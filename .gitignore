@@ -1,0 +1,26 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local runtime exports and uploaded payroll files
+outputs/*
+!outputs/招聘奖金核算_规则库.xlsx
+!outputs/招聘奖金核算_月度导入模板.xlsx
+
+# Generated/debug workbooks and local batch archives
+outputs/platform_exports/
+outputs/runs/
+outputs/debug_*/
+
+# Local experimental assets unrelated to the bonus platform
+lantern-otter-run/
+
+# One-off local diagnostics/repairs with machine-specific input paths
+audit_*.py
+repair_*.py
+
+# Environment files
+.env
+.venv/
+venv/
