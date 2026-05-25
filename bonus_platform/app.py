@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 import shutil
@@ -8,7 +9,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS
+from .config import DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, ensure_data_files
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.rules import load_rulebook
@@ -24,15 +25,23 @@ from .engine.runs import (
     save_metadata,
     update_metadata,
 )
+from .engine.table_data import build_table_data, load_table_data, merge_diff_rows, save_table_data
 from .engine.workbook_io import build_final_workbook, build_pending_workbook, build_result_workbook, read_import_rows
 
 
-app = FastAPI(title="招聘奖金与内推奖金核算平台")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_data_files()
+    yield
+
+
+app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @app.get("/api/health")
 def health() -> dict:
+    ensure_data_files()
     return {"status": "ok", "rule_workbook": str(DEFAULT_RULE_WORKBOOK)}
 
 
@@ -99,6 +108,7 @@ async def calculate_run(
             build_pending_workbook(result, pending_path)
         else:
             pending_path = None
+        save_table_data(run_dir, build_table_data(run_id, result))
     except ValueError as exc:
         temp_upload_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -139,6 +149,14 @@ def list_runs() -> dict:
 def get_run(run_id: str) -> dict:
     try:
         return load_metadata(get_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="批次不存在。") from exc
+
+
+@app.get("/api/runs/{run_id}/table-data")
+def get_run_table_data(run_id: str) -> dict:
+    try:
+        return load_table_data(get_run_dir(run_id))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="批次不存在。") from exc
 
@@ -204,6 +222,7 @@ async def compare_run(
     diff_path = run_dir / _safe_output_name(metadata.get("sourceFilename") or "核算结果.xlsx", "差异报告")
     try:
         metrics = build_difference_report(Path(source_record["path"]), offline_path, diff_path)
+        merge_diff_rows(run_dir, metrics)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"生成差异报告失败：{exc}") from exc
 

@@ -8,6 +8,7 @@ from uuid import uuid4
 from typing import Any, Dict, List
 
 from ..config import DEFAULT_RULE_WORKBOOK, RUNS_DIR
+from .local_store import list_indexed_runs, upsert_run_metadata
 
 
 METADATA_FILE = "metadata.json"
@@ -31,6 +32,7 @@ def save_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
     metadata["updatedAt"] = now
     metadata_path = run_dir / METADATA_FILE
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    upsert_run_metadata(metadata)
     return metadata
 
 
@@ -49,15 +51,20 @@ def load_metadata(run_dir: Path) -> Dict[str, Any]:
 
 
 def list_run_metadata() -> List[Dict[str, Any]]:
+    indexed = list_indexed_runs()
     if not RUNS_DIR.exists():
-        return []
+        return indexed
     runs = []
     for metadata_path in RUNS_DIR.glob(f"*/{METADATA_FILE}"):
         try:
             runs.append(json.loads(metadata_path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             continue
-    return sorted(runs, key=lambda row: row.get("updatedAt") or row.get("createdAt") or "", reverse=True)
+    by_id = {row.get("id"): row for row in runs if row.get("id")}
+    for row in indexed:
+        if row.get("id"):
+            by_id[row["id"]] = row
+    return sorted(by_id.values(), key=lambda row: row.get("updatedAt") or row.get("createdAt") or "", reverse=True)
 
 
 def get_run_dir(run_id: str) -> Path:

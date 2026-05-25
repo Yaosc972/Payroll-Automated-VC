@@ -1,0 +1,61 @@
+{
+  "name": "sigma-workbench-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Σ-Workbench desktop shell for local recruitment bonus calculation.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js",
+    "build:backend": "node scripts/build-backend.js",
+    "dist:mac": "npm run build:backend && electron-builder --mac dmg --config.mac.identity=null",
+    "dist:win": "npm run build:backend && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.sigmaworkbench.desktop",
+    "productName": "西格玛工作台",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "scripts/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend-dist/sigma-backend",
+        "to": "backend/sigma-backend"
+      },
+      {
+        "from": "../outputs/招聘奖金核算_规则库.xlsx",
+        "to": "seed-data/招聘奖金核算_规则库.xlsx"
+      },
+      {
+        "from": "../outputs/招聘奖金核算_月度导入模板.xlsx",
+        "to": "seed-data/招聘奖金核算_月度导入模板.xlsx"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  }
+}

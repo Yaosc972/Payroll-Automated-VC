@@ -3,25 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>招聘奖金核算平台</title>
+    <title>西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="styles.css?v=13" />
+    <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_semanticui.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=16" />
   </head>
-  <body>
+  <body class="brushed-metal">
+    <div class="ambient-brand" aria-hidden="true">SIGMA</div>
     <header class="app-header">
       <div class="header-inner">
         <div class="brand-block">
-          <img class="brand-logo" src="assets/bonus-logo-header-transparent.png" alt="招聘奖金核算平台 logo" />
+          <img class="brand-logo" src="assets/bonus-logo-header-blue.png" alt="西格玛工作台 logo" />
           <div>
-            <p>Compensation Workbench</p>
-            <h1>招聘奖金核算平台</h1>
+            <p>Σ-Workbench</p>
+            <h1>西格玛工作台</h1>
           </div>
         </div>
         <div class="header-copy">
-          <h2 class="hero-title workbench-title">月度核算工作台</h2>
+          <h2 class="hero-title workbench-title">招聘奖金核算</h2>
           <span>把每月奖金初算、确认、差异复核和导出归档集中到一个批次流程。</span>
         </div>
         <div class="header-actions">
@@ -38,7 +40,10 @@
             <p>Run History</p>
             <h2>核算批次</h2>
           </div>
-          <button id="refreshRunsButton" class="icon-button" type="button" title="刷新批次"><i data-lucide="refresh-cw"></i></button>
+          <div class="heading-actions">
+            <button id="toggleRunsButton" class="icon-button" type="button" title="收起批次"><i data-lucide="panel-left-close"></i></button>
+            <button id="refreshRunsButton" class="icon-button" type="button" title="刷新批次"><i data-lucide="refresh-cw"></i></button>
+          </div>
         </div>
         <div id="runList" class="run-list">
           <div class="empty-card">暂无批次，先上传本月导入表。</div>
@@ -166,68 +171,108 @@
         </section>
 
         <section class="panel table-card">
-          <nav class="tabs" aria-label="结果视图">
-            <button class="tab active" data-target="previewPanel" type="button">明细预览</button>
-            <button class="tab" data-target="pendingPanel" type="button">待确认</button>
-            <button class="tab" data-target="exceptionPanel" type="button">异常清单</button>
-            <button class="tab" data-target="diffPanel" type="button">差异概览</button>
-          </nav>
-
-          <section id="previewPanel" class="table-panel active">
-            <div class="section-title">
-              <div>
-                <p>Detail Preview</p>
-                <h2>招聘奖金明细预览</h2>
+          <div class="command-layout">
+            <aside class="filter-rail" aria-label="明细筛选">
+              <div class="filter-title">
+                <div>
+                  <p>Filters</p>
+                  <h2>筛选器</h2>
+                </div>
+                <button id="toggleFiltersButton" class="icon-button mini" type="button" title="收起筛选器"><i data-lucide="sliders-horizontal"></i></button>
               </div>
-              <span>最多展示前 50 行，完整内容以 Excel 结果为准。</span>
-            </div>
-            <div class="table-scroll">
-              <table id="previewTable">
-                <thead>
-                  <tr>
-                    <th>姓名</th><th>工号</th><th>职级</th><th>ABC类别</th><th>招聘渠道</th><th>招聘人入职1月奖金</th><th>内推入职1月奖金</th><th>异常提示</th>
-                  </tr>
-                </thead>
-                <tbody class="skeleton-body">
-                  <tr><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-40"></span></td></tr>
-                  <tr><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-28"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-36"></span></td></tr>
-                  <tr><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-44"></span></td></tr>
-                  <tr><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-32"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-20"></span></td><td><span class="skeleton w-32"></span></td></tr>
-                  <tr><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-24"></span></td><td><span class="skeleton w-16"></span></td><td><span class="skeleton w-40"></span></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
+              <div class="filter-body">
+                <label class="filter-field search-field">
+                  <span>搜索</span>
+                  <input id="globalSearch" type="search" placeholder="姓名 / 工号 / 负责人 / 推荐人" />
+                </label>
+                <label class="filter-field">
+                  <span>奖金类型</span>
+                  <select id="bonusTypeFilter"><option value="">全部</option></select>
+                </label>
+                <label class="filter-field">
+                  <span>状态</span>
+                  <select id="statusFilter"><option value="">全部</option></select>
+                </label>
+                <label class="filter-field">
+                  <span>地区/规则范围</span>
+                  <select id="ruleScopeFilter"><option value="">全部</option></select>
+                </label>
+                <label class="filter-field">
+                  <span>负责人/推荐人</span>
+                  <select id="ownerFilter"><option value="">全部</option></select>
+                </label>
+                <div class="amount-filter">
+                  <label class="filter-field"><span>最小金额</span><input id="minAmountFilter" type="number" step="0.01" placeholder="0" /></label>
+                  <label class="filter-field"><span>最大金额</span><input id="maxAmountFilter" type="number" step="0.01" placeholder="不限" /></label>
+                </div>
+                <div class="quick-filters">
+                  <button type="button" data-quick="pending">只看待确认</button>
+                  <button type="button" data-quick="exception">只看异常</button>
+                  <button type="button" data-quick="amount">只看有金额</button>
+                  <button type="button" data-quick="diff">只看差异</button>
+                  <button type="button" data-quick="reset">重置筛选</button>
+                </div>
+              </div>
+            </aside>
 
-          <section id="pendingPanel" class="table-panel">
-            <div class="section-title">
-              <div><p>Manual Review</p><h2>待确认发放判断</h2></div>
-              <span>平台内先展示，正式确认仍可通过 Excel 下载/上传完成。</span>
-            </div>
-            <div class="table-scroll"><table id="pendingTable"><thead></thead><tbody></tbody></table></div>
-          </section>
+            <section class="command-main">
+              <div class="section-title command-title">
+                <div>
+                  <p>Command Center</p>
+                  <h2>统一核算明细</h2>
+                </div>
+                <span id="tableSummary">选择批次后显示招聘奖金、内推奖金、待确认、异常和差异。</span>
+              </div>
+              <div class="table-toolbar">
+                <div class="toolbar-stats">
+                  <strong id="visibleRows">0</strong><span>当前行</span>
+                  <strong id="totalRows">0</strong><span>总行数</span>
+                </div>
+                <button id="columnToggleButton" class="secondary-action small-action" type="button"><i data-lucide="columns-3"></i>列设置</button>
+              </div>
+              <div id="commandTable" class="command-table">
+                <div class="table-empty">
+                  <div class="skeleton-row"></div>
+                  <div class="skeleton-row short"></div>
+                  <div class="skeleton-row"></div>
+                  <div class="skeleton-row mid"></div>
+                  <div class="skeleton-row"></div>
+                </div>
+              </div>
+            </section>
+          </div>
 
-          <section id="exceptionPanel" class="table-panel">
-            <div class="section-title">
-              <div><p>Exception List</p><h2>异常清单</h2></div>
-              <span>异常不会直接填 0，需要复核后处理。</span>
-            </div>
-            <div class="table-scroll"><table id="exceptionTable"><thead></thead><tbody></tbody></table></div>
-          </section>
-
-          <section id="diffPanel" class="table-panel">
-            <div class="section-title">
-              <div><p>Compare</p><h2>差异概览</h2></div>
-              <span>差异报告完整明细请下载 Excel。</span>
-            </div>
-            <div id="diffSummary" class="diff-summary">
-              <div class="empty-card">上传线下表后展示招聘/内推汇总差异行数和金额差异。</div>
-            </div>
+          <section class="legacy-panels" aria-label="批次辅助信息">
+            <details>
+              <summary>差异概览</summary>
+              <div id="diffSummary" class="diff-summary">
+                <div class="empty-card">上传线下表后展示招聘/内推汇总差异行数和金额差异。</div>
+              </div>
+            </details>
           </section>
         </section>
       </section>
     </main>
 
-    <script src="app.js?v=13"></script>
+    <aside id="detailDrawer" class="detail-drawer" aria-hidden="true">
+      <div class="drawer-panel">
+        <div class="drawer-header">
+          <div>
+            <p>Calculation Trace</p>
+            <h2 id="drawerTitle">计算解释</h2>
+            <span id="drawerSubtitle">点击明细行查看</span>
+          </div>
+          <button id="drawerClose" class="icon-button" type="button" title="关闭"><i data-lucide="x"></i></button>
+        </div>
+        <div id="drawerContent" class="drawer-content">
+          <div class="empty-card">暂无明细。</div>
+        </div>
+      </div>
+    </aside>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-label="操作通知"></div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+    <script src="app.js?v=15"></script>
   </body>
 </html>

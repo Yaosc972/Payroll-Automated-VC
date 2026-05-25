@@ -77,9 +77,11 @@ class RecruitmentDetail:
     recruiter_id: str
     recruiter_name: str
     recruiter_status: str
+    recruiter_last_work_date: Any
     assistant_id: str
     assistant_name: str
     assistant_status: str
+    assistant_last_work_date: Any
     start_date: Any
     onboard_date: Any
     probation_date: Any

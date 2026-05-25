@@ -72,6 +72,33 @@ def test_run_calculation_creates_queryable_batch_with_rule_info():
     assert any(run["id"] == data["id"] for run in list_response.json()["runs"])
 
 
+def test_run_table_data_returns_full_command_center_rows():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/runs/calculate",
+        files={"file": ("monthly.xlsx", _monthly_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    run = response.json()
+
+    table_response = client.get(f"/api/runs/{run['id']}/table-data")
+
+    assert table_response.status_code == 200
+    data = table_response.json()
+    assert data["runId"] == run["id"]
+    assert data["month"] == 202510
+    assert data["stats"]["totalRows"] >= 1
+    assert data["filters"]["bonusTypes"]
+    assert data["filters"]["statuses"]
+    first = data["rows"][0]
+    assert first["employeeNo"] == "zt-run-001"
+    assert first["employeeName"] == "批次测试"
+    assert first["sourceRow"] == 2
+    assert "calculation" in first
+    assert "nodes" in first["calculation"]
+    assert "searchText" in first
+
+
 def test_same_month_run_calculations_do_not_overwrite_each_other():
     client = TestClient(app)
 
@@ -106,6 +133,13 @@ def test_run_finalize_uses_saved_initial_result_and_updates_batch():
     assert data["status"] == "已最终确认"
     assert data["finalDownloadUrl"].endswith(".xlsx")
     assert Path(data["files"]["finalResult"]["path"]).exists()
+    workbook = load_workbook(Path(data["files"]["finalResult"]["path"]), read_only=True)
+    assert "待确认_发放判断" not in workbook.sheetnames
+    assert "招聘奖金汇总" not in workbook.sheetnames
+    assert "内推奖金汇总" not in workbook.sheetnames
+    assert "最终招聘奖金汇总" in workbook.sheetnames
+    assert "最终内推奖金汇总" in workbook.sheetnames
+    assert workbook["确认留痕"].sheet_state == "hidden"
 
 
 def test_run_compare_generates_difference_report_for_batch():
@@ -127,3 +161,8 @@ def test_run_compare_generates_difference_report_for_batch():
     assert data["diffMetrics"]["recruitmentSummaryDiffCount"] >= 1
     workbook = load_workbook(Path(data["files"]["diffReport"]["path"]), read_only=True)
     assert workbook.sheetnames == ["摘要", "招聘汇总差异", "内推汇总差异", "招聘明细差异", "内推明细差异"]
+
+    table_response = client.get(f"/api/runs/{run['id']}/table-data")
+    table_data = table_response.json()
+    assert any(row["status"] == "差异" for row in table_data["rows"])
+    assert table_data["stats"]["diffRows"] >= 1

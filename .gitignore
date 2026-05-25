@@ -24,3 +24,10 @@ repair_*.py
 .env
 .venv/
 venv/
+
+# Desktop packaging artifacts
+desktop/node_modules/
+desktop/backend-build/
+desktop/backend-dist/
+desktop/release/
+desktop/dist/
