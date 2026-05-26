@@ -1,6 +1,6 @@
 {
   "name": "sigma-workbench-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Σ-Workbench desktop shell for local recruitment bonus calculation.",
   "main": "main.js",
@@ -9,7 +9,7 @@
     "start": "electron .",
     "check": "node --check main.js && node --check preload.js",
     "build:backend": "node scripts/build-backend.js",
-    "dist:mac": "npm run build:backend && electron-builder --mac dmg --config.mac.identity=null",
+    "dist:mac": "npm run build:backend && electron-builder --mac dmg",
     "dist:win": "npm run build:backend && electron-builder --win nsis"
   },
   "build": {
@@ -18,6 +18,7 @@
     "directories": {
       "output": "release"
     },
+    "afterPack": "scripts/ad-hoc-sign-mac.js",
     "files": [
       "main.js",
       "preload.js",

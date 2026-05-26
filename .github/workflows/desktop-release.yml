@@ -67,8 +67,6 @@ jobs:
 
       - name: Build desktop installer
         working-directory: desktop
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: ${{ matrix.build-command }}
 
       - name: Upload installer artifact
