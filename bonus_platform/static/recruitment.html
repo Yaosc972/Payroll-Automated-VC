@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>招聘奖金核算 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_semanticui.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=20" />
+  </head>
+  <body class="brushed-metal">
+    <div class="ambient-brand" aria-hidden="true">SIGMA</div>
+    <header class="app-header">
+      <div class="header-inner">
+        <a class="brand-block brand-home-link" href="/" aria-label="返回西格玛工作台首页">
+          <img class="brand-logo" src="assets/bonus-logo-header-blue.png" alt="西格玛工作台 logo" />
+          <div>
+            <p>Σ-Workbench</p>
+            <h1>西格玛工作台</h1>
+          </div>
+        </a>
+        <div class="header-copy">
+          <h2 class="hero-title workbench-title">招聘奖金核算</h2>
+          <span>把每月奖金初算、确认、差异复核和导出归档集中到一个批次流程。</span>
+        </div>
+        <div class="header-actions">
+          <a class="ghost-button" href="/"><i data-lucide="layout-dashboard"></i>返回首页</a>
+          <a class="ghost-button" href="/api/template"><i data-lucide="download"></i>下载导入模板</a>
+          <a id="downloadLink" class="solid-button disabled" href="#" aria-disabled="true"><i data-lucide="file-down"></i>下载当前结果</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="workbench">
+      <aside class="sidebar panel">
+        <div class="panel-heading compact">
+          <div>
+            <p>Run History</p>
+            <h2>核算批次</h2>
+          </div>
+          <div class="heading-actions">
+            <button id="toggleRunsButton" class="icon-button" type="button" title="收起批次"><i data-lucide="panel-left-close"></i></button>
+            <button id="refreshRunsButton" class="icon-button" type="button" title="刷新批次"><i data-lucide="refresh-cw"></i></button>
+          </div>
+        </div>
+        <div id="runList" class="run-list">
+          <div class="empty-card">暂无批次，先上传本月导入表。</div>
+        </div>
+      </aside>
+
+      <section class="main-column">
+        <section class="status-strip panel">
+          <div>
+            <p class="eyebrow">Current Month</p>
+            <h2 id="currentRunTitle">尚未选择批次</h2>
+            <span id="currentRunSubTitle">上传月度导入表后，平台会生成一个可追溯的核算批次。</span>
+          </div>
+          <div class="rule-chip">
+            <i data-lucide="shield-check"></i>
+            <div>
+              <span>规则库</span>
+              <strong id="ruleVersion">等待读取</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="flow panel" aria-label="核算流程">
+          <div class="flow-step active" data-step="upload">
+            <span>1</span>
+            <div><strong>上传数据</strong><em>创建批次</em></div>
+          </div>
+          <div class="flow-step" data-step="calculate">
+            <span>2</span>
+            <div><strong>初算</strong><em>规则引擎</em></div>
+          </div>
+          <div class="flow-step" data-step="pending">
+            <span>3</span>
+            <div><strong>待确认</strong><em>人工判断</em></div>
+          </div>
+          <div class="flow-step" data-step="final">
+            <span>4</span>
+            <div><strong>最终汇总</strong><em>确认后生成</em></div>
+          </div>
+          <div class="flow-step" data-step="compare">
+            <span>5</span>
+            <div><strong>差异复核</strong><em>对比线下</em></div>
+          </div>
+          <div class="flow-step" data-step="archive">
+            <span>6</span>
+            <div><strong>导出归档</strong><em>保留文件</em></div>
+          </div>
+        </section>
+
+        <section class="action-grid">
+          <section class="panel action-card primary-card">
+            <div class="panel-heading">
+              <div>
+                <p>Step 1</p>
+                <h2>上传月度导入表</h2>
+              </div>
+              <i data-lucide="upload-cloud"></i>
+            </div>
+            <label class="file-picker">
+              <input id="fileInput" type="file" accept=".xlsx,.xlsm" />
+              <span><i data-lucide="file-spreadsheet"></i></span>
+              <strong id="fileName">选择本月 Excel 文件</strong>
+            </label>
+            <button id="calculateButton" class="primary-button" type="button">创建批次并初算</button>
+            <div id="status" class="status">等待上传</div>
+          </section>
+
+          <section class="panel action-card">
+            <div class="panel-heading">
+              <div>
+                <p>Step 3-4</p>
+                <h2>确认后生成最终结果</h2>
+              </div>
+              <i data-lucide="clipboard-check"></i>
+            </div>
+            <div class="download-row">
+              <a id="pendingDownloadLink" class="secondary-button disabled" href="#" aria-disabled="true">下载待确认表</a>
+            </div>
+            <label class="file-picker compact-picker">
+              <input id="confirmationInput" type="file" accept=".xlsx,.xlsm" />
+              <span><i data-lucide="badge-check"></i></span>
+              <strong id="confirmationName">上传已确认表</strong>
+            </label>
+            <button id="finalizeButton" class="dark-button" type="button">生成最终结果</button>
+            <div id="finalStatus" class="status">选择一个批次后可操作</div>
+          </section>
+
+          <section class="panel action-card">
+            <div class="panel-heading">
+              <div>
+                <p>Step 5</p>
+                <h2>上传线下表做差异检验</h2>
+              </div>
+              <i data-lucide="git-compare-arrows"></i>
+            </div>
+            <label class="file-picker compact-picker">
+              <input id="offlineInput" type="file" accept=".xlsx,.xlsm" />
+              <span><i data-lucide="table-2"></i></span>
+              <strong id="offlineName">选择线下/复核 Excel</strong>
+            </label>
+            <button id="compareButton" class="secondary-action" type="button">生成差异报告</button>
+            <div id="compareStatus" class="status">最终结果或初算结果均可对比</div>
+          </section>
+        </section>
+
+        <section class="metrics" aria-label="核算结果概览">
+          <div class="metric"><i data-lucide="calendar-days"></i><span>核算月份</span><strong id="month">-</strong></div>
+          <div class="metric"><i data-lucide="rows-3"></i><span>导入行数</span><strong id="importedRows">-</strong></div>
+          <div class="metric"><i data-lucide="wallet-cards"></i><span>招聘奖金</span><strong id="recruitmentTotal">-</strong></div>
+          <div class="metric"><i data-lucide="gift"></i><span>内推奖金</span><strong id="referralTotal">-</strong></div>
+          <div class="metric"><i data-lucide="clipboard-list"></i><span>待确认</span><strong id="pendingCount">-</strong></div>
+          <div class="metric"><i data-lucide="triangle-alert"></i><span>异常条数</span><strong id="exceptionCount">-</strong></div>
+        </section>
+
+        <section class="panel downloads-panel">
+          <div class="panel-heading compact">
+            <div>
+              <p>Archive</p>
+              <h2>批次文件</h2>
+            </div>
+          </div>
+          <div id="downloadGrid" class="download-grid">
+            <div class="empty-card">创建批次后显示原始导入、初算结果、待确认表、最终结果和差异报告。</div>
+          </div>
+        </section>
+
+        <section class="panel table-card">
+          <div class="command-layout">
+            <aside class="filter-rail" aria-label="明细筛选">
+              <div class="filter-title">
+                <div>
+                  <p>Filters</p>
+                  <h2>筛选器</h2>
+                </div>
+                <button id="toggleFiltersButton" class="icon-button mini" type="button" title="收起筛选器"><i data-lucide="sliders-horizontal"></i></button>
+              </div>
+              <div class="filter-body">
+                <label class="filter-field search-field">
+                  <span>搜索</span>
+                  <input id="globalSearch" type="search" placeholder="姓名 / 工号 / 负责人 / 推荐人" />
+                </label>
+                <label class="filter-field">
+                  <span>奖金类型</span>
+                  <select id="bonusTypeFilter"><option value="">全部</option></select>
+                </label>
+                <label class="filter-field">
+                  <span>状态</span>
+                  <select id="statusFilter"><option value="">全部</option></select>
+                </label>
+                <label class="filter-field">
+                  <span>地区/规则范围</span>
+                  <select id="ruleScopeFilter"><option value="">全部</option></select>
+                </label>
+                <label class="filter-field">
+                  <span>负责人/推荐人</span>
+                  <select id="ownerFilter"><option value="">全部</option></select>
+                </label>
+                <div class="amount-filter">
+                  <label class="filter-field"><span>最小金额</span><input id="minAmountFilter" type="number" step="0.01" placeholder="0" /></label>
+                  <label class="filter-field"><span>最大金额</span><input id="maxAmountFilter" type="number" step="0.01" placeholder="不限" /></label>
+                </div>
+                <div class="quick-filters">
+                  <button type="button" data-quick="pending">只看待确认</button>
+                  <button type="button" data-quick="exception">只看异常</button>
+                  <button type="button" data-quick="amount">只看有金额</button>
+                  <button type="button" data-quick="diff">只看差异</button>
+                  <button type="button" data-quick="reset">重置筛选</button>
+                </div>
+              </div>
+            </aside>
+
+            <section class="command-main">
+              <div class="section-title command-title">
+                <div>
+                  <p>Command Center</p>
+                  <h2>统一核算明细</h2>
+                </div>
+                <span id="tableSummary">选择批次后显示招聘奖金、内推奖金、待确认、异常和差异。</span>
+              </div>
+              <div class="table-toolbar">
+                <div class="toolbar-stats">
+                  <strong id="visibleRows">0</strong><span>当前行</span>
+                  <strong id="totalRows">0</strong><span>总行数</span>
+                </div>
+                <button id="columnToggleButton" class="secondary-action small-action" type="button"><i data-lucide="columns-3"></i>列设置</button>
+              </div>
+              <div id="commandTable" class="command-table">
+                <div class="table-empty">
+                  <div class="skeleton-row"></div>
+                  <div class="skeleton-row short"></div>
+                  <div class="skeleton-row"></div>
+                  <div class="skeleton-row mid"></div>
+                  <div class="skeleton-row"></div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <section class="legacy-panels" aria-label="批次辅助信息">
+            <details>
+              <summary>差异概览</summary>
+              <div id="diffSummary" class="diff-summary">
+                <div class="empty-card">上传线下表后展示招聘/内推汇总差异行数和金额差异。</div>
+              </div>
+            </details>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <aside id="detailDrawer" class="detail-drawer" aria-hidden="true">
+      <div class="drawer-panel">
+        <div class="drawer-header">
+          <div>
+            <p>Calculation Trace</p>
+            <h2 id="drawerTitle">计算解释</h2>
+            <span id="drawerSubtitle">点击明细行查看</span>
+          </div>
+          <button id="drawerClose" class="icon-button" type="button" title="关闭"><i data-lucide="x"></i></button>
+        </div>
+        <div id="drawerContent" class="drawer-content">
+          <div class="empty-card">暂无明细。</div>
+        </div>
+      </div>
+    </aside>
+
+    <div id="toastRegion" class="toast-region" aria-live="polite" aria-label="操作通知"></div>
+
+    <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
+    <script src="app.js?v=16"></script>
+  </body>
+</html>
