@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1280" />
+    <title>海外劳务工报账核对 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=21" />
+  </head>
+  <body class="overseas-labor-shell">
+    <header class="labor-audit-header">
+      <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
+        <img src="assets/bonus-logo-header-blue.png" alt="" />
+        <span>Σ-WORKBENCH</span>
+      </a>
+      <div class="audit-title-block">
+        <p>Overseas Labor Invoice Audit</p>
+        <h1>海外劳务工报账核对</h1>
+        <span>AI 抽取供应商发票，按员工核对工时与金额差异。</span>
+      </div>
+      <a id="laborReportLink" class="dark-button disabled" href="#" aria-disabled="true">下载差异报告</a>
+    </header>
+
+    <main class="labor-audit-layout">
+      <aside class="audit-steps" aria-label="核对步骤">
+        <div class="audit-step active"><b>01</b><span>新建批次</span></div>
+        <div class="audit-step"><b>02</b><span>上传文件</span></div>
+        <div class="audit-step"><b>03</b><span>字段映射</span></div>
+        <div class="audit-step"><b>04</b><span>抽取比对</span></div>
+        <div class="audit-step"><b>05</b><span>结果复核</span></div>
+      </aside>
+
+      <section class="audit-workbench">
+        <div class="audit-panel">
+          <div class="panel-heading">
+            <p>Batch Setup</p>
+            <h2>新建核对批次</h2>
+          </div>
+          <div class="audit-form-grid">
+            <label><span>供应商</span><input id="supplierName" value="Fairway Staffing Service" /></label>
+            <label><span>账期开始</span><input id="periodStart" type="date" value="2026-05-11" /></label>
+            <label><span>账期结束</span><input id="periodEnd" type="date" value="2026-05-17" /></label>
+            <label><span>币种</span><input id="currency" value="USD" /></label>
+          </div>
+          <button id="createLaborRun" class="primary-button">创建批次</button>
+          <p id="createStatus" class="audit-status">等待创建批次。</p>
+        </div>
+
+        <div class="audit-panel">
+          <div class="panel-heading">
+            <p>Source Files</p>
+            <h2>上传 PDF 发票与线下账单</h2>
+          </div>
+          <div class="audit-upload-grid">
+            <label class="audit-upload-card">
+              <span>PDF 发票，可多选</span>
+              <input id="pdfFiles" type="file" accept="application/pdf" multiple />
+              <strong id="pdfFileName">选择供应商 PDF 发票</strong>
+            </label>
+            <label class="audit-upload-card">
+              <span>线下账单 Excel</span>
+              <input id="workbookFile" type="file" accept=".xlsx,.xlsm" />
+              <strong id="workbookFileName">选择线下账单</strong>
+            </label>
+          </div>
+          <button id="uploadLaborFiles" class="secondary-button">上传文件</button>
+          <p id="uploadStatus" class="audit-status">创建批次后上传文件。</p>
+        </div>
+
+        <div class="audit-panel">
+          <div class="panel-heading">
+            <p>Field Mapping</p>
+            <h2>字段映射</h2>
+          </div>
+          <div class="audit-form-grid mapping-grid">
+            <label><span>工作表</span><select id="sheetSelect"></select></label>
+            <label><span>工号列（可选）</span><select id="employeeIdColumn"></select></label>
+            <label><span>姓名列</span><select id="nameColumn"></select></label>
+            <label><span>工时列</span><select id="hoursColumn"></select></label>
+            <label><span>金额列</span><select id="amountColumn"></select></label>
+            <label><span>币种列（可选）</span><select id="currencyColumn"></select></label>
+          </div>
+          <div class="mapping-actions">
+            <button id="loadSheets" class="secondary-action">读取工作表</button>
+            <button id="saveMapping" class="primary-button">确认字段映射</button>
+          </div>
+          <div id="mappingPreview" class="mapping-preview">字段映射后显示预览行。</div>
+        </div>
+
+        <div class="audit-panel result-panel">
+          <div class="panel-heading">
+            <p>Reconciliation</p>
+            <h2>抽取与结果复核</h2>
+          </div>
+          <button id="extractCompare" class="dark-button">抽取并比对</button>
+          <p id="compareStatus" class="audit-status">低置信度项不阻断，但会进入风险清单。</p>
+          <div id="summaryGrid" class="labor-summary-grid"></div>
+          <h3>金额差异员工</h3>
+          <div id="amountDiffTable" class="audit-table">暂无金额差异。</div>
+          <h3>风险与未匹配</h3>
+          <div id="riskTable" class="audit-table">暂无风险项。</div>
+        </div>
+      </section>
+    </main>
+
+    <div id="laborToast" class="labor-toast" role="status" aria-live="polite"></div>
+    <script src="overseas-labor.js?v=1"></script>
+  </body>
+</html>

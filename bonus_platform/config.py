@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -29,9 +30,51 @@ DEFAULT_RULE_WORKBOOK = OUTPUT_DIR / "招聘奖金核算_规则库.xlsx"
 DEFAULT_IMPORT_TEMPLATE = OUTPUT_DIR / "招聘奖金核算_月度导入模板.xlsx"
 EXPORT_DIR = OUTPUT_DIR / "platform_exports"
 RUNS_DIR = OUTPUT_DIR / "runs"
+LABOR_RUNS_DIR = OUTPUT_DIR / "labor_runs"
 DATABASE_PATH = OUTPUT_DIR / "sigma_workbench.db"
 
 MAX_PREVIEW_ROWS = 50
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+AI_CONFIG: dict[str, Any] = {
+    "enabled": _env_bool("AI_ENABLED", False),
+    "provider": os.environ.get("AI_PROVIDER", ""),
+    "api_key": os.environ.get("AI_API_KEY", ""),
+    "base_url": os.environ.get("AI_BASE_URL", ""),
+    "model": os.environ.get("AI_MODEL", ""),
+    "timeout_seconds": _env_int("AI_TIMEOUT_SECONDS", 90),
+    "confidence_threshold": _env_float("AI_CONFIDENCE_THRESHOLD", 0.85),
+    "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.01),
+    "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
+    "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
+}
 
 
 def ensure_data_files() -> None:

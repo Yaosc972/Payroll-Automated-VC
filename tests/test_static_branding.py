@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = ROOT / "bonus_platform" / "static" / "index.html"
 RECRUITMENT_HTML = ROOT / "bonus_platform" / "static" / "recruitment.html"
 LABOR_HTML = ROOT / "bonus_platform" / "static" / "labor.html"
+OVERSEAS_LABOR_HTML = ROOT / "bonus_platform" / "static" / "overseas-labor.html"
+OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
@@ -135,8 +137,11 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "招聘奖金核算" in html
     assert "Domestic Labor Vendor Payroll" in html
     assert "劳务工薪酬核算" in html
+    assert "Overseas Labor Invoice Audit" in html
+    assert "海外劳务工报账核对" in html
     assert 'href="recruitment.html"' in html
     assert 'href="labor.html"' in html
+    assert 'href="overseas-labor.html"' in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
 
@@ -163,6 +168,20 @@ def test_labor_page_is_desktop_placeholder_with_local_animation():
     assert "kinetic-sculpture" in html
     assert "@keyframes gearSpin" in css
     assert "@keyframes constructionWave" in css
+
+
+def test_overseas_labor_page_is_separate_audit_workbench():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert "海外劳务工报账核对" in html
+    assert "AI 抽取供应商发票" in html
+    assert "overseas-labor.js" in html
+    assert "/api/labor/runs" in js
+    assert "字段映射" in html
+    assert "金额差异员工" in html
+    assert ".overseas-labor-shell" in css
 
 
 def test_desktop_builder_uses_platform_logo_icons():

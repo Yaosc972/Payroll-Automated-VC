@@ -5,13 +5,26 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, ensure_data_files
+from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, ensure_data_files
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
+from .engine.labor.compare import compare_labor_items
+from .engine.labor.extract import extract_invoice_items
+from .engine.labor.report import build_labor_report
+from .engine.labor.runs import (
+    attach_labor_file,
+    create_labor_run,
+    get_labor_run_dir,
+    list_labor_metadata,
+    load_labor_metadata,
+    safe_labor_filename,
+    update_labor_metadata,
+)
+from .engine.labor.workbook import list_workbook_sheets, read_workbook_rows, suggest_mapping
 from .engine.rules import load_rulebook
 from .engine.runs import (
     attach_file_record,
@@ -159,6 +172,166 @@ def get_run_table_data(run_id: str) -> dict:
         return load_table_data(get_run_dir(run_id))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="批次不存在。") from exc
+
+
+@app.get("/api/labor/runs")
+def list_labor_runs() -> dict:
+    return {"runs": list_labor_metadata()}
+
+
+@app.post("/api/labor/runs")
+def create_labor_run_endpoint(payload: dict = Body(...)) -> dict:
+    supplier = str(payload.get("supplier_name") or payload.get("supplierName") or "").strip()
+    period_start = str(payload.get("period_start") or payload.get("periodStart") or "").strip()
+    period_end = str(payload.get("period_end") or payload.get("periodEnd") or "").strip()
+    if not supplier:
+        raise HTTPException(status_code=400, detail="请填写供应商名称。")
+    if not period_start or not period_end:
+        raise HTTPException(status_code=400, detail="请填写账期开始和结束日期。")
+    return create_labor_run(
+        {
+            "supplierName": supplier,
+            "periodStart": period_start,
+            "periodEnd": period_end,
+            "currency": str(payload.get("currency") or "USD").strip() or "USD",
+            "notes": str(payload.get("notes") or ""),
+        }
+    )
+
+
+@app.get("/api/labor/runs/{run_id}")
+def get_labor_run(run_id: str) -> dict:
+    try:
+        return load_labor_metadata(get_labor_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+
+
+@app.post("/api/labor/runs/{run_id}/files")
+async def upload_labor_files(
+    run_id: str,
+    pdf_files: list[UploadFile] = File(...),
+    workbook_file: UploadFile = File(...),
+) -> dict:
+    try:
+        run_dir = get_labor_run_dir(run_id)
+        metadata = load_labor_metadata(run_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+    if not pdf_files:
+        raise HTTPException(status_code=400, detail="请至少上传一张 PDF 发票。")
+    if not workbook_file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="线下账单请上传 Excel 文件（.xlsx 或 .xlsm）。")
+    pdf_records = []
+    for upload in pdf_files:
+        if not upload.filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
+        path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
+        pdf_records.append(attach_labor_file(run_id, path, "PDF发票"))
+    workbook_path = await _save_upload_to(workbook_file, run_dir / safe_labor_filename(workbook_file.filename))
+    files = dict(metadata.get("files", {}))
+    files["pdfInvoices"] = pdf_records
+    files["workbook"] = attach_labor_file(run_id, workbook_path, "线下账单")
+    return update_labor_metadata(run_id, {"status": "已上传文件", "files": files})
+
+
+@app.get("/api/labor/runs/{run_id}/workbook-sheets")
+def labor_workbook_sheets(run_id: str) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
+    workbook_path = _labor_workbook_path(metadata)
+    try:
+        return {"sheets": list_workbook_sheets(workbook_path)}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"读取 Excel 工作表失败：{exc}") from exc
+
+
+@app.post("/api/labor/runs/{run_id}/field-suggestions")
+def labor_field_suggestions(run_id: str, payload: dict = Body(...)) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
+    workbook_path = _labor_workbook_path(metadata)
+    sheet_name = str(payload.get("sheet_name") or payload.get("sheetName") or "").strip()
+    if not sheet_name:
+        raise HTTPException(status_code=400, detail="请选择 Excel 工作表。")
+    try:
+        return suggest_mapping(workbook_path, sheet_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/labor/runs/{run_id}/mapping")
+def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
+    sheet_name = str(payload.get("sheet_name") or payload.get("sheetName") or "").strip()
+    mapping = payload.get("mapping") or {}
+    if not sheet_name:
+        raise HTTPException(status_code=400, detail="请选择 Excel 工作表。")
+    for field in ("name", "hours", "amount"):
+        if not mapping.get(field):
+            raise HTTPException(status_code=400, detail="字段映射缺少姓名、工时或金额。")
+    return update_labor_metadata(run_id, {"status": "已确认字段", "workbookSheet": sheet_name, "excelMapping": mapping})
+
+
+@app.post("/api/labor/runs/{run_id}/extract-and-compare")
+def extract_and_compare_labor_run(run_id: str) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
+    run_dir = get_labor_run_dir(run_id)
+    mapping = metadata.get("excelMapping") or {}
+    sheet_name = metadata.get("workbookSheet") or ""
+    if not sheet_name or not mapping:
+        raise HTTPException(status_code=400, detail="请先确认 Excel 工作表和字段映射。")
+    workbook_path = _labor_workbook_path(metadata)
+    pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
+    if not pdf_paths:
+        raise HTTPException(status_code=400, detail="请先上传 PDF 发票。")
+    try:
+        pdf_rows = extract_invoice_items(
+            pdf_paths,
+            AI_CONFIG,
+            supplier=metadata.get("supplierName", ""),
+            period_start=metadata.get("periodStart", ""),
+            period_end=metadata.get("periodEnd", ""),
+            currency=metadata.get("currency", ""),
+        )
+        excel_rows = read_workbook_rows(workbook_path, sheet_name, mapping)
+        comparison = compare_labor_items(
+            pdf_rows,
+            excel_rows,
+            amount_tolerance=AI_CONFIG["amount_tolerance"],
+            hours_tolerance=AI_CONFIG["hours_tolerance"],
+            confidence_threshold=AI_CONFIG["confidence_threshold"],
+        )
+        report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
+        build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"生成劳务核对结果失败：{exc}") from exc
+    files = dict(metadata.get("files", {}))
+    files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
+    updated = update_labor_metadata(
+        run_id,
+        {
+            "status": "已生成差异报告",
+            "files": files,
+            "comparisonSummary": comparison["summary"],
+            "comparisonRows": comparison["rows"],
+            "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
+            "excelRows": [row.to_dict() for row in excel_rows],
+            "diffDownloadUrl": files["diffReport"]["downloadUrl"],
+        },
+    )
+    return updated
+
+
+@app.get("/api/labor/runs/{run_id}/download/{filename}")
+def download_labor_file(run_id: str, filename: str) -> FileResponse:
+    try:
+        run_dir = get_labor_run_dir(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+    path = run_dir / Path(filename).name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="文件不存在或已被清理。")
+    return FileResponse(path, filename=path.name)
 
 
 @app.post("/api/runs/{run_id}/finalize")
@@ -355,6 +528,24 @@ def _calculation_payload(result) -> dict:
         "pendingConfirmations": result.pending_confirmations[:MAX_PREVIEW_ROWS],
         "exceptions": result.exceptions[:MAX_PREVIEW_ROWS],
     }
+
+
+def _labor_metadata_or_404(run_id: str) -> dict:
+    try:
+        return load_labor_metadata(get_labor_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+
+
+def _labor_workbook_path(metadata: dict) -> Path:
+    workbook_record = metadata.get("files", {}).get("workbook") or {}
+    path = workbook_record.get("path")
+    if not path:
+        raise HTTPException(status_code=400, detail="请先上传线下账单 Excel。")
+    workbook_path = Path(path)
+    if not workbook_path.exists():
+        raise HTTPException(status_code=404, detail="线下账单文件不存在。")
+    return workbook_path
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
