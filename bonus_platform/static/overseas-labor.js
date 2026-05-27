@@ -28,6 +28,7 @@ const labor = {
   mappingPreview: document.querySelector("#mappingPreview"),
   extractCompare: document.querySelector("#extractCompare"),
   compareStatus: document.querySelector("#compareStatus"),
+  qualityAlert: document.querySelector("#qualityAlert"),
   summaryGrid: document.querySelector("#summaryGrid"),
   amountDiffTable: document.querySelector("#amountDiffTable"),
   candidateTable: document.querySelector("#candidateTable"),
@@ -218,6 +219,7 @@ function renderPreview(rows) {
 
 function renderResult(run) {
   const summary = run.comparisonSummary || {};
+  renderQualityAlert(run.extractionQuality);
   const metrics = [
     ["PDF人数", summary.pdfEmployeeCount],
     ["Excel人数", summary.excelEmployeeCount],
@@ -235,6 +237,18 @@ function renderResult(run) {
   renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
   renderRows(labor.riskTable, rows.filter((row) => row.matchStatus !== "通过" && row.matchStatus !== "金额差异"));
   renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
+}
+
+function renderQualityAlert(quality) {
+  if (!labor.qualityAlert) return;
+  if (!quality || quality.level === "ok") {
+    labor.qualityAlert.hidden = true;
+    labor.qualityAlert.innerHTML = "";
+    return;
+  }
+  const issues = quality.issues || [];
+  labor.qualityAlert.hidden = false;
+  labor.qualityAlert.innerHTML = `<strong>${escapeHtml(quality.message || "抽取质量存在风险。")}</strong>${issues.length ? `<ul>${issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>` : ""}`;
 }
 
 function renderRows(container, rows) {

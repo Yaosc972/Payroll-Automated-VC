@@ -996,6 +996,26 @@ button {
   font-size: 22px;
 }
 
+.quality-alert {
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  border-radius: 14px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  color: #fde68a;
+  background: rgba(120, 53, 15, 0.42);
+}
+
+.quality-alert strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.quality-alert ul {
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(255, 247, 237, 0.78);
+}
+
 .risk-pill {
   display: inline-flex;
   border-radius: 999px;

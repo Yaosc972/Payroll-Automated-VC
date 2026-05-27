@@ -128,6 +128,106 @@ def test_labor_compare_response_includes_candidate_matches(monkeypatch):
     assert isinstance(body["candidateMatches"], list)
 
 
+def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(
+        app_module,
+        "extract_invoice_items",
+        lambda *args, **kwargs: [
+            LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alvarez Mitrache, Rosa", hours=10, amount=100, currency="USD", confidence=0.95, evidence_text="Total $100")
+        ],
+    )
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_file", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert body["status"] == "已生成差异报告"
+    assert body["extractionQuality"]["level"] == "warning"
+    assert any("总金额差异" in issue for issue in body["extractionQuality"]["issues"])
+    assert "请复核 PDF 抽取明细" in body["extractionQuality"]["message"]
+
+
+def test_labor_compare_retries_with_excel_candidates_when_quality_warns(monkeypatch):
+    import bonus_platform.app as app_module
+
+    calls = []
+
+    def fake_extract(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("expected_rows"):
+            return [
+                LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Rosa Alvarez Minchaca", hours=31.19, amount=701.90, currency="USD", confidence=0.9, evidence_text="retry")
+            ]
+        return [
+            LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alvarez Mitrache, Rosa", hours=10, amount=100, currency="USD", confidence=0.95, evidence_text="first pass")
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_file", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert len(calls) == 2
+    assert calls[1]["expected_rows"][0]["employee_name"] == "Rosa Alvarez Minchaca"
+    assert body["extractionQuality"]["level"] == "ok"
+    assert body["extractionQuality"]["retryApplied"] is True
+    assert body["comparisonSummary"]["exceptionCount"] == 0
+
+
+def test_labor_extraction_quality_passes_when_counts_and_totals_align():
+    import bonus_platform.app as app_module
+
+    quality = app_module._labor_extraction_quality(
+        {
+            "pdfEmployeeCount": 161,
+            "excelEmployeeCount": 161,
+            "pdfHoursTotal": 5912.62,
+            "excelHoursTotal": 5912.62,
+            "pdfAmountTotal": 150078.21,
+            "excelAmountTotal": 150119.51,
+            "unmatchedPdfCount": 0,
+            "unmatchedExcelCount": 0,
+        }
+    )
+
+    assert quality == {"level": "ok", "message": "抽取质量检查通过。", "issues": []}
+
+
 def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatch):
     import bonus_platform.app as app_module
 

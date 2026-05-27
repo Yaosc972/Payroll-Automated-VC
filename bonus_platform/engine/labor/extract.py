@@ -24,7 +24,15 @@ MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
 AI_PAGE_CACHE_VERSION = "v4"
 
 
-def extract_invoice_items(pdf_paths: List[Path], ai_config: Dict[str, Any], supplier: str = "", period_start: str = "", period_end: str = "", currency: str = "") -> List[LaborLineItem]:
+def extract_invoice_items(
+    pdf_paths: List[Path],
+    ai_config: Dict[str, Any],
+    supplier: str = "",
+    period_start: str = "",
+    period_end: str = "",
+    currency: str = "",
+    expected_rows: List[Dict[str, Any]] | None = None,
+) -> List[LaborLineItem]:
     supplier_profile = resolve_supplier_profile(supplier, profiles_path=ai_config.get("supplier_profiles_path"))
     pages = _extract_pdf_pages(pdf_paths)
     rule_items = _extract_with_rules(pages, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
@@ -33,7 +41,7 @@ def extract_invoice_items(pdf_paths: List[Path], ai_config: Dict[str, Any], supp
     if _ai_ready(ai_config):
         errors: List[str] = []
         try:
-            rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile)
+            rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
             items = line_items_from_dicts(rows)
             if items:
                 return items
@@ -42,7 +50,7 @@ def extract_invoice_items(pdf_paths: List[Path], ai_config: Dict[str, Any], supp
         try:
             image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.5))
             image_pages = _apply_image_page_policy(image_pages, supplier_profile)
-            rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile)
+            rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
             items = line_items_from_dicts(rows)
             if items:
                 return items
@@ -104,6 +112,7 @@ def _extract_with_ai_text(
     period_end: str = "",
     currency: str = "",
     supplier_profile: SupplierExtractionProfile | None = None,
+    expected_rows: List[Dict[str, Any]] | None = None,
 ) -> List[Dict[str, Any]]:
     prompt = {
         "instruction": _ai_instruction(supplier_profile),
@@ -113,6 +122,8 @@ def _extract_with_ai_text(
         "currency": currency,
         "pages": pages,
     }
+    if expected_rows:
+        prompt["expected_employees"] = expected_rows
     payload = {
         "model": ai_config["model"],
         "messages": [
@@ -134,6 +145,7 @@ def _extract_with_ai_images(
     period_end: str = "",
     currency: str = "",
     supplier_profile: SupplierExtractionProfile | None = None,
+    expected_rows: List[Dict[str, Any]] | None = None,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     max_pages = max(int(ai_config.get("max_pages_per_request") or 5), 1)
@@ -158,6 +170,7 @@ def _extract_with_ai_images(
                         "period_end": period_end,
                         "currency": currency,
                         "pages": [{"source_file": page["source_file"], "page": page["page"]} for page in chunk],
+                        **({"expected_employees": expected_rows} if expected_rows else {}),
                     },
                     ensure_ascii=False,
                 ),
@@ -233,7 +246,8 @@ def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None) -
         "If a page has no clear employee charge rows, return [] exactly. "
         "employee_name_raw must be a visible person name from an Associate/Employee row, not a vendor, subtotal, invoice number, barcode, account number, or random numeric string. "
         "employee_id must be empty unless a separate visible employee ID column/value exists next to that person; never copy a name, barcode, invoice number, account number, or long numeric string into employee_id. "
-        "If a premium/meal row has amount but no worked hours, use hours 0 and keep the amount."
+        "If a premium/meal row has amount but no worked hours, use hours 0 and keep the amount. "
+        "If expected_employees is provided, use it only as a reconciliation candidate list: search the invoice for those visible employees, return only rows that are actually visible, preserve the visible PDF names, choose the row total billed amount, and return [] for candidates not found."
     )
     if supplier_profile and supplier_profile.prompt_notes:
         instruction += " Supplier-specific profile guidance: " + " ".join(supplier_profile.prompt_notes)

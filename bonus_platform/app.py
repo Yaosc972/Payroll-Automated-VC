@@ -327,6 +327,39 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             hours_tolerance=AI_CONFIG["hours_tolerance"],
             confidence_threshold=AI_CONFIG["confidence_threshold"],
         )
+        extraction_quality = _labor_extraction_quality(comparison["summary"])
+        extraction_quality["retryAttempted"] = False
+        extraction_quality["retryApplied"] = False
+        if extraction_quality["level"] == "warning":
+            retry_config = dict(AI_CONFIG)
+            retry_config["cache_enabled"] = False
+            retry_pdf_rows = extract_invoice_items(
+                pdf_paths,
+                retry_config,
+                supplier=metadata.get("supplierName", ""),
+                period_start=metadata.get("periodStart", ""),
+                period_end=metadata.get("periodEnd", ""),
+                currency=metadata.get("currency", ""),
+                expected_rows=_expected_labor_rows(excel_rows),
+            )
+            if retry_pdf_rows:
+                retry_comparison = compare_labor_items(
+                    retry_pdf_rows,
+                    excel_rows,
+                    amount_tolerance=AI_CONFIG["amount_tolerance"],
+                    hours_tolerance=AI_CONFIG["hours_tolerance"],
+                    confidence_threshold=AI_CONFIG["confidence_threshold"],
+                )
+                retry_quality = _labor_extraction_quality(retry_comparison["summary"])
+                extraction_quality["retryAttempted"] = True
+                if _labor_quality_score(retry_quality, retry_comparison["summary"]) < _labor_quality_score(extraction_quality, comparison["summary"]):
+                    pdf_rows = retry_pdf_rows
+                    comparison = retry_comparison
+                    extraction_quality = retry_quality
+                    extraction_quality["retryAttempted"] = True
+                    extraction_quality["retryApplied"] = True
+                else:
+                    extraction_quality["retryApplied"] = False
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
     except ValueError:
@@ -341,12 +374,66 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             "comparisonSummary": comparison["summary"],
             "comparisonRows": comparison["rows"],
             "candidateMatches": comparison.get("candidateMatches", []),
+            "extractionQuality": extraction_quality,
             "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
             "excelRows": [row.to_dict() for row in excel_rows],
             "diffDownloadUrl": files["diffReport"]["downloadUrl"],
         },
     )
     return updated
+
+
+def _expected_labor_rows(excel_rows) -> list[dict]:
+    return [
+        {
+            "employee_id": row.employee_id,
+            "employee_name": row.employee_name_raw,
+            "hours": row.hours,
+            "amount": row.amount,
+            "currency": row.currency,
+            "source_ref": row.source_page_or_row,
+        }
+        for row in excel_rows
+    ]
+
+
+def _labor_quality_score(quality: dict, summary: dict) -> tuple:
+    return (
+        1 if quality.get("level") == "warning" else 0,
+        len(quality.get("issues") or []),
+        int(summary.get("exceptionCount") or 0),
+        int(summary.get("unmatchedPdfCount") or 0) + int(summary.get("unmatchedExcelCount") or 0),
+        abs(float(summary.get("amountDeltaTotal") or 0)),
+    )
+
+
+def _labor_extraction_quality(summary: dict) -> dict:
+    pdf_count = int(summary.get("pdfEmployeeCount") or 0)
+    excel_count = int(summary.get("excelEmployeeCount") or 0)
+    unmatched_pdf = int(summary.get("unmatchedPdfCount") or 0)
+    unmatched_excel = int(summary.get("unmatchedExcelCount") or 0)
+    pdf_hours = float(summary.get("pdfHoursTotal") or 0)
+    excel_hours = float(summary.get("excelHoursTotal") or 0)
+    pdf_amount = float(summary.get("pdfAmountTotal") or 0)
+    excel_amount = float(summary.get("excelAmountTotal") or 0)
+
+    issues = []
+    if excel_count and abs(pdf_count - excel_count) / excel_count > 0.05:
+        issues.append(f"PDF员工数 {pdf_count} 与 Excel员工数 {excel_count} 偏差超过 5%。")
+    if excel_count and (unmatched_pdf + unmatched_excel) / excel_count > 0.20:
+        issues.append(f"未匹配员工 {unmatched_pdf + unmatched_excel} 人，超过 Excel人数的 20%。")
+    if excel_hours and abs(pdf_hours - excel_hours) / excel_hours > 0.05:
+        issues.append(f"总工时差异 {round(pdf_hours - excel_hours, 2)}，超过 Excel总工时的 5%。")
+    if excel_amount and abs(pdf_amount - excel_amount) / excel_amount > 0.05:
+        issues.append(f"总金额差异 {round(pdf_amount - excel_amount, 2)}，超过 Excel总金额的 5%。")
+
+    if issues:
+        return {
+            "level": "warning",
+            "message": "抽取质量存在风险，请复核 PDF 抽取明细后再使用差异报告。",
+            "issues": issues,
+        }
+    return {"level": "ok", "message": "抽取质量检查通过。", "issues": []}
 
 
 @app.get("/api/labor/runs/{run_id}/download/{filename}")
