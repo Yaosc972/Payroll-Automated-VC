@@ -1,6 +1,7 @@
 const laborState = {
   run: null,
   headers: [],
+  comparePollTimer: null,
 };
 
 const labor = {
@@ -29,7 +30,9 @@ const labor = {
   compareStatus: document.querySelector("#compareStatus"),
   summaryGrid: document.querySelector("#summaryGrid"),
   amountDiffTable: document.querySelector("#amountDiffTable"),
+  candidateTable: document.querySelector("#candidateTable"),
   riskTable: document.querySelector("#riskTable"),
+  extractPreviewTable: document.querySelector("#extractPreviewTable"),
   reportLink: document.querySelector("#laborReportLink"),
   toast: document.querySelector("#laborToast"),
 };
@@ -147,17 +150,55 @@ async function saveMapping() {
 
 async function extractAndCompare() {
   if (!laborState.run) return toast("请先创建批次。");
-  setText(labor.compareStatus, "正在抽取 PDF 并生成差异...");
+  stopComparePolling();
+  setText(labor.compareStatus, "已提交后台抽取，正在等待结果...");
+  labor.extractCompare.disabled = true;
   try {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/extract-and-compare`, { method: "POST" });
-    renderResult(laborState.run);
-    setText(labor.compareStatus, "核对完成。低置信度项已在风险表标记。");
-    setDownload(laborState.run.diffDownloadUrl);
-    toast("差异报告已生成。");
+    setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果...");
+    await pollCompareResult();
+    laborState.comparePollTimer = window.setInterval(pollCompareResult, 3000);
   } catch (error) {
+    labor.extractCompare.disabled = false;
     setText(labor.compareStatus, error.message, true);
     toast(error.message);
   }
+}
+
+async function pollCompareResult() {
+  if (!laborState.run) return;
+  try {
+    const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
+    laborState.run = run;
+    if (run.status === "抽取失败") {
+      stopComparePolling();
+      labor.extractCompare.disabled = false;
+      setText(labor.compareStatus, run.errorMessage || "抽取失败，请检查文件后重试。", true);
+      toast(run.errorMessage || "抽取失败。");
+      return;
+    }
+    if (run.diffDownloadUrl || run.status === "已生成差异报告") {
+      stopComparePolling();
+      labor.extractCompare.disabled = false;
+      renderResult(run);
+      setText(labor.compareStatus, "核对完成。低置信度项已在风险表标记。");
+      setDownload(run.diffDownloadUrl);
+      toast("差异报告已生成。");
+      return;
+    }
+    setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果...");
+  } catch (error) {
+    stopComparePolling();
+    labor.extractCompare.disabled = false;
+    setText(labor.compareStatus, error.message, true);
+    toast(error.message);
+  }
+}
+
+function stopComparePolling() {
+  if (!laborState.comparePollTimer) return;
+  window.clearInterval(laborState.comparePollTimer);
+  laborState.comparePollTimer = null;
 }
 
 function fillColumnSelect(select, selected = "", optional = false) {
@@ -183,12 +224,17 @@ function renderResult(run) {
     ["PDF总工时", summary.pdfHoursTotal],
     ["Excel总工时", summary.excelHoursTotal],
     ["金额差异人数", summary.amountDiffCount],
+    ["疑似姓名匹配", summary.fuzzyMatchCount],
+    ["候选匹配", summary.candidateMatchCount],
+    ["低置信度", summary.lowConfidenceCount],
     ["风险人数", summary.exceptionCount],
   ];
   labor.summaryGrid.innerHTML = metrics.map(([label, value]) => `<div><span>${label}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`).join("");
   const rows = run.comparisonRows || [];
   renderRows(labor.amountDiffTable, rows.filter((row) => row.matchStatus === "金额差异"));
+  renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
   renderRows(labor.riskTable, rows.filter((row) => row.matchStatus !== "通过" && row.matchStatus !== "金额差异"));
+  renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
 }
 
 function renderRows(container, rows) {
@@ -197,6 +243,24 @@ function renderRows(container, rows) {
     return;
   }
   container.innerHTML = `<table><thead><tr><th>员工</th><th>状态</th><th>PDF金额</th><th>Excel金额</th><th>差异</th><th>来源</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.employeeName)}</td><td><span class="risk-pill">${escapeHtml(row.matchStatus)}</span></td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${escapeHtml(row.sourceRefs || "")}</td></tr>`).join("")}</tbody></table>`;
+}
+
+function renderCandidateRows(container, rows) {
+  if (!rows.length) {
+    container.textContent = "暂无候选匹配。";
+    return;
+  }
+  const visible = rows.slice(0, 40);
+  container.innerHTML = `<table><thead><tr><th>PDF员工</th><th>Excel员工</th><th>相似度</th><th>PDF金额</th><th>Excel金额</th><th>金额差</th><th>工时差</th><th>建议</th></tr></thead><tbody>${visible.map((row) => `<tr><td>${escapeHtml(row.pdfEmployeeName)}</td><td>${escapeHtml(row.excelEmployeeName)}</td><td>${formatPercent(row.nameSimilarity)}</td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${formatHours(row.hoursDelta)}</td><td><span class="candidate-pill">${escapeHtml(row.recommendation || "人工复核")}</span></td></tr>`).join("")}</tbody></table>${rows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条，完整候选请下载报告查看。</p>` : ""}`;
+}
+
+function renderExtractRows(container, rows) {
+  if (!rows.length) {
+    container.textContent = "暂无 PDF 抽取明细。";
+    return;
+  }
+  const visible = rows.slice(0, 80);
+  container.innerHTML = `<table><thead><tr><th>员工</th><th>工号</th><th>工时</th><th>金额</th><th>置信度</th><th>来源</th><th>证据</th></tr></thead><tbody>${visible.map((row) => `<tr><td>${escapeHtml(row.employee_name_raw)}</td><td>${escapeHtml(row.employee_id || "")}</td><td>${formatHours(row.hours)}</td><td>${formatMoney(row.amount)}</td><td>${formatPercent(row.confidence)}</td><td>${escapeHtml(`${row.source_file || ""} ${row.source_page_or_row || ""}`)}</td><td>${escapeHtml(row.evidence_text || "")}</td></tr>`).join("")}</tbody></table>${rows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条，完整明细请下载报告查看。</p>` : ""}`;
 }
 
 async function requestJson(url, options = {}) {
@@ -226,6 +290,15 @@ function toast(message) {
 
 function formatMoney(value) {
   return Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatHours(value) {
+  return Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatPercent(value) {
+  const number = Number(value || 0);
+  return number > 1 ? `${number.toFixed(1)}%` : `${(number * 100).toFixed(1)}%`;
 }
 
 function escapeHtml(value) {

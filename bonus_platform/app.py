@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -271,17 +271,43 @@ def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/labor/runs/{run_id}/extract-and-compare")
-def extract_and_compare_labor_run(run_id: str) -> dict:
+def extract_and_compare_labor_run(run_id: str, background_tasks: BackgroundTasks) -> dict:
     metadata = _labor_metadata_or_404(run_id)
-    run_dir = get_labor_run_dir(run_id)
     mapping = metadata.get("excelMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
     if not sheet_name or not mapping:
         raise HTTPException(status_code=400, detail="请先确认 Excel 工作表和字段映射。")
-    workbook_path = _labor_workbook_path(metadata)
     pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
     if not pdf_paths:
         raise HTTPException(status_code=400, detail="请先上传 PDF 发票。")
+    queued = update_labor_metadata(
+        run_id,
+        {
+            "status": "抽取中",
+            "errorMessage": "",
+            "diffDownloadUrl": "",
+        },
+    )
+    background_tasks.add_task(_run_labor_extract_compare, run_id)
+    return queued
+
+
+def _run_labor_extract_compare(run_id: str) -> None:
+    try:
+        _perform_labor_extract_compare(run_id)
+    except ValueError as exc:
+        update_labor_metadata(run_id, {"status": "抽取失败", "errorMessage": str(exc)})
+    except Exception as exc:
+        update_labor_metadata(run_id, {"status": "抽取失败", "errorMessage": f"生成劳务核对结果失败：{exc}"})
+
+
+def _perform_labor_extract_compare(run_id: str) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
+    run_dir = get_labor_run_dir(run_id)
+    mapping = metadata.get("excelMapping") or {}
+    sheet_name = metadata.get("workbookSheet") or ""
+    workbook_path = _labor_workbook_path(metadata)
+    pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
     try:
         pdf_rows = extract_invoice_items(
             pdf_paths,
@@ -291,6 +317,8 @@ def extract_and_compare_labor_run(run_id: str) -> dict:
             period_end=metadata.get("periodEnd", ""),
             currency=metadata.get("currency", ""),
         )
+        if not pdf_rows:
+            raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或启用 AI/OCR 后重试。")
         excel_rows = read_workbook_rows(workbook_path, sheet_name, mapping)
         comparison = compare_labor_items(
             pdf_rows,
@@ -301,10 +329,8 @@ def extract_and_compare_labor_run(run_id: str) -> dict:
         )
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"生成劳务核对结果失败：{exc}") from exc
+    except ValueError:
+        raise
     files = dict(metadata.get("files", {}))
     files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
     updated = update_labor_metadata(
@@ -314,6 +340,7 @@ def extract_and_compare_labor_run(run_id: str) -> dict:
             "files": files,
             "comparisonSummary": comparison["summary"],
             "comparisonRows": comparison["rows"],
+            "candidateMatches": comparison.get("candidateMatches", []),
             "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
             "excelRows": [row.to_dict() for row in excel_rows],
             "diffDownloadUrl": files["diffReport"]["downloadUrl"],

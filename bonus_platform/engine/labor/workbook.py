@@ -104,6 +104,9 @@ def _first_header(headers: List[str], keywords: tuple[str, ...]) -> str:
 
 def _preferred_amount_header(headers: List[str]) -> str:
     for header in headers:
+        if "不含税" in header:
+            return header
+    for header in headers:
         if "含税" in header and "不含税" not in header:
             return header
     return _first_header(headers, AMOUNT_PREFERRED_KEYWORDS)

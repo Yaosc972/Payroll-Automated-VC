@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from .models import LaborLineItem
 
 
-REPORT_SHEETS = ["核对摘要", "金额差异员工", "工时风险项", "未匹配员工", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
+REPORT_SHEETS = ["核对摘要", "金额差异员工", "工时风险项", "未匹配员工", "未匹配候选", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
 
 
 def build_labor_report(
@@ -27,6 +27,7 @@ def build_labor_report(
     _write_rows(workbook, "金额差异员工", _filter(rows, "金额差异"))
     _write_rows(workbook, "工时风险项", _filter(rows, "工时不一致"))
     _write_rows(workbook, "未匹配员工", [row for row in rows if row.get("matchStatus") in {"PDF有Excel无", "Excel有PDF无", "疑似姓名匹配"}])
+    _write_candidate_matches(workbook, comparison.get("candidateMatches", []))
     _write_rows(workbook, "低置信度抽取", [row for row in rows if row.get("matchStatus") == "低置信度抽取" or "低置信度抽取" in row.get("riskFlags", [])])
     _write_detail(workbook, "PDF抽取明细", pdf_rows)
     _write_detail(workbook, "Excel账单明细", excel_rows)
@@ -76,6 +77,15 @@ def _write_mapping(workbook: Workbook, mapping: Dict[str, str]) -> None:
     _format(sheet)
 
 
+def _write_candidate_matches(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
+    headers = ["pdfEmployeeName", "excelEmployeeName", "nameSimilarity", "pdfHoursTotal", "excelHoursTotal", "hoursDelta", "pdfAmountTotal", "excelAmountTotal", "amountDelta", "recommendation", "sourceRefs"]
+    sheet = workbook.create_sheet("未匹配候选")
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([row.get(header, "") for header in headers])
+    _format(sheet)
+
+
 def _filter(rows: List[Dict[str, Any]], status: str) -> List[Dict[str, Any]]:
     return [row for row in rows if row.get("matchStatus") == status]
 
@@ -92,4 +102,3 @@ def _format(sheet) -> None:
             width = min(max(width, len(str(cell.value or "")) + 2), 48)
         sheet.column_dimensions[letter].width = width
     sheet.freeze_panes = "A2"
-

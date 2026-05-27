@@ -25,7 +25,8 @@ def parse_number(value: Any) -> float:
 
 
 def normalize_employee_name(value: Any) -> str:
-    text = str(value or "").upper()
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(value or ""))
+    text = text.upper()
     text = unicodedata.normalize("NFKD", text)
     text = "".join(char for char in text if not unicodedata.combining(char))
     text = re.sub(r"\([^)]*\)", " ", text)
@@ -37,11 +38,10 @@ def normalize_employee_name(value: Any) -> str:
         last, first = [part.strip() for part in text.split(",", 1)]
         text = f"{first} {last}"
     text = text.replace("-", " ")
-    particles = {"DE", "DEL", "LA", "LAS", "LOS", "VAN", "VON"}
-    tokens = [token for token in text.split() if token and token not in particles]
+    particles = {"DE", "DEL", "LA", "LAS", "LOS", "VAN", "VON", "JR", "SR", "II", "III", "IV"}
+    tokens = {token for token in text.split() if token and token not in particles}
     return " ".join(sorted(tokens))
 
 
 def display_name(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
-

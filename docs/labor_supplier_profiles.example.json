@@ -1,0 +1,20 @@
+[
+  {
+    "key": "onesource",
+    "aliases": ["onesource", "one source", "one source staffing"],
+    "prompt_notes": [
+      "Only extract rows from pages that include charge amount columns or visible invoice totals.",
+      "Ignore timecard/detail pages, handwritten RG/OT notes, barcodes, headers, footers, and pages without currency amounts."
+    ],
+    "image_page_policy": "first_page_only"
+  },
+  {
+    "key": "new-supplier-example",
+    "aliases": ["supplier legal name", "supplier short name"],
+    "prompt_notes": [
+      "Describe where employee rows are located and which tables/pages should be ignored.",
+      "State exact column labels for name, employee ID, hours, and total billed amount when known."
+    ],
+    "image_page_policy": "all"
+  }
+]

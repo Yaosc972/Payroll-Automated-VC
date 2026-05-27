@@ -3,3 +3,4 @@ uvicorn
 python-multipart
 openpyxl
 pypdf
+pypdfium2

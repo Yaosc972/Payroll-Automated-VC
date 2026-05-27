@@ -10,6 +10,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "SigmaWorkbench"
 
 
+def _load_local_env() -> None:
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_local_env()
+
+
 def resolve_data_root() -> Path:
     configured = os.environ.get("SIGMA_WORKBENCH_HOME")
     if configured:
@@ -66,15 +84,23 @@ def _env_int(name: str, default: int) -> int:
 AI_CONFIG: dict[str, Any] = {
     "enabled": _env_bool("AI_ENABLED", False),
     "provider": os.environ.get("AI_PROVIDER", ""),
-    "api_key": os.environ.get("AI_API_KEY", ""),
+    "api_key": os.environ.get("AI_API_KEY", "") or os.environ.get("MIMO_API_KEY", ""),
     "base_url": os.environ.get("AI_BASE_URL", ""),
     "model": os.environ.get("AI_MODEL", ""),
     "timeout_seconds": _env_int("AI_TIMEOUT_SECONDS", 90),
     "confidence_threshold": _env_float("AI_CONFIDENCE_THRESHOLD", 0.85),
-    "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.01),
+    "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.05),
     "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
     "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
+    "render_scale": _env_float("AI_RENDER_SCALE", 1.5),
+    "document_toolchain": os.environ.get("AI_DOCUMENT_TOOLCHAIN", "pypdfium2,mimo"),
+    "ocr_command": os.environ.get("AI_OCR_COMMAND", ""),
+    "supplier_profiles_path": os.environ.get("LABOR_SUPPLIER_PROFILES_PATH", ""),
 }
+
+if AI_CONFIG["provider"].lower() == "mimo":
+    AI_CONFIG["base_url"] = AI_CONFIG["base_url"] or "https://api.xiaomimimo.com/v1"
+    AI_CONFIG["model"] = AI_CONFIG["model"] or "mimo-v2.5"
 
 
 def ensure_data_files() -> None:

@@ -970,7 +970,7 @@ button {
 
 .labor-summary-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 10px;
   margin: 18px 0;
 }
@@ -1003,6 +1003,33 @@ button {
   color: #451a03;
   background: #fbbf24;
   font-weight: 900;
+}
+
+.candidate-pill {
+  display: inline-flex;
+  border: 1px solid rgba(45, 212, 191, 0.42);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: #ccfbf1;
+  background: rgba(20, 184, 166, 0.18);
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.review-table {
+  max-height: 430px;
+}
+
+.review-table td:last-child {
+  max-width: 460px;
+  color: rgba(255, 247, 237, 0.68);
+}
+
+.table-note {
+  margin: 10px 0 0;
+  color: rgba(255, 247, 237, 0.58);
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .labor-toast {

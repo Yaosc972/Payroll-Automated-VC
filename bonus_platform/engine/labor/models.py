@@ -68,12 +68,12 @@ def line_items_from_dicts(rows: List[Dict[str, Any]]) -> List[LaborLineItem]:
             source_type=str(row.get("source_type") or row.get("sourceType") or ""),
             source_file=str(row.get("source_file") or row.get("sourceFile") or ""),
             source_page_or_row=str(row.get("source_page_or_row") or row.get("sourcePageOrRow") or ""),
-            employee_id=str(row.get("employee_id") or row.get("employeeId") or ""),
+            employee_id=_employee_id(row.get("employee_id") or row.get("employeeId"), row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or ""),
             employee_name_raw=str(row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or ""),
             hours=float(row.get("hours") or 0),
             amount=float(row.get("amount") or 0),
             currency=str(row.get("currency") or ""),
-            confidence=float(row.get("confidence") if row.get("confidence") is not None else 1.0),
+            confidence=_confidence(row.get("confidence")),
             evidence_text=str(row.get("evidence_text") or row.get("evidenceText") or ""),
             supplier=str(row.get("supplier") or ""),
             period_start=str(row.get("period_start") or row.get("periodStart") or ""),
@@ -82,3 +82,26 @@ def line_items_from_dicts(rows: List[Dict[str, Any]]) -> List[LaborLineItem]:
         for row in rows
     ]
 
+
+def _confidence(value: Any) -> float:
+    if value is None:
+        return 1.0
+    if isinstance(value, str):
+        label = value.strip().lower()
+        if label in {"high", "高", "高置信度"}:
+            return 0.95
+        if label in {"medium", "med", "中", "中置信度"}:
+            return 0.75
+        if label in {"low", "低", "低置信度"}:
+            return 0.5
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.7
+
+
+def _employee_id(value: Any, employee_name: Any) -> str:
+    employee_id = str(value or "").strip()
+    if employee_id and employee_id == str(employee_name or "").strip():
+        return ""
+    return employee_id
