@@ -222,30 +222,55 @@ function renderResult(run) {
   const summary = run.comparisonSummary || {};
   renderQualityAlert(run.extractionQuality);
   const wc = run.warehouseComparison;
-  const warehouseMetrics = wc && wc.summary ? [
-    { label: "仓库数", value: wc.summary.warehouseCount, type: "info" },
-    { label: "仓库通过", value: wc.summary.passedCount, type: wc.summary.exceptionCount > 0 ? "warning" : "success" },
-    { label: "仓库差异", value: wc.summary.exceptionCount, type: wc.summary.exceptionCount > 0 ? "warning" : "success" },
+  const wcSummary = wc && wc.summary;
+  const totalPassed = wcSummary && wcSummary.totalPassed;
+
+  // Top-level reconciliation status
+  const reconcilStatus = totalPassed
+    ? { label: "总金额核对", value: "一致", type: "success" }
+    : wcSummary
+      ? { label: "总金额核对", value: `差异 $${(wcSummary.amountDeltaTotal || 0).toFixed(2)}`, type: "warning" }
+      : null;
+
+  const warehouseMetrics = wcSummary && !totalPassed ? [
+    { label: "仓库数", value: wcSummary.warehouseCount, type: "info" },
+    { label: "仓库通过", value: wcSummary.passedCount, type: wcSummary.exceptionCount > 0 ? "warning" : "success" },
+    { label: "仓库差异", value: wcSummary.exceptionCount, type: wcSummary.exceptionCount > 0 ? "warning" : "success" },
   ] : [];
+
   const metrics = [
+    ...(reconcilStatus ? [reconcilStatus] : []),
     ...warehouseMetrics,
-    { label: "PDF人数", value: summary.pdfEmployeeCount, type: "info" },
-    { label: "Excel人数", value: summary.excelEmployeeCount, type: "info" },
-    { label: "PDF总工时", value: summary.pdfHoursTotal, type: "info" },
-    { label: "Excel总工时", value: summary.excelHoursTotal, type: "info" },
-    { label: "金额差异人数", value: summary.amountDiffCount, type: summary.amountDiffCount > 0 ? "warning" : "success" },
-    { label: "疑似姓名匹配", value: summary.fuzzyMatchCount, type: "info" },
-    { label: "候选匹配", value: summary.candidateMatchCount, type: "info" },
-    { label: "低置信度", value: summary.lowConfidenceCount, type: summary.lowConfidenceCount > 0 ? "warning" : "success" },
-    { label: "风险人数", value: summary.exceptionCount, type: summary.exceptionCount > 0 ? "warning" : "success" },
   ];
+
+  // Only show employee-level metrics when total has differences
+  if (!totalPassed) {
+    metrics.push(
+      { label: "PDF人数", value: summary.pdfEmployeeCount, type: "info" },
+      { label: "Excel人数", value: summary.excelEmployeeCount, type: "info" },
+      { label: "金额差异人数", value: summary.amountDiffCount, type: summary.amountDiffCount > 0 ? "warning" : "success" },
+      { label: "疑似姓名匹配", value: summary.fuzzyMatchCount, type: "info" },
+      { label: "低置信度", value: summary.lowConfidenceCount, type: summary.lowConfidenceCount > 0 ? "warning" : "success" },
+      { label: "风险人数", value: summary.exceptionCount, type: summary.exceptionCount > 0 ? "warning" : "success" },
+    );
+  }
+
   labor.summaryGrid.innerHTML = metrics.map(({ label, value, type }) => `<div class="metric-${type}"><span>${label}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`).join("");
   renderWarehouseTable(wc);
-  const rows = run.comparisonRows || [];
-  renderRows(labor.amountDiffTable, rows.filter((row) => row.matchStatus === "金额差异"));
-  renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
-  renderRows(labor.riskTable, rows.filter((row) => row.matchStatus !== "通过" && row.matchStatus !== "金额差异"));
-  renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
+
+  // Only show detail tables when total has differences
+  if (totalPassed) {
+    labor.amountDiffTable.innerHTML = '<p class="empty-state-text" style="color:#16a34a">总金额一致，无需核对明细。</p>';
+    labor.candidateTable.innerHTML = "";
+    labor.riskTable.innerHTML = "";
+    labor.extractPreviewTable.innerHTML = "";
+  } else {
+    const rows = run.comparisonRows || [];
+    renderRows(labor.amountDiffTable, rows.filter((row) => row.matchStatus === "金额差异"));
+    renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
+    renderRows(labor.riskTable, rows.filter((row) => row.matchStatus !== "通过" && row.matchStatus !== "金额差异"));
+    renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
+  }
 }
 
 function renderWarehouseTable(wc) {
