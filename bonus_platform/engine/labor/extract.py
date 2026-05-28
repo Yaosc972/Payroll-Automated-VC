@@ -4,6 +4,7 @@ import base64
 from io import BytesIO
 import json
 import re
+import socket
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.error import HTTPError
@@ -194,13 +195,13 @@ def _extract_with_ai_images(
             extracted = _post_chat_completion(payload, ai_config)
             _save_ai_page_cache(chunk, ai_config, extracted)
             rows.extend(extracted)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TimeoutError, socket.timeout):
             try:
                 extracted = _post_chat_completion(payload, ai_config)
                 _save_ai_page_cache(chunk, ai_config, extracted)
                 rows.extend(extracted)
                 continue
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TimeoutError, socket.timeout):
                 pass
             if chunk and all(int(page.get("page") or 1) > 1 for page in chunk):
                 continue
@@ -209,8 +210,16 @@ def _extract_with_ai_images(
 
 
 def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    provider = str(ai_config.get("provider") or "").lower()
+    base_url = ai_config["base_url"].rstrip("/")
+
+    if provider == "mimo" and "token-plan" in base_url:
+        # MiMo token plan uses Anthropic Messages API format
+        return _post_anthropic_completion(payload, ai_config)
+
+    # Standard OpenAI-compatible format
     req = request.Request(
-        ai_config["base_url"].rstrip("/") + "/chat/completions",
+        base_url + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers=_request_headers(ai_config),
         method="POST",
@@ -218,6 +227,67 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
     with request.urlopen(req, timeout=int(ai_config.get("timeout_seconds", 90))) as response:
         data = json.loads(response.read().decode("utf-8"))
     content = data["choices"][0]["message"]["content"]
+    return _json_array(content)
+
+
+def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Call MiMo token plan using Anthropic Messages API format."""
+    # Convert OpenAI-style payload to Anthropic Messages format
+    system_msg = ""
+    messages = []
+    for msg in payload.get("messages", []):
+        if msg["role"] == "system":
+            system_msg = msg["content"]
+        elif msg["role"] == "user":
+            content = msg["content"]
+            if isinstance(content, str):
+                messages.append({"role": "user", "content": content})
+            elif isinstance(content, list):
+                # Image+text multimodal content
+                anthropic_content = []
+                for part in content:
+                    if part.get("type") == "text":
+                        anthropic_content.append({"type": "text", "text": part["text"]})
+                    elif part.get("type") == "image_url":
+                        url = part["image_url"]["url"]
+                        # data:image/png;base64,xxx
+                        if url.startswith("data:"):
+                            media_type, b64 = url.split(",", 1)
+                            media_type = media_type.split(":")[1].split(";")[0]
+                            anthropic_content.append({
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": media_type, "data": b64},
+                            })
+                messages.append({"role": "user", "content": anthropic_content})
+
+    anthropic_payload = {
+        "model": payload.get("model", "mimo-v2.5-pro"),
+        "max_tokens": payload.get("max_completion_tokens", 4096),
+        "messages": messages,
+    }
+    if system_msg:
+        anthropic_payload["system"] = system_msg
+
+    headers = {
+        "x-api-key": str(ai_config["api_key"]),
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    base_url = ai_config["base_url"].rstrip("/")
+    req = request.Request(
+        base_url + "/v1/messages",
+        data=json.dumps(anthropic_payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with request.urlopen(req, timeout=int(ai_config.get("timeout_seconds", 180))) as response:
+        data = json.loads(response.read().decode("utf-8"))
+
+    # Extract text from Anthropic response
+    content = ""
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            content += block["text"]
     return _json_array(content)
 
 
@@ -233,6 +303,13 @@ def _request_headers(ai_config: Dict[str, Any]) -> Dict[str, str]:
 def _apply_provider_options(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> None:
     if str(ai_config.get("provider") or "").lower() == "mimo":
         payload["thinking"] = {"type": "disabled"}
+
+
+def _is_token_plan(ai_config: Dict[str, Any]) -> bool:
+    """Check if using MiMo token plan (no vision support)."""
+    provider = str(ai_config.get("provider") or "").lower()
+    base_url = str(ai_config.get("base_url") or "")
+    return provider == "mimo" and "token-plan" in base_url
 
 
 def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None) -> str:
