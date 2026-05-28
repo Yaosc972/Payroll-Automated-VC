@@ -12,7 +12,7 @@ class SupplierExtractionProfile:
     key: str
     aliases: List[str] = field(default_factory=list)
     prompt_notes: List[str] = field(default_factory=list)
-    image_page_policy: str = "all"
+    image_page_policy: str = "first_page_only"
 
 
 DEFAULT_PROFILE = SupplierExtractionProfile(key="default")
@@ -48,7 +48,7 @@ BUILTIN_PROFILES = [
             "Each employee may have multiple rows for different pay codes (Reg, OT, DT).",
             "Sum hours and amounts for the same employee across all rows.",
         ],
-        image_page_policy="all",
+        image_page_policy="first_page_only",
     ),
     SupplierExtractionProfile(
         key="adecco",
@@ -58,7 +58,7 @@ BUILTIN_PROFILES = [
             "Look for employee names followed by hours and amounts.",
             "Handle both horizontal and vertical layouts.",
         ],
-        image_page_policy="all",
+        image_page_policy="first_page_only",
     ),
     SupplierExtractionProfile(
         key="randstad",
@@ -68,7 +68,7 @@ BUILTIN_PROFILES = [
             "Extract rows from the main billing table.",
             "Ignore summary rows and totals.",
         ],
-        image_page_policy="all",
+        image_page_policy="first_page_only",
     ),
     SupplierExtractionProfile(
         key="manpower",
@@ -78,7 +78,7 @@ BUILTIN_PROFILES = [
             "Sum hours and amounts for the same employee.",
             "Look for the main billing section, not timecard details.",
         ],
-        image_page_policy="all",
+        image_page_policy="first_page_only",
     ),
 ]
 
