@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
-from .parsing import normalize_employee_name
+from .parsing import normalize_employee_name, parse_number
 
 
 @dataclass
@@ -70,8 +70,8 @@ def line_items_from_dicts(rows: List[Dict[str, Any]]) -> List[LaborLineItem]:
             source_page_or_row=str(row.get("source_page_or_row") or row.get("sourcePageOrRow") or ""),
             employee_id=_employee_id(row.get("employee_id") or row.get("employeeId"), row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or ""),
             employee_name_raw=str(row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or ""),
-            hours=float(row.get("hours") or 0),
-            amount=float(row.get("amount") or 0),
+            hours=parse_number(row.get("hours")),
+            amount=parse_number(row.get("amount")),
             currency=str(row.get("currency") or ""),
             confidence=_confidence(row.get("confidence")),
             evidence_text=str(row.get("evidence_text") or row.get("evidenceText") or ""),

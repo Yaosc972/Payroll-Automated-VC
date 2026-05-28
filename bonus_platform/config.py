@@ -92,6 +92,7 @@ AI_CONFIG: dict[str, Any] = {
     "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.05),
     "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
     "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
+    "max_completion_tokens": _env_int("AI_MAX_COMPLETION_TOKENS", 8192),
     "render_scale": _env_float("AI_RENDER_SCALE", 1.5),
     "document_toolchain": os.environ.get("AI_DOCUMENT_TOOLCHAIN", "pypdfium2,mimo"),
     "ocr_command": os.environ.get("AI_OCR_COMMAND", ""),
