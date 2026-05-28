@@ -55,6 +55,7 @@ def extract_invoice_items(
             items = line_items_from_dicts(rows)
             if items:
                 return items
+            errors.append("AI 图片抽取返回 0 条员工明细")
         except Exception as exc:
             errors.append(_safe_error_message(exc))
         if errors:
@@ -288,6 +289,8 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
     for block in data.get("content", []):
         if block.get("type") == "text":
             content += block["text"]
+    if not content.strip():
+        return []
     return _json_array(content)
 
 
@@ -447,15 +450,17 @@ def _ai_page_cache_path(chunk: List[Dict[str, Any]], ai_config: Dict[str, Any]) 
 
 
 def _json_array(content: str) -> List[Dict[str, Any]]:
+    if not content or not content.strip():
+        return []
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
         match = re.search(r"\[[\s\S]*\]", content)
         if not match:
-            raise
+            return []
         parsed = json.loads(match.group(0))
     if not isinstance(parsed, list):
-        raise ValueError("AI 返回结果不是员工明细数组。")
+        return []
     return [row for row in parsed if isinstance(row, dict)]
 
 
