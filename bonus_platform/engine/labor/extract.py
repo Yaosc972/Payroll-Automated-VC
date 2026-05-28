@@ -36,6 +36,8 @@ def extract_invoice_items(
 ) -> List[LaborLineItem]:
     supplier_profile = resolve_supplier_profile(supplier, profiles_path=ai_config.get("supplier_profiles_path"))
     pages = _extract_pdf_pages(pdf_paths)
+    if supplier_profile.image_page_policy == "first_page_only":
+        pages = [p for p in pages if int(p.get("page") or 1) == 1]
     rule_items = _extract_with_rules(pages, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
     if rule_items:
         return rule_items
