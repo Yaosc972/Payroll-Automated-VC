@@ -93,7 +93,7 @@ def quick_extract_totals(
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    pages = _extract_pdf_pages(pdf_paths)
+    pages = _extract_pdf_pages(pdf_paths, max_pages=1)
     first_pages = [p for p in pages if int(p.get("page") or 1) == 1]
 
     prompt = (
@@ -222,7 +222,7 @@ def _safe_error_message(exc: Exception) -> str:
     return message or exc.__class__.__name__
 
 
-def _extract_pdf_pages(pdf_paths: List[Path]) -> List[Dict[str, Any]]:
+def _extract_pdf_pages(pdf_paths: List[Path], max_pages: int | None = None) -> List[Dict[str, Any]]:
     pages: List[Dict[str, Any]] = []
     try:
         from pypdf import PdfReader
@@ -234,8 +234,9 @@ def _extract_pdf_pages(pdf_paths: List[Path]) -> List[Dict[str, Any]]:
             continue
         try:
             reader = PdfReader(str(path))
-            for index, page in enumerate(reader.pages, start=1):
-                pages.append({"source_file": path.name, "page": index, "text": page.extract_text() or ""})
+            page_count = len(reader.pages) if max_pages is None else min(len(reader.pages), max_pages)
+            for index in range(page_count):
+                pages.append({"source_file": path.name, "page": index + 1, "text": reader.pages[index].extract_text() or ""})
         except Exception:
             pages.append({"source_file": path.name, "page": 1, "text": ""})
     return pages
