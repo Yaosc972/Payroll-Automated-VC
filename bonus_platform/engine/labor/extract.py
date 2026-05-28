@@ -86,9 +86,12 @@ def quick_extract_totals(
 
     Returns list of {source_file, total_amount, warehouse_id} dicts.
     Much faster than full employee extraction — one short AI call per PDF.
+    Calls are parallelized via thread pool.
     """
     if not _ai_ready(ai_config):
         return [{"source_file": p.name, "total_amount": 0.0, "warehouse_id": ""} for p in pdf_paths]
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     pages = _extract_pdf_pages(pdf_paths)
     first_pages = [p for p in pages if int(p.get("page") or 1) == 1]
@@ -101,19 +104,24 @@ def quick_extract_totals(
         "Return only the JSON object, no extra text."
     )
 
-    results = []
-    for page in first_pages:
+    def _extract_one(page: Dict[str, Any]) -> Dict[str, Any]:
         source_file = page.get("source_file", "")
         wh = _warehouse_id_from_filename(source_file)
         page_text = page.get("text", "")
         if not page_text.strip():
-            results.append({"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh})
-            continue
+            return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
         try:
             amount = _extract_total_with_ai(page_text, prompt, ai_config)
-            results.append({"source_file": source_file, "total_amount": amount, "warehouse_id": wh})
+            return {"source_file": source_file, "total_amount": amount, "warehouse_id": wh}
         except Exception:
-            results.append({"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh})
+            return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
+
+    results = [None] * len(first_pages)
+    with ThreadPoolExecutor(max_workers=min(len(first_pages), 6)) as executor:
+        future_to_idx = {executor.submit(_extract_one, page): i for i, page in enumerate(first_pages)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            results[idx] = future.result()
     return results
 
 
