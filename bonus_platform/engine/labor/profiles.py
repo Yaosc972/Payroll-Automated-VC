@@ -33,11 +33,12 @@ BUILTIN_PROFILES = [
         key="fairway",
         aliases=["fairway", "fairway staffing", "fairway staffing service"],
         prompt_notes=[
-            "FAIRWAY invoices typically include employee rows with meal premiums and overtime.",
+            "FAIRWAY invoices typically include employee charge rows on the first billing page.",
             "Extract all charge rows including meal premiums even if hours are zero.",
             "Look for rows with amounts in the TOTAL column.",
+            "Ignore timecard detail pages and pages without charge amount columns.",
         ],
-        image_page_policy="all",
+        image_page_policy="first_page_only",
     ),
     SupplierExtractionProfile(
         key="osi",
