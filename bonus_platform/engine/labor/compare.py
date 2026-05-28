@@ -4,7 +4,7 @@ from collections import defaultdict
 from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List
 
-from .models import LaborComparisonRow, LaborLineItem
+from .models import LaborComparisonRow, LaborLineItem, line_items_from_dicts
 from .parsing import normalize_employee_name
 
 
@@ -359,13 +359,16 @@ def compare_by_warehouse(
     pdf_rows: List[LaborLineItem],
     excel_rows_with_warehouse: List[Dict[str, Any]],
     amount_tolerance: float = 0.05,
+    hours_tolerance: float = 0.1,
+    confidence_threshold: float = 0.85,
 ) -> Dict[str, Any]:
     """Compare PDF totals vs Excel totals grouped by warehouse.
 
     excel_rows_with_warehouse: list of dicts with keys: warehouse_id, hours, amount
+    Also includes per-warehouse employee-level comparison when items are LaborLineItem.
     """
     # Group PDF rows by warehouse
-    pdf_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"hours": 0.0, "amount": 0.0, "count": 0})
+    pdf_by_wh: Dict[str, List[LaborLineItem]] = defaultdict(list)
     pdf_warehouse_errors: List[str] = []
     for item in pdf_rows:
         wh = _warehouse_id_from_filename(item.source_file)
@@ -374,42 +377,52 @@ def compare_by_warehouse(
         if not wh:
             pdf_warehouse_errors.append(f"无法从文件名提取仓库号: {item.source_file}")
             continue
-        pdf_by_wh[wh]["hours"] = round(pdf_by_wh[wh]["hours"] + item.hours, 2)
-        pdf_by_wh[wh]["amount"] = round(pdf_by_wh[wh]["amount"] + item.amount, 2)
-        pdf_by_wh[wh]["count"] += 1
+        pdf_by_wh[wh].append(item)
 
-    # Group Excel rows by warehouse
-    excel_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"hours": 0.0, "amount": 0.0, "count": 0})
+    # Group Excel rows by warehouse — keep full items for employee-level comparison
+    excel_by_wh: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     excel_warehouse_errors: List[str] = []
     for row in excel_rows_with_warehouse:
         wh = str(row.get("warehouse_id") or "")
         if not wh:
             excel_warehouse_errors.append(f"Excel 行缺少物理仓: {row.get('employee_name', '')}")
             continue
-        excel_by_wh[wh]["hours"] = round(excel_by_wh[wh]["hours"] + float(row.get("hours") or 0), 2)
-        excel_by_wh[wh]["amount"] = round(excel_by_wh[wh]["amount"] + float(row.get("amount") or 0), 2)
-        excel_by_wh[wh]["count"] += 1
+        excel_by_wh[wh].append(row)
 
     # Build comparison rows
     all_wh = sorted(set(pdf_by_wh) | set(excel_by_wh))
     warehouse_rows = []
     for wh in all_wh:
-        pdf = pdf_by_wh.get(wh, {"hours": 0, "amount": 0, "count": 0})
-        excel = excel_by_wh.get(wh, {"hours": 0, "amount": 0, "count": 0})
-        amount_delta = round(pdf["amount"] - excel["amount"], 2)
-        hours_delta = round(pdf["hours"] - excel["hours"], 2)
+        pdf_items = pdf_by_wh.get(wh, [])
+        excel_items = excel_by_wh.get(wh, [])
+        pdf_hours = round(sum(i.hours for i in pdf_items), 2)
+        pdf_amount = round(sum(i.amount for i in pdf_items), 2)
+        excel_hours = round(sum(float(r.get("hours") or 0) for r in excel_items), 2)
+        excel_amount = round(sum(float(r.get("amount") or 0) for r in excel_items), 2)
+        amount_delta = round(pdf_amount - excel_amount, 2)
+        hours_delta = round(pdf_hours - excel_hours, 2)
         status = "通过" if abs(amount_delta) <= amount_tolerance else "金额差异"
+
+        # Employee-level comparison within this warehouse
+        employee_rows = _compare_warehouse_employees(
+            pdf_items, excel_items,
+            amount_tolerance=amount_tolerance,
+            hours_tolerance=hours_tolerance,
+            confidence_threshold=confidence_threshold,
+        )
+
         warehouse_rows.append({
             "warehouseId": wh,
-            "pdfEmployeeCount": pdf["count"],
-            "excelEmployeeCount": excel["count"],
-            "pdfHoursTotal": pdf["hours"],
-            "excelHoursTotal": excel["hours"],
+            "pdfEmployeeCount": len(pdf_items),
+            "excelEmployeeCount": len(excel_items),
+            "pdfHoursTotal": pdf_hours,
+            "excelHoursTotal": excel_hours,
             "hoursDelta": hours_delta,
-            "pdfAmountTotal": pdf["amount"],
-            "excelAmountTotal": excel["amount"],
+            "pdfAmountTotal": pdf_amount,
+            "excelAmountTotal": excel_amount,
             "amountDelta": amount_delta,
             "matchStatus": status,
+            "employeeRows": employee_rows,
         })
 
     passed = sum(1 for r in warehouse_rows if r["matchStatus"] == "通过")
@@ -422,3 +435,67 @@ def compare_by_warehouse(
         "amountDeltaTotal": round(sum(r["amountDelta"] for r in warehouse_rows), 2),
     }
     return {"summary": summary, "rows": warehouse_rows, "errors": pdf_warehouse_errors + excel_warehouse_errors}
+
+
+def _compare_warehouse_employees(
+    pdf_items: List[LaborLineItem],
+    excel_items: List[Dict[str, Any]],
+    amount_tolerance: float,
+    hours_tolerance: float,
+    confidence_threshold: float,
+) -> List[Dict[str, Any]]:
+    """Employee-level comparison within a single warehouse."""
+    if not pdf_items and not excel_items:
+        return []
+
+    # Convert Excel dicts to LaborLineItem for consistent handling
+    excel_line_items = line_items_from_dicts(excel_items) if excel_items else []
+
+    # Use the same aggregation and comparison logic as compare_labor_items
+    pdf = _aggregate(pdf_items)
+    excel = _aggregate(excel_line_items)
+    fuzzy_matches = _fuzzy_match_unmatched_groups(pdf, excel, amount_tolerance=amount_tolerance, hours_tolerance=hours_tolerance)
+    rows: List[Dict[str, Any]] = []
+
+    for key in sorted(set(pdf) | set(excel)):
+        if key in fuzzy_matches["skip_keys"]:
+            continue
+        pdf_group = pdf.get(key, _empty_group())
+        excel_key = fuzzy_matches["pdf_to_excel"].get(key)
+        excel_group = excel.get(excel_key, _empty_group()) if excel_key else excel.get(key, _empty_group())
+        pdf_amount = round(pdf_group["amount"], 2)
+        excel_amount = round(excel_group["amount"], 2)
+        pdf_hours = round(pdf_group["hours"], 2)
+        excel_hours = round(excel_group["hours"], 2)
+        amount_delta = round(pdf_amount - excel_amount, 2)
+        hours_delta = round(pdf_hours - excel_hours, 2)
+        risk_flags = []
+        low_confidence = pdf_group["min_confidence"] < confidence_threshold
+        if low_confidence:
+            risk_flags.append("低置信度抽取")
+        fuzzy_matched = bool(excel_key)
+        if fuzzy_matched:
+            risk_flags.append("疑似姓名匹配")
+        status = _status(
+            has_pdf=bool(pdf_group["items"]),
+            has_excel=bool(excel_group["items"]),
+            amount_delta=amount_delta,
+            hours_delta=hours_delta,
+            amount_tolerance=amount_tolerance,
+            hours_tolerance=hours_tolerance,
+            low_confidence=low_confidence,
+            fuzzy_matched=fuzzy_matched,
+        )
+        rows.append({
+            "employeeKey": key,
+            "employeeName": _matched_name(pdf_group, excel_group, fuzzy_matched) or key,
+            "pdfHoursTotal": pdf_hours,
+            "excelHoursTotal": excel_hours,
+            "hoursDelta": hours_delta,
+            "pdfAmountTotal": pdf_amount,
+            "excelAmountTotal": excel_amount,
+            "amountDelta": amount_delta,
+            "matchStatus": status,
+            "riskFlags": risk_flags,
+        })
+    return rows

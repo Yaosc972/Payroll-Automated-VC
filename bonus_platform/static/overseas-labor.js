@@ -261,19 +261,42 @@ function renderWarehouseTable(wc) {
   table.hidden = false;
   const headers = ["仓库", "PDF员工数", "Excel员工数", "PDF金额", "Excel金额", "差异", "状态"];
   const thead = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
-  const tbody = wc.rows.map((r) => {
+  const tbody = wc.rows.map((r, idx) => {
+    const hasDetails = r.employeeRows && r.employeeRows.length > 0;
+    const expandIcon = hasDetails ? "▸" : "";
     const statusClass = r.matchStatus === "通过" ? "status-pass" : "status-fail";
-    return `<tr>
-      <td>仓库${escapeHtml(r.warehouseId)}</td>
+    const detailRow = hasDetails ? `<tr class="warehouse-detail-row" id="wh-detail-${idx}" hidden><td colspan="7">${_renderWarehouseEmployees(r.employeeRows)}</td></tr>` : "";
+    return `<tr class="warehouse-main-row" ${hasDetails ? `data-idx="${idx}" style="cursor:pointer"` : ""}>
+      <td>${expandIcon} 仓库${escapeHtml(r.warehouseId)}</td>
       <td>${r.pdfEmployeeCount}</td>
       <td>${r.excelEmployeeCount}</td>
       <td>$${r.pdfAmountTotal.toFixed(2)}</td>
       <td>$${r.excelAmountTotal.toFixed(2)}</td>
       <td>${r.amountDelta >= 0 ? "+" : ""}$${r.amountDelta.toFixed(2)}</td>
       <td style="color:${r.matchStatus === "通过" ? "#16a34a" : "#dc2626"};font-weight:600">${escapeHtml(r.matchStatus)}</td>
-    </tr>`;
+    </tr>${detailRow}`;
   }).join("");
   table.innerHTML = `<table class="audit-data-table">${thead}<tbody>${tbody}</tbody></table>`;
+  // Bind expand/collapse
+  table.querySelectorAll(".warehouse-main-row[data-idx]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const idx = row.dataset.idx;
+      const detail = document.getElementById(`wh-detail-${idx}`);
+      if (!detail) return;
+      const expanded = !detail.hidden;
+      detail.hidden = expanded;
+      const icon = row.querySelector("td:first-child");
+      if (icon) icon.textContent = icon.textContent.replace(expanded ? "▾" : "▸", expanded ? "▸" : "▾");
+    });
+  });
+}
+
+function _renderWarehouseEmployees(rows) {
+  if (!rows.length) return '<p class="empty-state-text">无员工明细。</p>';
+  return `<table class="audit-data-table" style="margin-top:8px"><thead><tr><th>员工</th><th>状态</th><th>PDF金额</th><th>Excel金额</th><th>差异</th><th>PDF工时</th><th>Excel工时</th><th>工时差</th></tr></thead><tbody>${rows.map((row) => {
+    const sc = row.matchStatus === "通过" ? "status-pass" : row.matchStatus === "金额差异" ? "status-diff" : "status-warn";
+    return `<tr><td>${escapeHtml(row.employeeName)}</td><td><span class="risk-pill ${sc}">${escapeHtml(row.matchStatus)}</span></td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${formatHours(row.pdfHoursTotal)}</td><td>${formatHours(row.excelHoursTotal)}</td><td>${formatHours(row.hoursDelta)}</td></tr>`;
+  }).join("")}</tbody></table>`;
 }
 
 function renderQualityAlert(quality) {

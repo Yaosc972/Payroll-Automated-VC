@@ -361,7 +361,12 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 else:
                     extraction_quality["retryApplied"] = False
         excel_warehouse_data = [{"warehouse_id": row.warehouse_id, "hours": row.hours, "amount": row.amount, "employee_name": row.employee_name_raw} for row in excel_rows]
-        warehouse_comparison = compare_by_warehouse(pdf_rows, excel_warehouse_data, amount_tolerance=AI_CONFIG["amount_tolerance"])
+        warehouse_comparison = compare_by_warehouse(
+            pdf_rows, excel_warehouse_data,
+            amount_tolerance=AI_CONFIG["amount_tolerance"],
+            hours_tolerance=AI_CONFIG["hours_tolerance"],
+            confidence_threshold=AI_CONFIG["confidence_threshold"],
+        )
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
     except ValueError:
