@@ -247,7 +247,12 @@ def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None) -
         "employee_name_raw must be a visible person name from an Associate/Employee row, not a vendor, subtotal, invoice number, barcode, account number, or random numeric string. "
         "employee_id must be empty unless a separate visible employee ID column/value exists next to that person; never copy a name, barcode, invoice number, account number, or long numeric string into employee_id. "
         "If a premium/meal row has amount but no worked hours, use hours 0 and keep the amount. "
-        "If expected_employees is provided, use it only as a reconciliation candidate list: search the invoice for those visible employees, return only rows that are actually visible, preserve the visible PDF names, choose the row total billed amount, and return [] for candidates not found."
+        "If expected_employees is provided, use it only as a reconciliation candidate list: search the invoice for those visible employees, return only rows that are actually visible, preserve the visible PDF names, choose the row total billed amount, and return [] for candidates not found. "
+        "Confidence scoring: use 0.95+ for clear, unambiguous rows; 0.85-0.94 for rows with minor OCR issues or formatting variations; 0.70-0.84 for rows requiring interpretation; below 0.70 only for highly uncertain extractions. "
+        "Evidence text: include the original text snippet that supports the extraction, including dollar signs, amounts, and employee names. "
+        "Currency: use the currency symbol or code visible in the invoice (USD, EUR, etc.); if not visible, use the provided currency parameter. "
+        "Error handling: if you encounter unclear or ambiguous data, make your best interpretation and assign lower confidence; do not skip rows that are likely valid. "
+        "Output format: return ONLY the JSON array, no additional text, explanations, or markdown formatting."
     )
     if supplier_profile and supplier_profile.prompt_notes:
         instruction += " Supplier-specific profile guidance: " + " ".join(supplier_profile.prompt_notes)
@@ -381,6 +386,7 @@ def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start
     rows: List[LaborLineItem] = []
     for page in pages:
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         for line in (page.get("text") or "").splitlines():
             compact = " ".join(line.split())
             match = LINE_RE.match(compact)
@@ -430,6 +436,51 @@ def _extract_vertical_invoice_rows(page: Dict[str, Any], supplier: str, period_s
                 )
             )
         index += 8
+    return rows
+
+
+def _extract_tabular_invoice_rows(page: Dict[str, Any], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
+    lines = [" ".join(line.split()) for line in (page.get("text") or "").splitlines()]
+    lines = [line for line in lines if line]
+    rows: List[LaborLineItem] = []
+
+    # Look for tabular data with headers like "Employee Name", "Employee ID", "Hours", "Rate", "Amount"
+    header_pattern = re.compile(r"(?:Employee\s+)?(?:Name|ID)\s+(?:Employee\s+)?(?:ID|Name)\s+Hours\s+Rate\s+Amount", re.IGNORECASE)
+    data_pattern = re.compile(r"^([A-Za-z\s,.-]+?)\s+([A-Z0-9]+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$")
+
+    for i, line in enumerate(lines):
+        if header_pattern.search(line):
+            # Found header, extract data rows
+            for j in range(i + 1, len(lines)):
+                data_match = data_pattern.match(lines[j])
+                if data_match:
+                    name = data_match.group(1).strip()
+                    employee_id = data_match.group(2).strip()
+                    hours = parse_number(data_match.group(3))
+                    amount = parse_number(data_match.group(5))
+                    if name and amount:
+                        rows.append(
+                            LaborLineItem(
+                                source_type="pdf_invoice",
+                                source_file=page["source_file"],
+                                source_page_or_row=f"p{page['page']}",
+                                employee_id=employee_id,
+                                employee_name_raw=name,
+                                hours=round(hours, 2),
+                                amount=round(amount, 2),
+                                currency=currency,
+                                confidence=0.95,
+                                evidence_text=lines[j],
+                                supplier=supplier,
+                                period_start=period_start,
+                                period_end=period_end,
+                            )
+                        )
+                else:
+                    # If we hit a non-data line, stop processing this table
+                    break
+            break
+
     return rows
 
 

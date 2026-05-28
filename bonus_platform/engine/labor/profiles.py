@@ -28,7 +28,57 @@ BUILTIN_PROFILES = [
             "Ignore pages that only show working hours, overtime notes, handwritten RG/OT calculations, or no currency amounts.",
         ],
         image_page_policy="first_page_only",
-    )
+    ),
+    SupplierExtractionProfile(
+        key="fairway",
+        aliases=["fairway", "fairway staffing", "fairway staffing service"],
+        prompt_notes=[
+            "FAIRWAY invoices typically include employee rows with meal premiums and overtime.",
+            "Extract all charge rows including meal premiums even if hours are zero.",
+            "Look for rows with amounts in the TOTAL column.",
+        ],
+        image_page_policy="all",
+    ),
+    SupplierExtractionProfile(
+        key="osi",
+        aliases=["osi", "osi staffing", "osi staffing inc"],
+        prompt_notes=[
+            "OSI invoices use a vertical format with Date, Description, Hours, Pay Code, Type, Pay Rate, Bill Rate, Amount columns.",
+            "Each employee may have multiple rows for different pay codes (Reg, OT, DT).",
+            "Sum hours and amounts for the same employee across all rows.",
+        ],
+        image_page_policy="all",
+    ),
+    SupplierExtractionProfile(
+        key="adecco",
+        aliases=["adecco", "adecco staffing"],
+        prompt_notes=[
+            "ADECCO invoices may use various formats depending on the region.",
+            "Look for employee names followed by hours and amounts.",
+            "Handle both horizontal and vertical layouts.",
+        ],
+        image_page_policy="all",
+    ),
+    SupplierExtractionProfile(
+        key="randstad",
+        aliases=["randstad", "randstad staffing"],
+        prompt_notes=[
+            "RANDSTAD invoices typically include employee ID, name, hours, and amounts.",
+            "Extract rows from the main billing table.",
+            "Ignore summary rows and totals.",
+        ],
+        image_page_policy="all",
+    ),
+    SupplierExtractionProfile(
+        key="manpower",
+        aliases=["manpower", "manpower group"],
+        prompt_notes=[
+            "MANPOWER invoices may include multiple line items per employee.",
+            "Sum hours and amounts for the same employee.",
+            "Look for the main billing section, not timecard details.",
+        ],
+        image_page_policy="all",
+    ),
 ]
 
 

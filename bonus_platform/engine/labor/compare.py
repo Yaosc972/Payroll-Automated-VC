@@ -68,14 +68,40 @@ def compare_labor_items(
 
     rows = [row.to_dict() for row in comparison_rows]
     candidate_matches = _suggest_unmatched_candidates(rows, pdf, excel)
+
+    # Calculate additional quality metrics
+    total_rows = len(rows)
+    passed_count = sum(1 for row in rows if row["matchStatus"] == "通过")
+    match_rate = round(passed_count / total_rows * 100, 1) if total_rows > 0 else 0.0
+
+    # Calculate average confidence from PDF rows
+    pdf_confidences = [item.confidence for item in pdf_rows]
+    average_confidence = round(sum(pdf_confidences) / len(pdf_confidences), 3) if pdf_confidences else 0.0
+
+    # Calculate percentage deltas
+    pdf_amount_total = sum(row.amount for row in pdf_rows)
+    excel_amount_total = sum(row.amount for row in excel_rows)
+    amount_delta_total = round(pdf_amount_total - excel_amount_total, 2)
+    amount_delta_percentage = round(abs(amount_delta_total) / max(abs(pdf_amount_total), abs(excel_amount_total), 1.0) * 100, 2)
+
+    pdf_hours_total = round(sum(row.hours for row in pdf_rows), 2)
+    excel_hours_total = round(sum(row.hours for row in excel_rows), 2)
+    hours_delta_total = round(pdf_hours_total - excel_hours_total, 2)
+    hours_delta_percentage = round(abs(hours_delta_total) / max(abs(pdf_hours_total), abs(excel_hours_total), 1.0) * 100, 2)
+
     summary = {
         "pdfEmployeeCount": len(pdf),
         "excelEmployeeCount": len(excel),
-        "pdfHoursTotal": round(sum(row.hours for row in pdf_rows), 2),
-        "excelHoursTotal": round(sum(row.hours for row in excel_rows), 2),
-        "pdfAmountTotal": round(sum(row.amount for row in pdf_rows), 2),
-        "excelAmountTotal": round(sum(row.amount for row in excel_rows), 2),
-        "amountDeltaTotal": round(sum(row.amount for row in pdf_rows) - sum(row.amount for row in excel_rows), 2),
+        "pdfHoursTotal": pdf_hours_total,
+        "excelHoursTotal": excel_hours_total,
+        "pdfAmountTotal": round(pdf_amount_total, 2),
+        "excelAmountTotal": round(excel_amount_total, 2),
+        "amountDeltaTotal": amount_delta_total,
+        "amountDeltaPercentage": amount_delta_percentage,
+        "hoursDeltaTotal": hours_delta_total,
+        "hoursDeltaPercentage": hours_delta_percentage,
+        "matchRate": match_rate,
+        "averageConfidence": average_confidence,
         "amountDiffCount": sum(1 for row in rows if row["matchStatus"] == "金额差异"),
         "hoursRiskCount": sum(1 for row in rows if row["matchStatus"] == "工时不一致"),
         "unmatchedPdfCount": sum(1 for row in rows if row["pdfHoursTotal"] and not row["excelHoursTotal"]),
@@ -183,7 +209,22 @@ def _name_similarity(left: str, right: str) -> float:
     right_longest = max(right_tokens, key=len) if right_tokens else ""
     longest_bonus = 0.15 if left_longest == right_longest else 0.0
     coverage = len(intersection) / max_size
-    return round(min(base * 0.7 + coverage * 0.3 + longest_bonus, 1.0), 3)
+    token_score = round(min(base * 0.7 + coverage * 0.3 + longest_bonus, 1.0), 3)
+
+    # Add SequenceMatcher-based similarity for better fuzzy matching
+    left_normalized = normalize_employee_name(left)
+    right_normalized = normalize_employee_name(right)
+    sequence_score = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+
+    # Check for nickname/variant matches
+    from .parsing import expand_name_variants
+    left_variants = expand_name_variants(left)
+    right_variants = expand_name_variants(right)
+    variant_intersection = left_variants & right_variants
+    variant_bonus = 0.3 if variant_intersection else 0.0
+
+    # Weighted average: token-based score gets 40%, sequence-based gets 60%, plus variant bonus
+    return round(min(token_score * 0.4 + sequence_score * 0.6 + variant_bonus, 1.0), 3)
 
 
 def _fuzzy_totals_support_match(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], score: float, amount_tolerance: float, hours_tolerance: float) -> bool:
