@@ -45,6 +45,7 @@ from .engine.workbook_io import build_final_workbook, build_pending_workbook, bu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_data_files()
+    _recover_stuck_labor_runs()
     yield
 
 
@@ -202,9 +203,10 @@ def create_labor_run_endpoint(payload: dict = Body(...)) -> dict:
 @app.get("/api/labor/runs/{run_id}")
 def get_labor_run(run_id: str) -> dict:
     try:
-        return load_labor_metadata(get_labor_run_dir(run_id))
+        metadata = load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+    return _check_stale_extracting(metadata)
 
 
 @app.post("/api/labor/runs/{run_id}/files")
@@ -460,6 +462,53 @@ def _labor_quality_score(quality: dict, summary: dict) -> tuple:
         int(summary.get("unmatchedPdfCount") or 0) + int(summary.get("unmatchedExcelCount") or 0),
         abs(float(summary.get("amountDeltaTotal") or 0)),
     )
+
+
+def _check_stale_extracting(metadata: dict) -> dict:
+    """Mark run as failed if it's been stuck in '抽取中' for over 10 minutes."""
+    if metadata.get("status") != "抽取中":
+        return metadata
+    from datetime import datetime as _dt, timedelta
+    updated = metadata.get("updatedAt") or metadata.get("createdAt") or ""
+    try:
+        updated_dt = _dt.fromisoformat(updated)
+    except (ValueError, TypeError):
+        return metadata
+    if _dt.now() - updated_dt > timedelta(minutes=10):
+        run_id = metadata.get("id")
+        if run_id:
+            try:
+                metadata = update_labor_metadata(run_id, {
+                    "status": "抽取失败",
+                    "errorMessage": "抽取超时（超过 10 分钟未完成）。请重新点击「抽取并核对」重试。",
+                })
+            except Exception:
+                pass
+    return metadata
+
+
+def _recover_stuck_labor_runs() -> None:
+    """Mark stale '抽取中' runs as failed on server startup."""
+    from datetime import datetime as _dt, timedelta
+    threshold = _dt.now() - timedelta(minutes=5)
+    for metadata in list_labor_metadata():
+        if metadata.get("status") != "抽取中":
+            continue
+        updated = metadata.get("updatedAt") or metadata.get("createdAt") or ""
+        try:
+            updated_dt = _dt.fromisoformat(updated)
+        except (ValueError, TypeError):
+            continue
+        if updated_dt < threshold:
+            run_id = metadata.get("id")
+            if run_id:
+                try:
+                    update_labor_metadata(run_id, {
+                        "status": "抽取失败",
+                        "errorMessage": "服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
+                    })
+                except Exception:
+                    pass
 
 
 def _labor_extraction_quality(summary: dict) -> dict:
