@@ -171,17 +171,31 @@ def _fuzzy_match_unmatched_groups(
 
 
 def _name_similarity(left: str, right: str) -> float:
-    return SequenceMatcher(None, normalize_employee_name(left), normalize_employee_name(right)).ratio()
+    left_tokens = set(normalize_employee_name(left).split())
+    right_tokens = set(normalize_employee_name(right).split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    intersection = left_tokens & right_tokens
+    min_size = min(len(left_tokens), len(right_tokens))
+    max_size = max(len(left_tokens), len(right_tokens))
+    base = len(intersection) / min_size
+    left_longest = max(left_tokens, key=len) if left_tokens else ""
+    right_longest = max(right_tokens, key=len) if right_tokens else ""
+    longest_bonus = 0.15 if left_longest == right_longest else 0.0
+    coverage = len(intersection) / max_size
+    return round(min(base * 0.7 + coverage * 0.3 + longest_bonus, 1.0), 3)
 
 
 def _fuzzy_totals_support_match(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], score: float, amount_tolerance: float, hours_tolerance: float) -> bool:
     amount_delta = abs(round(pdf_group["amount"] - excel_group["amount"], 2))
     hours_delta = abs(round(pdf_group["hours"] - excel_group["hours"], 2))
-    if score >= 0.88:
+    max_amount = max(abs(pdf_group["amount"]), abs(excel_group["amount"]), 1.0)
+    relative_amount_diff = amount_delta / max_amount
+    if score >= 0.85:
         return True
-    if score >= 0.65 and amount_delta <= max(amount_tolerance, 0.05) and hours_delta <= max(hours_tolerance, 0.1):
+    if score >= 0.70 and relative_amount_diff <= 0.02 and hours_delta <= max(hours_tolerance, 0.5):
         return True
-    if score >= 0.72 and (amount_delta <= max(amount_tolerance, 0.05) or hours_delta <= max(hours_tolerance, 0.1)):
+    if score >= 0.60 and relative_amount_diff <= 0.01 and hours_delta <= max(hours_tolerance, 0.2):
         return True
     return False
 
@@ -205,7 +219,7 @@ def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dic
             pdf_group = pdf.get(pdf_key, _empty_group())
             excel_group = excel.get(excel_key, _empty_group())
             score = _name_similarity(pdf_group["name"], excel_group["name"])
-            if score < 0.70:
+            if score < 0.55:
                 continue
             amount_delta = round(pdf_group["amount"] - excel_group["amount"], 2)
             hours_delta = round(pdf_group["hours"] - excel_group["hours"], 2)

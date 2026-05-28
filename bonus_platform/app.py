@@ -418,14 +418,16 @@ def _labor_extraction_quality(summary: dict) -> dict:
     excel_amount = float(summary.get("excelAmountTotal") or 0)
 
     issues = []
-    if excel_count and abs(pdf_count - excel_count) / excel_count > 0.05:
-        issues.append(f"PDF员工数 {pdf_count} 与 Excel员工数 {excel_count} 偏差超过 5%。")
-    if excel_count and (unmatched_pdf + unmatched_excel) / excel_count > 0.20:
-        issues.append(f"未匹配员工 {unmatched_pdf + unmatched_excel} 人，超过 Excel人数的 20%。")
-    if excel_hours and abs(pdf_hours - excel_hours) / excel_hours > 0.05:
-        issues.append(f"总工时差异 {round(pdf_hours - excel_hours, 2)}，超过 Excel总工时的 5%。")
-    if excel_amount and abs(pdf_amount - excel_amount) / excel_amount > 0.05:
-        issues.append(f"总金额差异 {round(pdf_amount - excel_amount, 2)}，超过 Excel总金额的 5%。")
+    if excel_count and abs(pdf_count - excel_count) / excel_count > 0.10:
+        issues.append(f"PDF员工数 {pdf_count} 与 Excel员工数 {excel_count} 偏差超过 10%。")
+    if excel_count and (unmatched_pdf + unmatched_excel) / excel_count > 0.25:
+        issues.append(f"未匹配员工 {unmatched_pdf + unmatched_excel} 人，超过 Excel人数的 25%。")
+    if excel_hours and abs(pdf_hours - excel_hours) / excel_hours > 0.10:
+        issues.append(f"总工时差异 {round(pdf_hours - excel_hours, 2)}，超过 Excel总工时的 10%。")
+    if excel_amount:
+        amount_drift = abs(pdf_amount - excel_amount) / excel_amount
+        if amount_drift > 0.10:
+            issues.append(f"总金额差异 {round(pdf_amount - excel_amount, 2)}，超过 Excel总金额的 10%。")
 
     if issues:
         return {
