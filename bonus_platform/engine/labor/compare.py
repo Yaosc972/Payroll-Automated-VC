@@ -67,7 +67,36 @@ def compare_labor_items(
         )
 
     rows = [row.to_dict() for row in comparison_rows]
-    candidate_matches = _suggest_unmatched_candidates(rows, pdf, excel)
+    candidate_matches, promoted_pdf, promoted_excel = _suggest_unmatched_candidates(rows, pdf, excel)
+
+    # Replace promoted PDF-only / Excel-only rows with merged "疑似姓名匹配" rows
+    promoted_rows: List[Dict[str, Any]] = []
+    kept_rows: List[Dict[str, Any]] = []
+    for row in rows:
+        key = row["employeeKey"]
+        if key in promoted_pdf:
+            # Find the matching candidate to build merged row
+            cand = next((c for c in candidate_matches if c["pdfEmployeeKey"] == key), None)
+            if cand:
+                promoted_rows.append({
+                    "employeeKey": key,
+                    "employeeName": f"{cand['pdfEmployeeName']} ⇄ {cand['excelEmployeeName']}",
+                    "pdfHoursTotal": cand["pdfHoursTotal"],
+                    "excelHoursTotal": cand["excelHoursTotal"],
+                    "hoursDelta": cand["hoursDelta"],
+                    "pdfAmountTotal": cand["pdfAmountTotal"],
+                    "excelAmountTotal": cand["excelAmountTotal"],
+                    "amountDelta": cand["amountDelta"],
+                    "matchStatus": "疑似姓名匹配",
+                    "riskFlags": ["名字相似，金额/工时未对齐"],
+                    "sourceRefs": cand["sourceRefs"],
+                })
+            continue
+        if key in promoted_excel:
+            # Skip the Excel side — already merged into the PDF row above
+            continue
+        kept_rows.append(row)
+    rows = kept_rows + promoted_rows
 
     # Calculate additional quality metrics
     total_rows = len(rows)
@@ -104,10 +133,10 @@ def compare_labor_items(
         "averageConfidence": average_confidence,
         "amountDiffCount": sum(1 for row in rows if row["matchStatus"] == "金额差异"),
         "hoursRiskCount": sum(1 for row in rows if row["matchStatus"] == "工时不一致"),
-        "unmatchedPdfCount": sum(1 for row in rows if row["pdfHoursTotal"] and not row["excelHoursTotal"]),
-        "unmatchedExcelCount": sum(1 for row in rows if row["excelHoursTotal"] and not row["pdfHoursTotal"]),
+        "unmatchedPdfCount": sum(1 for row in rows if row["matchStatus"] in ("PDF有Excel无", "低置信度抽取") and row["pdfHoursTotal"] and not row["excelHoursTotal"]),
+        "unmatchedExcelCount": sum(1 for row in rows if row["matchStatus"] == "Excel有PDF无"),
         "lowConfidenceCount": sum(1 for row in rows if "低置信度抽取" in row.get("riskFlags", []) or row["matchStatus"] == "低置信度抽取"),
-        "fuzzyMatchCount": sum(1 for row in rows if "疑似姓名匹配" in row.get("riskFlags", [])),
+        "fuzzyMatchCount": sum(1 for row in rows if row["matchStatus"] == "疑似姓名匹配" or "疑似姓名匹配" in row.get("riskFlags", [])),
         "candidateMatchCount": len(candidate_matches),
         "exceptionCount": sum(1 for row in rows if row["matchStatus"] != "通过"),
     }
@@ -247,10 +276,19 @@ def _matched_name(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], fuzzy_
     return pdf_group["name"] or excel_group["name"]
 
 
-def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dict[str, Any]], excel: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dict[str, Any]], excel: Dict[str, Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set, set]:
+    """Find name-similar pairs among unmatched rows.
+
+    Returns (candidates, promoted_pdf_keys, promoted_excel_keys).
+    High-similarity pairs (>= 0.65) are "promoted" — the caller should remove
+    the original PDF-only / Excel-only rows and replace them with a merged
+    "疑似姓名匹配" row so the operator can confirm at a glance.
+    """
     unmatched_pdf_keys = [row["employeeKey"] for row in rows if row.get("matchStatus") == "PDF有Excel无"]
     unmatched_excel_keys = [row["employeeKey"] for row in rows if row.get("matchStatus") == "Excel有PDF无"]
     candidates = []
+    promoted_pdf: set = set()
+    promoted_excel: set = set()
     used_excel = set()
     for pdf_key in unmatched_pdf_keys:
         best = None
@@ -284,7 +322,11 @@ def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dic
         if best:
             candidates.append(best)
             used_excel.add(best["excelEmployeeKey"])
-    return sorted(candidates, key=lambda row: row["nameSimilarity"], reverse=True)
+            # Promote high-similarity pairs into main comparison view
+            if best["nameSimilarity"] >= 0.65:
+                promoted_pdf.add(best["pdfEmployeeKey"])
+                promoted_excel.add(best["excelEmployeeKey"])
+    return sorted(candidates, key=lambda row: row["nameSimilarity"], reverse=True), promoted_pdf, promoted_excel
 
 
 def _source_ref(item: LaborLineItem) -> str:
