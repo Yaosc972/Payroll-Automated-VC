@@ -529,6 +529,9 @@ def _warehouse_id_from_filename(source_file: str) -> str:
     m = re.search(r"CHINA_EXPRESS__?(\d+)", name, re.IGNORECASE)
     if m:
         return m.group(1)
+    m = re.search(r"elog(\d+)-", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
     return ""
 
 

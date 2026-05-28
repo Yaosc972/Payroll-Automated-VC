@@ -26,12 +26,15 @@ AI_PAGE_CACHE_VERSION = "v4"
 
 
 def _warehouse_id_from_filename(source_file: str) -> str:
-    """Extract warehouse number from PDF filename like DEPT_1, CHINA_EXPRESS__3."""
+    """Extract warehouse number from PDF filename like DEPT_1, CHINA_EXPRESS__3, elog9-1."""
     name = Path(source_file).stem.split("_202")[0]
     m = re.search(r"DEPT[_-](\d+)", name, re.IGNORECASE)
     if m:
         return m.group(1)
     m = re.search(r"CHINA_EXPRESS__?(\d+)", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"elog(\d+)-", name, re.IGNORECASE)
     if m:
         return m.group(1)
     return ""
