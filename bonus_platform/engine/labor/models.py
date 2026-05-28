@@ -21,6 +21,7 @@ class LaborLineItem:
     supplier: str = ""
     period_start: str = ""
     period_end: str = ""
+    warehouse_id: str = ""
 
     @property
     def employee_name_normalized(self) -> str:
@@ -78,6 +79,7 @@ def line_items_from_dicts(rows: List[Dict[str, Any]]) -> List[LaborLineItem]:
             supplier=str(row.get("supplier") or ""),
             period_start=str(row.get("period_start") or row.get("periodStart") or ""),
             period_end=str(row.get("period_end") or row.get("periodEnd") or ""),
+            warehouse_id=str(row.get("warehouse_id") or row.get("warehouseId") or ""),
         )
         for row in rows
     ]

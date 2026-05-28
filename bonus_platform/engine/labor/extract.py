@@ -332,6 +332,7 @@ def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None) -
         "Evidence text: include the original text snippet that supports the extraction, including dollar signs, amounts, and employee names. "
         "Currency: use the currency symbol or code visible in the invoice (USD, EUR, etc.); if not visible, use the provided currency parameter. "
         "Error handling: if you encounter unclear or ambiguous data, make your best interpretation and assign lower confidence; do not skip rows that are likely valid. "
+        "Warehouse identification: if the page contains a warehouse/dept identifier (e.g. DEPT:CA#3, DEPT:CA-27, warehouse code), include it as warehouse_id field in each row. Extract only the numeric part (e.g. DEPT:CA#3 -> 3, DEPT:CA-27 -> 27). If no warehouse identifier is visible, set warehouse_id to empty string. "
         "Output format: return ONLY the JSON array, no additional text, explanations, or markdown formatting."
     )
     if supplier_profile and supplier_profile.prompt_notes:

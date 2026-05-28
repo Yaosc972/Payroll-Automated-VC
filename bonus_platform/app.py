@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, ensure_data_files
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
-from .engine.labor.compare import compare_labor_items
+from .engine.labor.compare import compare_labor_items, compare_by_warehouse
 from .engine.labor.extract import extract_invoice_items
 from .engine.labor.report import build_labor_report
 from .engine.labor.runs import (
@@ -360,6 +360,8 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     extraction_quality["retryApplied"] = True
                 else:
                     extraction_quality["retryApplied"] = False
+        excel_warehouse_data = [{"warehouse_id": row.warehouse_id, "hours": row.hours, "amount": row.amount, "employee_name": row.employee_name_raw} for row in excel_rows]
+        warehouse_comparison = compare_by_warehouse(pdf_rows, excel_warehouse_data, amount_tolerance=AI_CONFIG["amount_tolerance"])
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
     except ValueError:
@@ -374,6 +376,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             "comparisonSummary": comparison["summary"],
             "comparisonRows": comparison["rows"],
             "candidateMatches": comparison.get("candidateMatches", []),
+            "warehouseComparison": warehouse_comparison,
             "extractionQuality": extraction_quality,
             "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
             "excelRows": [row.to_dict() for row in excel_rows],

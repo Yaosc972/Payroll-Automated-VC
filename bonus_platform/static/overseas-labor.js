@@ -30,6 +30,7 @@ const labor = {
   compareStatus: document.querySelector("#compareStatus"),
   qualityAlert: document.querySelector("#qualityAlert"),
   summaryGrid: document.querySelector("#summaryGrid"),
+  warehouseTable: document.querySelector("#warehouseTable"),
   amountDiffTable: document.querySelector("#amountDiffTable"),
   candidateTable: document.querySelector("#candidateTable"),
   riskTable: document.querySelector("#riskTable"),
@@ -220,7 +221,14 @@ function renderPreview(rows) {
 function renderResult(run) {
   const summary = run.comparisonSummary || {};
   renderQualityAlert(run.extractionQuality);
+  const wc = run.warehouseComparison;
+  const warehouseMetrics = wc && wc.summary ? [
+    { label: "仓库数", value: wc.summary.warehouseCount, type: "info" },
+    { label: "仓库通过", value: wc.summary.passedCount, type: wc.summary.exceptionCount > 0 ? "warning" : "success" },
+    { label: "仓库差异", value: wc.summary.exceptionCount, type: wc.summary.exceptionCount > 0 ? "warning" : "success" },
+  ] : [];
   const metrics = [
+    ...warehouseMetrics,
     { label: "PDF人数", value: summary.pdfEmployeeCount, type: "info" },
     { label: "Excel人数", value: summary.excelEmployeeCount, type: "info" },
     { label: "PDF总工时", value: summary.pdfHoursTotal, type: "info" },
@@ -232,11 +240,40 @@ function renderResult(run) {
     { label: "风险人数", value: summary.exceptionCount, type: summary.exceptionCount > 0 ? "warning" : "success" },
   ];
   labor.summaryGrid.innerHTML = metrics.map(({ label, value, type }) => `<div class="metric-${type}"><span>${label}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`).join("");
+  renderWarehouseTable(wc);
   const rows = run.comparisonRows || [];
   renderRows(labor.amountDiffTable, rows.filter((row) => row.matchStatus === "金额差异"));
   renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
   renderRows(labor.riskTable, rows.filter((row) => row.matchStatus !== "通过" && row.matchStatus !== "金额差异"));
   renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
+}
+
+function renderWarehouseTable(wc) {
+  const heading = document.getElementById("warehouseHeading");
+  const table = labor.warehouseTable;
+  if (!heading || !table) return;
+  if (!wc || !wc.rows || wc.rows.length === 0) {
+    heading.hidden = true;
+    table.hidden = true;
+    return;
+  }
+  heading.hidden = false;
+  table.hidden = false;
+  const headers = ["仓库", "PDF员工数", "Excel员工数", "PDF金额", "Excel金额", "差异", "状态"];
+  const thead = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
+  const tbody = wc.rows.map((r) => {
+    const statusClass = r.matchStatus === "通过" ? "status-pass" : "status-fail";
+    return `<tr>
+      <td>仓库${escapeHtml(r.warehouseId)}</td>
+      <td>${r.pdfEmployeeCount}</td>
+      <td>${r.excelEmployeeCount}</td>
+      <td>$${r.pdfAmountTotal.toFixed(2)}</td>
+      <td>$${r.excelAmountTotal.toFixed(2)}</td>
+      <td>${r.amountDelta >= 0 ? "+" : ""}$${r.amountDelta.toFixed(2)}</td>
+      <td style="color:${r.matchStatus === "通过" ? "#16a34a" : "#dc2626"};font-weight:600">${escapeHtml(r.matchStatus)}</td>
+    </tr>`;
+  }).join("");
+  table.innerHTML = `<table class="audit-data-table">${thead}<tbody>${tbody}</tbody></table>`;
 }
 
 function renderQualityAlert(quality) {

@@ -65,6 +65,14 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
             employee_id = display_name(_value(row, index[mapping["employeeId"]]))
         if mapping.get("currency") and mapping["currency"] in index:
             currency = display_name(_value(row, index[mapping["currency"]]))
+        warehouse_id = ""
+        for wh_col_name in ("物理仓", "仓库", "warehouse"):
+            if wh_col_name in index:
+                raw_wh = _value(row, index[wh_col_name])
+                import re as _re
+                m = _re.search(r"(\d+)号仓", str(raw_wh or ""))
+                warehouse_id = m.group(1) if m else ""
+                break
         result.append(
             LaborLineItem(
                 source_type="offline_workbook",
@@ -77,6 +85,7 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
                 currency=currency,
                 confidence=1.0,
                 evidence_text="",
+                warehouse_id=warehouse_id,
             )
         )
     return result
