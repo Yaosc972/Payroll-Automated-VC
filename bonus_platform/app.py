@@ -13,7 +13,7 @@ from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, E
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
-from .engine.labor.extract import extract_invoice_items, quick_extract_totals
+from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename
 from .engine.labor.report import build_labor_report
 from .engine.labor.runs import (
     attach_labor_file,
@@ -348,15 +348,23 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 # Quick extraction failed, extract all employees
                 diff_wh = ["*"]
             if diff_wh:
+                # Only extract employees from diff warehouse PDFs (unless all totals failed)
+                if "*" not in diff_wh:
+                    filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_filename(p.name) in diff_wh]
+                    filtered_excel_rows = [r for r in excel_rows if r.warehouse_id in diff_wh]
+                else:
+                    filtered_pdf_paths = pdf_paths
+                    filtered_excel_rows = excel_rows
+
                 pdf_rows = extract_invoice_items(
-                    pdf_paths, AI_CONFIG,
+                    filtered_pdf_paths, AI_CONFIG,
                     supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
                 )
                 if not pdf_rows:
                     raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或启用 AI/OCR 后重试。")
 
                 comparison = compare_labor_items(
-                    pdf_rows, excel_rows,
+                    pdf_rows, filtered_excel_rows,
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
                     hours_tolerance=AI_CONFIG["hours_tolerance"],
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
@@ -367,12 +375,14 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
 
                 if extraction_quality["level"] == "warning":
                     pdf_rows, comparison, extraction_quality = _retry_if_better(
-                        pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison,
+                        filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
                         supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
                     )
 
                 # Re-run warehouse comparison with full employee rows for Tier 3
+                # Pass pdf_totals to preserve correct total amounts for non-diff warehouses
                 warehouse_comparison = compare_by_warehouse(
+                    pdf_totals=pdf_totals,
                     pdf_rows=pdf_rows,
                     excel_rows_with_warehouse=excel_warehouse_data,
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
