@@ -25,6 +25,18 @@ MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
 AI_PAGE_CACHE_VERSION = "v4"
 
 
+def _warehouse_id_from_filename(source_file: str) -> str:
+    """Extract warehouse number from PDF filename like DEPT_1, CHINA_EXPRESS__3."""
+    name = Path(source_file).stem.split("_202")[0]
+    m = re.search(r"DEPT[_-](\d+)", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"CHINA_EXPRESS__?(\d+)", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def extract_invoice_items(
     pdf_paths: List[Path],
     ai_config: Dict[str, Any],
@@ -63,6 +75,119 @@ def extract_invoice_items(
         if errors:
             raise ValueError("AI 抽取失败：" + "；".join(errors))
     return []
+
+
+def quick_extract_totals(
+    pdf_paths: List[Path],
+    ai_config: Dict[str, Any],
+    supplier: str = "",
+) -> List[Dict[str, Any]]:
+    """Lightweight extraction: only get total_amount per PDF from first page.
+
+    Returns list of {source_file, total_amount, warehouse_id} dicts.
+    Much faster than full employee extraction — one short AI call per PDF.
+    """
+    if not _ai_ready(ai_config):
+        return [{"source_file": p.name, "total_amount": 0.0, "warehouse_id": ""} for p in pdf_paths]
+
+    pages = _extract_pdf_pages(pdf_paths)
+    first_pages = [p for p in pages if int(p.get("page") or 1) == 1]
+
+    prompt = (
+        "From this invoice page, extract ONLY two values as strict JSON:\n"
+        "1. total_amount: the invoice total/balance due (a number, no currency symbol)\n"
+        "2. warehouse_id: the warehouse/dept number if visible (e.g. DEPT:CA#3 → 3), else empty string\n\n"
+        'Return: {"total_amount": 12345.67, "warehouse_id": "3"}\n'
+        "Return only the JSON object, no extra text."
+    )
+
+    results = []
+    for page in first_pages:
+        source_file = page.get("source_file", "")
+        wh = _warehouse_id_from_filename(source_file)
+        page_text = page.get("text", "")
+        if not page_text.strip():
+            results.append({"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh})
+            continue
+        try:
+            amount = _extract_total_with_ai(page_text, prompt, ai_config)
+            results.append({"source_file": source_file, "total_amount": amount, "warehouse_id": wh})
+        except Exception:
+            results.append({"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh})
+    return results
+
+
+def _extract_total_with_ai(page_text: str, prompt: str, ai_config: Dict[str, Any]) -> float:
+    """Call AI to extract total amount from a single page text."""
+    provider = str(ai_config.get("provider") or "").lower()
+    base_url = ai_config["base_url"].rstrip("/")
+
+    if provider == "mimo" and "token-plan" in base_url:
+        return _extract_total_anthropic(page_text, prompt, ai_config)
+
+    payload = {
+        "model": ai_config["model"],
+        "messages": [
+            {"role": "system", "content": "Extract invoice total as JSON only."},
+            {"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"},
+        ],
+        "temperature": 0,
+        "max_completion_tokens": 256,
+    }
+    _apply_provider_options(payload, ai_config)
+    req = request.Request(
+        base_url + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_request_headers(ai_config),
+        method="POST",
+    )
+    with request.urlopen(req, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    return _parse_total_from_response(data["choices"][0]["message"]["content"])
+
+
+def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, Any]) -> float:
+    """Anthropic Messages API variant for total extraction."""
+    headers = {
+        "x-api-key": str(ai_config["api_key"]),
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": ai_config["model"],
+        "max_tokens": 256,
+        "system": "Extract invoice total as JSON only.",
+        "messages": [{"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"}],
+    }
+    base_url = ai_config["base_url"].rstrip("/")
+    req = request.Request(
+        base_url + "/v1/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with request.urlopen(req, timeout=30) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    content = ""
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            content += block["text"]
+    return _parse_total_from_response(content)
+
+
+def _parse_total_from_response(content: str) -> float:
+    """Extract total_amount number from AI response."""
+    if not content or not content.strip():
+        return 0.0
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parse_number(parsed.get("total_amount"))
+    except json.JSONDecodeError:
+        match = re.search(r'"total_amount"\s*:\s*([\d,]+\.?\d*)', content)
+        if match:
+            return parse_number(match.group(1))
+    return 0.0
 
 
 def _ai_ready(ai_config: Dict[str, Any]) -> bool:

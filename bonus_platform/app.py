@@ -13,7 +13,7 @@ from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, E
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
-from .engine.labor.extract import extract_invoice_items
+from .engine.labor.extract import extract_invoice_items, quick_extract_totals
 from .engine.labor.report import build_labor_report
 from .engine.labor.runs import (
     attach_labor_file,
@@ -308,65 +308,78 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     sheet_name = metadata.get("workbookSheet") or ""
     workbook_path = _labor_workbook_path(metadata)
     pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
+    supplier = metadata.get("supplierName", "")
+    period_start = metadata.get("periodStart", "")
+    period_end = metadata.get("periodEnd", "")
+    currency = metadata.get("currency", "")
+
     try:
-        pdf_rows = extract_invoice_items(
-            pdf_paths,
-            AI_CONFIG,
-            supplier=metadata.get("supplierName", ""),
-            period_start=metadata.get("periodStart", ""),
-            period_end=metadata.get("periodEnd", ""),
-            currency=metadata.get("currency", ""),
-        )
-        if not pdf_rows:
-            raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或启用 AI/OCR 后重试。")
         excel_rows = read_workbook_rows(workbook_path, sheet_name, mapping)
-        comparison = compare_labor_items(
-            pdf_rows,
-            excel_rows,
+        excel_warehouse_data = [
+            {"warehouse_id": row.warehouse_id, "hours": row.hours, "amount": row.amount, "employee_name": row.employee_name_raw}
+            for row in excel_rows
+        ]
+
+        # === Stage 1: Quick total extraction ===
+        pdf_totals = quick_extract_totals(pdf_paths, AI_CONFIG, supplier=supplier)
+        all_totals_zero = all(float(t.get("total_amount") or 0) == 0 for t in pdf_totals)
+        if all_totals_zero:
+            pdf_totals = []  # Fall through to full extraction
+        warehouse_comparison = compare_by_warehouse(
+            pdf_totals=pdf_totals,
+            excel_rows_with_warehouse=excel_warehouse_data,
             amount_tolerance=AI_CONFIG["amount_tolerance"],
-            hours_tolerance=AI_CONFIG["hours_tolerance"],
-            confidence_threshold=AI_CONFIG["confidence_threshold"],
         )
-        extraction_quality = _labor_extraction_quality(comparison["summary"])
-        extraction_quality["retryAttempted"] = False
-        extraction_quality["retryApplied"] = False
-        if extraction_quality["level"] == "warning":
-            retry_config = dict(AI_CONFIG)
-            retry_config["cache_enabled"] = False
-            retry_pdf_rows = extract_invoice_items(
-                pdf_paths,
-                retry_config,
-                supplier=metadata.get("supplierName", ""),
-                period_start=metadata.get("periodStart", ""),
-                period_end=metadata.get("periodEnd", ""),
-                currency=metadata.get("currency", ""),
-                expected_rows=_expected_labor_rows(excel_rows),
-            )
-            if retry_pdf_rows:
-                retry_comparison = compare_labor_items(
-                    retry_pdf_rows,
-                    excel_rows,
+
+        pdf_rows = []
+        comparison = {"summary": {}, "rows": [], "candidateMatches": []}
+        extraction_quality = {"level": "ok", "message": "总金额核对通过，无需抽取员工明细。", "issues": [], "retryAttempted": False, "retryApplied": False}
+
+        if warehouse_comparison["summary"]["totalPassed"]:
+            # Total matched — done, no employee extraction needed
+            pass
+        else:
+            # === Stage 2: Full extraction for diff warehouses ===
+            diff_wh = warehouse_comparison["summary"].get("diffWarehouses", [])
+            if not diff_wh and not all_totals_zero:
+                # Totals don't match but no warehouses identified — shouldn't happen
+                all_totals_zero = True
+            if all_totals_zero:
+                # Quick extraction failed, extract all employees
+                diff_wh = ["*"]
+            if diff_wh:
+                pdf_rows = extract_invoice_items(
+                    pdf_paths, AI_CONFIG,
+                    supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                )
+                if not pdf_rows:
+                    raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或启用 AI/OCR 后重试。")
+
+                comparison = compare_labor_items(
+                    pdf_rows, excel_rows,
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
                     hours_tolerance=AI_CONFIG["hours_tolerance"],
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
                 )
-                retry_quality = _labor_extraction_quality(retry_comparison["summary"])
-                extraction_quality["retryAttempted"] = True
-                if _labor_quality_score(retry_quality, retry_comparison["summary"]) < _labor_quality_score(extraction_quality, comparison["summary"]):
-                    pdf_rows = retry_pdf_rows
-                    comparison = retry_comparison
-                    extraction_quality = retry_quality
-                    extraction_quality["retryAttempted"] = True
-                    extraction_quality["retryApplied"] = True
-                else:
-                    extraction_quality["retryApplied"] = False
-        excel_warehouse_data = [{"warehouse_id": row.warehouse_id, "hours": row.hours, "amount": row.amount, "employee_name": row.employee_name_raw} for row in excel_rows]
-        warehouse_comparison = compare_by_warehouse(
-            pdf_rows, excel_warehouse_data,
-            amount_tolerance=AI_CONFIG["amount_tolerance"],
-            hours_tolerance=AI_CONFIG["hours_tolerance"],
-            confidence_threshold=AI_CONFIG["confidence_threshold"],
-        )
+                extraction_quality = _labor_extraction_quality(comparison["summary"])
+                extraction_quality["retryAttempted"] = False
+                extraction_quality["retryApplied"] = False
+
+                if extraction_quality["level"] == "warning":
+                    pdf_rows, comparison, extraction_quality = _retry_if_better(
+                        pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison,
+                        supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                    )
+
+                # Re-run warehouse comparison with full employee rows for Tier 3
+                warehouse_comparison = compare_by_warehouse(
+                    pdf_rows=pdf_rows,
+                    excel_rows_with_warehouse=excel_warehouse_data,
+                    amount_tolerance=AI_CONFIG["amount_tolerance"],
+                    hours_tolerance=AI_CONFIG["hours_tolerance"],
+                    confidence_threshold=AI_CONFIG["confidence_threshold"],
+                )
+
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
     except ValueError:
@@ -389,6 +402,30 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         },
     )
     return updated
+
+
+def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison, **kwargs):
+    retry_config = dict(AI_CONFIG)
+    retry_config["cache_enabled"] = False
+    retry_pdf_rows = extract_invoice_items(
+        pdf_paths, retry_config,
+        expected_rows=_expected_labor_rows(excel_rows), **kwargs,
+    )
+    if retry_pdf_rows:
+        retry_comparison = compare_labor_items(
+            retry_pdf_rows, excel_rows,
+            amount_tolerance=AI_CONFIG["amount_tolerance"],
+            hours_tolerance=AI_CONFIG["hours_tolerance"],
+            confidence_threshold=AI_CONFIG["confidence_threshold"],
+        )
+        retry_quality = _labor_extraction_quality(retry_comparison["summary"])
+        extraction_quality["retryAttempted"] = True
+        if _labor_quality_score(retry_quality, retry_comparison["summary"]) < _labor_quality_score(extraction_quality, comparison["summary"]):
+            retry_quality["retryAttempted"] = True
+            retry_quality["retryApplied"] = True
+            return retry_pdf_rows, retry_comparison, retry_quality
+        extraction_quality["retryApplied"] = False
+    return pdf_rows, comparison, extraction_quality
 
 
 def _expected_labor_rows(excel_rows) -> list[dict]:

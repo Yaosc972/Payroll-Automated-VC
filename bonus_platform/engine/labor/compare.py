@@ -37,20 +37,31 @@ def compare_labor_items(
 
 
 def compare_by_warehouse(
-    pdf_rows: List[LaborLineItem],
     excel_rows_with_warehouse: List[Dict[str, Any]],
+    pdf_totals: List[Dict[str, Any]] | None = None,
+    pdf_rows: List[LaborLineItem] | None = None,
     amount_tolerance: float = 0.05,
     hours_tolerance: float = 0.1,
     confidence_threshold: float = 0.85,
 ) -> Dict[str, Any]:
     """Three-tier reconciliation: total → warehouse → employee.
 
-    Only drills into employee detail for warehouses that have amount differences.
+    Two calling modes:
+    - Fast mode (pdf_totals only): Tier 1 + Tier 2, no employee detail.
+    - Full mode (pdf_rows): Tier 3 for warehouses that need employee comparison.
+
+    If both are provided, pdf_totals drives Tier 1/2 and pdf_rows drives Tier 3
+    only for warehouses with differences.
     """
     errors: List[str] = []
 
     # Tier 1: total amount comparison
-    pdf_total = round(sum(r.amount for r in pdf_rows), 2)
+    if pdf_totals:
+        pdf_total = round(sum(float(t.get("total_amount") or 0) for t in pdf_totals), 2)
+    elif pdf_rows:
+        pdf_total = round(sum(r.amount for r in pdf_rows), 2)
+    else:
+        pdf_total = 0.0
     excel_total = round(sum(float(r.get("amount") or 0) for r in excel_rows_with_warehouse), 2)
     total_delta = round(pdf_total - excel_total, 2)
     total_passed = abs(total_delta) <= amount_tolerance
@@ -69,25 +80,51 @@ def compare_by_warehouse(
         return {"summary": summary, "rows": [], "errors": []}
 
     # Tier 2: per-warehouse comparison
-    pdf_by_wh, pdf_errors = _group_pdf_by_warehouse(pdf_rows)
-    excel_by_wh, excel_errors = _group_excel_by_warehouse(excel_rows_with_warehouse)
-    errors = pdf_errors + excel_errors
+    if pdf_totals:
+        pdf_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0})
+        for t in pdf_totals:
+            wh = str(t.get("warehouse_id") or "")
+            if not wh:
+                errors.append(f"无法提取仓库号: {t.get('source_file', '')}")
+                continue
+            pdf_by_wh[wh]["amount"] = round(pdf_by_wh[wh]["amount"] + float(t.get("total_amount") or 0), 2)
+            pdf_by_wh[wh]["count"] += 1
+        pdf_wh_amounts = dict(pdf_by_wh)
+    else:
+        pdf_wh_amounts = {}
 
-    all_wh = sorted(set(pdf_by_wh) | set(excel_by_wh))
+    pdf_row_by_wh: Dict[str, List[LaborLineItem]] = {}
+    if pdf_rows:
+        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(pdf_rows)
+        errors.extend(pdf_errors)
+    excel_by_wh, excel_errors = _group_excel_by_warehouse(excel_rows_with_warehouse)
+    errors.extend(excel_errors)
+
+    all_wh = sorted(set(pdf_wh_amounts) | set(pdf_row_by_wh) | set(excel_by_wh))
     warehouse_rows = []
     for wh in all_wh:
-        pdf_items = pdf_by_wh.get(wh, [])
+        # PDF amounts: prefer totals, fallback to rows
+        if wh in pdf_wh_amounts:
+            pdf_amount = pdf_wh_amounts[wh]["amount"]
+            pdf_count = pdf_wh_amounts[wh]["count"]
+        elif wh in pdf_row_by_wh:
+            items = pdf_row_by_wh[wh]
+            pdf_amount = round(sum(i.amount for i in items), 2)
+            pdf_count = len(items)
+        else:
+            pdf_amount = 0.0
+            pdf_count = 0
+
         excel_items = excel_by_wh.get(wh, [])
-        pdf_amount = round(sum(i.amount for i in pdf_items), 2)
         excel_amount = round(sum(float(r.get("amount") or 0) for r in excel_items), 2)
         amount_delta = round(pdf_amount - excel_amount, 2)
         wh_passed = abs(amount_delta) <= amount_tolerance
 
         row = {
             "warehouseId": wh,
-            "pdfEmployeeCount": len(pdf_items),
+            "pdfEmployeeCount": pdf_count,
             "excelEmployeeCount": len(excel_items),
-            "pdfHoursTotal": round(sum(i.hours for i in pdf_items), 2),
+            "pdfHoursTotal": round(sum(i.hours for i in pdf_row_by_wh.get(wh, [])), 2) if wh in pdf_row_by_wh else 0,
             "excelHoursTotal": round(sum(float(r.get("hours") or 0) for r in excel_items), 2),
             "pdfAmountTotal": pdf_amount,
             "excelAmountTotal": excel_amount,
@@ -96,8 +133,9 @@ def compare_by_warehouse(
             "employeeRows": [],
         }
 
-        # Tier 3: employee detail only for warehouses with differences
-        if not wh_passed:
+        # Tier 3: employee detail only for warehouses with differences AND available rows
+        if not wh_passed and wh in pdf_row_by_wh:
+            pdf_items = pdf_row_by_wh[wh]
             excel_line_items = line_items_from_dicts(excel_items)
             pdf_agg = _aggregate(pdf_items)
             excel_agg = _aggregate(excel_line_items)
@@ -115,6 +153,7 @@ def compare_by_warehouse(
         "warehouseCount": len(warehouse_rows),
         "passedCount": passed,
         "exceptionCount": len(warehouse_rows) - passed,
+        "diffWarehouses": [r["warehouseId"] for r in warehouse_rows if r["matchStatus"] != "通过"],
     })
     return {"summary": summary, "rows": warehouse_rows, "errors": errors}
 
