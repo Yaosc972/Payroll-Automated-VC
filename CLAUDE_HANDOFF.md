@@ -140,7 +140,7 @@ python3 -m pytest -q
 For local development:
 
 ```bash
-python3 -m uvicorn bonus_platform.app:app --reload --port 8001
+python3 -m uvicorn bonus_platform.app:app --reload --port 8001 --reload-exclude outputs/ --lifespan off
 ```
 
 Then verify:
@@ -154,7 +154,9 @@ If frontend files changed, confirm the page still renders and the labor workflow
 Paste the following into Claude Code when starting a handoff:
 
 ```text
-You are taking over this repository for a period of time. Continue improving the overseas labor invoice reconciliation workflow.
+继续 Payroll-Automated-VC 项目，分支 claude/handoff-01，最新提交 330198f。
+
+先读 CLAUDE_HANDOFF.md 和记忆文件，然后继续工作。
 
 Start from the current branch only. Read CLAUDE_HANDOFF.md first, then read the listed core files before making changes.
 
