@@ -6,7 +6,7 @@
     <title>海外劳务工报账核对 · 西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=21" />
+    <link rel="stylesheet" href="styles.css?v=22" />
   </head>
   <body class="overseas-labor-shell">
     <header class="labor-audit-header">
@@ -85,7 +85,7 @@
             <button id="loadSheets" class="secondary-action">读取工作表</button>
             <button id="saveMapping" class="primary-button">确认字段映射</button>
           </div>
-          <div id="mappingPreview" class="mapping-preview">字段映射后显示预览行。</div>
+          <div id="mappingPreview" class="mapping-preview"><p class="empty-state-text">Preview rows will appear after field mapping.</p></div>
         </div>
 
         <div class="audit-panel result-panel">
@@ -98,13 +98,13 @@
           <div id="qualityAlert" class="quality-alert" hidden></div>
           <div id="summaryGrid" class="labor-summary-grid"></div>
           <h3>金额差异员工</h3>
-          <div id="amountDiffTable" class="audit-table">暂无金额差异。</div>
+          <div id="amountDiffTable" class="audit-table"><p class="empty-state-text">No amount differences detected.</p></div>
           <h3>未匹配候选</h3>
-          <div id="candidateTable" class="audit-table review-table">暂无候选匹配。</div>
+          <div id="candidateTable" class="audit-table review-table"><p class="empty-state-text">No candidate matches to review.</p></div>
           <h3>风险与未匹配</h3>
-          <div id="riskTable" class="audit-table">暂无风险项。</div>
+          <div id="riskTable" class="audit-table"><p class="empty-state-text">No anomalies detected. System running smoothly.</p></div>
           <h3>AI 抽取明细</h3>
-          <div id="extractPreviewTable" class="audit-table review-table">抽取完成后显示 PDF 明细。</div>
+          <div id="extractPreviewTable" class="audit-table review-table"><p class="empty-state-text">Extract data will appear here after comparison.</p></div>
         </div>
       </section>
     </main>

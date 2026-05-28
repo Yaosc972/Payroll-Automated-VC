@@ -210,7 +210,7 @@ function fillColumnSelect(select, selected = "", optional = false) {
 
 function renderPreview(rows) {
   if (!rows.length) {
-    labor.mappingPreview.textContent = "没有可预览的数据行。";
+    labor.mappingPreview.innerHTML = '<p class="empty-state-text">No preview data available.</p>';
     return;
   }
   const headers = laborState.headers.slice(0, 6);
@@ -221,17 +221,17 @@ function renderResult(run) {
   const summary = run.comparisonSummary || {};
   renderQualityAlert(run.extractionQuality);
   const metrics = [
-    ["PDF人数", summary.pdfEmployeeCount],
-    ["Excel人数", summary.excelEmployeeCount],
-    ["PDF总工时", summary.pdfHoursTotal],
-    ["Excel总工时", summary.excelHoursTotal],
-    ["金额差异人数", summary.amountDiffCount],
-    ["疑似姓名匹配", summary.fuzzyMatchCount],
-    ["候选匹配", summary.candidateMatchCount],
-    ["低置信度", summary.lowConfidenceCount],
-    ["风险人数", summary.exceptionCount],
+    { label: "PDF人数", value: summary.pdfEmployeeCount, type: "info" },
+    { label: "Excel人数", value: summary.excelEmployeeCount, type: "info" },
+    { label: "PDF总工时", value: summary.pdfHoursTotal, type: "info" },
+    { label: "Excel总工时", value: summary.excelHoursTotal, type: "info" },
+    { label: "金额差异人数", value: summary.amountDiffCount, type: summary.amountDiffCount > 0 ? "warning" : "success" },
+    { label: "疑似姓名匹配", value: summary.fuzzyMatchCount, type: "info" },
+    { label: "候选匹配", value: summary.candidateMatchCount, type: "info" },
+    { label: "低置信度", value: summary.lowConfidenceCount, type: summary.lowConfidenceCount > 0 ? "warning" : "success" },
+    { label: "风险人数", value: summary.exceptionCount, type: summary.exceptionCount > 0 ? "warning" : "success" },
   ];
-  labor.summaryGrid.innerHTML = metrics.map(([label, value]) => `<div><span>${label}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`).join("");
+  labor.summaryGrid.innerHTML = metrics.map(({ label, value, type }) => `<div class="metric-${type}"><span>${label}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`).join("");
   const rows = run.comparisonRows || [];
   renderRows(labor.amountDiffTable, rows.filter((row) => row.matchStatus === "金额差异"));
   renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
@@ -253,15 +253,18 @@ function renderQualityAlert(quality) {
 
 function renderRows(container, rows) {
   if (!rows.length) {
-    container.textContent = "暂无数据。";
+    container.innerHTML = '<p class="empty-state-text">No anomalies detected. System running smoothly.</p>';
     return;
   }
-  container.innerHTML = `<table><thead><tr><th>员工</th><th>状态</th><th>PDF金额</th><th>Excel金额</th><th>差异</th><th>来源</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(row.employeeName)}</td><td><span class="risk-pill">${escapeHtml(row.matchStatus)}</span></td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${escapeHtml(row.sourceRefs || "")}</td></tr>`).join("")}</tbody></table>`;
+  container.innerHTML = `<table><thead><tr><th>员工</th><th>状态</th><th>PDF金额</th><th>Excel金额</th><th>差异</th><th>来源</th></tr></thead><tbody>${rows.map((row) => {
+    const statusClass = row.matchStatus === "通过" ? "status-pass" : row.matchStatus === "金额差异" ? "status-diff" : "status-warn";
+    return `<tr><td>${escapeHtml(row.employeeName)}</td><td><span class="risk-pill ${statusClass}">${escapeHtml(row.matchStatus)}</span></td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${escapeHtml(row.sourceRefs || "")}</td></tr>`;
+  }).join("")}</tbody></table>`;
 }
 
 function renderCandidateRows(container, rows) {
   if (!rows.length) {
-    container.textContent = "暂无候选匹配。";
+    container.innerHTML = '<p class="empty-state-text">No candidate matches to review.</p>';
     return;
   }
   const visible = rows.slice(0, 40);
@@ -270,7 +273,7 @@ function renderCandidateRows(container, rows) {
 
 function renderExtractRows(container, rows) {
   if (!rows.length) {
-    container.textContent = "暂无 PDF 抽取明细。";
+    container.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison.</p>';
     return;
   }
   const visible = rows.slice(0, 80);
