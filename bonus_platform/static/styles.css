@@ -909,6 +909,21 @@ button {
   color: #86868B;
 }
 
+.audit-step.done {
+  color: #16a34a;
+}
+
+.audit-step.done b {
+  color: #16a34a;
+  font-size: 0;
+}
+
+.audit-step.done b::after {
+  content: '✓';
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .audit-workbench {
   display: grid;
   gap: 24px;

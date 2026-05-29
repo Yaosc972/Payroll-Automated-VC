@@ -5,6 +5,7 @@ const laborState = {
 };
 
 const labor = {
+  steps: document.querySelectorAll(".audit-step"),
   supplierName: document.querySelector("#supplierName"),
   periodStart: document.querySelector("#periodStart"),
   periodEnd: document.querySelector("#periodEnd"),
@@ -43,6 +44,13 @@ const labor = {
 
 bindLaborEvents();
 
+function updateSteps(activeIndex) {
+  labor.steps.forEach((step, i) => {
+    step.classList.toggle("active", i === activeIndex);
+    step.classList.toggle("done", i < activeIndex);
+  });
+}
+
 function bindLaborEvents() {
   labor.createLaborRun.addEventListener("click", createRun);
   labor.uploadLaborFiles.addEventListener("click", uploadFiles);
@@ -73,6 +81,7 @@ async function createRun() {
     });
     laborState.run = run;
     setText(labor.createStatus, `批次已创建：${run.id}`);
+    updateSteps(1);
     toast("劳务核对批次已创建。");
   } catch (error) {
     setText(labor.createStatus, error.message, true);
@@ -90,6 +99,7 @@ async function uploadFiles() {
   try {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/files`, { method: "POST", body: form });
     setText(labor.uploadStatus, "文件已上传，可以读取工作表。");
+    updateSteps(2);
     toast("文件上传完成。");
   } catch (error) {
     setText(labor.uploadStatus, error.message, true);
@@ -146,6 +156,7 @@ async function saveMapping() {
         },
       }),
     });
+    updateSteps(3);
     toast("字段映射已确认。");
   } catch (error) {
     toast(error.message);
@@ -157,6 +168,7 @@ async function extractAndCompare() {
   stopComparePolling();
   setText(labor.compareStatus, "已提交后台抽取，正在等待结果...");
   labor.extractCompare.disabled = true;
+  updateSteps(3);
   try {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/extract-and-compare`, { method: "POST" });
     setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果...");
@@ -185,6 +197,7 @@ async function pollCompareResult() {
       stopComparePolling();
       labor.extractCompare.disabled = false;
       renderResult(run);
+      updateSteps(4);
       setText(labor.compareStatus, "核对完成。低置信度项已在风险表标记。");
       setDownload(run.diffDownloadUrl);
       toast("差异报告已生成。");
