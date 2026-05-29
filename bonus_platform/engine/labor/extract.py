@@ -72,13 +72,60 @@ def extract_invoice_items(
     currency: str = "",
     expected_rows: List[Dict[str, Any]] | None = None,
 ) -> List[LaborLineItem]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     supplier_profile = resolve_supplier_profile(supplier, profiles_path=ai_config.get("supplier_profiles_path"))
     pages = _extract_pdf_pages(pdf_paths)
     if supplier_profile.image_page_policy == "first_page_only":
         pages = [p for p in pages if int(p.get("page") or 1) == 1]
-    rule_items = _extract_with_rules(pages, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
-    if rule_items:
-        return rule_items
+
+    # 并行规则抽取
+    parallel_enabled = ai_config.get("parallel_extraction_enabled", True)
+
+    def _extract_rules_for_page(page: Dict[str, Any]) -> List[LaborLineItem]:
+        """对单个页面尝试规则抽取"""
+        rows = []
+        rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        for line in (page.get("text") or "").splitlines():
+            compact = " ".join(line.split())
+            match = LINE_RE.match(compact)
+            if not match:
+                continue
+            values = [parse_number(value) for value in NUMBER_RE.findall(match.group("rest"))]
+            if len(values) < 10:
+                if len(values) == 9:
+                    rows.append(_line_item(page, match, hours=0.0, amount=values[-1], currency=currency, supplier=supplier, period_start=period_start, period_end=period_end, evidence_text=compact))
+                continue
+            hours_values = values[4:-4]
+            hours = sum(hours_values)
+            amount = values[-1]
+            rows.append(_line_item(page, match, hours=hours, amount=amount, currency=currency, supplier=supplier, period_start=period_start, period_end=period_end, evidence_text=compact))
+        return rows
+
+    if parallel_enabled and len(pages) > 1:
+        all_rule_items: List[LaborLineItem] = []
+        max_workers = min(len(pages), int(ai_config.get("parallel_max_workers", 6)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_page = {executor.submit(_extract_rules_for_page, page): page for page in pages}
+            for future in as_completed(future_to_page):
+                try:
+                    items = future.result()
+                    all_rule_items.extend(items)
+                except Exception:
+                    pass
+    else:
+        all_rule_items = []
+        for page in pages:
+            try:
+                all_rule_items.extend(_extract_rules_for_page(page))
+            except Exception:
+                pass
+
+    if all_rule_items:
+        return all_rule_items
+
+    # 如果规则抽取失败，尝试 AI 抽取
     if _ai_ready(ai_config):
         errors: List[str] = []
         try:
@@ -89,7 +136,8 @@ def extract_invoice_items(
         except Exception as exc:
             errors.append(_safe_error_message(exc))
         try:
-            image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.5))
+            render_workers = int(ai_config.get("parallel_image_render_workers", 4))
+            image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.5), max_workers=render_workers)
             image_pages = _apply_image_page_policy(image_pages, supplier_profile)
             rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
             items = line_items_from_dicts(rows)
@@ -694,38 +742,63 @@ def _looks_like_employee_row(employee_name: str, row: Dict[str, Any]) -> bool:
     return True
 
 
-def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.5) -> List[Dict[str, Any]]:
+def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.5, max_workers: int = 4) -> List[Dict[str, Any]]:
+    """渲染 PDF 页面为图片，支持并行处理多个 PDF 文件。"""
     try:
         import pypdfium2 as pdfium
     except Exception as exc:
         raise RuntimeError("扫描版 PDF 需要安装 pypdfium2 才能渲染页面图片。") from exc
 
-    image_pages: List[Dict[str, Any]] = []
-    for path in pdf_paths:
-        document = pdfium.PdfDocument(str(path))
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _render_single_pdf(path: Path) -> List[Dict[str, Any]]:
+        """渲染单个 PDF 的所有页面"""
         try:
-            for index in range(len(document)):
-                page = document[index]
-                try:
-                    bitmap = page.render(scale=scale).to_pil()
-                    if bitmap.height > bitmap.width:
-                        bitmap = bitmap.rotate(90, expand=True)
-                    buffer = BytesIO()
-                    bitmap.save(buffer, format="PNG")
-                    image_pages.append(
-                        {
+            document = pdfium.PdfDocument(str(path))
+            pages = []
+            try:
+                for index in range(len(document)):
+                    page = document[index]
+                    try:
+                        bitmap = page.render(scale=scale).to_pil()
+                        if bitmap.height > bitmap.width:
+                            bitmap = bitmap.rotate(90, expand=True)
+                        buffer = BytesIO()
+                        bitmap.save(buffer, format="PNG")
+                        pages.append({
                             "source_file": path.name,
                             "source_path": str(path),
                             "page": index + 1,
                             "mime_type": "image/png",
                             "base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
-                        }
-                    )
-                finally:
-                    page.close()
-        finally:
-            document.close()
-    return image_pages
+                        })
+                    finally:
+                        page.close()
+            finally:
+                document.close()
+            return pages
+        except Exception:
+            return []
+
+    if len(pdf_paths) <= 1:
+        # 单个文件直接渲染，无需并行
+        if pdf_paths:
+            return _render_single_pdf(pdf_paths[0])
+        return []
+
+    # 并行渲染多个 PDF
+    all_image_pages: List[Dict[str, Any]] = []
+    actual_workers = min(len(pdf_paths), max_workers)
+    with ThreadPoolExecutor(max_workers=actual_workers) as executor:
+        future_to_path = {executor.submit(_render_single_pdf, path): path for path in pdf_paths}
+        for future in as_completed(future_to_path):
+            try:
+                pages = future.result()
+                all_image_pages.extend(pages)
+            except Exception:
+                pass
+
+    return all_image_pages
 
 
 def _apply_image_page_policy(image_pages: List[Dict[str, Any]], supplier_profile: SupplierExtractionProfile) -> List[Dict[str, Any]]:

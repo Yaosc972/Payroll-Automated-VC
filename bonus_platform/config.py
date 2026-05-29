@@ -97,6 +97,10 @@ AI_CONFIG: dict[str, Any] = {
     "document_toolchain": os.environ.get("AI_DOCUMENT_TOOLCHAIN", "pypdfium2,mimo"),
     "ocr_command": os.environ.get("AI_OCR_COMMAND", ""),
     "supplier_profiles_path": os.environ.get("LABOR_SUPPLIER_PROFILES_PATH", ""),
+    # 并行化配置
+    "parallel_extraction_enabled": _env_bool("PARALLEL_EXTRACTION_ENABLED", True),
+    "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 6),
+    "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 4),
 }
 
 if AI_CONFIG["provider"].lower() == "mimo":

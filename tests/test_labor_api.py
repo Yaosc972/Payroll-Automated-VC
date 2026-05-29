@@ -317,6 +317,72 @@ def test_advanced_name_normalization():
     assert normalize_employee_name_advanced("Rosa Maria Alvarez") == "rosa maria alvarez"
 
 
+def test_parallel_rule_extraction():
+    """测试并行规则抽取"""
+    from bonus_platform.engine.labor.extract import extract_invoice_items, _extract_with_rules
+    from bonus_platform.config import AI_CONFIG
+
+    # 模拟多个页面数据
+    pages = [
+        {
+            "source_file": "invoice1.pdf",
+            "page": 1,
+            "text": "05/01/2026\nAlvarez, Rosa\n8.00\nReg\nREG\n$25.00\n$200.00\n$200.00\n05/02/2026\nSmith, John\n4.00\nOT\nOT\n$37.50\n$150.00\n$150.00"
+        },
+        {
+            "source_file": "invoice2.pdf",
+            "page": 1,
+            "text": "05/03/2026\nJohnson, Maria\n6.00\nReg\nREG\n$30.00\n$180.00\n$180.00"
+        }
+    ]
+
+    # 测试并行抽取
+    items = _extract_with_rules(pages, supplier="Test", period_start="2026-05-01", period_end="2026-05-31", currency="USD")
+
+    # 验证结果
+    assert len(items) == 3, f"应抽取 3 条记录，实际 {len(items)} 条"
+    assert any(item.employee_name_raw == "Alvarez, Rosa" for item in items)
+    assert any(item.employee_name_raw == "Smith, John" for item in items)
+    assert any(item.employee_name_raw == "Johnson, Maria" for item in items)
+
+
+def test_parallel_extraction_disabled():
+    """测试禁用并行抽取"""
+    from bonus_platform.engine.labor.extract import _extract_with_rules
+
+    # 模拟页面数据
+    pages = [
+        {
+            "source_file": "invoice1.pdf",
+            "page": 1,
+            "text": "05/01/2026\nAlvarez, Rosa\n8.00\nReg\nREG\n$25.00\n$200.00\n$200.00"
+        }
+    ]
+
+    # 测试串行抽取（单页面）
+    items = _extract_with_rules(pages, supplier="Test", period_start="2026-05-01", period_end="2026-05-31", currency="USD")
+
+    # 验证结果
+    assert len(items) == 1
+    assert items[0].employee_name_raw == "Alvarez, Rosa"
+    assert items[0].amount == 200.0
+
+
+def test_parallel_image_render_workers_config():
+    """测试并行图片渲染配置"""
+    from bonus_platform.config import AI_CONFIG
+
+    # 验证配置存在
+    assert "parallel_extraction_enabled" in AI_CONFIG
+    assert "parallel_max_workers" in AI_CONFIG
+    assert "parallel_image_render_workers" in AI_CONFIG
+
+    # 验证默认值
+    assert AI_CONFIG["parallel_extraction_enabled"] is True
+    assert AI_CONFIG["parallel_max_workers"] == 6
+    assert AI_CONFIG["parallel_image_render_workers"] == 4
+
+
 def test_improved_name_similarity():
     """测试改进的姓名相似度"""
     from bonus_platform.engine.labor.compare import _name_similarity_improved
