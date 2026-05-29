@@ -128,13 +128,16 @@ def extract_invoice_items(
     # 如果规则抽取失败，尝试 AI 抽取
     if _ai_ready(ai_config):
         errors: List[str] = []
-        try:
-            rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
-            items = line_items_from_dicts(rows)
-            if items:
-                return items
-        except Exception as exc:
-            errors.append(_safe_error_message(exc))
+        # 跳过文本 AI 抽取：当所有页面文本为空（图片 PDF）时，直接走图片路径
+        has_text = any((page.get("text") or "").strip() for page in pages)
+        if has_text:
+            try:
+                rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
+                items = line_items_from_dicts(rows)
+                if items:
+                    return items
+            except Exception as exc:
+                errors.append(_safe_error_message(exc))
         try:
             render_workers = int(ai_config.get("parallel_image_render_workers", 4))
             image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.5), max_workers=render_workers)
