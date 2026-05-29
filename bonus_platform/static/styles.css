@@ -67,6 +67,8 @@ input:focus-visible {
 .group-count {
   font-variant-numeric: tabular-nums;
 }
+
+:root {
   --type-metric: 28px;
   --type-micro-tracking: 0.075em;
   --type-label-tracking: 0.018em;
