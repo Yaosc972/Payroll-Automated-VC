@@ -90,6 +90,7 @@ def quick_extract_totals(
     Returns list of {source_file, total_amount, warehouse_id} dicts.
     Much faster than full employee extraction — one short AI call per PDF.
     Calls are parallelized via thread pool.
+    Supports both text-based and image-based PDFs.
     """
     if not _ai_ready(ai_config):
         return [{"source_file": p.name, "total_amount": 0.0, "warehouse_id": ""} for p in pdf_paths]
@@ -98,6 +99,21 @@ def quick_extract_totals(
 
     pages = _extract_pdf_pages(pdf_paths, max_pages=1)
     first_pages = [p for p in pages if int(p.get("page") or 1) == 1]
+
+    # Map filename to full path for image rendering
+    fname_to_path = {p.name: p for p in pdf_paths}
+
+    # Pre-render images for PDFs with empty text (image-based PDFs)
+    image_pages_map: Dict[str, Dict[str, Any]] = {}
+    empty_text_pages = [p for p in first_pages if not p.get("text", "").strip()]
+    if empty_text_pages:
+        empty_pdf_paths = [fname_to_path[p["source_file"]] for p in empty_text_pages if p["source_file"] in fname_to_path]
+        if empty_pdf_paths:
+            image_pages = _render_pdf_pages_to_images(empty_pdf_paths, scale=float(ai_config.get("render_scale") or 1.5))
+            for img in image_pages:
+                key = img.get("source_file", "")
+                if key not in image_pages_map:
+                    image_pages_map[key] = img
 
     prompt = (
         "From this invoice page, extract ONLY two values as strict JSON:\n"
@@ -112,6 +128,14 @@ def quick_extract_totals(
         wh = _warehouse_id_from_filename(source_file)
         page_text = page.get("text", "")
         if not page_text.strip():
+            # Try image-based extraction for image PDFs
+            img_data = image_pages_map.get(source_file)
+            if img_data and img_data.get("base64"):
+                try:
+                    amount = _extract_total_with_ai_image(img_data, prompt, ai_config)
+                    return {"source_file": source_file, "total_amount": amount, "warehouse_id": wh}
+                except Exception:
+                    pass
             return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
         try:
             amount = _extract_total_with_ai(page_text, prompt, ai_config)
@@ -184,6 +208,88 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
         if block.get("type") == "text":
             content += block["text"]
     return _parse_total_from_response(content)
+
+
+def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: Dict[str, Any]) -> float:
+    """Extract total amount from image-based PDF using vision API."""
+    provider = str(ai_config.get("provider") or "").lower()
+    base_url = ai_config["base_url"].rstrip("/")
+    model = ai_config.get("model") or "mimo-v2.5"
+
+    if provider == "mimo" and "token-plan" in base_url:
+        # Anthropic Messages API with image
+        headers = {
+            "x-api-key": str(ai_config["api_key"]),
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "max_tokens": 1024,
+            "system": "Extract invoice total as JSON only. Be concise.",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": f"{prompt}\n\nExtract the total amount from this invoice image. Return ONLY the JSON object."},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": page.get("mime_type", "image/png"),
+                            "data": page["base64"],
+                        },
+                    },
+                ],
+            }],
+        }
+        req = request.Request(
+            base_url + "/v1/messages",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        timeout = int(ai_config.get("timeout_seconds") or 180)
+        with request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        content = ""
+        thinking = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                content += block["text"]
+            elif block.get("type") == "thinking":
+                thinking += block.get("thinking", "")
+        # Fallback: try to extract from thinking if no text content
+        if not content.strip() and thinking:
+            content = thinking
+        return _parse_total_from_response(content)
+
+    # OpenAI-compatible API with image
+    payload = {
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"{prompt}\n\nExtract the total amount from this invoice image."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{page.get('mime_type', 'image/png')};base64,{page['base64']}"},
+                },
+            ],
+        }],
+        "temperature": 0,
+        "max_tokens": 256,
+    }
+    _apply_provider_options(payload, ai_config)
+    req = request.Request(
+        base_url + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_request_headers(ai_config),
+        method="POST",
+    )
+    timeout = int(ai_config.get("timeout_seconds") or 180)
+    with request.urlopen(req, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    return _parse_total_from_response(data["choices"][0]["message"]["content"])
 
 
 def _parse_total_from_response(content: str) -> float:
