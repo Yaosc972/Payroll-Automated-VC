@@ -132,11 +132,14 @@ def quick_extract_totals(
     if empty_text_pages:
         empty_pdf_paths = [fname_to_path[p["source_file"]] for p in empty_text_pages if p["source_file"] in fname_to_path]
         if empty_pdf_paths:
-            image_pages = _render_pdf_pages_to_images(empty_pdf_paths, scale=float(ai_config.get("render_scale") or 1.5))
-            for img in image_pages:
-                key = img.get("source_file", "")
-                if key not in image_pages_map:
-                    image_pages_map[key] = img
+            try:
+                image_pages = _render_pdf_pages_to_images(empty_pdf_paths, scale=float(ai_config.get("render_scale") or 1.5))
+                for img in image_pages:
+                    key = img.get("source_file", "")
+                    if key not in image_pages_map:
+                        image_pages_map[key] = img
+            except Exception:
+                pass  # Corrupt or unrenderable PDFs will fall through to 0.0
 
     prompt = (
         "From this invoice page, extract ONLY two values as strict JSON:\n"

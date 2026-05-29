@@ -65,6 +65,7 @@ def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
 def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_rows(monkeypatch):
     import bonus_platform.app as app_module
 
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
     monkeypatch.setattr(app_module, "extract_invoice_items", lambda *args, **kwargs: [])
     client = TestClient(app)
     run = client.post(
@@ -96,6 +97,7 @@ def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_r
 def test_labor_compare_response_includes_candidate_matches(monkeypatch):
     import bonus_platform.app as app_module
 
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         app_module,
         "extract_invoice_items",
@@ -131,6 +133,7 @@ def test_labor_compare_response_includes_candidate_matches(monkeypatch):
 def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(monkeypatch):
     import bonus_platform.app as app_module
 
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         app_module,
         "extract_invoice_items",
@@ -167,6 +170,8 @@ def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(
 
 def test_labor_compare_retries_with_excel_candidates_when_quality_warns(monkeypatch):
     import bonus_platform.app as app_module
+
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
 
     calls = []
 
