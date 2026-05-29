@@ -163,9 +163,22 @@ async function saveMapping() {
   }
 }
 
+function clearResults() {
+  if (labor.conclusionSection) { labor.conclusionSection.hidden = true; labor.conclusionSection.innerHTML = ""; }
+  if (labor.warehouseHeading) labor.warehouseHeading.hidden = true;
+  if (labor.warehouseTable) { labor.warehouseTable.hidden = true; labor.warehouseTable.innerHTML = ""; }
+  if (labor.pendingItemsSection) labor.pendingItemsSection.hidden = true;
+  if (labor.qualityAlert) { labor.qualityAlert.hidden = true; labor.qualityAlert.innerHTML = ""; }
+  if (labor.extractPreviewTable) labor.extractPreviewTable.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison.</p>';
+  labor.reportLink.classList.add("disabled");
+  labor.reportLink.setAttribute("aria-disabled", "true");
+  labor.reportLink.href = "#";
+}
+
 async function extractAndCompare() {
   if (!laborState.run) return toast("请先创建批次。");
   stopComparePolling();
+  clearResults();
   setText(labor.compareStatus, "已提交后台抽取，正在等待结果...");
   labor.extractCompare.disabled = true;
   updateSteps(3);
