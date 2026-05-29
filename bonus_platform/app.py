@@ -572,10 +572,9 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
         else:
             conclusion_message = f"仓库总金额差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
 
-    # 计算不在本批发票人数
-    not_in_invoice_count = 0
-    if excel_employee_count > pdf_employee_count:
-        not_in_invoice_count = excel_employee_count - pdf_employee_count
+    # 计算不在本批发票人数（使用实际的"Excel有PDF无"行数，而非简单减法）
+    comparison_rows = comparison.get("rows", [])
+    not_in_invoice_count = sum(1 for r in comparison_rows if r.get("matchStatus") == "Excel有PDF无")
 
     return {
         "conclusionLevel": conclusion_level,

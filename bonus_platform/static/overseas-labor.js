@@ -176,7 +176,7 @@ function clearResults() {
   if (labor.warehouseTable) { labor.warehouseTable.hidden = true; labor.warehouseTable.innerHTML = ""; }
   if (labor.pendingItemsSection) labor.pendingItemsSection.hidden = true;
   if (labor.qualityAlert) { labor.qualityAlert.hidden = true; labor.qualityAlert.innerHTML = ""; }
-  if (labor.extractPreviewTable) labor.extractPreviewTable.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison…</p>';
+  if (labor.extractPreviewTable) labor.extractPreviewTable.innerHTML = '<p class="empty-state-text">抽取数据将在核对完成后显示…</p>';
   labor.reportLink.classList.add("disabled");
   labor.reportLink.setAttribute("aria-disabled", "true");
   labor.reportLink.href = "#";
@@ -255,7 +255,7 @@ function fillColumnSelect(select, selected = "", optional = false) {
 
 function renderPreview(rows) {
   if (!rows.length) {
-    labor.mappingPreview.innerHTML = '<p class="empty-state-text">No preview data available.</p>';
+    labor.mappingPreview.innerHTML = '<p class="empty-state-text">暂无预览数据。</p>';
     return;
   }
   const headers = laborState.headers.slice(0, 6);
@@ -532,7 +532,7 @@ function renderQualityAlert(quality) {
 
 function renderExtractRows(container, rows) {
   if (!rows.length) {
-    container.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison…</p>';
+    container.innerHTML = '<p class="empty-state-text">抽取数据将在核对完成后显示…</p>';
     return;
   }
   const visible = rows.slice(0, 80);
