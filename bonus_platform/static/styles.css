@@ -28,6 +28,45 @@
   --type-body: 13px;
   --type-title: 20px;
   --type-hero: 24px;
+}
+
+/* 焦点样式 — 只在键盘导航时显示 */
+:focus-visible {
+  outline: 2px solid var(--brand-2);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--brand-2);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 鼠标点击时不显示焦点环 */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* 数字列使用等宽数字 */
+.audit-data-table td,
+.conclusion-details strong,
+.group-count {
+  font-variant-numeric: tabular-nums;
+}
   --type-metric: 28px;
   --type-micro-tracking: 0.075em;
   --type-label-tracking: 0.018em;

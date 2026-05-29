@@ -2,6 +2,8 @@ const laborState = {
   run: null,
   headers: [],
   comparePollTimer: null,
+  pollRetryCount: 0,
+  pollMaxRetries: 100, // 最多轮询 100 次（约 5 分钟）
 };
 
 const labor = {
@@ -48,6 +50,11 @@ function updateSteps(activeIndex) {
   labor.steps.forEach((step, i) => {
     step.classList.toggle("active", i === activeIndex);
     step.classList.toggle("done", i < activeIndex);
+    if (i === activeIndex) {
+      step.setAttribute("aria-current", "step");
+    } else {
+      step.removeAttribute("aria-current");
+    }
   });
 }
 
@@ -169,7 +176,7 @@ function clearResults() {
   if (labor.warehouseTable) { labor.warehouseTable.hidden = true; labor.warehouseTable.innerHTML = ""; }
   if (labor.pendingItemsSection) labor.pendingItemsSection.hidden = true;
   if (labor.qualityAlert) { labor.qualityAlert.hidden = true; labor.qualityAlert.innerHTML = ""; }
-  if (labor.extractPreviewTable) labor.extractPreviewTable.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison.</p>';
+  if (labor.extractPreviewTable) labor.extractPreviewTable.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison…</p>';
   labor.reportLink.classList.add("disabled");
   labor.reportLink.setAttribute("aria-disabled", "true");
   labor.reportLink.href = "#";
@@ -179,12 +186,13 @@ async function extractAndCompare() {
   if (!laborState.run) return toast("请先创建批次。");
   stopComparePolling();
   clearResults();
-  setText(labor.compareStatus, "已提交后台抽取，正在等待结果...");
+  setText(labor.compareStatus, "已提交后台抽取，正在等待结果…");
   labor.extractCompare.disabled = true;
   updateSteps(3);
+  laborState.pollRetryCount = 0;
   try {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/extract-and-compare`, { method: "POST" });
-    setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果...");
+    setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果…");
     await pollCompareResult();
     laborState.comparePollTimer = window.setInterval(pollCompareResult, 3000);
   } catch (error) {
@@ -196,6 +204,14 @@ async function extractAndCompare() {
 
 async function pollCompareResult() {
   if (!laborState.run) return;
+  laborState.pollRetryCount++;
+  if (laborState.pollRetryCount > laborState.pollMaxRetries) {
+    stopComparePolling();
+    labor.extractCompare.disabled = false;
+    setText(labor.compareStatus, "抽取超时，请重新点击「抽取并比对」重试。", true);
+    toast("抽取超时。");
+    return;
+  }
   try {
     const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
     laborState.run = run;
@@ -433,7 +449,7 @@ function _renderPendingGroup(groupEl, items, renderFn) {
     contentEl.innerHTML = renderFn(items);
   }
 
-  // 绑定折叠/展开事件
+  // 绑定折叠/展开事件（<button> 元素，支持键盘和 aria）
   const header = groupEl.querySelector(".group-header");
   if (header && !header._bound) {
     header._bound = true;
@@ -443,6 +459,7 @@ function _renderPendingGroup(groupEl, items, renderFn) {
       if (!content) return;
       const expanded = !content.hidden;
       content.hidden = expanded;
+      header.setAttribute("aria-expanded", String(!expanded));
       if (icon) icon.textContent = expanded ? "▸" : "▾";
     });
   }
@@ -515,7 +532,7 @@ function renderQualityAlert(quality) {
 
 function renderExtractRows(container, rows) {
   if (!rows.length) {
-    container.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison.</p>';
+    container.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison…</p>';
     return;
   }
   const visible = rows.slice(0, 80);

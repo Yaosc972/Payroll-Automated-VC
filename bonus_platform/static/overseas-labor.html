@@ -2,11 +2,13 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=1280" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#ffffff" />
     <title>海外劳务工报账核对 · 西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=22" />
+    <link rel="stylesheet" href="styles.css?v=23" />
+    <style>html { color-scheme: light; }</style>
   </head>
   <body class="overseas-labor-shell">
     <header class="labor-audit-header">
@@ -23,12 +25,12 @@
     </header>
 
     <main class="labor-audit-layout">
-      <aside class="audit-steps" aria-label="核对步骤">
-        <div class="audit-step active"><b>01</b><span>新建批次</span></div>
-        <div class="audit-step"><b>02</b><span>上传文件</span></div>
-        <div class="audit-step"><b>03</b><span>字段映射</span></div>
-        <div class="audit-step"><b>04</b><span>抽取比对</span></div>
-        <div class="audit-step"><b>05</b><span>结果复核</span></div>
+      <aside class="audit-steps" aria-label="核对步骤" role="list">
+        <div class="audit-step active" role="listitem" aria-current="step"><b>01</b><span>新建批次</span></div>
+        <div class="audit-step" role="listitem"><b>02</b><span>上传文件</span></div>
+        <div class="audit-step" role="listitem"><b>03</b><span>字段映射</span></div>
+        <div class="audit-step" role="listitem"><b>04</b><span>抽取比对</span></div>
+        <div class="audit-step" role="listitem"><b>05</b><span>结果复核</span></div>
       </aside>
 
       <section class="audit-workbench">
@@ -38,10 +40,10 @@
             <h2>新建核对批次</h2>
           </div>
           <div class="audit-form-grid">
-            <label><span>供应商</span><input id="supplierName" value="Fairway Staffing Service" /></label>
-            <label><span>账期开始</span><input id="periodStart" type="date" value="2026-05-11" /></label>
-            <label><span>账期结束</span><input id="periodEnd" type="date" value="2026-05-17" /></label>
-            <label><span>币种</span><input id="currency" value="USD" /></label>
+            <label><span>供应商</span><input id="supplierName" name="supplierName" autocomplete="organization" placeholder="供应商名称…" /></label>
+            <label><span>账期开始</span><input id="periodStart" name="periodStart" type="date" autocomplete="off" /></label>
+            <label><span>账期结束</span><input id="periodEnd" name="periodEnd" type="date" autocomplete="off" /></label>
+            <label><span>币种</span><input id="currency" name="currency" autocomplete="off" placeholder="USD" /></label>
           </div>
           <button id="createLaborRun" class="primary-button">创建批次</button>
           <p id="createStatus" class="audit-status">等待创建批次。</p>
@@ -85,7 +87,7 @@
             <button id="loadSheets" class="secondary-action">读取工作表</button>
             <button id="saveMapping" class="primary-button">确认字段映射</button>
           </div>
-          <div id="mappingPreview" class="mapping-preview"><p class="empty-state-text">Preview rows will appear after field mapping.</p></div>
+          <div id="mappingPreview" class="mapping-preview"><p class="empty-state-text">Preview rows will appear after field mapping…</p></div>
         </div>
 
         <div class="audit-panel result-panel">
@@ -108,34 +110,34 @@
           <div id="pendingItemsSection" class="pending-items-section" hidden>
             <h3>待处理事项</h3>
             <div id="hoursDiffGroup" class="pending-group" hidden>
-              <div class="group-header" data-group="hoursDiff">
+              <button class="group-header" data-group="hoursDiff" aria-expanded="true" type="button">
                 <span class="expand-icon">▾</span>
                 <span>工时不一致</span>
                 <span class="group-count"></span>
-              </div>
+              </button>
               <div class="group-content"></div>
             </div>
             <div id="candidateGroup" class="pending-group" hidden>
-              <div class="group-header" data-group="candidate">
+              <button class="group-header" data-group="candidate" aria-expanded="true" type="button">
                 <span class="expand-icon">▾</span>
                 <span>姓名格式差异</span>
                 <span class="group-count"></span>
-              </div>
+              </button>
               <div class="group-content"></div>
             </div>
             <div id="notInInvoiceGroup" class="pending-group" hidden>
-              <div class="group-header" data-group="notInInvoice">
+              <button class="group-header" data-group="notInInvoice" aria-expanded="false" type="button">
                 <span class="expand-icon">▸</span>
                 <span>不在本批发票</span>
                 <span class="group-count"></span>
-              </div>
+              </button>
               <div class="group-content" hidden></div>
             </div>
           </div>
 
           <!-- AI 抽取明细 -->
           <h3>AI 抽取明细</h3>
-          <div id="extractPreviewTable" class="audit-table review-table"><p class="empty-state-text">Extract data will appear here after comparison.</p></div>
+          <div id="extractPreviewTable" class="audit-table review-table"><p class="empty-state-text">Extract data will appear here after comparison…</p></div>
         </div>
       </section>
     </main>
