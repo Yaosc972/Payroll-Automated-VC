@@ -217,9 +217,10 @@ def test_labor_compare_retries_with_excel_candidates_when_quality_warns(monkeypa
 
 
 def test_labor_extraction_quality_passes_when_counts_and_totals_align():
-    import bonus_platform.app as app_module
+    from bonus_platform.engine.labor.quality import calculate_extraction_quality
 
-    quality = app_module._labor_extraction_quality(
+    quality = calculate_extraction_quality(
+        [],  # No PDF rows needed for this test
         {
             "pdfEmployeeCount": 161,
             "excelEmployeeCount": 161,
@@ -232,7 +233,9 @@ def test_labor_extraction_quality_passes_when_counts_and_totals_align():
         }
     )
 
-    assert quality == {"level": "ok", "message": "抽取质量检查通过。", "issues": []}
+    assert quality["level"] == "ok"
+    assert quality["message"] == "抽取质量检查通过。"
+    assert quality["issues"] == []
 
 
 def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatch):

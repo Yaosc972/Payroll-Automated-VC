@@ -14,6 +14,7 @@ from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
 from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
+from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score
 from .engine.labor.report import build_labor_report
 
 
@@ -391,11 +392,11 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     hours_tolerance=AI_CONFIG["hours_tolerance"],
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
                 )
-                extraction_quality = _labor_extraction_quality(comparison["summary"])
+                extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"])
                 extraction_quality["retryAttempted"] = False
                 extraction_quality["retryApplied"] = False
 
-                if extraction_quality["level"] == "warning":
+                if extraction_quality["level"] in ("warning", "critical"):
                     pdf_rows, comparison, extraction_quality = _retry_if_better(
                         filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
                         supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
@@ -411,6 +412,13 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     hours_tolerance=AI_CONFIG["hours_tolerance"],
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
                 )
+
+                # Recalculate quality with warehouse comparison data, preserving retry flags
+                retry_attempted = extraction_quality.get("retryAttempted", False)
+                retry_applied = extraction_quality.get("retryApplied", False)
+                extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], warehouse_comparison)
+                extraction_quality["retryAttempted"] = retry_attempted
+                extraction_quality["retryApplied"] = retry_applied
 
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping, warehouse_comparison)
@@ -454,9 +462,9 @@ def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, compar
             hours_tolerance=AI_CONFIG["hours_tolerance"],
             confidence_threshold=AI_CONFIG["confidence_threshold"],
         )
-        retry_quality = _labor_extraction_quality(retry_comparison["summary"])
+        retry_quality = calculate_extraction_quality(retry_pdf_rows, retry_comparison["summary"])
         extraction_quality["retryAttempted"] = True
-        if _labor_quality_score(retry_quality, retry_comparison["summary"]) < _labor_quality_score(extraction_quality, comparison["summary"]):
+        if calculate_quality_score(retry_quality, retry_comparison["summary"]) < calculate_quality_score(extraction_quality, comparison["summary"]):
             retry_quality["retryAttempted"] = True
             retry_quality["retryApplied"] = True
             return retry_pdf_rows, retry_comparison, retry_quality
@@ -556,8 +564,11 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
 
     # 结论级别判定
     effective_tolerance = _adaptive_tolerance(max_amount, amount_tolerance)
-    if extraction_quality.get("level") == "warning" or low_confidence_count > 0:
+    if extraction_quality.get("level") == "critical":
         conclusion_level = "critical"
+        conclusion_message = "抽取质量存在严重问题，必须人工复核"
+    elif extraction_quality.get("level") == "warning" or low_confidence_count > 0:
+        conclusion_level = "warning"
         conclusion_message = "存在低置信度抽取，需人工复核"
     elif total_passed and amount_diff_count == 0:
         conclusion_level = "pass"
@@ -581,37 +592,6 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
         "conclusionMessage": conclusion_message,
         "notInInvoiceCount": not_in_invoice_count,
     }
-
-
-def _labor_extraction_quality(summary: dict) -> dict:
-    pdf_count = int(summary.get("pdfEmployeeCount") or 0)
-    excel_count = int(summary.get("excelEmployeeCount") or 0)
-    unmatched_pdf = int(summary.get("unmatchedPdfCount") or 0)
-    unmatched_excel = int(summary.get("unmatchedExcelCount") or 0)
-    pdf_hours = float(summary.get("pdfHoursTotal") or 0)
-    excel_hours = float(summary.get("excelHoursTotal") or 0)
-    pdf_amount = float(summary.get("pdfAmountTotal") or 0)
-    excel_amount = float(summary.get("excelAmountTotal") or 0)
-
-    issues = []
-    if excel_count and abs(pdf_count - excel_count) / excel_count > 0.10:
-        issues.append(f"PDF员工数 {pdf_count} 与 Excel员工数 {excel_count} 偏差超过 10%。")
-    if excel_count and (unmatched_pdf + unmatched_excel) / excel_count > 0.25:
-        issues.append(f"未匹配员工 {unmatched_pdf + unmatched_excel} 人，超过 Excel人数的 25%。")
-    if excel_hours and abs(pdf_hours - excel_hours) / excel_hours > 0.10:
-        issues.append(f"总工时差异 {round(pdf_hours - excel_hours, 2)}，超过 Excel总工时的 10%。")
-    if excel_amount:
-        amount_drift = abs(pdf_amount - excel_amount) / excel_amount
-        if amount_drift > 0.10:
-            issues.append(f"总金额差异 {round(pdf_amount - excel_amount, 2)}，超过 Excel总金额的 10%。")
-
-    if issues:
-        return {
-            "level": "warning",
-            "message": "抽取质量存在风险，请复核 PDF 抽取明细后再使用差异报告。",
-            "issues": issues,
-        }
-    return {"level": "ok", "message": "抽取质量检查通过。", "issues": []}
 
 
 @app.get("/api/labor/runs/{run_id}/download/{filename}")
