@@ -49,7 +49,7 @@ def normalize_employee_name(value: Any) -> str:
     return " ".join(sorted(tokens))
 
 
-def normalize_employee_name_advanced(name: str) -> str:
+def normalize_employee_name_advanced(name: Any) -> str:
     """高级姓名标准化，处理各种格式。
 
     处理：
@@ -58,6 +58,7 @@ def normalize_employee_name_advanced(name: str) -> str:
     - 统一大小写
     - 移除多余空格
     """
+    name = str(name or "").strip()
     if not name:
         return ""
 
@@ -73,7 +74,7 @@ def normalize_employee_name_advanced(name: str) -> str:
     if len(parts) >= 3:
         # 如果中间部分是单个字母或带点的单个字母，可能是中间名缩写
         middle = parts[1]
-        if len(middle) <= 2 and (len(middle) == 1 or middle.endswith('.')):
+        if len(middle) == 1 or (len(middle) == 2 and middle.endswith('.')):
             parts.pop(1)
 
     # 统一大小写并移除多余空格

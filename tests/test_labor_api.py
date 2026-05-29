@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -317,10 +318,10 @@ def test_advanced_name_normalization():
     assert normalize_employee_name_advanced("Rosa Maria Alvarez") == "rosa maria alvarez"
 
 
-def test_parallel_rule_extraction():
-    """测试并行规则抽取"""
-    from bonus_platform.engine.labor.extract import extract_invoice_items, _extract_with_rules
-    from bonus_platform.config import AI_CONFIG
+def test_parallel_rule_extraction(monkeypatch):
+    """测试并行规则抽取 - 通过 extract_invoice_items 并行路径"""
+    import bonus_platform.engine.labor.extract as extract_module
+    from bonus_platform.engine.labor.extract import extract_invoice_items
 
     # 模拟多个页面数据
     pages = [
@@ -336,40 +337,80 @@ def test_parallel_rule_extraction():
         }
     ]
 
-    # 测试并行抽取
-    items = _extract_with_rules(pages, supplier="Test", period_start="2026-05-01", period_end="2026-05-31", currency="USD")
+    # Mock _extract_pdf_pages 以返回多页数据
+    monkeypatch.setattr(extract_module, "_extract_pdf_pages", lambda pdf_paths, **kw: pages)
 
-    # 验证结果
+    # 配置: 启用并行抽取
+    ai_config = {
+        "parallel_extraction_enabled": True,
+        "parallel_max_workers": 4,
+        "enabled": False,  # 禁用 AI，仅走规则路径
+    }
+
+    # 调用 extract_invoice_items（并行路径）
+    items = extract_invoice_items(
+        pdf_paths=[Path("invoice1.pdf"), Path("invoice2.pdf")],
+        ai_config=ai_config,
+        supplier="Test",
+        period_start="2026-05-01",
+        period_end="2026-05-31",
+        currency="USD",
+    )
+
+    # 验证结果 - 两个文件的页面都应被并行处理
     assert len(items) == 3, f"应抽取 3 条记录，实际 {len(items)} 条"
     assert any(item.employee_name_raw == "Alvarez, Rosa" for item in items)
     assert any(item.employee_name_raw == "Smith, John" for item in items)
     assert any(item.employee_name_raw == "Johnson, Maria" for item in items)
 
 
-def test_parallel_extraction_disabled():
-    """测试禁用并行抽取"""
-    from bonus_platform.engine.labor.extract import _extract_with_rules
+def test_parallel_extraction_disabled(monkeypatch):
+    """测试禁用并行抽取 - 并行开关关闭后走串行路径"""
+    import bonus_platform.engine.labor.extract as extract_module
+    from bonus_platform.engine.labor.extract import extract_invoice_items
 
-    # 模拟页面数据
+    # 模拟多个页面数据
     pages = [
         {
             "source_file": "invoice1.pdf",
             "page": 1,
             "text": "05/01/2026\nAlvarez, Rosa\n8.00\nReg\nREG\n$25.00\n$200.00\n$200.00"
+        },
+        {
+            "source_file": "invoice2.pdf",
+            "page": 1,
+            "text": "05/03/2026\nJohnson, Maria\n6.00\nReg\nREG\n$30.00\n$180.00\n$180.00"
         }
     ]
 
-    # 测试串行抽取（单页面）
-    items = _extract_with_rules(pages, supplier="Test", period_start="2026-05-01", period_end="2026-05-31", currency="USD")
+    # Mock _extract_pdf_pages 以返回多页数据
+    monkeypatch.setattr(extract_module, "_extract_pdf_pages", lambda pdf_paths, **kw: pages)
 
-    # 验证结果
-    assert len(items) == 1
-    assert items[0].employee_name_raw == "Alvarez, Rosa"
-    assert items[0].amount == 200.0
+    # 配置: 禁用并行抽取
+    ai_config = {
+        "parallel_extraction_enabled": False,
+        "parallel_max_workers": 4,
+        "enabled": False,  # 禁用 AI，仅走规则路径
+    }
+
+    # 调用 extract_invoice_items - 应走串行路径（for page in pages）
+    items = extract_invoice_items(
+        pdf_paths=[Path("invoice1.pdf"), Path("invoice2.pdf")],
+        ai_config=ai_config,
+        supplier="Test",
+        period_start="2026-05-01",
+        period_end="2026-05-31",
+        currency="USD",
+    )
+
+    # 验证串行路径仍能正确抽取所有页面的结果（每页 1 人，共 2 人）
+    assert len(items) == 2, f"串行路径应抽取 2 条记录，实际 {len(items)} 条"
+    assert any(item.employee_name_raw == "Alvarez, Rosa" for item in items)
+    assert any(item.employee_name_raw == "Johnson, Maria" for item in items)
 
 
 def test_parallel_image_render_workers_config():
-    """测试并行图片渲染配置"""
+    """测试并行图片渲染配置默认值"""
     from bonus_platform.config import AI_CONFIG
 
     # 验证配置存在
@@ -381,6 +422,59 @@ def test_parallel_image_render_workers_config():
     assert AI_CONFIG["parallel_extraction_enabled"] is True
     assert AI_CONFIG["parallel_max_workers"] == 6
     assert AI_CONFIG["parallel_image_render_workers"] == 4
+
+
+def test_parallel_image_rendering(monkeypatch):
+    """测试并行图片渲染 - 多个 PDF 文件并行渲染"""
+    import sys
+    from unittest.mock import MagicMock
+    from PIL import Image
+
+    from bonus_platform.engine.labor.extract import _render_pdf_pages_to_images
+
+    # 创建 3 个模拟 PDF 路径
+    pdf_paths = [Path(f"invoice_{i}.pdf") for i in range(3)]
+
+    # 追踪并行调用
+    render_calls = []
+
+    # Mock pypdfium2 - 函数内部 import pypdfium2
+    mock_pdfium = MagicMock()
+
+    def fake_pdf_document(path_str):
+        """模拟 PdfDocument，返回包含 1 页的 mock 文档"""
+        render_calls.append(path_str)
+        mock_doc = MagicMock()
+        mock_page = MagicMock()
+        # 使用真实的 PIL Image，以便 save() 能产生实际 bytes
+        pil_img = Image.new("RGB", (10, 10), color="white")
+        mock_bitmap = MagicMock()
+        mock_bitmap.to_pil.return_value = pil_img
+        mock_page.render.return_value = mock_bitmap
+        mock_page.close = MagicMock()
+        # 文档有 1 页
+        mock_doc.__len__ = MagicMock(return_value=1)
+        mock_doc.__getitem__ = MagicMock(return_value=mock_page)
+        mock_doc.close = MagicMock()
+        return mock_doc
+
+    mock_pdfium.PdfDocument = fake_pdf_document
+    monkeypatch.setitem(sys.modules, "pypdfium2", mock_pdfium)
+
+    # 调用并行渲染函数（3个文件 > 1，触发并行路径）
+    result = _render_pdf_pages_to_images(pdf_paths, scale=1.5, max_workers=4)
+
+    # 验证所有 3 个 PDF 都被渲染了
+    assert len(render_calls) == 3, f"应渲染 3 个 PDF，实际渲染 {len(render_calls)} 个"
+    assert len(result) == 3, f"应返回 3 个页面，实际 {len(result)} 个"
+
+    # 验证每个页面都有正确的元数据
+    source_files = {p["source_file"] for p in result}
+    assert source_files == {"invoice_0.pdf", "invoice_1.pdf", "invoice_2.pdf"}
+    for page in result:
+        assert page["mime_type"] == "image/png"
+        assert page["base64"], "base64 不应为空"
+        assert page["page"] == 1
 
 
 def test_improved_name_similarity():

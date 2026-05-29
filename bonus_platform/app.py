@@ -420,7 +420,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
 
     # 计算结论级别
-    conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality)
+    conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality, amount_tolerance=AI_CONFIG["amount_tolerance"])
 
     updated = update_labor_metadata(
         run_id,
@@ -535,7 +535,7 @@ def _recover_stuck_labor_runs() -> None:
                     pass
 
 
-def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_quality: dict) -> dict:
+def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_quality: dict, amount_tolerance: float = 0.05) -> dict:
     """Build conclusion level and message for the reconciliation result."""
     from bonus_platform.engine.labor.compare import _adaptive_tolerance
 
@@ -555,7 +555,7 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
     exception_count = comp_summary.get("exceptionCount", 0)
 
     # 结论级别判定
-    effective_tolerance = _adaptive_tolerance(max_amount)
+    effective_tolerance = _adaptive_tolerance(max_amount, amount_tolerance)
     if extraction_quality.get("level") == "warning" or low_confidence_count > 0:
         conclusion_level = "critical"
         conclusion_message = "存在低置信度抽取，需人工复核"
