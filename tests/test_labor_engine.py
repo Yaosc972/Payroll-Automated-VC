@@ -395,7 +395,7 @@ def test_extract_invoice_items_applies_first_page_only_profile_policy(monkeypatc
     monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_with_ai_text", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         "bonus_platform.engine.labor.extract._render_pdf_pages_to_images",
-        lambda paths, scale=1.5: [
+        lambda paths, scale=1.5, **kwargs: [
             {"source_file": "scan.pdf", "source_path": str(pdf), "page": 1, "mime_type": "image/png", "base64": "page1"},
             {"source_file": "scan.pdf", "source_path": str(pdf), "page": 2, "mime_type": "image/png", "base64": "page2"},
         ],
@@ -534,7 +534,7 @@ def test_extract_invoice_items_uses_mimo_images_when_pdf_text_has_no_rows(monkey
     monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_pdf_pages", lambda paths: [{"source_file": "scan.pdf", "page": 1, "text": ""}])
     monkeypatch.setattr(
         "bonus_platform.engine.labor.extract._render_pdf_pages_to_images",
-        lambda paths, scale=1.5: [{"source_file": "scan.pdf", "page": 1, "mime_type": "image/png", "base64": "abc123"}],
+        lambda paths, scale=1.5, **kwargs: [{"source_file": "scan.pdf", "page": 1, "mime_type": "image/png", "base64": "abc123"}],
     )
     monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_with_ai_text", lambda *args, **kwargs: [])
     monkeypatch.setattr(
@@ -722,7 +722,7 @@ def test_extract_invoice_items_surfaces_ai_failure_when_enabled(monkeypatch, tmp
 
     monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_pdf_pages", lambda paths: [{"source_file": "scan.pdf", "page": 1, "text": ""}])
     monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_with_ai_text", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("HTTP 401 Invalid API Key")))
-    monkeypatch.setattr("bonus_platform.engine.labor.extract._render_pdf_pages_to_images", lambda paths: [])
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._render_pdf_pages_to_images", lambda paths, **kwargs: [])
 
     with pytest.raises(ValueError, match="AI 抽取失败"):
         extract_invoice_items(
