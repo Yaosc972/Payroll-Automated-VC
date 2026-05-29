@@ -13,8 +13,24 @@ from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, E
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
-from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename
+from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
 from .engine.labor.report import build_labor_report
+
+
+def _warehouse_id_from_text_path(pdf_path: Path, diff_wh: list) -> bool:
+    """检查 PDF 内容中的仓库号是否在差异仓库列表中。
+
+    用于文件名无法提取仓库号时（如 US ELogistics 格式），从 PDF 内容中匹配。
+    """
+    try:
+        from .engine.labor.extract import _extract_pdf_pages
+        pages = _extract_pdf_pages([pdf_path], max_pages=1)
+        if pages:
+            wh = _warehouse_id_from_text(pages[0].get("text", ""))
+            return wh in diff_wh
+    except Exception:
+        pass
+    return False
 from .engine.labor.runs import (
     attach_labor_file,
     create_labor_run,
@@ -352,7 +368,11 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             if diff_wh:
                 # Only extract employees from diff warehouse PDFs (unless all totals failed)
                 if "*" not in diff_wh:
+                    # 先尝试从文件名提取仓库号匹配
                     filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_filename(p.name) in diff_wh]
+                    # 如果文件名无法匹配任何仓库号（如 US ELogistics 格式），回退到从 PDF 内容提取
+                    if not filtered_pdf_paths:
+                        filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_text_path(p, diff_wh)]
                     filtered_excel_rows = [r for r in excel_rows if r.warehouse_id in diff_wh]
                 else:
                     filtered_pdf_paths = pdf_paths
