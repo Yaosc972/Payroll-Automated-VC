@@ -49,6 +49,37 @@ def normalize_employee_name(value: Any) -> str:
     return " ".join(sorted(tokens))
 
 
+def normalize_employee_name_advanced(name: str) -> str:
+    """高级姓名标准化，处理各种格式。
+
+    处理：
+    - "Last, First" → "First Last"
+    - 移除中间名缩写（如 "J."）
+    - 统一大小写
+    - 移除多余空格
+    """
+    if not name:
+        return ""
+
+    # 处理 "Last, First" 格式
+    if ',' in name:
+        parts = name.split(',', 1)
+        if len(parts) == 2:
+            last, first = parts
+            name = f"{first.strip()} {last.strip()}"
+
+    # 移除中间名缩写（如 "J." 或 "J"）
+    parts = name.split()
+    if len(parts) >= 3:
+        # 如果中间部分是单个字母或带点的单个字母，可能是中间名缩写
+        middle = parts[1]
+        if len(middle) <= 2 and (len(middle) == 1 or middle.endswith('.')):
+            parts.pop(1)
+
+    # 统一大小写并移除多余空格
+    return ' '.join(parts).lower().strip()
+
+
 def expand_name_variants(name: str) -> set:
     """Expand a name into possible variants for better matching."""
     normalized = normalize_employee_name(name)

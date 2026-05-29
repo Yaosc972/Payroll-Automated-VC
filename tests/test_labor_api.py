@@ -292,3 +292,54 @@ def test_adaptive_tolerance_for_large_amounts():
 
     # 容忍度不应过高（即使 $1M 也不超过 $1）
     assert _adaptive_tolerance(1_000_000) < 1.0
+
+
+def test_advanced_name_normalization():
+    """测试高级姓名标准化"""
+    from bonus_platform.engine.labor.parsing import normalize_employee_name_advanced
+
+    # "Last, First" 格式
+    assert normalize_employee_name_advanced("Alvarez, Rosa") == "rosa alvarez"
+
+    # 中间名缩写
+    assert normalize_employee_name_advanced("Rosa J. Alvarez") == "rosa alvarez"
+
+    # 多余空格
+    assert normalize_employee_name_advanced("  Rosa   Alvarez  ") == "rosa alvarez"
+
+    # 空字符串
+    assert normalize_employee_name_advanced("") == ""
+
+    # 单个名字
+    assert normalize_employee_name_advanced("Rosa") == "rosa"
+
+    # 三个部分无中间名缩写
+    assert normalize_employee_name_advanced("Rosa Maria Alvarez") == "rosa maria alvarez"
+
+
+def test_improved_name_similarity():
+    """测试改进的姓名相似度"""
+    from bonus_platform.engine.labor.compare import _name_similarity_improved
+
+    # 相同姓名
+    assert _name_similarity_improved("Rosa Alvarez", "Rosa Alvarez") == 1.0
+
+    # "Last, First" vs "First Last"
+    score_comma = _name_similarity_improved("Alvarez, Rosa", "Rosa Alvarez")
+    assert score_comma > 0.8, f"Last/First格式匹配得分过低: {score_comma}"
+
+    # 中间名差异
+    score_middle = _name_similarity_improved("Rosa J. Alvarez", "Rosa Alvarez")
+    assert score_middle > 0.8, f"中间名差异匹配得分过低: {score_middle}"
+
+    # 拼写错误
+    score_typo = _name_similarity_improved("Rosa Alvarez", "Rosa Alvarex")
+    assert score_typo > 0.65, f"拼写错误匹配得分过低: {score_typo}"
+
+    # 昵称变体
+    score_nick = _name_similarity_improved("Bob Smith", "Robert Smith")
+    assert score_nick > 0.5, f"昵称变体匹配得分过低: {score_nick}"
+
+    # 完全不同的名字
+    score_diff = _name_similarity_improved("Rosa Alvarez", "John Smith")
+    assert score_diff < 0.5, f"不同名字匹配得分过高: {score_diff}"

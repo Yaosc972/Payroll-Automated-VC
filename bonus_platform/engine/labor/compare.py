@@ -339,12 +339,56 @@ def _status(
     return "通过"
 
 
+def _name_similarity_improved(left: str, right: str) -> float:
+    """改进的姓名相似度计算。
+
+    结合多种算法：
+    1. 标准化后的精确匹配
+    2. Token 集合相似度（处理词序差异）
+    3. 编辑距离相似度（处理拼写错误）
+    4. 昵称变体匹配
+    """
+    from .parsing import expand_name_variants, normalize_employee_name_advanced
+
+    # 标准化
+    left_norm = normalize_employee_name_advanced(left)
+    right_norm = normalize_employee_name_advanced(right)
+
+    # 精确匹配
+    if left_norm == right_norm:
+        return 1.0
+
+    # Token 集合相似度
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    intersection = left_tokens & right_tokens
+    union = left_tokens | right_tokens
+    jaccard = len(intersection) / len(union) if union else 0.0
+
+    # 编辑距离相似度
+    sequence_ratio = SequenceMatcher(None, left_norm, right_norm).ratio()
+
+    # 昵称变体匹配
+    left_variants = expand_name_variants(left)
+    right_variants = expand_name_variants(right)
+    variant_bonus = 0.3 if left_variants & right_variants else 0.0
+
+    # 综合评分（加权平均）
+    score = jaccard * 0.4 + sequence_ratio * 0.6 + variant_bonus
+
+    return min(score, 1.0)
+
+
 def _fuzzy_match_unmatched_groups(
     pdf: Dict[str, Dict[str, Any]],
     excel: Dict[str, Dict[str, Any]],
     *,
     amount_tolerance: float,
     hours_tolerance: float,
+    use_improved: bool = True,
 ) -> Dict[str, Any]:
     exact_keys = set(pdf) & set(excel)
     pdf_candidates = [key for key, group in pdf.items() if key not in exact_keys and group["name"]]
@@ -352,11 +396,12 @@ def _fuzzy_match_unmatched_groups(
     matches: Dict[str, str] = {}
     used_excel = set()
     scored = []
+    similarity_func = _name_similarity_improved if use_improved else _name_similarity
     for pdf_key in pdf_candidates:
         for excel_key in excel_candidates:
             if excel_key in used_excel:
                 continue
-            score = _name_similarity(pdf[pdf_key]["name"], excel[excel_key]["name"])
+            score = similarity_func(pdf[pdf_key]["name"], excel[excel_key]["name"])
             if not _fuzzy_totals_support_match(pdf[pdf_key], excel[excel_key], score, amount_tolerance, hours_tolerance):
                 continue
             scored.append((score, pdf_key, excel_key))
