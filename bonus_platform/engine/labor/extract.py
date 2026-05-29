@@ -154,6 +154,13 @@ def quick_extract_totals(
         wh = _warehouse_id_from_filename(source_file)
         page_text = page.get("text", "")
 
+        # 检查缓存
+        source_path = fname_to_path.get(source_file)
+        if source_path:
+            cached = _load_totals_cache(source_path, ai_config)
+            if cached is not None:
+                return {"source_file": source_file, "total_amount": cached["total_amount"], "warehouse_id": cached.get("warehouse_id", wh)}
+
         # 如果文件名没有仓库号，尝试从PDF内容提取（如 CA#25 格式）
         if not wh and page_text:
             wh = _warehouse_id_from_text(page_text)
@@ -164,13 +171,19 @@ def quick_extract_totals(
             if img_data and img_data.get("base64"):
                 try:
                     amount = _extract_total_with_ai_image(img_data, prompt, ai_config)
-                    return {"source_file": source_file, "total_amount": amount, "warehouse_id": wh}
+                    result = {"total_amount": amount, "warehouse_id": wh}
+                    if source_path:
+                        _save_totals_cache(source_path, ai_config, result)
+                    return {"source_file": source_file, **result}
                 except Exception:
                     pass
             return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
         try:
             amount = _extract_total_with_ai(page_text, prompt, ai_config)
-            return {"source_file": source_file, "total_amount": amount, "warehouse_id": wh}
+            result = {"total_amount": amount, "warehouse_id": wh}
+            if source_path:
+                _save_totals_cache(source_path, ai_config, result)
+            return {"source_file": source_file, **result}
         except Exception:
             return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
 
@@ -731,6 +744,35 @@ def _ai_page_cache_path(chunk: List[Dict[str, Any]], ai_config: Dict[str, Any]) 
     path = Path(str(source_path))
     model = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(ai_config.get("model") or "model"))
     return path.parent / ".ai_extract_cache" / f"{path.stem}_p{page.get('page')}_{model}_{AI_PAGE_CACHE_VERSION}.json"
+
+
+def _totals_cache_path(source_path: Path, ai_config: Dict[str, Any]) -> Path:
+    model = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(ai_config.get("model") or "model"))
+    return source_path.parent / ".ai_extract_cache" / f"{source_path.stem}_totals_{model}_{AI_PAGE_CACHE_VERSION}.json"
+
+
+def _load_totals_cache(source_path: Path, ai_config: Dict[str, Any]) -> Dict[str, Any] | None:
+    if ai_config.get("cache_enabled") is False:
+        return None
+    cache_path = _totals_cache_path(source_path, ai_config)
+    if not cache_path.exists():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _save_totals_cache(source_path: Path, ai_config: Dict[str, Any], result: Dict[str, Any]) -> None:
+    if ai_config.get("cache_enabled") is False:
+        return
+    cache_path = _totals_cache_path(source_path, ai_config)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return
 
 
 def _json_array(content: str) -> List[Dict[str, Any]]:
