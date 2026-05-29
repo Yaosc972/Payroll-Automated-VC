@@ -500,26 +500,6 @@ function renderQualityAlert(quality) {
   labor.qualityAlert.innerHTML = `<strong>${escapeHtml(quality.message || "抽取质量存在风险。")}</strong>${issues.length ? `<ul>${issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>` : ""}`;
 }
 
-function renderRows(container, rows) {
-  if (!rows.length) {
-    container.innerHTML = '<p class="empty-state-text">No anomalies detected. System running smoothly.</p>';
-    return;
-  }
-  container.innerHTML = `<table><thead><tr><th>员工</th><th>状态</th><th>PDF金额</th><th>Excel金额</th><th>差异</th><th>来源</th></tr></thead><tbody>${rows.map((row) => {
-    const statusClass = row.matchStatus === "通过" ? "status-pass" : row.matchStatus === "金额差异" ? "status-diff" : "status-warn";
-    return `<tr><td>${escapeHtml(row.employeeName)}</td><td><span class="risk-pill ${statusClass}">${escapeHtml(row.matchStatus)}</span></td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${escapeHtml(row.sourceRefs || "")}</td></tr>`;
-  }).join("")}</tbody></table>`;
-}
-
-function renderCandidateRows(container, rows) {
-  if (!rows.length) {
-    container.innerHTML = '<p class="empty-state-text">No candidate matches to review.</p>';
-    return;
-  }
-  const visible = rows.slice(0, 40);
-  container.innerHTML = `<table><thead><tr><th>PDF员工</th><th>Excel员工</th><th>相似度</th><th>PDF金额</th><th>Excel金额</th><th>金额差</th><th>工时差</th><th>建议</th></tr></thead><tbody>${visible.map((row) => `<tr><td>${escapeHtml(row.pdfEmployeeName)}</td><td>${escapeHtml(row.excelEmployeeName)}</td><td>${formatPercent(row.nameSimilarity)}</td><td>${formatMoney(row.pdfAmountTotal)}</td><td>${formatMoney(row.excelAmountTotal)}</td><td>${formatMoney(row.amountDelta)}</td><td>${formatHours(row.hoursDelta)}</td><td><span class="candidate-pill">${escapeHtml(row.recommendation || "人工复核")}</span></td></tr>`).join("")}</tbody></table>${rows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条，完整候选请下载报告查看。</p>` : ""}`;
-}
-
 function renderExtractRows(container, rows) {
   if (!rows.length) {
     container.innerHTML = '<p class="empty-state-text">Extract data will appear here after comparison.</p>';
