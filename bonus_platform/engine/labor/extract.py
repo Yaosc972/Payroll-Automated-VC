@@ -7,7 +7,7 @@ import re
 import socket
 from pathlib import Path
 from typing import Any, Dict, List
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib import request
 
 from .models import LaborLineItem, line_items_from_dicts
@@ -335,13 +335,13 @@ def _extract_with_ai_images(
             extracted = _post_chat_completion(payload, ai_config)
             _save_ai_page_cache(chunk, ai_config, extracted)
             rows.extend(extracted)
-        except (json.JSONDecodeError, TimeoutError, socket.timeout):
+        except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError):
             try:
                 extracted = _post_chat_completion(payload, ai_config)
                 _save_ai_page_cache(chunk, ai_config, extracted)
                 rows.extend(extracted)
                 continue
-            except (json.JSONDecodeError, TimeoutError, socket.timeout):
+            except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError):
                 pass
             if chunk and all(int(page.get("page") or 1) > 1 for page in chunk):
                 continue
