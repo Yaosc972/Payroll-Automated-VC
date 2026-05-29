@@ -3070,3 +3070,177 @@ body.filters-collapsed .filter-body {
     padding: 16px 12px;
   }
 }
+
+/* 结论区样式 */
+.conclusion-section {
+  background: linear-gradient(135deg, #f0fdf4 0%, #f8fafc 100%);
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin: 16px 0;
+}
+
+.conclusion-section.warning {
+  background: linear-gradient(135deg, #fffbeb 0%, #f8fafc 100%);
+  border-color: #fde68a;
+}
+
+.conclusion-section.critical {
+  background: linear-gradient(135deg, #fef2f2 0%, #f8fafc 100%);
+  border-color: #fecaca;
+}
+
+.conclusion-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.conclusion-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.conclusion-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.conclusion-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.conclusion-details span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conclusion-details strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* 仓库归因样式 */
+.warehouse-attribution {
+  background: #f8fafc;
+  border-top: 1px solid #e5e7eb;
+  padding: 12px 16px;
+}
+
+.attribution-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12px;
+}
+
+.attribution-row:not(:last-child) {
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.attribution-name {
+  flex: 1;
+  color: var(--ink);
+}
+
+.attribution-amounts {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+}
+
+.attribution-delta {
+  font-weight: 600;
+  min-width: 80px;
+  text-align: right;
+}
+
+.attribution-delta.positive {
+  color: var(--danger);
+}
+
+.attribution-delta.negative {
+  color: #059669;
+}
+
+.attribution-other {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.no-attribution {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
+/* 待处理事项分组样式 */
+.pending-items-section {
+  margin: 16px 0;
+}
+
+.pending-items-section h3 {
+  margin-bottom: 12px;
+}
+
+.pending-group {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #f9fafb;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+}
+
+.group-header:hover {
+  background: #f3f4f6;
+}
+
+.expand-icon {
+  font-size: 12px;
+  color: var(--muted);
+  width: 16px;
+  text-align: center;
+}
+
+.group-count {
+  margin-left: auto;
+  background: #e5e7eb;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.group-content {
+  padding: 0;
+}
+
+.group-content table {
+  margin: 0;
+}
+
+.group-content table th {
+  background: #f9fafb;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

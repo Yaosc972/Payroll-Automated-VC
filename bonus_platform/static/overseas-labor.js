@@ -29,11 +29,13 @@ const labor = {
   extractCompare: document.querySelector("#extractCompare"),
   compareStatus: document.querySelector("#compareStatus"),
   qualityAlert: document.querySelector("#qualityAlert"),
-  summaryGrid: document.querySelector("#summaryGrid"),
+  conclusionSection: document.querySelector("#conclusionSection"),
+  warehouseHeading: document.querySelector("#warehouseHeading"),
   warehouseTable: document.querySelector("#warehouseTable"),
-  amountDiffTable: document.querySelector("#amountDiffTable"),
-  candidateTable: document.querySelector("#candidateTable"),
-  riskTable: document.querySelector("#riskTable"),
+  pendingItemsSection: document.querySelector("#pendingItemsSection"),
+  hoursDiffGroup: document.querySelector("#hoursDiffGroup"),
+  candidateGroup: document.querySelector("#candidateGroup"),
+  notInInvoiceGroup: document.querySelector("#notInInvoiceGroup"),
   extractPreviewTable: document.querySelector("#extractPreviewTable"),
   reportLink: document.querySelector("#laborReportLink"),
   toast: document.querySelector("#laborToast"),
@@ -225,56 +227,62 @@ function renderResult(run) {
   const wcSummary = wc && wc.summary;
   const totalPassed = wcSummary && wcSummary.totalPassed;
 
-  // Top-level reconciliation status
-  const reconcilStatus = totalPassed
-    ? { label: "总金额核对", value: "一致", type: "success" }
-    : wcSummary
-      ? { label: "总金额核对", value: `差异 $${(wcSummary.amountDeltaTotal || 0).toFixed(2)}`, type: "warning" }
-      : null;
+  // 渲染结论区
+  renderConclusion(summary, wcSummary, run.extractionQuality);
 
-  const warehouseMetrics = wcSummary && !totalPassed ? [
-    { label: "仓库数", value: wcSummary.warehouseCount, type: "info" },
-    { label: "仓库通过", value: wcSummary.passedCount, type: wcSummary.exceptionCount > 0 ? "warning" : "success" },
-    { label: "仓库差异", value: wcSummary.exceptionCount, type: wcSummary.exceptionCount > 0 ? "warning" : "success" },
-  ] : [];
-
-  const metrics = [
-    ...(reconcilStatus ? [reconcilStatus] : []),
-    ...warehouseMetrics,
-  ];
-
-  // Only show employee-level metrics when total has differences
-  if (!totalPassed) {
-    metrics.push(
-      { label: "PDF人数", value: summary.pdfEmployeeCount, type: "info" },
-      { label: "Excel人数", value: summary.excelEmployeeCount, type: "info" },
-      { label: "金额差异人数", value: summary.amountDiffCount, type: summary.amountDiffCount > 0 ? "warning" : "success" },
-      { label: "疑似姓名匹配", value: summary.fuzzyMatchCount, type: "info" },
-      { label: "低置信度", value: summary.lowConfidenceCount, type: summary.lowConfidenceCount > 0 ? "warning" : "success" },
-      { label: "风险人数", value: summary.exceptionCount, type: summary.exceptionCount > 0 ? "warning" : "success" },
-    );
-  }
-
-  labor.summaryGrid.innerHTML = metrics.map(({ label, value, type }) => `<div class="metric-${type}"><span>${label}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`).join("");
+  // 渲染仓库概览
   renderWarehouseTable(wc);
 
-  // Only show detail tables when total has differences
+  // 渲染待处理事项分组
+  const rows = run.comparisonRows || [];
+  renderPendingItems(rows, run.candidateMatches || [], summary);
+
+  // 渲染AI抽取明细
   if (totalPassed) {
-    labor.amountDiffTable.innerHTML = '<p class="empty-state-text" style="color:#16a34a">总金额一致，无需核对明细。</p>';
-    labor.candidateTable.innerHTML = "";
-    labor.riskTable.innerHTML = "";
-    labor.extractPreviewTable.innerHTML = "";
+    labor.extractPreviewTable.innerHTML = '<p class="empty-state-text" style="color:#16a34a">总金额一致，无需核对明细。</p>';
   } else {
-    const rows = run.comparisonRows || [];
-    renderRows(labor.amountDiffTable, rows.filter((row) => row.matchStatus === "金额差异"));
-    renderCandidateRows(labor.candidateTable, run.candidateMatches || []);
-    renderRows(labor.riskTable, rows.filter((row) => row.matchStatus !== "通过" && row.matchStatus !== "金额差异"));
     renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
   }
 }
 
+function renderConclusion(summary, wcSummary, extractionQuality) {
+  const section = labor.conclusionSection;
+  if (!section) return;
+
+  const conclusionLevel = summary.conclusionLevel || "pass";
+  const conclusionMessage = summary.conclusionMessage || "";
+  const levelIcons = { pass: "✅", warning: "⚠️", critical: "🔴" };
+  const levelLabels = { pass: "通过", warning: "需关注", critical: "需人工复核" };
+
+  const icon = levelIcons[conclusionLevel] || "❓";
+  const label = levelLabels[conclusionLevel] || conclusionLevel;
+
+  const amountDeltaTotal = wcSummary ? (wcSummary.amountDeltaTotal || 0) : 0;
+  const pdfAmountTotal = wcSummary ? Math.abs(wcSummary.pdfAmountTotal || 0) : 0;
+  const excelAmountTotal = wcSummary ? Math.abs(wcSummary.excelAmountTotal || 0) : 0;
+  const maxAmount = Math.max(pdfAmountTotal, excelAmountTotal, 1);
+  const amountDeltaPct = (Math.abs(amountDeltaTotal) / maxAmount * 100).toFixed(2);
+
+  const pdfCount = summary.pdfEmployeeCount || 0;
+  const excelCount = summary.excelEmployeeCount || 0;
+  const notInInvoice = summary.notInInvoiceCount || 0;
+
+  section.hidden = false;
+  section.className = `conclusion-section ${conclusionLevel}`;
+  section.innerHTML = `
+    <div class="conclusion-main">
+      <span class="conclusion-icon">${icon}</span>
+      <span class="conclusion-text">${escapeHtml(label)} - ${escapeHtml(conclusionMessage)}</span>
+    </div>
+    <div class="conclusion-details">
+      <span>总金额差异: <strong>$${amountDeltaTotal.toFixed(2)} (${amountDeltaPct}%)</strong></span>
+      <span>📋 本批发票覆盖 <strong>${pdfCount}</strong>人，账单共 <strong>${excelCount}</strong>人${notInInvoice > 0 ? `（<strong>${notInInvoice}</strong>人不在本批发票）` : ""}</span>
+    </div>
+  `;
+}
+
 function renderWarehouseTable(wc) {
-  const heading = document.getElementById("warehouseHeading");
+  const heading = labor.warehouseHeading;
   const table = labor.warehouseTable;
   if (!heading || !table) return;
   if (!wc || !wc.rows || wc.rows.length === 0) {
@@ -284,29 +292,51 @@ function renderWarehouseTable(wc) {
   }
   heading.hidden = false;
   table.hidden = false;
-  const headers = ["仓库", "PDF员工数", "Excel员工数", "PDF金额", "Excel金额", "差异", "状态"];
+
+  const headers = ["仓库", "PDF金额", "Excel金额", "差异", "状态"];
   const thead = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
+
   const tbody = wc.rows.map((r, idx) => {
-    const hasDetails = r.employeeRows && r.employeeRows.length > 0;
-    const expandIcon = hasDetails ? "▸" : "";
+    const hasAttribution = r.attribution && r.attribution.length > 0;
     const statusClass = r.matchStatus === "通过" ? "status-pass" : "status-fail";
-    const detailRow = hasDetails ? `<tr class="warehouse-detail-row" id="wh-detail-${idx}" hidden><td colspan="7">${_renderWarehouseEmployees(r.employeeRows)}</td></tr>` : "";
-    return `<tr class="warehouse-main-row" ${hasDetails ? `data-idx="${idx}" style="cursor:pointer"` : ""}>
+    const expandIcon = hasAttribution ? "▸" : "";
+
+    // 归因行
+    const attributionRow = hasAttribution
+      ? `<tr class="warehouse-attribution-row" id="wh-attr-${idx}" hidden><td colspan="5">${_renderAttribution(r.attribution)}</td></tr>`
+      : (r.matchStatus !== "通过" ? `<tr class="warehouse-attribution-row" id="wh-attr-${idx}" hidden><td colspan="5"><div class="no-attribution">无显著差异员工</div></td></tr>` : "");
+
+    return `<tr class="warehouse-main-row" ${hasAttribution || r.matchStatus !== "通过" ? `data-idx="${idx}" style="cursor:pointer"` : ""}>
       <td>${expandIcon} 仓库${escapeHtml(r.warehouseId)}</td>
-      <td>${r.pdfEmployeeCount}</td>
-      <td>${r.excelEmployeeCount}</td>
       <td>$${r.pdfAmountTotal.toFixed(2)}</td>
       <td>$${r.excelAmountTotal.toFixed(2)}</td>
       <td>${r.amountDelta >= 0 ? "+" : ""}$${r.amountDelta.toFixed(2)}</td>
       <td style="color:${r.matchStatus === "通过" ? "#16a34a" : "#dc2626"};font-weight:600">${escapeHtml(r.matchStatus)}</td>
-    </tr>${detailRow}`;
+    </tr>${attributionRow}`;
   }).join("");
+
   table.innerHTML = `<table class="audit-data-table">${thead}<tbody>${tbody}</tbody></table>`;
+
+  // 差异>= $1 的仓库自动展开
+  wc.rows.forEach((r, idx) => {
+    if (Math.abs(r.amountDelta) >= 1) {
+      const attrRow = document.getElementById(`wh-attr-${idx}`);
+      if (attrRow) {
+        attrRow.hidden = false;
+        const mainRow = table.querySelector(`.warehouse-main-row[data-idx="${idx}"]`);
+        if (mainRow) {
+          const icon = mainRow.querySelector("td:first-child");
+          if (icon) icon.textContent = icon.textContent.replace("▸", "▾");
+        }
+      }
+    }
+  });
+
   // Bind expand/collapse
   table.querySelectorAll(".warehouse-main-row[data-idx]").forEach((row) => {
     row.addEventListener("click", () => {
       const idx = row.dataset.idx;
-      const detail = document.getElementById(`wh-detail-${idx}`);
+      const detail = document.getElementById(`wh-attr-${idx}`);
       if (!detail) return;
       const expanded = !detail.hidden;
       detail.hidden = expanded;
@@ -314,6 +344,127 @@ function renderWarehouseTable(wc) {
       if (icon) icon.textContent = icon.textContent.replace(expanded ? "▾" : "▸", expanded ? "▸" : "▾");
     });
   });
+}
+
+function _renderAttribution(attribution) {
+  if (!attribution || attribution.length === 0) {
+    return '<div class="no-attribution">无显著差异员工</div>';
+  }
+
+  const rows = attribution.map(item => {
+    const isOther = item.employeeName.startsWith("其他");
+    const nameClass = isOther ? "attribution-name attribution-other" : "attribution-name";
+    const deltaClass = item.delta >= 0 ? "attribution-delta positive" : "attribution-delta negative";
+    const amountsHtml = item.pdfAmount != null
+      ? `<span>PDF: $${item.pdfAmount.toFixed(2)}</span><span>Excel: $${item.excelAmount.toFixed(2)}</span>`
+      : "";
+
+    return `<div class="attribution-row">
+      <span class="${nameClass}">${escapeHtml(item.employeeName)}</span>
+      <span class="attribution-amounts">${amountsHtml}</span>
+      <span class="${deltaClass}">${item.delta >= 0 ? "+" : ""}$${item.delta.toFixed(2)}</span>
+    </div>`;
+  }).join("");
+
+  return `<div class="warehouse-attribution">${rows}</div>`;
+}
+
+function renderPendingItems(rows, candidateMatches, summary) {
+  const section = labor.pendingItemsSection;
+  if (!section) return;
+
+  // 分组数据
+  const hoursDiffRows = rows.filter(row => row.matchStatus === "工时不一致");
+  const notInInvoiceRows = rows.filter(row => row.matchStatus === "Excel有PDF无");
+
+  // 判断是否有待处理事项
+  const hasItems = hoursDiffRows.length > 0 || candidateMatches.length > 0 || notInInvoiceRows.length > 0;
+  section.hidden = !hasItems;
+  if (!hasItems) return;
+
+  // 渲染工时不一致组
+  _renderPendingGroup(labor.hoursDiffGroup, hoursDiffRows, _renderHoursDiffTable);
+
+  // 渲染姓名格式差异组
+  _renderPendingGroup(labor.candidateGroup, candidateMatches, _renderCandidateTable);
+
+  // 渲染不在本批发票组
+  _renderPendingGroup(labor.notInInvoiceGroup, notInInvoiceRows, _renderNotInInvoiceTable);
+}
+
+function _renderPendingGroup(groupEl, items, renderFn) {
+  if (!groupEl) return;
+  if (!items || items.length === 0) {
+    groupEl.hidden = true;
+    return;
+  }
+  groupEl.hidden = false;
+  const countEl = groupEl.querySelector(".group-count");
+  if (countEl) countEl.textContent = `${items.length}人`;
+
+  const contentEl = groupEl.querySelector(".group-content");
+  if (contentEl) {
+    contentEl.innerHTML = renderFn(items);
+  }
+
+  // 绑定折叠/展开事件
+  const header = groupEl.querySelector(".group-header");
+  if (header && !header._bound) {
+    header._bound = true;
+    header.addEventListener("click", () => {
+      const icon = header.querySelector(".expand-icon");
+      const content = groupEl.querySelector(".group-content");
+      if (!content) return;
+      const expanded = !content.hidden;
+      content.hidden = expanded;
+      if (icon) icon.textContent = expanded ? "▸" : "▾";
+    });
+  }
+}
+
+function _renderHoursDiffTable(rows) {
+  if (!rows.length) return "";
+  const visible = rows.slice(0, 40);
+  return `<table class="audit-data-table">
+    <thead><tr><th>员工</th><th>PDF工时</th><th>Excel工时</th><th>工时差</th><th>PDF金额</th><th>Excel金额</th></tr></thead>
+    <tbody>${visible.map(row => `<tr>
+      <td>${escapeHtml(row.employeeName)}</td>
+      <td>${formatHours(row.pdfHoursTotal)}</td>
+      <td>${formatHours(row.excelHoursTotal)}</td>
+      <td>${formatHours(row.hoursDelta)}</td>
+      <td>${formatMoney(row.pdfAmountTotal)}</td>
+      <td>${formatMoney(row.excelAmountTotal)}</td>
+    </tr>`).join("")}</tbody>
+  </table>${rows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条。</p>` : ""}`;
+}
+
+function _renderCandidateTable(rows) {
+  if (!rows.length) return "";
+  const visible = rows.slice(0, 40);
+  return `<table class="audit-data-table">
+    <thead><tr><th>PDF员工</th><th>Excel员工</th><th>相似度</th><th>PDF金额</th><th>Excel金额</th><th>金额差</th></tr></thead>
+    <tbody>${visible.map(row => `<tr>
+      <td>${escapeHtml(row.pdfEmployeeName)}</td>
+      <td>${escapeHtml(row.excelEmployeeName)}</td>
+      <td>${formatPercent(row.nameSimilarity)}</td>
+      <td>${formatMoney(row.pdfAmountTotal)}</td>
+      <td>${formatMoney(row.excelAmountTotal)}</td>
+      <td>${formatMoney(row.amountDelta)}</td>
+    </tr>`).join("")}</tbody>
+  </table>${rows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条，完整候选请下载报告查看。</p>` : ""}`;
+}
+
+function _renderNotInInvoiceTable(rows) {
+  if (!rows.length) return "";
+  const visible = rows.slice(0, 40);
+  return `<table class="audit-data-table">
+    <thead><tr><th>员工</th><th>Excel金额</th><th>Excel工时</th></tr></thead>
+    <tbody>${visible.map(row => `<tr>
+      <td>${escapeHtml(row.employeeName)}</td>
+      <td>${formatMoney(row.excelAmountTotal)}</td>
+      <td>${formatHours(row.excelHoursTotal)}</td>
+    </tr>`).join("")}</tbody>
+  </table>${rows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条。</p>` : ""}`;
 }
 
 function _renderWarehouseEmployees(rows) {

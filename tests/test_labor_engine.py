@@ -803,5 +803,5 @@ def test_build_labor_report_contains_expected_sheets(tmp_path):
     build_labor_report(output, comparison, [], [], {"name": "姓名", "hours": "时长", "amount": "金额"})
 
     workbook = load_workbook(output, read_only=True)
-    assert workbook.sheetnames == ["核对摘要", "金额差异员工", "工时风险项", "未匹配员工", "未匹配候选", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
-    assert workbook["未匹配候选"].max_row == 2
+    assert workbook.sheetnames == ["核对结论", "核对摘要", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
+    assert workbook["姓名格式差异"].max_row == 2

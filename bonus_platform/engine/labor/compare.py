@@ -131,6 +131,7 @@ def compare_by_warehouse(
             "amountDelta": amount_delta,
             "matchStatus": "通过" if wh_passed else "金额差异",
             "employeeRows": [],
+            "attribution": [],
         }
 
         # Tier 3: employee detail only for warehouses with differences AND available rows
@@ -145,6 +146,9 @@ def compare_by_warehouse(
                 hours_tolerance=hours_tolerance,
                 confidence_threshold=confidence_threshold,
             )
+            # Build attribution for warehouses with diff >= $1
+            if abs(amount_delta) >= 1.0:
+                row["attribution"] = _build_attribution(row["employeeRows"])
 
         warehouse_rows.append(row)
 
@@ -537,3 +541,35 @@ def _warehouse_id_from_filename(source_file: str) -> str:
 
 def _source_ref(item: LaborLineItem) -> str:
     return f"{item.source_file} {item.source_page_or_row}".strip()
+
+
+def _build_attribution(employee_rows: List[Dict[str, Any]], max_items: int = 5) -> List[Dict[str, Any]]:
+    """Build attribution list for warehouses with significant differences.
+
+    Returns top contributors sorted by absolute amount delta, with an "other" entry for the rest.
+    """
+    # Filter rows with amount difference
+    diff_rows = [row for row in employee_rows if abs(row.get("amountDelta", 0)) >= 0.01]
+    # Sort by absolute amount delta descending
+    diff_rows.sort(key=lambda r: abs(r.get("amountDelta", 0)), reverse=True)
+
+    attribution = []
+    for row in diff_rows[:max_items]:
+        attribution.append({
+            "employeeName": row.get("employeeName", ""),
+            "pdfAmount": row.get("pdfAmountTotal", 0),
+            "excelAmount": row.get("excelAmountTotal", 0),
+            "delta": row.get("amountDelta", 0),
+        })
+
+    # Add "other" entry if there are more rows
+    if len(diff_rows) > max_items:
+        other_delta = sum(r.get("amountDelta", 0) for r in diff_rows[max_items:])
+        attribution.append({
+            "employeeName": f"其他{len(diff_rows) - max_items}人",
+            "pdfAmount": None,
+            "excelAmount": None,
+            "delta": round(other_delta, 2),
+        })
+
+    return attribution

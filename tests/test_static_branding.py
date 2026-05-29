@@ -180,7 +180,8 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert "overseas-labor.js" in html
     assert "/api/labor/runs" in js
     assert "字段映射" in html
-    assert "金额差异员工" in html
+    assert "结论" in html
+    assert "仓库核对总览" in html
     assert ".overseas-labor-shell" in css
 
 

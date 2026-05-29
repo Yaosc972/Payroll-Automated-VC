@@ -413,17 +413,21 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 )
 
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
-        build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping)
+        build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping, warehouse_comparison)
     except ValueError:
         raise
     files = dict(metadata.get("files", {}))
     files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
+
+    # 计算结论级别
+    conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality)
+
     updated = update_labor_metadata(
         run_id,
         {
             "status": "已生成差异报告",
             "files": files,
-            "comparisonSummary": comparison["summary"],
+            "comparisonSummary": {**comparison["summary"], **conclusion},
             "comparisonRows": comparison["rows"],
             "candidateMatches": comparison.get("candidateMatches", []),
             "warehouseComparison": warehouse_comparison,
@@ -529,6 +533,52 @@ def _recover_stuck_labor_runs() -> None:
                     })
                 except Exception:
                     pass
+
+
+def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_quality: dict) -> dict:
+    """Build conclusion level and message for the reconciliation result."""
+    wc_summary = warehouse_comparison.get("summary", {})
+    comp_summary = comparison.get("summary", {})
+    total_passed = wc_summary.get("totalPassed", False)
+    amount_delta_total = abs(wc_summary.get("amountDeltaTotal", 0))
+    pdf_amount_total = abs(wc_summary.get("pdfAmountTotal", 0))
+    excel_amount_total = abs(wc_summary.get("excelAmountTotal", 0))
+    max_amount = max(pdf_amount_total, excel_amount_total, 1.0)
+    amount_delta_pct = amount_delta_total / max_amount * 100
+
+    pdf_employee_count = comp_summary.get("pdfEmployeeCount", 0)
+    excel_employee_count = comp_summary.get("excelEmployeeCount", 0)
+    amount_diff_count = comp_summary.get("amountDiffCount", 0)
+    low_confidence_count = comp_summary.get("lowConfidenceCount", 0)
+    exception_count = comp_summary.get("exceptionCount", 0)
+
+    # 结论级别判定
+    if extraction_quality.get("level") == "warning" or low_confidence_count > 0:
+        conclusion_level = "critical"
+        conclusion_message = "存在低置信度抽取，需人工复核"
+    elif total_passed and amount_diff_count == 0:
+        conclusion_level = "pass"
+        conclusion_message = "仓库总金额核对通过"
+    elif amount_delta_pct < 0.1 and amount_diff_count == 0:
+        conclusion_level = "pass"
+        conclusion_message = f"仓库总金额核对通过，差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
+    else:
+        conclusion_level = "warning"
+        if amount_diff_count > 0:
+            conclusion_message = f"{amount_diff_count}人工时/金额差异需关注"
+        else:
+            conclusion_message = f"仓库总金额差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
+
+    # 计算不在本批发票人数
+    not_in_invoice_count = 0
+    if excel_employee_count > pdf_employee_count:
+        not_in_invoice_count = excel_employee_count - pdf_employee_count
+
+    return {
+        "conclusionLevel": conclusion_level,
+        "conclusionMessage": conclusion_message,
+        "notInInvoiceCount": not_in_invoice_count,
+    }
 
 
 def _labor_extraction_quality(summary: dict) -> dict:
