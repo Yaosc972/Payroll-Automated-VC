@@ -537,6 +537,8 @@ def _recover_stuck_labor_runs() -> None:
 
 def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_quality: dict) -> dict:
     """Build conclusion level and message for the reconciliation result."""
+    from bonus_platform.engine.labor.compare import _adaptive_tolerance
+
     wc_summary = warehouse_comparison.get("summary", {})
     comp_summary = comparison.get("summary", {})
     total_passed = wc_summary.get("totalPassed", False)
@@ -553,13 +555,14 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
     exception_count = comp_summary.get("exceptionCount", 0)
 
     # 结论级别判定
+    effective_tolerance = _adaptive_tolerance(max_amount)
     if extraction_quality.get("level") == "warning" or low_confidence_count > 0:
         conclusion_level = "critical"
         conclusion_message = "存在低置信度抽取，需人工复核"
     elif total_passed and amount_diff_count == 0:
         conclusion_level = "pass"
         conclusion_message = "仓库总金额核对通过"
-    elif amount_delta_pct < 0.1 and amount_diff_count == 0:
+    elif amount_delta_total <= effective_tolerance and amount_diff_count == 0:
         conclusion_level = "pass"
         conclusion_message = f"仓库总金额核对通过，差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
     else:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections import defaultdict
 from difflib import SequenceMatcher
@@ -8,6 +9,23 @@ from typing import Any, Dict, Iterable, List
 
 from .models import LaborComparisonRow, LaborLineItem, line_items_from_dicts
 from .parsing import normalize_employee_name
+
+
+# ---------------------------------------------------------------------------
+# Adaptive tolerance
+# ---------------------------------------------------------------------------
+
+def _adaptive_tolerance(amount: float, base_tolerance: float = 0.05) -> float:
+    """根据金额大小自适应调整容忍度。
+
+    大金额允许更大的绝对差异，但保持相对差异在合理范围内。
+    - 金额 <= $1,000: 使用基础容忍度
+    - 金额 > $1,000: 容忍度按对数增长，例如 $50,000 → ~0.074
+    """
+    if amount <= 1000:
+        return base_tolerance
+    multiplier = 1 + math.log10(amount / 1000)
+    return base_tolerance * multiplier
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +82,8 @@ def compare_by_warehouse(
         pdf_total = 0.0
     excel_total = round(sum(float(r.get("amount") or 0) for r in excel_rows_with_warehouse), 2)
     total_delta = round(pdf_total - excel_total, 2)
-    total_passed = abs(total_delta) <= amount_tolerance
+    effective_total_tolerance = _adaptive_tolerance(max(abs(pdf_total), abs(excel_total)), amount_tolerance)
+    total_passed = abs(total_delta) <= effective_total_tolerance
 
     summary = {
         "pdfAmountTotal": pdf_total,
@@ -118,7 +137,8 @@ def compare_by_warehouse(
         excel_items = excel_by_wh.get(wh, [])
         excel_amount = round(sum(float(r.get("amount") or 0) for r in excel_items), 2)
         amount_delta = round(pdf_amount - excel_amount, 2)
-        wh_passed = abs(amount_delta) <= amount_tolerance
+        effective_wh_tolerance = _adaptive_tolerance(max(abs(pdf_amount), abs(excel_amount)), amount_tolerance)
+        wh_passed = abs(amount_delta) <= effective_wh_tolerance
 
         row = {
             "warehouseId": wh,

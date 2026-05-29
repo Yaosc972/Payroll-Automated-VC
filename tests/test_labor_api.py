@@ -1,5 +1,6 @@
 from io import BytesIO
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
@@ -266,3 +267,28 @@ def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatc
 
     assert response["status"] == "抽取中"
     assert queued["args"] == (run["id"],)
+
+
+def test_adaptive_tolerance_for_large_amounts():
+    """测试大金额的自适应容忍度"""
+    from bonus_platform.engine.labor.compare import _adaptive_tolerance
+
+    # 小金额使用基础容忍度
+    assert _adaptive_tolerance(500) == 0.05
+
+    # $1000 边界
+    assert _adaptive_tolerance(1000) == 0.05
+    assert _adaptive_tolerance(1001) > 0.05
+
+    # 大金额容忍度更高
+    tol_50k = _adaptive_tolerance(50000)
+    tol_100k = _adaptive_tolerance(100000)
+    assert tol_50k > 0.05
+    assert tol_100k > tol_50k
+
+    # 仓库19 的 $0.09 差异（$54,689）应在容忍范围内
+    tol_54k = _adaptive_tolerance(54689)
+    assert 0.09 <= tol_54k, f"$0.09 差异应被容忍, 但容忍度仅为 {tol_54k}"
+
+    # 容忍度不应过高（即使 $1M 也不超过 $1）
+    assert _adaptive_tolerance(1_000_000) < 1.0
