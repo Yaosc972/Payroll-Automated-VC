@@ -108,23 +108,32 @@ def quick_extract_totals(
     ai_config: Dict[str, Any],
     supplier: str = "",
 ) -> List[Dict[str, Any]]:
-    """Lightweight extraction: only get total_amount per PDF from first page.
+    """轻量级提取：每个 PDF 只提取总金额和仓库号。
 
-    Returns list of {source_file, total_amount, warehouse_id} dicts.
-    Much faster than full employee extraction — one short AI call per PDF.
-    Calls are parallelized via thread pool.
-    Supports both text-based and image-based PDFs.
+    提取策略（按优先级）：
+    1. 规则抽取 — 从文本行解析员工明细并求和（最快、最准）
+    2. 缓存 — 读取 .ai_extract_cache/ 中的历史结果
+    3. AI 抽取 — 调用 AI 模型提取总金额（最慢）
+
+    返回 [{source_file, total_amount, warehouse_id}, ...] 列表。
+    线程池并行处理，支持文本 PDF 和图片 PDF。
     """
     if not _ai_ready(ai_config):
         return [{"source_file": p.name, "total_amount": 0.0, "warehouse_id": ""} for p in pdf_paths]
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    pages = _extract_pdf_pages(pdf_paths, max_pages=1)
-    first_pages = [p for p in pages if int(p.get("page") or 1) == 1]
+    # 规则抽取需要所有页面才能得到完整总额，AI 抽取只读首页
+    all_pages = _extract_pdf_pages(pdf_paths)
+    first_pages = [p for p in all_pages if int(p.get("page") or 1) == 1]
 
     # Map filename to full path for image rendering
     fname_to_path = {p.name: p for p in pdf_paths}
+
+    # 按文件名分组所有页面，用于规则抽取
+    pages_by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for page in all_pages:
+        pages_by_file.setdefault(page["source_file"], []).append(page)
 
     # Pre-render images for PDFs with empty text (image-based PDFs)
     image_pages_map: Dict[str, Dict[str, Any]] = {}
@@ -150,23 +159,36 @@ def quick_extract_totals(
     )
 
     def _extract_one(page: Dict[str, Any]) -> Dict[str, Any]:
+        """提取单个 PDF 的总金额。优先规则抽取，其次缓存，最后 AI。"""
         source_file = page.get("source_file", "")
         wh = _warehouse_id_from_filename(source_file)
         page_text = page.get("text", "")
 
-        # 检查缓存
+        # 如果文件名没有仓库号，尝试从PDF内容提取（如 CA#25 格式）
+        if not wh and page_text:
+            wh = _warehouse_id_from_text(page_text)
+
+        # 1. 尝试规则抽取：从所有页面解析员工明细并求和
+        file_pages = pages_by_file.get(source_file, [])
+        if any(p.get("text", "").strip() for p in file_pages):
+            rule_rows: List[LaborLineItem] = []
+            for p in file_pages:
+                rule_rows.extend(_extract_vertical_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
+                if not rule_rows:
+                    rule_rows.extend(_extract_tabular_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
+            if rule_rows:
+                total = round(sum(r.amount for r in rule_rows), 2)
+                return {"source_file": source_file, "total_amount": total, "warehouse_id": wh}
+
+        # 2. 检查缓存
         source_path = fname_to_path.get(source_file)
         if source_path:
             cached = _load_totals_cache(source_path, ai_config)
             if cached is not None:
                 return {"source_file": source_file, "total_amount": cached["total_amount"], "warehouse_id": cached.get("warehouse_id", wh)}
 
-        # 如果文件名没有仓库号，尝试从PDF内容提取（如 CA#25 格式）
-        if not wh and page_text:
-            wh = _warehouse_id_from_text(page_text)
-
+        # 3. AI 抽取（文本或图片）
         if not page_text.strip():
-            # Try image-based extraction for image PDFs
             img_data = image_pages_map.get(source_file)
             if img_data and img_data.get("base64"):
                 try:
