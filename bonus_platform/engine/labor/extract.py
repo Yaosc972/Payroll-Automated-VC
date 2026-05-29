@@ -141,9 +141,9 @@ def quick_extract_totals(
     prompt = (
         "From this invoice page, extract ONLY two values as strict JSON:\n"
         "1. total_amount: the invoice total/balance due (a number, no currency symbol)\n"
-        "2. warehouse_id: the warehouse/dept number if visible (e.g. DEPT:CA#3 → 3), else empty string\n\n"
-        'Return: {"total_amount": 12345.67, "warehouse_id": "3"}\n'
-        "Return only the JSON object, no extra text."
+        "2. warehouse_id: the warehouse/dept number if visible (e.g. CA#3 → 3), else empty string\n\n"
+        "Return ONLY a JSON object like: {\"total_amount\": 1234.56, \"warehouse_id\": \"3\"}\n"
+        "Replace the example values with the ACTUAL values from the invoice. Return only the JSON, no extra text."
     )
 
     def _extract_one(page: Dict[str, Any]) -> Dict[str, Any]:
