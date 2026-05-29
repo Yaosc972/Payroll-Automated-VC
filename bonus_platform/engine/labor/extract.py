@@ -40,6 +40,29 @@ def _warehouse_id_from_filename(source_file: str) -> str:
     return ""
 
 
+def _warehouse_id_from_text(page_text: str) -> str:
+    """从PDF内容中提取仓库号（如 CA#25 → 25）。
+
+    支持格式：
+    - CA#N（如 CA#25 Bloomington）
+    - DEPT:N（如 DEPT:25）
+    - N号仓（如 25号仓）
+    """
+    # 匹配 CA#N 格式（US ELogistics 发票）
+    m = re.search(r"CA#(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # 匹配 DEPT:N 格式
+    m = re.search(r"DEPT[:\s]*(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # 匹配 N号仓 格式
+    m = re.search(r"(\d+)号仓", page_text)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def extract_invoice_items(
     pdf_paths: List[Path],
     ai_config: Dict[str, Any],
@@ -127,6 +150,11 @@ def quick_extract_totals(
         source_file = page.get("source_file", "")
         wh = _warehouse_id_from_filename(source_file)
         page_text = page.get("text", "")
+
+        # 如果文件名没有仓库号，尝试从PDF内容提取（如 CA#25 格式）
+        if not wh and page_text:
+            wh = _warehouse_id_from_text(page_text)
+
         if not page_text.strip():
             # Try image-based extraction for image PDFs
             img_data = image_pages_map.get(source_file)
@@ -190,8 +218,8 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
     }
     payload = {
         "model": ai_config["model"],
-        "max_tokens": 256,
-        "system": "Extract invoice total as JSON only.",
+        "max_tokens": 1024,  # 增加 token 限制，避免思考过程中用完
+        "system": "Extract invoice total as JSON only. Be concise.",
         "messages": [{"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"}],
     }
     base_url = ai_config["base_url"].rstrip("/")
@@ -201,12 +229,19 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
         headers=headers,
         method="POST",
     )
-    with request.urlopen(req, timeout=30) as response:
+    timeout = int(ai_config.get("timeout_seconds") or 180)
+    with request.urlopen(req, timeout=timeout) as response:
         data = json.loads(response.read().decode("utf-8"))
     content = ""
+    thinking = ""
     for block in data.get("content", []):
         if block.get("type") == "text":
             content += block["text"]
+        elif block.get("type") == "thinking":
+            thinking += block.get("thinking", "")
+    # 回退：如果没有 text 内容，尝试从 thinking 中提取
+    if not content.strip() and thinking:
+        content = thinking
     return _parse_total_from_response(content)
 
 
