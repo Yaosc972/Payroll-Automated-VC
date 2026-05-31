@@ -243,13 +243,19 @@ def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatc
 
     queued = {}
 
-    class FakeBackgroundTasks:
-        def add_task(self, fn, *args, **kwargs):
-            queued["fn"] = fn
-            queued["args"] = args
-            queued["kwargs"] = kwargs
-
+    # 后台任务现在通过 run_in_executor 运行，monkeypatch 替换为同步调用以便测试
     monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda run_id: queued.setdefault("completed", run_id))
+    # 拦截 run_in_executor，直接同步调用
+    import asyncio
+    original_run_in_executor = asyncio.get_event_loop().run_in_executor
+    def fake_run_in_executor(executor, fn, *args):
+        fn(*args)
+        # 返回一个已完成的 future
+        f = asyncio.Future()
+        f.set_result(None)
+        return f
+    monkeypatch.setattr(asyncio.get_event_loop(), "run_in_executor", fake_run_in_executor)
+
     client = TestClient(app)
     run = client.post(
         "/api/labor/runs",
@@ -267,10 +273,10 @@ def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatc
         json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
     )
 
-    response = app_module.extract_and_compare_labor_run(run["id"], FakeBackgroundTasks())
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare").json()
 
     assert response["status"] == "抽取中"
-    assert queued["args"] == (run["id"],)
+    assert queued.get("completed") == run["id"]
 
 
 def test_adaptive_tolerance_for_large_amounts():

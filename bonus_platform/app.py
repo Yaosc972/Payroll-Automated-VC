@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
+
+logger = logging.getLogger("bonus_platform.labor")
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -290,7 +299,7 @@ def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/labor/runs/{run_id}/extract-and-compare")
-def extract_and_compare_labor_run(run_id: str, background_tasks: BackgroundTasks) -> dict:
+async def extract_and_compare_labor_run(run_id: str) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     mapping = metadata.get("excelMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
@@ -303,21 +312,27 @@ def extract_and_compare_labor_run(run_id: str, background_tasks: BackgroundTasks
         run_id,
         {
             "status": "抽取中",
+            "stage": "初始化",
             "errorMessage": "",
             "diffDownloadUrl": "",
         },
     )
-    background_tasks.add_task(_run_labor_extract_compare, run_id)
+    # 在独立线程中运行，不阻塞事件循环
+    asyncio.get_event_loop().run_in_executor(None, _run_labor_extract_compare, run_id)
     return queued
 
 
 def _run_labor_extract_compare(run_id: str) -> None:
     try:
+        logger.info(f"[{run_id}] === 抽取任务启动 ===")
         _perform_labor_extract_compare(run_id)
+        logger.info(f"[{run_id}] === 抽取任务完成 ===")
     except ValueError as exc:
-        update_labor_metadata(run_id, {"status": "抽取失败", "errorMessage": str(exc)})
+        logger.error(f"[{run_id}] 抽取失败(ValueError): {exc}")
+        update_labor_metadata(run_id, {"status": "抽取失败", "stage": "错误", "errorMessage": str(exc)})
     except Exception as exc:
-        update_labor_metadata(run_id, {"status": "抽取失败", "errorMessage": f"生成劳务核对结果失败：{exc}"})
+        logger.error(f"[{run_id}] 抽取失败(Exception): {exc}", exc_info=True)
+        update_labor_metadata(run_id, {"status": "抽取失败", "stage": "错误", "errorMessage": f"生成劳务核对结果失败：{exc}"})
 
 
 def _perform_labor_extract_compare(run_id: str) -> dict:
@@ -333,16 +348,25 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     currency = metadata.get("currency", "")
 
     try:
+        # [F] Excel 解析
+        logger.info(f"[{run_id}] [F] 开始解析 Excel: {workbook_path.name}, 工作表: {sheet_name}")
+        update_labor_metadata(run_id, {"stage": "解析 Excel 账单"})
         excel_rows = read_workbook_rows(workbook_path, sheet_name, mapping)
+        logger.info(f"[{run_id}] [F] Excel 解析完成: {len(excel_rows)} 行")
         excel_warehouse_data = [
             {"warehouse_id": row.warehouse_id, "hours": row.hours, "amount": row.amount, "employee_name": row.employee_name_raw}
             for row in excel_rows
         ]
 
         # === Stage 1: Quick total extraction ===
+        logger.info(f"[{run_id}] === Stage 1: 快速总金额抽取 ({len(pdf_paths)} 个 PDF) ===")
+        update_labor_metadata(run_id, {"stage": "Stage 1: 快速抽取总金额"})
         pdf_totals = quick_extract_totals(pdf_paths, AI_CONFIG, supplier=supplier)
+        for t in pdf_totals:
+            logger.info(f"[{run_id}]   PDF总金额: {t.get('source_file','?')} -> {t.get('total_amount', 0)}")
         all_totals_zero = all(float(t.get("total_amount") or 0) == 0 for t in pdf_totals)
         if all_totals_zero:
+            logger.warning(f"[{run_id}] 所有 PDF 总金额为 0，将进入 Stage 2 全量抽取")
             pdf_totals = []  # Fall through to full extraction
         warehouse_comparison = compare_by_warehouse(
             pdf_totals=pdf_totals,
@@ -355,10 +379,12 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         extraction_quality = {"level": "ok", "message": "总金额核对通过，无需抽取员工明细。", "issues": [], "retryAttempted": False, "retryApplied": False}
 
         if warehouse_comparison["summary"]["totalPassed"]:
-            # Total matched — done, no employee extraction needed
-            pass
+            logger.info(f"[{run_id}] ✅ Stage 1 通过: 总金额一致，无需抽取员工明细")
+            update_labor_metadata(run_id, {"stage": "Stage 1 通过: 总金额一致"})
         else:
             # === Stage 2: Full extraction for diff warehouses ===
+            logger.info(f"[{run_id}] === Stage 2: 总金额不一致，进入员工明细抽取 ===")
+            update_labor_metadata(run_id, {"stage": "Stage 2: 抽取员工明细"})
             diff_wh = warehouse_comparison["summary"].get("diffWarehouses", [])
             if not diff_wh and not all_totals_zero:
                 # Totals don't match but no warehouses identified — shouldn't happen
@@ -379,13 +405,18 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     filtered_pdf_paths = pdf_paths
                     filtered_excel_rows = excel_rows
 
+                logger.info(f"[{run_id}] [C/D] 开始抽取员工明细: {len(filtered_pdf_paths)} 个 PDF, {len(filtered_excel_rows)} 行 Excel")
+                update_labor_metadata(run_id, {"stage": f"Stage 2: AI 抽取 {len(filtered_pdf_paths)} 个 PDF"})
                 pdf_rows = extract_invoice_items(
                     filtered_pdf_paths, AI_CONFIG,
                     supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
                 )
+                logger.info(f"[{run_id}] [C/D] 员工明细抽取完成: {len(pdf_rows)} 条记录")
                 if not pdf_rows:
                     raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或启用 AI/OCR 后重试。")
 
+                logger.info(f"[{run_id}] [G] 开始数据比对: PDF {len(pdf_rows)} 行 vs Excel {len(filtered_excel_rows)} 行")
+                update_labor_metadata(run_id, {"stage": "比对员工明细"})
                 comparison = compare_labor_items(
                     pdf_rows, filtered_excel_rows,
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
@@ -395,8 +426,11 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"])
                 extraction_quality["retryAttempted"] = False
                 extraction_quality["retryApplied"] = False
+                logger.info(f"[{run_id}] [G] 比对完成: 质量={extraction_quality['level']}, 问题={len(extraction_quality.get('issues',[]))}条")
 
                 if extraction_quality["level"] in ("warning", "critical"):
+                    logger.info(f"[{run_id}] 质量为 {extraction_quality['level']}，尝试重试...")
+                    update_labor_metadata(run_id, {"stage": "重试抽取（质量优化）"})
                     pdf_rows, comparison, extraction_quality = _retry_if_better(
                         filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
                         supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
@@ -420,8 +454,11 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 extraction_quality["retryAttempted"] = retry_attempted
                 extraction_quality["retryApplied"] = retry_applied
 
+        logger.info(f"[{run_id}] 生成差异报告...")
+        update_labor_metadata(run_id, {"stage": "生成报告"})
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
         build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping, warehouse_comparison, extraction_quality)
+        logger.info(f"[{run_id}] 报告已生成: {report_path.name}")
     except ValueError:
         raise
     files = dict(metadata.get("files", {}))

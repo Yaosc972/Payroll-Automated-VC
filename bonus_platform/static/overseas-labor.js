@@ -281,7 +281,7 @@ async function pollCompareResult() {
   if (laborState.pollRetryCount > laborState.pollMaxRetries) {
     stopComparePolling();
     labor.extractCompare.disabled = false;
-    setText(labor.compareStatus, "抽取超时，请重新点击「抽取并比对」重试。", true);
+    setText(labor.compareStatus, "抽取超时（5分钟），请重新点击「抽取并比对」重试。", true);
     toast("抽取超时。");
     return;
   }
@@ -304,7 +304,10 @@ async function pollCompareResult() {
       toast("差异报告已生成。");
       return;
     }
-    setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果...");
+    // 显示实时进度（stage 字段）
+    const stage = run.stage || "抽取中";
+    const elapsed = laborState.pollRetryCount * 3;
+    setText(labor.compareStatus, `${stage}... (${elapsed}s)`);
   } catch (error) {
     stopComparePolling();
     labor.extractCompare.disabled = false;

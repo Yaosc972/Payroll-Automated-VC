@@ -3,12 +3,15 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 import json
+import logging
 import re
 import socket
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
 from urllib import request
+
+logger = logging.getLogger("bonus_platform.labor.extract")
 
 from .models import LaborLineItem, line_items_from_dicts
 from .parsing import parse_number
@@ -112,21 +115,23 @@ def extract_invoice_items(
                 try:
                     items = future.result()
                     all_rule_items.extend(items)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(f"规则抽取(并行)异常: {exc}")
     else:
         all_rule_items = []
         for page in pages:
             try:
                 all_rule_items.extend(_extract_rules_for_page(page))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(f"规则抽取(顺序)异常: {exc}")
 
     if all_rule_items:
+        logger.info(f"规则抽取成功: {len(all_rule_items)} 条记录")
         return all_rule_items
 
     # 如果规则抽取失败，尝试 AI 抽取
     if _ai_ready(ai_config):
+        logger.info(f"规则抽取失败(0条)，进入 AI 抽取流程")
         errors: List[str] = []
         # 跳过文本 AI 抽取：当所有页面文本为空（图片 PDF）时，直接走图片路径
         has_text = any((page.get("text") or "").strip() for page in pages)
@@ -170,10 +175,12 @@ def quick_extract_totals(
     线程池并行处理，支持文本 PDF 和图片 PDF。
     """
     if not _ai_ready(ai_config):
+        logger.warning("AI 未就绪，跳过快速总金额抽取")
         return [{"source_file": p.name, "total_amount": 0.0, "warehouse_id": ""} for p in pdf_paths]
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    logger.info(f"开始快速总金额抽取: {len(pdf_paths)} 个 PDF")
     # 规则抽取需要所有页面才能得到完整总额，AI 抽取只读首页
     all_pages = _extract_pdf_pages(pdf_paths)
     first_pages = [p for p in all_pages if int(p.get("page") or 1) == 1]
@@ -593,14 +600,21 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
         return _post_anthropic_completion(payload, ai_config)
 
     # Standard OpenAI-compatible format
+    timeout = int(ai_config.get("timeout_seconds", 90))
+    logger.info(f"[D] 发起 OpenAI API 请求: {base_url}/chat/completions, timeout={timeout}s")
     req = request.Request(
         base_url + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers=_request_headers(ai_config),
         method="POST",
     )
-    with request.urlopen(req, timeout=int(ai_config.get("timeout_seconds", 90))) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        logger.info(f"[E] API 响应成功, model={data.get('model','?')}")
+    except Exception as exc:
+        logger.error(f"[E] API 请求失败: {exc}")
+        raise
     content = data["choices"][0]["message"]["content"]
     return _json_array(content)
 
@@ -653,14 +667,23 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
         "Content-Type": "application/json",
     }
     base_url = ai_config["base_url"].rstrip("/")
+    timeout = int(ai_config.get("timeout_seconds", 180))
+    logger.info(f"[D] 发起 Anthropic API 请求: {base_url}/v1/messages, timeout={timeout}s, model={anthropic_payload.get('model','?')}")
     req = request.Request(
         base_url + "/v1/messages",
         data=json.dumps(anthropic_payload).encode("utf-8"),
         headers=headers,
         method="POST",
     )
-    with request.urlopen(req, timeout=int(ai_config.get("timeout_seconds", 180))) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        stop_reason = data.get("stop_reason", "?")
+        usage = data.get("usage", {})
+        logger.info(f"[E] Anthropic 响应成功: stop_reason={stop_reason}, input_tokens={usage.get('input_tokens',0)}, output_tokens={usage.get('output_tokens',0)}")
+    except Exception as exc:
+        logger.error(f"[E] Anthropic API 请求失败: {exc}")
+        raise
 
     # Extract text from Anthropic response
     content = ""
@@ -668,6 +691,7 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
         if block.get("type") == "text":
             content += block["text"]
     if not content.strip():
+        logger.warning(f"[E] Anthropic 响应无文本内容, blocks={[b.get('type') for b in data.get('content',[])]}")
         return []
     return _json_array(content)
 
