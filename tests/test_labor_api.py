@@ -475,7 +475,7 @@ def test_parallel_image_rendering(monkeypatch):
     source_files = {p["source_file"] for p in result}
     assert source_files == {"invoice_0.pdf", "invoice_1.pdf", "invoice_2.pdf"}
     for page in result:
-        assert page["mime_type"] == "image/png"
+        assert page["mime_type"] == "image/jpeg", "应使用 JPEG 格式以减少传输大小"
         assert page["base64"], "base64 不应为空"
         assert page["page"] == 1
 
