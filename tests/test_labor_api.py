@@ -429,8 +429,8 @@ def test_parallel_image_render_workers_config():
 
     # 验证默认值
     assert AI_CONFIG["parallel_extraction_enabled"] is True
-    assert AI_CONFIG["parallel_max_workers"] == 6
-    assert AI_CONFIG["parallel_image_render_workers"] == 4
+    assert AI_CONFIG["parallel_max_workers"] == 2
+    assert AI_CONFIG["parallel_image_render_workers"] == 2
 
 
 def test_parallel_image_rendering(monkeypatch):
