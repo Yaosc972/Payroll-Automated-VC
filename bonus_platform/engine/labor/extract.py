@@ -108,7 +108,7 @@ def extract_invoice_items(
 
     if parallel_enabled and len(pages) > 1:
         all_rule_items: List[LaborLineItem] = []
-        max_workers = min(len(pages), int(ai_config.get("parallel_max_workers", 6)))
+        max_workers = min(len(pages), int(ai_config.get("parallel_max_workers", 3)))
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_page = {executor.submit(_extract_rules_for_page, page): page for page in pages}
             for future in as_completed(future_to_page):
@@ -144,7 +144,7 @@ def extract_invoice_items(
             except Exception as exc:
                 errors.append(_safe_error_message(exc))
         try:
-            render_workers = int(ai_config.get("parallel_image_render_workers", 4))
+            render_workers = int(ai_config.get("parallel_image_render_workers", 2))
             image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.2), max_workers=render_workers)
             image_pages = _apply_image_page_policy(image_pages, supplier_profile)
             rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
@@ -268,11 +268,19 @@ def quick_extract_totals(
             return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
 
     results = [None] * len(first_pages)
-    with ThreadPoolExecutor(max_workers=min(len(first_pages), 6)) as executor:
+    # AI 调用并发数降到 2，避免 MiMo 服务限流导致全部卡死
+    max_workers = min(len(first_pages), int(ai_config.get("parallel_max_workers", 2)))
+    logger.info(f"快速总金额抽取: {len(first_pages)} 个 PDF, 并发数={max_workers}")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_idx = {executor.submit(_extract_one, page): i for i, page in enumerate(first_pages)}
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
-            results[idx] = future.result()
+            try:
+                results[idx] = future.result()
+                logger.info(f"  PDF {idx+1}/{len(first_pages)} 完成: {results[idx].get('source_file','?')} -> {results[idx].get('total_amount', 0)}")
+            except Exception as exc:
+                logger.error(f"  PDF {idx+1}/{len(first_pages)} 失败: {exc}")
+                results[idx] = {"source_file": first_pages[idx].get("source_file", ""), "total_amount": 0.0, "warehouse_id": ""}
     return results
 
 
