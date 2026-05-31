@@ -196,15 +196,23 @@ def extract_invoice_items(
             except Exception as exc:
                 errors.append(_safe_error_message(exc))
         try:
-            render_workers = int(ai_config.get("parallel_image_render_workers", 2))
+            render_workers = int(ai_config.get("parallel_image_render_workers", 1))
+            logger.info(f"[C] 渲染 PDF 为图片: {len(pdf_paths)} 个 PDF, workers={render_workers}")
             image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.2), max_workers=render_workers)
+            logger.info(f"[C] 渲染完成: {len(image_pages)} 张图片")
             image_pages = _apply_image_page_policy(image_pages, supplier_profile)
-            rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
-            items = line_items_from_dicts(rows)
-            if items:
-                return items
-            errors.append("AI 图片抽取返回 0 条员工明细")
+            logger.info(f"[C] 策略过滤后: {len(image_pages)} 张图片")
+            if not image_pages:
+                logger.error("[C] 图片为空！PDF 渲染失败或策略过滤掉所有页面")
+                errors.append("PDF 渲染为图片后为空，无法进行 AI 抽取")
+            else:
+                rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
+                items = line_items_from_dicts(rows)
+                if items:
+                    return items
+                errors.append("AI 图片抽取返回 0 条员工明细")
         except Exception as exc:
+            logger.error(f"[C] 图片抽取异常: {exc}", exc_info=True)
             errors.append(_safe_error_message(exc))
         if errors:
             raise ValueError("AI 抽取失败：" + "；".join(errors))
@@ -605,8 +613,10 @@ def _extract_with_ai_images(
     # 图片抽取使用简化的 prompt，避免模型返回空结果
     image_instruction = _ai_instruction(supplier_profile, for_image=True)
 
+    logger.info(f"[D] _extract_with_ai_images: {len(image_pages)} 张图片, max_pages={max_pages}")
     for start in range(0, len(image_pages), max_pages):
         chunk = image_pages[start : start + max_pages]
+        logger.info(f"[D] 处理 chunk: {len(chunk)} 张图片 (index {start}-{start+len(chunk)-1})")
         content: List[Dict[str, Any]] = []
         for page in chunk:
             content.append(
@@ -954,7 +964,8 @@ def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.2, max_w
             finally:
                 document.close()
             return pages
-        except Exception:
+        except Exception as exc:
+            logger.error(f"PDF 渲染失败: {path.name}: {exc}")
             return []
 
     if len(pdf_paths) <= 1:
