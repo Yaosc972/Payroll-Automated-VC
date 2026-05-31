@@ -520,41 +520,46 @@ def _extract_with_ai_images(
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     max_pages = max(int(ai_config.get("max_pages_per_request") or 5), 1)
+
+    # 图片抽取使用简化的 prompt，避免模型返回空结果
+    image_instruction = _ai_instruction(supplier_profile, for_image=True)
+
     for start in range(0, len(image_pages), max_pages):
         chunk = image_pages[start : start + max_pages]
         content: List[Dict[str, Any]] = []
         for page in chunk:
             content.append(
                 {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{page['mime_type']};base64,{page['base64']}"},
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": page["mime_type"],
+                        "data": page["base64"],
+                    },
                 }
             )
-        content.append(
-            {
-                "type": "text",
-                "text": json.dumps(
-                    {
-                        "instruction": _ai_instruction(supplier_profile),
-                        "supplier": supplier,
-                        "period_start": period_start,
-                        "period_end": period_end,
-                        "currency": currency,
-                        "pages": [{"source_file": page["source_file"], "page": page["page"]} for page in chunk],
-                        **({"expected_employees": expected_rows} if expected_rows else {}),
-                    },
-                    ensure_ascii=False,
-                ),
-            }
-        )
+
+        # 构建简洁的 prompt
+        prompt_text = image_instruction
+        if supplier:
+            prompt_text += f"\nSupplier: {supplier}"
+        if currency:
+            prompt_text += f"\nCurrency: {currency}"
+        if expected_rows:
+            # 只提供员工姓名列表，简化 expected_employees
+            names = [r.get("employee_name", "") for r in expected_rows[:20]]  # 限制数量
+            prompt_text += f"\nExpected employees: {', '.join(names)}"
+
+        content.append({"type": "text", "text": prompt_text})
+
         payload = {
             "model": ai_config["model"],
             "messages": [
-                {"role": "system", "content": "You extract payroll invoice table rows from images into JSON only."},
+                {"role": "system", "content": "You extract employee data from invoice images as JSON arrays."},
                 {"role": "user", "content": content},
             ],
             "temperature": 0,
-            "max_completion_tokens": int(ai_config.get("max_completion_tokens") or 8192),
+            "max_completion_tokens": int(ai_config.get("max_completion_tokens") or 4096),
         }
         _apply_provider_options(payload, ai_config)
         cached = _load_ai_page_cache(chunk, ai_config)
@@ -619,6 +624,7 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
                     if part.get("type") == "text":
                         anthropic_content.append({"type": "text", "text": part["text"]})
                     elif part.get("type") == "image_url":
+                        # OpenAI 格式: image_url
                         url = part["image_url"]["url"]
                         # data:image/png;base64,xxx
                         if url.startswith("data:"):
@@ -628,6 +634,9 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
                                 "type": "image",
                                 "source": {"type": "base64", "media_type": media_type, "data": b64},
                             })
+                    elif part.get("type") == "image" and part.get("source"):
+                        # Anthropic 格式: image with source
+                        anthropic_content.append(part)
                 messages.append({"role": "user", "content": anthropic_content})
 
     anthropic_payload = {
@@ -684,26 +693,42 @@ def _is_token_plan(ai_config: Dict[str, Any]) -> bool:
     return provider == "mimo" and "token-plan" in base_url
 
 
-def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None) -> str:
-    instruction = (
-        "Extract labor invoice employee rows as a strict JSON array. "
-        "Each row must include source_file, source_page_or_row, employee_id, employee_name_raw, hours, amount, currency, confidence, evidence_text. "
-        "Spatial calibration: first identify page orientation, table boundaries, column headers, and row alignment before extracting. "
-        "Only extract rows spatially aligned under employee/name, hours, amount, and total/charge columns in the same table. "
-        "Ignore handwriting, margin notes, barcodes, page numbers, headers, footers, subtotals, and timesheet-only pages. "
-        "Return only employee charge rows, not invoice totals or headers. "
-        "If a page has no clear employee charge rows, return [] exactly. "
-        "employee_name_raw must be a visible person name from an Associate/Employee row, not a vendor, subtotal, invoice number, barcode, account number, or random numeric string. "
-        "employee_id must be empty unless a separate visible employee ID column/value exists next to that person; never copy a name, barcode, invoice number, account number, or long numeric string into employee_id. "
-        "If a premium/meal row has amount but no worked hours, use hours 0 and keep the amount. "
-        "If expected_employees is provided, use it only as a reconciliation candidate list: search the invoice for those visible employees, return only rows that are actually visible, preserve the visible PDF names, choose the row total billed amount, and return [] for candidates not found. "
-        "Confidence scoring: use 0.95+ for clear, unambiguous rows; 0.85-0.94 for rows with minor OCR issues or formatting variations; 0.70-0.84 for rows requiring interpretation; below 0.70 only for highly uncertain extractions. "
-        "Evidence text: include the original text snippet that supports the extraction, including dollar signs, amounts, and employee names. "
-        "Currency: use the currency symbol or code visible in the invoice (USD, EUR, etc.); if not visible, use the provided currency parameter. "
-        "Error handling: if you encounter unclear or ambiguous data, make your best interpretation and assign lower confidence; do not skip rows that are likely valid. "
-        "Warehouse identification: if the page contains a warehouse/dept identifier (e.g. DEPT:CA#3, DEPT:CA-27, warehouse code), include it as warehouse_id field in each row. Extract only the numeric part (e.g. DEPT:CA#3 -> 3, DEPT:CA-27 -> 27). If no warehouse identifier is visible, set warehouse_id to empty string. "
-        "Output format: return ONLY the JSON array, no additional text, explanations, or markdown formatting."
-    )
+def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None, for_image: bool = False) -> str:
+    if for_image:
+        # 图片抽取使用更简洁的 prompt，避免模型返回空结果
+        instruction = (
+            "Extract all employee/associate rows from this invoice image as a JSON array. "
+            "Each row must have these fields: employee_name_raw, hours, amount, currency, confidence, evidence_text. "
+            "Rules:\n"
+            "- employee_name_raw: the person's name from the Associate/Employee column\n"
+            "- hours: total worked hours (use 0 if only amount shown)\n"
+            "- amount: total billed amount in dollars\n"
+            "- currency: USD or currency shown in invoice\n"
+            "- confidence: 0.95 for clear rows, 0.85 for minor issues\n"
+            "- evidence_text: the original text snippet with name and amount\n"
+            "Ignore headers, footers, subtotals, and non-employee rows. "
+            "Return ONLY the JSON array, no explanations."
+        )
+    else:
+        instruction = (
+            "Extract labor invoice employee rows as a strict JSON array. "
+            "Each row must include source_file, source_page_or_row, employee_id, employee_name_raw, hours, amount, currency, confidence, evidence_text. "
+            "Spatial calibration: first identify page orientation, table boundaries, column headers, and row alignment before extracting. "
+            "Only extract rows spatially aligned under employee/name, hours, amount, and total/charge columns in the same table. "
+            "Ignore handwriting, margin notes, barcodes, page numbers, headers, footers, subtotals, and timesheet-only pages. "
+            "Return only employee charge rows, not invoice totals or headers. "
+            "If a page has no clear employee charge rows, return [] exactly. "
+            "employee_name_raw must be a visible person name from an Associate/Employee row, not a vendor, subtotal, invoice number, barcode, account number, or random numeric string. "
+            "employee_id must be empty unless a separate visible employee ID column/value exists next to that person; never copy a name, barcode, invoice number, account number, or long numeric string into employee_id. "
+            "If a premium/meal row has amount but no worked hours, use hours 0 and keep the amount. "
+            "If expected_employees is provided, use it only as a reconciliation candidate list: search the invoice for those visible employees, return only rows that are actually visible, preserve the visible PDF names, choose the row total billed amount, and return [] for candidates not found. "
+            "Confidence scoring: use 0.95+ for clear, unambiguous rows; 0.85-0.94 for rows with minor OCR issues or formatting variations; 0.70-0.84 for rows requiring interpretation; below 0.70 only for highly uncertain extractions. "
+            "Evidence text: include the original text snippet that supports the extraction, including dollar signs, amounts, and employee names. "
+            "Currency: use the currency symbol or code visible in the invoice (USD, EUR, etc.); if not visible, use the provided currency parameter. "
+            "Error handling: if you encounter unclear or ambiguous data, make your best interpretation and assign lower confidence; do not skip rows that are likely valid. "
+            "Warehouse identification: if the page contains a warehouse/dept identifier (e.g. DEPT:CA#3, DEPT:CA-27, warehouse code), include it as warehouse_id field in each row. Extract only the numeric part (e.g. DEPT:CA#3 -> 3, DEPT:CA-27 -> 27). If no warehouse identifier is visible, set warehouse_id to empty string. "
+            "Output format: return ONLY the JSON array, no additional text, explanations, or markdown formatting."
+        )
     if supplier_profile and supplier_profile.prompt_notes:
         instruction += " Supplier-specific profile guidance: " + " ".join(supplier_profile.prompt_notes)
     return instruction
