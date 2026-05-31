@@ -322,7 +322,8 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
     }
     payload = {
         "model": ai_config["model"],
-        "max_tokens": 1024,  # 增加 token 限制，避免思考过程中用完
+        "max_tokens": 4096,
+        "thinking": {"type": "disabled"},
         "system": "Extract invoice total as JSON only. Be concise.",
         "messages": [{"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"}],
     }
@@ -364,7 +365,8 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
         }
         payload = {
             "model": model,
-            "max_tokens": 1024,
+            "max_tokens": 4096,
+            "thinking": {"type": "disabled"},
             "system": "Extract invoice total as JSON only. Be concise.",
             "messages": [{
                 "role": "user",
@@ -668,6 +670,9 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
     }
     if system_msg:
         anthropic_payload["system"] = system_msg
+    # 传递 thinking 参数（禁用 thinking 可避免 token 全用在推理上）
+    if "thinking" in payload:
+        anthropic_payload["thinking"] = payload["thinking"]
 
     headers = {
         "x-api-key": str(ai_config["api_key"]),
