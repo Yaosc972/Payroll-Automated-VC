@@ -99,8 +99,8 @@ AI_CONFIG: dict[str, Any] = {
     "supplier_profiles_path": os.environ.get("LABOR_SUPPLIER_PROFILES_PATH", ""),
     # 并行化配置
     "parallel_extraction_enabled": _env_bool("PARALLEL_EXTRACTION_ENABLED", True),
-    "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 2),
-    "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 2),
+    "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 1),
+    "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 1),
 }
 
 if AI_CONFIG["provider"].lower() == "mimo":

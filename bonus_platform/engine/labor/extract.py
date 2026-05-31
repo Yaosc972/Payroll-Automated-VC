@@ -27,6 +27,58 @@ TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
 AI_PAGE_CACHE_VERSION = "v4"
 
+# ── Fuzzy key matching for AI-extracted rows ──
+_AMOUNT_KEYS = ("amount", "total", "charge", "cost", "price", "total_amount",
+                "金额", "费用", "实际", "bill", "bill_amount", "invoice_amount",
+                "amount_due", "balance", "net", "gross", "subtotal")
+_HOURS_KEYS = ("hours", "hour", "hrs", "hr", "工时", "时长", "total_hours",
+               "work_hours", "regular_hours", "ot_hours")
+_NAME_KEYS = ("employee_name_raw", "employeeNameRaw", "employee_name",
+              "employeeName", "name", "employee", "worker_name", "staff_name",
+              "姓名", "员工", "worker")
+
+
+def _fuzzy_get(row: Dict[str, Any], candidates: tuple, default: Any = None) -> Any:
+    """Fuzzy key lookup: try exact match, then lowercase, then substring."""
+    # Exact match
+    for key in candidates:
+        if key in row and row[key] is not None and row[key] != "":
+            return row[key]
+    # Lowercase match
+    lower_map = {k.lower(): v for k, v in row.items()}
+    for key in candidates:
+        if key.lower() in lower_map and lower_map[key.lower()] is not None:
+            return lower_map[key.lower()]
+    # Substring match (key contains candidate)
+    for key, val in row.items():
+        if val is not None and val != "":
+            key_lower = key.lower()
+            for candidate in candidates:
+                if candidate in key_lower or key_lower in candidate:
+                    return val
+    return default
+
+
+def _fuzzy_get_amount(row: Dict[str, Any]) -> float:
+    """Extract amount from row, trying all known key variations."""
+    raw = _fuzzy_get(row, _AMOUNT_KEYS, 0)
+    result = parse_number(raw)
+    if result == 0:
+        # Log raw data so we can see what AI actually returned
+        non_null = {k: v for k, v in row.items() if v is not None and v != ""}
+        if non_null:
+            logger.warning(f"金额为0, 原始数据: {json.dumps(non_null, ensure_ascii=False)[:300]}")
+    return result
+
+
+def _fuzzy_get_hours(row: Dict[str, Any]) -> float:
+    raw = _fuzzy_get(row, _HOURS_KEYS, 0)
+    return parse_number(raw)
+
+
+def _fuzzy_get_name(row: Dict[str, Any]) -> str:
+    return str(_fuzzy_get(row, _NAME_KEYS, "")).strip()
+
 
 def _warehouse_id_from_filename(source_file: str) -> str:
     """Extract warehouse number from PDF filename like DEPT_1, CHINA_EXPRESS__3, elog9-1."""
@@ -322,21 +374,28 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
     }
     payload = {
         "model": ai_config["model"],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "thinking": {"type": "disabled"},
         "system": "Extract invoice total as JSON only. Be concise.",
         "messages": [{"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"}],
     }
     base_url = ai_config["base_url"].rstrip("/")
+    timeout = 45  # Strict 45s timeout
     req = request.Request(
         base_url + "/v1/messages",
         data=json.dumps(payload).encode("utf-8"),
         headers=headers,
         method="POST",
     )
-    timeout = int(ai_config.get("timeout_seconds") or 180)
-    with request.urlopen(req, timeout=timeout) as response:
-        data = json.loads(response.read().decode("utf-8"))
+    try:
+        with request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except socket.timeout:
+        raise MiMoTimeoutException(f"MiMo API 超时 ({timeout}s): _extract_total_anthropic")
+    except URLError as exc:
+        if "timed out" in str(exc).lower():
+            raise MiMoTimeoutException(f"MiMo API 超时 ({timeout}s): _extract_total_anthropic")
+        raise
     content = ""
     thinking = ""
     for block in data.get("content", []):
@@ -344,7 +403,6 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
             content += block["text"]
         elif block.get("type") == "thinking":
             thinking += block.get("thinking", "")
-    # 回退：如果没有 text 内容，尝试从 thinking 中提取
     if not content.strip() and thinking:
         content = thinking
     return _parse_total_from_response(content)
@@ -365,7 +423,7 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
         }
         payload = {
             "model": model,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "thinking": {"type": "disabled"},
             "system": "Extract invoice total as JSON only. Be concise.",
             "messages": [{
@@ -383,15 +441,22 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
                 ],
             }],
         }
+        timeout = 45  # Strict 45s timeout
         req = request.Request(
             base_url + "/v1/messages",
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
         )
-        timeout = int(ai_config.get("timeout_seconds") or 180)
-        with request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(req, timeout=timeout) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except socket.timeout:
+            raise MiMoTimeoutException(f"MiMo API 超时 ({timeout}s): _extract_total_with_ai_image")
+        except URLError as exc:
+            if "timed out" in str(exc).lower():
+                raise MiMoTimeoutException(f"MiMo API 超时 ({timeout}s): _extract_total_with_ai_image")
+            raise
         content = ""
         thinking = ""
         for block in data.get("content", []):
@@ -399,7 +464,6 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
                 content += block["text"]
             elif block.get("type") == "thinking":
                 thinking += block.get("thinking", "")
-        # Fallback: try to extract from thinking if no text content
         if not content.strip() and thinking:
             content = thinking
         return _parse_total_from_response(content)
@@ -611,8 +675,8 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
         return _post_anthropic_completion(payload, ai_config)
 
     # Standard OpenAI-compatible format
-    timeout = int(ai_config.get("timeout_seconds", 90))
-    logger.info(f"[D] 发起 OpenAI API 请求: {base_url}/chat/completions, timeout={timeout}s")
+    timeout = 45  # Strict 45s timeout
+    logger.info(f"[D] OpenAI API 请求: {base_url}/chat/completions, timeout={timeout}s")
     req = request.Request(
         base_url + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -623,6 +687,12 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
         with request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
         logger.info(f"[E] API 响应成功, model={data.get('model','?')}")
+    except socket.timeout:
+        raise MiMoTimeoutException(f"API 超时 ({timeout}s): {base_url}/chat/completions")
+    except URLError as exc:
+        if "timed out" in str(exc).lower():
+            raise MiMoTimeoutException(f"API 超时 ({timeout}s): {base_url}/chat/completions")
+        raise
     except Exception as exc:
         logger.error(f"[E] API 请求失败: {exc}")
         raise
@@ -630,8 +700,16 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
     return _json_array(content)
 
 
+class MiMoTimeoutException(Exception):
+    """Raised when MiMo API request exceeds timeout."""
+    pass
+
+
 def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Call MiMo token plan using Anthropic Messages API format."""
+    """Call MiMo token plan using Anthropic Messages API format.
+
+    Handles thinking blocks correctly and enforces strict 45s timeout.
+    """
     # Convert OpenAI-style payload to Anthropic Messages format
     system_msg = ""
     messages = []
@@ -649,9 +727,7 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
                     if part.get("type") == "text":
                         anthropic_content.append({"type": "text", "text": part["text"]})
                     elif part.get("type") == "image_url":
-                        # OpenAI 格式: image_url
                         url = part["image_url"]["url"]
-                        # data:image/png;base64,xxx
                         if url.startswith("data:"):
                             media_type, b64 = url.split(",", 1)
                             media_type = media_type.split(":")[1].split(";")[0]
@@ -660,20 +736,18 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
                                 "source": {"type": "base64", "media_type": media_type, "data": b64},
                             })
                     elif part.get("type") == "image" and part.get("source"):
-                        # Anthropic 格式: image with source
                         anthropic_content.append(part)
                 messages.append({"role": "user", "content": anthropic_content})
 
+    # Build Anthropic payload — always disable thinking to ensure text output
     anthropic_payload = {
-        "model": payload.get("model", "mimo-v2.5-pro"),
-        "max_tokens": payload.get("max_completion_tokens", 4096),
+        "model": payload.get("model", "mimo-v2.5"),
+        "max_tokens": 8192,
+        "thinking": {"type": "disabled"},
         "messages": messages,
     }
     if system_msg:
         anthropic_payload["system"] = system_msg
-    # 传递 thinking 参数（禁用 thinking 可避免 token 全用在推理上）
-    if "thinking" in payload:
-        anthropic_payload["thinking"] = payload["thinking"]
 
     headers = {
         "x-api-key": str(ai_config["api_key"]),
@@ -681,8 +755,10 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
         "Content-Type": "application/json",
     }
     base_url = ai_config["base_url"].rstrip("/")
-    timeout = int(ai_config.get("timeout_seconds", 180))
-    logger.info(f"[D] 发起 Anthropic API 请求: {base_url}/v1/messages, timeout={timeout}s, model={anthropic_payload.get('model','?')}")
+
+    # ── STRICT 45s TIMEOUT ──
+    timeout = 45
+    logger.info(f"[D] Anthropic API 请求: {base_url}/v1/messages, timeout={timeout}s, model={anthropic_payload.get('model','?')}")
     req = request.Request(
         base_url + "/v1/messages",
         data=json.dumps(anthropic_payload).encode("utf-8"),
@@ -692,20 +768,39 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
     try:
         with request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
-        stop_reason = data.get("stop_reason", "?")
-        usage = data.get("usage", {})
-        logger.info(f"[E] Anthropic 响应成功: stop_reason={stop_reason}, input_tokens={usage.get('input_tokens',0)}, output_tokens={usage.get('output_tokens',0)}")
+    except socket.timeout:
+        raise MiMoTimeoutException(f"MiMo API 超时 ({timeout}s): {base_url}/v1/messages")
+    except URLError as exc:
+        if "timed out" in str(exc).lower():
+            raise MiMoTimeoutException(f"MiMo API 超时 ({timeout}s): {base_url}/v1/messages")
+        raise
     except Exception as exc:
         logger.error(f"[E] Anthropic API 请求失败: {exc}")
         raise
 
-    # Extract text from Anthropic response
+    stop_reason = data.get("stop_reason", "?")
+    usage = data.get("usage", {})
+    logger.info(f"[E] Anthropic 响应: stop_reason={stop_reason}, in={usage.get('input_tokens',0)}, out={usage.get('output_tokens',0)}")
+
+    # ── ROBUST CONTENT EXTRACTION: handle both text and thinking blocks ──
     content = ""
+    thinking = ""
     for block in data.get("content", []):
-        if block.get("type") == "text":
-            content += block["text"]
+        block_type = block.get("type", "")
+        if block_type == "text":
+            content += block.get("text", "")
+        elif block_type == "thinking":
+            thinking += block.get("thinking", "")
+        else:
+            logger.warning(f"[E] 未知 block 类型: {block_type}")
+
+    # Fallback: if no text but thinking exists, try to extract JSON from thinking
+    if not content.strip() and thinking:
+        logger.warning(f"[E] 无 text 内容，尝试从 thinking 中提取 ({len(thinking)} 字符)")
+        content = thinking
+
     if not content.strip():
-        logger.warning(f"[E] Anthropic 响应无文本内容, blocks={[b.get('type') for b in data.get('content',[])]}")
+        logger.warning(f"[E] Anthropic 响应完全为空, blocks={[b.get('type') for b in data.get('content',[])]}")
         return []
     return _json_array(content)
 
@@ -774,13 +869,18 @@ def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None, f
 
 def _normalize_ai_rows(rows: List[Dict[str, Any]], supplier: str, period_start: str, period_end: str, currency: str) -> List[Dict[str, Any]]:
     normalized = []
-    for row in rows:
-        employee_name = str(row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or "").strip()
+    for i, row in enumerate(rows):
+        employee_name = _fuzzy_get_name(row)
         if not employee_name:
+            logger.warning(f"行{i}: 无员工姓名, 原始数据: {json.dumps({k:v for k,v in row.items() if v}, ensure_ascii=False)[:200]}")
             continue
         if not _looks_like_employee_row(employee_name, row):
             continue
         current = dict(row)
+        # Normalize key names to canonical form
+        current["employee_name_raw"] = employee_name
+        current["hours"] = _fuzzy_get_hours(row)
+        current["amount"] = _fuzzy_get_amount(row)
         current["source_type"] = current.get("source_type") or current.get("sourceType") or "pdf_invoice"
         current["source_page_or_row"] = current.get("source_page_or_row") or current.get("sourcePageOrRow") or "p?"
         current["currency"] = current.get("currency") or currency
@@ -793,16 +893,14 @@ def _normalize_ai_rows(rows: List[Dict[str, Any]], supplier: str, period_start: 
 
 
 def _looks_like_employee_row(employee_name: str, row: Dict[str, Any]) -> bool:
-    hours = parse_number(row.get("hours"))
-    amount = parse_number(row.get("amount"))
-    evidence = str(row.get("evidence_text") or row.get("evidenceText") or "").lower()
+    amount = _fuzzy_get_amount(row)
     if amount == 0:
         return False
-    # 放宽 evidence 标记检查：图片 PDF 的 AI 抽取 evidence 可能被截断或不含标记词
-    # 只要 amount > 0 且有合理人名就接受
-    letters = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", employee_name)
-    if len(letters) < 3:
+    # Accept if name has >= 3 alpha characters (covers CJK names too)
+    letters = re.findall(r"[A-Za-z一-鿿À-ÖØ-öø-ÿ]", employee_name)
+    if len(letters) < 2:
         return False
+    # Reject obvious non-names (pure codes like "RG-40", "OT-0.42")
     if re.fullmatch(r"[A-Z]{1,4}[-\s]*\d+(?:\.\d+)?", employee_name.strip(), flags=re.IGNORECASE):
         return False
     return True
