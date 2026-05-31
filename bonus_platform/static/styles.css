@@ -3338,3 +3338,370 @@ body.filters-collapsed .filter-body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+/* Header Actions */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.new-batch-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  background: #0071E3;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.new-batch-btn:hover {
+  background: #0077ED;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.3);
+}
+
+.new-batch-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Wizard Drawer */
+.audit-setup-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1000;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.audit-setup-drawer.open {
+  pointer-events: auto;
+  visibility: visible;
+}
+
+.drawer-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.audit-setup-drawer.open .drawer-overlay {
+  opacity: 1;
+}
+
+.drawer-content {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 480px;
+  background: #FFFFFF;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.1);
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.audit-setup-drawer.open .drawer-content {
+  transform: translateX(0);
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 32px;
+  border-bottom: 1px solid #E5E5E7;
+}
+
+.drawer-header h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1D1D1F;
+}
+
+.drawer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: #F5F5F7;
+  border-radius: 10px;
+  color: #86868B;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.drawer-close:hover {
+  background: #E5E5E7;
+  color: #1D1D1F;
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+
+.drawer-step {
+  margin-bottom: 32px;
+  opacity: 0.5;
+  pointer-events: none;
+  transition: all 0.3s ease;
+}
+
+.drawer-step.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer-step.completed {
+  opacity: 0.7;
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.step-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #E5E5E7;
+  color: #86868B;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.drawer-step.active .step-number {
+  background: #0071E3;
+  color: #FFFFFF;
+}
+
+.drawer-step.completed .step-number {
+  background: #34C759;
+  color: #FFFFFF;
+}
+
+.step-info h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1D1D1F;
+}
+
+.step-info p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #86868B;
+}
+
+.step-content {
+  padding-left: 48px;
+}
+
+.drawer-footer {
+  padding: 24px 32px;
+  border-top: 1px solid #E5E5E7;
+  background: #F9FAFB;
+}
+
+.drawer-footer .dark-button {
+  width: 100%;
+  justify-content: center;
+  padding: 14px 24px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.drawer-footer .audit-status {
+  text-align: center;
+  margin-top: 12px;
+}
+
+/* Summary Grid - Updated */
+.labor-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0 0 24px;
+}
+
+.labor-summary-grid > div {
+  border: 1px solid #E5E5E7;
+  border-radius: 12px;
+  padding: 20px;
+  background: #FFFFFF;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.labor-summary-grid > div:hover {
+  border-color: #0071E3;
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.1);
+  transform: translateY(-2px);
+}
+
+.labor-summary-grid span {
+  display: block;
+  color: #86868B;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.labor-summary-grid strong {
+  display: block;
+  margin-top: 8px;
+  font-family: var(--font-number);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.labor-summary-grid .metric-info strong {
+  color: #1D1D1F;
+}
+
+.labor-summary-grid .metric-success strong {
+  color: #34C759;
+}
+
+.labor-summary-grid .metric-warning strong {
+  color: #FF3B30;
+}
+
+.labor-summary-grid .metric-alert strong {
+  color: #FF9500;
+}
+
+/* Empty State */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  text-align: center;
+}
+
+.empty-state-icon {
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.empty-state-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1D1D1F;
+}
+
+.empty-state-text {
+  margin: 0;
+  font-size: 13px;
+  color: #86868B;
+  max-width: 280px;
+}
+
+/* Layout Updates */
+.labor-audit-layout {
+  display: block;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 32px 48px 64px;
+}
+
+.audit-workbench {
+  display: grid;
+  gap: 24px;
+}
+
+/* Remove old steps sidebar */
+.audit-steps {
+  display: none;
+}
+
+/* Drawer Form Grid - Compact */
+.drawer-body .audit-form-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.drawer-body .audit-upload-grid {
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.drawer-body .mapping-grid {
+  grid-template-columns: 1fr;
+}
+
+.drawer-body .audit-form-grid label,
+.drawer-body .audit-upload-card {
+  padding: 14px 16px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1280px) {
+  .labor-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .drawer-content {
+    width: 400px;
+  }
+}
+
+@media (max-width: 768px) {
+  .labor-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .drawer-content {
+    width: 100%;
+  }
+
+  .labor-audit-header {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 16px 24px;
+  }
+
+  .header-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .labor-audit-layout {
+    padding: 16px 24px 32px;
+  }
+}
