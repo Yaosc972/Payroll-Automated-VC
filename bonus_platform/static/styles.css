@@ -821,12 +821,12 @@ button {
 }
 
 .overseas-labor-shell {
-  min-width: 1280px;
   min-height: 100vh;
   background: #F5F5F7;
   color: #1D1D1F;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .labor-audit-header {
