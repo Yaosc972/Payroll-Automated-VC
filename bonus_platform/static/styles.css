@@ -3729,6 +3729,20 @@ body.filters-collapsed .filter-body {
   gap: 16px;
 }
 
+/* Override portal-logo-mark inside app-chrome for compact header */
+.app-chrome .portal-logo-mark {
+  gap: 10px;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  color: #86868B;
+}
+
+.app-chrome .portal-logo-mark img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
 .chrome-logo {
   display: flex;
   align-items: center;
