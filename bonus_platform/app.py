@@ -488,10 +488,16 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
 def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison, **kwargs):
     retry_config = dict(AI_CONFIG)
     retry_config["cache_enabled"] = False
-    retry_pdf_rows = extract_invoice_items(
-        pdf_paths, retry_config,
-        expected_rows=_expected_labor_rows(excel_rows), **kwargs,
-    )
+    logger.info(f"重试抽取: {len(pdf_paths)} 个 PDF, cache_enabled=False")
+    try:
+        retry_pdf_rows = extract_invoice_items(
+            pdf_paths, retry_config,
+            expected_rows=_expected_labor_rows(excel_rows), **kwargs,
+        )
+    except Exception as exc:
+        logger.error(f"重试抽取异常: {exc}")
+        return pdf_rows, comparison, extraction_quality
+    logger.info(f"重试抽取结果: {len(retry_pdf_rows)} 条")
     if retry_pdf_rows:
         retry_comparison = compare_labor_items(
             retry_pdf_rows, excel_rows,

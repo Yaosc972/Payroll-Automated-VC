@@ -607,6 +607,7 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
 
     if provider == "mimo" and "token-plan" in base_url:
         # MiMo token plan uses Anthropic Messages API format
+        logger.info(f"[D] 发起 MiMo/Anthropic API 请求 (via _post_chat_completion)")
         return _post_anthropic_completion(payload, ai_config)
 
     # Standard OpenAI-compatible format
