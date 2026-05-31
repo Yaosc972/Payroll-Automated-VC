@@ -3,223 +3,417 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#ffffff" />
     <title>海外劳务工报账核对 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
-    <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=24" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css?v=25" />
     <style>html { color-scheme: light; }</style>
   </head>
   <body class="overseas-labor-shell">
-    <header class="labor-audit-header">
-      <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
-        <img src="assets/bonus-logo-header-blue.png" alt="" />
-        <span>Σ-WORKBENCH</span>
-      </a>
-      <div class="audit-title-block">
-        <p>Overseas Labor Invoice Audit</p>
-        <h1>海外劳务工报账核对</h1>
-        <span>AI 抽取供应商发票，按员工核对工时与金额差异。</span>
-      </div>
-      <div class="header-actions">
-        <button id="newAuditBatch" class="primary-button new-batch-btn">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <path d="M8 1v14M1 8h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- ═══ TOP CHROME ═══ -->
+    <header class="app-chrome">
+      <div class="chrome-left">
+        <a class="chrome-logo" href="/" aria-label="返回西格玛工作台">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <rect width="28" height="28" rx="7" fill="#0071E3"/>
+            <path d="M7 20L11.5 8L16 14.5L19 11L22 20" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          新建批次
+          <span>Σ-WORKBENCH</span>
+        </a>
+        <div class="chrome-divider"></div>
+        <div class="chrome-context">
+          <span class="chrome-label">Overseas Labor Invoice Audit</span>
+          <span class="chrome-title">海外劳务工报账核对</span>
+          <span class="chrome-desc">AI 抽取供应商发票，按员工核对工时与金额差异</span>
+        </div>
+      </div>
+      <div class="chrome-right">
+        <div class="chrome-run-badge" id="chromeRunBadge" hidden>
+          <span class="run-dot"></span>
+          <span id="chromeRunLabel">批次 #—</span>
+        </div>
+        <button class="btn-new-batch" id="btnOpenDrawer" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          新建核对批次
         </button>
-        <a id="laborReportLink" class="dark-button disabled" href="#" aria-disabled="true">下载差异报告</a>
+        <a id="laborReportLink" class="btn-download disabled" href="#" aria-disabled="true">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          下载报告
+        </a>
       </div>
     </header>
 
-    <main class="labor-audit-layout">
-      <!-- 主工作区 -->
-      <section class="audit-workbench">
-        <!-- Summary Banner Grid -->
-        <div class="labor-summary-grid" id="summaryGrid">
-          <div class="metric-info" data-filter="all">
-            <span>总审核行数</span>
-            <strong id="totalAuditedRows">-</strong>
-          </div>
-          <div class="metric-success" data-filter="cleared">
-            <span>完全匹配</span>
-            <strong id="clearedMatches">-</strong>
-          </div>
-          <div class="metric-warning" data-filter="amountDiff">
-            <span>金额差异</span>
-            <strong id="amountVariances">-</strong>
-          </div>
-          <div class="metric-alert" data-filter="missing">
-            <span>不在本批发票</span>
-            <strong id="missingInInvoice">-</strong>
+    <!-- ═══ KPI SUMMARY BANNER ═══ -->
+    <div class="kpi-banner" id="kpiBanner">
+      <button class="kpi-card kpi-neutral active-filter" data-filter="all" id="kpiTotal" type="button">
+        <span class="kpi-label">核对总行数</span>
+        <span class="kpi-value" id="kpiTotalVal">—</span>
+        <span class="kpi-sub">Audited Rows</span>
+      </button>
+      <button class="kpi-card kpi-success" data-filter="matched" id="kpiMatched" type="button">
+        <span class="kpi-label">核对通过</span>
+        <span class="kpi-value" id="kpiMatchedVal">—</span>
+        <span class="kpi-sub">Matched &amp; Cleared</span>
+      </button>
+      <button class="kpi-card kpi-warning" data-filter="variance" id="kpiVariance" type="button">
+        <span class="kpi-label">金额差异</span>
+        <span class="kpi-value" id="kpiVarianceVal">—</span>
+        <span class="kpi-sub">Amount Variances</span>
+      </button>
+      <button class="kpi-card kpi-danger" data-filter="unmatched" id="kpiUnmatched" type="button">
+        <span class="kpi-label">未匹配项</span>
+        <span class="kpi-value" id="kpiUnmatchedVal">—</span>
+        <span class="kpi-sub">Unmatched Candidates</span>
+      </button>
+    </div>
+
+    <!-- ═══ MAIN WORKSPACE ═══ -->
+    <main class="workspace">
+
+      <!-- Conclusion section -->
+      <div id="conclusionSection" class="conclusion-section" hidden>
+        <h3>核对结论</h3>
+      </div>
+      <div id="qualityAlert" class="quality-alert" hidden></div>
+
+      <!-- Warehouse overview -->
+      <section class="workspace-section" id="warehouseSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title" id="warehouseHeading">仓库核对总览</h2>
+            <p class="section-sub">Warehouse Reconciliation Overview</p>
           </div>
         </div>
+        <div id="warehouseTable" class="audit-table"></div>
+      </section>
 
-        <!-- 结论区 -->
-        <div id="conclusionSection" class="conclusion-section" hidden></div>
-
-        <!-- 质量评分 -->
-        <div id="qualityAlert" class="quality-alert" hidden></div>
-
-        <!-- 仓库概览 + 差异归因下钻 -->
-        <h3 id="warehouseHeading" hidden>仓库核对总览</h3>
-        <div id="warehouseTable" class="audit-table" hidden></div>
-
-        <!-- 待处理事项分组 -->
-        <div id="pendingItemsSection" class="pending-items-section" hidden>
-          <h3>待处理事项</h3>
+      <!-- Pending items -->
+      <section class="workspace-section" id="pendingItemsSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">待处理事项</h2>
+            <p class="section-sub">Pending Items by Category</p>
+          </div>
+        </div>
+        <div class="pending-groups-row">
           <div id="hoursDiffGroup" class="pending-group" hidden>
             <button class="group-header" data-group="hoursDiff" aria-expanded="true" type="button">
-              <span class="expand-icon">▾</span>
-              <span>工时不一致</span>
+              <span class="group-icon amber">⏱</span>
+              <span class="group-label">工时不一致</span>
               <span class="group-count"></span>
+              <span class="expand-icon">▾</span>
             </button>
             <div class="group-content"></div>
           </div>
           <div id="candidateGroup" class="pending-group" hidden>
             <button class="group-header" data-group="candidate" aria-expanded="true" type="button">
-              <span class="expand-icon">▾</span>
-              <span>姓名格式差异</span>
+              <span class="group-icon blue">👤</span>
+              <span class="group-label">姓名格式差异</span>
               <span class="group-count"></span>
+              <span class="expand-icon">▾</span>
             </button>
             <div class="group-content"></div>
           </div>
           <div id="notInInvoiceGroup" class="pending-group" hidden>
             <button class="group-header" data-group="notInInvoice" aria-expanded="false" type="button">
-              <span class="expand-icon">▸</span>
-              <span>不在本批发票</span>
+              <span class="group-icon red">🚫</span>
+              <span class="group-label">不在本批发票</span>
               <span class="group-count"></span>
+              <span class="expand-icon">▸</span>
             </button>
             <div class="group-content" hidden></div>
           </div>
         </div>
+      </section>
 
-        <!-- AI 抽取明细 -->
-        <h3>AI 抽取明细</h3>
-        <div id="extractPreviewTable" class="audit-table review-table">
+      <!-- AI Extract Detail Table -->
+      <section class="workspace-section">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">AI 抽取明细</h2>
+            <p class="section-sub">Extract & Reconciliation Detail · Click a KPI card above to filter</p>
+          </div>
+          <div class="section-actions">
+            <button id="extractCompare" class="btn-extract" type="button">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              抽取并比对
+            </button>
+            <p id="compareStatus" class="inline-status">低置信度项不阻断，但会进入风险清单。</p>
+          </div>
+        </div>
+        <div id="extractPreviewTable" class="audit-table premium-grid">
           <div class="empty-state">
-            <div class="empty-state-icon">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-                <rect x="8" y="4" width="32" height="40" rx="4" stroke="#C7C7CC" stroke-width="2"/>
-                <path d="M16 14h16M16 22h12M16 30h8" stroke="#C7C7CC" stroke-width="2" stroke-linecap="round"/>
-                <circle cx="36" cy="36" r="8" fill="#F2F2F7" stroke="#C7C7CC" stroke-width="2"/>
-                <path d="M33 36h6M36 33v6" stroke="#C7C7CC" stroke-width="2" stroke-linecap="round"/>
-              </svg>
+            <div class="empty-icon">
+              <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
             </div>
-            <p class="empty-state-title">等待数据抽取</p>
-            <p class="empty-state-text">创建批次并上传文件后，点击"抽取并比对"开始核对</p>
+            <p class="empty-title">暂无抽取数据</p>
+            <p class="empty-desc">完成字段映射后，点击「抽取并比对」开始核对</p>
           </div>
         </div>
       </section>
+
     </main>
 
-    <!-- Wizard Drawer -->
-    <div class="audit-setup-drawer" id="setupDrawer">
-      <div class="drawer-overlay" id="drawerOverlay"></div>
-      <div class="drawer-content">
+    <!-- ═══ WIZARD DRAWER (slides in from right) ═══ -->
+    <div class="drawer-overlay" id="drawerOverlay"></div>
+    <aside class="wizard-drawer" id="wizardDrawer" aria-label="新建核对批次">
+      <div class="drawer-chrome">
         <div class="drawer-header">
-          <h2>新建核对批次</h2>
-          <button class="drawer-close" id="drawerClose" aria-label="关闭">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-              <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            </svg>
+          <div>
+            <p class="drawer-eyebrow">New Audit Batch</p>
+            <h2 class="drawer-title">新建核对批次</h2>
+          </div>
+          <button class="btn-close-drawer" id="btnCloseDrawer" type="button" aria-label="关闭">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           </button>
         </div>
-
-        <div class="drawer-body">
-          <!-- Step 1: Batch Setup -->
-          <div class="drawer-step active" data-step="1">
-            <div class="step-header">
-              <div class="step-number">1</div>
-              <div class="step-info">
-                <h3>批次信息</h3>
-                <p>设置供应商和账期</p>
-              </div>
-            </div>
-            <div class="step-content">
-              <div class="audit-form-grid">
-                <label><span>供应商</span><input id="supplierName" name="supplierName" autocomplete="organization" placeholder="供应商名称…" /></label>
-                <label><span>账期开始</span><input id="periodStart" name="periodStart" type="date" autocomplete="off" /></label>
-                <label><span>账期结束</span><input id="periodEnd" name="periodEnd" type="date" autocomplete="off" /></label>
-                <label><span>币种</span><input id="currency" name="currency" autocomplete="off" placeholder="USD" /></label>
-              </div>
-              <button id="createLaborRun" class="primary-button">创建批次</button>
-              <p id="createStatus" class="audit-status">等待创建批次。</p>
-            </div>
-          </div>
-
-          <!-- Step 2: Source Files -->
-          <div class="drawer-step" data-step="2">
-            <div class="step-header">
-              <div class="step-number">2</div>
-              <div class="step-info">
-                <h3>上传文件</h3>
-                <p>上传 PDF 发票和 Excel 账单</p>
-              </div>
-            </div>
-            <div class="step-content">
-              <div class="audit-upload-grid">
-                <label class="audit-upload-card">
-                  <span>PDF 发票，可多选</span>
-                  <input id="pdfFiles" type="file" accept="application/pdf" multiple />
-                  <strong id="pdfFileName">选择供应商 PDF 发票</strong>
-                </label>
-                <label class="audit-upload-card">
-                  <span>线下账单 Excel</span>
-                  <input id="workbookFile" type="file" accept=".xlsx,.xlsm" />
-                  <strong id="workbookFileName">选择线下账单</strong>
-                </label>
-              </div>
-              <button id="uploadLaborFiles" class="secondary-button">上传文件</button>
-              <p id="uploadStatus" class="audit-status">创建批次后上传文件。</p>
-            </div>
-          </div>
-
-          <!-- Step 3: Field Mapping -->
-          <div class="drawer-step" data-step="3">
-            <div class="step-header">
-              <div class="step-number">3</div>
-              <div class="step-info">
-                <h3>字段映射</h3>
-                <p>配置 Excel 列映射</p>
-              </div>
-            </div>
-            <div class="step-content">
-              <div class="audit-form-grid mapping-grid">
-                <label><span>工作表</span><select id="sheetSelect"></select></label>
-                <label><span>工号列（可选）</span><select id="employeeIdColumn"></select></label>
-                <label><span>姓名列</span><select id="nameColumn"></select></label>
-                <label><span>工时列</span><select id="hoursColumn"></select></label>
-                <label><span>金额列</span><select id="amountColumn"></select></label>
-                <label><span>币种列（可选）</span><select id="currencyColumn"></select></label>
-              </div>
-              <div class="mapping-actions">
-                <button id="loadSheets" class="secondary-action">读取工作表</button>
-                <button id="saveMapping" class="primary-button">确认字段映射</button>
-              </div>
-              <div id="mappingPreview" class="mapping-preview">
-                <div class="empty-state">
-                  <div class="empty-state-icon">
-                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-                      <rect x="4" y="8" width="32" height="24" rx="3" stroke="#C7C7CC" stroke-width="2"/>
-                      <path d="M4 14h32M14 8v24M24 8v24" stroke="#C7C7CC" stroke-width="2"/>
-                    </svg>
-                  </div>
-                  <p class="empty-state-text">读取工作表后将显示预览数据</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="drawer-footer">
-          <button id="extractCompare" class="dark-button" disabled>抽取并比对</button>
-          <p id="compareStatus" class="audit-status">完成字段映射后开始核对。</p>
+        <!-- Step pills -->
+        <div class="wizard-steps">
+          <button class="wz-step active" data-step="1" type="button"><span>01</span> 批次信息</button>
+          <div class="wz-connector"></div>
+          <button class="wz-step" data-step="2" type="button"><span>02</span> 上传文件</button>
+          <div class="wz-connector"></div>
+          <button class="wz-step" data-step="3" type="button"><span>03</span> 字段映射</button>
         </div>
       </div>
-    </div>
 
+      <div class="drawer-body">
+
+        <!-- ── STEP 1: Batch Setup ── -->
+        <div class="wz-panel active" data-panel="1">
+          <div class="field-section">
+            <label class="field-group">
+              <span class="field-label">供应商名称</span>
+              <input id="supplierName" class="field-input" name="supplierName" autocomplete="organization" placeholder="输入供应商名称…" />
+            </label>
+            <div class="field-row">
+              <label class="field-group">
+                <span class="field-label">账期开始</span>
+                <input id="periodStart" class="field-input" name="periodStart" type="date" autocomplete="off" />
+              </label>
+              <label class="field-group">
+                <span class="field-label">账期结束</span>
+                <input id="periodEnd" class="field-input" name="periodEnd" type="date" autocomplete="off" />
+              </label>
+            </div>
+            <label class="field-group">
+              <span class="field-label">结算币种</span>
+              <input id="currency" class="field-input" name="currency" autocomplete="off" placeholder="USD / CNY / EUR…" />
+            </label>
+          </div>
+          <div class="drawer-footer">
+            <p id="createStatus" class="inline-status">填写批次信息后创建。</p>
+            <button id="createLaborRun" class="btn-primary-lg" type="button">创建批次 →</button>
+          </div>
+        </div>
+
+        <!-- ── STEP 2: Upload ── -->
+        <div class="wz-panel" data-panel="2">
+          <div class="upload-zone" id="pdfUploadZone">
+            <input id="pdfFiles" type="file" accept="application/pdf" multiple />
+            <div class="upload-icon">
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 18V8M9 13l5-5 5 5" stroke="#0071E3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="19" width="22" height="6" rx="2" stroke="#D2D2D7" stroke-width="1.5"/></svg>
+            </div>
+            <p class="upload-title">供应商 PDF 发票</p>
+            <p class="upload-sub" id="pdfFileName">点击选择 · 支持多选</p>
+          </div>
+          <div class="upload-zone" id="xlsxUploadZone">
+            <input id="workbookFile" type="file" accept=".xlsx,.xlsm" />
+            <div class="upload-icon">
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="4" y="3" width="20" height="22" rx="3" stroke="#34C759" stroke-width="1.5"/><path d="M9 10h10M9 14h10M9 18h6" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <p class="upload-title">线下账单 Excel</p>
+            <p class="upload-sub" id="workbookFileName">点击选择 .xlsx / .xlsm</p>
+          </div>
+          <div class="drawer-footer">
+            <p id="uploadStatus" class="inline-status">创建批次后可上传文件。</p>
+            <button id="uploadLaborFiles" class="btn-primary-lg" type="button">上传文件 →</button>
+          </div>
+        </div>
+
+        <!-- ── STEP 3: Field Mapping ── -->
+        <div class="wz-panel" data-panel="3">
+          <div class="mapping-header-row">
+            <label class="field-group flex-1">
+              <span class="field-label">选择工作表</span>
+              <select id="sheetSelect" class="field-input"></select>
+            </label>
+            <button id="loadSheets" class="btn-secondary" type="button">读取工作表</button>
+          </div>
+          <p class="mapping-hint">每个映射字段下方显示前 3 行样本数据，请确认列选择正确。</p>
+          <div class="mapping-smart-grid" id="mappingSmartGrid">
+            <!-- Column: 姓名 -->
+            <div class="mapping-field-card required">
+              <div class="mf-header">
+                <span class="mf-target">姓名列 <em>Name</em></span>
+                <span class="mf-required">必填</span>
+              </div>
+              <select id="nameColumn" class="field-input"></select>
+              <div class="mf-preview" id="nameColumnPreview">
+                <span class="preview-chip">—</span>
+              </div>
+            </div>
+            <!-- Column: 工时 -->
+            <div class="mapping-field-card required">
+              <div class="mf-header">
+                <span class="mf-target">工时列 <em>Hours</em></span>
+                <span class="mf-required">必填</span>
+              </div>
+              <select id="hoursColumn" class="field-input"></select>
+              <div class="mf-preview" id="hoursColumnPreview">
+                <span class="preview-chip">—</span>
+              </div>
+            </div>
+            <!-- Column: 金额 -->
+            <div class="mapping-field-card required">
+              <div class="mf-header">
+                <span class="mf-target">金额列 <em>Amount</em></span>
+                <span class="mf-required">必填</span>
+              </div>
+              <select id="amountColumn" class="field-input"></select>
+              <div class="mf-preview" id="amountColumnPreview">
+                <span class="preview-chip">—</span>
+              </div>
+            </div>
+            <!-- Column: 工号 (optional) -->
+            <div class="mapping-field-card">
+              <div class="mf-header">
+                <span class="mf-target">工号列 <em>Emp. ID</em></span>
+                <span class="mf-optional">可选</span>
+              </div>
+              <select id="employeeIdColumn" class="field-input"></select>
+              <div class="mf-preview" id="employeeIdColumnPreview">
+                <span class="preview-chip">—</span>
+              </div>
+            </div>
+            <!-- Column: 币种 (optional) -->
+            <div class="mapping-field-card">
+              <div class="mf-header">
+                <span class="mf-target">币种列 <em>Currency</em></span>
+                <span class="mf-optional">可选</span>
+              </div>
+              <select id="currencyColumn" class="field-input"></select>
+              <div class="mf-preview" id="currencyColumnPreview">
+                <span class="preview-chip">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Mapping preview table -->
+          <div id="mappingPreview" class="mapping-preview-table">
+            <p class="empty-state-text">选择工作表并映射字段后，此处显示数据预览。</p>
+          </div>
+
+          <div class="drawer-footer">
+            <button id="saveMapping" class="btn-primary-lg full-width" type="button">确认字段映射 · 完成配置</button>
+          </div>
+        </div>
+
+      </div><!-- /drawer-body -->
+    </aside>
+
+    <!-- ═══ TOAST ═══ -->
     <div id="laborToast" class="labor-toast" role="status" aria-live="polite"></div>
-    <script src="overseas-labor.js?v=4"></script>
+
+    <script src="overseas-labor.js?v=5"></script>
+    <script>
+      // ── Drawer open/close ──
+      const drawer = document.getElementById('wizardDrawer');
+      const overlay = document.getElementById('drawerOverlay');
+      const btnOpen = document.getElementById('btnOpenDrawer');
+      const btnClose = document.getElementById('btnCloseDrawer');
+
+      function openDrawer() {
+        drawer.classList.add('open');
+        overlay.classList.add('visible');
+        document.body.style.overflow = 'hidden';
+      }
+      function closeDrawer() {
+        drawer.classList.remove('open');
+        overlay.classList.remove('visible');
+        document.body.style.overflow = '';
+      }
+
+      btnOpen.addEventListener('click', openDrawer);
+      btnClose.addEventListener('click', closeDrawer);
+      overlay.addEventListener('click', closeDrawer);
+
+      // ── Wizard step pills ──
+      document.querySelectorAll('.wz-step').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const step = btn.dataset.step;
+          document.querySelectorAll('.wz-step').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.wz-panel').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.querySelector(`.wz-panel[data-panel="${step}"]`).classList.add('active');
+        });
+      });
+
+      // ── Auto advance step after create ──
+      const createBtn = document.getElementById('createLaborRun');
+      if (createBtn) {
+        createBtn.addEventListener('click', () => {
+          setTimeout(() => {
+            const step2Btn = document.querySelector('.wz-step[data-step="2"]');
+            if (step2Btn) step2Btn.click();
+          }, 800);
+        });
+      }
+
+      // ── Auto advance to step 3 after upload ──
+      const uploadBtn = document.getElementById('uploadLaborFiles');
+      if (uploadBtn) {
+        uploadBtn.addEventListener('click', () => {
+          setTimeout(() => {
+            const step3Btn = document.querySelector('.wz-step[data-step="3"]');
+            if (step3Btn) step3Btn.click();
+          }, 800);
+        });
+      }
+
+      // ── Close drawer after saveMapping ──
+      const saveBtn = document.getElementById('saveMapping');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+          setTimeout(closeDrawer, 600);
+        });
+      }
+
+      // ── KPI filter buttons ──
+      document.querySelectorAll('.kpi-card').forEach(card => {
+        card.addEventListener('click', () => {
+          document.querySelectorAll('.kpi-card').forEach(c => c.classList.remove('active-filter'));
+          card.classList.add('active-filter');
+          // Dispatch custom event that overseas-labor.js can listen to
+          document.dispatchEvent(new CustomEvent('kpi-filter', { detail: card.dataset.filter }));
+        });
+      });
+
+      // ── PDF upload zone click delegation ──
+      document.getElementById('pdfUploadZone').addEventListener('click', (e) => {
+        if (e.target.tagName !== 'INPUT') {
+          document.getElementById('pdfFiles').click();
+        }
+      });
+      document.getElementById('xlsxUploadZone').addEventListener('click', (e) => {
+        if (e.target.tagName !== 'INPUT') {
+          document.getElementById('workbookFile').click();
+        }
+      });
+
+      // ── File name display ──
+      document.getElementById('pdfFiles').addEventListener('change', function() {
+        const count = this.files.length;
+        document.getElementById('pdfFileName').textContent = count > 0 ? `${count} 个 PDF 文件已选择` : '点击选择 · 支持多选';
+        if (count > 0) document.getElementById('pdfUploadZone').classList.add('has-file');
+      });
+      document.getElementById('workbookFile').addEventListener('change', function() {
+        const name = this.files[0]?.name || '';
+        document.getElementById('workbookFileName').textContent = name || '点击选择 .xlsx / .xlsm';
+        if (name) document.getElementById('xlsxUploadZone').classList.add('has-file');
+      });
+    </script>
   </body>
 </html>

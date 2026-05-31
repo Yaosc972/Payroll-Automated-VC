@@ -7,12 +7,17 @@ const laborState = {
   currentStep: 1,
 };
 
+// ── Element references ──
 const labor = {
-  // Drawer elements
-  setupDrawer: document.querySelector("#setupDrawer"),
-  drawerOverlay: document.querySelector("#drawerOverlay"),
-  drawerClose: document.querySelector("#drawerClose"),
-  newAuditBatch: document.querySelector("#newAuditBatch"),
+  // KPI cards
+  kpiTotal: document.querySelector("#kpiTotalVal"),
+  kpiMatched: document.querySelector("#kpiMatchedVal"),
+  kpiVariance: document.querySelector("#kpiVarianceVal"),
+  kpiUnmatched: document.querySelector("#kpiUnmatchedVal"),
+
+  // Run badge
+  chromeRunBadge: document.querySelector("#chromeRunBadge"),
+  chromeRunLabel: document.querySelector("#chromeRunLabel"),
 
   // Form elements
   supplierName: document.querySelector("#supplierName"),
@@ -46,6 +51,7 @@ const labor = {
   compareStatus: document.querySelector("#compareStatus"),
   qualityAlert: document.querySelector("#qualityAlert"),
   conclusionSection: document.querySelector("#conclusionSection"),
+  warehouseSection: document.querySelector("#warehouseSection"),
   warehouseHeading: document.querySelector("#warehouseHeading"),
   warehouseTable: document.querySelector("#warehouseTable"),
   pendingItemsSection: document.querySelector("#pendingItemsSection"),
@@ -55,65 +61,39 @@ const labor = {
   extractPreviewTable: document.querySelector("#extractPreviewTable"),
   reportLink: document.querySelector("#laborReportLink"),
   toast: document.querySelector("#laborToast"),
-
-  // Summary grid
-  summaryGrid: document.querySelector("#summaryGrid"),
-  totalAuditedRows: document.querySelector("#totalAuditedRows"),
-  clearedMatches: document.querySelector("#clearedMatches"),
-  amountVariances: document.querySelector("#amountVariances"),
-  missingInInvoice: document.querySelector("#missingInInvoice"),
 };
 
-// Initialize
+// ── Initialize ──
 bindLaborEvents();
-initDrawer();
+listenKpiFilters();
 
-function initDrawer() {
-  // Open drawer on "New Batch" button click
-  labor.newAuditBatch.addEventListener("click", () => {
-    openDrawer();
-  });
-
-  // Close drawer on overlay click
-  labor.drawerOverlay.addEventListener("click", () => {
-    closeDrawer();
-  });
-
-  // Close drawer on close button click
-  labor.drawerClose.addEventListener("click", () => {
-    closeDrawer();
-  });
-
-  // Close drawer on Escape key
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && labor.setupDrawer.classList.contains("open")) {
-      closeDrawer();
-    }
+function listenKpiFilters() {
+  document.addEventListener('kpi-filter', (e) => {
+    filterPendingItems(e.detail);
   });
 }
 
-function openDrawer() {
-  labor.setupDrawer.classList.add("open");
-  document.body.style.overflow = "hidden";
-  updateDrawerStep(1);
-}
+function filterPendingItems(filter) {
+  const section = labor.pendingItemsSection;
+  if (!section || section.hidden) return;
 
-function closeDrawer() {
-  labor.setupDrawer.classList.remove("open");
-  document.body.style.overflow = "";
-}
-
-function updateDrawerStep(step) {
-  laborState.currentStep = step;
-  const steps = labor.setupDrawer.querySelectorAll(".drawer-step");
-  steps.forEach((stepEl, index) => {
-    const stepNum = index + 1;
-    stepEl.classList.toggle("active", stepNum === step);
-    stepEl.classList.toggle("completed", stepNum < step);
-  });
-
-  // Enable/disable extract button
-  labor.extractCompare.disabled = step < 3;
+  if (filter === 'all') {
+    section.querySelectorAll('.pending-group').forEach(group => {
+      if (group.dataset.count > 0) group.hidden = false;
+    });
+  } else if (filter === 'variance') {
+    section.querySelectorAll('.pending-group').forEach(group => {
+      group.hidden = group.id !== 'hoursDiffGroup';
+    });
+  } else if (filter === 'unmatched') {
+    section.querySelectorAll('.pending-group').forEach(group => {
+      group.hidden = group.id !== 'notInInvoiceGroup';
+    });
+  } else if (filter === 'matched') {
+    section.querySelectorAll('.pending-group').forEach(group => {
+      group.hidden = true;
+    });
+  }
 }
 
 function bindLaborEvents() {
@@ -123,67 +103,6 @@ function bindLaborEvents() {
   labor.sheetSelect.addEventListener("change", loadFieldSuggestions);
   labor.saveMapping.addEventListener("click", saveMapping);
   labor.extractCompare.addEventListener("click", extractAndCompare);
-
-  labor.pdfFiles.addEventListener("change", () => {
-    labor.pdfFileName.textContent = labor.pdfFiles.files.length
-      ? `${labor.pdfFiles.files.length} 个 PDF 已选择`
-      : "选择供应商 PDF 发票";
-  });
-
-  labor.workbookFile.addEventListener("change", () => {
-    labor.workbookFileName.textContent = labor.workbookFile.files[0]?.name || "选择线下账单";
-  });
-
-  // Summary grid filter clicks
-  if (labor.summaryGrid) {
-    labor.summaryGrid.querySelectorAll("[data-filter]").forEach((card) => {
-      card.addEventListener("click", () => {
-        const filter = card.dataset.filter;
-        filterPendingItems(filter);
-      });
-    });
-  }
-}
-
-function filterPendingItems(filter) {
-  // Reset all cards active state
-  labor.summaryGrid.querySelectorAll("[data-filter]").forEach((card) => {
-    card.style.borderColor = "#E5E5E7";
-    card.style.boxShadow = "none";
-  });
-
-  // Highlight clicked card
-  const activeCard = labor.summaryGrid.querySelector(`[data-filter="${filter}"]`);
-  if (activeCard) {
-    activeCard.style.borderColor = "#0071E3";
-    activeCard.style.boxShadow = "0 4px 12px rgba(0, 113, 227, 0.15)";
-  }
-
-  // Filter pending items based on selection
-  const section = labor.pendingItemsSection;
-  if (!section || section.hidden) return;
-
-  if (filter === "all") {
-    // Show all groups
-    section.querySelectorAll(".pending-group").forEach((group) => {
-      if (group.dataset.count > 0) group.hidden = false;
-    });
-  } else if (filter === "amountDiff") {
-    // Show only hours diff group (amount variances)
-    section.querySelectorAll(".pending-group").forEach((group) => {
-      group.hidden = group.id !== "hoursDiffGroup";
-    });
-  } else if (filter === "missing") {
-    // Show only not in invoice group
-    section.querySelectorAll(".pending-group").forEach((group) => {
-      group.hidden = group.id !== "notInInvoiceGroup";
-    });
-  } else if (filter === "cleared") {
-    // Hide all groups (cleared items have no pending issues)
-    section.querySelectorAll(".pending-group").forEach((group) => {
-      group.hidden = true;
-    });
-  }
 }
 
 async function createRun() {
@@ -201,7 +120,13 @@ async function createRun() {
     });
     laborState.run = run;
     setText(labor.createStatus, `批次已创建：${run.id}`);
-    updateDrawerStep(2);
+
+    // Update run badge
+    if (labor.chromeRunBadge) {
+      labor.chromeRunBadge.hidden = false;
+      labor.chromeRunLabel.textContent = `批次 #${run.id.slice(0, 8)}`;
+    }
+
     toast("劳务核对批次已创建。");
   } catch (error) {
     setText(labor.createStatus, error.message, true);
@@ -225,7 +150,6 @@ async function uploadFiles() {
       body: form,
     });
     setText(labor.uploadStatus, "文件已上传，可以读取工作表。");
-    updateDrawerStep(3);
     toast("文件上传完成。");
   } catch (error) {
     setText(labor.uploadStatus, error.message, true);
@@ -261,7 +185,7 @@ async function loadFieldSuggestions() {
     fillColumnSelect(labor.hoursColumn, data.suggestedMapping?.hours);
     fillColumnSelect(labor.amountColumn, data.suggestedMapping?.amount);
     fillColumnSelect(labor.currencyColumn, data.suggestedMapping?.currency, true);
-    renderPreview(data.previewRows || []);
+    renderMappingPreview(data.previewRows || []);
   } catch (error) {
     toast(error.message);
   }
@@ -284,8 +208,6 @@ async function saveMapping() {
         },
       }),
     });
-    updateDrawerStep(4);
-    labor.extractCompare.disabled = false;
     toast("字段映射已确认，可以开始抽取比对。");
   } catch (error) {
     toast(error.message);
@@ -297,6 +219,7 @@ function clearResults() {
     labor.conclusionSection.hidden = true;
     labor.conclusionSection.innerHTML = "";
   }
+  if (labor.warehouseSection) labor.warehouseSection.hidden = true;
   if (labor.warehouseHeading) labor.warehouseHeading.hidden = true;
   if (labor.warehouseTable) {
     labor.warehouseTable.hidden = true;
@@ -310,16 +233,11 @@ function clearResults() {
   if (labor.extractPreviewTable) {
     labor.extractPreviewTable.innerHTML = `
       <div class="empty-state">
-        <div class="empty-state-icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect x="8" y="4" width="32" height="40" rx="4" stroke="#C7C7CC" stroke-width="2"/>
-            <path d="M16 14h16M16 22h12M16 30h8" stroke="#C7C7CC" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="36" cy="36" r="8" fill="#F2F2F7" stroke="#C7C7CC" stroke-width="2"/>
-            <path d="M33 36h6M36 33v6" stroke="#C7C7CC" stroke-width="2" stroke-linecap="round"/>
-          </svg>
+        <div class="empty-icon">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
-        <p class="empty-state-title">等待数据抽取</p>
-        <p class="empty-state-text">点击"抽取并比对"开始核对</p>
+        <p class="empty-title">暂无抽取数据</p>
+        <p class="empty-desc">点击「抽取并比对」开始核对</p>
       </div>
     `;
   }
@@ -327,11 +245,11 @@ function clearResults() {
   labor.reportLink.setAttribute("aria-disabled", "true");
   labor.reportLink.href = "#";
 
-  // Reset summary grid
-  if (labor.totalAuditedRows) labor.totalAuditedRows.textContent = "-";
-  if (labor.clearedMatches) labor.clearedMatches.textContent = "-";
-  if (labor.amountVariances) labor.amountVariances.textContent = "-";
-  if (labor.missingInInvoice) labor.missingInInvoice.textContent = "-";
+  // Reset KPI
+  if (labor.kpiTotal) labor.kpiTotal.textContent = "—";
+  if (labor.kpiMatched) labor.kpiMatched.textContent = "—";
+  if (labor.kpiVariance) labor.kpiVariance.textContent = "—";
+  if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = "—";
 }
 
 async function extractAndCompare() {
@@ -341,7 +259,6 @@ async function extractAndCompare() {
 
   setText(labor.compareStatus, "已提交后台抽取，正在等待结果…");
   labor.extractCompare.disabled = true;
-  closeDrawer();
   laborState.pollRetryCount = 0;
 
   try {
@@ -412,26 +329,16 @@ function fillColumnSelect(select, selected = "", optional = false) {
   select.value = selected || "";
 }
 
-function renderPreview(rows) {
+function renderMappingPreview(rows) {
   if (!rows.length) {
-    labor.mappingPreview.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-icon">
-          <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-            <rect x="4" y="8" width="32" height="24" rx="3" stroke="#C7C7CC" stroke-width="2"/>
-            <path d="M4 14h32M14 8v24M24 8v24" stroke="#C7C7CC" stroke-width="2"/>
-          </svg>
-        </div>
-        <p class="empty-state-text">暂无预览数据</p>
-      </div>
-    `;
+    labor.mappingPreview.innerHTML = '<p class="empty-state-text">暂无预览数据。</p>';
     return;
   }
   const headers = laborState.headers.slice(0, 6);
   labor.mappingPreview.innerHTML = `<table><thead><tr>${headers
     .map((header) => `<th>${escapeHtml(header)}</th>`)
     .join("")}</tr></thead><tbody>${rows
-    .slice(0, 4)
+    .slice(0, 3)
     .map(
       (row) =>
         `<tr>${headers.map((header) => `<td>${escapeHtml(row[header] ?? "")}</td>`).join("")}</tr>`
@@ -446,8 +353,8 @@ function renderResult(run) {
   const wcSummary = wc && wc.summary;
   const totalPassed = wcSummary && wcSummary.totalPassed;
 
-  // Update summary grid
-  updateSummaryGrid(summary, run.comparisonRows || []);
+  // Update KPI cards
+  updateKpiCards(summary, run.comparisonRows || []);
 
   // Render conclusion
   renderConclusion(summary, wcSummary, run.extractionQuality);
@@ -463,14 +370,14 @@ function renderResult(run) {
   if (totalPassed) {
     labor.extractPreviewTable.innerHTML = `
       <div class="empty-state">
-        <div class="empty-state-icon" style="color: #34C759">
+        <div class="empty-icon" style="color: #34C759">
           <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
             <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2"/>
             <path d="M16 24l6 6 10-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </div>
-        <p class="empty-state-title" style="color: #34C759">总金额一致</p>
-        <p class="empty-state-text">无需核对明细</p>
+        <p class="empty-title" style="color: #34C759">总金额一致</p>
+        <p class="empty-desc">无需核对明细</p>
       </div>
     `;
   } else {
@@ -478,22 +385,21 @@ function renderResult(run) {
   }
 }
 
-function updateSummaryGrid(summary, rows) {
+function updateKpiCards(summary, rows) {
   const pdfCount = summary.pdfEmployeeCount || 0;
   const excelCount = summary.excelEmployeeCount || 0;
   const amountDiffCount = summary.amountDiffCount || 0;
   const notInInvoiceCount = summary.notInInvoiceCount || 0;
 
-  // Calculate cleared matches (rows without issues)
+  // Calculate cleared matches
   const clearedCount = rows.filter(
     (r) => r.matchStatus === "通过" || r.matchStatus === "金额一致"
   ).length;
 
-  if (labor.totalAuditedRows) labor.totalAudiredRows = Math.max(pdfCount, excelCount);
-  if (labor.totalAuditedRows) labor.totalAuditedRows.textContent = Math.max(pdfCount, excelCount);
-  if (labor.clearedMatches) labor.clearedMatches.textContent = clearedCount;
-  if (labor.amountVariances) labor.amountVariances.textContent = amountDiffCount;
-  if (labor.missingInInvoice) labor.missingInInvoice.textContent = notInInvoiceCount;
+  if (labor.kpiTotal) labor.kpiTotal.textContent = Math.max(pdfCount, excelCount);
+  if (labor.kpiMatched) labor.kpiMatched.textContent = clearedCount;
+  if (labor.kpiVariance) labor.kpiVariance.textContent = amountDiffCount;
+  if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = notInInvoiceCount;
 }
 
 function renderConclusion(summary, wcSummary, extractionQuality) {
@@ -535,16 +441,15 @@ function renderConclusion(summary, wcSummary, extractionQuality) {
 }
 
 function renderWarehouseTable(wc) {
+  const section = labor.warehouseSection;
   const heading = labor.warehouseHeading;
   const table = labor.warehouseTable;
-  if (!heading || !table) return;
+  if (!heading || !table || !section) return;
   if (!wc || !wc.rows || wc.rows.length === 0) {
-    heading.hidden = true;
-    table.hidden = true;
+    section.hidden = true;
     return;
   }
-  heading.hidden = false;
-  table.hidden = false;
+  section.hidden = false;
 
   const headers = ["仓库", "PDF金额", "Excel金额", "差异", "状态"];
   const thead = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join("")}</tr></thead>`;
@@ -552,7 +457,6 @@ function renderWarehouseTable(wc) {
   const tbody = wc.rows
     .map((r, idx) => {
       const hasAttribution = r.attribution && r.attribution.length > 0;
-      const statusClass = r.matchStatus === "通过" ? "status-pass" : "status-fail";
       const expandIcon = hasAttribution ? "▸" : "";
 
       const attributionRow = hasAttribution
@@ -571,13 +475,13 @@ function renderWarehouseTable(wc) {
       <td>$${r.excelAmountTotal.toFixed(2)}</td>
       <td>${r.amountDelta >= 0 ? "+" : ""}$${r.amountDelta.toFixed(2)}</td>
       <td style="color:${
-        r.matchStatus === "通过" ? "#16a34a" : "#dc2626"
+        r.matchStatus === "通过" ? "#34C759" : "#FF3B30"
       };font-weight:600">${escapeHtml(r.matchStatus)}</td>
     </tr>${attributionRow}`;
     })
     .join("");
 
-  table.innerHTML = `<table class="audit-data-table">${thead}<tbody>${tbody}</tbody></table>`;
+  table.innerHTML = `<table>${thead}<tbody>${tbody}</tbody></table>`;
 
   // Auto-expand warehouses with difference >= $1
   wc.rows.forEach((r, idx) => {
@@ -692,7 +596,7 @@ function _renderPendingGroup(groupEl, items, renderFn) {
 function _renderHoursDiffTable(rows) {
   if (!rows.length) return "";
   const visible = rows.slice(0, 40);
-  return `<table class="audit-data-table">
+  return `<table>
     <thead><tr><th>员工</th><th>PDF工时</th><th>Excel工时</th><th>工时差</th><th>PDF金额</th><th>Excel金额</th></tr></thead>
     <tbody>${visible
       .map(
@@ -716,7 +620,7 @@ function _renderHoursDiffTable(rows) {
 function _renderCandidateTable(rows) {
   if (!rows.length) return "";
   const visible = rows.slice(0, 40);
-  return `<table class="audit-data-table">
+  return `<table>
     <thead><tr><th>PDF员工</th><th>Excel员工</th><th>相似度</th><th>PDF金额</th><th>Excel金额</th><th>金额差</th></tr></thead>
     <tbody>${visible
       .map(
@@ -740,7 +644,7 @@ function _renderCandidateTable(rows) {
 function _renderNotInInvoiceTable(rows) {
   if (!rows.length) return "";
   const visible = rows.slice(0, 40);
-  return `<table class="audit-data-table">
+  return `<table>
     <thead><tr><th>员工</th><th>Excel金额</th><th>Excel工时</th></tr></thead>
     <tbody>${visible
       .map(
@@ -857,14 +761,11 @@ function renderExtractRows(container, rows) {
   if (!rows.length) {
     container.innerHTML = `
       <div class="empty-state">
-        <div class="empty-state-icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect x="8" y="4" width="32" height="40" rx="4" stroke="#C7C7CC" stroke-width="2"/>
-            <path d="M16 14h16M16 22h12M16 30h8" stroke="#C7C7CC" stroke-width="2" stroke-linecap="round"/>
-          </svg>
+        <div class="empty-icon">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
-        <p class="empty-state-title">等待数据抽取</p>
-        <p class="empty-state-text">点击"抽取并比对"开始核对</p>
+        <p class="empty-title">暂无抽取数据</p>
+        <p class="empty-desc">点击「抽取并比对」开始核对</p>
       </div>
     `;
     return;
@@ -888,6 +789,7 @@ function renderExtractRows(container, rows) {
   }`;
 }
 
+// ── Utility functions ──
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
