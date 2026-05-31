@@ -11,6 +11,8 @@ from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
 from urllib import request
 
+import httpx
+
 logger = logging.getLogger("bonus_platform.labor.extract")
 
 from .models import LaborLineItem, line_items_from_dicts
@@ -26,6 +28,37 @@ PAY_CODE_RE = re.compile(r"^(?:Reg|OT|DT)$", re.IGNORECASE)
 TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
 AI_PAGE_CACHE_VERSION = "v4"
+
+# ── HTTP client with strict total timeout (wall-clock) ──
+# urllib.request.urlopen timeout only covers socket read, not total request duration.
+# httpx.Timeout enforces absolute wall-clock time on the entire request lifecycle.
+_MIMO_TIMEOUT = httpx.Timeout(30.0, connect=5.0, read=25.0, pool=5.0)
+
+
+def _http_post_json(url: str, headers: Dict[str, str], payload: dict, timeout: httpx.Timeout = _MIMO_TIMEOUT) -> dict:
+    """POST JSON with strict total timeout. Returns parsed JSON response.
+
+    Raises MiMoTimeoutException on any timeout (connect, read, pool, or total).
+    """
+    logger.info(f"[D] [CRITICAL] POST → {url}, payload={len(json.dumps(payload))} bytes, timeout=30s total")
+    try:
+        with httpx.Client(timeout=timeout, http2=False) as client:
+            resp = client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        logger.info(f"[E] [CRITICAL] POST ← {url} responded in time, status={resp.status_code}")
+        return data
+    except httpx.TimeoutException as exc:
+        raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over 30s to respond: {url}") from exc
+    except httpx.HTTPStatusError as exc:
+        logger.error(f"[E] HTTP {exc.response.status_code}: {exc.response.text[:300]}")
+        raise
+    except Exception as exc:
+        logger.error(f"[E] POST {url} failed: {exc}")
+        raise
+
+
+
 
 # ── Fuzzy key matching for AI-extracted rows ──
 _AMOUNT_KEYS = ("amount", "total", "charge", "cost", "price", "total_amount",
@@ -362,25 +395,7 @@ def _extract_total_with_ai(page_text: str, prompt: str, ai_config: Dict[str, Any
         "max_completion_tokens": 256,
     }
     _apply_provider_options(payload, ai_config)
-    timeout = 30
-    payload_bytes = json.dumps(payload).encode("utf-8")
-    logger.info(f"[D] [CRITICAL] _extract_total_with_ai → {base_url}/chat/completions, payload={len(payload_bytes)} bytes, timeout={timeout}s")
-    req = request.Request(
-        base_url + "/chat/completions",
-        data=payload_bytes,
-        headers=_request_headers(ai_config),
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        logger.info(f"[E] [CRITICAL] _extract_total_with_ai ← responded in time")
-    except socket.timeout:
-        raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-    except URLError as exc:
-        if "timed out" in str(exc).lower():
-            raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-        raise
+    data = _http_post_json(f"{base_url}/chat/completions", _request_headers(ai_config), payload)
     return _parse_total_from_response(data["choices"][0]["message"]["content"])
 
 
@@ -389,7 +404,6 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
     headers = {
         "x-api-key": str(ai_config["api_key"]),
         "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
     }
     payload = {
         "model": ai_config["model"],
@@ -398,25 +412,7 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
         "messages": [{"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"}],
     }
     base_url = ai_config["base_url"].rstrip("/")
-    timeout = 30
-    payload_bytes = json.dumps(payload).encode("utf-8")
-    logger.info(f"[D] [CRITICAL] _extract_total_anthropic → {base_url}/v1/messages, payload={len(payload_bytes)} bytes, timeout={timeout}s")
-    req = request.Request(
-        base_url + "/v1/messages",
-        data=payload_bytes,
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        logger.info(f"[E] [CRITICAL] _extract_total_anthropic ← responded in time")
-    except socket.timeout:
-        raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-    except URLError as exc:
-        if "timed out" in str(exc).lower():
-            raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-        raise
+    data = _http_post_json(f"{base_url}/v1/messages", headers, payload)
     content = ""
     thinking = ""
     for block in data.get("content", []):
@@ -440,7 +436,6 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
         headers = {
             "x-api-key": str(ai_config["api_key"]),
             "anthropic-version": "2023-06-01",
-            "Content-Type": "application/json",
         }
         payload = {
             "model": model,
@@ -461,25 +456,7 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
                 ],
             }],
         }
-        timeout = 30
-        payload_bytes = json.dumps(payload).encode("utf-8")
-        logger.info(f"[D] [CRITICAL] _extract_total_with_ai_image → {base_url}/v1/messages, payload={len(payload_bytes)} bytes, timeout={timeout}s")
-        req = request.Request(
-            base_url + "/v1/messages",
-            data=payload_bytes,
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with request.urlopen(req, timeout=timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
-            logger.info(f"[E] [CRITICAL] _extract_total_with_ai_image ← responded in time")
-        except socket.timeout:
-            raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-        except URLError as exc:
-            if "timed out" in str(exc).lower():
-                raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-            raise
+        data = _http_post_json(f"{base_url}/v1/messages", headers, payload)
         content = ""
         thinking = ""
         for block in data.get("content", []):
@@ -508,25 +485,7 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
         "max_tokens": 256,
     }
     _apply_provider_options(payload, ai_config)
-    timeout = 30
-    payload_bytes = json.dumps(payload).encode("utf-8")
-    logger.info(f"[D] [CRITICAL] _extract_total_with_ai_image(OpenAI) → {base_url}/chat/completions, payload={len(payload_bytes)} bytes, timeout={timeout}s")
-    req = request.Request(
-        base_url + "/chat/completions",
-        data=payload_bytes,
-        headers=_request_headers(ai_config),
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        logger.info(f"[E] [CRITICAL] _extract_total_with_ai_image(OpenAI) ← responded in time")
-    except socket.timeout:
-        raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-    except URLError as exc:
-        if "timed out" in str(exc).lower():
-            raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-        raise
+    data = _http_post_json(f"{base_url}/chat/completions", _request_headers(ai_config), payload)
     return _parse_total_from_response(data["choices"][0]["message"]["content"])
 
 
@@ -710,28 +669,7 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
         return _post_anthropic_completion(payload, ai_config)
 
     # Standard OpenAI-compatible format
-    timeout = 30
-    payload_bytes = json.dumps(payload).encode("utf-8")
-    logger.info(f"[D] [CRITICAL] OpenAI → {base_url}/chat/completions, payload={len(payload_bytes)} bytes, timeout={timeout}s")
-    req = request.Request(
-        base_url + "/chat/completions",
-        data=payload_bytes,
-        headers=_request_headers(ai_config),
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        logger.info(f"[E] [CRITICAL] OpenAI ← responded in time, model={data.get('model','?')}")
-    except socket.timeout:
-        raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-    except URLError as exc:
-        if "timed out" in str(exc).lower():
-            raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-        raise
-    except Exception as exc:
-        logger.error(f"[E] API 请求失败: {exc}")
-        raise
+    data = _http_post_json(f"{base_url}/chat/completions", _request_headers(ai_config), payload)
     content = data["choices"][0]["message"]["content"]
     return _json_array(content)
 
@@ -790,33 +728,10 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
     headers = {
         "x-api-key": str(ai_config["api_key"]),
         "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
     }
     base_url = ai_config["base_url"].rstrip("/")
 
-    # ── HARD 30s SOCKET TIMEOUT ──
-    timeout = 30
-    payload_bytes = json.dumps(anthropic_payload).encode("utf-8")
-    logger.info(f"[D] [CRITICAL] _post_anthropic_completion → {base_url}/v1/messages, payload={len(payload_bytes)} bytes, timeout={timeout}s, model={anthropic_payload.get('model','?')}")
-    req = request.Request(
-        base_url + "/v1/messages",
-        data=payload_bytes,
-        headers=headers,
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        logger.info(f"[E] [CRITICAL] _post_anthropic_completion ← responded in time")
-    except socket.timeout:
-        raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-    except URLError as exc:
-        if "timed out" in str(exc).lower():
-            raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over {timeout}s to respond")
-        raise
-    except Exception as exc:
-        logger.error(f"[E] Anthropic API 请求失败: {exc}")
-        raise
+    data = _http_post_json(f"{base_url}/v1/messages", headers, anthropic_payload)
 
     stop_reason = data.get("stop_reason", "?")
     usage = data.get("usage", {})
