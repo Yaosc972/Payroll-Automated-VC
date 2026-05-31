@@ -792,8 +792,8 @@ def _looks_like_employee_row(employee_name: str, row: Dict[str, Any]) -> bool:
     evidence = str(row.get("evidence_text") or row.get("evidenceText") or "").lower()
     if amount == 0:
         return False
-    if amount > 0 and not any(marker in evidence for marker in ("$", "amount", "bill", "total", "charge", "invoice")):
-        return False
+    # 放宽 evidence 标记检查：图片 PDF 的 AI 抽取 evidence 可能被截断或不含标记词
+    # 只要 amount > 0 且有合理人名就接受
     letters = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ]", employee_name)
     if len(letters) < 3:
         return False

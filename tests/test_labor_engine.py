@@ -602,7 +602,9 @@ def test_mimo_image_extractor_filters_timesheet_rows_without_money_evidence(monk
         {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
     )
 
-    assert [row["employee_name_raw"] for row in rows] == ["Alvarez Minchaca, Rosa"]
+    # evidence 标记检查已移除（太严格导致图片PDF抽取结果被误过滤）
+    # amount=40 > 0 且有合理人名，现在应该保留
+    assert [row["employee_name_raw"] for row in rows] == ["Brian Cowan", "Alvarez Minchaca, Rosa"]
 
 
 def test_mimo_image_extractor_filters_rows_without_amount(monkeypatch):
