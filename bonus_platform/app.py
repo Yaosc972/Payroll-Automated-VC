@@ -431,6 +431,9 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 if extraction_quality["level"] in ("warning", "critical"):
                     logger.info(f"[{run_id}] 质量为 {extraction_quality['level']}，尝试重试...")
                     update_labor_metadata(run_id, {"stage": "重试抽取（质量优化）"})
+                    original_rows = list(pdf_rows)
+                    original_comparison = dict(comparison)
+                    original_quality = dict(extraction_quality)
                     pdf_rows, comparison, extraction_quality = _retry_if_better(
                         filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
                         supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
@@ -495,9 +498,16 @@ def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, compar
             expected_rows=_expected_labor_rows(excel_rows), **kwargs,
         )
     except Exception as exc:
-        logger.error(f"重试抽取异常: {exc}")
+        logger.error(f"重试抽取异常，保留原始结果: {exc}")
+        extraction_quality["retryAttempted"] = True
+        extraction_quality["retryApplied"] = False
         return pdf_rows, comparison, extraction_quality
     logger.info(f"重试抽取结果: {len(retry_pdf_rows)} 条")
+    if not retry_pdf_rows:
+        logger.warning("重试抽取返回 0 条，保留原始结果")
+        extraction_quality["retryAttempted"] = True
+        extraction_quality["retryApplied"] = False
+        return pdf_rows, comparison, extraction_quality
     if retry_pdf_rows:
         retry_comparison = compare_labor_items(
             retry_pdf_rows, excel_rows,
