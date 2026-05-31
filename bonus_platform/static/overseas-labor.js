@@ -525,9 +525,84 @@ function renderQualityAlert(quality) {
     labor.qualityAlert.innerHTML = "";
     return;
   }
+
   const issues = quality.issues || [];
+  const metrics = quality.metrics || {};
+  const confidence = metrics.confidence || {};
+  const methods = metrics.extractionMethods || {};
+  const employeeCounts = metrics.employeeCounts || {};
+  const totals = metrics.totals || {};
+
+  // 构建详细信息
+  let detailsHtml = '';
+
+  // 置信度分布
+  if (confidence.average !== undefined) {
+    detailsHtml += `
+      <div class="quality-detail-section">
+        <h4>置信度分布</h4>
+        <div class="quality-metrics">
+          <span>平均置信度: <strong>${(confidence.average * 100).toFixed(1)}%</strong></span>
+          <span>低置信度: <strong>${confidence.lowCount || 0}</strong>条</span>
+          <span>极低置信度: <strong>${confidence.veryLowCount || 0}</strong>条</span>
+        </div>
+      </div>
+    `;
+  }
+
+  // 抽取方法统计
+  if (Object.keys(methods).length > 0) {
+    detailsHtml += `
+      <div class="quality-detail-section">
+        <h4>抽取方法</h4>
+        <div class="quality-metrics">
+          <span>规则: <strong>${methods.rule || 0}</strong></span>
+          <span>AI文本: <strong>${methods.ai_text || 0}</strong></span>
+          <span>AI图片: <strong>${methods.ai_image || 0}</strong></span>
+        </div>
+      </div>
+    `;
+  }
+
+  // 员工数量对比
+  if (employeeCounts.pdf !== undefined) {
+    detailsHtml += `
+      <div class="quality-detail-section">
+        <h4>员工覆盖</h4>
+        <div class="quality-metrics">
+          <span>PDF: <strong>${employeeCounts.pdf}</strong>人</span>
+          <span>Excel: <strong>${employeeCounts.excel}</strong>人</span>
+          <span>未匹配: <strong>${(employeeCounts.unmatchedPdf || 0) + (employeeCounts.unmatchedExcel || 0)}</strong>人</span>
+        </div>
+      </div>
+    `;
+  }
+
+  // 金额/工时偏差
+  if (totals.pdfAmount !== undefined) {
+    const amountDelta = Math.abs(totals.amountDelta || 0);
+    const hoursDelta = Math.abs(totals.hoursDelta || 0);
+    if (amountDelta > 0.01 || hoursDelta > 0.01) {
+      detailsHtml += `
+        <div class="quality-detail-section">
+          <h4>差异统计</h4>
+          <div class="quality-metrics">
+            <span>金额差异: <strong>$${amountDelta.toFixed(2)}</strong></span>
+            <span>工时差异: <strong>${hoursDelta.toFixed(2)}h</strong></span>
+          </div>
+        </div>
+      `;
+    }
+  }
+
   labor.qualityAlert.hidden = false;
-  labor.qualityAlert.innerHTML = `<strong>${escapeHtml(quality.message || "抽取质量存在风险。")}</strong>${issues.length ? `<ul>${issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>` : ""}`;
+  labor.qualityAlert.innerHTML = `
+    <div class="quality-header">
+      <strong>${escapeHtml(quality.message || "抽取质量存在风险。")}</strong>
+    </div>
+    ${issues.length ? `<div class="quality-issues"><ul>${issues.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul></div>` : ""}
+    ${detailsHtml ? `<div class="quality-details">${detailsHtml}</div>` : ""}
+  `;
 }
 
 function renderExtractRows(container, rows) {
