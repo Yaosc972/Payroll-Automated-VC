@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from .models import LaborLineItem
 
 
-REPORT_SHEETS = ["核对结论", "核对摘要", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
+REPORT_SHEETS = ["核对结论", "质量评分", "核对摘要", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
 
 
 def build_labor_report(
@@ -20,12 +20,17 @@ def build_labor_report(
     excel_rows: List[LaborLineItem],
     mapping: Dict[str, str],
     warehouse_comparison: Dict[str, Any] | None = None,
+    extraction_quality: Dict[str, Any] | None = None,
 ) -> None:
     workbook = Workbook()
     workbook.remove(workbook.active)
 
     # 写入核对结论（第一个sheet）
     _write_conclusion(workbook, comparison.get("summary", {}), warehouse_comparison)
+
+    # 写入质量评分（第二个sheet）
+    if extraction_quality:
+        _write_quality(workbook, extraction_quality)
 
     _write_summary(workbook, comparison.get("summary", {}))
     rows = comparison.get("rows", [])
@@ -81,6 +86,88 @@ def _write_conclusion(workbook: Workbook, summary: Dict[str, Any], warehouse_com
                 attribution = row.get("attribution", [])
                 attr_summary = "；".join([f"{a['employeeName']}: ${a['delta']:.2f}" for a in attribution[:3]])
                 sheet.append([f"仓库{wh_id}", f"${pdf_amount:.2f}", f"${excel_amount:.2f}", f"${delta:.2f}", attr_summary])
+
+    _format(sheet)
+
+
+def _write_quality(workbook: Workbook, extraction_quality: Dict[str, Any]) -> None:
+    """Write the quality scoring sheet."""
+    sheet = workbook.create_sheet("质量评分", 1)
+
+    # 质量级别
+    level = extraction_quality.get("level", "ok")
+    level_display = {"ok": "通过", "warning": "需关注", "critical": "需人工复核"}.get(level, level)
+    message = extraction_quality.get("message", "")
+    sheet.append(["质量级别", f"{level_display} - {message}"])
+    sheet.append([])
+
+    # 质量问题列表
+    issues = extraction_quality.get("issues", [])
+    if issues:
+        sheet.append(["质量问题"])
+        for i, issue in enumerate(issues, 1):
+            sheet.append([f"{i}.", issue])
+        sheet.append([])
+
+    # 详细指标
+    metrics = extraction_quality.get("metrics", {})
+
+    # 置信度分布
+    confidence = metrics.get("confidence", {})
+    if confidence:
+        sheet.append(["置信度分布"])
+        sheet.append(["平均置信度", f"{confidence.get('average', 0):.3f}"])
+        sheet.append(["低置信度记录数 (<0.85)", confidence.get("lowCount", 0)])
+        sheet.append(["极低置信度记录数 (<0.5)", confidence.get("veryLowCount", 0)])
+        sheet.append(["总记录数", confidence.get("totalCount", 0)])
+        sheet.append([])
+
+    # 抽取方法统计
+    methods = metrics.get("extractionMethods", {})
+    if methods:
+        sheet.append(["抽取方法统计"])
+        sheet.append(["规则抽取", methods.get("rule", 0)])
+        sheet.append(["AI文本抽取", methods.get("ai_text", 0)])
+        sheet.append(["AI图片抽取", methods.get("ai_image", 0)])
+        sheet.append([])
+
+    # 员工数量对比
+    employee_counts = metrics.get("employeeCounts", {})
+    if employee_counts:
+        sheet.append(["员工数量对比"])
+        sheet.append(["PDF员工数", employee_counts.get("pdf", 0)])
+        sheet.append(["Excel员工数", employee_counts.get("excel", 0)])
+        sheet.append(["PDF未匹配", employee_counts.get("unmatchedPdf", 0)])
+        sheet.append(["Excel未匹配", employee_counts.get("unmatchedExcel", 0)])
+        sheet.append([])
+
+    # 金额/工时偏差
+    totals = metrics.get("totals", {})
+    if totals:
+        sheet.append(["金额/工时偏差"])
+        sheet.append(["PDF总工时", f"{totals.get('pdfHours', 0):.2f}"])
+        sheet.append(["Excel总工时", f"{totals.get('excelHours', 0):.2f}"])
+        sheet.append(["工时差异", f"{totals.get('hoursDelta', 0):.2f}"])
+        sheet.append(["PDF总金额", f"${totals.get('pdfAmount', 0):.2f}"])
+        sheet.append(["Excel总金额", f"${totals.get('excelAmount', 0):.2f}"])
+        sheet.append(["金额差异", f"${totals.get('amountDelta', 0):.2f}"])
+        sheet.append([])
+
+    # 仓库问题
+    warehouse_issues = metrics.get("warehouseIssues", [])
+    if warehouse_issues:
+        sheet.append(["仓库问题"])
+        for issue in warehouse_issues:
+            sheet.append(["", issue])
+        sheet.append([])
+
+    # 名称模式
+    name_patterns = metrics.get("namePatterns", {})
+    if name_patterns:
+        sheet.append(["名称模式"])
+        sheet.append(["包含中文", "是" if name_patterns.get("hasChinese") else "否"])
+        sheet.append(["包含英文", "是" if name_patterns.get("hasEnglish") else "否"])
+        sheet.append(["中英文混合", "是" if name_patterns.get("hasMixed") else "否"])
 
     _format(sheet)
 

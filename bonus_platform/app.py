@@ -421,7 +421,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 extraction_quality["retryApplied"] = retry_applied
 
         report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
-        build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping, warehouse_comparison)
+        build_labor_report(report_path, comparison, pdf_rows, excel_rows, mapping, warehouse_comparison, extraction_quality)
     except ValueError:
         raise
     files = dict(metadata.get("files", {}))
