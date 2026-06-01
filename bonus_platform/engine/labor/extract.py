@@ -229,6 +229,7 @@ def extract_invoice_items(
     def _extract_rules_for_page(page: Dict[str, Any]) -> List[LaborLineItem]:
         """对单个页面尝试规则抽取"""
         rows = []
+        rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         for line in (page.get("text") or "").splitlines():
@@ -1077,6 +1078,7 @@ def _json_array(content: str) -> List[Dict[str, Any]]:
 def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
     rows: List[LaborLineItem] = []
     for page in pages:
+        rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         for line in (page.get("text") or "").splitlines():
@@ -1093,6 +1095,50 @@ def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start
             hours = sum(hours_values)
             amount = values[-1]
             rows.append(_line_item(page, match, hours=hours, amount=amount, currency=currency, supplier=supplier, period_start=period_start, period_end=period_end, evidence_text=compact))
+    return rows
+
+
+def _extract_wage_code_invoice_rows(page: Dict[str, Any], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
+    """Extract invoice rows laid out as name / wage code / type / hours / rate / amount."""
+    lines = [" ".join(line.split()) for line in (page.get("text") or "").splitlines()]
+    lines = [line for line in lines if line]
+    rows: List[LaborLineItem] = []
+    index = 0
+    while index + 5 < len(lines):
+        name, wage_code, pay_type, hours_raw, rate_raw, amount_raw = lines[index : index + 6]
+        if not (
+            _looks_like_vertical_name(name)
+            and PAY_CODE_RE.match(wage_code)
+            and TYPE_RE.match(pay_type)
+            and HOUR_RE.match(hours_raw)
+            and HOUR_RE.match(rate_raw)
+            and MONEY_RE.match(amount_raw)
+        ):
+            index += 1
+            continue
+
+        hours = parse_number(hours_raw)
+        amount = parse_number(amount_raw)
+        if amount:
+            rows.append(
+                LaborLineItem(
+                    source_type="pdf_invoice",
+                    source_file=page["source_file"],
+                    source_page_or_row=f"p{page['page']}",
+                    employee_id="",
+                    employee_name_raw=name,
+                    hours=round(hours, 2),
+                    amount=round(amount, 2),
+                    currency=currency,
+                    confidence=0.98,
+                    evidence_text=" | ".join(lines[index : index + 6]),
+                    supplier=supplier,
+                    period_start=period_start,
+                    period_end=period_end,
+                    warehouse_id=_warehouse_id_from_text(page.get("text") or ""),
+                )
+            )
+        index += 6
     return rows
 
 

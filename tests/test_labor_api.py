@@ -165,6 +165,52 @@ def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(mon
     assert any("无法将异常仓库映射到具体 PDF" in issue for issue in body["extractionQuality"]["issues"])
 
 
+def test_labor_rule_extraction_reads_wage_code_invoice_rows():
+    from bonus_platform.engine.labor.extract import _extract_wage_code_invoice_rows
+
+    rows = _extract_wage_code_invoice_rows(
+        {
+            "source_file": "Invoice-5058871.pdf",
+            "page": 1,
+            "text": """
+Reference
+Employee
+Wage Code
+Type
+Hours
+Rate
+Amount
+Aguilar, Hortensia
+Reg
+REG
+40.00
+22.58
+$903.20
+Aguilar, Hortensia
+Reg
+OT
+1.40
+33.86
+$47.40
+Customer ID
+Invoice Number
+5058871
+""",
+        },
+        supplier="Invoice",
+        period_start="2026-05-17",
+        period_end="2026-05-22",
+        currency="USD",
+    )
+
+    assert len(rows) == 2
+    assert rows[0].employee_name_raw == "Aguilar, Hortensia"
+    assert rows[0].hours == 40
+    assert rows[0].amount == 903.20
+    assert rows[1].hours == 1.4
+    assert rows[1].amount == 47.40
+
+
 def test_labor_compare_response_includes_candidate_matches(monkeypatch):
     import bonus_platform.app as app_module
 
