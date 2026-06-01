@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from .models import LaborLineItem
 
 
-REPORT_SHEETS = ["核对结论", "质量评分", "核对摘要", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
+REPORT_SHEETS = ["核对结论", "质量评分", "核对摘要", "全员对账明细", "仓库金额汇总", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
 
 
 def build_labor_report(
@@ -34,8 +34,11 @@ def build_labor_report(
 
     _write_summary(workbook, comparison.get("summary", {}))
     rows = comparison.get("rows", [])
+    _write_reconciliation_detail(workbook, rows)
+    if warehouse_comparison:
+        _write_warehouse_summary(workbook, warehouse_comparison)
     _write_rows(workbook, "金额差异员工", _filter(rows, "金额差异"))
-    _write_rows(workbook, "工时风险项", _filter(rows, "工时不一致"))
+    _write_rows(workbook, "工时风险项", [row for row in rows if row.get("matchStatus") == "工时不一致" or "工时需复核" in row.get("riskFlags", [])])
     _write_rows(workbook, "不在本批发票", [row for row in rows if row.get("matchStatus") in {"PDF有Excel无", "Excel有PDF无", "疑似姓名匹配"}])
     _write_candidate_matches(workbook, comparison.get("candidateMatches", []))
     _write_rows(workbook, "低置信度抽取", [row for row in rows if row.get("matchStatus") == "低置信度抽取" or "低置信度抽取" in row.get("riskFlags", [])])
@@ -180,6 +183,53 @@ def _write_summary(workbook: Workbook, summary: Dict[str, Any]) -> None:
     _format(sheet)
 
 
+def _write_reconciliation_detail(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
+    sheet = workbook.create_sheet("全员对账明细")
+    headers = ["员工", "状态", "PDF工时", "Excel工时", "工时差异", "PDF金额", "Excel金额", "金额差异", "风险标记", "来源"]
+    sheet.append(headers)
+    for row in rows:
+        risk_flags = row.get("riskFlags", [])
+        sheet.append([
+            row.get("employeeName", ""),
+            _display_status(row.get("matchStatus", ""), risk_flags),
+            row.get("pdfHoursTotal", 0),
+            row.get("excelHoursTotal", 0),
+            row.get("hoursDelta", 0),
+            row.get("pdfAmountTotal", 0),
+            row.get("excelAmountTotal", 0),
+            row.get("amountDelta", 0),
+            "；".join(str(item) for item in risk_flags) if isinstance(risk_flags, list) else str(risk_flags or ""),
+            row.get("sourceRefs", ""),
+        ])
+    _format(sheet)
+    _apply_status_fills(sheet, status_column=2, delta_column=8)
+
+
+def _write_warehouse_summary(workbook: Workbook, warehouse_comparison: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("仓库金额汇总")
+    sheet.append(["仓库", "状态", "PDF人数/发票数", "Excel人数", "PDF工时", "Excel工时", "PDF金额", "Excel金额", "金额差异", "主要差异来源"])
+    for row in warehouse_comparison.get("rows", []):
+        attribution = row.get("attribution", [])
+        attr_summary = "；".join(
+            f"{item.get('employeeName', '')}: ${float(item.get('delta') or 0):.2f}"
+            for item in attribution[:5]
+        )
+        sheet.append([
+            row.get("warehouseId", ""),
+            row.get("matchStatus", ""),
+            row.get("pdfEmployeeCount", 0),
+            row.get("excelEmployeeCount", 0),
+            row.get("pdfHoursTotal", 0),
+            row.get("excelHoursTotal", 0),
+            row.get("pdfAmountTotal", 0),
+            row.get("excelAmountTotal", 0),
+            row.get("amountDelta", 0),
+            attr_summary,
+        ])
+    _format(sheet)
+    _apply_status_fills(sheet, status_column=2, delta_column=9)
+
+
 def _write_rows(workbook: Workbook, title: str, rows: List[Dict[str, Any]]) -> None:
     headers = ["employeeName", "matchStatus", "pdfHoursTotal", "excelHoursTotal", "hoursDelta", "pdfAmountTotal", "excelAmountTotal", "amountDelta", "riskFlags", "sourceRefs"]
     sheet = workbook.create_sheet(title)
@@ -238,3 +288,31 @@ def _format(sheet) -> None:
             width = min(max(width, len(str(cell.value or "")) + 2), 48)
         sheet.column_dimensions[letter].width = width
     sheet.freeze_panes = "A2"
+
+
+def _display_status(status: str, risk_flags: Any) -> str:
+    if status == "通过" and isinstance(risk_flags, list) and "工时需复核" in risk_flags:
+        return "金额一致（工时需复核）"
+    return status
+
+
+def _apply_status_fills(sheet, status_column: int, delta_column: int) -> None:
+    ok_fill = PatternFill("solid", fgColor="EAF7EA")
+    warn_fill = PatternFill("solid", fgColor="FFF4D6")
+    diff_fill = PatternFill("solid", fgColor="FDEAEA")
+    for row in range(2, sheet.max_row + 1):
+        status = str(sheet.cell(row=row, column=status_column).value or "")
+        try:
+            delta = float(sheet.cell(row=row, column=delta_column).value or 0)
+        except (TypeError, ValueError):
+            delta = 0.0
+        if "差异" in status or abs(delta) >= 0.1:
+            fill = diff_fill
+        elif "复核" in status or "疑似" in status or "低置信" in status:
+            fill = warn_fill
+        elif "通过" in status or "一致" in status:
+            fill = ok_fill
+        else:
+            continue
+        for col in range(1, sheet.max_column + 1):
+            sheet.cell(row=row, column=col).fill = fill

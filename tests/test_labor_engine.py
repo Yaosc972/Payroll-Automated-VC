@@ -164,6 +164,38 @@ def test_compare_labor_items_fuzzy_matches_ocr_name_variants_when_totals_align()
     assert "疑似姓名匹配" in result["rows"][0]["riskFlags"]
 
 
+def test_compare_labor_items_uses_amount_as_primary_and_flags_hours_only_as_risk():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Flores, Alexis", hours=59.22, amount=1864.70, currency="USD", confidence=0.96, evidence_text="$1864.70"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Alexis Flores", hours=51.22, amount=1864.70, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["hoursRiskCount"] == 1
+    assert result["rows"][0]["matchStatus"] == "通过"
+    assert "工时需复核" in result["rows"][0]["riskFlags"]
+
+
+def test_compare_labor_items_matches_workbuddy_jaccard_when_amounts_align():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Gamboa, Arilene", hours=53.62, amount=1520.28, currency="USD", confidence=0.96, evidence_text="$1520.28"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Arlene Gamboa", hours=53.62, amount=1520.28, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["fuzzyMatchCount"] == 1
+    assert result["rows"][0]["matchStatus"] == "通过"
+    assert "疑似姓名匹配" in result["rows"][0]["riskFlags"]
+
+
 def test_compare_labor_items_fuzzy_match_can_still_surface_amount_delta():
     pdf_rows = [
         LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Castillo, Misael", hours=30.92, amount=689.12, currency="USD", confidence=0.95, evidence_text="Total $689.12"),
@@ -911,5 +943,6 @@ def test_build_labor_report_contains_expected_sheets(tmp_path):
     build_labor_report(output, comparison, [], [], {"name": "姓名", "hours": "时长", "amount": "金额"})
 
     workbook = load_workbook(output, read_only=True)
-    assert workbook.sheetnames == ["核对结论", "核对摘要", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
+    assert workbook.sheetnames == ["核对结论", "核对摘要", "全员对账明细", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
     assert workbook["姓名格式差异"].max_row == 2
+    assert workbook["全员对账明细"].max_row == 2

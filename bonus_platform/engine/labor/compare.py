@@ -222,6 +222,9 @@ def _match_employee_groups(
             risk_flags.append("低置信度抽取")
         if fuzzy_matched:
             risk_flags.append("疑似姓名匹配")
+        amount_matches = abs(amount_delta) <= amount_tolerance
+        if amount_matches and abs(hours_delta) > hours_tolerance:
+            risk_flags.append("工时需复核")
 
         status = _status(
             has_pdf=bool(pdf_group["items"]),
@@ -328,14 +331,13 @@ def _status(
         return "低置信度抽取" if low_confidence else "PDF有Excel无"
     if has_excel and not has_pdf:
         return "Excel有PDF无"
-    if abs(hours_delta) > hours_tolerance:
-        return "工时不一致"
     if abs(amount_delta) > amount_tolerance:
         return "金额差异"
-    if fuzzy_matched:
-        return "通过"
     if low_confidence:
         return "低置信度抽取"
+    # Amount is the primary audit criterion. Hour deltas can reflect REG/OT/rest-day
+    # bucket differences while the billed total is still correct, so they remain a
+    # risk flag instead of failing the row.
     return "通过"
 
 
@@ -382,6 +384,15 @@ def _name_similarity_improved(left: str, right: str) -> float:
     return min(score, 1.0)
 
 
+def _workbuddy_jaccard(left: str, right: str) -> float:
+    """Token Jaccard over normalized names, matching the WorkBuddy handoff method."""
+    left_tokens = set(normalize_employee_name(left).split())
+    right_tokens = set(normalize_employee_name(right).split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
 def _fuzzy_match_unmatched_groups(
     pdf: Dict[str, Dict[str, Any]],
     excel: Dict[str, Dict[str, Any]],
@@ -402,9 +413,10 @@ def _fuzzy_match_unmatched_groups(
             if excel_key in used_excel:
                 continue
             score = similarity_func(pdf[pdf_key]["name"], excel[excel_key]["name"])
-            if not _fuzzy_totals_support_match(pdf[pdf_key], excel[excel_key], score, amount_tolerance, hours_tolerance):
+            jaccard = _workbuddy_jaccard(pdf[pdf_key]["name"], excel[excel_key]["name"])
+            if not _fuzzy_totals_support_match(pdf[pdf_key], excel[excel_key], score, jaccard, amount_tolerance, hours_tolerance):
                 continue
-            scored.append((score, pdf_key, excel_key))
+            scored.append((max(score, jaccard), pdf_key, excel_key))
     for _score, pdf_key, excel_key in sorted(scored, reverse=True):
         if pdf_key in matches or excel_key in used_excel:
             continue
@@ -441,11 +453,13 @@ def _name_similarity(left: str, right: str) -> float:
     return round(min(token_score * 0.4 + sequence_score * 0.6 + variant_bonus, 1.0), 3)
 
 
-def _fuzzy_totals_support_match(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], score: float, amount_tolerance: float, hours_tolerance: float) -> bool:
+def _fuzzy_totals_support_match(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], score: float, jaccard: float, amount_tolerance: float, hours_tolerance: float) -> bool:
     amount_delta = abs(round(pdf_group["amount"] - excel_group["amount"], 2))
     hours_delta = abs(round(pdf_group["hours"] - excel_group["hours"], 2))
     max_amount = max(abs(pdf_group["amount"]), abs(excel_group["amount"]), 1.0)
     relative_amount_diff = amount_delta / max_amount
+    if jaccard >= 0.35 and amount_delta <= amount_tolerance:
+        return True
     if score >= 0.85:
         return True
     if score >= 0.70 and relative_amount_diff <= 0.02 and hours_delta <= max(hours_tolerance, 0.5):
@@ -576,7 +590,7 @@ def _build_summary(
         "matchRate": match_rate,
         "averageConfidence": average_confidence,
         "amountDiffCount": sum(1 for row in rows if row["matchStatus"] == "金额差异"),
-        "hoursRiskCount": sum(1 for row in rows if row["matchStatus"] == "工时不一致"),
+        "hoursRiskCount": sum(1 for row in rows if row["matchStatus"] == "工时不一致" or "工时需复核" in row.get("riskFlags", [])),
         "unmatchedPdfCount": sum(1 for row in rows if row["matchStatus"] in ("PDF有Excel无", "低置信度抽取") and row["pdfHoursTotal"] and not row["excelHoursTotal"]),
         "unmatchedExcelCount": sum(1 for row in rows if row["matchStatus"] == "Excel有PDF无"),
         "lowConfidenceCount": sum(1 for row in rows if "低置信度抽取" in row.get("riskFlags", []) or row["matchStatus"] == "低置信度抽取"),
