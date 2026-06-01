@@ -290,18 +290,28 @@ def labor_field_suggestions(run_id: str, payload: dict = Body(...)) -> dict:
 def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
     sheet_name = str(payload.get("sheet_name") or payload.get("sheetName") or "").strip()
     mapping = payload.get("mapping") or {}
+    manual_name_mapping = payload.get("manualNameMapping") or payload.get("manual_name_mapping") or payload.get("manualMapping") or {}
     if not sheet_name:
         raise HTTPException(status_code=400, detail="请选择 Excel 工作表。")
     for field in ("name", "hours", "amount"):
         if not mapping.get(field):
             raise HTTPException(status_code=400, detail="字段映射缺少姓名、工时或金额。")
-    return update_labor_metadata(run_id, {"status": "已确认字段", "workbookSheet": sheet_name, "excelMapping": mapping})
+    return update_labor_metadata(
+        run_id,
+        {
+            "status": "已确认字段",
+            "workbookSheet": sheet_name,
+            "excelMapping": mapping,
+            "manualNameMapping": manual_name_mapping,
+        },
+    )
 
 
 @app.post("/api/labor/runs/{run_id}/extract-and-compare")
 async def extract_and_compare_labor_run(run_id: str) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     mapping = metadata.get("excelMapping") or {}
+    manual_name_mapping = metadata.get("manualNameMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
     if not sheet_name or not mapping:
         raise HTTPException(status_code=400, detail="请先确认 Excel 工作表和字段映射。")
@@ -346,6 +356,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     period_start = metadata.get("periodStart", "")
     period_end = metadata.get("periodEnd", "")
     currency = metadata.get("currency", "")
+    manual_name_mapping = metadata.get("manualNameMapping") or {}
 
     try:
         # [F] Excel 解析
@@ -372,6 +383,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             pdf_totals=pdf_totals,
             excel_rows_with_warehouse=excel_warehouse_data,
             amount_tolerance=AI_CONFIG["amount_tolerance"],
+            manual_name_mapping=manual_name_mapping,
         )
 
         pdf_rows = []
@@ -432,6 +444,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
                     hours_tolerance=AI_CONFIG["hours_tolerance"],
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
+                    manual_name_mapping=manual_name_mapping,
                 )
                 extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"])
                 extraction_quality["retryAttempted"] = False
@@ -447,6 +460,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     original_quality = dict(extraction_quality)
                     pdf_rows, comparison, extraction_quality = _retry_if_better(
                         filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
+                        manual_name_mapping=manual_name_mapping,
                         supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
                     )
 
@@ -459,6 +473,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
                     hours_tolerance=AI_CONFIG["hours_tolerance"],
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
+                    manual_name_mapping=manual_name_mapping,
                 )
 
                 # Recalculate quality with warehouse comparison data, preserving retry flags
@@ -510,6 +525,7 @@ def _append_quality_issues(extraction_quality: dict, issues: list[str]) -> None:
 
 
 def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison, **kwargs):
+    manual_name_mapping = kwargs.pop("manual_name_mapping", None)
     retry_config = dict(AI_CONFIG)
     retry_config["cache_enabled"] = False
     # Serial execution for retry stability
@@ -546,6 +562,7 @@ def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, compar
             amount_tolerance=AI_CONFIG["amount_tolerance"],
             hours_tolerance=AI_CONFIG["hours_tolerance"],
             confidence_threshold=AI_CONFIG["confidence_threshold"],
+            manual_name_mapping=manual_name_mapping,
         )
         retry_quality = calculate_extraction_quality(retry_pdf_rows, retry_comparison["summary"])
         extraction_quality["retryAttempted"] = True

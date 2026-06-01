@@ -10,7 +10,7 @@ from bonus_platform.engine.labor.compare import compare_labor_items
 from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
-from bonus_platform.engine.labor.parsing import normalize_employee_name, parse_number
+from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
 from bonus_platform.engine.labor.report import build_labor_report
 from bonus_platform.engine.labor.workbook import read_workbook_rows, suggest_mapping
@@ -154,7 +154,11 @@ def test_compare_labor_items_fuzzy_matches_ocr_name_variants_when_totals_align()
         LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!4", employee_id="", employee_name_raw="Jeymmy Benavides", hours=22.68, amount=508.03, currency="USD", confidence=1, evidence_text=""),
     ]
 
-    result = compare_labor_items(pdf_rows, excel_rows)
+    result = compare_labor_items(
+        pdf_rows,
+        excel_rows,
+        manual_name_mapping={"Benavides, Jeremy": "Jeymmy Benavides"},
+    )
 
     assert result["summary"]["unmatchedPdfCount"] == 0
     assert result["summary"]["unmatchedExcelCount"] == 0
@@ -182,13 +186,39 @@ def test_compare_labor_items_uses_amount_as_primary_and_flags_hours_only_as_risk
 
 def test_compare_labor_items_matches_workbuddy_jaccard_when_amounts_align():
     pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Nava de Luna, Julian", hours=12.25, amount=276.64, currency="USD", confidence=0.96, evidence_text="$276.64"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Julieta Nava de Luna", hours=12.25, amount=276.64, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["fuzzyMatchCount"] == 1
+    assert result["rows"][0]["matchStatus"] == "通过"
+    assert "疑似姓名匹配" in result["rows"][0]["riskFlags"]
+
+
+def test_workbuddy_normalize_removes_accents_punctuation_and_lowercases():
+    assert normalize_workbuddy_name("García, María") == "garcia maria"
+    assert normalize_workbuddy_name("Nava-de_Luna, Julián") == "nava de luna julian"
+
+
+def test_compare_labor_items_uses_manual_mapping_for_two_token_spelling_variants():
+    pdf_rows = [
         LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Gamboa, Arilene", hours=53.62, amount=1520.28, currency="USD", confidence=0.96, evidence_text="$1520.28"),
     ]
     excel_rows = [
         LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Arlene Gamboa", hours=53.62, amount=1520.28, currency="USD", confidence=1, evidence_text=""),
     ]
 
-    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1)
+    result = compare_labor_items(
+        pdf_rows,
+        excel_rows,
+        amount_tolerance=0.1,
+        manual_name_mapping={"Gamboa, Arilene": "Arlene Gamboa"},
+    )
 
     assert result["summary"]["exceptionCount"] == 0
     assert result["summary"]["fuzzyMatchCount"] == 1
@@ -204,7 +234,11 @@ def test_compare_labor_items_fuzzy_match_can_still_surface_amount_delta():
         LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!7", employee_id="", employee_name_raw="Massiel Castillo", hours=30.92, amount=694.17, currency="USD", confidence=1, evidence_text=""),
     ]
 
-    result = compare_labor_items(pdf_rows, excel_rows)
+    result = compare_labor_items(
+        pdf_rows,
+        excel_rows,
+        manual_name_mapping={"Castillo, Misael": "Massiel Castillo"},
+    )
 
     assert result["summary"]["amountDiffCount"] == 1
     assert result["summary"]["unmatchedPdfCount"] == 0

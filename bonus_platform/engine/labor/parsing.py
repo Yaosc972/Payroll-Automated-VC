@@ -49,6 +49,24 @@ def normalize_employee_name(value: Any) -> str:
     return " ".join(sorted(tokens))
 
 
+def normalize_workbuddy_name(value: Any) -> str:
+    text = str(value or "").strip()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(char for char in text if unicodedata.category(char) != "Mn")
+    text = text.lower()
+    for char in (",", ".", "-", "_", "'"):
+        text = text.replace(char, " ")
+    return " ".join(text.split())
+
+
+def pdf_name_to_first_last(value: Any) -> str:
+    text = str(value or "").strip()
+    parts = text.split(",", 1)
+    if len(parts) == 2:
+        return f"{parts[1].strip()} {parts[0].strip()}".strip()
+    return text
+
+
 def normalize_employee_name_advanced(name: Any) -> str:
     """高级姓名标准化，处理各种格式。
 

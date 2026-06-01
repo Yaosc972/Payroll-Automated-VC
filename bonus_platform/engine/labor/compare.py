@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from .models import LaborComparisonRow, LaborLineItem, line_items_from_dicts
-from .parsing import normalize_employee_name
+from .parsing import normalize_employee_name, normalize_workbuddy_name, pdf_name_to_first_last
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +39,7 @@ def compare_labor_items(
     amount_tolerance: float = 0.05,
     hours_tolerance: float = 0.1,
     confidence_threshold: float = 0.85,
+    manual_name_mapping: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Employee-level comparison between PDF and Excel rows."""
     pdf = _aggregate(pdf_rows)
@@ -46,7 +47,8 @@ def compare_labor_items(
     rows = _match_employee_groups(pdf, excel,
                                   amount_tolerance=amount_tolerance,
                                   hours_tolerance=hours_tolerance,
-                                  confidence_threshold=confidence_threshold)
+                                  confidence_threshold=confidence_threshold,
+                                  manual_name_mapping=manual_name_mapping)
 
     candidate_matches, promoted_pdf, promoted_excel = _suggest_unmatched_candidates(rows, pdf, excel)
     rows = _apply_promotions(rows, candidate_matches, promoted_pdf, promoted_excel)
@@ -61,6 +63,7 @@ def compare_by_warehouse(
     amount_tolerance: float = 0.05,
     hours_tolerance: float = 0.1,
     confidence_threshold: float = 0.85,
+    manual_name_mapping: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Three-tier reconciliation: total → warehouse → employee.
 
@@ -165,6 +168,7 @@ def compare_by_warehouse(
                 amount_tolerance=amount_tolerance,
                 hours_tolerance=hours_tolerance,
                 confidence_threshold=confidence_threshold,
+                manual_name_mapping=manual_name_mapping,
             )
             # Build attribution for warehouses with diff >= $1
             if abs(amount_delta) >= 1.0:
@@ -193,11 +197,13 @@ def _match_employee_groups(
     amount_tolerance: float,
     hours_tolerance: float,
     confidence_threshold: float,
+    manual_name_mapping: Dict[str, str] | None = None,
 ) -> List[Dict[str, Any]]:
     """Match employee groups between aggregated PDF and Excel data."""
     fuzzy_matches = _fuzzy_match_unmatched_groups(pdf, excel,
                                                   amount_tolerance=amount_tolerance,
-                                                  hours_tolerance=hours_tolerance)
+                                                  hours_tolerance=hours_tolerance,
+                                                  manual_name_mapping=manual_name_mapping)
     rows: List[Dict[str, Any]] = []
 
     for key in sorted(set(pdf) | set(excel)):
@@ -386,11 +392,29 @@ def _name_similarity_improved(left: str, right: str) -> float:
 
 def _workbuddy_jaccard(left: str, right: str) -> float:
     """Token Jaccard over normalized names, matching the WorkBuddy handoff method."""
-    left_tokens = set(normalize_employee_name(left).split())
-    right_tokens = set(normalize_employee_name(right).split())
+    left_tokens = set(normalize_workbuddy_name(pdf_name_to_first_last(left)).split())
+    right_tokens = set(normalize_workbuddy_name(right).split())
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _manual_mapping_lookup(pdf_name: str, excel: Dict[str, Dict[str, Any]], manual_name_mapping: Dict[str, str] | None) -> str:
+    if not manual_name_mapping or pdf_name not in manual_name_mapping:
+        return ""
+    target = normalize_workbuddy_name(manual_name_mapping[pdf_name])
+    for excel_key, group in excel.items():
+        if normalize_workbuddy_name(group["name"]) == target:
+            return excel_key
+    return ""
+
+
+def _format_exact_lookup(pdf_name: str, excel: Dict[str, Dict[str, Any]]) -> str:
+    target = normalize_workbuddy_name(pdf_name_to_first_last(pdf_name))
+    for excel_key, group in excel.items():
+        if normalize_workbuddy_name(group["name"]) == target:
+            return excel_key
+    return ""
 
 
 def _fuzzy_match_unmatched_groups(
@@ -399,7 +423,7 @@ def _fuzzy_match_unmatched_groups(
     *,
     amount_tolerance: float,
     hours_tolerance: float,
-    use_improved: bool = True,
+    manual_name_mapping: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     exact_keys = set(pdf) & set(excel)
     pdf_candidates = [key for key, group in pdf.items() if key not in exact_keys and group["name"]]
@@ -407,16 +431,26 @@ def _fuzzy_match_unmatched_groups(
     matches: Dict[str, str] = {}
     used_excel = set()
     scored = []
-    similarity_func = _name_similarity_improved if use_improved else _name_similarity
     for pdf_key in pdf_candidates:
+        manual_excel_key = _manual_mapping_lookup(pdf[pdf_key]["name"], excel, manual_name_mapping)
+        if manual_excel_key and manual_excel_key in excel_candidates and manual_excel_key not in used_excel:
+            matches[pdf_key] = manual_excel_key
+            used_excel.add(manual_excel_key)
+            continue
+
+        exact_excel_key = _format_exact_lookup(pdf[pdf_key]["name"], excel)
+        if exact_excel_key and exact_excel_key in excel_candidates and exact_excel_key not in used_excel:
+            matches[pdf_key] = exact_excel_key
+            used_excel.add(exact_excel_key)
+            continue
+
         for excel_key in excel_candidates:
             if excel_key in used_excel:
                 continue
-            score = similarity_func(pdf[pdf_key]["name"], excel[excel_key]["name"])
             jaccard = _workbuddy_jaccard(pdf[pdf_key]["name"], excel[excel_key]["name"])
-            if not _fuzzy_totals_support_match(pdf[pdf_key], excel[excel_key], score, jaccard, amount_tolerance, hours_tolerance):
+            if jaccard < 0.35:
                 continue
-            scored.append((max(score, jaccard), pdf_key, excel_key))
+            scored.append((jaccard, pdf_key, excel_key))
     for _score, pdf_key, excel_key in sorted(scored, reverse=True):
         if pdf_key in matches or excel_key in used_excel:
             continue
@@ -514,9 +548,6 @@ def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dic
         if best:
             candidates.append(best)
             used_excel.add(best["excelEmployeeKey"])
-            if best["nameSimilarity"] >= 0.65:
-                promoted_pdf.add(best["pdfEmployeeKey"])
-                promoted_excel.add(best["excelEmployeeKey"])
     return sorted(candidates, key=lambda row: row["nameSimilarity"], reverse=True), promoted_pdf, promoted_excel
 
 

@@ -1105,7 +1105,23 @@ def _extract_wage_code_invoice_rows(page: Dict[str, Any], supplier: str, period_
     rows: List[LaborLineItem] = []
     index = 0
     while index + 5 < len(lines):
+        step = 6
         name, wage_code, pay_type, hours_raw, rate_raw, amount_raw = lines[index : index + 6]
+        if (
+            index + 6 < len(lines)
+            and not PAY_CODE_RE.match(wage_code)
+            and "," in lines[index]
+            and _looks_like_vertical_name(lines[index])
+            and _looks_like_vertical_name(lines[index + 1])
+            and PAY_CODE_RE.match(lines[index + 2])
+            and TYPE_RE.match(lines[index + 3])
+            and HOUR_RE.match(lines[index + 4])
+            and HOUR_RE.match(lines[index + 5])
+            and MONEY_RE.match(lines[index + 6])
+        ):
+            name = f"{lines[index]} {lines[index + 1]}"
+            wage_code, pay_type, hours_raw, rate_raw, amount_raw = lines[index + 2 : index + 7]
+            step = 7
         if not (
             _looks_like_vertical_name(name)
             and PAY_CODE_RE.match(wage_code)
@@ -1138,7 +1154,7 @@ def _extract_wage_code_invoice_rows(page: Dict[str, Any], supplier: str, period_
                     warehouse_id=_warehouse_id_from_text(page.get("text") or ""),
                 )
             )
-        index += 6
+        index += step
     return rows
 
 

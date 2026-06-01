@@ -69,10 +69,15 @@ def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
 
     mapping = client.post(
         f"/api/labor/runs/{run['id']}/mapping",
-        json={"sheet_name": "员工账单", "mapping": {"name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+        json={
+            "sheet_name": "员工账单",
+            "mapping": {"name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"},
+            "manualNameMapping": {"Gamboa, Arilene": "Arlene Gamboa"},
+        },
     )
     assert mapping.status_code == 200
     assert mapping.json()["excelMapping"]["name"] == "姓名"
+    assert mapping.json()["manualNameMapping"]["Gamboa, Arilene"] == "Arlene Gamboa"
 
 
 def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_rows(monkeypatch):
@@ -209,6 +214,41 @@ Invoice Number
     assert rows[0].amount == 903.20
     assert rows[1].hours == 1.4
     assert rows[1].amount == 47.40
+
+
+def test_labor_rule_extraction_combines_wrapped_wage_code_names():
+    from bonus_platform.engine.labor.extract import _extract_wage_code_invoice_rows
+
+    rows = _extract_wage_code_invoice_rows(
+        {
+            "source_file": "Invoice-5058877.pdf",
+            "page": 1,
+            "text": """
+ROSEL DUARTE, YAIR
+GUILLERMO
+Reg
+REG
+40.00
+22.58
+$903.20
+ROSEL DUARTE, YAIR
+GUILLERMO
+Reg
+OT
+0.97
+33.86
+$32.84
+""",
+        },
+        supplier="Invoice",
+        period_start="2026-05-17",
+        period_end="2026-05-22",
+        currency="USD",
+    )
+
+    assert len(rows) == 2
+    assert {row.employee_name_raw for row in rows} == {"ROSEL DUARTE, YAIR GUILLERMO"}
+    assert round(sum(row.amount for row in rows), 2) == 936.04
 
 
 def test_labor_compare_response_includes_candidate_matches(monkeypatch):

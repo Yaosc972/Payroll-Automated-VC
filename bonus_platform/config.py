@@ -89,7 +89,7 @@ AI_CONFIG: dict[str, Any] = {
     "model": os.environ.get("AI_MODEL", ""),
     "timeout_seconds": _env_int("AI_TIMEOUT_SECONDS", 90),
     "confidence_threshold": _env_float("AI_CONFIDENCE_THRESHOLD", 0.85),
-    "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.05),
+    "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.10),
     "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
     "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
     "max_completion_tokens": _env_int("AI_MAX_COMPLETION_TOKENS", 8192),
