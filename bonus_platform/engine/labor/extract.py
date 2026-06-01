@@ -107,6 +107,13 @@ def _effective_render_scale(ai_config: Dict[str, Any]) -> float:
     return scale
 
 
+def _effective_max_pages_per_request(ai_config: Dict[str, Any]) -> int:
+    max_pages = max(int(ai_config.get("max_pages_per_request") or 5), 1)
+    if _is_token_plan(ai_config):
+        return 1
+    return max_pages
+
+
 
 
 # ── Fuzzy key matching for AI-extracted rows ──
@@ -641,7 +648,7 @@ def _extract_with_ai_images(
     expected_rows: List[Dict[str, Any]] | None = None,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    max_pages = max(int(ai_config.get("max_pages_per_request") or 5), 1)
+    max_pages = _effective_max_pages_per_request(ai_config)
 
     # 图片抽取使用简化的 prompt，避免模型返回空结果
     image_instruction = _ai_instruction(supplier_profile, for_image=True)
@@ -694,17 +701,16 @@ def _extract_with_ai_images(
             extracted = _post_chat_completion(payload, ai_config)
             _save_ai_page_cache(chunk, ai_config, extracted)
             rows.extend(extracted)
-        except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError):
+        except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException) as exc:
             try:
                 extracted = _post_chat_completion(payload, ai_config)
                 _save_ai_page_cache(chunk, ai_config, extracted)
                 rows.extend(extracted)
                 continue
-            except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError):
-                pass
-            if chunk and all(int(page.get("page") or 1) > 1 for page in chunk):
+            except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException) as retry_exc:
+                sources = ", ".join(f"{page.get('source_file')}#p{page.get('page')}" for page in chunk)
+                logger.warning(f"AI 图片抽取跳过超时/解析失败页面: {sources}; first={exc}; retry={retry_exc}")
                 continue
-            raise
     return _normalize_ai_rows(rows, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
 
 

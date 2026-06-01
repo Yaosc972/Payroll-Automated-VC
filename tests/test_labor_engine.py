@@ -7,7 +7,7 @@ from openpyxl import Workbook, load_workbook
 from urllib.error import HTTPError
 
 from bonus_platform.engine.labor.compare import compare_labor_items
-from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_render_scale, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
+from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
 from bonus_platform.engine.labor.parsing import normalize_employee_name, parse_number
@@ -657,6 +657,55 @@ def test_mimo_image_extractor_retries_first_page_json_parse_failures(monkeypatch
 
     assert calls["count"] == 2
     assert rows[0]["employee_name_raw"] == "Alvarez Minchaca, Rosa"
+
+
+def test_mimo_image_extractor_skips_timed_out_page_and_keeps_later_rows(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_post(payload, config):
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise MiMoTimeoutException("gateway timeout")
+        return [
+            {
+                "source_file": "scan.pdf",
+                "source_page_or_row": "p2",
+                "employee_name_raw": "Alvarez Minchaca, Rosa",
+                "hours": 31.19,
+                "amount": 701.9,
+                "confidence": 0.95,
+                "evidence_text": "Total $701.90",
+            }
+        ]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post)
+
+    rows = _extract_with_ai_images(
+        [
+            {"source_file": "scan.pdf", "page": 1, "mime_type": "image/png", "base64": "abc123"},
+            {"source_file": "scan.pdf", "page": 2, "mime_type": "image/png", "base64": "def456"},
+        ],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "max_pages_per_request": 5,
+        },
+    )
+
+    assert calls["count"] == 3
+    assert [row["employee_name_raw"] for row in rows] == ["Alvarez Minchaca, Rosa"]
+
+
+def test_token_plan_image_extractor_forces_single_page_chunks():
+    assert _effective_max_pages_per_request(
+        {
+            "provider": "mimo",
+            "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+            "max_pages_per_request": 5,
+        }
+    ) == 1
 
 
 def test_mimo_image_extractor_uses_page_cache(monkeypatch, tmp_path):
