@@ -7,8 +7,10 @@ from openpyxl import Workbook, load_workbook
 from urllib.error import HTTPError
 
 from bonus_platform.engine.labor.compare import compare_labor_items
-from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
+from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _extract_invoice_total_from_text, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
+from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as extract_warehouse_id_from_filename
+from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
@@ -60,6 +62,30 @@ def test_normalize_employee_name_handles_invoice_and_workbook_variants():
 )
 def test_parse_number_handles_invoice_money_formats(raw, expected):
     assert parse_number(raw) == expected
+
+
+def test_fairway_warehouse_id_parses_from_filename_and_text():
+    assert extract_warehouse_id_from_filename("135306 US Elogistics Service Corp (#10).pdf") == "10"
+    assert extract_warehouse_id_from_filename("135307_US_Elogistics_Service_Corp___18_20260601_222816_133922.pdf") == "18"
+    assert _warehouse_id_from_text("US ELOGISTICS SERVICE CORP\nCA(LA)- #18 TAMARIND (TAMR2)") == "18"
+    assert _warehouse_id_from_text("FONTANA\n(CA)LA#10 HARBOR BAR (HARBOR)") == "10"
+    assert _warehouse_id_from_text("CHINO, CA 91710\nCA(LA)#25 (CEDAR)") == "25"
+
+
+def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment():
+    assert _extract_invoice_total_from_text(
+        "21 Totals 773.82 50.00 0.00 19,655.14$ 2,081.64$ -$ 21,736.78$\n"
+        "If paid after 6/7/2026 please pay: $22,171.52\n"
+        "GRAND TOTAL:\n"
+        "21,736.78$"
+    ) == 21736.78
+    assert _extract_invoice_total_from_text(
+        "If paid after 6/07/2026 please pay: 15,391.68$\n"
+        "GRAND TOTAL:\n"
+        "P.O. BOX 31001-2434\n"
+        "US ELOGISTICS SERVICE CORP\n"
+        "15,089.88$"
+    ) == 15089.88
 
 
 def test_suggest_mapping_and_read_workbook_rows_extract_required_fields(tmp_path):

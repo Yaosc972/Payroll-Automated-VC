@@ -181,6 +181,12 @@ def _warehouse_id_from_filename(source_file: str) -> str:
     m = re.search(r"elog(\d+)-", name, re.IGNORECASE)
     if m:
         return m.group(1)
+    m = re.search(r"\(#?(\d{1,3})\)\s*$", name)
+    if m:
+        return m.group(1)
+    m = re.search(r"(?:___|__)(\d{1,3})\s*$", name)
+    if m:
+        return m.group(1)
     return ""
 
 
@@ -192,7 +198,13 @@ def _warehouse_id_from_text(page_text: str) -> str:
     - DEPT:N（如 DEPT:25）
     - N号仓（如 25号仓）
     """
-    # 匹配 CA#N 格式（US ELogistics 发票）
+    # 匹配 CA#N / CA(LA)- #N / (CA)LA#N 格式（US ELogistics/Fairway 发票）
+    m = re.search(r"CA\s*\([^)]*\)\s*-?\s*#\s*(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"\(CA\)\s*LA\s*#\s*(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
     m = re.search(r"CA#(\d+)", page_text, re.IGNORECASE)
     if m:
         return m.group(1)
@@ -205,6 +217,35 @@ def _warehouse_id_from_text(page_text: str) -> str:
     if m:
         return m.group(1)
     return ""
+
+
+def _extract_invoice_total_from_text(page_text: str) -> float:
+    """Extract an invoice total from text before asking AI.
+
+    Fairway-style invoices expose the authoritative amount in either a
+    "Totals" row or the "GRAND TOTAL" block. Prefer those deterministic
+    signals over slower model extraction and over "pay after due date" amounts.
+    """
+    lines = [" ".join(line.split()) for line in (page_text or "").splitlines()]
+    totals: List[float] = []
+
+    for line in lines:
+        if re.search(r"\bTotals\b", line, re.IGNORECASE):
+            amounts = re.findall(r"\$?\s*[\d,]+\.\d{2}\$?", line)
+            if amounts:
+                totals.append(parse_number(amounts[-1]))
+
+    grand_totals: List[float] = []
+    for idx, line in enumerate(lines):
+        if "GRAND TOTAL" not in line.upper():
+            continue
+        window = " ".join(lines[idx : idx + 8])
+        amounts = re.findall(r"\$?\s*[\d,]+\.\d{2}\$?", window)
+        if amounts:
+            grand_totals.append(parse_number(amounts[0]))
+
+    candidates = [value for value in [*totals, *grand_totals] if value > 0]
+    return round(candidates[-1], 2) if candidates else 0.0
 
 
 def extract_invoice_items(
@@ -386,6 +427,9 @@ def quick_extract_totals(
             if rule_rows:
                 total = round(sum(r.amount for r in rule_rows), 2)
                 return {"source_file": source_file, "total_amount": total, "warehouse_id": wh}
+            text_total = _extract_invoice_total_from_text("\n".join(p.get("text", "") for p in file_pages))
+            if text_total > 0:
+                return {"source_file": source_file, "total_amount": text_total, "warehouse_id": wh}
 
         # 2. 检查缓存
         source_path = fname_to_path.get(source_file)

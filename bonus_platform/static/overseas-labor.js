@@ -717,6 +717,17 @@ function renderQualityAlert(quality) {
   const methods = metrics.extractionMethods || {};
   const employeeCounts = metrics.employeeCounts || {};
   const totals = metrics.totals || {};
+  const warehouseIssues = metrics.warehouseIssues || [];
+  const severityLabel = quality.level === "critical" ? "必须复核" : "建议复核";
+  const severityTitle =
+    quality.message || (quality.level === "critical" ? "抽取质量存在严重问题。" : "抽取质量需要关注。");
+  const actionItems = warehouseIssues.length
+    ? warehouseIssues.slice(0, 6)
+    : issues.slice(0, 6);
+  const amountDelta = Math.abs(totals.amountDelta || 0);
+  const hoursDelta = Math.abs(totals.hoursDelta || 0);
+  const pdfAmount = totals.pdfAmount;
+  const excelAmount = totals.excelAmount;
 
   // Build details
   let detailsHtml = "";
@@ -784,18 +795,58 @@ function renderQualityAlert(quality) {
 
   labor.qualityAlert.hidden = false;
   labor.qualityAlert.innerHTML = `
-    <div class="quality-header">
-      <strong>${escapeHtml(quality.message || "抽取质量存在风险。")}</strong>
+    <div class="quality-brief">
+      <div>
+        <span class="quality-badge">${escapeHtml(severityLabel)}</span>
+        <h3>${escapeHtml(severityTitle)}</h3>
+        <p>${escapeHtml(_qualityNextStepText(quality, warehouseIssues, totals))}</p>
+      </div>
+      <div class="quality-total-card">
+        <span>金额差异</span>
+        <strong>$${formatMoney(amountDelta)}</strong>
+        <small>工时差异 ${formatHours(hoursDelta)}h</small>
+      </div>
     </div>
-    ${
-      issues.length
-        ? `<div class="quality-issues"><ul>${issues
-            .map((issue) => `<li>${escapeHtml(issue)}</li>`)
-            .join("")}</ul></div>`
-        : ""
-    }
-    ${detailsHtml ? `<div class="quality-details">${detailsHtml}</div>` : ""}
+    <div class="quality-action-grid">
+      <div class="quality-action-card">
+        <h4>先看什么</h4>
+        ${
+          actionItems.length
+            ? `<ul>${actionItems.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>`
+            : "<p>暂无明确异常项，优先下载报告留档。</p>"
+        }
+      </div>
+      <div class="quality-action-card">
+        <h4>建议动作</h4>
+        <ul>
+          <li>先确认 PDF 发票总额与 Excel 账单总额是否同一口径。</li>
+          <li>若仓库列表有差异，先按仓库下钻，再看员工明细。</li>
+          <li>完整员工级证据请下载报告，不要只凭顶部差额做结论。</li>
+        </ul>
+      </div>
+      <div class="quality-action-card">
+        <h4>当前口径</h4>
+        <dl>
+          <div><dt>PDF</dt><dd>${pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}`}</dd></div>
+          <div><dt>Excel</dt><dd>${excelAmount === undefined ? "—" : `$${formatMoney(excelAmount)}`}</dd></div>
+          <div><dt>覆盖</dt><dd>PDF ${employeeCounts.pdf ?? "—"} 人 / Excel ${employeeCounts.excel ?? "—"} 人</dd></div>
+          <div><dt>抽取</dt><dd>规则 ${methods.rule || 0} · AI文本 ${methods.ai_text || 0} · AI图片 ${methods.ai_image || 0}</dd></div>
+        </dl>
+      </div>
+    </div>
+    ${detailsHtml ? `<details class="quality-diagnostics"><summary>查看技术诊断</summary><div class="quality-details">${detailsHtml}</div></details>` : ""}
   `;
+}
+
+function _qualityNextStepText(quality, warehouseIssues, totals) {
+  const amountDelta = Math.abs(totals.amountDelta || 0);
+  if (warehouseIssues && warehouseIssues.length) {
+    return `系统发现 ${warehouseIssues.length} 个仓库需要复核。先看仓库金额，再进入员工明细定位差异。`;
+  }
+  if (amountDelta <= 0.1 && quality.level !== "critical") {
+    return "总金额已在容差内，当前只是抽取质量提示；可下载报告留档。";
+  }
+  return "先核对总额口径，再按仓库和员工明细逐层确认。";
 }
 
 function renderExtractRows(container, rows) {

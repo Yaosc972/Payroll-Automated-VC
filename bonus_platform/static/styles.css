@@ -5018,13 +5018,128 @@ body.filters-collapsed .filter-body {
   border-color: #fedf89;
 }
 
-.quality-header strong::before {
-  content: "";
-  display: inline-block;
-  width: 10px;
-  height: 10px;
+.quality-brief {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 18px;
+  align-items: start;
+}
+
+.quality-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
   border-radius: 999px;
-  background: #f79009;
+  color: #b54708;
+  background: #fef0c7;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.quality-brief h3 {
+  margin: 10px 0 6px;
+  color: #172033;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.quality-brief p {
+  margin: 0;
+  color: #475467;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.quality-total-card {
+  padding: 14px;
+  border: 1px solid #fedf89;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.quality-total-card span,
+.quality-total-card small {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+}
+
+.quality-total-card strong {
+  display: block;
+  margin: 8px 0 4px;
+  color: #b54708;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quality-action-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.quality-action-card {
+  padding: 14px;
+  border: 1px solid rgba(254, 223, 137, 0.9);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.quality-action-card h4 {
+  margin: 0 0 10px;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.quality-action-card ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.quality-action-card li,
+.quality-action-card p,
+.quality-action-card dt,
+.quality-action-card dd {
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.quality-action-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.quality-action-card dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quality-action-card dt {
+  color: #667085;
+}
+
+.quality-action-card dd {
+  margin: 0;
+  text-align: right;
+}
+
+.quality-diagnostics {
+  margin-top: 14px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.quality-diagnostics summary {
+  cursor: pointer;
+  font-weight: 700;
 }
 
 .pending-groups-row {
@@ -5181,6 +5296,11 @@ body.filters-collapsed .filter-body {
   }
 
   .pass-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .quality-brief,
+  .quality-action-grid {
     grid-template-columns: 1fr;
   }
 }
