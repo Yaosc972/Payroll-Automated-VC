@@ -1,12 +1,13 @@
 from io import BytesIO
 import json
+import time
 
 import pytest
 from openpyxl import Workbook, load_workbook
 from urllib.error import HTTPError
 
 from bonus_platform.engine.labor.compare import compare_labor_items
-from bonus_platform.engine.labor.extract import extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
+from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_render_scale, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
 from bonus_platform.engine.labor.parsing import normalize_employee_name, parse_number
@@ -749,6 +750,58 @@ def test_safe_error_message_includes_mimo_error_body():
     message = _safe_error_message(error)
 
     assert "Invalid API Key" in message
+
+
+def test_http_post_json_enforces_wall_clock_timeout(monkeypatch):
+    class SlowResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    class SlowClient:
+        def __init__(self, *args, **kwargs):
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def post(self, *args, **kwargs):
+            time.sleep(0.2)
+            return SlowResponse()
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract.httpx.Client", SlowClient)
+
+    start = time.monotonic()
+    with pytest.raises(MiMoTimeoutException):
+        _http_post_json(
+            "https://example.test/v1/messages",
+            {},
+            {"payload": "x"},
+            wall_timeout_seconds=0.05,
+        )
+
+    assert time.monotonic() - start < 0.15
+
+
+def test_anthropic_messages_url_does_not_duplicate_v1():
+    assert _anthropic_messages_url({"base_url": "https://token-plan-cn.xiaomimimo.com"}) == "https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages"
+    assert _anthropic_messages_url({"base_url": "https://token-plan-cn.xiaomimimo.com/v1"}) == "https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages"
+    assert _anthropic_messages_url({"base_url": "https://token-plan-cn.xiaomimimo.com/anthropic"}) == "https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages"
+    assert _anthropic_messages_url({"base_url": "https://token-plan-cn.xiaomimimo.com/anthropic/v1"}) == "https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages"
+    assert _anthropic_messages_url({"base_url": "https://api.example.com/v1"}) == "https://api.example.com/v1/messages"
+
+
+def test_effective_render_scale_caps_token_plan_payload_size():
+    assert _effective_render_scale({"provider": "mimo", "base_url": "https://token-plan-cn.xiaomimimo.com/v1", "render_scale": 1.2}) == pytest.approx(0.75)
+    assert _effective_render_scale({"provider": "mimo", "base_url": "https://token-plan-cn.xiaomimimo.com/v1", "render_scale": 0.6}) == pytest.approx(0.6)
+    assert _effective_render_scale({"provider": "openai", "base_url": "https://api.example.com/v1", "render_scale": 1.2}) == pytest.approx(1.2)
 
 
 def test_line_items_from_ai_rows_coerces_confidence_labels_and_name_ids():

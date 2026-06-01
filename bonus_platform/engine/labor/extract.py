@@ -4,8 +4,10 @@ import base64
 from io import BytesIO
 import json
 import logging
+import queue
 import re
 import socket
+import threading
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
@@ -29,25 +31,54 @@ TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
 AI_PAGE_CACHE_VERSION = "v4"
 
-# ── HTTP client with strict total timeout (wall-clock) ──
-# urllib.request.urlopen timeout only covers socket read, not total request duration.
-# httpx.Timeout enforces absolute wall-clock time on the entire request lifecycle.
+# ── HTTP client with strict outer timeout (wall-clock) ──
+# urllib and httpx timeouts are phase/socket oriented, so a slow gateway can still
+# keep a request alive. The daemon worker below lets the caller abandon a stuck request.
 _MIMO_TIMEOUT = httpx.Timeout(30.0, connect=5.0, read=25.0, pool=5.0)
+_MIMO_WALL_TIMEOUT_SECONDS = 30.0
 
 
-def _http_post_json(url: str, headers: Dict[str, str], payload: dict, timeout: httpx.Timeout = _MIMO_TIMEOUT) -> dict:
+def _http_post_json(
+    url: str,
+    headers: Dict[str, str],
+    payload: dict,
+    timeout: httpx.Timeout = _MIMO_TIMEOUT,
+    wall_timeout_seconds: float = _MIMO_WALL_TIMEOUT_SECONDS,
+) -> dict:
     """POST JSON with strict total timeout. Returns parsed JSON response.
 
     Raises MiMoTimeoutException on any timeout (connect, read, pool, or total).
     """
-    logger.info(f"[D] [CRITICAL] POST → {url}, payload={len(json.dumps(payload))} bytes, timeout=30s total")
-    try:
+    logger.info(f"[D] [CRITICAL] POST → {url}, payload={len(json.dumps(payload))} bytes, timeout={wall_timeout_seconds}s total")
+    result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def _send() -> None:
         with httpx.Client(timeout=timeout, http2=False) as client:
             resp = client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-        logger.info(f"[E] [CRITICAL] POST ← {url} responded in time, status={resp.status_code}")
+        result_queue.put((True, (data, resp.status_code)))
+
+    def _worker() -> None:
+        try:
+            _send()
+        except Exception as exc:
+            result_queue.put((False, exc))
+
+    thread = threading.Thread(target=_worker, name="mimo-http-post", daemon=True)
+    thread.start()
+    try:
+        ok, result = result_queue.get(timeout=wall_timeout_seconds)
+    except queue.Empty as exc:
+        raise MiMoTimeoutException(f"MiMo API Gateway took over {wall_timeout_seconds:g}s to respond: {url}") from exc
+
+    if ok:
+        data, status_code = result
+        logger.info(f"[E] [CRITICAL] POST ← {url} responded in time, status={status_code}")
         return data
+    exc = result
+    try:
+        raise exc
     except httpx.TimeoutException as exc:
         raise MiMoTimeoutException(f"MiMo API Gateway dropped connection or took over 30s to respond: {url}") from exc
     except httpx.HTTPStatusError as exc:
@@ -56,6 +87,24 @@ def _http_post_json(url: str, headers: Dict[str, str], payload: dict, timeout: h
     except Exception as exc:
         logger.error(f"[E] POST {url} failed: {exc}")
         raise
+
+
+def _anthropic_messages_url(ai_config: Dict[str, Any]) -> str:
+    base_url = str(ai_config["base_url"]).rstrip("/")
+    if "token-plan-cn.xiaomimimo.com" in base_url and "/anthropic" not in base_url:
+        if base_url.endswith("/v1"):
+            base_url = base_url[: -len("/v1")]
+        return f"{base_url}/anthropic/v1/messages"
+    if base_url.endswith("/v1"):
+        return f"{base_url}/messages"
+    return f"{base_url}/v1/messages"
+
+
+def _effective_render_scale(ai_config: Dict[str, Any]) -> float:
+    scale = float(ai_config.get("render_scale") or 1.2)
+    if _is_token_plan(ai_config):
+        return min(scale, 0.75)
+    return scale
 
 
 
@@ -231,7 +280,7 @@ def extract_invoice_items(
         try:
             render_workers = int(ai_config.get("parallel_image_render_workers", 1))
             logger.info(f"[C] 渲染 PDF 为图片: {len(pdf_paths)} 个 PDF, workers={render_workers}")
-            image_pages = _render_pdf_pages_to_images(pdf_paths, scale=float(ai_config.get("render_scale") or 1.2), max_workers=render_workers)
+            image_pages = _render_pdf_pages_to_images(pdf_paths, scale=_effective_render_scale(ai_config), max_workers=render_workers)
             logger.info(f"[C] 渲染完成: {len(image_pages)} 张图片")
             image_pages = _apply_image_page_policy(image_pages, supplier_profile)
             logger.info(f"[C] 策略过滤后: {len(image_pages)} 张图片")
@@ -293,7 +342,7 @@ def quick_extract_totals(
         empty_pdf_paths = [fname_to_path[p["source_file"]] for p in empty_text_pages if p["source_file"] in fname_to_path]
         if empty_pdf_paths:
             try:
-                image_pages = _render_pdf_pages_to_images(empty_pdf_paths, scale=float(ai_config.get("render_scale") or 1.2))
+                image_pages = _render_pdf_pages_to_images(empty_pdf_paths, scale=_effective_render_scale(ai_config))
                 for img in image_pages:
                     key = img.get("source_file", "")
                     if key not in image_pages_map:
@@ -412,7 +461,7 @@ def _extract_total_anthropic(page_text: str, prompt: str, ai_config: Dict[str, A
         "messages": [{"role": "user", "content": f"{prompt}\n\nInvoice text:\n{page_text[:3000]}"}],
     }
     base_url = ai_config["base_url"].rstrip("/")
-    data = _http_post_json(f"{base_url}/v1/messages", headers, payload)
+    data = _http_post_json(_anthropic_messages_url(ai_config), headers, payload)
     content = ""
     thinking = ""
     for block in data.get("content", []):
@@ -456,7 +505,7 @@ def _extract_total_with_ai_image(page: Dict[str, Any], prompt: str, ai_config: D
                 ],
             }],
         }
-        data = _http_post_json(f"{base_url}/v1/messages", headers, payload)
+        data = _http_post_json(_anthropic_messages_url(ai_config), headers, payload)
         content = ""
         thinking = ""
         for block in data.get("content", []):
@@ -731,7 +780,7 @@ def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any
     }
     base_url = ai_config["base_url"].rstrip("/")
 
-    data = _http_post_json(f"{base_url}/v1/messages", headers, anthropic_payload)
+    data = _http_post_json(_anthropic_messages_url(ai_config), headers, anthropic_payload)
 
     stop_reason = data.get("stop_reason", "?")
     usage = data.get("usage", {})
