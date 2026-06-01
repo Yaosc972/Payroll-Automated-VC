@@ -357,7 +357,7 @@ function renderResult(run) {
   const totalPassed = wcSummary && wcSummary.totalPassed;
 
   // Update KPI cards
-  updateKpiCards(summary, run.comparisonRows || []);
+  updateKpiCards(summary, run.comparisonRows || [], wcSummary, run.candidateMatches || []);
 
   // Render conclusion
   renderConclusion(summary, wcSummary, run.extractionQuality);
@@ -369,40 +369,46 @@ function renderResult(run) {
   const rows = run.comparisonRows || [];
   renderPendingItems(rows, run.candidateMatches || [], summary);
 
-  // Render AI extraction details
+  // Render employee-level evidence or the stage-1 pass proof
   if (totalPassed) {
-    labor.extractPreviewTable.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon" style="color: #34C759">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="2"/>
-            <path d="M16 24l6 6 10-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <p class="empty-title" style="color: #34C759">总金额一致</p>
-        <p class="empty-desc">无需核对明细</p>
-      </div>
-    `;
+    renderPassEvidence(labor.extractPreviewTable, summary, wcSummary);
   } else {
     renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
   }
 }
 
-function updateKpiCards(summary, rows) {
+function updateKpiCards(summary, rows, wcSummary, candidateMatches = []) {
   const pdfCount = summary.pdfEmployeeCount || 0;
   const excelCount = summary.excelEmployeeCount || 0;
   const amountDiffCount = summary.amountDiffCount || 0;
   const notInInvoiceCount = summary.notInInvoiceCount || 0;
+  const pdfAmount = wcSummary ? wcSummary.pdfAmountTotal || 0 : summary.pdfAmountTotal || 0;
+  const excelAmount = wcSummary ? wcSummary.excelAmountTotal || 0 : summary.excelAmountTotal || 0;
+  const amountDelta = wcSummary ? wcSummary.amountDeltaTotal || 0 : summary.amountDeltaTotal || 0;
 
   // Calculate cleared matches
   const clearedCount = rows.filter(
     (r) => r.matchStatus === "通过" || r.matchStatus === "金额一致"
   ).length;
+  const reviewCount =
+    amountDiffCount +
+    notInInvoiceCount +
+    (summary.hoursDiffCount || 0) +
+    (candidateMatches ? candidateMatches.length : 0);
 
-  if (labor.kpiTotal) labor.kpiTotal.textContent = Math.max(pdfCount, excelCount);
-  if (labor.kpiMatched) labor.kpiMatched.textContent = clearedCount;
-  if (labor.kpiVariance) labor.kpiVariance.textContent = amountDiffCount;
-  if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = notInInvoiceCount;
+  if (labor.kpiTotal) labor.kpiTotal.textContent = `$${formatMoney(pdfAmount)}`;
+  if (labor.kpiMatched) labor.kpiMatched.textContent = `$${formatMoney(excelAmount)}`;
+  if (labor.kpiVariance) labor.kpiVariance.textContent = `${amountDelta >= 0 ? "+" : "-"}$${formatMoney(Math.abs(amountDelta))}`;
+  if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = `${reviewCount} 项`;
+
+  const totalCard = document.querySelector("#kpiTotal .kpi-sub");
+  const matchedCard = document.querySelector("#kpiMatched .kpi-sub");
+  const varianceCard = document.querySelector("#kpiVariance .kpi-sub");
+  const unmatchedCard = document.querySelector("#kpiUnmatched .kpi-sub");
+  if (totalCard) totalCard.textContent = `PDF ${pdfCount} 人`;
+  if (matchedCard) matchedCard.textContent = `Excel ${excelCount} 人`;
+  if (varianceCard) varianceCard.textContent = `容差 $0.10`;
+  if (unmatchedCard) unmatchedCard.textContent = clearedCount ? `${clearedCount} 人已清账` : "异常队列";
 }
 
 function renderConclusion(summary, wcSummary, extractionQuality) {
@@ -411,10 +417,8 @@ function renderConclusion(summary, wcSummary, extractionQuality) {
 
   const conclusionLevel = summary.conclusionLevel || "pass";
   const conclusionMessage = summary.conclusionMessage || "";
-  const levelIcons = { pass: "✅", warning: "⚠️", critical: "🔴" };
   const levelLabels = { pass: "通过", warning: "需关注", critical: "需人工复核" };
 
-  const icon = levelIcons[conclusionLevel] || "❓";
   const label = levelLabels[conclusionLevel] || conclusionLevel;
 
   const amountDeltaTotal = wcSummary ? wcSummary.amountDeltaTotal || 0 : 0;
@@ -431,14 +435,48 @@ function renderConclusion(summary, wcSummary, extractionQuality) {
   section.className = `conclusion-section ${conclusionLevel}`;
   section.innerHTML = `
     <div class="conclusion-main">
-      <span class="conclusion-icon">${icon}</span>
-      <span class="conclusion-text">${escapeHtml(label)} - ${escapeHtml(conclusionMessage)}</span>
+      <span class="conclusion-icon" aria-hidden="true"></span>
+      <span class="conclusion-text">${escapeHtml(label)} · ${escapeHtml(conclusionMessage)}</span>
     </div>
     <div class="conclusion-details">
       <span>总金额差异: <strong>$${amountDeltaTotal.toFixed(2)} (${amountDeltaPct}%)</strong></span>
-      <span>📋 本批发票覆盖 <strong>${pdfCount}</strong>人，账单共 <strong>${excelCount}</strong>人${
+      <span>本批发票覆盖 <strong>${pdfCount}</strong>人，账单共 <strong>${excelCount}</strong>人${
         notInInvoice > 0 ? `（<strong>${notInInvoice}</strong>人不在本批发票）` : ""
       }</span>
+    </div>
+  `;
+}
+
+function renderPassEvidence(container, summary, wcSummary) {
+  const amountDelta = wcSummary ? wcSummary.amountDeltaTotal || 0 : 0;
+  const pdfAmount = wcSummary ? wcSummary.pdfAmountTotal || 0 : 0;
+  const excelAmount = wcSummary ? wcSummary.excelAmountTotal || 0 : 0;
+  const pdfCount = summary.pdfEmployeeCount || 0;
+  const excelCount = summary.excelEmployeeCount || 0;
+  container.innerHTML = `
+    <div class="pass-evidence">
+      <div class="pass-evidence-copy">
+        <span class="decision-badge">总额核对通过</span>
+        <h3>本批发票与账单金额在容差内一致</h3>
+        <p>系统已先核对 PDF 发票总额与 Excel 账单总额。差额未超过 $0.10，因此无需进入员工级逐项追差；如需留档，可下载完整报告。</p>
+      </div>
+      <div class="pass-evidence-grid">
+        <div>
+          <span>PDF 发票总额</span>
+          <strong>$${formatMoney(pdfAmount)}</strong>
+          <small>${pdfCount} 人</small>
+        </div>
+        <div>
+          <span>Excel 账单总额</span>
+          <strong>$${formatMoney(excelAmount)}</strong>
+          <small>${excelCount} 人</small>
+        </div>
+        <div>
+          <span>金额差额</span>
+          <strong>${amountDelta >= 0 ? "+" : "-"}$${formatMoney(Math.abs(amountDelta))}</strong>
+          <small>容差 $0.10</small>
+        </div>
+      </div>
     </div>
   `;
 }

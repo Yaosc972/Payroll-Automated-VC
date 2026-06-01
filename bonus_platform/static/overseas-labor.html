@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外劳务工报账核对 · 西格玛工作台</title>
-    <link rel="stylesheet" href="styles.css?v=26" />
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=27" />
     <style>html { color-scheme: light; }</style>
   </head>
   <body class="overseas-labor-shell">
@@ -13,8 +14,13 @@
     <header class="app-chrome">
       <div class="chrome-left">
         <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
-          <img src="assets/bonus-logo-header-blue.png" alt="" />
-          <span>Σ-WORKBENCH</span>
+          <span class="brand-mark-frame">
+            <img src="assets/bonus-logo-header-blue.png" alt="" />
+          </span>
+          <span class="brand-copy">
+            <span class="brand-name">Σ-WORKBENCH</span>
+            <span class="brand-note">Payroll Audit</span>
+          </span>
         </a>
         <div class="chrome-divider"></div>
         <div class="chrome-context">
@@ -42,24 +48,24 @@
     <!-- ═══ KPI SUMMARY BANNER ═══ -->
     <div class="kpi-banner" id="kpiBanner">
       <button class="kpi-card kpi-neutral active-filter" data-filter="all" id="kpiTotal" type="button">
-        <span class="kpi-label">核对总行数</span>
+        <span class="kpi-label">PDF 发票总额</span>
         <span class="kpi-value" id="kpiTotalVal">—</span>
-        <span class="kpi-sub">Audited Rows</span>
+        <span class="kpi-sub">Invoice Total</span>
       </button>
       <button class="kpi-card kpi-success" data-filter="matched" id="kpiMatched" type="button">
-        <span class="kpi-label">核对通过</span>
+        <span class="kpi-label">Excel 账单总额</span>
         <span class="kpi-value" id="kpiMatchedVal">—</span>
-        <span class="kpi-sub">Matched &amp; Cleared</span>
+        <span class="kpi-sub">Bill Total</span>
       </button>
       <button class="kpi-card kpi-warning" data-filter="variance" id="kpiVariance" type="button">
-        <span class="kpi-label">金额差异</span>
+        <span class="kpi-label">总金额差额</span>
         <span class="kpi-value" id="kpiVarianceVal">—</span>
-        <span class="kpi-sub">Amount Variances</span>
+        <span class="kpi-sub">Tolerance $0.10</span>
       </button>
       <button class="kpi-card kpi-danger" data-filter="unmatched" id="kpiUnmatched" type="button">
-        <span class="kpi-label">未匹配项</span>
+        <span class="kpi-label">待人工复核</span>
         <span class="kpi-value" id="kpiUnmatchedVal">—</span>
-        <span class="kpi-sub">Unmatched Candidates</span>
+        <span class="kpi-sub">Exception Queue</span>
       </button>
     </div>
 
@@ -94,7 +100,7 @@
         <div class="pending-groups-row">
           <div id="hoursDiffGroup" class="pending-group" hidden>
             <button class="group-header" data-group="hoursDiff" aria-expanded="true" type="button">
-              <span class="group-icon amber">⏱</span>
+              <span class="group-icon amber">H</span>
               <span class="group-label">工时不一致</span>
               <span class="group-count"></span>
               <span class="expand-icon">▾</span>
@@ -103,7 +109,7 @@
           </div>
           <div id="candidateGroup" class="pending-group" hidden>
             <button class="group-header" data-group="candidate" aria-expanded="true" type="button">
-              <span class="group-icon blue">👤</span>
+              <span class="group-icon blue">N</span>
               <span class="group-label">姓名格式差异</span>
               <span class="group-count"></span>
               <span class="expand-icon">▾</span>
@@ -112,7 +118,7 @@
           </div>
           <div id="notInInvoiceGroup" class="pending-group" hidden>
             <button class="group-header" data-group="notInInvoice" aria-expanded="false" type="button">
-              <span class="group-icon red">🚫</span>
+              <span class="group-icon red">U</span>
               <span class="group-label">不在本批发票</span>
               <span class="group-count"></span>
               <span class="expand-icon">▸</span>
@@ -126,8 +132,8 @@
       <section class="workspace-section">
         <div class="section-header">
           <div>
-            <h2 class="section-title">AI 抽取明细</h2>
-            <p class="section-sub">Extract & Reconciliation Detail · Click a KPI card above to filter</p>
+            <h2 class="section-title">员工级核对证据</h2>
+            <p class="section-sub">按总额、仓库、员工逐层下钻；完整明细以下载报告为准</p>
           </div>
           <div class="section-actions">
             <button id="extractCompare" class="btn-extract" type="button">
@@ -311,7 +317,7 @@
     <!-- ═══ TOAST ═══ -->
     <div id="laborToast" class="labor-toast" role="status" aria-live="polite"></div>
 
-    <script src="overseas-labor.js?v=5"></script>
+    <script src="overseas-labor.js?v=6"></script>
     <script>
       // ── Drawer open/close ──
       const drawer = document.getElementById('wizardDrawer');
