@@ -351,7 +351,7 @@ function renderMappingPreview(rows) {
 
 function renderResult(run) {
   const summary = run.comparisonSummary || {};
-  renderQualityAlert(run.extractionQuality);
+  renderQualityAlert(run.extractionQuality, run.reconciliationDiagnostics);
   const wc = run.warehouseComparison;
   const wcSummary = wc && wc.summary;
   const totalPassed = wcSummary && wcSummary.totalPassed;
@@ -380,6 +380,7 @@ function renderResult(run) {
 function updateKpiCards(summary, rows, wcSummary, candidateMatches = []) {
   const pdfCount = summary.pdfEmployeeCount || 0;
   const excelCount = summary.excelEmployeeCount || 0;
+  const skippedEmployeeDrilldown = wcSummary && wcSummary.totalPassed && !rows.length;
   const amountDiffCount = summary.amountDiffCount || 0;
   const notInInvoiceCount = summary.notInInvoiceCount || 0;
   const pdfAmount = wcSummary ? wcSummary.pdfAmountTotal || 0 : summary.pdfAmountTotal || 0;
@@ -405,8 +406,8 @@ function updateKpiCards(summary, rows, wcSummary, candidateMatches = []) {
   const matchedCard = document.querySelector("#kpiMatched .kpi-sub");
   const varianceCard = document.querySelector("#kpiVariance .kpi-sub");
   const unmatchedCard = document.querySelector("#kpiUnmatched .kpi-sub");
-  if (totalCard) totalCard.textContent = `PDF ${pdfCount} 人`;
-  if (matchedCard) matchedCard.textContent = `Excel ${excelCount} 人`;
+  if (totalCard) totalCard.textContent = skippedEmployeeDrilldown ? "总额已核对" : `PDF ${pdfCount} 人`;
+  if (matchedCard) matchedCard.textContent = skippedEmployeeDrilldown ? "未下钻员工明细" : `Excel ${excelCount} 人`;
   if (varianceCard) varianceCard.textContent = `容差 $0.10`;
   if (unmatchedCard) unmatchedCard.textContent = clearedCount ? `${clearedCount} 人已清账` : "异常队列";
 }
@@ -703,34 +704,68 @@ function _renderNotInInvoiceTable(rows) {
   }`;
 }
 
-function renderQualityAlert(quality) {
+function renderQualityAlert(quality, diagnostics) {
   if (!labor.qualityAlert) return;
-  if (!quality || quality.level === "ok") {
+  quality = quality || {};
+  const hasQualityIssue = quality && quality.level && quality.level !== "ok";
+  const hasDiagnosticIssue = diagnostics && diagnostics.level && diagnostics.level !== "ok";
+  if (!hasQualityIssue && !hasDiagnosticIssue) {
     labor.qualityAlert.hidden = true;
     labor.qualityAlert.innerHTML = "";
     return;
   }
 
   const issues = quality.issues || [];
+  const diagnosticIssues = diagnostics && Array.isArray(diagnostics.issues) ? diagnostics.issues : [];
   const metrics = quality.metrics || {};
   const confidence = metrics.confidence || {};
   const methods = metrics.extractionMethods || {};
   const employeeCounts = metrics.employeeCounts || {};
   const totals = metrics.totals || {};
   const warehouseIssues = metrics.warehouseIssues || [];
-  const severityLabel = quality.level === "critical" ? "必须复核" : "建议复核";
+  const alertLevel = _higherSeverity(quality.level, diagnostics && diagnostics.level);
+  const severityLabel = alertLevel === "critical" ? "必须复核" : "建议复核";
   const severityTitle =
-    quality.message || (quality.level === "critical" ? "抽取质量存在严重问题。" : "抽取质量需要关注。");
-  const actionItems = warehouseIssues.length
+    (diagnostics && diagnostics.message) ||
+    quality.message ||
+    (alertLevel === "critical" ? "抽取质量存在严重问题。" : "抽取质量需要关注。");
+  const actionItems = diagnosticIssues.length
+    ? diagnosticIssues
+        .slice(0, 6)
+        .map((issue) => `${issue.title || "信号异常"}：${issue.message || ""}`)
+        .filter(Boolean)
+    : warehouseIssues.length
     ? warehouseIssues.slice(0, 6)
     : issues.slice(0, 6);
   const amountDelta = Math.abs(totals.amountDelta || 0);
   const hoursDelta = Math.abs(totals.hoursDelta || 0);
   const pdfAmount = totals.pdfAmount;
   const excelAmount = totals.excelAmount;
+  const signals = (diagnostics && diagnostics.signals) || {};
 
   // Build details
   let detailsHtml = "";
+
+  if (diagnosticIssues.length) {
+    detailsHtml += `
+      <div class="quality-detail-section">
+        <h4>信号诊断</h4>
+        ${diagnosticIssues
+          .map(
+            (issue) => `<div class="diagnostic-issue">
+              <strong>${escapeHtml(issue.title || "信号异常")}</strong>
+              <p>${escapeHtml(issue.message || "")}</p>
+              ${
+                issue.items && issue.items.length
+                  ? `<ul>${issue.items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+                  : ""
+              }
+            </div>`
+          )
+          .join("")}
+      </div>
+    `;
+  }
 
   // Confidence distribution
   if (confidence.average !== undefined) {
@@ -799,12 +834,16 @@ function renderQualityAlert(quality) {
       <div>
         <span class="quality-badge">${escapeHtml(severityLabel)}</span>
         <h3>${escapeHtml(severityTitle)}</h3>
-        <p>${escapeHtml(_qualityNextStepText(quality, warehouseIssues, totals))}</p>
+        <p>${escapeHtml(_qualityNextStepText(quality, warehouseIssues, totals, diagnostics))}</p>
       </div>
       <div class="quality-total-card">
-        <span>金额差异</span>
-        <strong>$${formatMoney(amountDelta)}</strong>
-        <small>工时差异 ${formatHours(hoursDelta)}h</small>
+        <span>${signals.fastPdfTotal !== undefined ? "PDF总额校验" : "金额差异"}</span>
+        <strong>$${formatMoney(
+          signals.fastPdfTotal !== undefined
+            ? Math.abs((signals.fastPdfTotal || 0) - (signals.excelTotal || 0))
+            : amountDelta
+        )}</strong>
+        <small>${signals.fastPdfTotal !== undefined ? "快速总额 vs Excel" : `工时差异 ${formatHours(hoursDelta)}h`}</small>
       </div>
     </div>
     <div class="quality-action-grid">
@@ -827,8 +866,10 @@ function renderQualityAlert(quality) {
       <div class="quality-action-card">
         <h4>当前口径</h4>
         <dl>
-          <div><dt>PDF</dt><dd>${pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}`}</dd></div>
-          <div><dt>Excel</dt><dd>${excelAmount === undefined ? "—" : `$${formatMoney(excelAmount)}`}</dd></div>
+          <div><dt>快速PDF</dt><dd>${signals.fastPdfTotal === undefined ? "—" : `$${formatMoney(signals.fastPdfTotal)}`}</dd></div>
+          <div><dt>员工明细</dt><dd>${signals.employeePdfTotal === undefined ? pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}` : `$${formatMoney(signals.employeePdfTotal)}`}</dd></div>
+          <div><dt>Excel</dt><dd>${signals.excelTotal === undefined ? excelAmount === undefined ? "—" : `$${formatMoney(excelAmount)}` : `$${formatMoney(signals.excelTotal)}`}</dd></div>
+          <div><dt>仓库PDF</dt><dd>${signals.warehouseTotal === undefined ? "—" : `$${formatMoney(signals.warehouseTotal)}`}</dd></div>
           <div><dt>覆盖</dt><dd>PDF ${employeeCounts.pdf ?? "—"} 人 / Excel ${employeeCounts.excel ?? "—"} 人</dd></div>
           <div><dt>抽取</dt><dd>规则 ${methods.rule || 0} · AI文本 ${methods.ai_text || 0} · AI图片 ${methods.ai_image || 0}</dd></div>
         </dl>
@@ -838,7 +879,8 @@ function renderQualityAlert(quality) {
   `;
 }
 
-function _qualityNextStepText(quality, warehouseIssues, totals) {
+function _qualityNextStepText(quality, warehouseIssues, totals, diagnostics) {
+  if (diagnostics && diagnostics.nextStep) return diagnostics.nextStep;
   const amountDelta = Math.abs(totals.amountDelta || 0);
   if (warehouseIssues && warehouseIssues.length) {
     return `系统发现 ${warehouseIssues.length} 个仓库需要复核。先看仓库金额，再进入员工明细定位差异。`;
@@ -847,6 +889,13 @@ function _qualityNextStepText(quality, warehouseIssues, totals) {
     return "总金额已在容差内，当前只是抽取质量提示；可下载报告留档。";
   }
   return "先核对总额口径，再按仓库和员工明细逐层确认。";
+}
+
+function _higherSeverity(levelA, levelB) {
+  const rank = { ok: 0, warning: 1, critical: 2 };
+  const a = rank[levelA] || 0;
+  const b = rank[levelB] || 0;
+  return a >= b ? levelA || "ok" : levelB || "ok";
 }
 
 function renderExtractRows(container, rows) {

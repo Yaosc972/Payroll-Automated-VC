@@ -23,7 +23,7 @@ from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
 from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
-from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score
+from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score, build_reconciliation_diagnostics
 from .engine.labor.report import build_labor_report
 
 
@@ -496,6 +496,12 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
 
     # 计算结论级别
     conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality, amount_tolerance=AI_CONFIG["amount_tolerance"])
+    reconciliation_diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=pdf_totals,
+        comparison_summary=comparison["summary"],
+        warehouse_comparison=warehouse_comparison,
+        amount_tolerance=AI_CONFIG["amount_tolerance"],
+    )
 
     updated = update_labor_metadata(
         run_id,
@@ -507,6 +513,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             "candidateMatches": comparison.get("candidateMatches", []),
             "warehouseComparison": warehouse_comparison,
             "extractionQuality": extraction_quality,
+            "reconciliationDiagnostics": reconciliation_diagnostics,
             "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
             "excelRows": [row.to_dict() for row in excel_rows],
             "diffDownloadUrl": files["diffReport"]["downloadUrl"],

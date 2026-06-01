@@ -14,6 +14,7 @@ from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
+from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics
 from bonus_platform.engine.labor.report import build_labor_report
 from bonus_platform.engine.labor.workbook import read_workbook_rows, suggest_mapping
 
@@ -86,6 +87,47 @@ def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment()
         "US ELOGISTICS SERVICE CORP\n"
         "15,089.88$"
     ) == 15089.88
+
+
+def test_reconciliation_diagnostics_flags_conflicting_pdf_signals():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[
+            {"source_file": "fairway_10.pdf", "warehouse_id": "", "total_amount": 21736.78},
+            {"source_file": "fairway_18.pdf", "warehouse_id": "18", "total_amount": 0},
+            {"source_file": "fairway_19.pdf", "warehouse_id": "19", "total_amount": 27162.78},
+        ],
+        comparison_summary={"pdfAmountTotal": 147368.65, "excelAmountTotal": 147368.73},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 48899.56, "excelAmountTotal": 147368.73},
+            "errors": ["no warehouse match"],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "critical"
+    assert diagnostics["signals"]["fastPdfTotal"] == 48899.56
+    assert diagnostics["signals"]["employeePdfTotal"] == 147368.65
+    assert "pdf_total_conflict" in issue_codes
+    assert "missing_warehouse_id" in issue_codes
+    assert "zero_pdf_total" in issue_codes
+    assert "warehouse_mapping_errors" in issue_codes
+
+
+def test_reconciliation_diagnostics_passes_when_totals_align():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[
+            {"source_file": "fairway_10.pdf", "warehouse_id": "10", "total_amount": 21736.78},
+            {"source_file": "fairway_18.pdf", "warehouse_id": "18", "total_amount": 42868.43},
+        ],
+        comparison_summary={"pdfAmountTotal": 64605.21, "excelAmountTotal": 64605.27},
+        warehouse_comparison={"summary": {"pdfAmountTotal": 64605.21, "excelAmountTotal": 64605.27}, "errors": []},
+        amount_tolerance=0.1,
+    )
+
+    assert diagnostics["level"] == "ok"
+    assert diagnostics["issues"] == []
+    assert diagnostics["nextStep"] == "可按当前结论使用报告。"
 
 
 def test_suggest_mapping_and_read_workbook_rows_extract_required_fields(tmp_path):
