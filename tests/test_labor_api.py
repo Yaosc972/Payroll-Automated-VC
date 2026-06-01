@@ -20,6 +20,17 @@ def _excel_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _excel_bytes_with_warehouse() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单"
+    sheet.append(["工号", "姓名", "时长总计(H)", "费用总计(含税)", "币种", "物理仓"])
+    sheet.append(["WUS000001", "Alice Worker", 8, 100, "USD", "1号仓"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
     client = TestClient(app)
 
@@ -94,6 +105,64 @@ def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_r
     body = client.get(f"/api/labor/runs/{run['id']}").json()
     assert body["status"] == "抽取失败"
     assert "PDF 未抽取出员工明细" in body["errorMessage"]
+
+
+def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(monkeypatch):
+    import bonus_platform.app as app_module
+
+    captured_paths = []
+
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda *args, **kwargs: [{"source_file": "Invoice-5058871.pdf", "total_amount": 50, "warehouse_id": ""}],
+    )
+    monkeypatch.setattr(app_module, "_warehouse_id_from_text_path", lambda *args, **kwargs: False)
+
+    def fake_extract(pdf_paths, *args, **kwargs):
+        captured_paths.extend([Path(p).name for p in pdf_paths])
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file="Invoice-5058871.pdf",
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=100,
+                currency="USD",
+                confidence=0.95,
+                evidence_text="Total $100",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Invoice", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("Invoice-5058871.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("Invoice-5058872.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_file", ("账单.xlsx", _excel_bytes_with_warehouse(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert body["status"] == "已生成差异报告"
+    assert len(captured_paths) == 2
+    assert all(name.startswith(("Invoice-5058871_", "Invoice-5058872_")) for name in captured_paths)
+    assert any("无法将异常仓库映射到具体 PDF" in issue for issue in body["extractionQuality"]["issues"])
 
 
 def test_labor_compare_response_includes_candidate_matches(monkeypatch):

@@ -377,6 +377,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         pdf_rows = []
         comparison = {"summary": {}, "rows": [], "candidateMatches": []}
         extraction_quality = {"level": "ok", "message": "总金额核对通过，无需抽取员工明细。", "issues": [], "retryAttempted": False, "retryApplied": False}
+        stage2_quality_issues: list[str] = []
 
         if warehouse_comparison["summary"]["totalPassed"]:
             logger.info(f"[{run_id}] ✅ Stage 1 通过: 总金额一致，无需抽取员工明细")
@@ -401,6 +402,15 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     if not filtered_pdf_paths:
                         filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_text_path(p, diff_wh)]
                     filtered_excel_rows = [r for r in excel_rows if r.warehouse_id in diff_wh]
+                    if not filtered_pdf_paths:
+                        filtered_pdf_paths = pdf_paths
+                        filtered_excel_rows = excel_rows
+                        issue = (
+                            "无法将异常仓库映射到具体 PDF，已全量抽取 PDF 并按全量 Excel 比对。"
+                            f" 异常仓库: {', '.join(diff_wh)}"
+                        )
+                        stage2_quality_issues.append(issue)
+                        logger.warning(f"[{run_id}] {issue}")
                 else:
                     filtered_pdf_paths = pdf_paths
                     filtered_excel_rows = excel_rows
@@ -426,6 +436,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"])
                 extraction_quality["retryAttempted"] = False
                 extraction_quality["retryApplied"] = False
+                _append_quality_issues(extraction_quality, stage2_quality_issues)
                 logger.info(f"[{run_id}] [G] 比对完成: 质量={extraction_quality['level']}, 问题={len(extraction_quality.get('issues',[]))}条")
 
                 if extraction_quality["level"] in ("warning", "critical"):
@@ -456,6 +467,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], warehouse_comparison)
                 extraction_quality["retryAttempted"] = retry_attempted
                 extraction_quality["retryApplied"] = retry_applied
+                _append_quality_issues(extraction_quality, stage2_quality_issues)
 
         logger.info(f"[{run_id}] 生成差异报告...")
         update_labor_metadata(run_id, {"stage": "生成报告"})
@@ -486,6 +498,15 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         },
     )
     return updated
+
+
+def _append_quality_issues(extraction_quality: dict, issues: list[str]) -> None:
+    if not issues:
+        return
+    existing = extraction_quality.setdefault("issues", [])
+    for issue in issues:
+        if issue not in existing:
+            existing.append(issue)
 
 
 def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison, **kwargs):
