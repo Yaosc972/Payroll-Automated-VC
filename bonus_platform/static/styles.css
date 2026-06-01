@@ -4795,7 +4795,7 @@ body.filters-collapsed .filter-body {
 }
 
 .app-chrome {
-  min-height: 72px;
+  min-height: 86px;
   padding: 14px 36px;
   background: rgba(255, 255, 255, 0.96);
   border-bottom: 1px solid #d8dee8;
@@ -4808,8 +4808,8 @@ body.filters-collapsed .filter-body {
 }
 
 .app-chrome .portal-logo-mark {
-  gap: 12px;
-  min-width: 218px;
+  gap: 16px;
+  min-width: 220px;
   margin: 0;
   color: #172033;
 }
@@ -4818,22 +4818,19 @@ body.filters-collapsed .filter-body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  border: 1px solid #d8dee8;
-  border-radius: 8px;
-  background: #f8fafc;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 50px;
 }
 
 .app-chrome .brand-mark-frame img {
-  width: 26px;
-  height: 26px;
+  width: 44px;
+  height: 44px;
 }
 
 .brand-copy {
   display: grid;
-  gap: 2px;
+  gap: 4px;
 }
 
 .brand-name,
@@ -4845,20 +4842,22 @@ body.filters-collapsed .filter-body {
 }
 
 .brand-name {
-  font-size: 13px;
+  color: #667085;
+  font-size: 15px;
   font-weight: 800;
   line-height: 1;
+  text-transform: uppercase;
 }
 
 .brand-note {
-  color: #667085;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
+  color: #172033;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1.05;
 }
 
 .chrome-divider {
-  height: 36px;
+  height: 50px;
   background: #d8dee8;
 }
 
