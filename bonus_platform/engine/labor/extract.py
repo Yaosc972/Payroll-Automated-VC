@@ -220,8 +220,6 @@ def extract_invoice_items(
 
     supplier_profile = resolve_supplier_profile(supplier, profiles_path=ai_config.get("supplier_profiles_path"))
     pages = _extract_pdf_pages(pdf_paths)
-    if supplier_profile.image_page_policy == "first_page_only":
-        pages = [p for p in pages if int(p.get("page") or 1) == 1]
 
     # 并行规则抽取
     parallel_enabled = ai_config.get("parallel_extraction_enabled", True)

@@ -494,6 +494,52 @@ def test_extract_invoice_items_applies_first_page_only_profile_policy(monkeypatc
     assert rows[0].employee_name_raw == "Alvarez Minchaca, Rosa"
 
 
+def test_extract_invoice_items_applies_first_page_only_only_to_images(monkeypatch, tmp_path):
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "invoice.pdf",
+                "page": 1,
+                "text": "\n".join(["Reference", "Employee", "Wage Code", "Type", "Hours", "Rate", "Amount"]),
+            },
+            {
+                "source_file": "invoice.pdf",
+                "page": 2,
+                "text": "\n".join(
+                    [
+                        "Torres, Fabiola",
+                        "Reg",
+                        "REG",
+                        "40.00",
+                        "22.58",
+                        "$903.20",
+                        "Torres, Fabiola",
+                        "Reg",
+                        "OT",
+                        "4.64",
+                        "33.86",
+                        "$157.11",
+                    ]
+                ),
+            },
+        ],
+    )
+
+    rows = extract_invoice_items(
+        [pdf],
+        {"enabled": True, "provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        supplier="ONESOURCE",
+    )
+
+    assert len(rows) == 2
+    assert {row.source_page_or_row for row in rows} == {"p2"}
+    assert round(sum(row.amount for row in rows), 2) == 1060.31
+
+
 def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path):
     from PIL import Image
 
