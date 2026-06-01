@@ -379,6 +379,7 @@ def quick_extract_totals(
         if any(p.get("text", "").strip() for p in file_pages):
             rule_rows: List[LaborLineItem] = []
             for p in file_pages:
+                rule_rows.extend(_extract_wage_code_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
                 rule_rows.extend(_extract_vertical_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
                 if not rule_rows:
                     rule_rows.extend(_extract_tabular_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))

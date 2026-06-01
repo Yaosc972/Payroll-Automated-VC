@@ -540,6 +540,60 @@ def test_extract_invoice_items_applies_first_page_only_only_to_images(monkeypatc
     assert round(sum(row.amount for row in rows), 2) == 1060.31
 
 
+def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "invoice.pdf",
+                "page": 1,
+                "text": "\n".join(
+                    [
+                        "Aguilar, Hortensia",
+                        "Reg",
+                        "REG",
+                        "40.00",
+                        "22.58",
+                        "$903.20",
+                    ]
+                ),
+            },
+            {
+                "source_file": "invoice.pdf",
+                "page": 2,
+                "text": "\n".join(
+                    [
+                        "Torres, Fabiola",
+                        "Reg",
+                        "REG",
+                        "40.00",
+                        "22.58",
+                        "$903.20",
+                        "Torres, Fabiola",
+                        "Reg",
+                        "OT",
+                        "4.64",
+                        "33.86",
+                        "$157.11",
+                    ]
+                ),
+            },
+        ],
+    )
+
+    totals = quick_extract_totals(
+        [pdf],
+        {"enabled": True, "provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        supplier="Invoice",
+    )
+
+    assert totals == [{"source_file": "invoice.pdf", "total_amount": 1963.51, "warehouse_id": ""}]
+
+
 def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path):
     from PIL import Image
 
