@@ -127,6 +127,36 @@ def test_grande_solutions_simple_table_extracts_all_employee_rows():
     assert all(row.source_file == "GS_invoice-ELOG-466-FL.pdf" for row in rows)
 
 
+def test_citi_bill_rate_rows_merge_reg_and_ot_by_employee():
+    page = {
+        "source_file": "In291943.pdf",
+        "page": 1,
+        "text": "\n".join(
+            [
+                "Hours  Amount Bill Rate Date  Description  Pay Rate",
+                "WAREHOUSE LOC.#29PO #:",
+                "$33.60  0.400 $13.44 5/17/2026 Arellano Luna, Pablo $26.250 OT",
+                "$22.40  40.000 $896.00 5/17/2026 Arellano Luna, Pablo $17.500 Reg",
+                "$25.60  30.000 $768.00 5/17/2026 Escobar, Armando $20.000 Reg",
+                "$38.40  0.450 $17.28 5/17/2026 Escobar, Armando $30.000 OT",
+                "Regular",
+                "Overtime",
+                "Total Due: $1,694.72",
+            ]
+        ),
+    }
+
+    rows = _extract_with_rules([page], "CITI", "2026-05-17", "2026-05-22", "USD")
+
+    assert len(rows) == 2
+    by_name = {row.employee_name_raw: row for row in rows}
+    assert by_name["Arellano Luna, Pablo"].hours == 40.4
+    assert by_name["Arellano Luna, Pablo"].amount == 909.44
+    assert by_name["Arellano Luna, Pablo"].warehouse_id == "29"
+    assert by_name["Escobar, Armando"].hours == 30.45
+    assert by_name["Escobar, Armando"].amount == 785.28
+
+
 def test_layout_analyzer_recommends_simple_numbered_labor_table_for_gs_invoice():
     page = {
         "source_file": "GS_invoice-ELOG-466-FL.pdf",
@@ -643,6 +673,7 @@ def test_unknown_supplier_uses_default_extraction_profile():
     profile = resolve_supplier_profile("Unseen Vendor LLC")
 
     assert profile.key == "default"
+    assert profile.image_page_policy == "all"
 
 
 def test_supplier_profiles_can_load_from_json_config(tmp_path):
@@ -777,6 +808,63 @@ def test_extract_invoice_items_applies_first_page_only_only_to_images(monkeypatc
     assert round(sum(row.amount for row in rows), 2) == 1060.31
 
 
+def test_extract_invoice_items_falls_back_to_images_for_unparsed_scanned_pdf(monkeypatch, tmp_path):
+    text_pdf = tmp_path / "text.pdf"
+    scan_pdf = tmp_path / "scan.pdf"
+    text_pdf.write_bytes(b"%PDF-1.4\n")
+    scan_pdf.write_bytes(b"%PDF-1.4\n")
+    seen_pages = []
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "text.pdf",
+                "page": 1,
+                "text": "\n".join(
+                    [
+                        "Hours Amount Bill Rate Date Description Pay Rate",
+                        "$22.40 40.000 $896.00 5/17/2026 Arellano Luna, Pablo $17.500 Reg",
+                    ]
+                ),
+            },
+            {"source_file": "scan.pdf", "page": 1, "text": ""},
+            {"source_file": "scan.pdf", "page": 2, "text": ""},
+        ],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_pages_to_images",
+        lambda paths, scale=1.5, **kwargs: [
+            {"source_file": "scan.pdf", "source_path": str(scan_pdf), "page": 1, "mime_type": "image/png", "base64": "page1"},
+            {"source_file": "scan.pdf", "source_path": str(scan_pdf), "page": 2, "mime_type": "image/png", "base64": "page2"},
+        ],
+    )
+
+    def fake_extract_images(image_pages, *args, **kwargs):
+        seen_pages.extend(page["page"] for page in image_pages)
+        return [
+            {
+                "source_file": "scan.pdf",
+                "source_page_or_row": "p2",
+                "employee_name_raw": "Scan Person",
+                "hours": 8,
+                "amount": 160,
+                "confidence": 0.9,
+            }
+        ]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_with_ai_images", fake_extract_images)
+
+    rows = extract_invoice_items(
+        [text_pdf, scan_pdf],
+        {"enabled": True, "provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        supplier="CITI",
+    )
+
+    assert seen_pages == [1, 2]
+    assert [row.employee_name_raw for row in rows] == ["Arellano Luna, Pablo", "Scan Person"]
+
+
 def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tmp_path):
     from bonus_platform.engine.labor.extract import quick_extract_totals
 
@@ -829,6 +917,38 @@ def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tm
     )
 
     assert totals == [{"source_file": "invoice.pdf", "total_amount": 1963.51, "warehouse_id": ""}]
+
+
+def test_quick_extract_totals_uses_citi_bill_rate_rows(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "invoice.pdf",
+                "page": 1,
+                "text": "\n".join(
+                    [
+                        "Hours Amount Bill Rate Date Description Pay Rate",
+                        "WAREHOUSE LOC.#29PO #:",
+                        "$22.40 40.000 $896.00 5/17/2026 Arellano Luna, Pablo $17.500 Reg",
+                        "$33.60 0.400 $13.44 5/17/2026 Arellano Luna, Pablo $26.250 OT",
+                    ]
+                ),
+            }
+        ],
+    )
+
+    totals = quick_extract_totals(
+        [pdf],
+        {"enabled": True, "provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        supplier="CITI",
+    )
+
+    assert totals == [{"source_file": "invoice.pdf", "total_amount": 909.44, "warehouse_id": "29"}]
 
 
 def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path):
@@ -1116,7 +1236,7 @@ def test_mimo_image_extractor_uses_page_cache(monkeypatch, tmp_path):
     pdf.write_bytes(b"pdf")
     cache_dir = tmp_path / ".ai_extract_cache"
     cache_dir.mkdir()
-    cache_file = cache_dir / "scan_p1_mimo-v2.5_v4.json"
+    cache_file = cache_dir / "scan_p1_mimo-v2.5_v5.json"
     cache_file.write_text(
         json.dumps(
             [
@@ -1171,7 +1291,7 @@ def test_mimo_image_extractor_writes_page_cache(monkeypatch, tmp_path):
         {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
     )
 
-    cache_file = tmp_path / ".ai_extract_cache" / "scan_p1_mimo-v2.5_v4.json"
+    cache_file = tmp_path / ".ai_extract_cache" / "scan_p1_mimo-v2.5_v5.json"
     assert cache_file.exists()
 
 

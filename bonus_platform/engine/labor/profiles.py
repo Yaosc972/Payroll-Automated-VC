@@ -15,7 +15,7 @@ class SupplierExtractionProfile:
     image_page_policy: str = "first_page_only"
 
 
-DEFAULT_PROFILE = SupplierExtractionProfile(key="default")
+DEFAULT_PROFILE = SupplierExtractionProfile(key="default", image_page_policy="all")
 
 
 BUILTIN_PROFILES = [

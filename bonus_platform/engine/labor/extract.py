@@ -31,7 +31,7 @@ HOUR_RE = re.compile(r"^\d+(?:\.\d+)?$")
 PAY_CODE_RE = re.compile(r"^(?:Reg|OT|DT)$", re.IGNORECASE)
 TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
-AI_PAGE_CACHE_VERSION = "v4"
+AI_PAGE_CACHE_VERSION = "v5"
 
 # ── HTTP client with strict outer timeout (wall-clock) ──
 # urllib and httpx timeouts are phase/socket oriented, so a slow gateway can still
@@ -214,6 +214,9 @@ def _warehouse_id_from_text(page_text: str) -> str:
     m = re.search(r"DEPT[:\s]*(\d+)", page_text, re.IGNORECASE)
     if m:
         return m.group(1)
+    m = re.search(r"WAREHOUSE\s+LOC\.?\s*#\s*(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
     # 匹配 N号仓 格式
     m = re.search(r"(\d+)号仓", page_text)
     if m:
@@ -284,6 +287,7 @@ def extract_invoice_items(
         if rows:
             return rows
         rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        rows.extend(_extract_bill_rate_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_simple_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
@@ -324,6 +328,36 @@ def extract_invoice_items(
 
     if all_rule_items:
         logger.info(f"规则抽取成功: {len(all_rule_items)} 条记录")
+        parsed_sources = {item.source_file for item in all_rule_items}
+        pages_by_source: Dict[str, List[Dict[str, Any]]] = {}
+        for page in pages:
+            pages_by_source.setdefault(str(page.get("source_file") or ""), []).append(page)
+        unparsed_empty_sources = {
+            source
+            for source, source_pages in pages_by_source.items()
+            if source and source not in parsed_sources and not any((page.get("text") or "").strip() for page in source_pages)
+        }
+        if unparsed_empty_sources and _ai_ready(ai_config):
+            unparsed_paths = [path for path in pdf_paths if path.name in unparsed_empty_sources]
+            try:
+                render_workers = int(ai_config.get("parallel_image_render_workers", 1))
+                image_pages = _render_pdf_pages_to_images(unparsed_paths, scale=_effective_render_scale(ai_config), max_workers=render_workers)
+                image_pages = _apply_image_page_policy(image_pages, supplier_profile)
+                if image_pages:
+                    rows = _extract_with_ai_images(
+                        image_pages,
+                        ai_config,
+                        supplier=supplier,
+                        period_start=period_start,
+                        period_end=period_end,
+                        currency=currency,
+                        supplier_profile=supplier_profile,
+                        expected_rows=expected_rows,
+                    )
+                    rows = _filter_ai_rows_by_page_text(rows, pages)
+                    all_rule_items.extend(line_items_from_dicts(rows))
+            except Exception as exc:
+                logger.warning(f"规则抽取后补充扫描 PDF 失败，保留已抽取结果: {_safe_error_message(exc)}")
         return all_rule_items
 
     layout_plan = analyze_invoice_layout(pages)
@@ -460,6 +494,7 @@ def quick_extract_totals(
             rule_rows: List[LaborLineItem] = []
             for p in file_pages:
                 rule_rows.extend(_extract_wage_code_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
+                rule_rows.extend(_extract_bill_rate_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
                 rule_rows.extend(_extract_vertical_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
                 if not rule_rows:
                     rule_rows.extend(_extract_tabular_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
@@ -1044,6 +1079,7 @@ def _filter_ai_rows_by_page_text(rows: List[Dict[str, Any]], pages: List[Dict[st
         }
         for page in text_pages
     ]
+    text_sources = {page["source_file"] for page in normalized_pages}
     filtered: List[Dict[str, Any]] = []
     for row in rows:
         name = str(row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or "")
@@ -1052,8 +1088,14 @@ def _filter_ai_rows_by_page_text(rows: List[Dict[str, Any]], pages: List[Dict[st
         evidence_key = _normalize_support_text(evidence)
         if not name_key:
             continue
+        row_source = str(row.get("source_file") or row.get("sourceFile") or "")
+        if row_source and row_source not in text_sources:
+            filtered.append(dict(row))
+            continue
         matched_page = None
         for page in normalized_pages:
+            if row_source and page["source_file"] != row_source:
+                continue
             page_text = page["text"]
             if name_key in page_text or (evidence_key and evidence_key in page_text):
                 matched_page = page
@@ -1264,6 +1306,7 @@ def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start
         if layout_plan.recommended_parser != "ai_assisted":
             continue
         rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        rows.extend(_extract_bill_rate_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_simple_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
@@ -1380,6 +1423,63 @@ def _extract_wage_code_invoice_rows(page: Dict[str, Any], supplier: str, period_
                 )
             )
         index += step
+    return rows
+
+
+def _extract_bill_rate_invoice_rows(page: Dict[str, Any], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
+    """Extract rows like "$22.40 40.000 $896.00 5/17/2026 Name $17.500 Reg"."""
+    text = page.get("text") or ""
+    if not re.search(r"Hours\s+Amount\s+Bill\s+Rate\s+Date\s+Description\s+Pay\s+Rate", text, re.IGNORECASE):
+        return []
+
+    line_pattern = re.compile(
+        r"^\$(?P<bill_rate>\d[\d,]*(?:\.\d+)?)\s+"
+        r"(?P<hours>\d+(?:\.\d+)?)\s+"
+        r"\$(?P<amount>\d[\d,]*(?:\.\d+)?)\s+"
+        r"\d{1,2}/\d{1,2}/\d{4}\s+"
+        r"(?P<name>.+?)\s+"
+        r"\$(?P<pay_rate>\d[\d,]*(?:\.\d+)?)\s+"
+        r"(?P<type>Reg|OT|Overtime|Regular|DT|Doubletime)$",
+        re.IGNORECASE,
+    )
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for line in text.splitlines():
+        compact = " ".join(line.split())
+        match = line_pattern.match(compact)
+        if not match:
+            continue
+        name = match.group("name").strip()
+        if not _looks_like_vertical_name(name):
+            continue
+        current = grouped.setdefault(name, {"hours": 0.0, "amount": 0.0, "evidence": []})
+        current["hours"] += parse_number(match.group("hours"))
+        current["amount"] += parse_number(match.group("amount"))
+        current["evidence"].append(compact)
+
+    warehouse_id = _warehouse_id_from_text(text)
+    rows: List[LaborLineItem] = []
+    for name, data in grouped.items():
+        amount = round(float(data["amount"]), 2)
+        if not amount:
+            continue
+        rows.append(
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=page["source_file"],
+                source_page_or_row=f"p{page['page']}",
+                employee_id="",
+                employee_name_raw=name,
+                hours=round(float(data["hours"]), 2),
+                amount=amount,
+                currency=currency,
+                confidence=0.98,
+                evidence_text=" | ".join(data["evidence"]),
+                supplier=supplier,
+                period_start=period_start,
+                period_end=period_end,
+                warehouse_id=warehouse_id,
+            )
+        )
     return rows
 
 

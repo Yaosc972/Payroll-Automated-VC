@@ -413,6 +413,20 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     # 如果文件名无法匹配任何仓库号（如 US ELogistics 格式），回退到从 PDF 内容提取
                     if not filtered_pdf_paths:
                         filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_text_path(p, diff_wh)]
+                    zero_total_pdf_names = {
+                        str(total.get("source_file") or "")
+                        for total in pdf_totals
+                        if float(total.get("total_amount") or 0) == 0
+                    }
+                    zero_total_pdf_paths = [p for p in pdf_paths if p.name in zero_total_pdf_names and p not in filtered_pdf_paths]
+                    if zero_total_pdf_paths:
+                        filtered_pdf_paths.extend(zero_total_pdf_paths)
+                        issue = (
+                            "部分 PDF 快速总金额为 0，已纳入 Stage 2 明细抽取，避免扫描件或未知版式被仓库过滤遗漏。"
+                            f" 文件: {', '.join(p.name for p in zero_total_pdf_paths)}"
+                        )
+                        stage2_quality_issues.append(issue)
+                        logger.warning(f"[{run_id}] {issue}")
                     filtered_excel_rows = [r for r in excel_rows if r.warehouse_id in diff_wh]
                     if not filtered_pdf_paths:
                         filtered_pdf_paths = pdf_paths
@@ -452,7 +466,12 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 _append_quality_issues(extraction_quality, stage2_quality_issues)
                 logger.info(f"[{run_id}] [G] 比对完成: 质量={extraction_quality['level']}, 问题={len(extraction_quality.get('issues',[]))}条")
 
-                if extraction_quality["level"] in ("warning", "critical"):
+                should_retry_quality = extraction_quality["level"] in ("warning", "critical")
+                if should_retry_quality and any("快速总金额为 0" in issue for issue in stage2_quality_issues):
+                    should_retry_quality = False
+                    logger.info(f"[{run_id}] 已包含扫描/未知版式 PDF 补充抽取，跳过质量重试以避免重复大图 AI 请求")
+
+                if should_retry_quality:
                     logger.info(f"[{run_id}] 质量为 {extraction_quality['level']}，尝试重试...")
                     update_labor_metadata(run_id, {"stage": "重试抽取（质量优化）"})
                     original_rows = list(pdf_rows)
