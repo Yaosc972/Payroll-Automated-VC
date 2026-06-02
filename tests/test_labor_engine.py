@@ -18,6 +18,7 @@ from bonus_platform.engine.labor.layout import analyze_invoice_layout, extract_r
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
 from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics
+from bonus_platform.app import _supporting_zero_total_pdf_names
 from bonus_platform.engine.labor.report import build_labor_report
 from bonus_platform.engine.labor.workbook import read_workbook_rows, suggest_mapping
 
@@ -951,6 +952,22 @@ def test_quick_extract_totals_uses_citi_bill_rate_rows(monkeypatch, tmp_path):
     assert totals == [{"source_file": "invoice.pdf", "total_amount": 909.44, "warehouse_id": "29"}]
 
 
+def test_supporting_zero_total_pdf_names_only_flags_supplements_when_payable_invoice_exists():
+    totals = [
+        {"source_file": "In291943.pdf", "total_amount": 13836.28},
+        {"source_file": "Supplement1.pdf", "total_amount": 0},
+        {"source_file": "unknown_scan.pdf", "total_amount": 0},
+    ]
+
+    assert _supporting_zero_total_pdf_names(totals) == {"Supplement1.pdf"}
+
+
+def test_supporting_zero_total_pdf_names_keeps_only_pdf_when_all_totals_failed():
+    totals = [{"source_file": "Supplement1.pdf", "total_amount": 0}]
+
+    assert _supporting_zero_total_pdf_names(totals) == set()
+
+
 def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path):
     from PIL import Image
 
@@ -1053,6 +1070,41 @@ def test_mimo_image_extractor_sends_base64_pages_and_returns_rows(monkeypatch):
     assert rows[0]["employee_name_raw"] == "Alvarez Minchaca, Rosa"
     assert rows[0]["source_type"] == "pdf_invoice"
     assert rows[0]["supplier"] == "ONESOURCE"
+
+
+def test_mimo_image_extractor_annotates_single_page_rows_when_model_omits_source(monkeypatch):
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._post_chat_completion",
+        lambda payload, ai_config: [
+            {
+                "employee_name_raw": "Scan Person",
+                "hours": 8,
+                "amount": 160,
+                "confidence": 0.9,
+            }
+        ],
+    )
+
+    rows = _extract_with_ai_images(
+        [
+            {
+                "source_file": "scan.pdf",
+                "page": 2,
+                "mime_type": "image/png",
+                "base64": "abc123",
+            }
+        ],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "cache_enabled": False,
+        },
+    )
+
+    assert rows[0]["source_file"] == "scan.pdf"
+    assert rows[0]["source_page_or_row"] == "p2"
 
 
 def test_extract_invoice_items_uses_mimo_images_when_pdf_text_has_no_rows(monkeypatch, tmp_path):

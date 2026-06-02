@@ -857,15 +857,17 @@ def _extract_with_ai_images(
         _apply_provider_options(payload, ai_config)
         cached = _load_ai_page_cache(chunk, ai_config)
         if cached is not None:
-            rows.extend(cached)
+            rows.extend(_annotate_image_rows(cached, chunk))
             continue
         try:
             extracted = _post_chat_completion(payload, ai_config)
+            extracted = _annotate_image_rows(extracted, chunk)
             _save_ai_page_cache(chunk, ai_config, extracted)
             rows.extend(extracted)
         except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException) as exc:
             try:
                 extracted = _post_chat_completion(payload, ai_config)
+                extracted = _annotate_image_rows(extracted, chunk)
                 _save_ai_page_cache(chunk, ai_config, extracted)
                 rows.extend(extracted)
                 continue
@@ -874,6 +876,23 @@ def _extract_with_ai_images(
                 logger.warning(f"AI 图片抽取跳过超时/解析失败页面: {sources}; first={exc}; retry={retry_exc}")
                 continue
     return _normalize_ai_rows(rows, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
+
+
+def _annotate_image_rows(rows: List[Dict[str, Any]], chunk: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(chunk) != 1:
+        return rows
+    page = chunk[0]
+    source_file = page.get("source_file") or ""
+    source_page = f"p{page.get('page')}"
+    annotated: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        current = dict(row)
+        current["source_file"] = current.get("source_file") or current.get("sourceFile") or source_file
+        current["source_page_or_row"] = current.get("source_page_or_row") or current.get("sourcePageOrRow") or source_page
+        annotated.append(current)
+    return annotated
 
 
 def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:

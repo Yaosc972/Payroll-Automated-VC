@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
+import re
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -25,6 +26,21 @@ from .engine.labor.compare import compare_labor_items, compare_by_warehouse
 from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
 from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score, build_reconciliation_diagnostics
 from .engine.labor.report import build_labor_report
+
+
+SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
+
+
+def _supporting_zero_total_pdf_names(pdf_totals: list[dict]) -> set[str]:
+    has_payable_invoice = any(float(total.get("total_amount") or 0) > 0 for total in pdf_totals)
+    if not has_payable_invoice:
+        return set()
+    return {
+        str(total.get("source_file") or "")
+        for total in pdf_totals
+        if float(total.get("total_amount") or 0) == 0
+        and SUPPORTING_PDF_RE.search(str(total.get("source_file") or ""))
+    }
 
 
 def _warehouse_id_from_text_path(pdf_path: Path, diff_wh: list) -> bool:
@@ -379,8 +395,10 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         if all_totals_zero:
             logger.warning(f"[{run_id}] 所有 PDF 总金额为 0，将进入 Stage 2 全量抽取")
             pdf_totals = []  # Fall through to full extraction
+        supporting_pdf_names = _supporting_zero_total_pdf_names(pdf_totals)
+        payable_pdf_totals = [t for t in pdf_totals if str(t.get("source_file") or "") not in supporting_pdf_names]
         warehouse_comparison = compare_by_warehouse(
-            pdf_totals=pdf_totals,
+            pdf_totals=payable_pdf_totals,
             excel_rows_with_warehouse=excel_warehouse_data,
             amount_tolerance=AI_CONFIG["amount_tolerance"],
             manual_name_mapping=manual_name_mapping,
@@ -418,7 +436,16 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                         for total in pdf_totals
                         if float(total.get("total_amount") or 0) == 0
                     }
+                    supporting_pdf_paths = [p for p in pdf_paths if p.name in supporting_pdf_names]
+                    if supporting_pdf_paths:
+                        issue = (
+                            "检测到零总额支持材料 PDF，未计入应付金额明细抽取，避免与主发票重复计入。"
+                            f" 文件: {', '.join(p.name for p in supporting_pdf_paths)}"
+                        )
+                        stage2_quality_issues.append(issue)
+                        logger.warning(f"[{run_id}] {issue}")
                     zero_total_pdf_paths = [p for p in pdf_paths if p.name in zero_total_pdf_names and p not in filtered_pdf_paths]
+                    zero_total_pdf_paths = [p for p in zero_total_pdf_paths if p.name not in supporting_pdf_names]
                     if zero_total_pdf_paths:
                         filtered_pdf_paths.extend(zero_total_pdf_paths)
                         issue = (
@@ -486,7 +513,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 # Re-run warehouse comparison with full employee rows for Tier 3
                 # Pass pdf_totals to preserve correct total amounts for non-diff warehouses
                 warehouse_comparison = compare_by_warehouse(
-                    pdf_totals=pdf_totals,
+                    pdf_totals=payable_pdf_totals,
                     pdf_rows=pdf_rows,
                     excel_rows_with_warehouse=excel_warehouse_data,
                     amount_tolerance=AI_CONFIG["amount_tolerance"],
@@ -516,7 +543,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     # 计算结论级别
     conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality, amount_tolerance=AI_CONFIG["amount_tolerance"])
     reconciliation_diagnostics = build_reconciliation_diagnostics(
-        pdf_totals=pdf_totals,
+        pdf_totals=payable_pdf_totals,
         comparison_summary=comparison["summary"],
         warehouse_comparison=warehouse_comparison,
         amount_tolerance=AI_CONFIG["amount_tolerance"],
