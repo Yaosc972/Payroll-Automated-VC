@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import math
-import re
 from collections import defaultdict
 from difflib import SequenceMatcher
-from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from .extract import _warehouse_id_from_filename
 from .models import LaborComparisonRow, LaborLineItem, line_items_from_dicts
 from .parsing import normalize_employee_name, normalize_workbuddy_name, pdf_name_to_first_last
 
@@ -98,9 +97,6 @@ def compare_by_warehouse(
         "exceptionCount": 0,
     }
 
-    if total_passed:
-        return {"summary": summary, "rows": [], "errors": []}
-
     excel_by_wh, excel_errors = _group_excel_by_warehouse(excel_rows_with_warehouse)
     errors.extend(excel_errors)
     fallback_warehouse_id = next(iter(excel_by_wh), "") if len(excel_by_wh) == 1 else ""
@@ -109,6 +105,13 @@ def compare_by_warehouse(
     if pdf_totals:
         pdf_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0})
         for t in pdf_totals:
+            conflict = t.get("warehouse_conflict")
+            if conflict:
+                errors.append(
+                    "仓库号冲突: "
+                    f"{t.get('source_file', '')} 文件名={conflict.get('filename_warehouse_id', '')}, "
+                    f"内容={conflict.get('text_warehouse_id', '')}"
+                )
             wh = str(t.get("warehouse_id") or "")
             if not wh:
                 if fallback_warehouse_id and len(pdf_totals) == 1:
@@ -182,11 +185,15 @@ def compare_by_warehouse(
         warehouse_rows.append(row)
 
     passed = sum(1 for r in warehouse_rows if r["matchStatus"] == "通过")
+    diff_warehouses = [r["warehouseId"] for r in warehouse_rows if r["matchStatus"] != "通过"]
+    # 即使总金额一致，也要保留仓库级核对结果，避免仓库 A 多付、仓库 B 少付后在总额上互相抵消。
+    if total_passed and diff_warehouses:
+        summary["totalPassed"] = False
     summary.update({
         "warehouseCount": len(warehouse_rows),
         "passedCount": passed,
         "exceptionCount": len(warehouse_rows) - passed,
-        "diffWarehouses": [r["warehouseId"] for r in warehouse_rows if r["matchStatus"] != "通过"],
+        "diffWarehouses": diff_warehouses,
     })
     return {"summary": summary, "rows": warehouse_rows, "errors": errors}
 
@@ -638,30 +645,6 @@ def _build_summary(
         "candidateMatchCount": len(candidate_matches),
         "exceptionCount": sum(1 for row in rows if row["matchStatus"] != "通过"),
     }
-
-
-# ---------------------------------------------------------------------------
-# Warehouse ID extraction
-# ---------------------------------------------------------------------------
-
-def _warehouse_id_from_filename(source_file: str) -> str:
-    name = Path(source_file).stem.split("_202")[0]
-    m = re.search(r"DEPT[_-](\d+)", name, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    m = re.search(r"CHINA_EXPRESS__?(\d+)", name, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    m = re.search(r"elog(\d+)-", name, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    m = re.search(r"\(#?(\d{1,3})\)\s*$", name)
-    if m:
-        return m.group(1)
-    m = re.search(r"(?:___|__)(\d{1,3})\s*$", name)
-    if m:
-        return m.group(1)
-    return ""
 
 
 def _source_ref(item: LaborLineItem) -> str:

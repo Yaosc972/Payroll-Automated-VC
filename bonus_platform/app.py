@@ -29,17 +29,25 @@ from .engine.labor.report import build_labor_report
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
+NON_PAYABLE_PDF_TYPES = {"supporting", "attachment"}
 
 
-def _supporting_zero_total_pdf_names(pdf_totals: list[dict]) -> set[str]:
-    has_payable_invoice = any(float(total.get("total_amount") or 0) > 0 for total in pdf_totals)
+def _non_payable_pdf_names(pdf_totals: list[dict]) -> set[str]:
+    has_payable_invoice = any(
+        float(total.get("total_amount") or 0) > 0
+        and str(total.get("pdf_type") or "") not in NON_PAYABLE_PDF_TYPES
+        for total in pdf_totals
+    )
     if not has_payable_invoice:
         return set()
     return {
         str(total.get("source_file") or "")
         for total in pdf_totals
-        if float(total.get("total_amount") or 0) == 0
-        and SUPPORTING_PDF_RE.search(str(total.get("source_file") or ""))
+        if str(total.get("pdf_type") or "") in NON_PAYABLE_PDF_TYPES
+        or (
+            float(total.get("total_amount") or 0) == 0
+            and SUPPORTING_PDF_RE.search(str(total.get("source_file") or ""))
+        )
     }
 
 
@@ -395,8 +403,8 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         if all_totals_zero:
             logger.warning(f"[{run_id}] 所有 PDF 总金额为 0，将进入 Stage 2 全量抽取")
             pdf_totals = []  # Fall through to full extraction
-        supporting_pdf_names = _supporting_zero_total_pdf_names(pdf_totals)
-        payable_pdf_totals = [t for t in pdf_totals if str(t.get("source_file") or "") not in supporting_pdf_names]
+        non_payable_pdf_names = _non_payable_pdf_names(pdf_totals)
+        payable_pdf_totals = [t for t in pdf_totals if str(t.get("source_file") or "") not in non_payable_pdf_names]
         warehouse_comparison = compare_by_warehouse(
             pdf_totals=payable_pdf_totals,
             excel_rows_with_warehouse=excel_warehouse_data,
@@ -436,16 +444,16 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                         for total in pdf_totals
                         if float(total.get("total_amount") or 0) == 0
                     }
-                    supporting_pdf_paths = [p for p in pdf_paths if p.name in supporting_pdf_names]
-                    if supporting_pdf_paths:
+                    non_payable_pdf_paths = [p for p in pdf_paths if p.name in non_payable_pdf_names]
+                    if non_payable_pdf_paths:
                         issue = (
-                            "检测到零总额支持材料 PDF，未计入应付金额明细抽取，避免与主发票重复计入。"
-                            f" 文件: {', '.join(p.name for p in supporting_pdf_paths)}"
+                            "检测到支持材料/附件 PDF，未计入应付金额明细抽取，避免与主发票重复计入。"
+                            f" 文件: {', '.join(p.name for p in non_payable_pdf_paths)}"
                         )
                         stage2_quality_issues.append(issue)
                         logger.warning(f"[{run_id}] {issue}")
                     zero_total_pdf_paths = [p for p in pdf_paths if p.name in zero_total_pdf_names and p not in filtered_pdf_paths]
-                    zero_total_pdf_paths = [p for p in zero_total_pdf_paths if p.name not in supporting_pdf_names]
+                    zero_total_pdf_paths = [p for p in zero_total_pdf_paths if p.name not in non_payable_pdf_names]
                     if zero_total_pdf_paths:
                         filtered_pdf_paths.extend(zero_total_pdf_paths)
                         issue = (

@@ -174,13 +174,22 @@ def _fuzzy_get_name(row: Dict[str, Any]) -> str:
 def _warehouse_id_from_filename(source_file: str) -> str:
     """Extract warehouse number from PDF filename like DEPT_1, CHINA_EXPRESS__3, elog9-1."""
     name = Path(source_file).stem.split("_202")[0]
-    m = re.search(r"DEPT[_-](\d+)", name, re.IGNORECASE)
+    m = re.search(r"DEPT[_\-\s]*(\d+)", name, re.IGNORECASE)
     if m:
         return m.group(1)
     m = re.search(r"CHINA_EXPRESS__?(\d+)", name, re.IGNORECASE)
     if m:
         return m.group(1)
     m = re.search(r"elog(\d+)-", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"(?:^|[_\-\s])WH[_\-\s]*(\d{1,3})(?:$|[_\-\s])", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"(?:^|[_\-\s])LOC(?:ATION)?[_\-\s]*(\d{1,3})(?:$|[_\-\s])", name, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"\bCA[_\-\s]*#?\s*(\d{1,3})\b", name, re.IGNORECASE)
     if m:
         return m.group(1)
     m = re.search(r"\(#?(\d{1,3})\)\s*$", name)
@@ -207,7 +216,7 @@ def _warehouse_id_from_text(page_text: str) -> str:
     m = re.search(r"\(CA\)\s*LA\s*#\s*(\d+)", page_text, re.IGNORECASE)
     if m:
         return m.group(1)
-    m = re.search(r"CA#(\d+)", page_text, re.IGNORECASE)
+    m = re.search(r"CA\s*#\s*(\d+)", page_text, re.IGNORECASE)
     if m:
         return m.group(1)
     # 匹配 DEPT:N 格式
@@ -217,11 +226,44 @@ def _warehouse_id_from_text(page_text: str) -> str:
     m = re.search(r"WAREHOUSE\s+LOC\.?\s*#\s*(\d+)", page_text, re.IGNORECASE)
     if m:
         return m.group(1)
+    m = re.search(r"\bWH(?:\s|[:#-])+\s*(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"\bLOC(?:ATION)?\.?(?:\s|[:#-])+\s*(\d+)", page_text, re.IGNORECASE)
+    if m:
+        return m.group(1)
     # 匹配 N号仓 格式
     m = re.search(r"(\d+)号仓", page_text)
     if m:
         return m.group(1)
     return ""
+
+
+def _warehouse_id_conflict(source_file: str, page_text: str) -> Dict[str, str]:
+    filename_wh = _warehouse_id_from_filename(source_file)
+    text_wh = _warehouse_id_from_text(page_text)
+    if filename_wh and text_wh and filename_wh != text_wh:
+        return {
+            "source_file": source_file,
+            "filename_warehouse_id": filename_wh,
+            "text_warehouse_id": text_wh,
+        }
+    return {}
+
+
+def _classify_pdf(source_file: str, pages_text: str) -> str:
+    """按业务用途轻量分类 PDF，避免把支持材料/附件重复计入应付金额。"""
+    name = Path(source_file).name.lower()
+    text = (pages_text or "").lower()
+    combined = f"{name}\n{text}"
+    if re.search(r"\b(?:w-?9|coi|certificate|insurance|payment\s+terms)\b", combined):
+        return "attachment"
+    if re.search(r"(?:supplement|support|time\s*card|timecard|timesheet|daily\s+log|backup|appendix)", combined):
+        if not re.search(r"(?:invoice\s+total|total\s+due|amount\s+due|balance\s+due|grand\s+total)", text):
+            return "supporting"
+    if re.search(r"(?:invoice\s+total|total\s+due|amount\s+due|balance\s+due|grand\s+total)", text) and re.search(r"\$?\s*[\d,]+\.\d{2}\$?", text):
+        return "primary"
+    return "unknown"
 
 
 def _extract_invoice_total_from_text(page_text: str) -> float:
@@ -236,6 +278,10 @@ def _extract_invoice_total_from_text(page_text: str) -> float:
 
     for line in lines:
         if re.search(r"\bTotals\b", line, re.IGNORECASE):
+            amounts = re.findall(r"\$?\s*[\d,]+\.\d{2}\$?", line)
+            if amounts:
+                totals.append(parse_number(amounts[-1]))
+        if re.search(r"\b(?:total\s+due|invoice\s+total|amount\s+due|balance\s+due)\b", line, re.IGNORECASE):
             amounts = re.findall(r"\$?\s*[\d,]+\.\d{2}\$?", line)
             if amounts:
                 totals.append(parse_number(amounts[-1]))
@@ -481,15 +527,28 @@ def quick_extract_totals(
     def _extract_one(page: Dict[str, Any]) -> Dict[str, Any]:
         """提取单个 PDF 的总金额。优先规则抽取，其次缓存，最后 AI。"""
         source_file = page.get("source_file", "")
-        wh = _warehouse_id_from_filename(source_file)
         page_text = page.get("text", "")
+        filename_wh = _warehouse_id_from_filename(source_file)
+        text_wh = _warehouse_id_from_text(page_text) if page_text else ""
+        wh = filename_wh or text_wh
+        conflict = _warehouse_id_conflict(source_file, page_text)
+        file_pages = pages_by_file.get(source_file, [])
+        file_text = "\n".join(p.get("text", "") for p in file_pages) or page_text
+        pdf_type = _classify_pdf(source_file, file_text)
 
-        # 如果文件名没有仓库号，尝试从PDF内容提取（如 CA#25 格式）
-        if not wh and page_text:
-            wh = _warehouse_id_from_text(page_text)
+        def _result(total_amount: float, warehouse_id: str = "") -> Dict[str, Any]:
+            payload = {
+                "source_file": source_file,
+                "total_amount": total_amount,
+                "warehouse_id": warehouse_id or wh,
+                "pdf_type": pdf_type,
+            }
+            if conflict:
+                # 文件名和正文仓库号冲突时不静默吞掉，交给仓库核对/质量诊断提示人工复核。
+                payload["warehouse_conflict"] = conflict
+            return payload
 
         # 1. 尝试规则抽取：从所有页面解析员工明细并求和
-        file_pages = pages_by_file.get(source_file, [])
         if any(p.get("text", "").strip() for p in file_pages):
             rule_rows: List[LaborLineItem] = []
             for p in file_pages:
@@ -500,17 +559,17 @@ def quick_extract_totals(
                     rule_rows.extend(_extract_tabular_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
             if rule_rows:
                 total = round(sum(r.amount for r in rule_rows), 2)
-                return {"source_file": source_file, "total_amount": total, "warehouse_id": wh}
+                return _result(total)
             text_total = _extract_invoice_total_from_text("\n".join(p.get("text", "") for p in file_pages))
             if text_total > 0:
-                return {"source_file": source_file, "total_amount": text_total, "warehouse_id": wh}
+                return _result(text_total)
 
         # 2. 检查缓存
         source_path = fname_to_path.get(source_file)
         if source_path:
             cached = _load_totals_cache(source_path, ai_config)
             if cached is not None:
-                return {"source_file": source_file, "total_amount": cached["total_amount"], "warehouse_id": cached.get("warehouse_id", wh)}
+                return _result(cached["total_amount"], cached.get("warehouse_id", wh))
 
         # 3. AI 抽取（文本或图片）
         if not page_text.strip():
@@ -521,18 +580,18 @@ def quick_extract_totals(
                     result = {"total_amount": amount, "warehouse_id": wh}
                     if source_path:
                         _save_totals_cache(source_path, ai_config, result)
-                    return {"source_file": source_file, **result}
+                    return _result(amount, wh)
                 except Exception:
                     pass
-            return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
+            return _result(0.0)
         try:
             amount = _extract_total_with_ai(page_text, prompt, ai_config)
             result = {"total_amount": amount, "warehouse_id": wh}
             if source_path:
                 _save_totals_cache(source_path, ai_config, result)
-            return {"source_file": source_file, **result}
+            return _result(amount, wh)
         except Exception:
-            return {"source_file": source_file, "total_amount": 0.0, "warehouse_id": wh}
+            return _result(0.0)
 
     results = [None] * len(first_pages)
     # AI 调用并发数降到 2，避免 MiMo 服务限流导致全部卡死

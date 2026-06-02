@@ -12,13 +12,15 @@ from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pa
 from bonus_platform.engine.labor.extract import _analyze_layout_with_ai
 from bonus_platform.engine.labor.extract import _filter_ai_rows_by_page_text
 from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as extract_warehouse_id_from_filename
+from bonus_platform.engine.labor.extract import _warehouse_id_conflict
+from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
 from bonus_platform.engine.labor.layout import analyze_invoice_layout, extract_rows_from_layout_plan
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
 from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics
-from bonus_platform.app import _supporting_zero_total_pdf_names
+from bonus_platform.app import _non_payable_pdf_names
 from bonus_platform.engine.labor.report import build_labor_report
 from bonus_platform.engine.labor.workbook import read_workbook_rows, suggest_mapping
 
@@ -75,6 +77,44 @@ def test_fairway_warehouse_id_parses_from_filename_and_text():
     assert _warehouse_id_from_text("US ELOGISTICS SERVICE CORP\nCA(LA)- #18 TAMARIND (TAMR2)") == "18"
     assert _warehouse_id_from_text("FONTANA\n(CA)LA#10 HARBOR BAR (HARBOR)") == "10"
     assert _warehouse_id_from_text("CHINO, CA 91710\nCA(LA)#25 (CEDAR)") == "25"
+
+
+def test_warehouse_id_patterns_cover_common_filename_and_text_variants():
+    assert extract_warehouse_id_from_filename("INVOICE_WH-30.pdf") == "30"
+    assert extract_warehouse_id_from_filename("CITISTAFF_LOC_29_20260602.pdf") == "29"
+    assert _warehouse_id_from_text("Location: 3号仓") == "3"
+    assert _warehouse_id_from_text("Warehouse: WH 28") == "28"
+    assert _warehouse_id_from_text("LOC #21") == "21"
+
+
+def test_warehouse_id_conflict_is_reported_when_filename_and_text_disagree():
+    conflict = _warehouse_id_conflict("CHINA_EXPRESS__3_INVOICE.pdf", "US ELOGISTICS\nCA#30")
+
+    assert conflict == {"source_file": "CHINA_EXPRESS__3_INVOICE.pdf", "filename_warehouse_id": "3", "text_warehouse_id": "30"}
+
+
+def test_warehouse_comparison_reports_pdf_warehouse_conflict_errors():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {
+                "source_file": "CHINA_EXPRESS__3_INVOICE.pdf",
+                "warehouse_id": "3",
+                "total_amount": 1000.0,
+                "warehouse_conflict": {"filename_warehouse_id": "3", "text_warehouse_id": "30"},
+            }
+        ],
+        excel_rows_with_warehouse=[{"employee_name": "A", "warehouse_id": "3", "amount": 1000.0, "hours": 10}],
+        amount_tolerance=0.1,
+    )
+
+    assert result["errors"] == ["仓库号冲突: CHINA_EXPRESS__3_INVOICE.pdf 文件名=3, 内容=30"]
+
+
+def test_classify_pdf_distinguishes_invoice_support_and_attachments():
+    assert _classify_pdf("Invoice_123.pdf", "Invoice Total $1,000.00\nEmployee A") == "primary"
+    assert _classify_pdf("Supplement1.pdf", "Timecard Detail\nDaily Log\nEmployee hours only") == "supporting"
+    assert _classify_pdf("COI_certificate.pdf", "Certificate of Insurance") == "attachment"
+    assert _classify_pdf("scan.pdf", "") == "unknown"
 
 
 def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment():
@@ -272,6 +312,25 @@ def test_single_pdf_total_maps_to_only_excel_warehouse_when_pdf_has_no_warehouse
     assert result["rows"][0]["pdfEmployeeCount"] == 2
     assert result["rows"][0]["pdfAmountTotal"] == 25487.5
     assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_still_runs_when_totals_offset_between_warehouses():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "warehouse_3.pdf", "warehouse_id": "3", "total_amount": 5000.0},
+            {"source_file": "warehouse_5.pdf", "warehouse_id": "5", "total_amount": 3000.0},
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "A", "warehouse_id": "3", "amount": 4000.0, "hours": 10},
+            {"employee_name": "B", "warehouse_id": "5", "amount": 4000.0, "hours": 10},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["summary"]["amountDeltaTotal"] == 0.0
+    assert result["summary"]["totalPassed"] is False
+    assert result["summary"]["diffWarehouses"] == ["3", "5"]
+    assert {row["warehouseId"]: row["amountDelta"] for row in result["rows"]} == {"3": 1000.0, "5": -1000.0}
 
 
 def test_reconciliation_diagnostics_suppresses_missing_warehouse_when_single_pdf_was_safely_attributed():
@@ -917,7 +976,7 @@ def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tm
         supplier="Invoice",
     )
 
-    assert totals == [{"source_file": "invoice.pdf", "total_amount": 1963.51, "warehouse_id": ""}]
+    assert totals == [{"source_file": "invoice.pdf", "total_amount": 1963.51, "warehouse_id": "", "pdf_type": "unknown"}]
 
 
 def test_quick_extract_totals_uses_citi_bill_rate_rows(monkeypatch, tmp_path):
@@ -949,23 +1008,62 @@ def test_quick_extract_totals_uses_citi_bill_rate_rows(monkeypatch, tmp_path):
         supplier="CITI",
     )
 
-    assert totals == [{"source_file": "invoice.pdf", "total_amount": 909.44, "warehouse_id": "29"}]
+    assert totals == [{"source_file": "invoice.pdf", "total_amount": 909.44, "warehouse_id": "29", "pdf_type": "unknown"}]
 
 
-def test_supporting_zero_total_pdf_names_only_flags_supplements_when_payable_invoice_exists():
-    totals = [
-        {"source_file": "In291943.pdf", "total_amount": 13836.28},
-        {"source_file": "Supplement1.pdf", "total_amount": 0},
-        {"source_file": "unknown_scan.pdf", "total_amount": 0},
+def test_quick_extract_totals_preserves_warehouse_conflict(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "INVOICE_WH-3.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "INVOICE_WH-3.pdf",
+                "page": 1,
+                "text": "US ELOGISTICS\nCA#30\nTotal Due: $1,000.00",
+            }
+        ],
+    )
+
+    totals = quick_extract_totals(
+        [pdf],
+        {"enabled": True, "provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        supplier="Invoice",
+    )
+
+    assert totals == [
+        {
+            "source_file": "INVOICE_WH-3.pdf",
+            "total_amount": 1000.0,
+            "warehouse_id": "3",
+            "pdf_type": "primary",
+            "warehouse_conflict": {
+                "source_file": "INVOICE_WH-3.pdf",
+                "filename_warehouse_id": "3",
+                "text_warehouse_id": "30",
+            },
+        }
     ]
 
-    assert _supporting_zero_total_pdf_names(totals) == {"Supplement1.pdf"}
+
+def test_non_payable_pdf_names_flags_supporting_types_when_payable_invoice_exists():
+    totals = [
+        {"source_file": "In291943.pdf", "total_amount": 13836.28, "pdf_type": "primary"},
+        {"source_file": "Supplement1.pdf", "total_amount": 120.0, "pdf_type": "supporting"},
+        {"source_file": "COI.pdf", "total_amount": 0, "pdf_type": "attachment"},
+        {"source_file": "legacy_detail.pdf", "total_amount": 0},
+        {"source_file": "unknown_scan.pdf", "total_amount": 0, "pdf_type": "unknown"},
+    ]
+
+    assert _non_payable_pdf_names(totals) == {"Supplement1.pdf", "COI.pdf", "legacy_detail.pdf"}
 
 
-def test_supporting_zero_total_pdf_names_keeps_only_pdf_when_all_totals_failed():
-    totals = [{"source_file": "Supplement1.pdf", "total_amount": 0}]
+def test_non_payable_pdf_names_keeps_only_pdf_when_all_totals_failed():
+    totals = [{"source_file": "Supplement1.pdf", "total_amount": 0, "pdf_type": "supporting"}]
 
-    assert _supporting_zero_total_pdf_names(totals) == set()
+    assert _non_payable_pdf_names(totals) == set()
 
 
 def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path):
