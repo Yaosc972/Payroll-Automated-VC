@@ -16,7 +16,7 @@ from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
-from bonus_platform.engine.labor.layout import analyze_invoice_layout, extract_rows_from_layout_plan
+from bonus_platform.engine.labor.layout import InvoiceLayoutPlan, analyze_invoice_layout, extract_rows_from_layout_plan
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
 from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics
@@ -269,6 +269,85 @@ def test_ai_layout_analyzer_response_is_normalized_to_layout_plan(monkeypatch):
     assert plan.confidence == 0.86
     assert plan.hours_columns == ["Regular", "OT"]
     assert plan.amount_column == "Total"
+
+
+def test_layout_plan_extracts_generic_line_item_text_table():
+    page = {
+        "source_file": "new_vendor.pdf",
+        "page": 1,
+        "text": "\n".join(
+            [
+                "Warehouse: WH 42",
+                "Employee Hours Rate Amount",
+                "1 Jane Doe WUS010325 40.00 2.50 $21.00 $892.50",
+                "5/17/2026 John Smith 38.25 $20.00 $765.00",
+                "Invoice Total $1,657.50",
+            ]
+        ),
+    }
+    plan = InvoiceLayoutPlan(
+        layout_type="single_line_employee_amount_table",
+        recommended_parser="line_item_text_table",
+        confidence=0.84,
+        employee_name_pattern="employee name appears before hours and amount on the same line",
+        hours_columns=["Hours", "OT"],
+        amount_column="Amount",
+    )
+
+    rows = extract_rows_from_layout_plan([page], plan, supplier="New Vendor", period_start="2026-05-17", period_end="2026-05-22", currency="USD")
+
+    by_name = {row.employee_name_raw: row for row in rows}
+    assert list(by_name) == ["Jane Doe", "John Smith"]
+    assert by_name["Jane Doe"].employee_id == "WUS010325"
+    assert by_name["Jane Doe"].hours == 42.5
+    assert by_name["Jane Doe"].amount == 892.5
+    assert by_name["Jane Doe"].warehouse_id == "42"
+    assert by_name["John Smith"].hours == 38.25
+    assert by_name["John Smith"].amount == 765.0
+
+
+def test_extract_invoice_items_uses_ai_layout_plan_before_direct_ai(monkeypatch, tmp_path):
+    pdf = tmp_path / "unknown_vendor.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    page = {
+        "source_file": "unknown_vendor.pdf",
+        "page": 1,
+        "text": "Worker Detail\nJane Doe 40.00 1.00 $20.00 $830.00\nInvoice Total $830.00",
+    }
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_pdf_pages", lambda paths: [page])
+
+    def fake_post_chat_completion(payload, ai_config):
+        content = json.dumps(payload.get("messages", [{}])[-1].get("content", {}), ensure_ascii=False)
+        assert "line_item_text_table" in content
+        return [
+            {
+                "layout_type": "single_line_employee_amount_table",
+                "recommended_parser": "line_item_text_table",
+                "confidence": 0.86,
+                "employee_name_pattern": "between row number and first hours value",
+                "hours_columns": ["Hours", "OT"],
+                "amount_column": "Amount",
+                "evidence": ["Jane Doe 40.00 1.00 $20.00 $830.00"],
+            }
+        ]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post_chat_completion)
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_with_ai_text", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("direct text AI should not run")))
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_with_ai_images", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("image AI should not run")))
+
+    rows = extract_invoice_items(
+        [pdf],
+        {"enabled": True, "provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        supplier="Unknown Vendor",
+        currency="USD",
+    )
+
+    assert len(rows) == 1
+    assert rows[0].employee_name_raw == "Jane Doe"
+    assert rows[0].hours == 41.0
+    assert rows[0].amount == 830.0
+    assert rows[0].confidence == 0.82
 
 
 def test_ai_rows_without_supporting_page_text_are_filtered():

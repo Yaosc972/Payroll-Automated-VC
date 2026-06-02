@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List
 
 from .models import LaborLineItem
+from .parsing import parse_number
 
 
 @dataclass
@@ -131,4 +132,154 @@ def extract_rows_from_layout_plan(
                 )
             )
         return rows
+    if plan.recommended_parser == "line_item_text_table":
+        return _extract_line_item_text_table_rows(
+            pages,
+            supplier=supplier,
+            period_start=period_start,
+            period_end=period_end,
+            currency=currency,
+        )
     return []
+
+
+def _extract_line_item_text_table_rows(
+    pages: List[Dict[str, Any]],
+    *,
+    supplier: str,
+    period_start: str,
+    period_end: str,
+    currency: str,
+) -> List[LaborLineItem]:
+    """通用单行员工明细解析器。
+
+    AI 版式识别只负责判断“这一版是否是一行一个员工”的结构；这里仍用确定性规则取值，
+    避免把 AI 的自由文本判断直接写进金额结果。
+    """
+    rows: List[LaborLineItem] = []
+    for page in pages:
+        warehouse_id = _warehouse_id_from_text_local(page.get("text") or "")
+        for raw_line in (page.get("text") or "").splitlines():
+            compact = " ".join(raw_line.split())
+            if not _looks_like_line_item(compact):
+                continue
+            item = _line_item_from_text_line(
+                compact,
+                page,
+                warehouse_id=warehouse_id,
+                supplier=supplier,
+                period_start=period_start,
+                period_end=period_end,
+                currency=currency,
+            )
+            if item:
+                rows.append(item)
+    return rows
+
+
+def _looks_like_line_item(line: str) -> bool:
+    if not line:
+        return False
+    if re.search(r"\b(?:total|subtotal|summary|invoice|balance|amount due)\b", line, re.IGNORECASE):
+        return False
+    if not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]{2,}", line):
+        return False
+    return bool(re.search(r"\$?\s*-?[\d,]+\.\d{2}\$?", line))
+
+
+def _line_item_from_text_line(
+    line: str,
+    page: Dict[str, Any],
+    *,
+    warehouse_id: str,
+    supplier: str,
+    period_start: str,
+    period_end: str,
+    currency: str,
+) -> LaborLineItem | None:
+    amount_matches = list(re.finditer(r"-?\$\s*[\d,]+\.\d{2}|-?[\d,]+\.\d{2}\$", line))
+    if not amount_matches:
+        amount_matches = list(re.finditer(r"-?[\d,]+\.\d{2}", line))
+    if not amount_matches:
+        return None
+    amount = parse_number(amount_matches[-1].group(0))
+    if not amount:
+        return None
+
+    name_area = line[: amount_matches[0].start()]
+    name = _extract_employee_name_from_line_prefix(name_area)
+    if not name:
+        return None
+
+    hours = _extract_hours_from_line(line, amount_matches)
+    if hours <= 0:
+        return None
+    return LaborLineItem(
+        source_type="pdf_invoice",
+        source_file=str(page.get("source_file") or ""),
+        source_page_or_row=f"p{page.get('page')}",
+        employee_id=_extract_employee_id(line),
+        employee_name_raw=name,
+        hours=round(hours, 2),
+        amount=round(amount, 2),
+        currency=currency,
+        confidence=0.82,
+        evidence_text=line,
+        supplier=supplier,
+        period_start=period_start,
+        period_end=period_end,
+        warehouse_id=warehouse_id,
+    )
+
+
+def _extract_employee_name_from_line_prefix(prefix: str) -> str:
+    cleaned = re.sub(r"^\s*\d+\s+", " ", prefix)
+    cleaned = re.sub(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", " ", cleaned)
+    cleaned = re.sub(r"\b(?:WUS)?\d{3,8}\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.split(r"\b(?:reg|regular|ot|overtime|dt|doubletime|hours?|hrs?)\b", cleaned, flags=re.IGNORECASE)[0]
+    cleaned = re.split(r"\s+\d+(?:\.\d+)?\b", cleaned, maxsplit=1)[0]
+    cleaned = re.sub(r"[^A-Za-zÀ-ÖØ-öø-ÿ,\s.'-]", " ", cleaned)
+    cleaned = " ".join(cleaned.split()).strip(" ,.-'")
+    tokens = [token for token in cleaned.split() if len(token.strip(".,'")) > 1]
+    if len(tokens) < 2:
+        return ""
+    return cleaned
+
+
+def _extract_hours_from_line(line: str, amount_matches: List[re.Match[str]]) -> float:
+    prefix = line[: amount_matches[0].start()]
+    prefix = re.sub(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b", " ", prefix)
+    prefix = re.sub(r"\b(?:WUS)?\d{3,8}\b", " ", prefix, flags=re.IGNORECASE)
+    numeric_values = [
+        parse_number(match.group(0))
+        for match in re.finditer(r"(?<![A-Za-z])\d{1,3}(?:\.\d{1,3})?(?![A-Za-z])", prefix)
+    ]
+    hours = [value for value in numeric_values if 0 < value <= 80]
+    if not hours:
+        return 0.0
+    # 单行表常见为 regular + OT 多列，排除行号/日期后把合理工时相加。
+    if len(hours) >= 2 and hours[0].is_integer() and int(hours[0]) <= 200 and re.match(r"^\s*\d+\s+", line):
+        hours = hours[1:]
+    return sum(hours[:3])
+
+
+def _extract_employee_id(line: str) -> str:
+    match = re.search(r"\b(WUS\d{3,8}|\d{5,8})\b", line, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _warehouse_id_from_text_local(text: str) -> str:
+    patterns = [
+        r"\(CA\)\s*LA\s*#\s*(\d+)",
+        r"CA\s*#\s*(\d+)",
+        r"DEPT\s*:?\s*(\d+)",
+        r"WAREHOUSE\s+LOC\.?\s*#\s*(\d+)",
+        r"\bWH(?:\s|[:#-])+\s*(\d+)",
+        r"\bLOC(?:ATION)?\.?(?:\s|[:#-])+\s*(\d+)",
+        r"(\d{1,3})\s*号仓",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""

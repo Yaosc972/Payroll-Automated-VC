@@ -833,10 +833,12 @@ def _analyze_layout_with_ai(
         "instruction": (
             "Analyze the labor invoice table layout. Return one JSON object inside an array. "
             "Do not extract employee rows. Choose recommended_parser only from: "
-            "simple_invoice_table, ai_assisted. "
+            "simple_invoice_table, line_item_text_table, ai_assisted. "
             "Return fields: layout_type, recommended_parser, confidence, "
             "employee_name_pattern, hours_columns, amount_column, total_label, "
             "warehouse_source, evidence."
+            "Use line_item_text_table only when each text line contains one employee "
+            "and the same line also contains hours and a payable amount."
         ),
         "supplier": supplier,
         "currency": currency,
