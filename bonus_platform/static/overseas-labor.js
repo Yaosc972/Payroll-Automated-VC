@@ -726,7 +726,7 @@ function renderQualityAlert(quality, diagnostics) {
   const alertLevel = _higherSeverity(quality.level, diagnostics && diagnostics.level);
   const severityLabel = alertLevel === "critical" ? "必须复核" : "建议复核";
   const severityTitle =
-    (diagnostics && diagnostics.message) ||
+    (hasDiagnosticIssue && diagnostics && diagnostics.message) ||
     quality.message ||
     (alertLevel === "critical" ? "抽取质量存在严重问题。" : "抽取质量需要关注。");
   const actionItems = diagnosticIssues.length
@@ -742,6 +742,17 @@ function renderQualityAlert(quality, diagnostics) {
   const pdfAmount = totals.pdfAmount;
   const excelAmount = totals.excelAmount;
   const signals = (diagnostics && diagnostics.signals) || {};
+  const employeeGap = Math.abs((employeeCounts.unmatchedPdf || 0) + (employeeCounts.unmatchedExcel || 0));
+  const signalDelta =
+    signals.fastPdfTotal !== undefined
+      ? Math.abs((signals.fastPdfTotal || 0) - (signals.excelTotal || 0))
+      : amountDelta;
+  const primaryFocus = actionItems.length
+    ? actionItems[0]
+    : amountDelta > 0.1
+    ? "总金额存在差异，先按仓库定位，再下钻到员工。"
+    : "总金额在容差内，当前只需抽样复核抽取证据。";
+  const secondaryFocus = actionItems.slice(1, 4);
 
   // Build details
   let detailsHtml = "";
@@ -773,9 +784,9 @@ function renderQualityAlert(quality, diagnostics) {
       <div class="quality-detail-section">
         <h4>置信度分布</h4>
         <div class="quality-metrics">
-          <span>平均置信度: <strong>${(confidence.average * 100).toFixed(1)}%</strong></span>
-          <span>低置信度: <strong>${confidence.lowCount || 0}</strong>条</span>
-          <span>极低置信度: <strong>${confidence.veryLowCount || 0}</strong>条</span>
+          <span><em>平均置信度</em><strong>${(confidence.average * 100).toFixed(1)}%</strong></span>
+          <span><em>低置信度</em><strong>${confidence.lowCount || 0} 条</strong></span>
+          <span><em>极低置信度</em><strong>${confidence.veryLowCount || 0} 条</strong></span>
         </div>
       </div>
     `;
@@ -787,9 +798,9 @@ function renderQualityAlert(quality, diagnostics) {
       <div class="quality-detail-section">
         <h4>抽取方法</h4>
         <div class="quality-metrics">
-          <span>规则: <strong>${methods.rule || 0}</strong></span>
-          <span>AI文本: <strong>${methods.ai_text || 0}</strong></span>
-          <span>AI图片: <strong>${methods.ai_image || 0}</strong></span>
+          <span><em>规则</em><strong>${methods.rule || 0}</strong></span>
+          <span><em>AI 文本</em><strong>${methods.ai_text || 0}</strong></span>
+          <span><em>AI 图片</em><strong>${methods.ai_image || 0}</strong></span>
         </div>
       </div>
     `;
@@ -801,11 +812,11 @@ function renderQualityAlert(quality, diagnostics) {
       <div class="quality-detail-section">
         <h4>员工覆盖</h4>
         <div class="quality-metrics">
-          <span>PDF: <strong>${employeeCounts.pdf}</strong>人</span>
-          <span>Excel: <strong>${employeeCounts.excel}</strong>人</span>
-          <span>未匹配: <strong>${
+          <span><em>PDF</em><strong>${employeeCounts.pdf} 人</strong></span>
+          <span><em>Excel</em><strong>${employeeCounts.excel} 人</strong></span>
+          <span><em>未匹配</em><strong>${
             (employeeCounts.unmatchedPdf || 0) + (employeeCounts.unmatchedExcel || 0)
-          }</strong>人</span>
+          } 人</strong></span>
         </div>
       </div>
     `;
@@ -820,8 +831,8 @@ function renderQualityAlert(quality, diagnostics) {
         <div class="quality-detail-section">
           <h4>差异统计</h4>
           <div class="quality-metrics">
-            <span>金额差异: <strong>$${amountDelta.toFixed(2)}</strong></span>
-            <span>工时差异: <strong>${hoursDelta.toFixed(2)}h</strong></span>
+            <span><em>金额差异</em><strong>$${amountDelta.toFixed(2)}</strong></span>
+            <span><em>工时差异</em><strong>${hoursDelta.toFixed(2)}h</strong></span>
           </div>
         </div>
       `;
@@ -829,58 +840,55 @@ function renderQualityAlert(quality, diagnostics) {
   }
 
   labor.qualityAlert.hidden = false;
+  labor.qualityAlert.dataset.level = alertLevel || "warning";
   labor.qualityAlert.innerHTML = `
-    <div class="quality-brief">
-      <div>
-        <span class="quality-badge">${escapeHtml(severityLabel)}</span>
+    <div class="quality-command">
+      <div class="quality-command-main">
+        <span class="quality-eyebrow">${escapeHtml(severityLabel)}</span>
         <h3>${escapeHtml(severityTitle)}</h3>
         <p>${escapeHtml(_qualityNextStepText(quality, warehouseIssues, totals, diagnostics))}</p>
       </div>
-      <div class="quality-total-card">
-        <span>${signals.fastPdfTotal !== undefined ? "PDF总额校验" : "金额差异"}</span>
-        <strong>$${formatMoney(
-          signals.fastPdfTotal !== undefined
-            ? Math.abs((signals.fastPdfTotal || 0) - (signals.excelTotal || 0))
-            : amountDelta
-        )}</strong>
-        <small>${signals.fastPdfTotal !== undefined ? "快速总额 vs Excel" : `工时差异 ${formatHours(hoursDelta)}h`}</small>
+      <div class="quality-money-stack">
+        <span>${signals.fastPdfTotal !== undefined ? "总额差异" : "金额差异"}</span>
+        <strong>${signalDelta > 0 ? "+" : ""}$${formatMoney(signalDelta)}</strong>
+        <small>${signals.fastPdfTotal !== undefined ? "PDF vs Excel" : `工时差异 ${formatHours(hoursDelta)}h`}</small>
       </div>
     </div>
-    <div class="quality-action-grid">
-      <div class="quality-action-card">
-        <h4>先看什么</h4>
-        ${
-          actionItems.length
-            ? `<ul>${actionItems.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>`
-            : "<p>暂无明确异常项，优先下载报告留档。</p>"
-        }
-      </div>
-      <div class="quality-action-card">
-        <h4>建议动作</h4>
-        <ul>
-          <li>先确认 PDF 发票总额与 Excel 账单总额是否同一口径。</li>
-          <li>若仓库列表有差异，先按仓库下钻，再看员工明细。</li>
-          <li>完整员工级证据请下载报告，不要只凭顶部差额做结论。</li>
-        </ul>
-      </div>
-      <div class="quality-action-card">
+    <div class="quality-workflow">
+      <section class="quality-focus-card">
+        <span class="focus-index">01</span>
+        <div>
+          <h4>优先复核</h4>
+          <p>${escapeHtml(primaryFocus)}</p>
+          ${
+            secondaryFocus.length
+              ? `<ul>${secondaryFocus.map((issue) => `<li>${escapeHtml(issue)}</li>`).join("")}</ul>`
+              : ""
+          }
+        </div>
+      </section>
+      <section class="quality-ledger-card">
         <h4>当前口径</h4>
-        <dl>
-          <div><dt>快速PDF</dt><dd>${signals.fastPdfTotal === undefined ? "—" : `$${formatMoney(signals.fastPdfTotal)}`}</dd></div>
-          <div><dt>员工明细</dt><dd>${signals.employeePdfTotal === undefined ? pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}` : `$${formatMoney(signals.employeePdfTotal)}`}</dd></div>
-          <div><dt>Excel</dt><dd>${signals.excelTotal === undefined ? excelAmount === undefined ? "—" : `$${formatMoney(excelAmount)}` : `$${formatMoney(signals.excelTotal)}`}</dd></div>
-          <div><dt>仓库PDF</dt><dd>${signals.warehouseTotal === undefined ? "—" : `$${formatMoney(signals.warehouseTotal)}`}</dd></div>
-          <div><dt>覆盖</dt><dd>PDF ${employeeCounts.pdf ?? "—"} 人 / Excel ${employeeCounts.excel ?? "—"} 人</dd></div>
-          <div><dt>抽取</dt><dd>规则 ${methods.rule || 0} · AI文本 ${methods.ai_text || 0} · AI图片 ${methods.ai_image || 0}</dd></div>
-        </dl>
-      </div>
+        <div class="ledger-grid">
+          <div><span>PDF 总额</span><strong>${signals.fastPdfTotal === undefined ? pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}` : `$${formatMoney(signals.fastPdfTotal)}`}</strong></div>
+          <div><span>Excel 总额</span><strong>${signals.excelTotal === undefined ? excelAmount === undefined ? "—" : `$${formatMoney(excelAmount)}` : `$${formatMoney(signals.excelTotal)}`}</strong></div>
+          <div><span>员工明细</span><strong>${signals.employeePdfTotal === undefined ? pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}` : `$${formatMoney(signals.employeePdfTotal)}`}</strong></div>
+          <div><span>仓库 PDF</span><strong>${signals.warehouseTotal === undefined ? "—" : `$${formatMoney(signals.warehouseTotal)}`}</strong></div>
+        </div>
+      </section>
     </div>
-    ${detailsHtml ? `<details class="quality-diagnostics"><summary>查看技术诊断</summary><div class="quality-details">${detailsHtml}</div></details>` : ""}
+    <div class="quality-mini-metrics">
+      <div><span>覆盖</span><strong>PDF ${employeeCounts.pdf ?? "—"} / Excel ${employeeCounts.excel ?? "—"}</strong></div>
+      <div><span>未匹配</span><strong>${employeeGap} 人</strong></div>
+      <div><span>抽取</span><strong>规则 ${methods.rule || 0} · AI ${Number(methods.ai_text || 0) + Number(methods.ai_image || 0)}</strong></div>
+      <div><span>置信度</span><strong>${confidence.average === undefined ? "—" : `${(confidence.average * 100).toFixed(1)}%`}</strong></div>
+    </div>
+    ${detailsHtml ? `<details class="quality-diagnostics"><summary>技术诊断与抽取指标</summary><div class="quality-details">${detailsHtml}</div></details>` : ""}
   `;
 }
 
 function _qualityNextStepText(quality, warehouseIssues, totals, diagnostics) {
-  if (diagnostics && diagnostics.nextStep) return diagnostics.nextStep;
+  if (diagnostics && diagnostics.level && diagnostics.level !== "ok" && diagnostics.nextStep) return diagnostics.nextStep;
   const amountDelta = Math.abs(totals.amountDelta || 0);
   if (warehouseIssues && warehouseIssues.length) {
     return `系统发现 ${warehouseIssues.length} 个仓库需要复核。先看仓库金额，再进入员工明细定位差异。`;
