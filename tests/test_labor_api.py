@@ -325,7 +325,7 @@ def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(
     assert "请复核 PDF 抽取明细" in body["extractionQuality"]["message"]
 
 
-def test_labor_compare_retries_with_excel_candidates_when_quality_warns(monkeypatch):
+def test_labor_compare_uses_excel_candidates_on_initial_extract(monkeypatch):
     import bonus_platform.app as app_module
 
     monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
@@ -334,12 +334,8 @@ def test_labor_compare_retries_with_excel_candidates_when_quality_warns(monkeypa
 
     def fake_extract(*args, **kwargs):
         calls.append(kwargs)
-        if kwargs.get("expected_rows"):
-            return [
-                LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Rosa Alvarez Minchaca", hours=31.19, amount=701.90, currency="USD", confidence=0.9, evidence_text="retry")
-            ]
         return [
-            LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alvarez Mitrache, Rosa", hours=10, amount=100, currency="USD", confidence=0.95, evidence_text="first pass")
+            LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Rosa Alvarez Minchaca", hours=31.19, amount=701.90, currency="USD", confidence=0.9, evidence_text="initial")
         ]
 
     monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
@@ -364,10 +360,10 @@ def test_labor_compare_retries_with_excel_candidates_when_quality_warns(monkeypa
 
     assert response.status_code == 200
     body = client.get(f"/api/labor/runs/{run['id']}").json()
-    assert len(calls) == 2
-    assert calls[1]["expected_rows"][0]["employee_name"] == "Rosa Alvarez Minchaca"
+    assert len(calls) == 1
+    assert calls[0]["expected_rows"][0]["employee_name"] == "Rosa Alvarez Minchaca"
     assert body["extractionQuality"]["level"] == "ok"
-    assert body["extractionQuality"]["retryApplied"] is True
+    assert body["extractionQuality"].get("retryApplied") is not True
     assert body["comparisonSummary"]["exceptionCount"] == 0
 
 

@@ -481,6 +481,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 pdf_rows = extract_invoice_items(
                     filtered_pdf_paths, AI_CONFIG,
                     supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                    expected_rows=_expected_labor_rows(filtered_excel_rows),
                 )
                 logger.info(f"[{run_id}] [C/D] 员工明细抽取完成: {len(pdf_rows)} 条记录")
                 if not pdf_rows:
@@ -684,26 +685,18 @@ def _check_stale_extracting(metadata: dict) -> dict:
 
 def _recover_stuck_labor_runs() -> None:
     """Mark stale '抽取中' runs as failed on server startup."""
-    from datetime import datetime as _dt, timedelta
-    threshold = _dt.now() - timedelta(minutes=5)
     for metadata in list_labor_metadata():
         if metadata.get("status") != "抽取中":
             continue
-        updated = metadata.get("updatedAt") or metadata.get("createdAt") or ""
-        try:
-            updated_dt = _dt.fromisoformat(updated)
-        except (ValueError, TypeError):
-            continue
-        if updated_dt < threshold:
-            run_id = metadata.get("id")
-            if run_id:
-                try:
-                    update_labor_metadata(run_id, {
-                        "status": "抽取失败",
-                        "errorMessage": "服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
-                    })
-                except Exception:
-                    pass
+        run_id = metadata.get("id")
+        if run_id:
+            try:
+                update_labor_metadata(run_id, {
+                    "status": "抽取失败",
+                    "errorMessage": "服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
+                })
+            except Exception:
+                pass
 
 
 def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_quality: dict, amount_tolerance: float = 0.05) -> dict:

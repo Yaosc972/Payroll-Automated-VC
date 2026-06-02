@@ -11,6 +11,7 @@ from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
 from bonus_platform.engine.labor.extract import _analyze_layout_with_ai
 from bonus_platform.engine.labor.extract import _filter_ai_rows_by_page_text
+from bonus_platform.engine.labor.extract import _filter_ai_rows_by_expected_employees
 from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as extract_warehouse_id_from_filename
 from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
@@ -1145,7 +1146,7 @@ def test_non_payable_pdf_names_keeps_only_pdf_when_all_totals_failed():
     assert _non_payable_pdf_names(totals) == set()
 
 
-def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path):
+def test_rendered_invoice_images_preserve_pdf_orientation(monkeypatch, tmp_path):
     from PIL import Image
 
     class FakeBitmap:
@@ -1180,7 +1181,7 @@ def test_rendered_invoice_images_are_rotated_to_landscape(monkeypatch, tmp_path)
     rows = __import__("bonus_platform.engine.labor.extract", fromlist=["_render_pdf_pages_to_images"])._render_pdf_pages_to_images([tmp_path / "scan.pdf"])
 
     image = Image.open(BytesIO(__import__("base64").b64decode(rows[0]["base64"])))
-    assert image.size == (200, 100)
+    assert image.size == (100, 200)
 
 
 def test_pdf_text_extraction_keeps_pipeline_alive_for_unreadable_pdf(tmp_path):
@@ -1341,6 +1342,44 @@ def test_mimo_image_extractor_filters_non_employee_zero_rows(monkeypatch):
     assert [row["employee_name_raw"] for row in rows] == ["Alvarez Minchaca, Rosa"]
 
 
+def test_image_extractor_includes_full_expected_employee_list(monkeypatch):
+    captured = {}
+
+    def fake_post(payload, config):
+        captured["payload"] = payload
+        return []
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post)
+    expected_rows = [{"employee_name": f"Employee {idx}"} for idx in range(1, 36)]
+
+    _extract_with_ai_images(
+        [{"source_file": "scan.pdf", "page": 1, "mime_type": "image/png", "base64": "abc123"}],
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+        expected_rows=expected_rows,
+    )
+
+    prompt_text = captured["payload"]["messages"][1]["content"][-1]["text"]
+    assert "Employee 1" in prompt_text
+    assert "Employee 20" in prompt_text
+    assert "Employee 35" in prompt_text
+
+
+def test_image_ai_rows_are_filtered_against_expected_employee_candidates():
+    rows = [
+        {"employee_name_raw": "John Doe", "hours": 0, "amount": 5500, "confidence": 0.95},
+        {"employee_name_raw": "Morales, Katherine", "hours": 40.6, "amount": 916.16, "confidence": 0.95},
+        {"employee_name_raw": "Gerardo Torres Valencia", "hours": 39.27, "amount": 1008.51, "confidence": 0.95},
+    ]
+    expected_rows = [
+        {"employee_name": "Katherina Morales"},
+        {"employee_name": "Gerardo Torres"},
+    ]
+
+    filtered = _filter_ai_rows_by_expected_employees(rows, expected_rows)
+
+    assert [row["employee_name_raw"] for row in filtered] == ["Morales, Katherine", "Gerardo Torres Valencia"]
+
+
 def test_mimo_image_extractor_filters_timesheet_rows_without_money_evidence(monkeypatch):
     monkeypatch.setattr(
         "bonus_platform.engine.labor.extract._post_chat_completion",
@@ -1465,7 +1504,7 @@ def test_mimo_image_extractor_uses_page_cache(monkeypatch, tmp_path):
     pdf.write_bytes(b"pdf")
     cache_dir = tmp_path / ".ai_extract_cache"
     cache_dir.mkdir()
-    cache_file = cache_dir / "scan_p1_mimo-v2.5_v5.json"
+    cache_file = cache_dir / "scan_p1_mimo-v2.5_v6.json"
     cache_file.write_text(
         json.dumps(
             [
@@ -1520,7 +1559,7 @@ def test_mimo_image_extractor_writes_page_cache(monkeypatch, tmp_path):
         {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
     )
 
-    cache_file = tmp_path / ".ai_extract_cache" / "scan_p1_mimo-v2.5_v5.json"
+    cache_file = tmp_path / ".ai_extract_cache" / "scan_p1_mimo-v2.5_v6.json"
     assert cache_file.exists()
 
 

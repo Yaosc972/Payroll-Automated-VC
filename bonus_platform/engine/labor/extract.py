@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from difflib import SequenceMatcher
 from io import BytesIO
 import json
 import logging
@@ -20,7 +21,7 @@ logger = logging.getLogger("bonus_platform.labor.extract")
 
 from .models import LaborLineItem, line_items_from_dicts
 from .layout import InvoiceLayoutPlan, analyze_invoice_layout, extract_rows_from_layout_plan, layout_plan_from_dict
-from .parsing import parse_number
+from .parsing import normalize_workbuddy_name, parse_number
 from .profiles import SupplierExtractionProfile, resolve_supplier_profile
 
 
@@ -31,7 +32,7 @@ HOUR_RE = re.compile(r"^\d+(?:\.\d+)?$")
 PAY_CODE_RE = re.compile(r"^(?:Reg|OT|DT)$", re.IGNORECASE)
 TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
-AI_PAGE_CACHE_VERSION = "v5"
+AI_PAGE_CACHE_VERSION = "v6"
 
 # ── HTTP client with strict outer timeout (wall-clock) ──
 # urllib and httpx timeouts are phase/socket oriented, so a slow gateway can still
@@ -900,9 +901,13 @@ def _extract_with_ai_images(
         if currency:
             prompt_text += f"\nCurrency: {currency}"
         if expected_rows:
-            # 只提供员工姓名列表，简化 expected_employees
-            names = [r.get("employee_name", "") for r in expected_rows[:20]]  # 限制数量
-            prompt_text += f"\nExpected employees: {', '.join(names)}"
+            # 扫描件没有可校验文本层，必须用完整账单名单约束模型，降低凭空造人的概率。
+            names = [r.get("employee_name", "") for r in expected_rows[:80] if r.get("employee_name")]
+            prompt_text += (
+                "\nExpected employees for this batch: " + ", ".join(names) +
+                "\nReturn only employees visibly present in the invoice image and plausibly matching this list. "
+                "If no listed employee is visible, return [] exactly. Do not invent placeholder names."
+            )
 
         content.append({"type": "text", "text": prompt_text})
 
@@ -936,7 +941,10 @@ def _extract_with_ai_images(
                 sources = ", ".join(f"{page.get('source_file')}#p{page.get('page')}" for page in chunk)
                 logger.warning(f"AI 图片抽取跳过超时/解析失败页面: {sources}; first={exc}; retry={retry_exc}")
                 continue
-    return _normalize_ai_rows(rows, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
+    normalized = _normalize_ai_rows(rows, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
+    if expected_rows:
+        normalized = _filter_ai_rows_by_expected_employees(normalized, expected_rows)
+    return normalized
 
 
 def _annotate_image_rows(rows: List[Dict[str, Any]], chunk: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1198,6 +1206,33 @@ def _normalize_support_text(value: str) -> str:
     return " ".join(value.split())
 
 
+def _filter_ai_rows_by_expected_employees(rows: List[Dict[str, Any]], expected_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """扫描件无文本证据时，用 Excel 候选名单拦截图片 AI 幻觉员工。"""
+    expected_names = [str(row.get("employee_name") or "").strip() for row in expected_rows if row.get("employee_name")]
+    if not expected_names:
+        return rows
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        name = _fuzzy_get_name(row)
+        if any(_matches_expected_employee(name, expected) for expected in expected_names):
+            filtered.append(row)
+            continue
+        logger.warning(f"AI 图片抽取员工不在本批 Excel 候选名单中，已丢弃: {name}")
+    return filtered
+
+
+def _matches_expected_employee(left: str, right: str) -> bool:
+    left_norm = normalize_workbuddy_name(left)
+    right_norm = normalize_workbuddy_name(right)
+    left_tokens = set(left_norm.split())
+    right_tokens = set(right_norm.split())
+    if not left_tokens or not right_tokens:
+        return False
+    token_score = len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+    char_score = SequenceMatcher(None, left_norm, right_norm).ratio()
+    return token_score >= 0.30 or char_score >= 0.78
+
+
 def _looks_like_employee_row(employee_name: str, row: Dict[str, Any]) -> bool:
     amount = _fuzzy_get_amount(row)
     if amount == 0:
@@ -1238,9 +1273,6 @@ def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.2, max_w
                     page = document[index]
                     try:
                         bitmap = page.render(scale=scale).to_pil()
-                        if bitmap.height > bitmap.width:
-                            bitmap = bitmap.rotate(90, expand=True)
-
                         # 图片预处理：增强对比度和锐度，提升扫描件识别率
                         bitmap = ImageEnhance.Contrast(bitmap).enhance(1.15)
                         bitmap = ImageEnhance.Sharpness(bitmap).enhance(1.1)

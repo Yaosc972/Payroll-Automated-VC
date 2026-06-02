@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List
@@ -36,7 +37,10 @@ def save_labor_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, An
     payload = dict(metadata)
     payload.setdefault("createdAt", now)
     payload["updatedAt"] = now
-    (run_dir / METADATA_FILE).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    metadata_path = run_dir / METADATA_FILE
+    tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, metadata_path)
     return payload
 
 
@@ -91,4 +95,3 @@ def safe_labor_filename(original_name: str, suffix: str = "") -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     suffix_part = f"_{suffix}" if suffix else ""
     return f"{stem}{suffix_part}_{timestamp}{original.suffix.lower()}"
-

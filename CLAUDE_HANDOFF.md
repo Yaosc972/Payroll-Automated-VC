@@ -1,161 +1,184 @@
 # Claude Handoff
 
-This document is the handoff brief for Claude Code or any other coding agent taking over the repository for a period of time.
+This document is the handoff brief for Claude Code or any other coding agent taking over the Sigma Workbench repository.
 
 Use this document as the operational source of truth before making changes.
 
 ## Repository
 
 - Repo: `Payroll-Automated-VC`
-- Local workspace root: `/Users/zt27532/Payroll-Automated-VC`
-- Branch: `claude/handoff-01`
-- Latest commit: `1f17902`
+- Local workspace root: `/Users/zt27532/Documents/New project 2`
+- Current branch: `claude/handoff-01`
+- Local state at handoff: this branch is ahead of `origin/claude/handoff-01`; check `git status --short --branch` before editing.
 
-When handing work to Claude, create a fresh working branch from the latest agreed branch instead of reusing historical branches.
+When taking over, create a fresh working branch from the latest agreed branch if you are doing new work. Do not overwrite uncommitted user or agent changes.
 
-## Product Context
+## Product Scope
 
-This repo started as a local recruitment/referral bonus calculation workbench. It now also includes a separate workflow for overseas labor invoice reconciliation.
+Sigma Workbench has three project areas:
 
-The overseas labor workflow is the main handoff target.
+1. Recruitment bonus calculation
+2. Overseas labor invoice reconciliation
+3. Domestic labor worker payroll calculation
 
-User-facing flow:
+The current priority is **overseas labor invoice reconciliation**.
 
-1. Create a labor reconciliation batch
-2. Upload PDF invoices and one Excel workbook
-3. Confirm field mapping
-4. Extract employee rows from PDFs
-5. Compare PDF totals against Excel employee rows
-6. Review risks and download a difference report
+Do not confuse overseas labor invoice reconciliation with domestic labor worker payroll calculation. Domestic labor worker payroll is a separate project area and should keep separate design, naming, and code boundaries.
+
+## Current Priority: Overseas Labor Invoice Reconciliation
+
+Business goal:
+
+Upload overseas labor vendor PDF invoices plus one Excel billing workbook, extract employee-level rows from the PDF invoices, compare them against Excel employee rows, identify discrepancies and risks, and generate a downloadable difference report.
 
 Page entry:
 
 - `http://127.0.0.1:8001/overseas-labor.html`
 
-## What Exists Today
+User-facing flow:
 
-Current implementation already includes:
+1. Create a labor reconciliation batch
+2. Upload PDF invoices and one Excel workbook
+3. Confirm Excel field mapping
+4. Stage 1: extract PDF invoice totals and compare by warehouse
+5. If totals differ, Stage 2: extract employee rows from PDFs
+6. Compare PDF employee rows against Excel employee rows
+7. Review quality risks and download the difference report
+
+Current implementation includes:
 
 - FastAPI backend with labor-specific batch APIs
 - Static frontend for the overseas labor workflow
-- PDF employee row extraction (rule-based + AI fallback)
-- Excel row mapping and loading
+- Excel sheet discovery, field suggestions, and field mapping
+- Warehouse-level total comparison
+- PDF employee row extraction with rule-based parsing plus AI/image fallback
 - Employee-level comparison by name or employee ID
-- Risk rows and downloadable Excel difference report
-- Extraction quality checks with retry logic
-- Warehouse-level total comparison (two-stage extraction)
-- Wizard Drawer UX for batch setup
-- KPI summary banner with interactive filtering
+- Extraction quality diagnostics and retry logic
+- Downloadable Excel difference report
+- Wizard Drawer UX and KPI/result panels in the frontend
 
-## CRITICAL UNRESOLVED ISSUE: MiMo API Gateway Hangs
+## Recent Fixes To Preserve
 
-**The core extraction pipeline is STILL BROKEN.** The MiMo API (`https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages`) completely deadlocks the thread when making HTTP requests with large payloads (100KB+ image base64). No timeout mechanism works reliably.
+The current working state includes several important fixes. Do not casually revert them.
 
-### What Was Tried (All Failed)
+1. Metadata writes are atomic.
+   - `bonus_platform/engine/labor/runs.py`
+   - `bonus_platform/engine/runs.py`
+   - Reason: frontend polling could previously read an empty or partially written `metadata.json`, causing 500 errors during background extraction.
 
-| Approach | Commit | Result |
-|----------|--------|--------|
-| `urllib.request.urlopen(timeout=180)` | original | Socket timeout doesn't cover total request time |
-| `urllib.request.urlopen(timeout=45)` | `a52e848` | Same — socket read timeout, not wall-clock |
-| `urllib.request.urlopen(timeout=30)` | `78d0aa2` | Same — still deadlocks for 3.5+ minutes |
-| `httpx.Client(timeout=30.0)` | `1f17902` | **Not yet verified** — latest attempt |
-| `thinking: {"type": "disabled"}` | `a52e848` | Removed — may cause gateway deadlock |
-| Parallel workers 6→2→1 | `ab7b325`, `79adbc4`, `652f735` | Reduces but doesn't eliminate hangs |
+2. Server startup recovers interrupted labor batches.
+   - `bonus_platform/app.py`
+   - Any batch left in `抽取中` after a server restart is marked as `抽取失败` with a clear retry message.
 
-### Root Cause Analysis
+3. Do not run long extraction tasks with `uvicorn --reload`.
+   - Use a stable server process for manual testing:
+     ```bash
+     python3 -m uvicorn bonus_platform.app:app --port 8001
+     ```
+   - `--reload` can interrupt background extraction and leave stale batch state.
 
-1. **`urllib.request.urlopen` timeout is socket-level, not wall-clock.** With a 100KB+ SSL payload, the proxy gateway trickles bytes slowly, keeping the socket alive and evading the timeout.
+4. PDF image rendering must preserve orientation.
+   - `bonus_platform/engine/labor/extract.py`
+   - A previous implementation forced any portrait page to landscape with `rotate(90)`. That made scanned invoice text sideways for the AI and caused employee-detail extraction to return `[]`.
 
-2. **The `thinking: {"type": "disabled"}` Anthropic parameter may cause the MiMo gateway to deadlock.** It was removed in `78d0aa2`.
+5. AI image extraction cache version is `v6`.
+   - This intentionally avoids stale `v5` image caches produced from wrongly rotated pages.
 
-3. **MiMo service may have rate limiting or connection pooling issues** that cause concurrent requests to hang indefinitely.
+6. AI image rows are filtered against Excel candidate employees.
+   - This prevents hallucinated names such as `John Doe`.
+   - Matching rule: token Jaccard `>= 0.30` or full-name character similarity `>= 0.78`.
 
-### What To Try Next
+## Known Risks
 
-1. **Verify httpx works**: Test if `httpx.Client(timeout=30.0)` actually enforces wall-clock timeout. If it does, the hang should break at 30s with `httpx.TimeoutException`.
+- MiMo/Anthropic image requests can still timeout or disconnect on some pages.
+- If all image pages fail or return empty arrays, Stage 2 can still fail with `AI 图片抽取返回 0 条员工明细`.
+- Error reporting is still too coarse. The UI should eventually distinguish:
+  - PDF render failure
+  - AI request timeout/disconnect
+  - AI returned empty rows
+  - rows discarded by Excel-candidate filtering
+  - comparison/report generation failure
+- Supplier formats vary. Avoid hardcoding one-off invoice rules unless isolated behind a supplier profile or a generally reusable parser.
 
-2. **If httpx also fails**: The issue is at the MiMo gateway level. Options:
-   - Switch to a different AI provider (e.g., direct Anthropic API, OpenAI)
-   - Add exponential backoff retry with a 10s per-attempt timeout
-   - Use a local OCR model instead of cloud AI
+## Suggested Next Work
 
-3. **Reduce payload size**: The 100KB image is the main problem. Consider:
-   - More aggressive JPEG compression (quality=50 instead of 85)
-   - Smaller render scale (0.8 instead of 1.2)
-   - Downscale images before sending
+For the overseas labor flow, prioritize in this order:
 
-4. **Add a process-level watchdog**: If a single PDF extraction takes >60s, kill the thread and skip that PDF.
+1. Re-run a real overseas labor invoice batch after the orientation/cache fix.
+2. Add per-page extraction diagnostics: render status, AI request status, raw row count, filtered row count, final kept row count.
+3. Improve user-facing failure messages so the user knows which stage failed and what to retry.
+4. Add or refine supplier profiles only after inspecting actual invoice layouts.
+5. Consider OCR or structured table extraction as a fallback if MiMo image extraction remains unreliable.
 
 ## Files To Read First
 
 Read these before editing behavior:
 
-1. **[bonus_platform/engine/labor/extract.py](bonus_platform/engine/labor/extract.py)** — Core extraction logic, AI API calls, HTTP client. This is where the hang happens. Key functions:
-   - `_http_post_json()` (line ~34) — new httpx-based HTTP client
-   - `_extract_one()` (line ~270) — per-PDF extraction (Stage 1)
-   - `_extract_with_ai_images()` (line ~590) — image-based extraction (Stage 2)
-   - `_post_anthropic_completion()` (line ~730) — Anthropic Messages API call
+1. `bonus_platform/app.py`
+   - FastAPI endpoints
+   - background extraction orchestration
+   - batch recovery logic
 
-2. **[bonus_platform/app.py](bonus_platform/app.py)** — FastAPI endpoints, background task orchestration. Key functions:
-   - `extract_and_compare_labor_run()` (line ~295) — starts extraction
-   - `_perform_labor_extract_compare()` (line ~330) — main extraction pipeline
-   - `_retry_if_better()` (line ~490) — retry logic
+2. `bonus_platform/engine/labor/extract.py`
+   - PDF text extraction
+   - PDF image rendering
+   - AI/MiMo request code
+   - employee row normalization and filtering
 
-3. **[bonus_platform/config.py](bonus_platform/config.py)** — AI configuration, parallelism settings
+3. `bonus_platform/engine/labor/compare.py`
+   - employee and warehouse comparison
 
-4. **[bonus_platform/engine/labor/compare.py](bonus_platform/engine/labor/compare.py)** — Employee matching and warehouse comparison
+4. `bonus_platform/engine/labor/quality.py`
+   - extraction quality and diagnostics
 
-5. **[bonus_platform/engine/labor/quality.py](bonus_platform/engine/labor/quality.py)** — Quality scoring system
+5. `bonus_platform/engine/labor/runs.py`
+   - labor batch metadata and file records
 
-6. **[docs/故障排查报告.md](docs/故障排查报告.md)** — Full troubleshooting report with all failed attempts
+6. `bonus_platform/static/overseas-labor.js`
+   - frontend labor workflow
 
-## Current Behavioral Notes
+7. `docs/superpowers/specs/2026-05-26-overseas-labor-billing-reconciliation-design.md`
 
-- Two-stage extraction: Stage 1 extracts totals, Stage 2 extracts employees only for diff warehouses
-- `PARALLEL_MAX_WORKERS=1` (serial execution) for stability
-- `PARALLEL_IMAGE_RENDER_WORKERS=1`
-- 30s wall-clock timeout via httpx (unverified)
-- Retry logic preserves original results if retry fails
-- Fuzzy field mapping for AI-extracted rows (30+ amount key variants)
-- Frontend: Wizard Drawer + KPI Banner + quality alert display
+8. `docs/superpowers/plans/2026-05-29-extraction-optimization.md`
+
+## Other Product Areas
+
+Recruitment bonus calculation exists and should not be broken while working on overseas labor reconciliation.
+
+Domestic labor worker payroll calculation is part of the broader Sigma Workbench product scope, but it is a separate project area. Do not implement it by mixing it into the overseas invoice reconciliation flow.
 
 ## Guardrails
 
-Do not make these kinds of changes casually:
-
-- Do not remove or rename labor APIs without updating all call sites and tests.
+- Do not remove or rename APIs without updating frontend call sites and tests.
 - Do not delete tests to make changes pass.
-- Do not change unrelated recruitment/referral bonus logic while working on overseas labor reconciliation.
-- Do not do broad refactors outside the labor flow unless they are required to complete the task safely.
-- Do not hardcode a one-off supplier workaround unless there is a strong reason and it is isolated behind a general mechanism or profile system.
-
-## Working Style
-
-Use this order of operations:
-
-1. Read the current implementation and summarize the actual state
-2. Identify the top 3 most valuable next improvements
-3. Choose one focused improvement at a time
-4. Implement in small commits
-5. Run tests after each meaningful change
-6. If UI changed, verify the page in browser as well
+- Do not change recruitment bonus behavior while working on overseas labor reconciliation unless the task explicitly requires it.
+- Do not do broad refactors outside the current behavior under repair.
+- Do not hardcode supplier-specific behavior unless the behavior belongs in a profile or a documented parser.
+- Always inspect `git status` and `git diff` before editing.
 
 ## Verification Requirements
 
-Before reporting completion of a change, run:
+For overseas labor changes, run:
+
+```bash
+python3 -m pytest -q tests/test_labor_engine.py tests/test_labor_api.py
+```
+
+For broader changes, run:
 
 ```bash
 python3 -m pytest -q
 ```
 
-For local development:
+For local manual testing:
 
 ```bash
-python3 -m uvicorn bonus_platform.app:app --reload --port 8001 --reload-exclude outputs/ --lifespan off
+python3 -m uvicorn bonus_platform.app:app --port 8001
 ```
 
 Then verify:
 
+- `http://127.0.0.1:8001/`
 - `http://127.0.0.1:8001/overseas-labor.html`
 
 ## Handoff-Back Requirements

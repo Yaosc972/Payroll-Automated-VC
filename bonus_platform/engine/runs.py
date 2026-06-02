@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import os
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -31,7 +32,9 @@ def save_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
     metadata.setdefault("createdAt", now)
     metadata["updatedAt"] = now
     metadata_path = run_dir / METADATA_FILE
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
+    tmp_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, metadata_path)
     upsert_run_metadata(metadata)
     return metadata
 
