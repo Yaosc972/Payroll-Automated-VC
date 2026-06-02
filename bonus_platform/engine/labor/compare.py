@@ -101,14 +101,21 @@ def compare_by_warehouse(
     if total_passed:
         return {"summary": summary, "rows": [], "errors": []}
 
+    excel_by_wh, excel_errors = _group_excel_by_warehouse(excel_rows_with_warehouse)
+    errors.extend(excel_errors)
+    fallback_warehouse_id = next(iter(excel_by_wh), "") if len(excel_by_wh) == 1 else ""
+
     # Tier 2: per-warehouse comparison
     if pdf_totals:
         pdf_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0})
         for t in pdf_totals:
             wh = str(t.get("warehouse_id") or "")
             if not wh:
-                errors.append(f"无法提取仓库号: {t.get('source_file', '')}")
-                continue
+                if fallback_warehouse_id and len(pdf_totals) == 1:
+                    wh = fallback_warehouse_id
+                else:
+                    errors.append(f"无法提取仓库号: {t.get('source_file', '')}")
+                    continue
             pdf_by_wh[wh]["amount"] = round(pdf_by_wh[wh]["amount"] + float(t.get("total_amount") or 0), 2)
             pdf_by_wh[wh]["count"] += 1
         pdf_wh_amounts = dict(pdf_by_wh)
@@ -117,10 +124,8 @@ def compare_by_warehouse(
 
     pdf_row_by_wh: Dict[str, List[LaborLineItem]] = {}
     if pdf_rows:
-        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(pdf_rows)
+        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(pdf_rows, fallback_warehouse_id=fallback_warehouse_id)
         errors.extend(pdf_errors)
-    excel_by_wh, excel_errors = _group_excel_by_warehouse(excel_rows_with_warehouse)
-    errors.extend(excel_errors)
 
     all_wh = sorted(set(pdf_wh_amounts) | set(pdf_row_by_wh) | set(excel_by_wh))
     warehouse_rows = []
@@ -128,7 +133,7 @@ def compare_by_warehouse(
         # PDF amounts: prefer totals, fallback to rows
         if wh in pdf_wh_amounts:
             pdf_amount = pdf_wh_amounts[wh]["amount"]
-            pdf_count = pdf_wh_amounts[wh]["count"]
+            pdf_count = len(pdf_row_by_wh[wh]) if wh in pdf_row_by_wh else pdf_wh_amounts[wh]["count"]
         elif wh in pdf_row_by_wh:
             items = pdf_row_by_wh[wh]
             pdf_amount = round(sum(i.amount for i in items), 2)
@@ -263,6 +268,7 @@ def _match_employee_groups(
 
 def _group_pdf_by_warehouse(
     pdf_rows: List[LaborLineItem],
+    fallback_warehouse_id: str = "",
 ) -> tuple[Dict[str, List[LaborLineItem]], List[str]]:
     grouped: Dict[str, List[LaborLineItem]] = defaultdict(list)
     errors: List[str] = []
@@ -271,8 +277,11 @@ def _group_pdf_by_warehouse(
         if not wh:
             wh = str(item.warehouse_id or "")
         if not wh:
-            errors.append(f"无法从文件名提取仓库号: {item.source_file}")
-            continue
+            if fallback_warehouse_id:
+                wh = fallback_warehouse_id
+            else:
+                errors.append(f"无法从文件名提取仓库号: {item.source_file}")
+                continue
         grouped[wh].append(item)
     return dict(grouped), errors
 

@@ -8,6 +8,7 @@ import queue
 import re
 import socket
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List
 from urllib.error import HTTPError, URLError
@@ -271,6 +272,7 @@ def extract_invoice_items(
         rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        rows.extend(_extract_simple_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         for line in (page.get("text") or "").splitlines():
             compact = " ".join(line.split())
             match = LINE_RE.match(compact)
@@ -319,6 +321,7 @@ def extract_invoice_items(
         if has_text:
             try:
                 rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
+                rows = _filter_ai_rows_by_page_text(rows, pages)
                 items = line_items_from_dicts(rows)
                 if items:
                     return items
@@ -336,6 +339,7 @@ def extract_invoice_items(
                 errors.append("PDF 渲染为图片后为空，无法进行 AI 抽取")
             else:
                 rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
+                rows = _filter_ai_rows_by_page_text(rows, pages)
                 items = line_items_from_dicts(rows)
                 if items:
                     return items
@@ -947,6 +951,52 @@ def _normalize_ai_rows(rows: List[Dict[str, Any]], supplier: str, period_start: 
     return normalized
 
 
+def _filter_ai_rows_by_page_text(rows: List[Dict[str, Any]], pages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reject AI rows that have no name/evidence support in an extractable text layer."""
+    text_pages = [page for page in pages if (page.get("text") or "").strip()]
+    if not text_pages:
+        return rows
+
+    normalized_pages = [
+        {
+            "source_file": page.get("source_file") or "",
+            "source_page_or_row": f"p{page.get('page')}",
+            "text": _normalize_support_text(page.get("text") or ""),
+        }
+        for page in text_pages
+    ]
+    filtered: List[Dict[str, Any]] = []
+    for row in rows:
+        name = str(row.get("employee_name_raw") or row.get("employeeNameRaw") or row.get("employee_name") or row.get("employeeName") or "")
+        evidence = str(row.get("evidence_text") or row.get("evidenceText") or "")
+        name_key = _normalize_support_text(name)
+        evidence_key = _normalize_support_text(evidence)
+        if not name_key:
+            continue
+        matched_page = None
+        for page in normalized_pages:
+            page_text = page["text"]
+            if name_key in page_text or (evidence_key and evidence_key in page_text):
+                matched_page = page
+                break
+        if not matched_page:
+            logger.warning(f"AI 抽取行缺少 PDF 文本证据，已丢弃: {name}")
+            continue
+        current = dict(row)
+        current["source_file"] = current.get("source_file") or current.get("sourceFile") or matched_page["source_file"]
+        current["source_page_or_row"] = current.get("source_page_or_row") or current.get("sourcePageOrRow") or matched_page["source_page_or_row"]
+        filtered.append(current)
+    return filtered
+
+
+def _normalize_support_text(value: str) -> str:
+    value = unicodedata.normalize("NFD", value)
+    value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
+    value = value.lower()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
 def _looks_like_employee_row(employee_name: str, row: Dict[str, Any]) -> bool:
     amount = _fuzzy_get_amount(row)
     if amount == 0:
@@ -1124,6 +1174,7 @@ def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start
         rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
+        rows.extend(_extract_simple_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         for line in (page.get("text") or "").splitlines():
             compact = " ".join(line.split())
             match = LINE_RE.match(compact)
@@ -1138,6 +1189,45 @@ def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start
             hours = sum(hours_values)
             amount = values[-1]
             rows.append(_line_item(page, match, hours=hours, amount=amount, currency=currency, supplier=supplier, period_start=period_start, period_end=period_end, evidence_text=compact))
+    return rows
+
+
+def _extract_simple_invoice_rows(page: Dict[str, Any], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
+    """Extract simple rows like: "1 Name 40 2.5 $19.00 $28.50 $834.75"."""
+    rows: List[LaborLineItem] = []
+    for line in (page.get("text") or "").splitlines():
+        compact = " ".join(line.split())
+        match = re.match(r"^\d+\s+(?P<name>[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s.'-]*?)\s+(?P<rest>\d.*\$\d[\d,]*\.\d{2})$", compact)
+        if not match:
+            continue
+        name = match.group("name").strip()
+        values = [parse_number(value) for value in re.findall(r"-?\$?\d[\d,]*(?:\.\d+)?\$?", match.group("rest"))]
+        if len(values) < 4:
+            continue
+        amount = values[-1]
+        if not amount:
+            continue
+        hours = values[0]
+        if len(values) >= 5:
+            hours += values[1]
+        rows.append(
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=page["source_file"],
+                source_page_or_row=f"p{page['page']}",
+                employee_id="",
+                employee_name_raw=name,
+                hours=round(hours, 2),
+                amount=round(amount, 2),
+                currency=currency,
+                confidence=0.95,
+                evidence_text=compact,
+                supplier=supplier,
+                period_start=period_start,
+                period_end=period_end,
+                warehouse_id=_warehouse_id_from_text(page.get("text") or ""),
+            )
+        )
     return rows
 
 

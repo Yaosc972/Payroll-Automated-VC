@@ -47,6 +47,12 @@ def build_reconciliation_diagnostics(
             if t.get("source_file") and not str(t.get("warehouse_id") or "").strip()
         }
     )
+    safely_attributed_single_warehouse = (
+        len(pdf_totals) == 1
+        and len(missing_warehouse) == 1
+        and not wc_errors
+        and int(wc_summary.get("warehouseCount") or 0) == 1
+    )
     zero_total_files = sorted(
         {
             str(t.get("source_file") or "")
@@ -55,7 +61,7 @@ def build_reconciliation_diagnostics(
         }
     )
 
-    if missing_warehouse:
+    if missing_warehouse and not safely_attributed_single_warehouse:
         issues.append(
             {
                 "code": "missing_warehouse_id",

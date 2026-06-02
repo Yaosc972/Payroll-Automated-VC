@@ -6,9 +6,10 @@ import pytest
 from openpyxl import Workbook, load_workbook
 from urllib.error import HTTPError
 
-from bonus_platform.engine.labor.compare import compare_labor_items
+from bonus_platform.engine.labor.compare import compare_labor_items, compare_by_warehouse
 from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _extract_invoice_total_from_text, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
+from bonus_platform.engine.labor.extract import _filter_ai_rows_by_page_text
 from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as extract_warehouse_id_from_filename
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
@@ -87,6 +88,99 @@ def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment()
         "US ELOGISTICS SERVICE CORP\n"
         "15,089.88$"
     ) == 15089.88
+
+
+def test_grande_solutions_simple_table_extracts_all_employee_rows():
+    text = "\n".join(
+        [
+            "TO Elogistics GA Service Corp",
+            "Invoice : ELOG-466-FL",
+            "Period Location",
+            "05/18/2026-05/24/2026 E-LOG 30 SHEIN",
+            "No. Name Reg. Hours O.T Hours Reg. Rate O.T Rate Total",
+            "1 Alberto Núñez 35.08 $21.08 $31.62 $739.49",
+            "2 Ivis Martinez 6.55 $21.08 $31.62 $138.07",
+            "3 Carolay Hincapie 40 7.82 $19.84 $29.76 $1,026.32",
+            "4 Liliana Cue 40 7.14 $19.84 $29.76 $1,006.09",
+            "TOTAL HOURS 1251.18 67.12 SUB TOTAL $25,487.50",
+        ]
+    )
+
+    rows = _extract_with_rules(
+        [{"source_file": "GS_invoice-ELOG-466-FL.pdf", "page": 1, "text": text}],
+        supplier="Grande Solutions Staffing",
+        period_start="2026-05-18",
+        period_end="2026-05-24",
+        currency="USD",
+    )
+
+    assert [row.employee_name_raw for row in rows] == [
+        "Alberto Núñez",
+        "Ivis Martinez",
+        "Carolay Hincapie",
+        "Liliana Cue",
+    ]
+    assert round(sum(row.amount for row in rows), 2) == 2909.97
+    assert round(sum(row.hours for row in rows), 2) == 136.59
+    assert all(row.source_file == "GS_invoice-ELOG-466-FL.pdf" for row in rows)
+
+
+def test_ai_rows_without_supporting_page_text_are_filtered():
+    pages = [
+        {
+            "source_file": "GS_invoice-ELOG-466-FL.pdf",
+            "page": 1,
+            "text": "1 Alberto Núñez 35.08 $21.08 $31.62 $739.49",
+        }
+    ]
+    rows = [
+        {"employee_name_raw": "Albert Achter", "amount": 289.88, "evidence_text": "Albert Achter 15.08 $289.88"},
+        {"employee_name_raw": "Alberto Núñez", "amount": 739.49, "evidence_text": "Alberto Núñez 35.08 $739.49"},
+    ]
+
+    filtered = _filter_ai_rows_by_page_text(rows, pages)
+
+    assert len(filtered) == 1
+    assert filtered[0]["employee_name_raw"] == "Alberto Núñez"
+    assert filtered[0]["source_file"] == "GS_invoice-ELOG-466-FL.pdf"
+    assert filtered[0]["source_page_or_row"] == "p1"
+
+
+def test_single_pdf_total_maps_to_only_excel_warehouse_when_pdf_has_no_warehouse_id():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="GS_invoice-ELOG-466-FL.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alberto Núñez", hours=35.08, amount=739.49, currency="USD", confidence=0.95, evidence_text=""),
+        LaborLineItem(source_type="pdf_invoice", source_file="GS_invoice-ELOG-466-FL.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Ivis Martinez", hours=6.55, amount=138.07, currency="USD", confidence=0.95, evidence_text=""),
+    ]
+    result = compare_by_warehouse(
+        pdf_totals=[{"source_file": "GS_invoice-ELOG-466-FL.pdf", "warehouse_id": "", "total_amount": 25487.5}],
+        pdf_rows=pdf_rows,
+        excel_rows_with_warehouse=[
+            {"employee_name": "Alberto Núñez", "warehouse_id": "1", "amount": 10000.0, "hours": 400},
+            {"employee_name": "Ivis Martinez", "warehouse_id": "1", "amount": 15975.47, "hours": 800},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["errors"] == []
+    assert result["rows"][0]["warehouseId"] == "1"
+    assert result["rows"][0]["pdfEmployeeCount"] == 2
+    assert result["rows"][0]["pdfAmountTotal"] == 25487.5
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_reconciliation_diagnostics_suppresses_missing_warehouse_when_single_pdf_was_safely_attributed():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[{"source_file": "GS_invoice-ELOG-466-FL.pdf", "warehouse_id": "", "total_amount": 25487.5}],
+        comparison_summary={"pdfAmountTotal": 25487.5, "excelAmountTotal": 25975.47},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 25487.5, "excelAmountTotal": 25975.47, "warehouseCount": 1},
+            "errors": [],
+        },
+        amount_tolerance=0.1,
+    )
+
+    assert diagnostics["level"] == "ok"
+    assert diagnostics["issues"] == []
 
 
 def test_reconciliation_diagnostics_flags_conflicting_pdf_signals():
