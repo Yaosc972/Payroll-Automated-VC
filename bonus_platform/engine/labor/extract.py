@@ -19,6 +19,7 @@ import httpx
 logger = logging.getLogger("bonus_platform.labor.extract")
 
 from .models import LaborLineItem, line_items_from_dicts
+from .layout import InvoiceLayoutPlan, analyze_invoice_layout, extract_rows_from_layout_plan, layout_plan_from_dict
 from .parsing import parse_number
 from .profiles import SupplierExtractionProfile, resolve_supplier_profile
 
@@ -269,6 +270,19 @@ def extract_invoice_items(
     def _extract_rules_for_page(page: Dict[str, Any]) -> List[LaborLineItem]:
         """对单个页面尝试规则抽取"""
         rows = []
+        layout_plan = analyze_invoice_layout([page])
+        rows.extend(
+            extract_rows_from_layout_plan(
+                [page],
+                layout_plan,
+                supplier=supplier,
+                period_start=period_start,
+                period_end=period_end,
+                currency=currency,
+            )
+        )
+        if rows:
+            return rows
         rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
@@ -311,6 +325,27 @@ def extract_invoice_items(
     if all_rule_items:
         logger.info(f"规则抽取成功: {len(all_rule_items)} 条记录")
         return all_rule_items
+
+    layout_plan = analyze_invoice_layout(pages)
+    has_text_for_layout = any((page.get("text") or "").strip() for page in pages)
+    if layout_plan.recommended_parser == "ai_assisted" and has_text_for_layout and _ai_ready(ai_config):
+        try:
+            ai_layout_plan = _analyze_layout_with_ai(pages, ai_config, supplier=supplier, currency=currency)
+            if ai_layout_plan.confidence >= 0.75 and ai_layout_plan.recommended_parser != "ai_assisted":
+                layout_plan = ai_layout_plan
+        except Exception as exc:
+            logger.warning(f"AI 版式分析失败，继续原抽取流程: {_safe_error_message(exc)}")
+    planned_rows = extract_rows_from_layout_plan(
+        pages,
+        layout_plan,
+        supplier=supplier,
+        period_start=period_start,
+        period_end=period_end,
+        currency=currency,
+    )
+    if planned_rows:
+        logger.info(f"版式计划抽取成功: {layout_plan.layout_type}/{layout_plan.recommended_parser}, {len(planned_rows)} 条记录")
+        return planned_rows
 
     # 如果规则抽取失败，尝试 AI 抽取
     if _ai_ready(ai_config):
@@ -683,6 +718,50 @@ def _extract_with_ai_text(
     }
     _apply_provider_options(payload, ai_config)
     return _normalize_ai_rows(_post_chat_completion(payload, ai_config), supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
+
+
+def _analyze_layout_with_ai(
+    pages: List[Dict[str, Any]],
+    ai_config: Dict[str, Any],
+    *,
+    supplier: str = "",
+    currency: str = "",
+) -> InvoiceLayoutPlan:
+    page_summaries = [
+        {
+            "source_file": page.get("source_file", ""),
+            "page": page.get("page", ""),
+            "text": (page.get("text") or "")[:5000],
+        }
+        for page in pages[:3]
+    ]
+    prompt = {
+        "instruction": (
+            "Analyze the labor invoice table layout. Return one JSON object inside an array. "
+            "Do not extract employee rows. Choose recommended_parser only from: "
+            "simple_invoice_table, ai_assisted. "
+            "Return fields: layout_type, recommended_parser, confidence, "
+            "employee_name_pattern, hours_columns, amount_column, total_label, "
+            "warehouse_source, evidence."
+        ),
+        "supplier": supplier,
+        "currency": currency,
+        "pages": page_summaries,
+    }
+    payload = {
+        "model": ai_config["model"],
+        "messages": [
+            {"role": "system", "content": "You classify invoice table layouts into parser plans."},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ],
+        "temperature": 0,
+        "max_completion_tokens": min(int(ai_config.get("max_completion_tokens") or 2048), 2048),
+    }
+    _apply_provider_options(payload, ai_config)
+    rows = _post_chat_completion(payload, ai_config)
+    if not rows:
+        return InvoiceLayoutPlan(layout_type="unknown", recommended_parser="ai_assisted", confidence=0.0)
+    return layout_plan_from_dict(rows[0])
 
 
 def _extract_with_ai_images(
@@ -1171,6 +1250,19 @@ def _json_array(content: str) -> List[Dict[str, Any]]:
 def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
     rows: List[LaborLineItem] = []
     for page in pages:
+        layout_plan = analyze_invoice_layout([page])
+        rows.extend(
+            extract_rows_from_layout_plan(
+                [page],
+                layout_plan,
+                supplier=supplier,
+                period_start=period_start,
+                period_end=period_end,
+                currency=currency,
+            )
+        )
+        if layout_plan.recommended_parser != "ai_assisted":
+            continue
         rows.extend(_extract_wage_code_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_vertical_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))
         rows.extend(_extract_tabular_invoice_rows(page, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency))

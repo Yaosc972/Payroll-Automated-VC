@@ -9,10 +9,12 @@ from urllib.error import HTTPError
 from bonus_platform.engine.labor.compare import compare_labor_items, compare_by_warehouse
 from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _extract_invoice_total_from_text, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
 from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
+from bonus_platform.engine.labor.extract import _analyze_layout_with_ai
 from bonus_platform.engine.labor.extract import _filter_ai_rows_by_page_text
 from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as extract_warehouse_id_from_filename
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
+from bonus_platform.engine.labor.layout import analyze_invoice_layout, extract_rows_from_layout_plan
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
 from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics
@@ -123,6 +125,79 @@ def test_grande_solutions_simple_table_extracts_all_employee_rows():
     assert round(sum(row.amount for row in rows), 2) == 2909.97
     assert round(sum(row.hours for row in rows), 2) == 136.59
     assert all(row.source_file == "GS_invoice-ELOG-466-FL.pdf" for row in rows)
+
+
+def test_layout_analyzer_recommends_simple_numbered_labor_table_for_gs_invoice():
+    page = {
+        "source_file": "GS_invoice-ELOG-466-FL.pdf",
+        "page": 1,
+        "text": "\n".join(
+            [
+                "No. Name Reg. Hours O.T Hours Reg. Rate O.T Rate Total",
+                "1 Alberto Núñez 35.08 $21.08 $31.62 $739.49",
+                "2 Ivis Martinez 6.55 $21.08 $31.62 $138.07",
+                "TOTAL HOURS 41.63 0 SUB TOTAL $877.56",
+            ]
+        ),
+    }
+
+    plan = analyze_invoice_layout([page])
+    rows = extract_rows_from_layout_plan([page], plan, supplier="Grande Solutions Staffing", period_start="2026-05-18", period_end="2026-05-24", currency="USD")
+
+    assert plan.layout_type == "simple_numbered_labor_table"
+    assert plan.recommended_parser == "simple_invoice_table"
+    assert plan.amount_column == "Total"
+    assert plan.hours_columns == ["Reg. Hours", "O.T Hours"]
+    assert plan.total_label == "TOTAL HOURS"
+    assert round(plan.confidence, 2) >= 0.8
+    assert [row.employee_name_raw for row in rows] == ["Alberto Núñez", "Ivis Martinez"]
+
+
+def test_layout_analyzer_keeps_unknown_layout_out_of_rule_parser():
+    page = {
+        "source_file": "unknown.pdf",
+        "page": 1,
+        "text": "This is an invoice summary without a visible employee table.",
+    }
+
+    plan = analyze_invoice_layout([page])
+    rows = extract_rows_from_layout_plan([page], plan, supplier="", period_start="", period_end="", currency="USD")
+
+    assert plan.layout_type == "unknown"
+    assert plan.recommended_parser == "ai_assisted"
+    assert rows == []
+
+
+def test_ai_layout_analyzer_response_is_normalized_to_layout_plan(monkeypatch):
+    def fake_post_chat_completion(payload, ai_config):
+        return [
+            {
+                "layout_type": "simple_numbered_labor_table",
+                "recommended_parser": "simple_invoice_table",
+                "confidence": 0.86,
+                "hours_columns": ["Regular", "OT"],
+                "amount_column": "Total",
+                "total_label": "GRAND TOTAL",
+                "employee_name_pattern": "between row number and first hours value",
+            }
+        ]
+
+    import bonus_platform.engine.labor.extract as extract_module
+
+    monkeypatch.setattr(extract_module, "_post_chat_completion", fake_post_chat_completion)
+
+    plan = _analyze_layout_with_ai(
+        [{"source_file": "unknown.pdf", "page": 1, "text": "No. Name Regular OT Total\n1 Jane Doe 40 2 $900.00"}],
+        {"model": "test-model"},
+        supplier="Vendor",
+        currency="USD",
+    )
+
+    assert plan.layout_type == "simple_numbered_labor_table"
+    assert plan.recommended_parser == "simple_invoice_table"
+    assert plan.confidence == 0.86
+    assert plan.hours_columns == ["Regular", "OT"]
+    assert plan.amount_column == "Total"
 
 
 def test_ai_rows_without_supporting_page_text_are_filtered():
