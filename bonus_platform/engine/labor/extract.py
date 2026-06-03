@@ -1248,19 +1248,21 @@ def _looks_like_employee_row(employee_name: str, row: Dict[str, Any]) -> bool:
 
 
 def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.2, max_workers: int = 4) -> List[Dict[str, Any]]:
-    """渲染 PDF 页面为图片，支持并行处理多个 PDF 文件。
+    """渲染 PDF 页面为图片。
 
     优化策略：
     - scale=1.2: 平衡清晰度和 token 消耗（约 690 tokens/页 vs scale=1.5 的 1073）
     - JPEG 格式: 比 PNG 小 ~70%，发票识别足够
     - 对比度增强: 提升扫描件识别率
+
+    pypdfium2/libpdfium 在 macOS 上多线程渲染后再次渲染可能触发原生内存破坏，
+    导致整个 Python 进程崩溃。这里故意串行渲染，避免后台抽取把 Web 服务带崩。
     """
     try:
         import pypdfium2 as pdfium
     except Exception as exc:
         raise RuntimeError("扫描版 PDF 需要安装 pypdfium2 才能渲染页面图片。") from exc
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     from PIL import ImageEnhance
 
     def _render_single_pdf(path: Path) -> List[Dict[str, Any]]:
@@ -1296,23 +1298,9 @@ def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.2, max_w
             logger.error(f"PDF 渲染失败: {path.name}: {exc}")
             return []
 
-    if len(pdf_paths) <= 1:
-        # 单个文件直接渲染，无需并行
-        if pdf_paths:
-            return _render_single_pdf(pdf_paths[0])
-        return []
-
-    # 并行渲染多个 PDF
     all_image_pages: List[Dict[str, Any]] = []
-    actual_workers = min(len(pdf_paths), max_workers)
-    with ThreadPoolExecutor(max_workers=actual_workers) as executor:
-        future_to_path = {executor.submit(_render_single_pdf, path): path for path in pdf_paths}
-        for future in as_completed(future_to_path):
-            try:
-                pages = future.result()
-                all_image_pages.extend(pages)
-            except Exception:
-                pass
+    for path in pdf_paths:
+        all_image_pages.extend(_render_single_pdf(path))
 
     return all_image_pages
 
