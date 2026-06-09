@@ -3,6 +3,7 @@ from bonus_platform.engine.fbu_performance.engines.bonus import BonusCalculator
 from bonus_platform.engine.fbu_performance.engines.coefficient import CoefficientCalculator
 from bonus_platform.engine.fbu_performance.engines.salary import SalaryProcessor
 from bonus_platform.engine.fbu_performance.parser import FBUPerformanceParser
+from bonus_platform.engine.fbu_performance.runs import FBURosterStore
 
 
 def test_warehouse_coefficient_boundaries():
@@ -124,3 +125,42 @@ def test_performance_preview_average_uses_scored_employee_count(tmp_path):
     assert preview["summary"]["total_employees"] == 2
     assert preview["summary"]["scored_employees"] == 1
     assert preview["summary"]["avg_score"] == 80
+
+
+def test_attendance_preview_uses_attendance_name_when_roster_is_missing(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "sheet1"
+    sheet.append(["header"] * 118)
+    row = [""] * 118
+    row[0] = "2026-04-01"
+    row[1] = "Ana Attendance"
+    row[2] = "E001"
+    row[21] = "08:00"
+    row[117] = 8
+    sheet.append(row)
+    path = tmp_path / "attendance.xlsx"
+    workbook.save(path)
+
+    preview = FBUPerformanceParser().parse_attendance_preview(str(path), target_month=4)
+
+    employee = preview["employees"][0]
+    assert employee["name"] == "Ana Attendance"
+    assert employee["roster_matched"] is False
+    assert preview["summary"]["roster_missing"] == 1
+
+
+def test_base_roster_store_saves_metadata_and_copies_snapshot(tmp_path):
+    store = FBURosterStore(str(tmp_path))
+    content = b"fake roster bytes"
+
+    metadata = store.save_active_roster(content, "roster.xlsx", total_employees=12)
+    copied = store.copy_active_to_run("run123")
+
+    assert metadata["filename"] == "roster.xlsx"
+    assert metadata["total_employees"] == 12
+    assert store.get_metadata()["has_roster"] is True
+    assert copied.read_bytes() == content
+    assert copied.name == "roster.xlsx"

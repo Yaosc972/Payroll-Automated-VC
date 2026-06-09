@@ -12,6 +12,7 @@ const state = {
   salaryData: null,
   performanceData: null,
   resultsData: null,
+  baseRoster: null,
 };
 
 // ═══ API Base ═══
@@ -46,6 +47,7 @@ const el = {
 
   // Buttons
   btnNewActivity: document.getElementById('btnNewActivity'),
+  btnUploadRoster: document.getElementById('btnUploadRoster'),
   btnUploadAttendance: document.getElementById('btnUploadAttendance'),
   btnUploadAttendanceEmpty: document.getElementById('btnUploadAttendanceEmpty'),
   btnExportAttendance: document.getElementById('btnExportAttendance'),
@@ -269,6 +271,58 @@ async function deleteActivity(activityId) {
   }
 }
 
+// ═══ Base Roster ═══
+
+async function loadBaseRoster() {
+  try {
+    const roster = await apiJson(`${API_BASE}/roster`);
+    state.baseRoster = roster;
+    updateRosterButton();
+  } catch (error) {
+    console.error('加载基础花名册状态失败:', error);
+  }
+}
+
+function updateRosterButton() {
+  if (!el.btnUploadRoster) return;
+  if (state.baseRoster?.has_roster) {
+    el.btnUploadRoster.textContent = `基础花名册 · ${state.baseRoster.total_employees || 0}人`;
+  } else {
+    el.btnUploadRoster.textContent = '上传基础花名册';
+  }
+}
+
+function chooseRosterFile() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.xls';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append('file', file);
+    el.btnUploadRoster.disabled = true;
+    el.btnUploadRoster.textContent = '花名册上传中...';
+    try {
+      const data = await apiJson(`${API_BASE}/roster`, {
+        method: 'POST',
+        body: formData,
+      });
+      state.baseRoster = data.roster;
+      updateRosterButton();
+      showNotification('基础花名册已更新，后续新活动会自动引用', 'success');
+    } catch (error) {
+      showNotification('花名册上传失败: ' + error.message, 'error');
+      updateRosterButton();
+    } finally {
+      el.btnUploadRoster.disabled = false;
+    }
+  });
+  input.click();
+}
+
+el.btnUploadRoster?.addEventListener('click', chooseRosterFile);
+
 // ═══ Upload Modal ═══
 
 let uploadType = '';
@@ -287,7 +341,9 @@ function openUploadModal(type) {
 
   el.uploadModalTitle.textContent = titles[type];
   el.uploadZoneTitle.textContent = '选择文件';
-  el.uploadZoneSub.textContent = '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
+  el.uploadZoneSub.textContent = type === 'attendance' && state.baseRoster?.has_roster
+    ? `点击选择或拖拽文件到此处 · 将自动引用基础花名册 ${state.baseRoster.filename || ''}`
+    : '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
   el.btnConfirmUpload.disabled = true;
 
   el.uploadModal.classList.add('active');
@@ -468,6 +524,10 @@ function renderAttendanceData() {
       <div class="summary-stat">
         <span class="summary-stat-label">夜班人数</span>
         <span class="summary-stat-value">${summary.night_shift_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">花名册匹配</span>
+        <span class="summary-stat-value">${summary.roster_matched || 0}/${summary.total_employees}</span>
       </div>
       <div class="summary-stat">
         <span class="summary-stat-label">总工时</span>
@@ -1006,5 +1066,6 @@ function showNotification(message, type = 'info') {
 // ═══ Init ═══
 
 document.addEventListener('DOMContentLoaded', () => {
+  loadBaseRoster();
   loadActivities();
 });

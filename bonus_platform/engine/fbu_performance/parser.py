@@ -208,7 +208,7 @@ class FBUPerformanceParser:
 
             # 获取员工信息
             info = employee_info.get(emp_id, {})
-            name = info.get('name', '')
+            name = info.get('name', '') or hours.get('name', '')
             department = info.get('department', '')
             area = info.get('area', '')
 
@@ -299,7 +299,7 @@ class FBUPerformanceParser:
         performance_data = self.parse_performance(performance_file)
 
         # 4. 构建员工数据
-        employees = self.build_employees(attendance_data, salary_data, performance_data)
+        employees = self.build_employees(attendance_data, salary_data, performance_data, self.employee_roster)
 
         # 5. 计算绩效奖金
         for emp in employees:
@@ -336,13 +336,15 @@ class FBUPerformanceParser:
         for emp_id, hours in attendance_data.items():
             # 获取员工信息
             emp_info = self.get_employee_info(emp_id)
+            roster_matched = bool(emp_info.get('name') or emp_info.get('department') or emp_info.get('area'))
 
             employee_list.append({
                 "employee_id": emp_id,
-                "name": emp_info['name'],
+                "name": emp_info['name'] or hours.get('name', ''),
                 "department": emp_info['department'],
                 "area": emp_info['area'],
                 "job_type": emp_info['job_type'],
+                "roster_matched": roster_matched,
                 "has_night_shift": hours['has_night_shift'],
                 "day_shift": hours['白班'],
                 "night_shift": hours['夜班'],
@@ -354,6 +356,7 @@ class FBUPerformanceParser:
         # 汇总统计
         total_employees = len(employee_list)
         night_shift_count = sum(1 for e in employee_list if e['has_night_shift'])
+        roster_matched = sum(1 for e in employee_list if e.get('roster_matched'))
         total_base_hours = sum(e['total_base_hours'] for e in employee_list)
         total_ot15 = sum(e['total_ot15'] for e in employee_list)
         total_ot20 = sum(e['total_ot20'] for e in employee_list)
@@ -362,6 +365,8 @@ class FBUPerformanceParser:
             "employees": employee_list,
             "summary": {
                 "total_employees": total_employees,
+                "roster_matched": roster_matched,
+                "roster_missing": total_employees - roster_matched,
                 "day_shift_count": total_employees - night_shift_count,
                 "night_shift_count": night_shift_count,
                 "total_base_hours": round(total_base_hours, 2),
@@ -501,6 +506,7 @@ class FBUPerformanceParser:
         for emp in attendance_data:
             emp_id = emp['employee_id']
             attendance_dict[emp_id] = {
+                'name': emp.get('name', ''),
                 '白班': emp['day_shift'],
                 '夜班': emp['night_shift'],
                 'has_night_shift': emp['has_night_shift'],

@@ -45,7 +45,7 @@ from .engine.labor.profiles import (
 
 # --- FBU Performance engine imports ---
 from .engine.fbu_performance.parser import FBUPerformanceParser
-from .engine.fbu_performance.runs import FBURunManager
+from .engine.fbu_performance.runs import FBURosterStore, FBURunManager
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -1568,6 +1568,56 @@ def download_domestic_labor_template(engine_key: str) -> FileResponse:
 # =========================================================================
 
 fbu_run_manager = FBURunManager(str(FBU_PERFORMANCE_RUNS_DIR))
+fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
+
+
+def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
+    """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    roster_path = run_dir / "roster.xlsx"
+    if not roster_path.exists():
+        roster_path = fbu_roster_store.copy_active_to_run(run_id)
+        if roster_path:
+            run = fbu_run_manager.get_run(run_id)
+            metadata = fbu_roster_store.get_metadata()
+            if run:
+                fbu_run_manager.update_run(
+                    run_id,
+                    roster_file=metadata.get("filename", "active_roster.xlsx"),
+                    roster_source="base",
+                )
+    if roster_path and roster_path.exists():
+        parser.load_roster(str(roster_path))
+        return roster_path
+    return None
+
+
+@app.get("/api/fbu-performance/roster")
+def get_fbu_base_roster() -> dict:
+    """获取FBU基础花名册状态"""
+    return fbu_roster_store.get_metadata()
+
+
+@app.post("/api/fbu-performance/roster")
+async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
+    """上传FBU基础花名册，供后续月度活动默认引用"""
+    try:
+        content = await file.read()
+        tmp_path = FBU_PERFORMANCE_RUNS_DIR / "_roster" / "_upload_check.xlsx"
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_bytes(content)
+
+        parser = FBUPerformanceParser()
+        roster = parser.load_roster(str(tmp_path))
+        metadata = fbu_roster_store.save_active_roster(
+            content=content,
+            filename=file.filename,
+            total_employees=len(roster),
+        )
+        tmp_path.unlink(missing_ok=True)
+        return {"success": True, "roster": metadata}
+    except Exception as e:
+        raise HTTPException(500, f"花名册解析失败: {str(e)}")
 
 
 @app.post("/api/fbu-performance/import-attendance")
@@ -1602,6 +1652,11 @@ async def import_fbu_attendance(
         with open(roster_path, "wb") as f:
             content = await roster.read()
             f.write(content)
+        fbu_run_manager.update_run(
+            run.run_id,
+            roster_file=roster.filename,
+            roster_source="activity",
+        )
 
     # 更新文件名
     fbu_run_manager.update_run(run.run_id, attendance_file=file.filename)
@@ -1611,9 +1666,11 @@ async def import_fbu_attendance(
         target_month = int(calc_month.split("-")[1]) if "-" in calc_month else int(calc_month)
         parser = FBUPerformanceParser()
 
-        # 加载花名册（如果存在）
+        # 加载本活动花名册；没有时自动引用当前基础花名册
         if roster_path and roster_path.exists():
             parser.load_roster(str(roster_path))
+        else:
+            _load_fbu_roster_for_run(parser, run.run_id)
 
         preview = parser.parse_attendance_preview(str(file_path), target_month)
 
@@ -1655,10 +1712,8 @@ async def import_fbu_salary(
     try:
         parser = FBUPerformanceParser()
 
-        # 加载花名册（如果存在）
-        roster_path = run_dir / "roster.xlsx"
-        if roster_path.exists():
-            parser.load_roster(str(roster_path))
+        # 加载活动花名册或基础花名册快照
+        _load_fbu_roster_for_run(parser, run_id)
 
         preview = parser.parse_salary_preview(str(file_path))
 
@@ -1700,10 +1755,8 @@ async def import_fbu_performance(
     try:
         parser = FBUPerformanceParser()
 
-        # 加载花名册（如果存在）
-        roster_path = run_dir / "roster.xlsx"
-        if roster_path.exists():
-            parser.load_roster(str(roster_path))
+        # 加载活动花名册或基础花名册快照
+        _load_fbu_roster_for_run(parser, run_id)
 
         preview = parser.parse_performance_preview(str(file_path))
 
@@ -1780,6 +1833,7 @@ def calculate_fbu_performance(run_id: str) -> dict:
             # 一次性导入模式：从文件计算
             run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
             target_month = int(run.calc_month.split("-")[1]) if "-" in run.calc_month else int(run.calc_month)
+            _load_fbu_roster_for_run(parser, run_id)
 
             engine = parser.parse_all(
                 attendance_file=str(run_dir / "attendance.xlsx"),
@@ -1825,12 +1879,23 @@ def create_fbu_performance_run(body: dict) -> dict:
         raise HTTPException(400, "核算月份格式无效")
 
     run = fbu_run_manager.create_run(calc_month=calc_month)
+    roster_path = fbu_roster_store.copy_active_to_run(run.run_id)
+    if roster_path:
+        metadata = fbu_roster_store.get_metadata()
+        fbu_run_manager.update_run(
+            run.run_id,
+            roster_file=metadata.get("filename", "active_roster.xlsx"),
+            roster_source="base",
+        )
+        run = fbu_run_manager.get_run(run.run_id) or run
 
     return {
         "success": True,
         "run_id": run.run_id,
         "calc_month": run.calc_month,
         "status": run.status,
+        "roster_file": run.roster_file,
+        "roster_source": run.roster_source,
     }
 
 
@@ -1848,6 +1913,8 @@ def list_fbu_performance_runs() -> dict:
                 "current_step": r.current_step,
                 "total_employees": r.total_employees,
                 "total_bonus": r.total_bonus,
+                "roster_file": r.roster_file,
+                "roster_source": r.roster_source,
             }
             for r in runs
         ]

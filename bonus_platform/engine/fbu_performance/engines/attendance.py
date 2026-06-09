@@ -93,6 +93,7 @@ class AttendanceProcessor:
 
         # 按员工+班次类型汇总
         employee_hours = defaultdict(lambda: {
+            'name': '',
             '白班': {'计薪出勤': 0, 'OT1.5': 0, 'OT2.0': 0, '病假': 0, '年假': 0, '节假日': 0},
             '夜班': {'计薪出勤': 0, 'OT1.5': 0, 'OT2.0': 0, '病假': 0, '年假': 0, '节假日': 0},
             'has_night_shift': False,
@@ -102,6 +103,8 @@ class AttendanceProcessor:
             emp_id = str(self.cell(row, 2)).strip() if self.cell(row, 2) else None
             if not emp_id:
                 continue
+            if not employee_hours[emp_id]['name'] and self.cell(row, 1):
+                employee_hours[emp_id]['name'] = str(self.cell(row, 1)).strip()
 
             # 判断夜班
             shift_start = self.cell(row, 21)

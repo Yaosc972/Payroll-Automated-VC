@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
+import shutil
 import json
 import uuid
 
@@ -22,6 +23,8 @@ class FBURun:
     attendance_file: str = ""
     salary_file: str = ""
     performance_file: str = ""
+    roster_file: str = ""
+    roster_source: str = ""  # activity / base
     # 分步数据
     attendance_data: dict = field(default_factory=dict)  # 考勤解析结果
     salary_data: dict = field(default_factory=dict)  # 薪资解析结果
@@ -221,3 +224,43 @@ class FBURunManager:
         }
 
         return exporter.export_to_excel(employees, str(output_path), summary)
+
+
+class FBURosterStore:
+    """FBU基础花名册存储。"""
+
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self.roster_dir = self.data_dir / "_roster"
+        self.roster_dir.mkdir(parents=True, exist_ok=True)
+        self.active_roster = self.roster_dir / "active_roster.xlsx"
+        self.metadata_file = self.roster_dir / "metadata.json"
+
+    def get_metadata(self) -> dict:
+        if not self.metadata_file.exists():
+            return {"has_roster": False}
+        with open(self.metadata_file, "r", encoding="utf-8") as f:
+            metadata = json.load(f)
+        metadata["has_roster"] = self.active_roster.exists()
+        return metadata
+
+    def save_active_roster(self, content: bytes, filename: str, total_employees: int = 0) -> dict:
+        self.active_roster.write_bytes(content)
+        metadata = {
+            "has_roster": True,
+            "filename": filename,
+            "uploaded_at": datetime.now().isoformat(),
+            "total_employees": total_employees,
+        }
+        with open(self.metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        return metadata
+
+    def copy_active_to_run(self, run_id: str) -> Optional[Path]:
+        if not self.active_roster.exists():
+            return None
+        run_dir = self.data_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        target = run_dir / "roster.xlsx"
+        shutil.copyfile(self.active_roster, target)
+        return target
