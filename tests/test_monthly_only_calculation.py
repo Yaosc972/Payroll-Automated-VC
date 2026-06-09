@@ -62,6 +62,32 @@ def test_download_template_hides_legacy_override_columns_from_monthly_import():
     assert not [header for header in headers if header and str(header).endswith("_覆盖")]
 
 
+def test_download_template_label_formula_matches_domestic_location_variants():
+    client = TestClient(app)
+
+    response = client.get("/api/template")
+    workbook = load_workbook(BytesIO(response.content), data_only=False, read_only=True)
+    sheet = workbook["导入_月度数据"]
+    headers = [sheet.cell(1, column).value for column in range(1, sheet.max_column + 1)]
+    header_cols = {header: index for index, header in enumerate(headers, start=1)}
+
+    assert response.status_code == 200
+    assert header_cols["招聘负责人人员状态"] == header_cols["招聘负责人姓名"] + 1
+    assert header_cols["招聘负责人最后工作日"] == header_cols["招聘负责人姓名"] + 2
+    assert header_cols["协助招聘人人员状态"] == header_cols["协助招聘人姓名"] + 1
+    assert header_cols["协助招聘人最后工作日"] == header_cols["协助招聘人姓名"] + 2
+    assert header_cols["推荐人最后工作日"] == header_cols["推荐人人员状态"] + 1
+    label_formula = sheet["S2"].value
+    region_formula = sheet.cell(2, header_cols["奖金地区类型"]).value
+    assert "非中国" in label_formula
+    assert "香港" in label_formula
+    assert "广东" in label_formula
+    assert "深圳" in label_formula
+    assert "香港" in region_formula
+    assert "广东" in region_formula
+    assert "德国" in region_formula
+
+
 def test_current_month_calculation_ignores_legacy_override_fields():
     values = {
         "核算月份": 202510,

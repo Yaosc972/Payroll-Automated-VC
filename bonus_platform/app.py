@@ -14,18 +14,38 @@ from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
+from openpyxl import load_workbook
 
 logger = logging.getLogger("bonus_platform.labor")
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, ensure_data_files
+from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, SUPPLIER_PROFILES_OUTPUT_DIR, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, ensure_data_files
+from .engine.domestic_labor.parser import PayrollDataLoader
+from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
+from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
+from .engine.domestic_labor.exporter import ExcelExporter
+from .engine.domestic_labor.runs import (
+    create_payroll_run, update_payroll_metadata, load_payroll_metadata,
+    list_payroll_metadata, get_payroll_run_dir, attach_payroll_file, safe_payroll_filename,
+)
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
 from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
 from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score, build_reconciliation_diagnostics
 from .engine.labor.report import build_labor_report
+from .engine.labor.profiles import (
+    generate_profile_from_extraction,
+    save_supplier_profile,
+    record_profile_failure,
+    reset_profile_failure,
+    resolve_supplier_profile,
+)
+
+# --- FBU Performance engine imports ---
+from .engine.fbu_performance.parser import FBUPerformanceParser
+from .engine.fbu_performance.runs import FBURunManager
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -88,7 +108,7 @@ from .engine.runs import (
     save_metadata,
     update_metadata,
 )
-from .engine.table_data import build_table_data, load_table_data, merge_diff_rows, save_table_data
+from .engine.table_data import build_final_table_data, build_table_data, load_table_data, merge_diff_rows, save_table_data
 from .engine.workbook_io import build_final_workbook, build_pending_workbook, build_result_workbook, read_import_rows
 
 
@@ -263,7 +283,7 @@ def get_labor_run(run_id: str) -> dict:
 async def upload_labor_files(
     run_id: str,
     pdf_files: list[UploadFile] = File(...),
-    workbook_file: UploadFile = File(...),
+    workbook_files: list[UploadFile] = File(...),
 ) -> dict:
     try:
         run_dir = get_labor_run_dir(run_id)
@@ -272,27 +292,46 @@ async def upload_labor_files(
         raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
     if not pdf_files:
         raise HTTPException(status_code=400, detail="请至少上传一张 PDF 发票。")
-    if not workbook_file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="线下账单请上传 Excel 文件（.xlsx 或 .xlsm）。")
+    if not workbook_files:
+        raise HTTPException(status_code=400, detail="请上传线下账单 Excel 文件。")
+    _EXCEL_EXTS = (".xlsx", ".xlsm", ".xls")
     pdf_records = []
     for upload in pdf_files:
         if not upload.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
         path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
         pdf_records.append(attach_labor_file(run_id, path, "PDF发票"))
-    workbook_path = await _save_upload_to(workbook_file, run_dir / safe_labor_filename(workbook_file.filename))
+    workbook_records = []
+    for upload in workbook_files:
+        if not upload.filename.lower().endswith(_EXCEL_EXTS):
+            raise HTTPException(status_code=400, detail=f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{upload.filename}")
+        path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
+        workbook_records.append(attach_labor_file(run_id, path, "线下账单"))
     files = dict(metadata.get("files", {}))
     files["pdfInvoices"] = pdf_records
-    files["workbook"] = attach_labor_file(run_id, workbook_path, "线下账单")
+    files["workbooks"] = workbook_records
+    # 兼容旧字段：第一个文件也写入 workbook
+    if workbook_records:
+        files["workbook"] = workbook_records[0]
     return update_labor_metadata(run_id, {"status": "已上传文件", "files": files})
 
 
 @app.get("/api/labor/runs/{run_id}/workbook-sheets")
 def labor_workbook_sheets(run_id: str) -> dict:
     metadata = _labor_metadata_or_404(run_id)
-    workbook_path = _labor_workbook_path(metadata)
+    paths = _labor_workbook_paths(metadata)
     try:
-        return {"sheets": list_workbook_sheets(workbook_path)}
+        if len(paths) == 1:
+            return {"sheets": list_workbook_sheets(paths[0])}
+        # 多文件：返回去重的 sheet 名（用户按名称选择，读取时合并所有文件）
+        all_sheets: list[str] = []
+        seen: set[str] = set()
+        for p in paths:
+            for name in list_workbook_sheets(p):
+                if name not in seen:
+                    seen.add(name)
+                    all_sheets.append(name)
+        return {"sheets": all_sheets, "fileCount": len(paths)}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"读取 Excel 工作表失败：{exc}") from exc
 
@@ -300,12 +339,13 @@ def labor_workbook_sheets(run_id: str) -> dict:
 @app.post("/api/labor/runs/{run_id}/field-suggestions")
 def labor_field_suggestions(run_id: str, payload: dict = Body(...)) -> dict:
     metadata = _labor_metadata_or_404(run_id)
-    workbook_path = _labor_workbook_path(metadata)
+    paths = _labor_workbook_paths(metadata)
     sheet_name = str(payload.get("sheet_name") or payload.get("sheetName") or "").strip()
     if not sheet_name:
         raise HTTPException(status_code=400, detail="请选择 Excel 工作表。")
     try:
-        return suggest_mapping(workbook_path, sheet_name)
+        # 从第一个文件读取字段映射建议（所有文件结构应一致）
+        return suggest_mapping(paths[0], sheet_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -374,7 +414,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     run_dir = get_labor_run_dir(run_id)
     mapping = metadata.get("excelMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
-    workbook_path = _labor_workbook_path(metadata)
+    workbook_paths = _labor_workbook_paths(metadata)
     pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
     supplier = metadata.get("supplierName", "")
     period_start = metadata.get("periodStart", "")
@@ -383,11 +423,15 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     manual_name_mapping = metadata.get("manualNameMapping") or {}
 
     try:
-        # [F] Excel 解析
-        logger.info(f"[{run_id}] [F] 开始解析 Excel: {workbook_path.name}, 工作表: {sheet_name}")
+        # [F] Excel 解析（多文件合并）
+        logger.info(f"[{run_id}] [F] 开始解析 Excel: {len(workbook_paths)} 个文件, 工作表: {sheet_name}")
         update_labor_metadata(run_id, {"stage": "解析 Excel 账单"})
-        excel_rows = read_workbook_rows(workbook_path, sheet_name, mapping)
-        logger.info(f"[{run_id}] [F] Excel 解析完成: {len(excel_rows)} 行")
+        excel_rows = []
+        for wb_path in workbook_paths:
+            rows = read_workbook_rows(wb_path, sheet_name, mapping)
+            logger.info(f"[{run_id}] [F]   {wb_path.name}: {len(rows)} 行")
+            excel_rows.extend(rows)
+        logger.info(f"[{run_id}] [F] Excel 解析完成: 共 {len(excel_rows)} 行")
         excel_warehouse_data = [
             {"warehouse_id": row.warehouse_id, "hours": row.hours, "amount": row.amount, "employee_name": row.employee_name_raw}
             for row in excel_rows
@@ -484,6 +528,17 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     expected_rows=_expected_labor_rows(filtered_excel_rows),
                 )
                 logger.info(f"[{run_id}] [C/D] 员工明细抽取完成: {len(pdf_rows)} 条记录")
+
+                # === Profile 失效检测 ===
+                _supplier_profile = resolve_supplier_profile(supplier, AI_CONFIG.get("supplier_profiles_path"))
+                if _supplier_profile and _supplier_profile.key != "default":
+                    _profile_file = Path(AI_CONFIG.get("supplier_profiles_path", "")) / f"{_supplier_profile.key}.json"
+                    if _profile_file.exists():
+                        if not pdf_rows:
+                            record_profile_failure(_profile_file)
+                        else:
+                            reset_profile_failure(_profile_file)
+
                 if not pdf_rows:
                     raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或启用 AI/OCR 后重试。")
 
@@ -496,7 +551,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     confidence_threshold=AI_CONFIG["confidence_threshold"],
                     manual_name_mapping=manual_name_mapping,
                 )
-                extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"])
+                extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], confidence_threshold=AI_CONFIG["confidence_threshold"])
                 extraction_quality["retryAttempted"] = False
                 extraction_quality["retryApplied"] = False
                 _append_quality_issues(extraction_quality, stage2_quality_issues)
@@ -506,6 +561,11 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 if should_retry_quality and any("快速总金额为 0" in issue for issue in stage2_quality_issues):
                     should_retry_quality = False
                     logger.info(f"[{run_id}] 已包含扫描/未知版式 PDF 补充抽取，跳过质量重试以避免重复大图 AI 请求")
+                # 硬编码阈值：PDF > 2 个时全量重试耗时过长（每个 PDF 需 AI 处理 30-60s），
+                # 超过此阈值跳过重试，避免整体超时。可通过 AI_MAX_RETRY_PDFS 环境变量覆盖。
+                if should_retry_quality and len(filtered_pdf_paths) > 2:
+                    should_retry_quality = False
+                    logger.info(f"[{run_id}] PDF 数量 {len(filtered_pdf_paths)} > 2，跳过质量重试以避免超时")
 
                 if should_retry_quality:
                     logger.info(f"[{run_id}] 质量为 {extraction_quality['level']}，尝试重试...")
@@ -513,11 +573,76 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     original_rows = list(pdf_rows)
                     original_comparison = dict(comparison)
                     original_quality = dict(extraction_quality)
-                    pdf_rows, comparison, extraction_quality = _retry_if_better(
-                        filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
-                        manual_name_mapping=manual_name_mapping,
-                        supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
-                    )
+
+                    # 先尝试局部重试低置信度行
+                    low_conf_rows = extraction_quality.get("lowConfidenceRows") or []
+                    partial_retry_done = False
+                    # 硬编码阈值：低置信度行占比 ≤ 50% 时才尝试局部重试，
+                    # 超过则认为整体质量太差，直接走全量重试。
+                    if low_conf_rows and len(low_conf_rows) <= len(pdf_rows) * 0.5:
+                        target_names = list({row["employee_name_raw"] for row in low_conf_rows if row.get("employee_name_raw")})
+                        partial_result = _retry_low_confidence_rows(
+                            filtered_pdf_paths, low_conf_rows, AI_CONFIG,
+                            supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                            expected_rows=_expected_labor_rows(filtered_excel_rows),
+                        )
+                        # 硬编码阈值：局部重试结果行数需 ≥ 原始行数的 80%，否则认为结果不完整，降级到全量重试。
+                        if partial_result and len(partial_result) >= len(pdf_rows) * 0.8:
+                            partial_comparison = compare_labor_items(
+                                partial_result, filtered_excel_rows,
+                                amount_tolerance=AI_CONFIG["amount_tolerance"],
+                                hours_tolerance=AI_CONFIG["hours_tolerance"],
+                                confidence_threshold=AI_CONFIG["confidence_threshold"],
+                                manual_name_mapping=manual_name_mapping,
+                            )
+                            partial_quality = calculate_extraction_quality(partial_result, partial_comparison["summary"], confidence_threshold=AI_CONFIG["confidence_threshold"])
+                            if calculate_quality_score(partial_quality, partial_comparison["summary"]) < calculate_quality_score(extraction_quality, comparison["summary"]):
+                                # 合并：保留原始高置信度行 + 局部重试的低置信度员工结果
+                                high_conf_rows = [r for r in pdf_rows if r.confidence >= AI_CONFIG["confidence_threshold"]]
+                                low_conf_names = {name.lower() for name in target_names}
+                                retry_low_conf_rows = [r for r in partial_result if r.employee_name_raw.lower() in low_conf_names]
+                                merged_rows = high_conf_rows + retry_low_conf_rows
+                                merged_comparison = compare_labor_items(
+                                    merged_rows, filtered_excel_rows,
+                                    amount_tolerance=AI_CONFIG["amount_tolerance"],
+                                    hours_tolerance=AI_CONFIG["hours_tolerance"],
+                                    confidence_threshold=AI_CONFIG["confidence_threshold"],
+                                    manual_name_mapping=manual_name_mapping,
+                                )
+                                merged_quality = calculate_extraction_quality(merged_rows, merged_comparison["summary"], confidence_threshold=AI_CONFIG["confidence_threshold"])
+                                if calculate_quality_score(merged_quality, merged_comparison["summary"]) < calculate_quality_score(extraction_quality, comparison["summary"]):
+                                    logger.info(f"[{run_id}] 局部重试改善了质量，采用合并结果（高置信度 {len(high_conf_rows)} 行 + 重试 {len(retry_low_conf_rows)} 行）")
+                                    pdf_rows = merged_rows
+                                    comparison = merged_comparison
+                                    extraction_quality = merged_quality
+                                    extraction_quality["retryAttempted"] = True
+                                    extraction_quality["retryApplied"] = True
+                                    partial_retry_done = True
+                                else:
+                                    logger.info(f"[{run_id}] 局部重试合并后未改善质量，降级到全量重试")
+                            else:
+                                logger.info(f"[{run_id}] 局部重试未改善质量，降级到全量重试")
+
+                    # 局部重试不够好或没有低置信度行，走全量重试
+                    if not partial_retry_done:
+                        pdf_rows, comparison, extraction_quality = _retry_if_better(
+                            filtered_pdf_paths, pdf_rows, filtered_excel_rows, extraction_quality, comparison,
+                            manual_name_mapping=manual_name_mapping,
+                            supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                        )
+
+                # === 自动生成供应商 Profile ===
+                if extraction_quality.get("level") == "ok" and pdf_rows:
+                    try:
+                        profile_data = generate_profile_from_extraction(
+                            supplier=supplier,
+                            pdf_rows=pdf_rows,
+                            extraction_quality_level=extraction_quality.get("level", "ok"),
+                        )
+                        profile_path = save_supplier_profile(profile_data, Path(SUPPLIER_PROFILES_OUTPUT_DIR))
+                        logger.info(f"[{run_id}] 已自动生成供应商 Profile: {profile_path.name}")
+                    except Exception as exc:
+                        logger.warning(f"[{run_id}] 供应商 Profile 自动生成失败: {exc}")
 
                 # Re-run warehouse comparison with full employee rows for Tier 3
                 # Pass pdf_totals to preserve correct total amounts for non-diff warehouses
@@ -534,7 +659,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 # Recalculate quality with warehouse comparison data, preserving retry flags
                 retry_attempted = extraction_quality.get("retryAttempted", False)
                 retry_applied = extraction_quality.get("retryApplied", False)
-                extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], warehouse_comparison)
+                extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], warehouse_comparison, confidence_threshold=AI_CONFIG["confidence_threshold"])
                 extraction_quality["retryAttempted"] = retry_attempted
                 extraction_quality["retryApplied"] = retry_applied
                 _append_quality_issues(extraction_quality, stage2_quality_issues)
@@ -586,6 +711,59 @@ def _append_quality_issues(extraction_quality: dict, issues: list[str]) -> None:
             existing.append(issue)
 
 
+def _retry_low_confidence_rows(
+    pdf_paths: list,
+    low_confidence_rows: list,
+    ai_config: dict,
+    supplier: str,
+    period_start: str,
+    period_end: str,
+    currency: str,
+    expected_rows: list | None = None,
+) -> list | None:
+    """对低置信度行做局部重试。
+
+    从 low_confidence_rows 提取员工名单，用 retry_mode 重新抽取。
+    返回合并后的新结果，失败时返回 None（降级到全量重试）。
+    """
+    if not low_confidence_rows:
+        return None
+
+    target_names = list({row["employee_name_raw"] for row in low_confidence_rows if row.get("employee_name_raw")})
+    if not target_names:
+        return None
+
+    logger.info(f"局部重试: {len(target_names)} 个低置信度员工: {target_names[:10]}")
+    try:
+        retry_config = dict(ai_config)
+        retry_config["cache_enabled"] = False
+        retry_config["parallel_max_workers"] = 1
+        retry_config["parallel_image_render_workers"] = 1
+
+        fresh_paths = [Path(str(p)) for p in pdf_paths]
+        for p in fresh_paths:
+            if not p.exists():
+                logger.warning(f"局部重试跳过: 文件不存在 {p}")
+                return None
+
+        retry_rows = extract_invoice_items(
+            fresh_paths, retry_config,
+            supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+            expected_rows=expected_rows,
+            retry_mode=True,
+            target_names=target_names,
+        )
+        if not retry_rows:
+            logger.info("局部重试返回 0 条，降级到全量重试")
+            return None
+
+        logger.info(f"局部重试完成: {len(retry_rows)} 条")
+        return retry_rows
+    except Exception as exc:
+        logger.warning(f"局部重试异常，降级到全量重试: {exc}")
+        return None
+
+
 def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, comparison, **kwargs):
     manual_name_mapping = kwargs.pop("manual_name_mapping", None)
     retry_config = dict(AI_CONFIG)
@@ -626,7 +804,7 @@ def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, compar
             confidence_threshold=AI_CONFIG["confidence_threshold"],
             manual_name_mapping=manual_name_mapping,
         )
-        retry_quality = calculate_extraction_quality(retry_pdf_rows, retry_comparison["summary"])
+        retry_quality = calculate_extraction_quality(retry_pdf_rows, retry_comparison["summary"], confidence_threshold=AI_CONFIG["confidence_threshold"])
         extraction_quality["retryAttempted"] = True
         if calculate_quality_score(retry_quality, retry_comparison["summary"]) < calculate_quality_score(extraction_quality, comparison["summary"]):
             retry_quality["retryAttempted"] = True
@@ -670,13 +848,13 @@ def _check_stale_extracting(metadata: dict) -> dict:
         updated_dt = _dt.fromisoformat(updated)
     except (ValueError, TypeError):
         return metadata
-    if _dt.now() - updated_dt > timedelta(minutes=10):
+    if _dt.now() - updated_dt > timedelta(minutes=30):
         run_id = metadata.get("id")
         if run_id:
             try:
                 metadata = update_labor_metadata(run_id, {
                     "status": "抽取失败",
-                    "errorMessage": "抽取超时（超过 10 分钟未完成）。请重新点击「抽取并核对」重试。",
+                    "errorMessage": "抽取超时（超过 30 分钟未完成）。请重新点击「抽取并核对」重试。",
                 })
             except Exception:
                 pass
@@ -788,6 +966,9 @@ async def finalize_run(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"生成最终结果失败：{exc}") from exc
 
+    final_payload = _final_calculation_payload(final_path, metadata)
+    save_table_data(run_dir, build_final_table_data(run_id, final_path, final_payload["month"]))
+
     files = dict(metadata.get("files", {}))
     files["confirmation"] = attach_file_record(run_id, confirmation_path, "确认结果")
     files["finalResult"] = attach_file_record(run_id, final_path, "最终结果")
@@ -797,6 +978,7 @@ async def finalize_run(
             "status": "已最终确认",
             "files": files,
             "finalDownloadUrl": files["finalResult"]["downloadUrl"],
+            **final_payload,
         },
     )
     return updated
@@ -898,6 +1080,7 @@ def download_template() -> FileResponse:
         DEFAULT_IMPORT_TEMPLATE,
         filename=DEFAULT_IMPORT_TEMPLATE.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -958,6 +1141,110 @@ def _calculation_payload(result) -> dict:
     }
 
 
+def _final_calculation_payload(final_path: Path, fallback_metadata: dict) -> dict:
+    workbook = load_workbook(final_path, data_only=True, read_only=True)
+    try:
+        fallback_month = _coerce_month(fallback_metadata.get("month")) or 0
+        month = (
+            _first_summary_month(workbook, "最终招聘奖金汇总")
+            or _first_summary_month(workbook, "最终内推奖金汇总")
+            or _intro_value(workbook, "核算月份")
+            or fallback_month
+        )
+        detail_rows = _workbook_rows(workbook, "招聘奖金明细", skip_total=False)
+        exception_rows = _workbook_rows(workbook, "异常清单", skip_total=False)
+        preview = [
+            {
+                "姓名": row.get("姓名", ""),
+                "工号": row.get("工号", ""),
+                "职级": row.get("职级", ""),
+                "ABC类别": row.get("ABC类别", ""),
+                "招聘渠道": row.get("招聘渠道", ""),
+                "招聘人入职1月奖金": row.get("招聘人入职1月奖金", 0),
+                "内推入职1月奖金": row.get("内推入职1月奖金", 0),
+                "异常提示": row.get("异常提示", ""),
+            }
+            for row in detail_rows[:MAX_PREVIEW_ROWS]
+        ]
+        return {
+            "month": month,
+            "importedRows": len(detail_rows),
+            "recruitmentTotal": _summary_total(workbook, "最终招聘奖金汇总"),
+            "referralTotal": _summary_total(workbook, "最终内推奖金汇总"),
+            "exceptionCount": len(exception_rows),
+            "pendingCount": 0,
+            "pendingTotal": 0,
+            "detailPreview": preview,
+            "pendingConfirmations": [],
+            "exceptions": exception_rows[:MAX_PREVIEW_ROWS],
+        }
+    finally:
+        workbook.close()
+
+
+def _workbook_rows(workbook, sheet_name: str, skip_total: bool = True) -> list[dict]:
+    if sheet_name not in workbook.sheetnames:
+        return []
+    sheet = workbook[sheet_name]
+    headers = [sheet.cell(1, column).value for column in range(1, sheet.max_column + 1)]
+    rows: list[dict] = []
+    for values in sheet.iter_rows(min_row=2, values_only=True):
+        row = {str(header).strip(): values[index] for index, header in enumerate(headers) if header and index < len(values)}
+        if not any(value not in (None, "") for value in row.values()):
+            continue
+        if skip_total and _is_workbook_total_row(row):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _is_workbook_total_row(row: dict) -> bool:
+    return any(str(value or "").strip() in {"合计", "总计"} for value in row.values())
+
+
+def _summary_total(workbook, sheet_name: str) -> float:
+    total = sum(_float_value(row.get("合计发放")) for row in _workbook_rows(workbook, sheet_name, skip_total=True))
+    return round(total, 2)
+
+
+def _first_summary_month(workbook, sheet_name: str) -> int | None:
+    for row in _workbook_rows(workbook, sheet_name, skip_total=True):
+        month = _coerce_month(row.get("核算月份"))
+        if month:
+            return month
+    return None
+
+
+def _intro_value(workbook, label: str) -> int | None:
+    if "计算说明" not in workbook.sheetnames:
+        return None
+    sheet = workbook["计算说明"]
+    for key, value in sheet.iter_rows(min_row=2, max_col=2, values_only=True):
+        if str(key or "").strip() == label:
+            return _coerce_month(value)
+    return None
+
+
+def _coerce_month(value) -> int | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value.year * 100 + value.month
+    if isinstance(value, (int, float)):
+        return int(value)
+    digits = "".join(char for char in str(value) if char.isdigit())
+    if len(digits) >= 6:
+        return int(digits[:6])
+    return None
+
+
+def _float_value(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _labor_metadata_or_404(run_id: str) -> dict:
     try:
         return load_labor_metadata(get_labor_run_dir(run_id))
@@ -966,14 +1253,558 @@ def _labor_metadata_or_404(run_id: str) -> dict:
 
 
 def _labor_workbook_path(metadata: dict) -> Path:
-    workbook_record = metadata.get("files", {}).get("workbook") or {}
-    path = workbook_record.get("path")
-    if not path:
+    """返回第一个 workbook 文件路径（兼容旧逻辑）"""
+    paths = _labor_workbook_paths(metadata)
+    return paths[0]
+
+
+def _labor_workbook_paths(metadata: dict) -> list[Path]:
+    """返回所有 workbook 文件路径，支持多文件上传"""
+    files_meta = metadata.get("files", {})
+    # 优先使用 workbooks 列表（新格式）
+    records = files_meta.get("workbooks") or []
+    if not records:
+        # 兼容旧格式：单个 workbook 字段
+        single = files_meta.get("workbook")
+        if single:
+            records = [single]
+    if not records:
         raise HTTPException(status_code=400, detail="请先上传线下账单 Excel。")
-    workbook_path = Path(path)
-    if not workbook_path.exists():
-        raise HTTPException(status_code=404, detail="线下账单文件不存在。")
-    return workbook_path
+    paths = []
+    for rec in records:
+        p = Path(rec.get("path", ""))
+        if not p.exists():
+            raise HTTPException(status_code=404, detail=f"线下账单文件不存在：{p.name}")
+        paths.append(p)
+    return paths
+
+
+# ============================================================
+# DOMESTIC LABOR PAYROLL API  /api/domestic-labor/*
+# ============================================================
+
+DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+PAYROLL_OUTPUT_DIR = DOMESTIC_LABOR_RUNS_DIR.parent / "payroll_outputs"
+PAYROLL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+payroll_logger = logging.getLogger("bonus_platform.payroll")
+
+
+def _run_payroll_calculation(run_id: str, file_path: str, attendance_month: str,
+                              engines: list, password: str = None,
+                              hrbp_list: list = None):
+    """Background worker: load Excel, run engines, save results."""
+    payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
+    try:
+        update_payroll_metadata(run_id, {"status": "计算中"})
+        with PayrollDataLoader(file_path, password=password) as loader:
+            monthly = loader.monthly
+            daily_by_emp = loader.group_daily_by_employee()
+            housing_by_emp = loader.group_housing_by_employee()
+
+            # Region auto-detection
+            region = "default"
+            if monthly.rows:
+                dept2 = str(monthly.rows[0].get("二级部门名称", ""))
+                if any(k in dept2 for k in ("华东枢纽", "华东揽收组", "华西枢纽", "华西揽收组")):
+                    region = "wes"
+
+            results = []
+            for row in monthly.rows:
+                emp_id = str(row.get("工号", ""))
+                emp_name = str(row.get("姓名", ""))
+                dept = str(row.get("二级部门名称", ""))
+                r = {"employee_id": emp_id, "employee_name": emp_name, "department": dept,
+                     "quanqinjiang": 0, "canbu": 0, "waisu_butie": 0, "gonglingjiang": 0,
+                     "total": 0, "warnings": []}
+
+                if "quanqinjiang" in engines:
+                    cr = QuanQinJiangEngine().calculate(row, daily_by_emp.get(emp_id, []))
+                    r["quanqinjiang"] = cr.amount
+                    r["warnings"].extend(cr.warnings)
+
+                if "canbu" in engines:
+                    cr = CanBuEngine().calculate(row, daily_by_emp.get(emp_id, []))
+                    r["canbu"] = cr.amount
+                    r["warnings"].extend(cr.warnings)
+
+                if "waisu_butie" in engines:
+                    cr = WaiSuBuTieEngine().calculate(row, daily_by_emp.get(emp_id, []),
+                                                       housing_by_emp.get(emp_id, []))
+                    r["waisu_butie"] = cr.amount
+                    r["warnings"].extend(cr.warnings)
+
+                if "gonglingjiang" in engines:
+                    cr = GongLingJiangEngine().calculate(row, hrbp_list or [], region=region)
+                    r["gonglingjiang"] = cr.amount
+                    r["warnings"].extend(cr.warnings)
+
+                r["total"] = r["quanqinjiang"] + r["canbu"] + r["waisu_butie"] + r["gonglingjiang"]
+                r["warnings"] = "; ".join(r["warnings"]) if r["warnings"] else ""
+                results.append(r)
+
+            # Compute summary
+            summary = {
+                "total_employees": len(results),
+                "total_quanqinjiang": sum(r["quanqinjiang"] for r in results),
+                "total_canbu": sum(r["canbu"] for r in results),
+                "total_waisu_butie": sum(r["waisu_butie"] for r in results),
+                "total_gonglingjiang": sum(r["gonglingjiang"] for r in results),
+                "grand_total": sum(r["total"] for r in results),
+                "warning_count": sum(1 for r in results if r["warnings"]),
+            }
+
+            update_payroll_metadata(run_id, {
+                "status": "已完成",
+                "results": results,
+                "summary": summary,
+            })
+            payroll_logger.info("Payroll calculation completed for %s: %d employees", run_id, len(results))
+    except Exception as exc:
+        payroll_logger.exception("Payroll calculation failed for %s", run_id)
+        update_payroll_metadata(run_id, {"status": "失败", "error": str(exc)})
+
+
+@app.get("/api/domestic-labor/runs")
+def list_domestic_labor_runs() -> dict:
+    return {"runs": list_payroll_metadata()}
+
+
+@app.post("/api/domestic-labor/runs")
+async def create_domestic_labor_run(file: UploadFile = File(...), engines: str = Body(""),
+                                     attendance_month: str = Body(""),
+                                     password: str = Body(""), hrbp_list: str = Body("")):
+    # Validate file
+    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        raise HTTPException(400, "请上传 Excel 文件（.xlsx / .xlsm / .xls）")
+
+    # Parse engines
+    engine_list = [e.strip() for e in engines.split(",") if e.strip()]
+    if not engine_list:
+        raise HTTPException(400, "请至少选择一个计算引擎")
+    valid_engines = set(ENGINE_TEMPLATES.keys())
+    for e in engine_list:
+        if e not in valid_engines:
+            raise HTTPException(400, f"未知引擎: {e}")
+
+    # Save uploaded file
+    DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    run_id_temp = safe_payroll_filename(file.filename)
+    # We'll create the run first, then save file into its directory
+    run = create_payroll_run({
+        "engines": engine_list,
+        "attendanceMonth": attendance_month,
+        "fileName": file.filename,
+    })
+    run_id = run["id"]
+    run_dir = get_payroll_run_dir(run_id)
+
+    saved_name = safe_payroll_filename(file.filename)
+    file_path = run_dir / saved_name
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    # Parse hrbp_list if provided
+    hrbp = None
+    if hrbp_list.strip():
+        try:
+            hrbp = __import__("json").loads(hrbp_list)
+        except Exception:
+            pass
+
+    update_payroll_metadata(run_id, {
+        "status": "已上传",
+        "filePath": str(file_path),
+        "savedFileName": saved_name,
+        "fileSize": file_path.stat().st_size,
+    })
+
+    # Launch background calculation
+    asyncio.get_event_loop().run_in_executor(
+        None, _run_payroll_calculation, run_id, str(file_path),
+        attendance_month, engine_list, password or None, hrbp,
+    )
+
+    return {"run_id": run_id, "status": "已上传", "message": "计算任务已提交"}
+
+
+@app.get("/api/domestic-labor/runs/{run_id}")
+def get_domestic_labor_run(run_id: str) -> dict:
+    try:
+        metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    return metadata
+
+
+@app.get("/api/domestic-labor/runs/{run_id}/results")
+def get_domestic_labor_results(run_id: str) -> dict:
+    try:
+        metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    return {
+        "run_id": run_id,
+        "status": metadata.get("status"),
+        "results": metadata.get("results", []),
+        "summary": metadata.get("summary", {}),
+    }
+
+
+@app.get("/api/domestic-labor/runs/{run_id}/export")
+def export_domestic_labor(run_id: str) -> dict:
+    try:
+        metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    results = metadata.get("results", [])
+    if not results:
+        raise HTTPException(400, "暂无计算结果可导出")
+    file_name = f"薪酬核算_{metadata.get('attendanceMonth', '')}_{run_id}.xlsx"
+    out_path = PAYROLL_OUTPUT_DIR / file_name
+    exporter = ExcelExporter(str(out_path))
+    summary = metadata.get("summary", {})
+    exporter.export(results, metadata.get("attendanceMonth", ""), summary)
+    return {"file_path": str(out_path), "file_name": file_name}
+
+
+@app.get("/api/domestic-labor/runs/{run_id}/download/{filename}")
+def download_domestic_labor_file(run_id: str, filename: str) -> FileResponse:
+    try:
+        run_dir = get_payroll_run_dir(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    # Check run dir first, then output dir
+    path = run_dir / Path(filename).name
+    if not path.exists():
+        path = PAYROLL_OUTPUT_DIR / Path(filename).name
+    if not path.exists():
+        raise HTTPException(404, "文件不存在或已被清理。")
+    return FileResponse(path, filename=path.name)
+
+
+@app.delete("/api/domestic-labor/runs/{run_id}")
+def delete_domestic_labor_run(run_id: str) -> dict:
+    try:
+        run_dir = get_payroll_run_dir(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    shutil.rmtree(run_dir, ignore_errors=True)
+    return {"message": f"已删除任务: {run_id}"}
+
+
+@app.get("/api/domestic-labor/templates")
+def list_domestic_labor_templates() -> dict:
+    return {"templates": [get_template_info(k) for k in ENGINE_TEMPLATES]}
+
+
+@app.get("/api/domestic-labor/templates/{engine_key}/download")
+def download_domestic_labor_template(engine_key: str) -> FileResponse:
+    if engine_key not in ENGINE_TEMPLATES:
+        raise HTTPException(404, "模板不存在")
+    data = generate_template(engine_key)
+    tmp = NamedTemporaryFile(delete=False, suffix=f"_{engine_key}_template.xlsx")
+    tmp.write(data)
+    tmp.close()
+    return FileResponse(
+        tmp.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"{engine_key}_template.xlsx",
+    )
+
+
+# =========================================================================
+# FBU PERFORMANCE API  /api/fbu-performance/*
+# =========================================================================
+
+fbu_run_manager = FBURunManager(str(FBU_PERFORMANCE_RUNS_DIR))
+
+
+@app.post("/api/fbu-performance/import-attendance")
+async def import_fbu_attendance(
+    file: UploadFile = File(...),
+    calc_month: str = Body(...),
+) -> dict:
+    """Step 1: 导入考勤日报表"""
+    # 创建运行记录
+    run = fbu_run_manager.create_run(calc_month=calc_month)
+
+    # 保存上传文件
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run.run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = run_dir / "attendance.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    # 更新文件名
+    fbu_run_manager.update_run(run.run_id, attendance_file=file.filename)
+
+    # 解析并预览
+    try:
+        target_month = int(calc_month.split("-")[1]) if "-" in calc_month else int(calc_month)
+        parser = FBUPerformanceParser()
+        preview = parser.parse_attendance_preview(str(file_path), target_month)
+
+        # 保存分步数据
+        fbu_run_manager.save_step_data(run.run_id, 1, preview)
+
+        return {
+            "success": True,
+            "run_id": run.run_id,
+            "step": 1,
+            "preview": preview,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run.run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"考勤数据解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import-salary")
+async def import_fbu_salary(
+    run_id: str = Body(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """Step 2: 导入薪资档案"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    # 保存上传文件
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    file_path = run_dir / "salary.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    # 更新文件名
+    fbu_run_manager.update_run(run_id, salary_file=file.filename)
+
+    # 解析并预览
+    try:
+        parser = FBUPerformanceParser()
+        preview = parser.parse_salary_preview(str(file_path))
+
+        # 保存分步数据
+        fbu_run_manager.save_step_data(run_id, 2, preview)
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 2,
+            "preview": preview,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"薪资数据解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import-performance")
+async def import_fbu_performance(
+    run_id: str = Body(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """Step 3: 导入绩效报表"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    # 保存上传文件
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    file_path = run_dir / "performance.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    # 更新文件名
+    fbu_run_manager.update_run(run_id, performance_file=file.filename)
+
+    # 解析并预览
+    try:
+        parser = FBUPerformanceParser()
+        preview = parser.parse_performance_preview(str(file_path))
+
+        # 保存分步数据
+        fbu_run_manager.save_step_data(run_id, 3, preview)
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 3,
+            "preview": preview,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"绩效数据解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import")
+async def import_fbu_performance_data(
+    attendance: UploadFile = File(...),
+    salary: UploadFile = File(...),
+    performance: UploadFile = File(...),
+    calc_month: str = Body(...),
+) -> dict:
+    """导入FBU绩效数据文件（保留兼容）"""
+    # 创建运行记录
+    run = fbu_run_manager.create_run(
+        calc_month=calc_month,
+        attendance_file=attendance.filename,
+        salary_file=salary.filename,
+        performance_file=performance.filename,
+    )
+
+    # 保存上传文件
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run.run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    for file, name in [(attendance, "attendance.xlsx"), (salary, "salary.xlsx"), (performance, "performance.xlsx")]:
+        file_path = run_dir / name
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+    fbu_run_manager.update_run(run.run_id, status="imported")
+
+    return {
+        "success": True,
+        "run_id": run.run_id,
+        "message": "数据导入成功",
+    }
+
+
+@app.post("/api/fbu-performance/calculate/{run_id}")
+def calculate_fbu_performance(run_id: str) -> dict:
+    """执行FBU绩效核算"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    try:
+        fbu_run_manager.update_run(run_id, status="processing")
+
+        parser = FBUPerformanceParser()
+
+        # 判断是分步模式还是一次性导入模式
+        if run.current_step >= 3 and run.attendance_data and run.salary_data and run.performance_data:
+            # 分步模式：从已保存的分步数据计算
+            engine = parser.parse_all_from_step_data(
+                attendance_data=run.attendance_data.get('employees', []),
+                salary_data=run.salary_data.get('employees', []),
+                performance_data=run.performance_data.get('employees', []),
+            )
+        else:
+            # 一次性导入模式：从文件计算
+            run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+            target_month = int(run.calc_month.split("-")[1]) if "-" in run.calc_month else int(run.calc_month)
+
+            engine = parser.parse_all(
+                attendance_file=str(run_dir / "attendance.xlsx"),
+                salary_file=str(run_dir / "salary.xlsx"),
+                performance_file=str(run_dir / "performance.xlsx"),
+                target_month=target_month,
+            )
+
+        # 保存结果
+        employees = engine.get_all_employees()
+        fbu_run_manager.save_results(run_id, employees)
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "total_employees": len(employees),
+            "total_bonus": sum(e.performance_bonus for e in employees),
+        }
+
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"计算失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/runs")
+def create_fbu_performance_run(body: dict) -> dict:
+    """创建新的月度核算活动"""
+    calc_month = body.get("calc_month")
+    if not calc_month:
+        raise HTTPException(400, "缺少核算月份")
+
+    run = fbu_run_manager.create_run(calc_month=calc_month)
+
+    return {
+        "success": True,
+        "run_id": run.run_id,
+        "calc_month": run.calc_month,
+        "status": run.status,
+    }
+
+
+@app.get("/api/fbu-performance/runs")
+def list_fbu_performance_runs() -> dict:
+    """获取FBU绩效核算任务列表"""
+    runs = fbu_run_manager.list_runs()
+    return {
+        "runs": [
+            {
+                "run_id": r.run_id,
+                "created_at": r.created_at,
+                "calc_month": r.calc_month,
+                "status": r.status,
+                "current_step": r.current_step,
+                "total_employees": r.total_employees,
+                "total_bonus": r.total_bonus,
+            }
+            for r in runs
+        ]
+    }
+
+
+@app.get("/api/fbu-performance/runs/{run_id}")
+def get_fbu_performance_run(run_id: str) -> dict:
+    """获取FBU绩效核算任务详情"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    return vars(run)
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/results")
+def get_fbu_performance_results(run_id: str) -> dict:
+    """获取FBU绩效核算结果"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    if run.status != "completed":
+        raise HTTPException(400, "任务未完成")
+    return {"results": run.results}
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/export")
+def export_fbu_performance(run_id: str) -> dict:
+    """导出FBU绩效核算结果"""
+    output_path = fbu_run_manager.export_run(run_id, str(EXPORT_DIR))
+    if not output_path:
+        raise HTTPException(400, "导出失败")
+    return {"file_path": output_path, "file_name": Path(output_path).name}
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/download/{filename}")
+def download_fbu_performance_file(run_id: str, filename: str) -> FileResponse:
+    """下载FBU绩效核算文件"""
+    path = EXPORT_DIR / Path(filename).name
+    if not path.exists():
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(path, filename=path.name)
+
+
+@app.delete("/api/fbu-performance/runs/{run_id}")
+def delete_fbu_performance_run(run_id: str) -> dict:
+    """删除FBU绩效核算任务"""
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    if run_dir.exists():
+        shutil.rmtree(run_dir, ignore_errors=True)
+    fbu_run_manager.delete_run(run_id)
+    return {"message": f"已删除任务: {run_id}"}
 
 
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

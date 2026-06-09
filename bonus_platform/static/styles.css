@@ -1291,6 +1291,87 @@ button {
   background: #F5F5F7;
 }
 
+/* ── Employee Reconciliation Table ── */
+.recon-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #6E6E73;
+  border-bottom: 1px solid #E5E5E7;
+  background: #FAFAFA;
+}
+.recon-summary-bar strong {
+  color: #1D1D1F;
+}
+.recon-variance-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #FF3B30;
+  background: #FFEBEE;
+}
+.recon-ok-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #34C759;
+  background: #E8F5E9;
+}
+.recon-row.variance {
+  background: #FFF8F0 !important;
+}
+.recon-row.variance:hover {
+  background: #FFF0E0 !important;
+}
+.recon-row.matched {
+  opacity: 0.65;
+}
+.recon-row.matched:hover {
+  opacity: 1;
+}
+
+/* ── Diagnostics fold ── */
+.diagnostics-fold {
+  margin: 20px 0;
+  border: 1px solid #E5E5E7;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.diagnostics-fold > summary {
+  padding: 14px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #6E6E73;
+  cursor: pointer;
+  background: #F5F5F7;
+  list-style: none;
+}
+.diagnostics-fold > summary::-webkit-details-marker {
+  display: none;
+}
+.diagnostics-fold > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 0.15s;
+}
+.diagnostics-fold[open] > summary::before {
+  transform: rotate(90deg);
+}
+.diagnostics-fold > summary:hover {
+  color: #1D1D1F;
+}
+
 .labor-toast {
   position: fixed;
   right: 24px;
@@ -2890,6 +2971,36 @@ body.filters-collapsed .filter-body {
   background: rgba(255, 255, 255, 0.46);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
+}
+
+.detail-drawer .drawer-content {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  z-index: 1;
+  display: grid;
+  flex-direction: initial;
+  gap: 14px;
+  width: auto;
+  padding: 18px;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  transition: none;
+}
+
+.detail-drawer .drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 22px 26px;
 }
 
 .toast-region {
@@ -5531,4 +5642,718 @@ body.filters-collapsed .filter-body {
   .section-header {
     flex-direction: column;
   }
+}
+
+/* Keep the recruitment calculation trace drawer isolated from other drawer systems. */
+.detail-drawer > .drawer-panel {
+  transform: translateX(100%);
+}
+
+.detail-drawer.open > .drawer-panel {
+  transform: translateX(0) !important;
+}
+
+.detail-drawer .drawer-content {
+  position: relative !important;
+  inset: auto !important;
+  display: grid !important;
+  gap: 14px;
+  width: auto !important;
+  padding: 18px;
+  overflow: visible;
+  background: transparent !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DOMESTIC LABOR PAYROLL - 国内劳务工薪酬核算
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Shell ── */
+.domestic-labor-shell {
+  background: #f4f6f8;
+  color: #172033;
+  font-family: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+}
+
+/* ── KPI 6 columns ── */
+.kpi-banner.kpi-6col {
+  grid-template-columns: repeat(6, 1fr);
+}
+
+.kpi-brand .kpi-value { color: #175cd3; }
+.kpi-info .kpi-value { color: #067647; }
+.kpi-violet .kpi-value { color: #7c3aed; }
+
+/* ── Engine Card Grid ── */
+.engine-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.engine-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border: 2px solid #d8dee8;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.engine-card:hover {
+  border-color: #2f6fed;
+  box-shadow: 0 2px 8px rgba(47, 111, 237, 0.1);
+}
+
+.engine-card.selected {
+  border-color: #175cd3;
+  background: #eff8ff;
+  box-shadow: 0 0 0 3px rgba(23, 92, 211, 0.12);
+}
+
+.engine-card-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.engine-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.engine-card-name {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #172033;
+}
+
+.engine-card-desc {
+  margin: 0;
+  font-size: 12px;
+  color: #667085;
+  line-height: 1.4;
+}
+
+.engine-card-check {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid #d8dee8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  transition: all 0.2s ease;
+}
+
+.engine-card.selected .engine-card-check {
+  background: #175cd3;
+  border-color: #175cd3;
+  color: #ffffff;
+}
+
+/* ── Template Links ── */
+.template-links {
+  margin-bottom: 16px;
+}
+
+.template-hint {
+  font-size: 12px;
+  color: #667085;
+  margin: 0 0 8px;
+}
+
+.template-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 12px;
+  margin-bottom: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #175cd3;
+  background: #eff8ff;
+  border-radius: 6px;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+.template-link:hover {
+  background: #d6eaff;
+}
+
+/* ── Task Status Card ── */
+.task-status-card {
+  padding: 24px;
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 10px;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #667085;
+}
+
+.status-indicator.status-pending .status-dot { background: #f79009; }
+.status-indicator.status-running .status-dot { background: #175cd3; animation: pulse 1.5s infinite; }
+.status-indicator.status-success .status-dot { background: #12b76a; }
+.status-indicator.status-error .status-dot { background: #f04438; }
+
+.status-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #172033;
+}
+
+.status-text {
+  font-size: 13px;
+  color: #667085;
+  margin: 0;
+}
+
+.progress-bar {
+  margin-top: 16px;
+  height: 6px;
+  background: #e4e7ec;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(90deg, #175cd3, #2f6fed);
+  border-radius: 3px;
+  animation: progress-indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* ── Engine Summary Grid ── */
+.engine-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.engine-summary-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 10px;
+}
+
+.engine-summary-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.engine-summary-body h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #172033;
+}
+
+.engine-summary-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #667085;
+}
+
+.engine-summary-stats strong {
+  color: #172033;
+  font-family: var(--font-number);
+  font-weight: 800;
+}
+
+/* ── Empty State Large ── */
+.workspace-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 32px;
+  text-align: center;
+}
+
+.empty-icon-large {
+  margin-bottom: 24px;
+  opacity: 0.5;
+}
+
+.empty-title-large {
+  font-size: 18px;
+  font-weight: 700;
+  color: #172033;
+  margin: 0 0 8px;
+}
+
+.empty-desc-large {
+  font-size: 14px;
+  color: #667085;
+  margin: 0;
+}
+
+/* ── Confirm Summary ── */
+.confirm-summary {
+  padding: 20px;
+  background: #f9fafb;
+  border: 1px solid #d8dee8;
+  border-radius: 10px;
+}
+
+.confirm-summary h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #172033;
+}
+
+.confirm-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.confirm-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid #e4e7ec;
+}
+
+.confirm-item:last-child {
+  border-bottom: none;
+}
+
+.confirm-label {
+  font-size: 13px;
+  color: #667085;
+}
+
+.confirm-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: #172033;
+}
+
+/* ── Field Textarea ── */
+.field-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d2d2d7;
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  color: #1d1d1f;
+  background: #ffffff;
+  resize: vertical;
+  transition: all 0.2s ease;
+}
+
+.field-textarea:focus {
+  outline: none;
+  border-color: #0071e3;
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
+}
+
+.field-textarea::placeholder {
+  color: #aeaeb2;
+}
+
+/* ── Field Hint ── */
+.field-hint {
+  font-size: 12px;
+  color: #667085;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+/* ── Index Page - Domestic Module Card ── */
+.domestic-module {
+  position: relative;
+  overflow: hidden;
+}
+
+.payroll-preview {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preview-card {
+  width: 48px;
+  height: 32px;
+  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+  border-radius: 6px;
+  transform: rotate(-5deg);
+}
+
+.preview-card:nth-child(2) {
+  transform: rotate(3deg);
+  opacity: 0.7;
+}
+
+.preview-line {
+  width: 32px;
+  height: 2px;
+  background: #a5b4fc;
+  border-radius: 1px;
+}
+
+.payroll-preview b {
+  font-family: var(--font-number);
+  font-size: 18px;
+  font-weight: 800;
+  color: #4f46e5;
+}
+
+/* ── Responsive ── */
+@media (max-width: 1280px) {
+  .kpi-banner.kpi-6col {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .engine-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .engine-summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .kpi-banner.kpi-6col {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .engine-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── FBU Performance Module Card ── */
+.fbu-module {
+  position: relative;
+  overflow: hidden;
+}
+
+.performance-preview {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.performance-preview .preview-card {
+  width: 32px;
+  height: 40px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 4px;
+  opacity: 0.6;
+}
+
+.performance-preview .preview-card:nth-child(2) {
+  transform: translateY(-8px);
+  opacity: 0.4;
+}
+
+.performance-preview .preview-line {
+  width: 40px;
+  height: 2px;
+  background: #667eea;
+  opacity: 0.5;
+}
+
+.performance-preview b {
+  font-size: 18px;
+  color: #667eea;
+  font-weight: 700;
+}
+
+/* ── FBU Performance Shell ── */
+.fbu-performance-shell {
+  background: #f5f5f7;
+  min-height: 100vh;
+}
+
+.fbu-performance-shell .kpi-banner {
+  display: grid;
+  gap: 16px;
+  padding: 16px 24px;
+  background: white;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.fbu-performance-shell .kpi-4col {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.fbu-performance-shell .kpi-card {
+  padding: 16px;
+  border-radius: 12px;
+  background: #f9f9fb;
+  border: 1px solid #e5e5e5;
+}
+
+.fbu-performance-shell .kpi-label {
+  font-size: 12px;
+  color: #667085;
+  display: block;
+}
+
+.fbu-performance-shell .kpi-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1d1d1f;
+  display: block;
+  margin: 4px 0;
+}
+
+.fbu-performance-shell .kpi-sub {
+  font-size: 11px;
+  color: #aeaeb2;
+}
+
+.fbu-performance-shell .kpi-neutral .kpi-value { color: #1d1d1f; }
+.fbu-performance-shell .kpi-success .kpi-value { color: #10b981; }
+.fbu-performance-shell .kpi-brand .kpi-value { color: #0071e3; }
+.fbu-performance-shell .kpi-info .kpi-value { color: #6366f1; }
+
+/* ── Import Section ── */
+.import-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 24px;
+}
+
+.import-card {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  border: 2px solid #e5e5e5;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: all 0.2s ease;
+}
+
+.import-card:hover {
+  border-color: #0071e3;
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.1);
+}
+
+.import-card-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #f0f4ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #0071e3;
+}
+
+.import-card-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin: 0 0 4px;
+}
+
+.import-card-info p {
+  font-size: 13px;
+  color: #667085;
+  margin: 0 0 8px;
+}
+
+.import-status {
+  font-size: 12px;
+  color: #aeaeb2;
+  padding: 4px 8px;
+  background: #f5f5f7;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.import-status.uploaded {
+  color: #10b981;
+  background: #ecfdf5;
+}
+
+.btn-import {
+  padding: 8px 16px;
+  border: 1px solid #d2d2d7;
+  border-radius: 8px;
+  background: white;
+  color: #1d1d1f;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-import:hover {
+  background: #f5f5f7;
+  border-color: #0071e3;
+  color: #0071e3;
+}
+
+.import-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px 24px;
+}
+
+.calc-month-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calc-month-input label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1d1d1f;
+}
+
+.calc-month-input input {
+  padding: 8px 12px;
+  border: 1px solid #d2d2d7;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* ── Progress Bar ── */
+.progress-bar-container {
+  padding: 0 24px 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background: #e5e5e5;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0071e3, #6366f1);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0071e3;
+  min-width: 40px;
+}
+
+/* ── Status Badges ── */
+.status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-badge.success {
+  background: #ecfdf5;
+  color: #10b981;
+}
+
+.status-badge.error {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.status-badge.warning {
+  background: #fffbeb;
+  color: #f59e0b;
+}
+
+/* ── Buttons ── */
+.btn-link {
+  background: none;
+  border: none;
+  color: #0071e3;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
+.btn-link.danger {
+  color: #ef4444;
+}
+
+/* ── Table Enhancements ── */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.data-table th {
+  background: #f9f9fb;
+  font-weight: 600;
+  font-size: 12px;
+  color: #667085;
+  text-transform: uppercase;
+}
+
+.data-table tbody tr:hover {
+  background: #f5f5f7;
 }

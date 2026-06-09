@@ -32,6 +32,15 @@ DEVELOPED_LOCATION_TOKENS = {
     "finland", "ireland", "australia", "new zealand", "singapore", "israel",
     "poland",
 }
+OVERSEAS_CHINA_LOCATION_TOKENS = {"非中国", "香港", "澳门", "澳門", "台湾", "臺灣"}
+MAINLAND_LOCATION_TOKENS = {
+    "北京", "天津", "上海", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
+    "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
+    "广东", "广西", "海南", "四川", "贵州", "云南", "西藏", "陕西", "甘肃",
+    "青海", "宁夏", "新疆", "内蒙古", "深圳", "广州", "杭州", "南京", "苏州",
+    "成都", "武汉", "西安", "青岛", "厦门", "宁波", "郑州", "长沙", "合肥",
+    "佛山", "东莞",
+}
 
 
 def calculate(rows: Iterable[ImportRow], rules: RuleBook, *, allow_legacy_overrides: bool = False) -> CalculationResult:
@@ -233,7 +242,20 @@ def _label(row: ImportRow) -> str:
     if label:
         return label
     location = row.text("工作地")
-    return "国内" if "中国" in location or "大陆" in location else "海外"
+    return "国内" if _is_domestic_location(location) else "海外"
+
+
+def _is_domestic_location(location: str) -> bool:
+    if not location:
+        return False
+    if any(token in location for token in OVERSEAS_CHINA_LOCATION_TOKENS):
+        return False
+    return (
+        "中国大陆" in location
+        or location.startswith("中国")
+        or "大陆" in location
+        or any(token in location for token in MAINLAND_LOCATION_TOKENS)
+    )
 
 
 def _date_diff(later: Optional[datetime], earlier: Optional[datetime]) -> Optional[float]:
@@ -359,7 +381,7 @@ def _referral_rule_region(row: ImportRow, scope: str) -> str:
 def _normalized_referral_region(row: ImportRow) -> str:
     location = row.text("工作地")
     location_lower = location.lower()
-    if any(token in location for token in ("中国", "大陆")) or location == "国内":
+    if location == "国内" or _is_domestic_location(location):
         return "国内发展中国家"
     if any(token in location_lower for token in DEVELOPED_LOCATION_TOKENS):
         return "海外发达国家"

@@ -3,7 +3,7 @@ const laborState = {
   headers: [],
   comparePollTimer: null,
   pollRetryCount: 0,
-  pollMaxRetries: 100,
+  pollMaxRetries: 200,  // 200 × 3s = 10 分钟
   currentStep: 1,
 };
 
@@ -49,6 +49,9 @@ const labor = {
   // Results
   extractCompare: document.querySelector("#extractCompare"),
   compareStatus: document.querySelector("#compareStatus"),
+  employeeReconSection: document.querySelector("#employeeReconSection"),
+  employeeReconTable: document.querySelector("#employeeReconTable"),
+  diagnosticsFold: document.querySelector("#diagnosticsFold"),
   qualityAlert: document.querySelector("#qualityAlert"),
   conclusionSection: document.querySelector("#conclusionSection"),
   warehouseSection: document.querySelector("#warehouseSection"),
@@ -136,12 +139,12 @@ async function createRun() {
 
 async function uploadFiles() {
   if (!laborState.run) return toast("请先创建批次。");
-  if (!labor.pdfFiles.files.length || !labor.workbookFile.files[0])
+  if (!labor.pdfFiles.files.length || !labor.workbookFile.files.length)
     return toast("请上传 PDF 发票和 Excel 账单。");
 
   const form = new FormData();
   Array.from(labor.pdfFiles.files).forEach((file) => form.append("pdf_files", file));
-  form.append("workbook_file", labor.workbookFile.files[0]);
+  Array.from(labor.workbookFile.files).forEach((file) => form.append("workbook_files", file));
 
   setText(labor.uploadStatus, "正在上传文件...");
   try {
@@ -219,6 +222,11 @@ function clearResults() {
     labor.conclusionSection.hidden = true;
     labor.conclusionSection.innerHTML = "";
   }
+  if (labor.employeeReconSection) {
+    labor.employeeReconSection.hidden = true;
+    if (labor.employeeReconTable) labor.employeeReconTable.innerHTML = "";
+  }
+  if (labor.diagnosticsFold) labor.diagnosticsFold.hidden = true;
   if (labor.warehouseSection) labor.warehouseSection.hidden = true;
   if (labor.warehouseHeading) labor.warehouseHeading.hidden = true;
   if (labor.warehouseTable) {
@@ -281,7 +289,7 @@ async function pollCompareResult() {
   if (laborState.pollRetryCount > laborState.pollMaxRetries) {
     stopComparePolling();
     labor.extractCompare.disabled = false;
-    setText(labor.compareStatus, "抽取超时（5分钟），请重新点击「抽取并比对」重试。", true);
+    setText(labor.compareStatus, "抽取超时（10分钟），请重新点击「抽取并比对」重试。", true);
     toast("抽取超时。");
     return;
   }
@@ -351,25 +359,32 @@ function renderMappingPreview(rows) {
 
 function renderResult(run) {
   const summary = run.comparisonSummary || {};
-  renderQualityAlert(run.extractionQuality, run.reconciliationDiagnostics);
   const wc = run.warehouseComparison;
   const wcSummary = wc && wc.summary;
   const totalPassed = wcSummary && wcSummary.totalPassed;
+  const rows = run.comparisonRows || [];
 
   // Update KPI cards
-  updateKpiCards(summary, run.comparisonRows || [], wcSummary, run.candidateMatches || []);
+  updateKpiCards(summary, rows, wcSummary, run.candidateMatches || []);
 
-  // Render conclusion
+  // 1. 结论 — 用户第一眼看到
   renderConclusion(summary, wcSummary, run.extractionQuality);
 
-  // Render warehouse overview
-  renderWarehouseTable(wc);
+  // 2. 全员对账明细 — 核心信息，有差异排前面
+  renderEmployeeReconTable(rows, run.candidateMatches || [], summary, totalPassed, wcSummary);
 
-  // Render pending items
-  const rows = run.comparisonRows || [];
+  // 3. 质量诊断 + 仓库概览 — 折叠在底部
+  renderQualityAlert(run.extractionQuality, run.reconciliationDiagnostics);
+  renderWarehouseTable(wc);
+  const hasDiagnostics = (labor.qualityAlert && !labor.qualityAlert.hidden) || (wc && wc.rows && wc.rows.length > 0);
+  if (labor.diagnosticsFold) {
+    labor.diagnosticsFold.hidden = !hasDiagnostics;
+  }
+
+  // 4. 待处理事项
   renderPendingItems(rows, run.candidateMatches || [], summary);
 
-  // Render employee-level evidence or the stage-1 pass proof
+  // 5. 抽取明细 / 通过证据
   if (totalPassed) {
     renderPassEvidence(labor.extractPreviewTable, summary, wcSummary);
   } else {
@@ -445,6 +460,100 @@ function renderConclusion(summary, wcSummary, extractionQuality) {
         notInInvoice > 0 ? `（<strong>${notInInvoice}</strong>人不在本批发票）` : ""
       }</span>
     </div>
+  `;
+}
+
+function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, wcSummary) {
+  const section = labor.employeeReconSection;
+  const container = labor.employeeReconTable;
+  if (!section || !container) return;
+
+  // 总额通过且无员工明细时，显示通过证据
+  if (totalPassed && !rows.length) {
+    section.hidden = false;
+    renderPassEvidence(container, summary, wcSummary);
+    return;
+  }
+
+  if (!rows.length && !candidateMatches.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  // 合并：精确匹配行 + 模糊匹配候选
+  const allRows = [];
+  rows.forEach(r => {
+    const delta = Math.abs(r.amountDelta || 0);
+    const hasVariance = r.matchStatus !== "通过" && r.matchStatus !== "金额一致";
+    allRows.push({
+      name: r.employeeName || "",
+      status: r.matchStatus || "",
+      pdfAmount: r.pdfAmountTotal || 0,
+      excelAmount: r.excelAmountTotal || 0,
+      amountDelta: r.amountDelta || 0,
+      pdfHours: r.pdfHoursTotal || 0,
+      excelHours: r.excelHoursTotal || 0,
+      hoursDelta: r.hoursDelta || 0,
+      hasVariance,
+      sortWeight: hasVariance ? delta : -1,
+      isCandidate: false,
+    });
+  });
+  candidateMatches.forEach(c => {
+    const delta = Math.abs(c.amountDelta || 0);
+    allRows.push({
+      name: `${c.pdfEmployeeName || ""} → ${c.excelEmployeeName || ""}`,
+      status: "姓名模糊匹配",
+      pdfAmount: c.pdfAmountTotal || 0,
+      excelAmount: c.excelAmountTotal || 0,
+      amountDelta: c.amountDelta || 0,
+      pdfHours: 0,
+      excelHours: 0,
+      hoursDelta: 0,
+      hasVariance: true,
+      sortWeight: delta,
+      isCandidate: true,
+      similarity: c.nameSimilarity,
+    });
+  });
+
+  // 排序：有差异的在前（按差异绝对值降序），无差异在后
+  allRows.sort((a, b) => b.sortWeight - a.sortWeight);
+
+  const varianceCount = allRows.filter(r => r.hasVariance).length;
+  const totalCount = allRows.length;
+
+  const headers = ["员工", "状态", "PDF金额", "Excel金额", "差异", "PDF工时", "Excel工时", "工时差异"];
+  const thead = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>`;
+  const visible = allRows.slice(0, 100);
+
+  const tbody = visible.map(r => {
+    const rowClass = r.hasVariance ? "recon-row variance" : "recon-row matched";
+    const statusStyle = r.hasVariance ? "color:#FF3B30;font-weight:600" : "color:#34C759";
+    const deltaStyle = Math.abs(r.amountDelta) > 0.01
+      ? (r.amountDelta > 0 ? "color:#FF9500" : "color:#FF3B30")
+      : "color:#8E8E93";
+    const similarityTag = r.similarity != null ? ` <small>(${formatPercent(r.similarity)})</small>` : "";
+    return `<tr class="${rowClass}">
+      <td>${escapeHtml(r.name)}${similarityTag}</td>
+      <td style="${statusStyle}">${escapeHtml(r.status)}</td>
+      <td>$${formatMoney(r.pdfAmount)}</td>
+      <td>$${formatMoney(r.excelAmount)}</td>
+      <td style="${deltaStyle}">${r.amountDelta >= 0 ? "+" : ""}$${formatMoney(Math.abs(r.amountDelta))}</td>
+      <td>${formatHours(r.pdfHours)}</td>
+      <td>${formatHours(r.excelHours)}</td>
+      <td>${formatHours(r.hoursDelta)}</td>
+    </tr>`;
+  }).join("");
+
+  container.innerHTML = `
+    <div class="recon-summary-bar">
+      <span>共 <strong>${totalCount}</strong> 人</span>
+      ${varianceCount > 0 ? `<span class="recon-variance-badge">${varianceCount} 人有差异</span>` : '<span class="recon-ok-badge">全部一致</span>'}
+    </div>
+    <table>${thead}<tbody>${tbody}</tbody></table>
+    ${allRows.length > visible.length ? `<p class="table-note">仅展示前 ${visible.length} 条，完整明细请下载报告。</p>` : ""}
   `;
 }
 

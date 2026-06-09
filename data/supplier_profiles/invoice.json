@@ -1,0 +1,11 @@
+{
+  "key": "invoice",
+  "aliases": [
+    "invoice"
+  ],
+  "prompt_notes": [],
+  "image_page_policy": "all",
+  "version": 1,
+  "created_from": "auto_generation",
+  "extraction_quality_level": "ok"
+}

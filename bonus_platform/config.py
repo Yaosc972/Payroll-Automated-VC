@@ -49,6 +49,8 @@ DEFAULT_IMPORT_TEMPLATE = OUTPUT_DIR / "招聘奖金核算_月度导入模板.xl
 EXPORT_DIR = OUTPUT_DIR / "platform_exports"
 RUNS_DIR = OUTPUT_DIR / "runs"
 LABOR_RUNS_DIR = OUTPUT_DIR / "labor_runs"
+DOMESTIC_LABOR_RUNS_DIR = OUTPUT_DIR / "domestic_labor_runs"
+FBU_PERFORMANCE_RUNS_DIR = OUTPUT_DIR / "fbu_performance_runs"
 DATABASE_PATH = OUTPUT_DIR / "sigma_workbench.db"
 
 MAX_PREVIEW_ROWS = 50
@@ -89,6 +91,7 @@ AI_CONFIG: dict[str, Any] = {
     "model": os.environ.get("AI_MODEL", ""),
     "timeout_seconds": _env_int("AI_TIMEOUT_SECONDS", 90),
     "confidence_threshold": _env_float("AI_CONFIDENCE_THRESHOLD", 0.85),
+    "default_confidence": _env_float("AI_DEFAULT_CONFIDENCE", 0.7),
     "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.10),
     "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
     "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
@@ -98,10 +101,21 @@ AI_CONFIG: dict[str, Any] = {
     "ocr_command": os.environ.get("AI_OCR_COMMAND", ""),
     "supplier_profiles_path": os.environ.get("LABOR_SUPPLIER_PROFILES_PATH", ""),
     # 并行化配置
+    "smart_page_selection": _env_bool("AI_SMART_PAGE_SELECTION", True),
     "parallel_extraction_enabled": _env_bool("PARALLEL_EXTRACTION_ENABLED", True),
     "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 1),
     "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 1),
 }
+
+# 自动生成的供应商 Profile 存储目录
+SUPPLIER_PROFILES_OUTPUT_DIR: str = os.environ.get(
+    "SUPPLIER_PROFILES_OUTPUT_DIR",
+    str(Path(__file__).parent.parent / "data" / "supplier_profiles"),
+)
+
+# 如果 supplier_profiles_path 未配置，使用全局 Profile 输出目录
+if not AI_CONFIG.get("supplier_profiles_path"):
+    AI_CONFIG["supplier_profiles_path"] = SUPPLIER_PROFILES_OUTPUT_DIR
 
 if AI_CONFIG["provider"].lower() == "mimo":
     AI_CONFIG["base_url"] = AI_CONFIG["base_url"] or "https://api.xiaomimimo.com/v1"

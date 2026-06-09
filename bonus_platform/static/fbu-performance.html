@@ -1,0 +1,983 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FBU美洲绩效奖金核算 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=31" />
+    <style>
+      :root {
+        --primary: #0071E3;
+        --success: #10B981;
+        --danger: #EF4444;
+        --warning: #F59E0B;
+        --bg-main: #F8FAFC;
+        --bg-card: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --border: #E2E8F0;
+        --sidebar-bg: #1E293B;
+        --sidebar-text: #94A3B8;
+        --sidebar-active: #FFFFFF;
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: var(--bg-main);
+        color: var(--text-primary);
+        min-height: 100vh;
+      }
+
+      /* ═══ Layout ═══ */
+      .app-layout {
+        display: flex;
+        min-height: 100vh;
+      }
+
+      /* ═══ Sidebar ═══ */
+      .sidebar {
+        width: 220px;
+        background: var(--sidebar-bg);
+        color: var(--sidebar-text);
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+      }
+
+      .sidebar-header {
+        padding: 20px;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+      }
+
+      .sidebar-logo {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        text-decoration: none;
+        color: white;
+      }
+
+      .sidebar-logo img {
+        width: 32px;
+        height: 32px;
+      }
+
+      .sidebar-logo-text {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .sidebar-logo-brand {
+        font-size: 14px;
+        font-weight: 600;
+        color: white;
+      }
+
+      .sidebar-logo-sub {
+        font-size: 11px;
+        color: var(--sidebar-text);
+      }
+
+      .sidebar-nav {
+        flex: 1;
+        padding: 16px 0;
+      }
+
+      .nav-section {
+        padding: 0 12px;
+        margin-bottom: 8px;
+      }
+
+      .nav-section-title {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--sidebar-text);
+        padding: 8px 12px;
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+        color: var(--sidebar-text);
+        text-decoration: none;
+      }
+
+      .nav-item:hover {
+        background: rgba(255,255,255,0.1);
+        color: white;
+      }
+
+      .nav-item.active {
+        background: var(--primary);
+        color: white;
+      }
+
+      .nav-item-icon {
+        width: 20px;
+        height: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .nav-item-text {
+        font-size: 14px;
+      }
+
+      /* ═══ Main Content ═══ */
+      .main-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      /* ═══ Top Bar ═══ */
+      .top-bar {
+        height: 60px;
+        background: var(--bg-card);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        flex-shrink: 0;
+      }
+
+      .top-bar-left {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+
+      .top-bar-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .top-bar-subtitle {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      .top-bar-right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      /* ═══ Buttons ═══ */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border: none;
+      }
+
+      .btn-primary {
+        background: var(--primary);
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background: #005BB5;
+      }
+
+      .btn-secondary {
+        background: var(--bg-card);
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+      }
+
+      .btn-secondary:hover {
+        background: var(--bg-main);
+      }
+
+      .btn-danger {
+        background: var(--danger);
+        color: white;
+      }
+
+      .btn-danger:hover {
+        background: #DC2626;
+      }
+
+      .btn-sm {
+        padding: 6px 12px;
+        font-size: 13px;
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* ═══ Content Area ═══ */
+      .content-area {
+        flex: 1;
+        padding: 24px;
+        overflow-y: auto;
+      }
+
+      /* ═══ KPI Cards ═══ */
+      .kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      .kpi-card {
+        background: var(--bg-card);
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      }
+
+      .kpi-card-label {
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+      }
+
+      .kpi-card-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: var(--text-primary);
+      }
+
+      .kpi-card-sub {
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+      }
+
+      .kpi-card.success .kpi-card-value { color: var(--success); }
+      .kpi-card.danger .kpi-card-value { color: var(--danger); }
+      .kpi-card.warning .kpi-card-value { color: var(--warning); }
+
+      /* ═══ Panel ═══ */
+      .panel {
+        background: var(--bg-card);
+        border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        margin-bottom: 24px;
+      }
+
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .panel-title {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .panel-body {
+        padding: 20px;
+      }
+
+      /* ═══ Data Table ═══ */
+      .data-table-container {
+        overflow-x: auto;
+      }
+
+      .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .data-table th {
+        background: #F1F5F9;
+        padding: 12px 16px;
+        text-align: left;
+        font-weight: 600;
+        color: var(--text-secondary);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .data-table td {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+        white-space: nowrap;
+      }
+
+      .data-table tr:hover {
+        background: #F8FAFC;
+      }
+
+      .data-table tr.row-danger {
+        background: #FEF2F2;
+      }
+
+      .data-table tr.row-danger:hover {
+        background: #FEE2E2;
+      }
+
+      /* ═══ Status Badge ═══ */
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .status-badge.success {
+        background: #D1FAE5;
+        color: #065F46;
+      }
+
+      .status-badge.danger {
+        background: #FEE2E2;
+        color: #991B1B;
+      }
+
+      .status-badge.warning {
+        background: #FEF3C7;
+        color: #92400E;
+      }
+
+      /* ═══ Upload Zone ═══ */
+      .upload-zone {
+        border: 2px dashed var(--border);
+        border-radius: 12px;
+        padding: 40px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .upload-zone:hover {
+        border-color: var(--primary);
+        background: rgba(0,113,227,0.02);
+      }
+
+      .upload-zone-icon {
+        margin-bottom: 12px;
+      }
+
+      .upload-zone-title {
+        font-size: 16px;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .upload-zone-sub {
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      /* ═══ Modal ═══ */
+      .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.3s;
+      }
+
+      .modal-overlay.active {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .modal {
+        background: var(--bg-card);
+        border-radius: 16px;
+        width: 480px;
+        max-width: 90%;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transform: translateY(-20px);
+        transition: transform 0.3s;
+      }
+
+      .modal-overlay.active .modal {
+        transform: translateY(0);
+      }
+
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .modal-title {
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .modal-close {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-secondary);
+      }
+
+      .modal-close:hover {
+        background: var(--bg-main);
+      }
+
+      .modal-body {
+        padding: 24px;
+      }
+
+      .modal-footer {
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        padding: 16px 24px;
+        border-top: 1px solid var(--border);
+      }
+
+      /* ═══ Steps Indicator ═══ */
+      .steps-indicator {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 24px;
+      }
+
+      .step-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .step-number {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: var(--border);
+        color: var(--text-secondary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      .step-item.active .step-number {
+        background: var(--primary);
+        color: white;
+      }
+
+      .step-item.completed .step-number {
+        background: var(--success);
+        color: white;
+      }
+
+      .step-text {
+        font-size: 14px;
+        color: var(--text-secondary);
+      }
+
+      .step-item.active .step-text {
+        color: var(--text-primary);
+        font-weight: 600;
+      }
+
+      .step-connector {
+        width: 40px;
+        height: 2px;
+        background: var(--border);
+      }
+
+      .step-item.completed + .step-connector {
+        background: var(--success);
+      }
+
+      /* ═══ Summary Stats ═══ */
+      .summary-stats {
+        display: flex;
+        gap: 24px;
+        padding: 16px 0;
+        border-top: 1px solid var(--border);
+        margin-top: 16px;
+      }
+
+      .summary-stat {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .summary-stat-label {
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .summary-stat-value {
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      /* ═══ Empty State ═══ */
+      .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+      }
+
+      .empty-state-icon {
+        margin-bottom: 16px;
+      }
+
+      .empty-state-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .empty-state-sub {
+        font-size: 14px;
+        color: var(--text-secondary);
+        margin-bottom: 24px;
+      }
+
+      /* ═══ Calculation Chain ═══ */
+      .calc-chain {
+        background: #F8FAFC;
+        border-radius: 8px;
+        padding: 16px;
+        font-family: monospace;
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .calc-chain-title {
+        font-weight: 600;
+        margin-bottom: 8px;
+      }
+
+      .calc-chain-item {
+        padding-left: 16px;
+      }
+
+      .calc-chain-result {
+        font-weight: 600;
+        color: var(--primary);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-layout">
+      <!-- ═══ Sidebar ═══ -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <a class="sidebar-logo" href="/">
+            <img src="assets/bonus-logo-header-blue.png" alt="" />
+            <div class="sidebar-logo-text">
+              <span class="sidebar-logo-brand">Σ-WORKBENCH</span>
+              <span class="sidebar-logo-sub">西格玛工作台</span>
+            </div>
+          </a>
+        </div>
+        <nav class="sidebar-nav">
+          <div class="nav-section">
+            <div class="nav-section-title">绩效核算</div>
+            <a class="nav-item active" data-page="activities">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 3h14a2 2 0 012 2v10a2 2 0 01-2 2H3a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </span>
+              <span class="nav-item-text">月度活动</span>
+            </a>
+            <a class="nav-item" data-page="attendance">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </span>
+              <span class="nav-item-text">考勤汇总</span>
+            </a>
+            <a class="nav-item" data-page="salary">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2v16M6 6h8M6 14h8M4 10h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </span>
+              <span class="nav-item-text">薪资匹配</span>
+            </a>
+            <a class="nav-item" data-page="performance">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 17V7l4-4 4 4 6-6v16H3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="nav-item-text">绩效明细</span>
+            </a>
+            <a class="nav-item" data-page="results">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </span>
+              <span class="nav-item-text">核算结果</span>
+            </a>
+          </div>
+        </nav>
+      </aside>
+
+      <!-- ═══ Main Content ═══ -->
+      <main class="main-content">
+        <!-- Top Bar -->
+        <header class="top-bar">
+          <div class="top-bar-left">
+            <h1 class="top-bar-title">FBU美洲绩效核算</h1>
+            <span class="top-bar-subtitle">月度活动管理</span>
+          </div>
+          <div class="top-bar-right">
+            <button class="btn btn-primary" id="btnNewActivity">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              新建月度活动
+            </button>
+          </div>
+        </header>
+
+        <!-- Content Area -->
+        <div class="content-area">
+          <!-- Activities Page -->
+          <div class="page-content" id="pageActivities">
+            <div class="kpi-grid">
+              <div class="kpi-card">
+                <div class="kpi-card-label">总活动数</div>
+                <div class="kpi-card-value" id="kpiTotalActivities">0</div>
+                <div class="kpi-card-sub">月度核算活动</div>
+              </div>
+              <div class="kpi-card success">
+                <div class="kpi-card-label">已完成</div>
+                <div class="kpi-card-value" id="kpiCompleted">0</div>
+                <div class="kpi-card-sub">核算完成</div>
+              </div>
+              <div class="kpi-card warning">
+                <div class="kpi-card-label">进行中</div>
+                <div class="kpi-card-value" id="kpiInProgress">0</div>
+                <div class="kpi-card-sub">正在核算</div>
+              </div>
+              <div class="kpi-card danger">
+                <div class="kpi-card-label">异常数</div>
+                <div class="kpi-card-value" id="kpiErrors">0</div>
+                <div class="kpi-card-sub">需要处理</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">月度活动列表</h2>
+              </div>
+              <div class="panel-body">
+                <div class="data-table-container">
+                  <table class="data-table" id="activitiesTable">
+                    <thead>
+                      <tr>
+                        <th>核算月份</th>
+                        <th>状态</th>
+                        <th>进度</th>
+                        <th>员工数</th>
+                        <th>奖金总额</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="activitiesBody">
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Attendance Page -->
+          <div class="page-content" id="pageAttendance" hidden>
+            <div class="steps-indicator">
+              <div class="step-item active">
+                <div class="step-number">1</div>
+                <div class="step-text">考勤汇总</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item">
+                <div class="step-number">2</div>
+                <div class="step-text">薪资匹配</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item">
+                <div class="step-number">3</div>
+                <div class="step-text">绩效明细</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item">
+                <div class="step-number">4</div>
+                <div class="step-text">核算结果</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">考勤数据</h2>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" id="btnExportAttendance">导出</button>
+                  <button class="btn btn-primary btn-sm" id="btnUploadAttendance">上传文件</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="attendanceContent">
+                  <div class="empty-state">
+                    <div class="empty-state-icon">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 8v24l12 12" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/><circle cx="32" cy="32" r="28" stroke="#94A3B8" stroke-width="3"/></svg>
+                    </div>
+                    <h3 class="empty-state-title">暂无考勤数据</h3>
+                    <p class="empty-state-sub">上传考勤日报表以查看员工工时明细</p>
+                    <button class="btn btn-primary" id="btnUploadAttendanceEmpty">上传考勤日报表</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Salary Page -->
+          <div class="page-content" id="pageSalary" hidden>
+            <div class="steps-indicator">
+              <div class="step-item completed">
+                <div class="step-number">✓</div>
+                <div class="step-text">考勤汇总</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item active">
+                <div class="step-number">2</div>
+                <div class="step-text">薪资匹配</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item">
+                <div class="step-number">3</div>
+                <div class="step-text">绩效明细</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item">
+                <div class="step-number">4</div>
+                <div class="step-text">核算结果</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">薪资数据</h2>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" id="btnExportSalary">导出</button>
+                  <button class="btn btn-primary btn-sm" id="btnUploadSalary">上传文件</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="salaryContent">
+                  <div class="empty-state">
+                    <div class="empty-state-icon">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 16v32M20 24h24M20 40h24M16 32h32" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
+                    </div>
+                    <h3 class="empty-state-title">暂无薪资数据</h3>
+                    <p class="empty-state-sub">上传薪资档案以查看时薪匹配情况</p>
+                    <button class="btn btn-primary" id="btnUploadSalaryEmpty">上传薪资档案</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Performance Page -->
+          <div class="page-content" id="pagePerformance" hidden>
+            <div class="steps-indicator">
+              <div class="step-item completed">
+                <div class="step-number">✓</div>
+                <div class="step-text">考勤汇总</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item completed">
+                <div class="step-number">✓</div>
+                <div class="step-text">薪资匹配</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item active">
+                <div class="step-number">3</div>
+                <div class="step-text">绩效明细</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item">
+                <div class="step-number">4</div>
+                <div class="step-text">核算结果</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">绩效数据</h2>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" id="btnExportPerformance">导出</button>
+                  <button class="btn btn-primary btn-sm" id="btnUploadPerformance">上传文件</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="performanceContent">
+                  <div class="empty-state">
+                    <div class="empty-state-icon">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M12 48V20l12-12 12 12 16-16v44H12z" stroke="#94A3B8" stroke-width="3" stroke-linejoin="round"/></svg>
+                    </div>
+                    <h3 class="empty-state-title">暂无绩效数据</h3>
+                    <p class="empty-state-sub">上传绩效报表以查看绩效明细</p>
+                    <button class="btn btn-primary" id="btnUploadPerformanceEmpty">上传绩效报表</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Results Page -->
+          <div class="page-content" id="pageResults" hidden>
+            <div class="steps-indicator">
+              <div class="step-item completed">
+                <div class="step-number">✓</div>
+                <div class="step-text">考勤汇总</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item completed">
+                <div class="step-number">✓</div>
+                <div class="step-text">薪资匹配</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item completed">
+                <div class="step-number">✓</div>
+                <div class="step-text">绩效明细</div>
+              </div>
+              <div class="step-connector"></div>
+              <div class="step-item active">
+                <div class="step-number">4</div>
+                <div class="step-text">核算结果</div>
+              </div>
+            </div>
+
+            <div class="kpi-grid">
+              <div class="kpi-card">
+                <div class="kpi-card-label">员工总数</div>
+                <div class="kpi-card-value" id="kpiResultEmployees">0</div>
+                <div class="kpi-card-sub">参与核算</div>
+              </div>
+              <div class="kpi-card success">
+                <div class="kpi-card-label">奖金总额</div>
+                <div class="kpi-card-value" id="kpiResultBonus">$0</div>
+                <div class="kpi-card-sub">绩效奖金</div>
+              </div>
+              <div class="kpi-card">
+                <div class="kpi-card-label">平均奖金</div>
+                <div class="kpi-card-value" id="kpiResultAvg">$0</div>
+                <div class="kpi-card-sub">人均奖金</div>
+              </div>
+              <div class="kpi-card warning">
+                <div class="kpi-card-label">异常数</div>
+                <div class="kpi-card-value" id="kpiResultErrors">0</div>
+                <div class="kpi-card-sub">需要处理</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header">
+                <h2 class="panel-title">核算结果</h2>
+                <div style="display: flex; gap: 8px;">
+                  <button class="btn btn-secondary btn-sm" id="btnExportResults">导出</button>
+                  <button class="btn btn-primary btn-sm" id="btnCalculate">执行核算</button>
+                </div>
+              </div>
+              <div class="panel-body">
+                <div id="resultsContent">
+                  <div class="empty-state">
+                    <div class="empty-state-icon">
+                      <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="12" y="12" width="40" height="40" rx="4" stroke="#94A3B8" stroke-width="3"/><path d="M24 28h16M24 36h16" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
+                    </div>
+                    <h3 class="empty-state-title">暂无核算结果</h3>
+                    <p class="empty-state-sub">完成前三步后执行核算</p>
+                    <button class="btn btn-primary" id="btnCalculateEmpty">执行核算</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Upload Modal -->
+    <div class="modal-overlay" id="uploadModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 class="modal-title" id="uploadModalTitle">上传文件</h3>
+          <button class="modal-close" id="btnCloseUploadModal">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="upload-zone" id="uploadZone">
+            <input type="file" id="uploadFileInput" accept=".xlsx,.xls" hidden />
+            <div class="upload-zone-icon">
+              <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><path d="M24 32V16M16 24l8-8 8 8" stroke="#0071E3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="32" width="32" height="8" rx="4" stroke="#D2D2D7" stroke-width="2"/></svg>
+            </div>
+            <h3 class="upload-zone-title" id="uploadZoneTitle">选择文件</h3>
+            <p class="upload-zone-sub" id="uploadZoneSub">点击选择或拖拽文件到此处 · 支持 .xlsx / .xls</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelUpload">取消</button>
+          <button class="btn btn-primary" id="btnConfirmUpload" disabled>确认上传</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Calculation Chain Modal -->
+    <div class="modal-overlay" id="calcChainModal">
+      <div class="modal" style="width: 560px;">
+        <div class="modal-header">
+          <h3 class="modal-title">计算过程</h3>
+          <button class="modal-close" id="btnCloseCalcChainModal">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="calc-chain" id="calcChainContent">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCloseCalcChain">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="fbu-performance.js"></script>
+  </body>
+</html>

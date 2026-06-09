@@ -17,6 +17,21 @@ RULE_XLSX = OUTPUT_DIR / "招聘奖金核算_规则库.xlsx"
 IMPORT_TEMPLATE_XLSX = OUTPUT_DIR / "招聘奖金核算_月度导入模板.xlsx"
 
 MAX_ROWS = 2000
+OVERSEAS_CHINA_LOCATION_TOKENS = ["非中国", "香港", "澳门", "澳門", "台湾", "臺灣"]
+MAINLAND_LOCATION_TOKENS = [
+    "北京", "天津", "上海", "重庆", "河北", "山西", "辽宁", "吉林", "黑龙江",
+    "江苏", "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南",
+    "广东", "广西", "海南", "四川", "贵州", "云南", "西藏", "陕西", "甘肃",
+    "青海", "宁夏", "新疆", "内蒙古", "深圳", "广州", "杭州", "南京", "苏州",
+    "成都", "武汉", "西安", "青岛", "厦门", "宁波", "郑州", "长沙", "合肥",
+    "佛山", "东莞",
+]
+DEVELOPED_LOCATION_TOKENS = [
+    "德国", "捷克", "美国", "英国", "法国", "加拿大", "日本", "韩国", "荷兰",
+    "意大利", "西班牙", "葡萄牙", "奥地利", "瑞士", "比利时", "卢森堡",
+    "丹麦", "瑞典", "挪威", "芬兰", "爱尔兰", "澳大利亚", "新西兰",
+    "新加坡", "以色列", "波兰",
+]
 
 
 THIN = Side(style="thin", color="D9E2EC")
@@ -29,6 +44,14 @@ IMPORT_FILL = PatternFill("solid", fgColor="F4B183")
 CALC_FILL = PatternFill("solid", fgColor="9DC3E6")
 MANUAL_FILL = PatternFill("solid", fgColor="FFD966")
 DATE_FORMAT = "yyyy/m/d"
+
+
+def excel_array(items: list[str]) -> str:
+    return "{" + ",".join(f'"{item}"' for item in items) + "}"
+
+
+def contains_any_formula(items: list[str], ref: str) -> str:
+    return f"SUMPRODUCT(--ISNUMBER(SEARCH({excel_array(items)},{ref})))>0"
 
 
 def normalize(v):
@@ -207,46 +230,68 @@ def add_import_sheet(wb):
         "核算月份", "姓名", "工号", "证件号", "入职日期", "人员状态", "工作地", "最后工作日", "职级",
         "二级组织", "三级组织", "四级组织", "五级组织", "职位", "职族", "职类", "直线经理",
         "直线经理工号", "标签分类", "职族分类", "ABC类别", "招聘负责人工号", "招聘负责人姓名",
-        "协助招聘人工号", "协助招聘人姓名", "招聘渠道", "海外offer流程编号", "海外招聘需求编号",
+        "招聘负责人人员状态", "招聘负责人最后工作日", "协助招聘人工号", "协助招聘人姓名",
+        "协助招聘人人员状态", "协助招聘人最后工作日", "招聘渠道", "海外offer流程编号", "海外招聘需求编号",
         "招聘启动日期", "候选人入职时间", "转正日期", "周期剔除天数", "奖金地区类型",
-        "推荐人姓名", "推荐人工号", "推荐人职级", "推荐人人员状态", "推荐人职位",
+        "推荐人姓名", "推荐人工号", "推荐人职级", "推荐人人员状态", "推荐人最后工作日", "推荐人职位",
         "直接上级工号", "间接上级1工号", "间接上级2工号", "间接上级3工号", "间接上级4工号",
         "特殊地区规则", "人工备注",
-        "招聘负责人人员状态", "招聘负责人最后工作日", "协助招聘人人员状态", "协助招聘人最后工作日",
-        "推荐人最后工作日",
     ]
     ws.append(headers)
+    header_cols = {header: index for index, header in enumerate(headers, start=1)}
+    location_col = get_column_letter(header_cols["工作地"])
     for row in range(2, MAX_ROWS + 2):
         ws.cell(row, 1).value = "=IF(B{0}=\"\",\"\",$A$2)".format(row)
-        ws.cell(row, 19).value = '=IF(G{0}="","",IF(G{0}="中国大陆","国内","海外"))'.format(row)
-        ws.cell(row, 33).value = (
-            '=IF(G{0}="","",IF(ISNUMBER(SEARCH("中国",G{0})),"国内发展中国家",'
-            'IF(SUMPRODUCT(--ISNUMBER(SEARCH({{"德国","捷克","美国","英国","法国","加拿大","日本","韩国","荷兰","意大利","西班牙","葡萄牙","奥地利","瑞士","比利时","卢森堡","丹麦","瑞典","挪威","芬兰","爱尔兰","澳大利亚","新西兰","新加坡","以色列","波兰"}},G{0})))>0,'
-            '"海外发达国家","海外发展中国家")))'
-        ).format(row)
+        location_ref = f"{location_col}{row}"
+        overseas_china_match = contains_any_formula(OVERSEAS_CHINA_LOCATION_TOKENS, location_ref)
+        mainland_match = (
+            f'OR(ISNUMBER(SEARCH("中国大陆",{location_ref})),LEFT({location_ref},2)="中国",'
+            f'ISNUMBER(SEARCH("大陆",{location_ref})),{contains_any_formula(MAINLAND_LOCATION_TOKENS, location_ref)})'
+        )
+        developed_match = contains_any_formula(DEVELOPED_LOCATION_TOKENS, location_ref)
+        ws.cell(row, header_cols["标签分类"]).value = (
+            '={formula}'
+        ).format(formula=(
+            f'IF({location_ref}="","",IF({overseas_china_match},"海外",'
+            f'IF({mainland_match},"国内","海外")))'
+        ))
+        ws.cell(row, header_cols["奖金地区类型"]).value = (
+            f'=IF({location_ref}="","",IF(AND(NOT({overseas_china_match}),{mainland_match}),'
+            f'"国内发展中国家",IF({developed_match},"海外发达国家","海外发展中国家")))'
+        )
     add_table(ws, "tbl_import", f"A1:{get_column_letter(len(headers))}{MAX_ROWS + 1}")
     style_range(ws, 1, MAX_ROWS + 1, 1, len(headers), header_rows=1)
     color_header_cells(ws, range(1, len(headers) + 1), IMPORT_FILL)
-    color_header_cells(ws, [19, 33], CALC_FILL)
+    color_header_cells(ws, [header_cols["标签分类"], header_cols["奖金地区类型"]], CALC_FILL)
     ws.freeze_panes = "A2"
     for col in range(1, len(headers) + 1):
         ws.column_dimensions[get_column_letter(col)].width = 16
-    for col in ["B", "J", "K", "L", "M", "N", "O", "P", "Q", "W", "Y", "AI", "AS", "AT", "AV"]:
+    for col in ["B", "J", "K", "L", "M", "N", "O", "P", "Q", "W", "Y", "AA", "AM", "AO", "AW"]:
         ws.column_dimensions[col].width = 22
-    apply_date_format(ws, [5, 8, 29, 30, 31, 47, 49, 50], 2, MAX_ROWS + 1)
+    apply_date_format(ws, [
+        header_cols["入职日期"],
+        header_cols["最后工作日"],
+        header_cols["招聘负责人最后工作日"],
+        header_cols["协助招聘人最后工作日"],
+        header_cols["招聘启动日期"],
+        header_cols["候选人入职时间"],
+        header_cols["转正日期"],
+        header_cols["推荐人最后工作日"],
+    ], 2, MAX_ROWS + 1)
 
     validations = {
-        "F": '"正式,试用,离职,通知期"',
-        "AT": '"正式,试用,离职,通知期,在职,正式在职,试用在职"',
-        "AV": '"正式,试用,离职,通知期,在职,正式在职,试用在职"',
-        "S": '"国内,海外,DBU海外"',
-        "T": '"职能类,操作类,技术类,营销类"',
-        "U": '"A类,B类,C类,C1类"',
-        "Z": '"招聘网站,内推,校招,二次入职,猎头,返聘,体系外转体系内,外包转正式,其他,人员调动"',
-        "AG": '"国内发展中国家,海外发达国家,海外发展中国家,FBU德国,FBU捷克"',
-        "AR": '"FBU德国,FBU捷克"',
+        "人员状态": '"正式,试用,离职,通知期"',
+        "招聘负责人人员状态": '"正式,试用,离职,通知期,在职,正式在职,试用在职"',
+        "协助招聘人人员状态": '"正式,试用,离职,通知期,在职,正式在职,试用在职"',
+        "标签分类": '"国内,海外,DBU海外"',
+        "职族分类": '"职能类,操作类,技术类,营销类"',
+        "ABC类别": '"A类,B类,C类,C1类"',
+        "招聘渠道": '"招聘网站,内推,校招,二次入职,猎头,返聘,体系外转体系内,外包转正式,其他,人员调动"',
+        "奖金地区类型": '"国内发展中国家,海外发达国家,海外发展中国家,FBU德国,FBU捷克"',
+        "特殊地区规则": '"FBU德国,FBU捷克"',
     }
-    for col, formula1 in validations.items():
+    for header, formula1 in validations.items():
+        col = get_column_letter(header_cols[header])
         dv = DataValidation(type="list", formula1=formula1, allow_blank=True)
         ws.add_data_validation(dv)
         dv.add(f"{col}2:{col}{MAX_ROWS + 1}")

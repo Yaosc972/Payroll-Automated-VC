@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>劳务工薪酬核算 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=30" />
+    <style>html { color-scheme: light; }</style>
+  </head>
+  <body class="domestic-labor-shell">
+
+    <!-- ═══ TOP CHROME ═══ -->
+    <header class="app-chrome">
+      <div class="chrome-left">
+        <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
+          <span class="brand-mark-frame">
+            <img src="assets/bonus-logo-header-blue.png" alt="" />
+          </span>
+          <span class="brand-copy">
+            <span class="brand-name">Σ-WORKBENCH</span>
+            <span class="brand-note">西格玛工作台</span>
+          </span>
+        </a>
+        <div class="chrome-divider"></div>
+        <div class="chrome-context">
+          <span class="chrome-label">Domestic Labor Payroll</span>
+          <span class="chrome-title">劳务工薪酬核算</span>
+          <span class="chrome-desc">上传考勤数据，自动计算全勤奖、餐补、外宿补贴、工龄奖</span>
+        </div>
+      </div>
+      <div class="chrome-right">
+        <div class="chrome-run-badge" id="chromeRunBadge" hidden>
+          <span class="run-dot"></span>
+          <span id="chromeRunLabel">任务 #—</span>
+        </div>
+        <button class="btn-new-batch" id="btnOpenDrawer" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          新建计算任务
+        </button>
+        <a id="reportLink" class="btn-download disabled" href="#" aria-disabled="true">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          下载报告
+        </a>
+      </div>
+    </header>
+
+    <!-- ═══ KPI SUMMARY BANNER (6 columns) ═══ -->
+    <div class="kpi-banner kpi-6col" id="kpiBanner">
+      <div class="kpi-card kpi-neutral" id="kpiTotalEmployees">
+        <span class="kpi-label">员工总数</span>
+        <span class="kpi-value" id="kpiTotalVal">—</span>
+        <span class="kpi-sub">Total Employees</span>
+      </div>
+      <div class="kpi-card kpi-success" id="kpiProcessed">
+        <span class="kpi-label">已计算</span>
+        <span class="kpi-value" id="kpiProcessedVal">—</span>
+        <span class="kpi-sub">Processed</span>
+      </div>
+      <div class="kpi-card kpi-brand" id="kpiQuanqinjiang">
+        <span class="kpi-label">全勤奖</span>
+        <span class="kpi-value" id="kpiQuanqinVal">—</span>
+        <span class="kpi-sub">Attendance Bonus</span>
+      </div>
+      <div class="kpi-card kpi-info" id="kpiCanbu">
+        <span class="kpi-label">餐补</span>
+        <span class="kpi-value" id="kpiCanbuVal">—</span>
+        <span class="kpi-sub">Meal Allowance</span>
+      </div>
+      <div class="kpi-card kpi-warning" id="kpiWaisu">
+        <span class="kpi-label">外宿补贴</span>
+        <span class="kpi-value" id="kpiWaisuVal">—</span>
+        <span class="kpi-sub">Housing Allowance</span>
+      </div>
+      <div class="kpi-card kpi-violet" id="kpiGongling">
+        <span class="kpi-label">工龄奖</span>
+        <span class="kpi-value" id="kpiGonglingVal">—</span>
+        <span class="kpi-sub">Seniority Bonus</span>
+      </div>
+    </div>
+
+    <!-- ═══ MAIN WORKSPACE ═══ -->
+    <main class="workspace">
+
+      <!-- Task status section -->
+      <section class="workspace-section" id="taskStatusSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">计算任务状态</h2>
+            <p class="section-sub" id="taskStatusSub">Task Status</p>
+          </div>
+          <div class="section-actions">
+            <button id="btnRefreshStatus" class="btn-secondary" type="button">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7a6 6 0 0111.2-3M13 7a6 6 0 01-11.2 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 1v3h-3M2 13v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              刷新状态
+            </button>
+            <button id="btnExport" class="btn-primary" type="button" hidden>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              导出 Excel
+            </button>
+          </div>
+        </div>
+        <div id="taskStatusCard" class="task-status-card"></div>
+      </section>
+
+      <!-- Results table -->
+      <section class="workspace-section" id="resultsSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">计算结果明细</h2>
+            <p class="section-sub">Payroll Calculation Results · 各引擎计算结果汇总</p>
+          </div>
+        </div>
+        <div id="resultsTable" class="audit-table premium-grid"></div>
+      </section>
+
+      <!-- Engine summary cards -->
+      <section class="workspace-section" id="engineSummarySection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">引擎计算汇总</h2>
+            <p class="section-sub">Engine Summary · 各引擎计算人数与金额</p>
+          </div>
+        </div>
+        <div id="engineSummaryGrid" class="engine-summary-grid"></div>
+      </section>
+
+      <!-- Empty state -->
+      <div class="workspace-empty" id="workspaceEmpty">
+        <div class="empty-icon-large">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+            <rect x="8" y="12" width="48" height="40" rx="6" stroke="#D2D2D7" stroke-width="2"/>
+            <path d="M20 28h24M20 36h16M20 44h8" stroke="#D2D2D7" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="32" cy="20" r="4" stroke="#D2D2D7" stroke-width="2"/>
+          </svg>
+        </div>
+        <p class="empty-title-large">选择引擎并上传考勤数据</p>
+        <p class="empty-desc-large">点击右上角「新建计算任务」开始薪酬核算</p>
+      </div>
+
+    </main>
+
+    <!-- ═══ WIZARD DRAWER (slides in from right) ═══ -->
+    <div class="drawer-overlay" id="drawerOverlay"></div>
+    <aside class="wizard-drawer" id="wizardDrawer" aria-label="新建计算任务">
+      <div class="drawer-chrome">
+        <div class="drawer-header">
+          <div>
+            <p class="drawer-eyebrow">New Payroll Task</p>
+            <h2 class="drawer-title">新建计算任务</h2>
+          </div>
+          <button class="btn-close-drawer" id="btnCloseDrawer" type="button" aria-label="关闭">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <!-- Step pills -->
+        <div class="wizard-steps">
+          <button class="wz-step active" data-step="1" type="button"><span>01</span> 选择引擎</button>
+          <div class="wz-connector"></div>
+          <button class="wz-step" data-step="2" type="button"><span>02</span> 上传数据</button>
+          <div class="wz-connector"></div>
+          <button class="wz-step" data-step="3" type="button"><span>03</span> 参数配置</button>
+          <div class="wz-connector"></div>
+          <button class="wz-step" data-step="4" type="button"><span>04</span> 确认计算</button>
+        </div>
+      </div>
+
+      <div class="drawer-body">
+
+        <!-- ── STEP 1: Select Engines ── -->
+        <div class="wz-panel active" data-panel="1">
+          <div class="field-section">
+            <p class="field-hint">选择需要计算的薪酬项目，可多选。每个引擎对应一个薪酬项。</p>
+            <div class="engine-card-grid" id="engineCardGrid">
+              <!-- Engine cards rendered by JS -->
+            </div>
+          </div>
+          <div class="field-section">
+            <label class="field-group">
+              <span class="field-label">考勤月份</span>
+              <input id="attendanceMonth" class="field-input" name="attendanceMonth" type="month" autocomplete="off" />
+            </label>
+          </div>
+          <div class="drawer-footer">
+            <p id="engineStatus" class="inline-status">选择引擎和考勤月份后继续。</p>
+            <button id="btnToStep2" class="btn-primary-lg" type="button" disabled>下一步：上传数据 →</button>
+          </div>
+        </div>
+
+        <!-- ── STEP 2: Upload File ── -->
+        <div class="wz-panel" data-panel="2">
+          <div class="upload-zone" id="fileUploadZone">
+            <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" />
+            <div class="upload-icon">
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 18V8M9 13l5-5 5 5" stroke="#0071E3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="19" width="22" height="6" rx="2" stroke="#D2D2D7" stroke-width="1.5"/></svg>
+            </div>
+            <p class="upload-title">考勤数据 Excel</p>
+            <p class="upload-sub" id="payrollFileName">点击选择 · 支持 .xlsx / .xlsm / .xls</p>
+          </div>
+          <div class="template-links" id="templateLinks">
+            <p class="template-hint">没有模板？下载对应引擎的模板：</p>
+            <!-- Template download links rendered by JS -->
+          </div>
+          <div class="field-section">
+            <label class="field-group">
+              <span class="field-label">文件密码（如有）</span>
+              <input id="filePassword" class="field-input" name="filePassword" type="password" autocomplete="off" placeholder="无密码请留空" />
+            </label>
+          </div>
+          <div class="drawer-footer">
+            <p id="uploadStatus" class="inline-status">选择文件后继续。</p>
+            <button id="btnToStep3" class="btn-primary-lg" type="button" disabled>下一步：参数配置 →</button>
+          </div>
+        </div>
+
+        <!-- ── STEP 3: Parameters (HRBP) ── -->
+        <div class="wz-panel" data-panel="3">
+          <div class="field-section">
+            <p class="field-hint">配置 HRBP 名单（可选）。填写后只计算名单内的员工。</p>
+            <label class="field-group">
+              <span class="field-label">HRBP 名单（JSON 数组）</span>
+              <textarea id="hrbpList" class="field-textarea" name="hrbpList" rows="4" placeholder='例如: ["张三", "李四"]&#10;留空则计算全部员工'></textarea>
+            </label>
+          </div>
+          <div class="drawer-footer">
+            <p id="paramStatus" class="inline-status">配置完成后继续。</p>
+            <button id="btnToStep4" class="btn-primary-lg" type="button">下一步：确认计算 →</button>
+          </div>
+        </div>
+
+        <!-- ── STEP 4: Confirm & Submit ── -->
+        <div class="wz-panel" data-panel="4">
+          <div class="confirm-summary" id="confirmSummary">
+            <h3>任务确认</h3>
+            <div class="confirm-grid">
+              <div class="confirm-item">
+                <span class="confirm-label">选择引擎</span>
+                <span class="confirm-value" id="confirmEngines">—</span>
+              </div>
+              <div class="confirm-item">
+                <span class="confirm-label">考勤月份</span>
+                <span class="confirm-value" id="confirmMonth">—</span>
+              </div>
+              <div class="confirm-item">
+                <span class="confirm-label">上传文件</span>
+                <span class="confirm-value" id="confirmFile">—</span>
+              </div>
+              <div class="confirm-item">
+                <span class="confirm-label">HRBP 过滤</span>
+                <span class="confirm-value" id="confirmHrbp">未配置</span>
+              </div>
+            </div>
+          </div>
+          <div class="drawer-footer">
+            <p id="submitStatus" class="inline-status">确认信息无误后提交。</p>
+            <button id="btnSubmitTask" class="btn-primary-lg full-width" type="button">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              提交计算任务
+            </button>
+          </div>
+        </div>
+
+      </div><!-- /drawer-body -->
+    </aside>
+
+    <!-- ═══ TOAST ═══ -->
+    <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
+
+    <script src="domestic-labor.js?v=1"></script>
+    <script>
+      // ── Drawer open/close ──
+      const drawer = document.getElementById('wizardDrawer');
+      const overlay = document.getElementById('drawerOverlay');
+      const btnOpen = document.getElementById('btnOpenDrawer');
+      const btnClose = document.getElementById('btnCloseDrawer');
+
+      function openDrawer() {
+        drawer.classList.add('open');
+        overlay.classList.add('visible');
+        document.body.style.overflow = 'hidden';
+      }
+      function closeDrawer() {
+        drawer.classList.remove('open');
+        overlay.classList.remove('visible');
+        document.body.style.overflow = '';
+      }
+
+      btnOpen.addEventListener('click', openDrawer);
+      btnClose.addEventListener('click', closeDrawer);
+      overlay.addEventListener('click', closeDrawer);
+
+      // ── Wizard step pills ──
+      document.querySelectorAll('.wz-step').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const step = btn.dataset.step;
+          document.querySelectorAll('.wz-step').forEach(b => b.classList.remove('active'));
+          document.querySelectorAll('.wz-panel').forEach(p => p.classList.remove('active'));
+          btn.classList.add('active');
+          document.querySelector(`.wz-panel[data-panel="${step}"]`).classList.add('active');
+        });
+      });
+
+      // ── File upload zone click delegation ──
+      document.getElementById('fileUploadZone').addEventListener('click', (e) => {
+        if (e.target.tagName !== 'INPUT') {
+          document.getElementById('payrollFile').click();
+        }
+      });
+
+      // ── File name display ──
+      document.getElementById('payrollFile').addEventListener('change', function() {
+        const name = this.files[0]?.name || '';
+        document.getElementById('payrollFileName').textContent = name || '点击选择 · 支持 .xlsx / .xlsm / .xls';
+        if (name) document.getElementById('fileUploadZone').classList.add('has-file');
+      });
+    </script>
+  </body>
+</html>

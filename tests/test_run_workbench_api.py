@@ -140,6 +140,14 @@ def test_run_finalize_uses_saved_initial_result_and_updates_batch():
     assert "最终招聘奖金汇总" in workbook.sheetnames
     assert "最终内推奖金汇总" in workbook.sheetnames
     assert workbook["确认留痕"].sheet_state == "hidden"
+    assert data["pendingCount"] == 0
+    assert data["pendingTotal"] == 0
+
+    table_response = client.get(f"/api/runs/{run['id']}/table-data")
+    assert table_response.status_code == 200
+    table_data = table_response.json()
+    assert table_data["stats"]["pendingRows"] == 0
+    assert all(row["status"] != "待确认" for row in table_data["rows"])
 
 
 def test_run_compare_generates_difference_report_for_batch():

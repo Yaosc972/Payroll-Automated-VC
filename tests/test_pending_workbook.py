@@ -121,6 +121,46 @@ def test_final_workbook_merges_pending_confirmation_by_currency(tmp_path: Path):
     assert total_row[9] == 330
 
 
+def test_final_workbook_does_not_reimport_initial_total_rows(tmp_path: Path):
+    initial_path = tmp_path / "initial.xlsx"
+    confirmation_path = tmp_path / "confirmation.xlsx"
+    output_path = tmp_path / "final.xlsx"
+    initial = Workbook()
+    recruitment = initial.active
+    recruitment.title = "招聘奖金汇总"
+    recruitment.append(["工号", "姓名", "角色", "币种", "核算月份", "入职1月奖金", "入职3月奖金", "入职6月奖金", "转正奖金", "合计发放"])
+    recruitment.append(["zt-a", "招聘A", "招聘负责人", "CNY", 202510, 10, 20, 0, 5, 35])
+    recruitment.append(["", "合计", "", "", "", 10, 20, 0, 5, 35])
+    referral = initial.create_sheet("内推奖金汇总")
+    referral.append(["推荐人工号", "推荐人姓名", "币种", "核算月份", "入职1月奖金", "入职3月奖金", "入职6月奖金", "转正奖金", "合计发放"])
+    referral.append(["zt-r", "推荐R", "CNY", 202510, 75, 25, 0, 0, 100])
+    referral.append(["", "合计", "", "", 75, 25, 0, 0, 100])
+    initial.save(initial_path)
+
+    confirmation = Workbook()
+    pending = confirmation.active
+    pending.title = "待确认_发放判断"
+    pending.append(PENDING_CONFIRMATION_HEADERS)
+    confirmation.save(confirmation_path)
+
+    build_final_workbook(initial_path, confirmation_path, output_path)
+
+    workbook = load_workbook(output_path, data_only=True)
+    recruitment_rows = list(workbook["最终招聘奖金汇总"].iter_rows(min_row=2, values_only=True))
+    referral_rows = list(workbook["最终内推奖金汇总"].iter_rows(min_row=2, values_only=True))
+
+    assert len(recruitment_rows) == 2
+    assert recruitment_rows[0][1] == "招聘A"
+    assert recruitment_rows[1][1] == "合计"
+    assert recruitment_rows[1][5] == 10
+    assert recruitment_rows[1][9] == 35
+    assert len(referral_rows) == 2
+    assert referral_rows[0][1] == "推荐R"
+    assert referral_rows[1][1] == "合计"
+    assert referral_rows[1][4] == 75
+    assert referral_rows[1][8] == 100
+
+
 def test_initial_summary_workbook_has_total_rows(tmp_path: Path):
     from bonus_platform.engine.workbook_io import build_result_workbook
 

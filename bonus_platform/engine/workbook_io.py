@@ -260,9 +260,15 @@ def _read_sheet_dicts(workbook, sheet_name: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for row_number in range(2, sheet.max_row + 1):
         row = {header: sheet.cell(row_number, column).value for column, header in enumerate(headers, start=1) if header}
+        if _is_total_summary_row(row):
+            continue
         if any(value not in (None, "") for value in row.values()):
             rows.append(row)
     return rows
+
+
+def _is_total_summary_row(row: Dict[str, Any]) -> bool:
+    return any(as_text(value) in {"合计", "总计"} for value in row.values())
 
 
 def _apply_confirmations_to_summaries(confirmations: List[Dict[str, Any]], recruitment_rows: List[Dict[str, Any]], referral_rows: List[Dict[str, Any]]) -> None:

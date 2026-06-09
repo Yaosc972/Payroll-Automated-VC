@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 
 from bonus_platform.config import DEFAULT_RULE_WORKBOOK
-from bonus_platform.engine.calculator import _period_after, _probation_period, _referral_scope, calculate
+from bonus_platform.engine.calculator import _label, _normalized_referral_region, _period_after, _probation_period, _referral_scope, calculate
 from bonus_platform.engine.models import ImportRow
 from bonus_platform.engine.history import load_history_overrides, merge_history_overrides
 from bonus_platform.engine.rules import load_rulebook
@@ -125,6 +125,29 @@ def test_fbu_referral_scope_requires_explicit_special_region_rule():
     assert _referral_scope(germany_row) == "集团统一"
     assert _referral_scope(czech_row) == "集团统一"
     assert _referral_scope(explicit_row) == "FBU德国"
+
+
+def test_non_china_location_is_classified_as_overseas_before_china_match():
+    domestic_row = ImportRow(source_row=2, values={"工作地": "中国/上海"})
+    mainland_row = ImportRow(source_row=3, values={"工作地": "中国大陆"})
+    germany_row = ImportRow(source_row=4, values={"工作地": "非中国/德国/杜塞尔多夫"})
+    usa_row = ImportRow(source_row=5, values={"工作地": "非中国/美国/新泽西"})
+    unknown_overseas_row = ImportRow(source_row=6, values={"工作地": "非中国"})
+    hong_kong_row = ImportRow(source_row=7, values={"工作地": "全国/香港"})
+    shenzhen_row = ImportRow(source_row=8, values={"工作地": "全国/广东省/深圳市"})
+
+    assert _label(domestic_row) == "国内"
+    assert _label(mainland_row) == "国内"
+    assert _label(germany_row) == "海外"
+    assert _label(usa_row) == "海外"
+    assert _label(unknown_overseas_row) == "海外"
+    assert _label(hong_kong_row) == "海外"
+    assert _label(shenzhen_row) == "国内"
+    assert _normalized_referral_region(germany_row) == "海外发达国家"
+    assert _normalized_referral_region(usa_row) == "海外发达国家"
+    assert _normalized_referral_region(unknown_overseas_row) == "海外发展中国家"
+    assert _normalized_referral_region(hong_kong_row) == "海外发展中国家"
+    assert _normalized_referral_region(shenzhen_row) == "国内发展中国家"
 
 
 def test_unmarked_fbu_location_is_flagged_for_referral_review():

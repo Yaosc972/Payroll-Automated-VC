@@ -141,6 +141,7 @@ def calculate_extraction_quality(
     pdf_rows: List[LaborLineItem],
     comparison_summary: Dict[str, Any],
     warehouse_comparison: Dict[str, Any] | None = None,
+    confidence_threshold: float = 0.85,
 ) -> Dict[str, Any]:
     """Calculate comprehensive extraction quality metrics.
 
@@ -154,10 +155,12 @@ def calculate_extraction_quality(
     metrics: Dict[str, Any] = {}
 
     # === Confidence Distribution ===
+    # 收集低置信度行明细，供局部重试使用
+    low_confidence_rows: List[Dict[str, Any]] = []
     if pdf_rows:
         confidences = [item.confidence for item in pdf_rows]
         avg_confidence = sum(confidences) / len(confidences)
-        low_confidence_count = sum(1 for c in confidences if c < 0.85)
+        low_confidence_count = sum(1 for c in confidences if c < confidence_threshold)
         very_low_confidence_count = sum(1 for c in confidences if c < 0.5)
 
         metrics["confidence"] = {
@@ -171,6 +174,17 @@ def calculate_extraction_quality(
             issues.append(f"{very_low_confidence_count} 条记录置信度极低 (<0.5)，建议重点复核。")
         elif low_confidence_count > len(pdf_rows) * 0.2:
             issues.append(f"{low_confidence_count} 条记录置信度较低 (<0.85)，占比 {low_confidence_count/len(pdf_rows)*100:.0f}%。")
+
+        # 收集低置信度行明细（confidence < 0.85），用于局部重试
+        for item in pdf_rows:
+            if item.confidence < confidence_threshold:
+                low_confidence_rows.append({
+                    "employee_name_raw": item.employee_name_raw,
+                    "amount": item.amount,
+                    "confidence": round(item.confidence, 3),
+                    "source_page_or_row": item.source_page_or_row,
+                    "source_file": item.source_file,
+                })
 
     # === Extraction Method Analysis ===
     if pdf_rows:
@@ -287,6 +301,7 @@ def calculate_extraction_quality(
         "message": message,
         "issues": issues,
         "metrics": metrics,
+        "lowConfidenceRows": low_confidence_rows,
     }
 
 

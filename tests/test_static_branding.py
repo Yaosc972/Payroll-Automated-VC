@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = ROOT / "bonus_platform" / "static" / "index.html"
 RECRUITMENT_HTML = ROOT / "bonus_platform" / "static" / "recruitment.html"
 LABOR_HTML = ROOT / "bonus_platform" / "static" / "labor.html"
+DOMESTIC_LABOR_HTML = ROOT / "bonus_platform" / "static" / "domestic-labor.html"
+DOMESTIC_LABOR_JS = ROOT / "bonus_platform" / "static" / "domestic-labor.js"
 OVERSEAS_LABOR_HTML = ROOT / "bonus_platform" / "static" / "overseas-labor.html"
 OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
@@ -140,8 +142,9 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "Overseas Labor Invoice Audit" in html
     assert "海外劳务工报账核对" in html
     assert 'href="recruitment.html"' in html
-    assert 'href="labor.html"' in html
+    assert 'href="domestic-labor.html"' in html
     assert 'href="overseas-labor.html"' in html
+    assert "Available · 已上线" in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
 
@@ -158,16 +161,29 @@ def test_recruitment_page_keeps_command_center_and_home_link():
     assert "招聘奖金核算" in html
 
 
-def test_labor_page_is_desktop_placeholder_with_local_animation():
+def test_labor_page_redirects_to_domestic_labor():
     html = LABOR_HTML.read_text(encoding="utf-8")
+
+    assert 'http-equiv="refresh"' in html
+    assert "domestic-labor.html" in html
+    assert "window.location.replace" in html
+
+
+def test_domestic_labor_page_is_payroll_workbench():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert "国内劳务工薪酬核算开发中" in html
-    assert "Under Development · Stay Tuned" in html
-    assert 'href="/"' in html
-    assert "kinetic-sculpture" in html
-    assert "@keyframes gearSpin" in css
-    assert "@keyframes constructionWave" in css
+    assert "劳务工薪酬核算" in html
+    assert "domestic-labor-shell" in html
+    assert "kpi-6col" in html
+    assert "engine-card-grid" in html
+    assert "wizard-drawer" in html
+    assert "domestic-labor.js" in html
+    assert "/api/domestic-labor/runs" in js
+    assert "/api/domestic-labor/templates" in js
+    assert ".engine-card {" in css
+    assert ".kpi-6col" in css
 
 
 def test_overseas_labor_page_is_separate_audit_workbench():

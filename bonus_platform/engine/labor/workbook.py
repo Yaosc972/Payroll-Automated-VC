@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
-from openpyxl import load_workbook
-
 from .models import LaborLineItem
 from .parsing import display_name, parse_number
+
+
+def _is_xls(path: Path) -> bool:
+    """判断是否为旧版 .xls 格式"""
+    return path.suffix.lower() == ".xls"
 
 
 NAME_KEYWORDS = ("姓名", "员工姓名", "name", "employee", "associate")
@@ -18,6 +21,11 @@ CURRENCY_KEYWORDS = ("币种", "currency")
 
 
 def list_workbook_sheets(path: Path) -> List[str]:
+    if _is_xls(path):
+        import xlrd
+        workbook = xlrd.open_workbook(str(path))
+        return workbook.sheet_names()
+    from openpyxl import load_workbook
     workbook = load_workbook(path, data_only=True, read_only=True)
     return workbook.sheetnames
 
@@ -29,7 +37,7 @@ def suggest_mapping(path: Path, sheet_name: str) -> Dict[str, Any]:
     headers = [display_name(value) for value in rows[0]]
     preview = [_row_dict(headers, row) for row in rows[1:]]
     return {
-        "sheetName": sheet.title,
+        "sheetName": getattr(sheet, "title", None) or getattr(sheet, "name", sheet_name),
         "headers": headers,
         "suggestedMapping": {
             "employeeId": _employee_id_header(headers),
@@ -77,7 +85,7 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
             LaborLineItem(
                 source_type="offline_workbook",
                 source_file=path.name,
-                source_page_or_row=f"{sheet.title}!{offset}",
+                source_page_or_row=f"{getattr(sheet, 'title', None) or getattr(sheet, 'name', sheet_name)}!{offset}",
                 employee_id=employee_id,
                 employee_name_raw=display_name(name),
                 hours=round(hours, 2),
@@ -92,6 +100,13 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
 
 
 def _sheet_rows(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any, List[tuple[Any, ...]]]:
+    if _is_xls(path):
+        return _sheet_rows_xls(path, sheet_name, max_rows)
+    return _sheet_rows_xlsx(path, sheet_name, max_rows)
+
+
+def _sheet_rows_xlsx(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any, List[tuple[Any, ...]]]:
+    from openpyxl import load_workbook
     workbook = load_workbook(path, data_only=True, read_only=True)
     if sheet_name not in workbook.sheetnames:
         raise ValueError(f"找不到工作表：{sheet_name}")
@@ -100,6 +115,21 @@ def _sheet_rows(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any,
         sheet.reset_dimensions()
     iterator = sheet.iter_rows(values_only=True, max_row=max_rows)
     rows = [row for row in iterator if any(value not in (None, "") for value in row)]
+    return sheet, rows
+
+
+def _sheet_rows_xls(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any, List[tuple[Any, ...]]]:
+    import xlrd
+    workbook = xlrd.open_workbook(str(path))
+    if sheet_name not in workbook.sheet_names():
+        raise ValueError(f"找不到工作表：{sheet_name}")
+    sheet = workbook.sheet_by_name(sheet_name)
+    limit = max_rows if max_rows else sheet.nrows
+    rows = []
+    for i in range(min(limit, sheet.nrows)):
+        row = tuple(sheet.cell_value(i, j) for j in range(sheet.ncols))
+        if any(value not in (None, "") for value in row):
+            rows.append(row)
     return sheet, rows
 
 

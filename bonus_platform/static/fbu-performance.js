@@ -1,0 +1,772 @@
+/**
+ * FBU美洲绩效奖金核算 - 数据看板交互逻辑
+ */
+
+// ═══ State ═══
+
+const state = {
+  currentPage: 'activities',
+  currentActivity: null,
+  activities: [],
+  attendanceData: null,
+  salaryData: null,
+  performanceData: null,
+  resultsData: null,
+};
+
+// ═══ API Base ═══
+
+const API_BASE = '/api/fbu-performance';
+
+// ═══ Element References ═══
+
+const el = {
+  // Navigation
+  navItems: document.querySelectorAll('.nav-item'),
+  pageTitle: document.querySelector('.top-bar-title'),
+  pageSubtitle: document.querySelector('.top-bar-subtitle'),
+
+  // Buttons
+  btnNewActivity: document.getElementById('btnNewActivity'),
+  btnUploadAttendance: document.getElementById('btnUploadAttendance'),
+  btnUploadAttendanceEmpty: document.getElementById('btnUploadAttendanceEmpty'),
+  btnExportAttendance: document.getElementById('btnExportAttendance'),
+  btnUploadSalary: document.getElementById('btnUploadSalary'),
+  btnUploadSalaryEmpty: document.getElementById('btnUploadSalaryEmpty'),
+  btnExportSalary: document.getElementById('btnExportSalary'),
+  btnUploadPerformance: document.getElementById('btnUploadPerformance'),
+  btnUploadPerformanceEmpty: document.getElementById('btnUploadPerformanceEmpty'),
+  btnExportPerformance: document.getElementById('btnExportPerformance'),
+  btnCalculate: document.getElementById('btnCalculate'),
+  btnCalculateEmpty: document.getElementById('btnCalculateEmpty'),
+  btnExportResults: document.getElementById('btnExportResults'),
+
+  // Pages
+  pages: {
+    activities: document.getElementById('pageActivities'),
+    attendance: document.getElementById('pageAttendance'),
+    salary: document.getElementById('pageSalary'),
+    performance: document.getElementById('pagePerformance'),
+    results: document.getElementById('pageResults'),
+  },
+
+  // KPIs
+  kpiTotalActivities: document.getElementById('kpiTotalActivities'),
+  kpiCompleted: document.getElementById('kpiCompleted'),
+  kpiInProgress: document.getElementById('kpiInProgress'),
+  kpiErrors: document.getElementById('kpiErrors'),
+  kpiResultEmployees: document.getElementById('kpiResultEmployees'),
+  kpiResultBonus: document.getElementById('kpiResultBonus'),
+  kpiResultAvg: document.getElementById('kpiResultAvg'),
+  kpiResultErrors: document.getElementById('kpiResultErrors'),
+
+  // Tables
+  activitiesBody: document.getElementById('activitiesBody'),
+
+  // Content areas
+  attendanceContent: document.getElementById('attendanceContent'),
+  salaryContent: document.getElementById('salaryContent'),
+  performanceContent: document.getElementById('performanceContent'),
+  resultsContent: document.getElementById('resultsContent'),
+
+  // Upload Modal
+  uploadModal: document.getElementById('uploadModal'),
+  uploadModalTitle: document.getElementById('uploadModalTitle'),
+  uploadZone: document.getElementById('uploadZone'),
+  uploadZoneTitle: document.getElementById('uploadZoneTitle'),
+  uploadZoneSub: document.getElementById('uploadZoneSub'),
+  uploadFileInput: document.getElementById('uploadFileInput'),
+  btnCloseUploadModal: document.getElementById('btnCloseUploadModal'),
+  btnCancelUpload: document.getElementById('btnCancelUpload'),
+  btnConfirmUpload: document.getElementById('btnConfirmUpload'),
+
+  // Calc Chain Modal
+  calcChainModal: document.getElementById('calcChainModal'),
+  calcChainContent: document.getElementById('calcChainContent'),
+  btnCloseCalcChainModal: document.getElementById('btnCloseCalcChainModal'),
+  btnCloseCalcChain: document.getElementById('btnCloseCalcChain'),
+};
+
+// ═══ Navigation ═══
+
+function navigateTo(page) {
+  state.currentPage = page;
+
+  // Update nav items
+  el.navItems.forEach(item => {
+    item.classList.toggle('active', item.dataset.page === page);
+  });
+
+  // Show/hide pages
+  Object.keys(el.pages).forEach(key => {
+    el.pages[key].hidden = key !== page;
+  });
+
+  // Update title
+  const titles = {
+    activities: { title: 'FBU美洲绩效核算', subtitle: '月度活动管理' },
+    attendance: { title: '考勤汇总', subtitle: state.currentActivity?.calc_month || '' },
+    salary: { title: '薪资匹配', subtitle: state.currentActivity?.calc_month || '' },
+    performance: { title: '绩效明细', subtitle: state.currentActivity?.calc_month || '' },
+    results: { title: '核算结果', subtitle: state.currentActivity?.calc_month || '' },
+  };
+
+  el.pageTitle.textContent = titles[page].title;
+  el.pageSubtitle.textContent = titles[page].subtitle;
+
+  // Load page data
+  if (page === 'activities') {
+    loadActivities();
+  }
+}
+
+el.navItems.forEach(item => {
+  item.addEventListener('click', (e) => {
+    e.preventDefault();
+    const page = item.dataset.page;
+    if (page) {
+      navigateTo(page);
+    }
+  });
+});
+
+// ═══ Activities ═══
+
+async function loadActivities() {
+  try {
+    const response = await fetch(`${API_BASE}/runs`);
+    const data = await response.json();
+
+    state.activities = data.runs || [];
+    renderActivities();
+    updateActivityKPIs();
+  } catch (error) {
+    console.error('加载活动列表失败:', error);
+  }
+}
+
+function renderActivities() {
+  el.activitiesBody.innerHTML = state.activities.map(activity => {
+    const statusClass = activity.status === 'completed' ? 'success' :
+                       activity.status === 'failed' ? 'danger' : 'warning';
+    const statusText = activity.status === 'completed' ? '已完成' :
+                      activity.status === 'failed' ? '失败' : '进行中';
+    const progress = `${activity.current_step || 0}/4`;
+
+    return `
+      <tr>
+        <td><strong>${activity.calc_month}</strong></td>
+        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+        <td>${progress}</td>
+        <td>${activity.total_employees || '-'}</td>
+        <td>${activity.total_bonus ? '$' + activity.total_bonus.toLocaleString() : '-'}</td>
+        <td>${new Date(activity.created_at).toLocaleDateString()}</td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="enterActivity('${activity.run_id}')">进入</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteActivity('${activity.run_id}')">删除</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function updateActivityKPIs() {
+  el.kpiTotalActivities.textContent = state.activities.length;
+  el.kpiCompleted.textContent = state.activities.filter(a => a.status === 'completed').length;
+  el.kpiInProgress.textContent = state.activities.filter(a => a.status !== 'completed' && a.status !== 'failed').length;
+  el.kpiErrors.textContent = state.activities.filter(a => a.status === 'failed').length;
+}
+
+// ═══ Enter Activity ═══
+
+async function enterActivity(activityId) {
+  try {
+    const response = await fetch(`${API_BASE}/runs/${activityId}`);
+    const activity = await response.json();
+
+    state.currentActivity = activity;
+
+    // Navigate to appropriate page based on step
+    const page = activity.current_step >= 3 ? 'results' :
+                 activity.current_step >= 2 ? 'performance' :
+                 activity.current_step >= 1 ? 'salary' : 'attendance';
+
+    navigateTo(page);
+
+    // Load data if available
+    if (activity.attendance_data) {
+      state.attendanceData = activity.attendance_data;
+      renderAttendanceData();
+    }
+    if (activity.salary_data) {
+      state.salaryData = activity.salary_data;
+      renderSalaryData();
+    }
+    if (activity.performance_data) {
+      state.performanceData = activity.performance_data;
+      renderPerformanceData();
+    }
+    if (activity.results) {
+      state.resultsData = activity.results;
+      renderResultsData();
+    }
+  } catch (error) {
+    console.error('加载活动详情失败:', error);
+    showNotification('加载活动详情失败', 'error');
+  }
+}
+
+// ═══ New Activity ═══
+
+el.btnNewActivity.addEventListener('click', async () => {
+  const calcMonth = prompt('请输入核算月份（格式：2026-04）：');
+  if (!calcMonth) return;
+
+  try {
+    const response = await fetch(`${API_BASE}/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ calc_month: calcMonth }),
+    });
+
+    const data = await response.json();
+    if (data.run_id) {
+      showNotification('月度活动创建成功', 'success');
+      enterActivity(data.run_id);
+    }
+  } catch (error) {
+    console.error('创建活动失败:', error);
+    showNotification('创建活动失败', 'error');
+  }
+});
+
+// ═══ Delete Activity ═══
+
+async function deleteActivity(activityId) {
+  if (!confirm('确定删除此活动？')) return;
+
+  try {
+    await fetch(`${API_BASE}/runs/${activityId}`, { method: 'DELETE' });
+    showNotification('已删除', 'success');
+    loadActivities();
+  } catch (error) {
+    showNotification('删除失败', 'error');
+  }
+}
+
+// ═══ Upload Modal ═══
+
+let uploadType = '';
+let uploadFile = null;
+
+function openUploadModal(type) {
+  uploadType = type;
+  uploadFile = null;
+  el.uploadFileInput.value = '';
+
+  const titles = {
+    attendance: '上传考勤日报表',
+    salary: '上传薪资档案',
+    performance: '上传绩效报表',
+  };
+
+  el.uploadModalTitle.textContent = titles[type];
+  el.uploadZoneTitle.textContent = '选择文件';
+  el.uploadZoneSub.textContent = '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
+  el.btnConfirmUpload.disabled = true;
+
+  el.uploadModal.classList.add('active');
+}
+
+function closeUploadModal() {
+  el.uploadModal.classList.remove('active');
+  uploadType = '';
+  uploadFile = null;
+}
+
+el.btnCloseUploadModal.addEventListener('click', closeUploadModal);
+el.btnCancelUpload.addEventListener('click', closeUploadModal);
+
+el.uploadZone.addEventListener('click', () => {
+  el.uploadFileInput.click();
+});
+
+el.uploadFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) {
+    uploadFile = file;
+    el.uploadZoneTitle.textContent = file.name;
+    el.uploadZoneSub.textContent = '已选择文件，点击确认上传';
+    el.btnConfirmUpload.disabled = false;
+  }
+});
+
+el.btnConfirmUpload.addEventListener('click', async () => {
+  if (!uploadFile || !state.currentActivity) return;
+
+  el.btnConfirmUpload.disabled = true;
+  el.btnConfirmUpload.textContent = '上传中...';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', uploadFile);
+
+    let endpoint = '';
+    if (uploadType === 'attendance') {
+      formData.append('calc_month', state.currentActivity.calc_month);
+      endpoint = `${API_BASE}/import-attendance`;
+    } else if (uploadType === 'salary') {
+      formData.append('run_id', state.currentActivity.run_id);
+      endpoint = `${API_BASE}/import-salary`;
+    } else if (uploadType === 'performance') {
+      formData.append('run_id', state.currentActivity.run_id);
+      endpoint = `${API_BASE}/import-performance`;
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showNotification('上传成功', 'success');
+      closeUploadModal();
+
+      // Update state
+      if (uploadType === 'attendance') {
+        state.attendanceData = data.preview;
+        renderAttendanceData();
+      } else if (uploadType === 'salary') {
+        state.salaryData = data.preview;
+        renderSalaryData();
+      } else if (uploadType === 'performance') {
+        state.performanceData = data.preview;
+        renderPerformanceData();
+      }
+
+      // Refresh activity data
+      enterActivity(state.currentActivity.run_id);
+    } else {
+      showNotification('上传失败: ' + (data.detail || '未知错误'), 'error');
+    }
+  } catch (error) {
+    showNotification('上传失败: ' + error.message, 'error');
+  } finally {
+    el.btnConfirmUpload.disabled = false;
+    el.btnConfirmUpload.textContent = '确认上传';
+  }
+});
+
+// ═══ Upload Buttons ═══
+
+el.btnUploadAttendance?.addEventListener('click', () => openUploadModal('attendance'));
+el.btnUploadAttendanceEmpty?.addEventListener('click', () => openUploadModal('attendance'));
+el.btnUploadSalary?.addEventListener('click', () => openUploadModal('salary'));
+el.btnUploadSalaryEmpty?.addEventListener('click', () => openUploadModal('salary'));
+el.btnUploadPerformance?.addEventListener('click', () => openUploadModal('performance'));
+el.btnUploadPerformanceEmpty?.addEventListener('click', () => openUploadModal('performance'));
+
+// ═══ Render Attendance Data ═══
+
+function renderAttendanceData() {
+  if (!state.attendanceData || !state.attendanceData.employees) {
+    el.attendanceContent.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 8v24l12 12" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/><circle cx="32" cy="32" r="28" stroke="#94A3B8" stroke-width="3"/></svg>
+        </div>
+        <h3 class="empty-state-title">暂无考勤数据</h3>
+        <p class="empty-state-sub">上传考勤日报表以查看员工工时明细</p>
+        <button class="btn btn-primary" onclick="openUploadModal('attendance')">上传考勤日报表</button>
+      </div>
+    `;
+    return;
+  }
+
+  const employees = state.attendanceData.employees;
+  const summary = state.attendanceData.summary;
+
+  el.attendanceContent.innerHTML = `
+    <div class="data-table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>工号</th>
+            <th>夜班</th>
+            <th>计薪出勤</th>
+            <th>OT1.5</th>
+            <th>OT2.0</th>
+            <th>病假</th>
+            <th>年假</th>
+            <th>节假日</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${employees.map(emp => `
+            <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}">
+              <td>${emp.employee_id}</td>
+              <td>${emp.has_night_shift ? '✓' : '-'}</td>
+              <td>${emp.total_base_hours.toFixed(2)}h</td>
+              <td>${emp.total_ot15.toFixed(2)}h</td>
+              <td>${emp.total_ot20.toFixed(2)}h</td>
+              <td>${(emp.day_shift['病假'] + emp.night_shift['病假']).toFixed(2)}h</td>
+              <td>${(emp.day_shift['年假'] + emp.night_shift['年假']).toFixed(2)}h</td>
+              <td>${(emp.day_shift['节假日'] + emp.night_shift['节假日']).toFixed(2)}h</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="summary-stats">
+      <div class="summary-stat">
+        <span class="summary-stat-label">员工总数</span>
+        <span class="summary-stat-value">${summary.total_employees}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">白班人数</span>
+        <span class="summary-stat-value">${summary.day_shift_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">夜班人数</span>
+        <span class="summary-stat-value">${summary.night_shift_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">总工时</span>
+        <span class="summary-stat-value">${summary.total_base_hours.toFixed(2)}h</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">总OT1.5</span>
+        <span class="summary-stat-value">${summary.total_ot15.toFixed(2)}h</span>
+      </div>
+    </div>
+  `;
+}
+
+// ═══ Render Salary Data ═══
+
+function renderSalaryData() {
+  if (!state.salaryData || !state.salaryData.employees) {
+    el.salaryContent.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 16v32M20 24h24M20 40h24M16 32h32" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
+        </div>
+        <h3 class="empty-state-title">暂无薪资数据</h3>
+        <p class="empty-state-sub">上传薪资档案以查看时薪匹配情况</p>
+        <button class="btn btn-primary" onclick="openUploadModal('salary')">上传薪资档案</button>
+      </div>
+    `;
+    return;
+  }
+
+  const employees = state.salaryData.employees;
+  const summary = state.salaryData.summary;
+
+  el.salaryContent.innerHTML = `
+    <div class="data-table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>工号</th>
+            <th>时薪</th>
+            <th>绩效比例</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${employees.map(emp => `
+            <tr>
+              <td>${emp.employee_id}</td>
+              <td>$${emp.hourly_rate.toFixed(2)}</td>
+              <td>${(emp.ratio * 100).toFixed(1)}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="summary-stats">
+      <div class="summary-stat">
+        <span class="summary-stat-label">员工总数</span>
+        <span class="summary-stat-value">${summary.total_employees}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">平均时薪</span>
+        <span class="summary-stat-value">$${summary.avg_hourly_rate.toFixed(2)}</span>
+      </div>
+    </div>
+  `;
+}
+
+// ═══ Render Performance Data ═══
+
+function renderPerformanceData() {
+  if (!state.performanceData || !state.performanceData.employees) {
+    el.performanceContent.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M12 48V20l12-12 12 12 16-16v44H12z" stroke="#94A3B8" stroke-width="3" stroke-linejoin="round"/></svg>
+        </div>
+        <h3 class="empty-state-title">暂无绩效数据</h3>
+        <p class="empty-state-sub">上传绩效报表以查看绩效明细</p>
+        <button class="btn btn-primary" onclick="openUploadModal('performance')">上传绩效报表</button>
+      </div>
+    `;
+    return;
+  }
+
+  const employees = state.performanceData.employees;
+  const summary = state.performanceData.summary;
+
+  el.performanceContent.innerHTML = `
+    <div class="data-table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>工号</th>
+            <th>绩效得分</th>
+            <th>绩效等级</th>
+            <th>绩效系数</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${employees.map(emp => `
+            <tr>
+              <td>${emp.employee_id}</td>
+              <td>${emp.score !== null ? emp.score.toFixed(2) : '-'}</td>
+              <td>${emp.level || '-'}</td>
+              <td>${emp.coefficient !== null ? emp.coefficient.toFixed(2) : '-'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="summary-stats">
+      <div class="summary-stat">
+        <span class="summary-stat-label">员工总数</span>
+        <span class="summary-stat-value">${summary.total_employees}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">平均得分</span>
+        <span class="summary-stat-value">${summary.avg_score.toFixed(2)}</span>
+      </div>
+      ${Object.entries(summary.level_distribution || {}).map(([level, count]) => `
+        <div class="summary-stat">
+          <span class="summary-stat-label">${level}</span>
+          <span class="summary-stat-value">${count}人</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// ═══ Render Results Data ═══
+
+function renderResultsData() {
+  if (!state.resultsData || state.resultsData.length === 0) {
+    el.resultsContent.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="12" y="12" width="40" height="40" rx="4" stroke="#94A3B8" stroke-width="3"/><path d="M24 28h16M24 36h16" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
+        </div>
+        <h3 class="empty-state-title">暂无核算结果</h3>
+        <p class="empty-state-sub">完成前三步后执行核算</p>
+        <button class="btn btn-primary" onclick="executeCalculate()">执行核算</button>
+      </div>
+    `;
+    return;
+  }
+
+  const results = state.resultsData;
+  const totalBonus = results.reduce((sum, r) => sum + r.performance_bonus, 0);
+  const avgBonus = totalBonus / results.length;
+
+  el.resultsContent.innerHTML = `
+    <div class="data-table-container">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>工号</th>
+            <th>岗位类型</th>
+            <th>时薪</th>
+            <th>绩效基数</th>
+            <th>绩效比例</th>
+            <th>绩效系数</th>
+            <th>绩效奖金</th>
+            <th>计算过程</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${results.map(r => `
+            <tr>
+              <td>${r.employee_id}</td>
+              <td>${r.job_type === 'warehouse' ? '仓库' : '职能'}</td>
+              <td>$${r.hourly_rate.toFixed(2)}</td>
+              <td>$${r.performance_base.toFixed(2)}</td>
+              <td>${(r.performance_ratio * 100).toFixed(1)}%</td>
+              <td>${r.performance_coefficient.toFixed(2)}</td>
+              <td><strong>$${r.performance_bonus.toFixed(2)}</strong></td>
+              <td><button class="btn btn-secondary btn-sm" onclick="showCalcChain('${r.employee_id}')">查看</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    <div class="summary-stats">
+      <div class="summary-stat">
+        <span class="summary-stat-label">员工总数</span>
+        <span class="summary-stat-value">${results.length}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">奖金总额</span>
+        <span class="summary-stat-value">$${totalBonus.toLocaleString()}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">平均奖金</span>
+        <span class="summary-stat-value">$${avgBonus.toFixed(2)}</span>
+      </div>
+    </div>
+  `;
+
+  // Update KPIs
+  el.kpiResultEmployees.textContent = results.length;
+  el.kpiResultBonus.textContent = '$' + totalBonus.toLocaleString();
+  el.kpiResultAvg.textContent = '$' + avgBonus.toFixed(2);
+}
+
+// ═══ Calculate ═══
+
+async function executeCalculate() {
+  if (!state.currentActivity) return;
+
+  try {
+    const response = await fetch(`${API_BASE}/calculate/${state.currentActivity.run_id}`, {
+      method: 'POST',
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showNotification('核算完成', 'success');
+      enterActivity(state.currentActivity.run_id);
+    } else {
+      showNotification('核算失败: ' + (data.detail || '未知错误'), 'error');
+    }
+  } catch (error) {
+    showNotification('核算失败: ' + error.message, 'error');
+  }
+}
+
+el.btnCalculate?.addEventListener('click', executeCalculate);
+el.btnCalculateEmpty?.addEventListener('click', executeCalculate);
+
+// ═══ Calc Chain ═══
+
+function showCalcChain(employeeId) {
+  const emp = state.resultsData?.find(r => r.employee_id === employeeId);
+  if (!emp) return;
+
+  const hourlyRate = emp.hourly_rate;
+  const baseHours = emp.base_hours;
+  const ot15Hours = emp.ot15_hours;
+  const ot20Hours = emp.ot20_hours;
+  const sickHours = emp.sick_hours;
+  const annualHours = emp.annual_hours;
+  const holidayHours = emp.holiday_hours;
+
+  const baseSalary = baseHours * hourlyRate;
+  const ot15Salary = ot15Hours * hourlyRate * 1.5;
+  const ot20Salary = ot20Hours * hourlyRate * 2.0;
+  const sickPay = sickHours * hourlyRate;
+  const annualPay = annualHours * hourlyRate;
+  const holidayPay = holidayHours * hourlyRate;
+
+  el.calcChainContent.innerHTML = `
+    <div class="calc-chain-title">绩效奖金计算过程 - ${employeeId}</div>
+    <div class="calc-chain-item">绩效基数 = $${emp.performance_base.toFixed(2)}</div>
+    <div class="calc-chain-item" style="padding-left: 32px;">├── 基础工资 = ${baseHours}h × $${hourlyRate.toFixed(2)} = $${baseSalary.toFixed(2)}</div>
+    <div class="calc-chain-item" style="padding-left: 32px;">├── OT1.5工资 = ${ot15Hours}h × $${hourlyRate.toFixed(2)} × 1.5 = $${ot15Salary.toFixed(2)}</div>
+    <div class="calc-chain-item" style="padding-left: 32px;">├── OT2.0工资 = ${ot20Hours}h × $${hourlyRate.toFixed(2)} × 2.0 = $${ot20Salary.toFixed(2)}</div>
+    <div class="calc-chain-item" style="padding-left: 32px;">├── 病假工资 = ${sickHours}h × $${hourlyRate.toFixed(2)} = $${sickPay.toFixed(2)}</div>
+    <div class="calc-chain-item" style="padding-left: 32px;">├── 年假补贴 = ${annualHours}h × $${hourlyRate.toFixed(2)} = $${annualPay.toFixed(2)}</div>
+    <div class="calc-chain-item" style="padding-left: 32px;">└── 节日补贴 = ${holidayHours}h × $${hourlyRate.toFixed(2)} = $${holidayPay.toFixed(2)}</div>
+    <div class="calc-chain-item">绩效比例 = ${(emp.performance_ratio * 100).toFixed(1)}%</div>
+    <div class="calc-chain-item">绩效系数 = ${emp.performance_coefficient.toFixed(2)}</div>
+    <div class="calc-chain-item calc-chain-result">绩效奖金 = $${emp.performance_base.toFixed(2)} × ${(emp.performance_ratio * 100).toFixed(1)}% × ${emp.performance_coefficient.toFixed(2)} = $${emp.performance_bonus.toFixed(2)}</div>
+  `;
+
+  el.calcChainModal.classList.add('active');
+}
+
+el.btnCloseCalcChainModal?.addEventListener('click', () => {
+  el.calcChainModal.classList.remove('active');
+});
+
+el.btnCloseCalcChain?.addEventListener('click', () => {
+  el.calcChainModal.classList.remove('active');
+});
+
+// ═══ Export ═══
+
+async function exportData(type) {
+  if (!state.currentActivity) return;
+
+  try {
+    let endpoint = '';
+    if (type === 'attendance') {
+      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
+    } else if (type === 'salary') {
+      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
+    } else if (type === 'performance') {
+      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
+    } else if (type === 'results') {
+      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
+    }
+
+    const response = await fetch(endpoint);
+    const data = await response.json();
+
+    if (data.file_path) {
+      const downloadUrl = `${API_BASE}/runs/${state.currentActivity.run_id}/download/${data.file_name}`;
+      window.open(downloadUrl, '_blank');
+      showNotification('导出成功', 'success');
+    }
+  } catch (error) {
+    showNotification('导出失败: ' + error.message, 'error');
+  }
+}
+
+el.btnExportAttendance?.addEventListener('click', () => exportData('attendance'));
+el.btnExportSalary?.addEventListener('click', () => exportData('salary'));
+el.btnExportPerformance?.addEventListener('click', () => exportData('performance'));
+el.btnExportResults?.addEventListener('click', () => exportData('results'));
+
+// ═══ Notification ═══
+
+function showNotification(message, type = 'info') {
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.textContent = message;
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 12px 24px;
+    background: ${type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : '#3B82F6'};
+    color: white;
+    border-radius: 8px;
+    z-index: 1000;
+    animation: slideIn 0.3s ease;
+  `;
+  document.body.appendChild(notification);
+
+  setTimeout(() => {
+    notification.remove();
+  }, 3000);
+}
+
+// ═══ Init ═══
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadActivities();
+});

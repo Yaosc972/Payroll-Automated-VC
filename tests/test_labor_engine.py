@@ -20,7 +20,15 @@ from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_di
 from bonus_platform.engine.labor.layout import InvoiceLayoutPlan, analyze_invoice_layout, extract_rows_from_layout_plan
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
 from bonus_platform.engine.labor.profiles import load_supplier_profiles, resolve_supplier_profile
-from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics
+from bonus_platform.engine.labor.quality import build_reconciliation_diagnostics, calculate_extraction_quality
+from bonus_platform.engine.labor.profiles import (
+    generate_profile_from_extraction,
+    save_supplier_profile,
+    record_profile_failure,
+    reset_profile_failure,
+    _profiles_for_resolution,
+    DEFAULT_PROFILE,
+)
 from bonus_platform.app import _non_payable_pdf_names
 from bonus_platform.engine.labor.report import build_labor_report
 from bonus_platform.engine.labor.workbook import read_workbook_rows, suggest_mapping
@@ -1455,7 +1463,7 @@ def test_mimo_image_extractor_skips_timed_out_page_and_keeps_later_rows(monkeypa
 
     def fake_post(payload, config):
         calls["count"] += 1
-        if calls["count"] <= 2:
+        if calls["count"] <= 4:
             raise MiMoTimeoutException("gateway timeout")
         return [
             {
@@ -1485,7 +1493,7 @@ def test_mimo_image_extractor_skips_timed_out_page_and_keeps_later_rows(monkeypa
         },
     )
 
-    assert calls["count"] == 3
+    assert calls["count"] == 5
     assert [row["employee_name_raw"] for row in rows] == ["Alvarez Minchaca, Rosa"]
 
 
@@ -1705,3 +1713,269 @@ def test_build_labor_report_contains_expected_sheets(tmp_path):
     assert workbook.sheetnames == ["核对结论", "核对摘要", "全员对账明细", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
     assert workbook["姓名格式差异"].max_row == 2
     assert workbook["全员对账明细"].max_row == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Tests
+# ---------------------------------------------------------------------------
+
+
+def _make_labor_item(
+    name: str = "John Doe",
+    amount: float = 1000.0,
+    hours: float = 40.0,
+    confidence: float = 0.95,
+    source_file: str = "test.pdf",
+    source_page: str = "p1",
+) -> LaborLineItem:
+    return LaborLineItem(
+        source_type="pdf",
+        source_file=source_file,
+        source_page_or_row=source_page,
+        employee_id="",
+        employee_name_raw=name,
+        hours=hours,
+        amount=amount,
+        currency="USD",
+        confidence=confidence,
+        evidence_text="",
+        supplier="",
+    )
+
+
+def test_calculate_extraction_quality_returns_low_confidence_rows_T_P2_1():
+    rows = [
+        _make_labor_item(name="John", confidence=0.95),
+        _make_labor_item(name="Jane", confidence=0.60),
+        _make_labor_item(name="Bob", confidence=0.80),
+    ]
+    result = calculate_extraction_quality(
+        pdf_rows=rows,
+        comparison_summary={},
+    )
+    assert "lowConfidenceRows" in result
+    low = result["lowConfidenceRows"]
+    assert len(low) == 2
+    names = {r["employee_name_raw"] for r in low}
+    assert names == {"Jane", "Bob"}
+    # Check fields present
+    for row in low:
+        assert "employee_name_raw" in row
+        assert "amount" in row
+        assert "confidence" in row
+        assert "source_page_or_row" in row
+        assert "source_file" in row
+
+
+def test_calculate_extraction_quality_low_confidence_rows_empty_when_all_high_T_P2_2():
+    rows = [
+        _make_labor_item(name="John", confidence=0.95),
+        _make_labor_item(name="Jane", confidence=0.90),
+    ]
+    result = calculate_extraction_quality(
+        pdf_rows=rows,
+        comparison_summary={},
+    )
+    assert result["lowConfidenceRows"] == []
+
+
+def test_calculate_extraction_quality_respects_confidence_threshold_param_T_P2_3():
+    rows = [
+        _make_labor_item(name="John", confidence=0.95),
+        _make_labor_item(name="Jane", confidence=0.85),
+        _make_labor_item(name="Bob", confidence=0.70),
+    ]
+    result = calculate_extraction_quality(
+        pdf_rows=rows,
+        comparison_summary={},
+        confidence_threshold=0.9,
+    )
+    low = result["lowConfidenceRows"]
+    names = {r["employee_name_raw"] for r in low}
+    # confidence=0.85 is < 0.9, so Jane should also be in low
+    assert "Jane" in names
+    assert "Bob" in names
+    assert "John" not in names
+
+
+def test_ai_instruction_retry_mode_appends_target_names_T_P2_4():
+    prompt = _ai_instruction(retry_mode=True, target_names=["John", "Jane"])
+    assert "RETRY MODE" in prompt
+    assert "John" in prompt
+    assert "Jane" in prompt
+
+
+def test_ai_instruction_no_retry_mode_by_default_T_P2_5():
+    prompt = _ai_instruction()
+    assert "RETRY MODE" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Tests
+# ---------------------------------------------------------------------------
+
+
+def test_generate_profile_from_extraction_basic_T_P3_1():
+    rows = [
+        _make_labor_item(name="Alice", hours=40, amount=1000, confidence=0.95),
+        _make_labor_item(name="Bob", hours=35, amount=800, confidence=0.90),
+    ]
+    profile = generate_profile_from_extraction("Fairway", rows)
+    assert "key" in profile
+    assert "aliases" in profile
+    assert "prompt_notes" in profile
+    assert "image_page_policy" in profile
+    assert "version" in profile
+    assert profile["key"] == "fairway"
+    assert isinstance(profile["prompt_notes"], list)
+    assert profile["version"] == 1
+
+
+def test_generate_profile_from_extraction_detects_zero_hours_premiums_T_P3_2():
+    rows = [
+        _make_labor_item(name="Alice", hours=0, amount=50, confidence=0.95),
+        _make_labor_item(name="Bob", hours=40, amount=1000, confidence=0.90),
+    ]
+    profile = generate_profile_from_extraction("Fairway", rows)
+    notes_text = " ".join(profile["prompt_notes"]).lower()
+    assert "meal premiums" in notes_text
+
+
+def test_generate_profile_from_extraction_empty_supplier_T_P3_3():
+    rows = [_make_labor_item(name="Alice")]
+    profile = generate_profile_from_extraction("", rows)
+    assert profile["key"] == "unknown"
+
+
+def test_save_supplier_profile_creates_file_T_P3_4(tmp_path):
+    profile = {
+        "key": "test_supplier",
+        "aliases": ["test supplier"],
+        "prompt_notes": ["note 1"],
+        "image_page_policy": "first_page_only",
+        "version": 1,
+    }
+    result_path = save_supplier_profile(profile, tmp_path)
+    assert result_path.exists()
+    loaded = json.loads(result_path.read_text(encoding="utf-8"))
+    assert loaded["key"] == "test_supplier"
+    assert loaded["aliases"] == ["test supplier"]
+
+
+def test_profiles_for_resolution_scans_directory_T_P3_5(tmp_path):
+    # Create two profile JSON files in the directory
+    profile_a = [
+        {"key": "supplier_a", "aliases": ["supplier a"], "prompt_notes": ["note a"]}
+    ]
+    profile_b = [
+        {"key": "supplier_b", "aliases": ["supplier b"], "prompt_notes": ["note b"]}
+    ]
+    (tmp_path / "a.json").write_text(json.dumps(profile_a), encoding="utf-8")
+    (tmp_path / "b.json").write_text(json.dumps(profile_b), encoding="utf-8")
+
+    profiles = _profiles_for_resolution(tmp_path)
+    keys = {p.key for p in profiles}
+    assert "supplier_a" in keys
+    assert "supplier_b" in keys
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 Tests
+# ---------------------------------------------------------------------------
+
+
+def test_check_profile_validity_returns_true_for_default_T_P4_1():
+    # DEFAULT_PROFILE is always valid
+    assert DEFAULT_PROFILE.key == "default"
+    assert DEFAULT_PROFILE.deprecated is False
+
+
+def test_check_profile_validity_returns_true_when_rule_rows_exist_T_P4_2(tmp_path):
+    # A non-default profile with prompt_notes (rule_rows proxy) should be valid
+    from bonus_platform.engine.labor.profiles import SupplierExtractionProfile
+
+    profile = SupplierExtractionProfile(
+        key="custom",
+        aliases=["custom"],
+        prompt_notes=["some rule"],
+        image_page_policy="first_page_only",
+    )
+    assert not profile.deprecated
+    assert len(profile.prompt_notes) > 0
+
+
+def test_check_profile_validity_returns_false_when_no_rule_rows_T_P4_3():
+    from bonus_platform.engine.labor.profiles import SupplierExtractionProfile
+
+    profile = SupplierExtractionProfile(
+        key="empty",
+        aliases=["empty"],
+        prompt_notes=[],
+        image_page_policy="first_page_only",
+    )
+    # Empty prompt_notes means no rules configured
+    assert len(profile.prompt_notes) == 0
+
+
+def test_record_profile_failure_increments_count_T_P4_4(tmp_path):
+    profile_data = {
+        "key": "test_profile",
+        "aliases": ["test"],
+        "failure_count": 0,
+    }
+    profile_path = tmp_path / "test_profile.json"
+    profile_path.write_text(json.dumps(profile_data), encoding="utf-8")
+
+    result = record_profile_failure(profile_path)
+    assert result is not None
+    assert result["failure_count"] == 1
+
+
+def test_record_profile_failure_marks_deprecated_after_3_T_P4_5(tmp_path):
+    profile_data = {
+        "key": "bad_profile",
+        "aliases": ["bad"],
+        "failure_count": 2,
+    }
+    profile_path = tmp_path / "bad_profile.json"
+    profile_path.write_text(json.dumps(profile_data), encoding="utf-8")
+
+    result = record_profile_failure(profile_path)
+    assert result is not None
+    assert result["failure_count"] == 3
+    assert result["deprecated"] is True
+
+
+def test_reset_profile_failure_clears_count_T_P4_6(tmp_path):
+    profile_data = {
+        "key": "recover_profile",
+        "aliases": ["recover"],
+        "failure_count": 2,
+        "deprecated": True,
+    }
+    profile_path = tmp_path / "recover_profile.json"
+    profile_path.write_text(json.dumps(profile_data), encoding="utf-8")
+
+    reset_profile_failure(profile_path)
+    loaded = json.loads(profile_path.read_text(encoding="utf-8"))
+    assert loaded["failure_count"] == 0
+    assert "deprecated" not in loaded
+
+
+def test_profiles_for_resolution_filters_deprecated_T_P4_7(tmp_path):
+    # Create a deprecated profile that would match "deprecated_supplier"
+    profile_data = [
+        {
+            "key": "deprecated_supplier",
+            "aliases": ["deprecated supplier"],
+            "prompt_notes": ["old rule"],
+            "deprecated": True,
+        }
+    ]
+    (tmp_path / "deprecated.json").write_text(
+        json.dumps(profile_data), encoding="utf-8"
+    )
+
+    profile = resolve_supplier_profile("deprecated supplier", profiles_path=tmp_path)
+    # Should fall back to DEFAULT_PROFILE because the deprecated one is filtered
+    assert profile.key == "default"

@@ -34,11 +34,17 @@ TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
 AI_PAGE_CACHE_VERSION = "v6"
 
+
+class MiMoTimeoutException(Exception):
+    """Raised when MiMo API request exceeds timeout."""
+    pass
+
+
 # ── HTTP client with strict outer timeout (wall-clock) ──
 # urllib and httpx timeouts are phase/socket oriented, so a slow gateway can still
 # keep a request alive. The daemon worker below lets the caller abandon a stuck request.
-_MIMO_TIMEOUT = httpx.Timeout(30.0, connect=5.0, read=25.0, pool=5.0)
-_MIMO_WALL_TIMEOUT_SECONDS = 30.0
+_MIMO_TIMEOUT = httpx.Timeout(60.0, connect=10.0, read=50.0, pool=5.0)
+_MIMO_WALL_TIMEOUT_SECONDS = 60.0
 
 
 def _http_post_json(
@@ -308,6 +314,8 @@ def extract_invoice_items(
     period_end: str = "",
     currency: str = "",
     expected_rows: List[Dict[str, Any]] | None = None,
+    retry_mode: bool = False,
+    target_names: list[str] | None = None,
 ) -> List[LaborLineItem]:
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -400,6 +408,8 @@ def extract_invoice_items(
                         currency=currency,
                         supplier_profile=supplier_profile,
                         expected_rows=expected_rows,
+                        retry_mode=retry_mode,
+                        target_names=target_names,
                     )
                     rows = _filter_ai_rows_by_page_text(rows, pages)
                     all_rule_items.extend(line_items_from_dicts(rows))
@@ -436,7 +446,7 @@ def extract_invoice_items(
         has_text = any((page.get("text") or "").strip() for page in pages)
         if has_text:
             try:
-                rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
+                rows = _extract_with_ai_text(pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows, retry_mode=retry_mode, target_names=target_names)
                 rows = _filter_ai_rows_by_page_text(rows, pages)
                 items = line_items_from_dicts(rows)
                 if items:
@@ -454,7 +464,7 @@ def extract_invoice_items(
                 logger.error("[C] 图片为空！PDF 渲染失败或策略过滤掉所有页面")
                 errors.append("PDF 渲染为图片后为空，无法进行 AI 抽取")
             else:
-                rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows)
+                rows = _extract_with_ai_images(image_pages, ai_config, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, supplier_profile=supplier_profile, expected_rows=expected_rows, retry_mode=retry_mode, target_names=target_names)
                 rows = _filter_ai_rows_by_page_text(rows, pages)
                 items = line_items_from_dicts(rows)
                 if items:
@@ -791,9 +801,11 @@ def _extract_with_ai_text(
     currency: str = "",
     supplier_profile: SupplierExtractionProfile | None = None,
     expected_rows: List[Dict[str, Any]] | None = None,
+    retry_mode: bool = False,
+    target_names: list[str] | None = None,
 ) -> List[Dict[str, Any]]:
     prompt = {
-        "instruction": _ai_instruction(supplier_profile),
+        "instruction": _ai_instruction(supplier_profile, retry_mode=retry_mode, target_names=target_names),
         "supplier": supplier,
         "period_start": period_start,
         "period_end": period_end,
@@ -812,7 +824,7 @@ def _extract_with_ai_text(
         "max_completion_tokens": int(ai_config.get("max_completion_tokens") or 8192),
     }
     _apply_provider_options(payload, ai_config)
-    return _normalize_ai_rows(_post_chat_completion(payload, ai_config), supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
+    return _normalize_ai_rows(_ai_call_with_retry(payload, ai_config), supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, default_confidence=float(ai_config.get("default_confidence", 0.7)))
 
 
 def _analyze_layout_with_ai(
@@ -855,7 +867,7 @@ def _analyze_layout_with_ai(
         "max_completion_tokens": min(int(ai_config.get("max_completion_tokens") or 2048), 2048),
     }
     _apply_provider_options(payload, ai_config)
-    rows = _post_chat_completion(payload, ai_config)
+    rows = _ai_call_with_retry(payload, ai_config)
     if not rows:
         return InvoiceLayoutPlan(layout_type="unknown", recommended_parser="ai_assisted", confidence=0.0)
     return layout_plan_from_dict(rows[0])
@@ -870,12 +882,17 @@ def _extract_with_ai_images(
     currency: str = "",
     supplier_profile: SupplierExtractionProfile | None = None,
     expected_rows: List[Dict[str, Any]] | None = None,
+    retry_mode: bool = False,
+    target_names: list[str] | None = None,
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     max_pages = _effective_max_pages_per_request(ai_config)
 
+    # 智能页面筛选：无 Profile 时 AI 判断有效页
+    image_pages = _select_invoice_pages(image_pages, ai_config, supplier_profile)
+
     # 图片抽取使用简化的 prompt，避免模型返回空结果
-    image_instruction = _ai_instruction(supplier_profile, for_image=True)
+    image_instruction = _ai_instruction(supplier_profile, for_image=True, retry_mode=retry_mode, target_names=target_names)
 
     logger.info(f"[D] _extract_with_ai_images: {len(image_pages)} 张图片, max_pages={max_pages}")
     for start in range(0, len(image_pages), max_pages):
@@ -925,23 +942,30 @@ def _extract_with_ai_images(
         if cached is not None:
             rows.extend(_annotate_image_rows(cached, chunk))
             continue
-        try:
-            extracted = _post_chat_completion(payload, ai_config)
-            extracted = _annotate_image_rows(extracted, chunk)
-            _save_ai_page_cache(chunk, ai_config, extracted)
-            rows.extend(extracted)
-        except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException) as exc:
+        _RETRY_DELAYS = [5, 15, 30]  # 退避等待秒数：第1次重试等5s，第2次等15s，第3次等30s
+        _AI_EXC_TYPES = (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException)
+        last_exc = None
+        for attempt in range(1 + len(_RETRY_DELAYS)):  # 首次 + 3次重试 = 最多4次
             try:
                 extracted = _post_chat_completion(payload, ai_config)
                 extracted = _annotate_image_rows(extracted, chunk)
                 _save_ai_page_cache(chunk, ai_config, extracted)
                 rows.extend(extracted)
-                continue
-            except (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException) as retry_exc:
-                sources = ", ".join(f"{page.get('source_file')}#p{page.get('page')}" for page in chunk)
-                logger.warning(f"AI 图片抽取跳过超时/解析失败页面: {sources}; first={exc}; retry={retry_exc}")
-                continue
-    normalized = _normalize_ai_rows(rows, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency)
+                last_exc = None
+                break
+            except _AI_EXC_TYPES as exc:
+                last_exc = exc
+                if attempt < len(_RETRY_DELAYS):
+                    delay = _RETRY_DELAYS[attempt]
+                    sources = ", ".join(f"{page.get('source_file')}#p{page.get('page')}" for page in chunk)
+                    logger.warning(f"AI 抽取失败，{delay}s 后重试 (attempt {attempt+1}/{1+len(_RETRY_DELAYS)}): {sources}; error={exc}")
+                    import time as _time
+                    _time.sleep(delay)
+        if last_exc is not None:
+            sources = ", ".join(f"{page.get('source_file')}#p{page.get('page')}" for page in chunk)
+            logger.warning(f"AI 图片抽取跳过超时/解析失败页面（已重试{len(_RETRY_DELAYS)}次）: {sources}; last={last_exc}")
+            continue
+    normalized = _normalize_ai_rows(rows, supplier=supplier, period_start=period_start, period_end=period_end, currency=currency, default_confidence=float(ai_config.get("default_confidence", 0.7)))
     if expected_rows:
         normalized = _filter_ai_rows_by_expected_employees(normalized, expected_rows)
     return normalized
@@ -963,6 +987,25 @@ def _annotate_image_rows(rows: List[Dict[str, Any]], chunk: List[Dict[str, Any]]
         annotated.append(current)
     return annotated
 
+_AI_RETRY_DELAYS = [5, 15, 30]  # 退避等待秒数
+_AI_EXC_TYPES = (json.JSONDecodeError, TimeoutError, socket.timeout, URLError, MiMoTimeoutException, httpx.TimeoutException)
+
+
+def _ai_call_with_retry(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """调用 AI API，失败时自动重试（最多 3 次退避重试）"""
+    last_exc = None
+    for attempt in range(1 + len(_AI_RETRY_DELAYS)):
+        try:
+            return _post_chat_completion(payload, ai_config)
+        except _AI_EXC_TYPES as exc:
+            last_exc = exc
+            if attempt < len(_AI_RETRY_DELAYS):
+                delay = _AI_RETRY_DELAYS[attempt]
+                logger.warning(f"AI 调用失败，{delay}s 后重试 (attempt {attempt+1}/{1+len(_AI_RETRY_DELAYS)}): {exc}")
+                import time as _time
+                _time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
 
 def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     provider = str(ai_config.get("provider") or "").lower()
@@ -982,6 +1025,9 @@ def _post_chat_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) ->
 class MiMoTimeoutException(Exception):
     """Raised when MiMo API request exceeds timeout."""
     pass
+
+
+# (moved to top of file — see after imports)
 
 
 def _post_anthropic_completion(payload: Dict[str, Any], ai_config: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1087,20 +1133,35 @@ def _is_token_plan(ai_config: Dict[str, Any]) -> bool:
     return provider == "mimo" and "token-plan" in base_url
 
 
-def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None, for_image: bool = False) -> str:
+def _ai_instruction(
+    supplier_profile: SupplierExtractionProfile | None = None,
+    for_image: bool = False,
+    retry_mode: bool = False,
+    target_names: list[str] | None = None,
+) -> str:
+    """生成 AI 抽取的 prompt 指令。
+
+    Args:
+        supplier_profile: 供应商专属 Profile，含 prompt_notes
+        for_image: 是否为图片抽取模式（使用更简洁的 prompt）
+        retry_mode: 是否为重试模式（针对低置信度行重新抽取）
+        target_names: 重试模式下需要重点关注的员工姓名列表
+    """
     if for_image:
         # 图片抽取使用更简洁的 prompt，避免模型返回空结果
         instruction = (
             "Extract all employee/associate rows from this invoice image as a JSON array. "
             "Each row must have these fields: employee_name_raw, hours, amount, currency, confidence, evidence_text. "
             "Rules:\n"
-            "- employee_name_raw: the person's name from the Associate/Employee column\n"
+            "- employee_name_raw: ONLY the person's full name (e.g. 'Lopez, Elizabeth'). "
+            "Do NOT include job codes, candidate IDs, shift types, or any other text after the name. "
+            "If the row shows 'Lopez, Elizabeth CUE1PK2 19905 8.00...', extract ONLY 'Lopez, Elizabeth'.\n"
             "- hours: total worked hours (use 0 if only amount shown)\n"
             "- amount: total billed amount in dollars\n"
             "- currency: USD or currency shown in invoice\n"
             "- confidence: 0.95 for clear rows, 0.85 for minor issues\n"
             "- evidence_text: the original text snippet with name and amount\n"
-            "Ignore headers, footers, subtotals, and non-employee rows. "
+            "Ignore headers, footers, subtotals, summary rows (like 'Workforce Shift', 'Flexible Workforce Shift'), and non-employee rows. "
             "Return ONLY the JSON array, no explanations."
         )
     else:
@@ -1112,7 +1173,10 @@ def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None, f
             "Ignore handwriting, margin notes, barcodes, page numbers, headers, footers, subtotals, and timesheet-only pages. "
             "Return only employee charge rows, not invoice totals or headers. "
             "If a page has no clear employee charge rows, return [] exactly. "
-            "employee_name_raw must be a visible person name from an Associate/Employee row, not a vendor, subtotal, invoice number, barcode, account number, or random numeric string. "
+            "employee_name_raw must be ONLY the person's visible name (e.g. 'Lopez, Elizabeth' or 'John Smith'). "
+            "Do NOT include job codes (like CUE1PK2, B1), candidate IDs, shift types (Packer Shift, Forklift Shift), or any other non-name text. "
+            "If the row shows 'Lopez, Elizabeth CUE1PK2 19905 8.00...', extract ONLY 'Lopez, Elizabeth'. "
+            "Do NOT extract summary/category rows like 'Workforce Shift', 'Flexible Workforce Shift', 'Open, Open' as employee names. "
             "employee_id must be empty unless a separate visible employee ID column/value exists next to that person; never copy a name, barcode, invoice number, account number, or long numeric string into employee_id. "
             "If a premium/meal row has amount but no worked hours, use hours 0 and keep the amount. "
             "If expected_employees is provided, use it only as a reconciliation candidate list: search the invoice for those visible employees, return only rows that are actually visible, preserve the visible PDF names, choose the row total billed amount, and return [] for candidates not found. "
@@ -1123,18 +1187,86 @@ def _ai_instruction(supplier_profile: SupplierExtractionProfile | None = None, f
             "Warehouse identification: if the page contains a warehouse/dept identifier (e.g. DEPT:CA#3, DEPT:CA-27, warehouse code), include it as warehouse_id field in each row. Extract only the numeric part (e.g. DEPT:CA#3 -> 3, DEPT:CA-27 -> 27). If no warehouse identifier is visible, set warehouse_id to empty string. "
             "Output format: return ONLY the JSON array, no additional text, explanations, or markdown formatting."
         )
+    # 重试模式：追加重点关注员工名单
+    if retry_mode and target_names:
+        names_str = ", ".join(target_names[:20])  # 最多20个名字，避免 prompt 过长
+        source_hint = "invoice image" if for_image else "invoice document"
+        instruction += (
+            f" RETRY MODE: Focus specifically on extracting data for these employees: {names_str}. "
+            f"Re-examine the {source_hint} carefully for these names — they may have been missed or extracted with low confidence in a previous pass. "
+            "Pay extra attention to name spelling, amount alignment, and row boundaries."
+        )
     if supplier_profile and supplier_profile.prompt_notes:
         instruction += " Supplier-specific profile guidance: " + " ".join(supplier_profile.prompt_notes)
     return instruction
 
 
-def _normalize_ai_rows(rows: List[Dict[str, Any]], supplier: str, period_start: str, period_end: str, currency: str) -> List[Dict[str, Any]]:
+# 清洗员工名：去掉 AI 误带的工号、岗位后缀等
+# 匹配 "Last, First" 格式的姓名（最可靠的模式）
+# Last: 字母+空格（如 "Palacios Villo", "St"）
+# First: 字母（如 "Elizabeth", "Juan"）
+# 遇到全大写token（工号如CUE1PK2）或纯数字（候选ID）就停止
+_NAME_COMMA_RE = re.compile(r"^([A-Za-z][A-Za-z .'-]*,\s*[A-Za-z][a-z .'-]+)")
+# 岗位关键词（用于过滤）
+_SHIFT_KEYWORDS = re.compile(
+    r"\b(?:Packer|Forklift|Loader|Loaders|Shipping|Receiving|Material\s*Handler|Workforce|Flexible|Shift|Bonus|Differential)\b",
+    re.IGNORECASE,
+)
+# 非员工名的关键词
+_NON_EMPLOYEE_NAMES = {
+    "workforce shift", "flexible workforce shift", "open, open",
+    "employee name", "name", "total", "totals", "subtotal",
+    "office payroll", "supplemental payroll", "payroll capture",
+}
+
+
+def _clean_employee_name(raw_name: str) -> str:
+    """清洗员工名，去掉工号、岗位后缀等非姓名内容。
+
+    处理 AI 抽取时误带的工号（如 CUE1PK2）、候选人ID、岗位后缀等。
+    """
+    name = raw_name.strip()
+    if not name:
+        return name
+
+    # 过滤明显的非员工名
+    if name.lower().strip() in _NON_EMPLOYEE_NAMES:
+        return ""
+
+    # 优先提取 "Last, First" 格式
+    m = _NAME_COMMA_RE.match(name)
+    if m:
+        return m.group(1).strip()
+
+    # 没有逗号的名字（如 "John Smith"）：去掉岗位关键词
+    name = _SHIFT_KEYWORDS.sub("", name).strip()
+    return name
+
+
+def _normalize_ai_rows(
+    rows: List[Dict[str, Any]],
+    supplier: str,
+    period_start: str,
+    period_end: str,
+    currency: str,
+    default_confidence: float = 0.7,
+) -> List[Dict[str, Any]]:
+    """标准化 AI 抽取结果。
+
+    Args:
+        default_confidence: AI 未返回 confidence 时的默认值，从 AI_CONFIG["default_confidence"] 读取
+    """
     normalized = []
     for i, row in enumerate(rows):
         employee_name = _fuzzy_get_name(row)
         if not employee_name:
             logger.warning(f"行{i}: 无员工姓名, 原始数据: {json.dumps({k:v for k,v in row.items() if v}, ensure_ascii=False)[:200]}")
             continue
+        # 清洗员工名：去掉工号、岗位后缀等
+        cleaned_name = _clean_employee_name(employee_name)
+        if not cleaned_name:
+            continue
+        employee_name = cleaned_name
         if not _looks_like_employee_row(employee_name, row):
             continue
         current = dict(row)
@@ -1148,7 +1280,7 @@ def _normalize_ai_rows(rows: List[Dict[str, Any]], supplier: str, period_start: 
         current["supplier"] = current.get("supplier") or supplier
         current["period_start"] = current.get("period_start") or current.get("periodStart") or period_start
         current["period_end"] = current.get("period_end") or current.get("periodEnd") or period_end
-        current["confidence"] = current.get("confidence") if current.get("confidence") is not None else 0.7
+        current["confidence"] = current.get("confidence") if current.get("confidence") is not None else default_confidence
         normalized.append(current)
     return normalized
 
@@ -1308,6 +1440,113 @@ def _render_pdf_pages_to_images(pdf_paths: List[Path], scale: float = 1.2, max_w
 def _apply_image_page_policy(image_pages: List[Dict[str, Any]], supplier_profile: SupplierExtractionProfile) -> List[Dict[str, Any]]:
     if supplier_profile.image_page_policy == "first_page_only":
         return [page for page in image_pages if int(page.get("page") or 1) == 1]
+    return image_pages
+
+
+def _check_profile_validity(
+    supplier_profile: SupplierExtractionProfile,
+    rule_rows: list,
+    ai_config: dict,
+) -> bool:
+    """检查 Profile 是否仍然有效。
+
+    当 Profile 存在（非 DEFAULT_PROFILE）但规则抽取返回 0 行时，
+    说明供应商格式可能已变化，Profile 失效。
+
+    Args:
+        supplier_profile: 当前使用的供应商 Profile
+        rule_rows: 规则抽取的结果行
+        ai_config: AI 配置字典
+
+    Returns:
+        True 表示 Profile 有效，False 表示失效应回退 AI
+    """
+    # 无 Profile 或默认 Profile — 始终有效（无需检测）
+    if not supplier_profile or supplier_profile.key == "default":
+        return True
+
+    # 规则抽取有结果 — Profile 有效
+    if rule_rows:
+        return True
+
+    # Profile 存在但规则抽取 0 行 — 格式可能变化
+    logger.warning(
+        f"Profile '{supplier_profile.key}' 存在但规则抽取返回 0 行，"
+        f"供应商格式可能已变化，回退到 AI 抽取"
+    )
+    return False
+
+
+def _select_invoice_pages(image_pages: List[Dict[str, Any]], ai_config: Dict[str, Any], supplier_profile: SupplierExtractionProfile) -> List[Dict[str, Any]]:
+    """智能页面筛选：无 Profile 时用 AI 判断哪些页面包含员工计费数据。
+
+    仅当 supplier_profile 是 DEFAULT_PROFILE 且 image_page_policy=="all" 时触发。
+    用轻量 AI 调用分析页面缩略图，返回有效页面列表。
+    0 页时 fallback 返回全部页。
+    """
+    if not supplier_profile or supplier_profile.key != "default" or supplier_profile.image_page_policy != "all":
+        return image_pages
+    if not ai_config.get("smart_page_selection", True):
+        return image_pages
+    if not _ai_ready(ai_config):
+        return image_pages
+    if len(image_pages) <= 2:
+        return image_pages  # 2 页以内不需要筛选
+
+    logger.info(f"[D] 智能页面筛选: {len(image_pages)} 页待分析")
+    try:
+        # 构造轻量 payload：每页只发缩略图，让 AI 判断哪些页有计费表
+        content: List[Dict[str, Any]] = []
+        for i, page in enumerate(image_pages):
+            content.append({"type": "text", "text": f"Page {i+1}:"})
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": page.get("mime_type", "image/png"),
+                    "data": page["base64"],
+                },
+            })
+
+        selection_prompt = (
+            "You are analyzing a multi-page labor invoice PDF. "
+            "For each page shown, determine if it contains an employee billing table with columns like: "
+            "employee name, hours worked, and charge amounts. "
+            "Return ONLY a JSON array of 1-based page numbers that contain billing data. "
+            "Example: [1, 3] means pages 1 and 3 have billing tables. "
+            "Ignore cover pages, summary pages, terms/conditions, and blank pages. "
+            "Return ONLY the JSON array, no explanations."
+        )
+
+        payload = {
+            "model": ai_config.get("model", ""),
+            "messages": [{"role": "user", "content": content + [{"type": "text", "text": selection_prompt}]}],
+            "max_tokens": 256,
+            "temperature": 0,
+        }
+        result = _post_chat_completion(payload, ai_config)
+
+        # 解析返回的页码列表
+        raw_text = ""
+        if isinstance(result, dict):
+            choices = result.get("choices") or []
+            if choices:
+                msg = choices[0].get("message") or {}
+                raw_text = msg.get("content") or ""
+
+        # 提取 JSON 数组
+        json_match = re.search(r'\[[\d\s,]*\]', raw_text)
+        if json_match:
+            page_numbers = json.loads(json_match.group())
+            valid_pages = [image_pages[n - 1] for n in page_numbers if 1 <= n <= len(image_pages)]
+            if valid_pages:
+                logger.info(f"[D] 智能筛选结果: {len(valid_pages)}/{len(image_pages)} 页有效")
+                return valid_pages
+
+        logger.warning(f"[D] 智能筛选解析失败，回退全读。原始返回: {raw_text[:200]}")
+    except Exception as exc:
+        logger.warning(f"[D] 智能筛选异常，回退全读: {exc}")
+
     return image_pages
 
 

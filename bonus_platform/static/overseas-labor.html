@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>海外劳务工报账核对 · 西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=28" />
+    <link rel="stylesheet" href="styles.css?v=29" />
     <style>html { color-scheme: light; }</style>
   </head>
   <body class="overseas-labor-shell">
@@ -76,10 +76,25 @@
       <div id="conclusionSection" class="conclusion-section" hidden>
         <h3>核对结论</h3>
       </div>
-      <div id="qualityAlert" class="quality-alert" hidden></div>
 
-      <!-- Warehouse overview -->
-      <section class="workspace-section" id="warehouseSection" hidden>
+      <!-- Employee Reconciliation Table (核心：全员对账明细) -->
+      <section class="workspace-section" id="employeeReconSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">全员对账明细</h2>
+            <p class="section-sub">Employee Reconciliation Detail · 有差异的排在前面</p>
+          </div>
+        </div>
+        <div id="employeeReconTable" class="audit-table premium-grid"></div>
+      </section>
+
+      <!-- Collapsible diagnostics: quality + warehouse -->
+      <details class="diagnostics-fold" id="diagnosticsFold" hidden>
+        <summary>质量诊断与仓库概览</summary>
+        <div id="qualityAlert" class="quality-alert" hidden></div>
+
+        <!-- Warehouse overview -->
+        <section class="workspace-section" id="warehouseSection" hidden>
         <div class="section-header">
           <div>
             <h2 class="section-title" id="warehouseHeading">仓库核对总览</h2>
@@ -88,6 +103,7 @@
         </div>
         <div id="warehouseTable" class="audit-table"></div>
       </section>
+      </details>
 
       <!-- Pending items -->
       <section class="workspace-section" id="pendingItemsSection" hidden>
@@ -220,12 +236,12 @@
             <p class="upload-sub" id="pdfFileName">点击选择 · 支持多选</p>
           </div>
           <div class="upload-zone" id="xlsxUploadZone">
-            <input id="workbookFile" type="file" accept=".xlsx,.xlsm" />
+            <input id="workbookFile" type="file" accept=".xlsx,.xlsm,.xls" multiple />
             <div class="upload-icon">
               <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="4" y="3" width="20" height="22" rx="3" stroke="#34C759" stroke-width="1.5"/><path d="M9 10h10M9 14h10M9 18h6" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/></svg>
             </div>
             <p class="upload-title">线下账单 Excel</p>
-            <p class="upload-sub" id="workbookFileName">点击选择 .xlsx / .xlsm</p>
+            <p class="upload-sub" id="workbookFileName">点击选择 · 支持多选 · .xlsx / .xlsm / .xls</p>
           </div>
           <div class="drawer-footer">
             <p id="uploadStatus" class="inline-status">创建批次后可上传文件。</p>
@@ -317,7 +333,7 @@
     <!-- ═══ TOAST ═══ -->
     <div id="laborToast" class="labor-toast" role="status" aria-live="polite"></div>
 
-    <script src="overseas-labor.js?v=6"></script>
+    <script src="overseas-labor.js?v=8"></script>
     <script>
       // ── Drawer open/close ──
       const drawer = document.getElementById('wizardDrawer');
@@ -410,9 +426,9 @@
         if (count > 0) document.getElementById('pdfUploadZone').classList.add('has-file');
       });
       document.getElementById('workbookFile').addEventListener('change', function() {
-        const name = this.files[0]?.name || '';
-        document.getElementById('workbookFileName').textContent = name || '点击选择 .xlsx / .xlsm';
-        if (name) document.getElementById('xlsxUploadZone').classList.add('has-file');
+        const count = this.files.length;
+        document.getElementById('workbookFileName').textContent = count > 0 ? `${count} 个 Excel 文件已选择` : '点击选择 · 支持多选 · .xlsx / .xlsm / .xls';
+        if (count > 0) document.getElementById('xlsxUploadZone').classList.add('has-file');
       });
     </script>
   </body>
