@@ -15,6 +15,8 @@ from .engines.bonus import BonusCalculator
 
 
 def _cell(row, index: int, default=None):
+    if index is None:
+        return default
     return row[index] if len(row) > index else default
 
 
@@ -30,6 +32,18 @@ def _to_float(value, default=None):
             return float(cleaned) / 100
         return float(cleaned)
     return float(value)
+
+
+def _find_column(headers, names: list[str], fallback: int | None = None) -> int | None:
+    normalized = {
+        str(header).strip(): index
+        for index, header in enumerate(headers)
+        if header is not None and str(header).strip()
+    }
+    for name in names:
+        if name in normalized:
+            return normalized[name]
+    return fallback
 
 
 class FBUPerformanceParser:
@@ -69,6 +83,7 @@ class FBUPerformanceParser:
         if path.suffix.lower() == ".xls":
             book = xlrd.open_workbook(filepath)
             sheet = book.sheet_by_index(0)
+            headers = sheet.row_values(0) if sheet.nrows else []
             rows = (
                 sheet.row_values(row_idx)
                 for row_idx in range(1, sheet.nrows)
@@ -76,21 +91,22 @@ class FBUPerformanceParser:
         else:
             wb = self.load_excel(filepath)
             ws = wb[wb.sheetnames[0]]
+            headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), [])
             rows = ws.iter_rows(min_row=2, values_only=True)
 
         # 找到关键列的索引
         col_map = {
-            '姓名': 0,      # A列
-            '工号': 3,      # D列
-            '二级部门': 19,  # T列
-            '三级部门': 20,  # U列
-            '四级部门': 21,  # V列
-            '五级部门': 22,  # W列
-            '六级部门': 23,  # X列
-            '七级部门': 24,  # Y列
-            '八级部门': 25,  # Z列
-            '划分区域': 89,  # CL列
-            '领色': 107,     # CT列
+            '姓名': _find_column(headers, ['姓名'], 0),
+            '工号': _find_column(headers, ['工号'], 3),
+            '二级部门': _find_column(headers, ['二级部门'], 19),
+            '三级部门': _find_column(headers, ['三级部门'], 20),
+            '四级部门': _find_column(headers, ['四级部门'], 21),
+            '五级部门': _find_column(headers, ['五级部门'], 22),
+            '六级部门': _find_column(headers, ['六级部门'], 23),
+            '七级部门': _find_column(headers, ['七级部门'], 24),
+            '八级部门': _find_column(headers, ['八级部门'], 25),
+            '划分区域': _find_column(headers, ['划分区域'], 89),
+            '领色': _find_column(headers, ['领色'], 107),
         }
 
         roster = {}
@@ -112,9 +128,9 @@ class FBUPerformanceParser:
             # 划分区域
             area = str(_cell(row, col_map['划分区域'])).strip() if _cell(row, col_map['划分区域']) else ''
 
-            # 岗位类型：蓝领=仓库，白领=职能
+            # 岗位类型：蓝领/灰领走仓库端公式，白领走职能端等级映射
             job_type_raw = str(_cell(row, col_map['领色'])).strip() if _cell(row, col_map['领色']) else ''
-            job_type = 'warehouse' if job_type_raw == '蓝领' else 'functional'
+            job_type = 'warehouse' if job_type_raw in {'蓝领', '灰领'} else 'functional'
 
             roster[emp_id] = {
                 'name': name,

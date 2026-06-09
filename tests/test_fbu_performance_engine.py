@@ -152,6 +152,47 @@ def test_attendance_preview_uses_attendance_name_when_roster_is_missing(tmp_path
     assert preview["summary"]["roster_missing"] == 1
 
 
+def test_roster_loader_finds_shifted_lingse_column_by_header(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    headers = [""] * 123
+    headers[0] = "姓名"
+    headers[3] = "工号"
+    headers[19] = "二级部门"
+    headers[20] = "三级部门"
+    headers[89] = "划分区域"
+    headers[122] = "领色"
+    sheet.append(headers)
+
+    for employee_id, name, lingse in [
+        ("E001", "Ana Roster", "蓝领"),
+        ("E002", "Ben Roster", "灰领"),
+        ("E003", "Cara Roster", "白领"),
+    ]:
+        row = [""] * 123
+        row[0] = name
+        row[3] = employee_id
+        row[19] = "FBU"
+        row[20] = "Americas"
+        row[89] = "US-West"
+        row[122] = lingse
+        sheet.append(row)
+
+    path = tmp_path / "roster.xlsx"
+    workbook.save(path)
+
+    roster = FBUPerformanceParser().load_roster(str(path))
+
+    assert roster["E001"]["name"] == "Ana Roster"
+    assert roster["E001"]["department"] == "FBU-Americas"
+    assert roster["E001"]["area"] == "US-West"
+    assert roster["E001"]["job_type"] == "warehouse"
+    assert roster["E002"]["job_type"] == "warehouse"
+    assert roster["E003"]["job_type"] == "functional"
+
+
 def test_base_roster_store_saves_metadata_and_copies_snapshot(tmp_path):
     store = FBURosterStore(str(tmp_path))
     content = b"fake roster bytes"
