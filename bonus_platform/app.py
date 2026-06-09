@@ -1574,8 +1574,8 @@ fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
 def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
     """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
-    roster_path = run_dir / "roster.xlsx"
-    if not roster_path.exists():
+    roster_path = next((path for path in [run_dir / "roster.xlsx", run_dir / "roster.xls"] if path.exists()), None)
+    if roster_path is None:
         roster_path = fbu_roster_store.copy_active_to_run(run_id)
         if roster_path:
             run = fbu_run_manager.get_run(run_id)
@@ -1602,8 +1602,11 @@ def get_fbu_base_roster() -> dict:
 async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
     """上传FBU基础花名册，供后续月度活动默认引用"""
     try:
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, "请上传 .xlsx 或 .xls 格式的花名册")
         content = await file.read()
-        tmp_path = FBU_PERFORMANCE_RUNS_DIR / "_roster" / "_upload_check.xlsx"
+        tmp_path = FBU_PERFORMANCE_RUNS_DIR / "_roster" / f"_upload_check{suffix}"
         tmp_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path.write_bytes(content)
 
@@ -1616,6 +1619,8 @@ async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
         )
         tmp_path.unlink(missing_ok=True)
         return {"success": True, "roster": metadata}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"花名册解析失败: {str(e)}")
 
@@ -1648,7 +1653,10 @@ async def import_fbu_attendance(
     # 保存花名册（如果提供）
     roster_path = None
     if roster:
-        roster_path = run_dir / "roster.xlsx"
+        roster_suffix = Path(roster.filename or "").suffix.lower()
+        if roster_suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, "请上传 .xlsx 或 .xls 格式的花名册")
+        roster_path = run_dir / f"roster{roster_suffix}"
         with open(roster_path, "wb") as f:
             content = await roster.read()
             f.write(content)

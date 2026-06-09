@@ -233,22 +233,34 @@ class FBURosterStore:
         self.data_dir = Path(data_dir)
         self.roster_dir = self.data_dir / "_roster"
         self.roster_dir.mkdir(parents=True, exist_ok=True)
-        self.active_roster = self.roster_dir / "active_roster.xlsx"
         self.metadata_file = self.roster_dir / "metadata.json"
+
+    def _active_roster_path(self, metadata: Optional[dict] = None) -> Path:
+        extension = (metadata or {}).get("extension", ".xlsx")
+        if extension not in {".xlsx", ".xls"}:
+            extension = ".xlsx"
+        return self.roster_dir / f"active_roster{extension}"
 
     def get_metadata(self) -> dict:
         if not self.metadata_file.exists():
             return {"has_roster": False}
         with open(self.metadata_file, "r", encoding="utf-8") as f:
             metadata = json.load(f)
-        metadata["has_roster"] = self.active_roster.exists()
+        metadata["has_roster"] = self._active_roster_path(metadata).exists()
         return metadata
 
     def save_active_roster(self, content: bytes, filename: str, total_employees: int = 0) -> dict:
-        self.active_roster.write_bytes(content)
+        extension = Path(filename).suffix.lower()
+        if extension not in {".xlsx", ".xls"}:
+            extension = ".xlsx"
+        for existing in self.roster_dir.glob("active_roster.*"):
+            existing.unlink(missing_ok=True)
+        active_roster = self._active_roster_path({"extension": extension})
+        active_roster.write_bytes(content)
         metadata = {
             "has_roster": True,
             "filename": filename,
+            "extension": extension,
             "uploaded_at": datetime.now().isoformat(),
             "total_employees": total_employees,
         }
@@ -257,10 +269,12 @@ class FBURosterStore:
         return metadata
 
     def copy_active_to_run(self, run_id: str) -> Optional[Path]:
-        if not self.active_roster.exists():
+        metadata = self.get_metadata()
+        active_roster = self._active_roster_path(metadata)
+        if not active_roster.exists():
             return None
         run_dir = self.data_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        target = run_dir / "roster.xlsx"
-        shutil.copyfile(self.active_roster, target)
+        target = run_dir / f"roster{metadata.get('extension', '.xlsx')}"
+        shutil.copyfile(active_roster, target)
         return target

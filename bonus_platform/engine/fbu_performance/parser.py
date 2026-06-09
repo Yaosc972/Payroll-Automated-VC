@@ -6,6 +6,7 @@ from collections import defaultdict
 import openpyxl
 import msoffcrypto
 import io
+import xlrd
 
 from .engines.base import EmployeeData, FBUPerformanceEngine
 from .engines.attendance import AttendanceProcessor
@@ -64,13 +65,18 @@ class FBUPerformanceParser:
         Returns:
             员工信息字典 {emp_id: {name, department, job_type, ...}}
         """
-        wb = self.load_excel(filepath)
-        ws = wb[wb.sheetnames[0]]
-
-        # 读取表头
-        headers = []
-        for cell in ws[1]:
-            headers.append(cell.value)
+        path = Path(filepath)
+        if path.suffix.lower() == ".xls":
+            book = xlrd.open_workbook(filepath)
+            sheet = book.sheet_by_index(0)
+            rows = (
+                sheet.row_values(row_idx)
+                for row_idx in range(1, sheet.nrows)
+            )
+        else:
+            wb = self.load_excel(filepath)
+            ws = wb[wb.sheetnames[0]]
+            rows = ws.iter_rows(min_row=2, values_only=True)
 
         # 找到关键列的索引
         col_map = {
@@ -88,7 +94,7 @@ class FBUPerformanceParser:
         }
 
         roster = {}
-        for row in ws.iter_rows(min_row=2, values_only=True):
+        for row in rows:
             if not row or _cell(row, col_map['工号']) is None:
                 continue
 
