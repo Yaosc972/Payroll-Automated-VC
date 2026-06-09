@@ -109,16 +109,38 @@ function bindLaborEvents() {
 }
 
 async function createRun() {
+  const supplierName = labor.supplierName.value.trim();
+  const periodStart = labor.periodStart.value.trim();
+  const periodEnd = labor.periodEnd.value.trim();
+  const currency = (labor.currency.value.trim() || "USD").toUpperCase();
+
+  if (!supplierName) {
+    labor.supplierName.focus();
+    setText(labor.createStatus, "请填写供应商名称。", true);
+    return toast("请填写供应商名称。");
+  }
+  if (!periodStart || !periodEnd) {
+    (periodStart ? labor.periodEnd : labor.periodStart).focus();
+    setText(labor.createStatus, "请填写账期开始和结束日期。", true);
+    return toast("请填写账期开始和结束日期。");
+  }
+  if (periodEnd < periodStart) {
+    labor.periodEnd.focus();
+    setText(labor.createStatus, "账期结束日期不能早于开始日期。", true);
+    return toast("账期结束日期不能早于开始日期。");
+  }
+
   setText(labor.createStatus, "正在创建批次...");
+  labor.createLaborRun.disabled = true;
   try {
     const run = await requestJson("/api/labor/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        supplier_name: labor.supplierName.value,
-        period_start: labor.periodStart.value,
-        period_end: labor.periodEnd.value,
-        currency: labor.currency.value,
+        supplier_name: supplierName,
+        period_start: periodStart,
+        period_end: periodEnd,
+        currency,
       }),
     });
     laborState.run = run;
@@ -131,9 +153,12 @@ async function createRun() {
     }
 
     toast("劳务核对批次已创建。");
+    advanceWizardStep("2");
   } catch (error) {
     setText(labor.createStatus, error.message, true);
     toast(error.message);
+  } finally {
+    labor.createLaborRun.disabled = false;
   }
 }
 
@@ -147,6 +172,7 @@ async function uploadFiles() {
   Array.from(labor.workbookFile.files).forEach((file) => form.append("workbook_files", file));
 
   setText(labor.uploadStatus, "正在上传文件...");
+  labor.uploadLaborFiles.disabled = true;
   try {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/files`, {
       method: "POST",
@@ -154,9 +180,12 @@ async function uploadFiles() {
     });
     setText(labor.uploadStatus, "文件已上传，可以读取工作表。");
     toast("文件上传完成。");
+    advanceWizardStep("3");
   } catch (error) {
     setText(labor.uploadStatus, error.message, true);
     toast(error.message);
+  } finally {
+    labor.uploadLaborFiles.disabled = false;
   }
 }
 
@@ -212,9 +241,15 @@ async function saveMapping() {
       }),
     });
     toast("字段映射已确认，可以开始抽取比对。");
+    if (typeof window.closeDrawer === "function") window.closeDrawer();
   } catch (error) {
     toast(error.message);
   }
+}
+
+function advanceWizardStep(step) {
+  const stepButton = document.querySelector(`.wz-step[data-step="${step}"]`);
+  if (stepButton) stepButton.click();
 }
 
 function clearResults() {

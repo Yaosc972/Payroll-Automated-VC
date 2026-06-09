@@ -370,36 +370,6 @@
         });
       });
 
-      // ── Auto advance step after create ──
-      const createBtn = document.getElementById('createLaborRun');
-      if (createBtn) {
-        createBtn.addEventListener('click', () => {
-          setTimeout(() => {
-            const step2Btn = document.querySelector('.wz-step[data-step="2"]');
-            if (step2Btn) step2Btn.click();
-          }, 800);
-        });
-      }
-
-      // ── Auto advance to step 3 after upload ──
-      const uploadBtn = document.getElementById('uploadLaborFiles');
-      if (uploadBtn) {
-        uploadBtn.addEventListener('click', () => {
-          setTimeout(() => {
-            const step3Btn = document.querySelector('.wz-step[data-step="3"]');
-            if (step3Btn) step3Btn.click();
-          }, 800);
-        });
-      }
-
-      // ── Close drawer after saveMapping ──
-      const saveBtn = document.getElementById('saveMapping');
-      if (saveBtn) {
-        saveBtn.addEventListener('click', () => {
-          setTimeout(closeDrawer, 600);
-        });
-      }
-
       // ── KPI filter buttons ──
       document.querySelectorAll('.kpi-card').forEach(card => {
         card.addEventListener('click', () => {
