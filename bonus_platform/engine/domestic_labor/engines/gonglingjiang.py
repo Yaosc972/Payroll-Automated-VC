@@ -2,6 +2,10 @@
 from datetime import date, datetime
 from typing import Any, Dict, List
 from .base import BaseEngine, CalculationResult
+from ..models import AuditExplanation, PayrollException
+
+
+SUBJECT = "gonglingjiang"
 
 
 # ==================== 莞深广珠区域 ====================
@@ -72,6 +76,69 @@ SENIORITY_CAP = SENIORITY_CAP_GSDG
 SENIORITY_RATE = SENIORITY_RATE_GSDG
 
 
+def _exception(
+    code: str,
+    level: str,
+    employee_id: str,
+    employee_name: str,
+    message: str,
+    suggested_action: str,
+    impact_amount: float = 0.0,
+) -> PayrollException:
+    return PayrollException(
+        code=code,
+        level=level,
+        subject=SUBJECT,
+        employee_id=employee_id,
+        employee_name=employee_name,
+        message=message,
+        suggested_action=suggested_action,
+        impact_amount=impact_amount,
+    )
+
+
+def _audit_explanation(
+    amount: float,
+    rule_name: str,
+    inputs: Dict[str, Any],
+    intermediate_values: Dict[str, Any] = None,
+    steps: List[str] = None,
+    formula: str = "",
+) -> Dict[str, Any]:
+    return AuditExplanation(
+        subject=SUBJECT,
+        amount=amount,
+        rule_name=rule_name,
+        formula=formula,
+        inputs=inputs,
+        intermediate_values=intermediate_values or {},
+        steps=steps or [],
+    ).to_dict()
+
+
+def _details(
+    base: Dict[str, Any],
+    amount: float,
+    rule_name: str,
+    inputs: Dict[str, Any],
+    intermediate_values: Dict[str, Any] = None,
+    steps: List[str] = None,
+    formula: str = "",
+    exceptions: List[PayrollException] = None,
+) -> Dict[str, Any]:
+    payload = dict(base)
+    payload["exceptions"] = [item.to_dict() for item in (exceptions or [])]
+    payload["audit_explanation"] = _audit_explanation(
+        amount=amount,
+        rule_name=rule_name,
+        formula=formula,
+        inputs=inputs,
+        intermediate_values=intermediate_values,
+        steps=steps,
+    )
+    return payload
+
+
 class GongLingJiangEngine(BaseEngine):
     """工龄奖计算引擎"""
 
@@ -95,10 +162,19 @@ class GongLingJiangEngine(BaseEngine):
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
         warnings = []
+        exceptions = []
 
         # F1: 归属部门大类（自动检测区域或使用指定区域）
         department = str(employee_data.get("二级部门名称", ""))
         position = str(employee_data.get("岗位名称", ""))
+        input_snapshot = {
+            "工号": employee_id,
+            "姓名": employee_name,
+            "二级部门名称": department,
+            "岗位名称": position,
+            "考勤月份": employee_data.get("考勤月份", ""),
+            "入职日期": str(employee_data.get("入职日期", "")),
+        }
 
         if region == "wes":
             # 华西华东东南区域
@@ -120,7 +196,16 @@ class GongLingJiangEngine(BaseEngine):
             if position in NO_BONUS_POSITIONS_WES:
                 standard = 0
                 if dept_category != "其他":
-                    warnings.append(f"员工{employee_id}岗位{position}为组长/非一线，无工龄奖")
+                    message = f"员工{employee_id}岗位{position}为组长/非一线，无工龄奖"
+                    warnings.append(message)
+                    exceptions.append(_exception(
+                        "EXCLUDED_POSITION",
+                        "info",
+                        employee_id,
+                        employee_name,
+                        message,
+                        "如岗位信息有误，请修正后重新计算。",
+                    ))
 
         else:
             # 莞深广珠区域（默认）
@@ -135,7 +220,27 @@ class GongLingJiangEngine(BaseEngine):
                     standard = SENIORITY_RATE_GSDG["揽收"]
                 else:
                     if not hrbp_list:
-                        warnings.append(f"员工{employee_id}为揽收部人员，请提供本月HRBP发放名单")
+                        message = f"员工{employee_id}为揽收部人员，请提供本月HRBP发放名单"
+                        warnings.append(message)
+                        exceptions.append(_exception(
+                            "MISSING_HRBP_LIST",
+                            "warning",
+                            employee_id,
+                            employee_name,
+                            message,
+                            "补充本月HRBP发放工号名单，或人工确认该员工不发放工龄奖。",
+                        ))
+                    elif employee_id not in hrbp_list:
+                        message = f"员工{employee_id}不在本月HRBP发放名单内，揽收工龄奖不发放"
+                        warnings.append(message)
+                        exceptions.append(_exception(
+                            "NOT_IN_HRBP_LIST",
+                            "warning",
+                            employee_id,
+                            employee_name,
+                            message,
+                            "确认名单是否遗漏；如需发放，请补充名单后重新计算。",
+                        ))
             elif dept_category == "FBU":
                 standard = SENIORITY_RATE_GSDG["FBU"]
 
@@ -146,7 +251,15 @@ class GongLingJiangEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "部门不在工龄奖范围", "department": department},
+                details=_details(
+                    {"reason": "部门不在工龄奖范围", "department": department},
+                    amount=0,
+                    rule_name="工龄奖部门范围判断",
+                    inputs={**input_snapshot, "部门类别": dept_category},
+                    steps=["二级部门未匹配工龄奖适用范围", "工龄奖金额为0"],
+                    formula="不适用部门 = 0",
+                    exceptions=exceptions,
+                ),
                 warnings=[]
             )
 
@@ -155,7 +268,15 @@ class GongLingJiangEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "不符合工龄奖标准", "department": dept_category, "position": position},
+                details=_details(
+                    {"reason": "不符合工龄奖标准", "department": dept_category, "position": position},
+                    amount=0,
+                    rule_name="工龄奖资格判断",
+                    inputs={**input_snapshot, "部门类别": dept_category, "HRBP名单人数": len(hrbp_list or [])},
+                    steps=["部门已匹配，但岗位或名单条件未满足", "工龄奖金额为0"],
+                    formula="资格不满足 = 0",
+                    exceptions=exceptions,
+                ),
                 warnings=warnings
             )
 
@@ -163,17 +284,43 @@ class GongLingJiangEngine(BaseEngine):
         remark = str(employee_data.get("备注", "") or "")
         remark_keywords = ["事假未出勤", "全月事假", "事假全月", "未出勤"]
         if any(kw in remark for kw in remark_keywords):
-            warnings.append(f"⚠️ 员工{employee_id}({employee_name})备注'{remark}'，需人工确认是否发放工龄奖")
+            message = f"员工{employee_id}({employee_name})备注'{remark}'，需人工确认是否发放工龄奖"
+            warnings.append(f"⚠️ {message}")
+            exceptions.append(_exception(
+                "REMARK_REVIEW_REQUIRED",
+                "warning",
+                employee_id,
+                employee_name,
+                message,
+                "复核备注对应的出勤状态，必要时登记人工调整或确认发放。",
+            ))
 
         # F3: 工龄（司龄）
         hire_date = employee_data.get("入职日期")
         if not isinstance(hire_date, date):
+            message = f"员工{employee_id}入职日期异常"
+            exceptions.append(_exception(
+                "INVALID_HIRE_DATE",
+                "blocking",
+                employee_id,
+                employee_name,
+                message,
+                "补充正确入职日期后重新计算。",
+            ))
             return CalculationResult(
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "入职日期异常"},
-                warnings=[f"员工{employee_id}入职日期异常"]
+                details=_details(
+                    {"reason": "入职日期异常"},
+                    amount=0,
+                    rule_name="工龄奖入职日期校验",
+                    inputs=input_snapshot,
+                    steps=["入职日期不是有效日期", "无法计算工龄", "工龄奖金额为0"],
+                    formula="入职日期无效 = 0",
+                    exceptions=exceptions,
+                ),
+                warnings=[message]
             )
 
         # 假设发放月为当月1日
@@ -195,7 +342,16 @@ class GongLingJiangEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "入职不足1年", "years": 0},
+                details=_details(
+                    {"reason": "入职不足1年", "years": 0},
+                    amount=0,
+                    rule_name="工龄奖工龄判断",
+                    inputs={**input_snapshot, "参考日期": ref_date.isoformat()},
+                    intermediate_values={"工龄(年)": 0},
+                    steps=["按考勤月份月初计算司龄", "司龄不足1年", "工龄奖金额为0"],
+                    formula="工龄不足1年 = 0",
+                    exceptions=exceptions,
+                ),
                 warnings=[]
             )
 
@@ -216,12 +372,29 @@ class GongLingJiangEngine(BaseEngine):
         # F7: 排班天数
         paiban = float(employee_data.get("排班天数", 0) or 0)
         if paiban == 0:
+            message = f"员工{employee_id}排班天数为0，无法折算"
+            exceptions.append(_exception(
+                "ZERO_SCHEDULE_DAYS",
+                "blocking",
+                employee_id,
+                employee_name,
+                message,
+                "补充排班天数后重新计算。",
+            ))
             return CalculationResult(
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "排班天数为0"},
-                warnings=[f"员工{employee_id}排班天数为0，无法折算"]
+                details=_details(
+                    {"reason": "排班天数为0"},
+                    amount=0,
+                    rule_name="工龄奖排班天数校验",
+                    inputs={**input_snapshot, "排班天数": paiban},
+                    steps=["排班天数为0", "无法计算日折算标准", "工龄奖金额为0"],
+                    formula="排班天数为0 = 0",
+                    exceptions=exceptions,
+                ),
+                warnings=[message]
             )
 
         # F8: 入离职缺勤时数
@@ -249,6 +422,40 @@ class GongLingJiangEngine(BaseEngine):
                 "事病旷排休时数": spk_hours,
                 "入离职缺勤时数": ruli_hours,
                 "最终金额": final,
+                "exceptions": [item.to_dict() for item in exceptions],
+                "audit_explanation": _audit_explanation(
+                    amount=final,
+                    rule_name="工龄奖标准与缺勤折算",
+                    formula="min(标准 × 工龄, 上限) → 按请假与入离职缺勤折算",
+                    inputs={
+                        **input_snapshot,
+                        "部门类别": dept_category,
+                        "区域": region or "gsdg",
+                        "排班天数": paiban,
+                        "实际在职工作日天数": actual_days,
+                        "HRBP名单人数": len(hrbp_list or []),
+                    },
+                    intermediate_values={
+                        "工龄(年)": years,
+                        "标准": standard,
+                        "上限": cap,
+                        "应发": yingfa,
+                        "日折算金额": round(day_rate, 6),
+                        "事病旷排休时数": spk_hours,
+                        "入离职缺勤时数": ruli_hours,
+                        "请假折算后金额": round(after_spk, 2),
+                        "最终金额": final,
+                    },
+                    steps=[
+                        f"部门{department}匹配为{dept_category}",
+                        f"岗位{position}匹配工龄奖资格",
+                        f"按{ref_date.isoformat()}计算工龄为{years}年",
+                        f"应发金额=min({standard}×{years}, {cap})={yingfa}",
+                        "请假时数达到56小时及以上时按日折算扣减",
+                        f"入离职缺勤时数{ruli_hours}小时参与折算",
+                        f"最终工龄奖为{final}",
+                    ],
+                ),
             },
             warnings=warnings
         )

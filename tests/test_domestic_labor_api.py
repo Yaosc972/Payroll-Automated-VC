@@ -1,4 +1,5 @@
 """国内劳务工薪酬核算 API 测试"""
+from datetime import date
 from io import BytesIO
 
 import pytest
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from bonus_platform.app import app
+from bonus_platform.engine.domestic_labor.engines.gonglingjiang import GongLingJiangEngine
 
 
 def _create_test_excel(sheet_names: dict[str, list[list]]) -> bytes:
@@ -261,3 +263,64 @@ def test_full_workflow():
 
     # Cleanup
     client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_gonglingjiang_returns_structured_exception_for_missing_hrbp_list():
+    """工龄奖缺少 HRBP 名单时保留 warning，并返回结构化异常"""
+    result = GongLingJiangEngine().calculate(_gongling_collection_employee(), hrbp_list=[], region="gsdg")
+
+    assert result.amount == 0
+    assert "请提供本月HRBP发放名单" in result.warnings[0]
+    assert result.details["exceptions"][0]["code"] == "MISSING_HRBP_LIST"
+    assert result.details["exceptions"][0]["level"] == "warning"
+    assert result.details["exceptions"][0]["subject"] == "gonglingjiang"
+    assert "suggested_action" in result.details["exceptions"][0]
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖资格判断"
+
+
+def test_gonglingjiang_returns_audit_explanation_for_hrbp_match():
+    """工龄奖发放结果包含审计解释、中间值和计算步骤"""
+    result = GongLingJiangEngine().calculate(
+        _gongling_collection_employee(),
+        hrbp_list=["OWHN001"],
+        region="gsdg",
+    )
+
+    explanation = result.details["audit_explanation"]
+    assert result.amount == 450
+    assert explanation["subject"] == "gonglingjiang"
+    assert explanation["amount"] == 450
+    assert explanation["inputs"]["HRBP名单人数"] == 1
+    assert explanation["intermediate_values"]["工龄(年)"] == 3
+    assert explanation["intermediate_values"]["标准"] == 150
+    assert explanation["intermediate_values"]["上限"] == 600
+    assert explanation["steps"]
+    assert result.details["exceptions"] == []
+
+
+def test_gonglingjiang_collection_employee_outside_hrbp_list_is_reviewable():
+    """HRBP 名单存在但员工不在名单内时，产出可复核结构化异常"""
+    result = GongLingJiangEngine().calculate(
+        _gongling_collection_employee(),
+        hrbp_list=["OWHN999"],
+        region="gsdg",
+    )
+
+    assert result.amount == 0
+    assert result.details["reason"] == "不符合工龄奖标准"
+    assert result.details["exceptions"][0]["code"] == "NOT_IN_HRBP_LIST"
+    assert "不在本月HRBP发放名单内" in result.warnings[0]
+
+
+def _gongling_collection_employee() -> dict:
+    return {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "二级部门名称": "第四纵队",
+        "岗位名称": "内勤专员",
+        "入职日期": date(2023, 1, 1),
+        "考勤月份": "202606",
+        "排班天数": 26,
+        "实际在职工作日天数": 26,
+        "请假时数": 0,
+    }
