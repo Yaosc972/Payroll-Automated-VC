@@ -623,6 +623,8 @@ def _build_summary(
     hours_delta_total = round(pdf_hours_total - excel_hours_total, 2)
     hours_delta_percentage = round(abs(hours_delta_total) / max(abs(pdf_hours_total), abs(excel_hours_total), 1.0) * 100, 2)
 
+    hours_risk_count = sum(1 for row in rows if row["matchStatus"] == "工时不一致" or "工时需复核" in row.get("riskFlags", []))
+
     return {
         "pdfEmployeeCount": len(_aggregate(pdf_rows)),
         "excelEmployeeCount": len(_aggregate(excel_rows)),
@@ -637,7 +639,8 @@ def _build_summary(
         "matchRate": match_rate,
         "averageConfidence": average_confidence,
         "amountDiffCount": sum(1 for row in rows if row["matchStatus"] == "金额差异"),
-        "hoursRiskCount": sum(1 for row in rows if row["matchStatus"] == "工时不一致" or "工时需复核" in row.get("riskFlags", [])),
+        "hoursRiskCount": hours_risk_count,
+        "hoursDiffCount": hours_risk_count,
         "unmatchedPdfCount": sum(1 for row in rows if row["matchStatus"] in ("PDF有Excel无", "低置信度抽取") and row["pdfHoursTotal"] and not row["excelHoursTotal"]),
         "unmatchedExcelCount": sum(1 for row in rows if row["matchStatus"] == "Excel有PDF无"),
         "lowConfidenceCount": sum(1 for row in rows if "低置信度抽取" in row.get("riskFlags", []) or row["matchStatus"] == "低置信度抽取"),

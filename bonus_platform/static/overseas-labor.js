@@ -409,7 +409,7 @@ function updateKpiCards(summary, rows, wcSummary, candidateMatches = []) {
   const reviewCount =
     amountDiffCount +
     notInInvoiceCount +
-    (summary.hoursDiffCount || 0) +
+    (summary.hoursRiskCount || summary.hoursDiffCount || 0) +
     (candidateMatches ? candidateMatches.length : 0);
 
   if (labor.kpiTotal) labor.kpiTotal.textContent = `$${formatMoney(pdfAmount)}`;
@@ -697,7 +697,9 @@ function renderPendingItems(rows, candidateMatches, summary) {
   if (!section) return;
 
   // Group data
-  const hoursDiffRows = rows.filter((row) => row.matchStatus === "工时不一致");
+  const hoursDiffRows = rows.filter(
+    (row) => row.matchStatus === "工时不一致" || (row.riskFlags || []).includes("工时需复核")
+  );
   const notInInvoiceRows = rows.filter((row) => row.matchStatus === "Excel有PDF无");
 
   // Check if there are pending items

@@ -595,6 +595,7 @@ def test_compare_labor_items_uses_amount_as_primary_and_flags_hours_only_as_risk
 
     assert result["summary"]["exceptionCount"] == 0
     assert result["summary"]["hoursRiskCount"] == 1
+    assert result["summary"]["hoursDiffCount"] == 1
     assert result["rows"][0]["matchStatus"] == "通过"
     assert "工时需复核" in result["rows"][0]["riskFlags"]
 
