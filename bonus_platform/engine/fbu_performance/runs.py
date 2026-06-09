@@ -145,6 +145,8 @@ class FBURunManager:
             results.append({
                 "employee_id": emp.employee_id,
                 "name": emp.name,
+                "department": emp.department,
+                "area": emp.area,
                 "job_type": emp.job_type,
                 "hourly_rate": emp.hourly_rate,
                 "performance_ratio": emp.performance_ratio,

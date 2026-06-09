@@ -60,9 +60,19 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
     for required in ("name", "hours", "amount"):
         if mapping[required] not in index:
             raise ValueError(f"字段映射无效：找不到 {mapping[required]}")
+    # 收集所有列名（用于表头检测）
+    header_names = set()
+    for col_name in mapping.values():
+        if col_name:
+            header_names.add(str(col_name).strip().lower())
+
     result: List[LaborLineItem] = []
     for offset, row in enumerate(rows[1:], start=2):
         name = _value(row, index[mapping["name"]])
+        # 检测并跳过表头行
+        name_str = str(name).strip() if name is not None else ""
+        if name_str and name_str.lower() in header_names:
+            continue
         if name in (None, ""):
             continue
         hours = parse_number(_value(row, index[mapping["hours"]]))

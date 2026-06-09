@@ -20,6 +20,7 @@ class FBUPerformanceParser:
         self.engine = FBUPerformanceEngine()
         self.attendance_processor = AttendanceProcessor()
         self.salary_processor = SalaryProcessor()
+        self.employee_roster = {}  # 花名册数据 {emp_id: {name, department, ...}}
 
     @staticmethod
     def load_excel(filepath: str, password: Optional[str] = None) -> openpyxl.Workbook:
@@ -34,6 +35,81 @@ class FBUPerformanceParser:
                 return openpyxl.load_workbook(decrypted, data_only=True)
         else:
             return openpyxl.load_workbook(filepath, data_only=True)
+
+    def load_roster(self, filepath: str) -> dict:
+        """
+        加载花名册数据
+
+        Args:
+            filepath: 花名册文件路径
+
+        Returns:
+            员工信息字典 {emp_id: {name, department, job_type, ...}}
+        """
+        wb = self.load_excel(filepath)
+        ws = wb[wb.sheetnames[0]]
+
+        # 读取表头
+        headers = []
+        for cell in ws[1]:
+            headers.append(cell.value)
+
+        # 找到关键列的索引
+        col_map = {
+            '姓名': 0,      # A列
+            '工号': 3,      # D列
+            '二级部门': 19,  # T列
+            '三级部门': 20,  # U列
+            '四级部门': 21,  # V列
+            '五级部门': 22,  # W列
+            '六级部门': 23,  # X列
+            '七级部门': 24,  # Y列
+            '八级部门': 25,  # Z列
+            '划分区域': 89,  # CL列
+            '领色': 107,     # CT列
+        }
+
+        roster = {}
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or row[col_map['工号']] is None:
+                continue
+
+            emp_id = str(row[col_map['工号']]).strip()
+            name = str(row[col_map['姓名']]).strip() if row[col_map['姓名']] else ''
+
+            # 构建部门全称：二级-三级-四级-五级-六级-七级-八级
+            dept_parts = []
+            for level in ['二级部门', '三级部门', '四级部门', '五级部门', '六级部门', '七级部门', '八级部门']:
+                val = row[col_map[level]]
+                if val and str(val).strip():
+                    dept_parts.append(str(val).strip())
+            department_full = '-'.join(dept_parts) if dept_parts else ''
+
+            # 划分区域
+            area = str(row[col_map['划分区域']]).strip() if row[col_map['划分区域']] else ''
+
+            # 岗位类型：蓝领=仓库，白领=职能
+            job_type_raw = str(row[col_map['领色']]).strip() if row[col_map['领色']] else ''
+            job_type = 'warehouse' if job_type_raw == '蓝领' else 'functional'
+
+            roster[emp_id] = {
+                'name': name,
+                'department': department_full,
+                'area': area,
+                'job_type': job_type,
+            }
+
+        self.employee_roster = roster
+        return roster
+
+    def get_employee_info(self, emp_id: str) -> dict:
+        """获取员工信息"""
+        return self.employee_roster.get(emp_id, {
+            'name': '',
+            'department': '',
+            'area': '',
+            'job_type': 'warehouse',
+        })
 
     def parse_attendance(self, filepath: str, target_month: int) -> dict:
         """解析考勤数据"""
@@ -90,8 +166,12 @@ class FBUPerformanceParser:
         attendance_data: dict,
         salary_data: dict,
         performance_data: dict,
+        employee_info: dict = None,
     ) -> list[EmployeeData]:
         """构建员工数据"""
+        if employee_info is None:
+            employee_info = {}
+
         employees = []
 
         for emp_id, hours in attendance_data.items():
@@ -103,16 +183,24 @@ class FBUPerformanceParser:
             # 获取绩效信息
             perf_info = performance_data.get(emp_id, {})
 
+            # 获取员工信息
+            info = employee_info.get(emp_id, {})
+            name = info.get('name', '')
+            department = info.get('department', '')
+            area = info.get('area', '')
+
             # 判断岗位类型（简化：有得分用仓库端，否则职能端）
             score = perf_info.get('score')
             level = perf_info.get('level')
-            job_type = 'warehouse' if score is not None else 'functional'
+            job_type = info.get('job_type', 'warehouse') if info else 'warehouse'
 
             # 处理白班
             if hours['白班']['计薪出勤'] > 0 or hours['白班']['OT1.5'] > 0:
                 emp = EmployeeData(
                     employee_id=emp_id,
-                    name='',  # 后续从花名册补充
+                    name=name,
+                    department=department,
+                    area=area,
                     hourly_rate=hourly_rate,
                     performance_ratio=ratio,
                     performance_score=score,
@@ -132,7 +220,9 @@ class FBUPerformanceParser:
             if hours['has_night_shift'] and (hours['夜班']['计薪出勤'] > 0 or hours['夜班']['OT1.5'] > 0):
                 emp = EmployeeData(
                     employee_id=f"{emp_id}-1",
-                    name='',
+                    name=name,
+                    department=department,
+                    area=area,
                     hourly_rate=hourly_rate + 1,  # 夜班时薪+1
                     performance_ratio=ratio,
                     performance_score=score,
@@ -214,8 +304,15 @@ class FBUPerformanceParser:
         # 构建明细列表
         employee_list = []
         for emp_id, hours in attendance_data.items():
+            # 获取员工信息
+            emp_info = self.get_employee_info(emp_id)
+
             employee_list.append({
                 "employee_id": emp_id,
+                "name": emp_info['name'],
+                "department": emp_info['department'],
+                "area": emp_info['area'],
+                "job_type": emp_info['job_type'],
                 "has_night_shift": hours['has_night_shift'],
                 "day_shift": hours['白班'],
                 "night_shift": hours['夜班'],
@@ -267,8 +364,14 @@ class FBUPerformanceParser:
         # 构建明细列表
         employee_list = []
         for emp_id, info in salary_data.items():
+            # 获取员工信息
+            emp_info = self.get_employee_info(emp_id)
+
             employee_list.append({
                 "employee_id": emp_id,
+                "name": emp_info['name'],
+                "department": emp_info['department'],
+                "area": emp_info['area'],
                 "hourly_rate": info.get('hourly_rate', 0),
                 "ratio": info.get('ratio', 0),
             })
@@ -310,8 +413,15 @@ class FBUPerformanceParser:
             level = row[17]  # 总等级
             coefficient = row[18]  # 绩效系数
 
+            # 获取员工信息
+            emp_info = self.get_employee_info(emp_id)
+
             employee_list.append({
                 "employee_id": emp_id,
+                "name": emp_info['name'],
+                "department": emp_info['department'],
+                "area": emp_info['area'],
+                "job_type": emp_info['job_type'],
                 "score": float(score) if score else None,
                 "level": str(level) if level else None,
                 "coefficient": float(coefficient) if coefficient else None,
@@ -350,7 +460,8 @@ class FBUPerformanceParser:
         Returns:
             计算完成的引擎实例
         """
-        # 转换为字典格式
+        # 转换为字典格式，并保存员工信息
+        employee_info = {}  # 保存员工基本信息
         attendance_dict = {}
         for emp in attendance_data:
             emp_id = emp['employee_id']
@@ -358,6 +469,13 @@ class FBUPerformanceParser:
                 '白班': emp['day_shift'],
                 '夜班': emp['night_shift'],
                 'has_night_shift': emp['has_night_shift'],
+            }
+            # 保存员工信息
+            employee_info[emp_id] = {
+                'name': emp.get('name', ''),
+                'department': emp.get('department', ''),
+                'area': emp.get('area', ''),
+                'job_type': emp.get('job_type', 'warehouse'),
             }
 
         salary_dict = {}
@@ -378,7 +496,7 @@ class FBUPerformanceParser:
             }
 
         # 构建员工数据
-        employees = self.build_employees(attendance_dict, salary_dict, performance_dict)
+        employees = self.build_employees(attendance_dict, salary_dict, performance_dict, employee_info)
 
         # 计算绩效奖金
         for emp in employees:

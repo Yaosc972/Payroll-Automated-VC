@@ -1236,11 +1236,24 @@ def _clean_employee_name(raw_name: str) -> str:
     # 优先提取 "Last, First" 格式
     m = _NAME_COMMA_RE.match(name)
     if m:
-        return m.group(1).strip()
+        result = m.group(1).strip()
+        # 二次检查：提取后可能是非员工名（如 "Open, Open Open B Bonus Nov" → "Open, Open"）
+        if result.lower() in _NON_EMPLOYEE_NAMES:
+            return ""
+        return result
 
-    # 没有逗号的名字（如 "John Smith"）：去掉岗位关键词
+    # 没有逗号的名字（如 "John Smith", "Antonio CUE LD"）
+    # 先去掉岗位关键词
     name = _SHIFT_KEYWORDS.sub("", name).strip()
-    return name
+    # 再去掉尾部的大写 token（工号如 CUE, LD, FL, B1）
+    parts = name.split()
+    while len(parts) > 1:
+        tail = parts[-1]
+        if tail.isupper() and len(tail) <= 4:  # 短大写 token = 工号
+            parts.pop()
+            continue
+        break
+    return " ".join(parts).strip()
 
 
 def _normalize_ai_rows(
@@ -1267,6 +1280,17 @@ def _normalize_ai_rows(
         if not cleaned_name:
             continue
         employee_name = cleaned_name
+
+        # 行级过滤：丢弃明显非员工行
+        # 1. 名字过短（< 2字符）或过长（> 40字符）
+        if len(employee_name) < 2 or len(employee_name) > 40:
+            continue
+        # 2. hours 和 amount 都为 0 的行（无效数据）
+        hours_val = float(row.get("hours") or 0)
+        amount_val = float(row.get("amount") or 0)
+        if hours_val == 0 and amount_val == 0:
+            continue
+
         if not _looks_like_employee_row(employee_name, row):
             continue
         current = dict(row)

@@ -9,6 +9,8 @@ class EmployeeData:
     """员工数据模型"""
     employee_id: str
     name: str
+    department: str = ""
+    area: str = ""
     hourly_rate: float = 0.0
     performance_ratio: float = 0.0
     performance_score: Optional[float] = None

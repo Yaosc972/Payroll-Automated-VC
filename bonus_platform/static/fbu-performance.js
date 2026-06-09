@@ -314,6 +314,7 @@ el.btnConfirmUpload.addEventListener('click', async () => {
     let endpoint = '';
     if (uploadType === 'attendance') {
       formData.append('calc_month', state.currentActivity.calc_month);
+      formData.append('run_id', state.currentActivity.run_id);
       endpoint = `${API_BASE}/import-attendance`;
     } else if (uploadType === 'salary') {
       formData.append('run_id', state.currentActivity.run_id);
@@ -389,11 +390,25 @@ function renderAttendanceData() {
   const summary = state.attendanceData.summary;
 
   el.attendanceContent.innerHTML = `
+    <!-- 筛选条件 -->
+    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <input type="text" id="filterAttendanceId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterAttendanceName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterAttendanceArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
+      <input type="text" id="filterAttendanceDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
+      <button class="btn btn-secondary btn-sm" onclick="filterAttendanceData()">筛选</button>
+      <button class="btn btn-secondary btn-sm" onclick="resetAttendanceFilter()">重置</button>
+    </div>
+
     <div class="data-table-container">
-      <table class="data-table">
+      <table class="data-table" id="attendanceTable">
         <thead>
           <tr>
             <th>工号</th>
+            <th>姓名</th>
+            <th>划分区域</th>
+            <th>部门全称</th>
+            <th>岗位类型</th>
             <th>夜班</th>
             <th>计薪出勤</th>
             <th>OT1.5</th>
@@ -405,8 +420,16 @@ function renderAttendanceData() {
         </thead>
         <tbody>
           ${employees.map(emp => `
-            <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}">
+            <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}"
+                data-id="${emp.employee_id}"
+                data-name="${emp.name || ''}"
+                data-area="${emp.area || ''}"
+                data-dept="${emp.department || ''}">
               <td>${emp.employee_id}</td>
+              <td>${emp.name || '-'}</td>
+              <td>${emp.area || '-'}</td>
+              <td>${emp.department || '-'}</td>
+              <td>${emp.job_type === 'warehouse' ? '仓库' : '职能'}</td>
               <td>${emp.has_night_shift ? '✓' : '-'}</td>
               <td>${emp.total_base_hours.toFixed(2)}h</td>
               <td>${emp.total_ot15.toFixed(2)}h</td>
@@ -465,19 +488,38 @@ function renderSalaryData() {
   const summary = state.salaryData.summary;
 
   el.salaryContent.innerHTML = `
+    <!-- 筛选条件 -->
+    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <input type="text" id="filterSalaryId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterSalaryName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterSalaryArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
+      <input type="text" id="filterSalaryDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
+      <button class="btn btn-secondary btn-sm" onclick="filterSalaryData()">筛选</button>
+      <button class="btn btn-secondary btn-sm" onclick="resetSalaryFilter()">重置</button>
+    </div>
+
     <div class="data-table-container">
-      <table class="data-table">
+      <table class="data-table" id="salaryTable">
         <thead>
           <tr>
             <th>工号</th>
+            <th>姓名</th>
+            <th>划分区域</th>
+            <th>部门全称</th>
             <th>时薪</th>
             <th>绩效比例</th>
           </tr>
         </thead>
         <tbody>
           ${employees.map(emp => `
-            <tr>
+            <tr data-id="${emp.employee_id}"
+                data-name="${emp.name || ''}"
+                data-area="${emp.area || ''}"
+                data-dept="${emp.department || ''}">
               <td>${emp.employee_id}</td>
+              <td>${emp.name || '-'}</td>
+              <td>${emp.area || '-'}</td>
+              <td>${emp.department || '-'}</td>
               <td>$${emp.hourly_rate.toFixed(2)}</td>
               <td>${(emp.ratio * 100).toFixed(1)}%</td>
             </tr>
@@ -519,11 +561,25 @@ function renderPerformanceData() {
   const summary = state.performanceData.summary;
 
   el.performanceContent.innerHTML = `
+    <!-- 筛选条件 -->
+    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <input type="text" id="filterPerfId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterPerfName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterPerfArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
+      <input type="text" id="filterPerfDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
+      <button class="btn btn-secondary btn-sm" onclick="filterPerformanceData()">筛选</button>
+      <button class="btn btn-secondary btn-sm" onclick="resetPerformanceFilter()">重置</button>
+    </div>
+
     <div class="data-table-container">
-      <table class="data-table">
+      <table class="data-table" id="performanceTable">
         <thead>
           <tr>
             <th>工号</th>
+            <th>姓名</th>
+            <th>划分区域</th>
+            <th>部门全称</th>
+            <th>岗位类型</th>
             <th>绩效得分</th>
             <th>绩效等级</th>
             <th>绩效系数</th>
@@ -531,8 +587,15 @@ function renderPerformanceData() {
         </thead>
         <tbody>
           ${employees.map(emp => `
-            <tr>
+            <tr data-id="${emp.employee_id}"
+                data-name="${emp.name || ''}"
+                data-area="${emp.area || ''}"
+                data-dept="${emp.department || ''}">
               <td>${emp.employee_id}</td>
+              <td>${emp.name || '-'}</td>
+              <td>${emp.area || '-'}</td>
+              <td>${emp.department || '-'}</td>
+              <td>${emp.job_type === 'warehouse' ? '仓库' : '职能'}</td>
               <td>${emp.score !== null ? emp.score.toFixed(2) : '-'}</td>
               <td>${emp.level || '-'}</td>
               <td>${emp.coefficient !== null ? emp.coefficient.toFixed(2) : '-'}</td>
@@ -582,11 +645,24 @@ function renderResultsData() {
   const avgBonus = totalBonus / results.length;
 
   el.resultsContent.innerHTML = `
+    <!-- 筛选条件 -->
+    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
+      <input type="text" id="filterResultsId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterResultsName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
+      <input type="text" id="filterResultsArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
+      <input type="text" id="filterResultsDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
+      <button class="btn btn-secondary btn-sm" onclick="filterResultsData()">筛选</button>
+      <button class="btn btn-secondary btn-sm" onclick="resetResultsFilter()">重置</button>
+    </div>
+
     <div class="data-table-container">
-      <table class="data-table">
+      <table class="data-table" id="resultsTable">
         <thead>
           <tr>
             <th>工号</th>
+            <th>姓名</th>
+            <th>划分区域</th>
+            <th>部门全称</th>
             <th>岗位类型</th>
             <th>时薪</th>
             <th>绩效基数</th>
@@ -598,8 +674,14 @@ function renderResultsData() {
         </thead>
         <tbody>
           ${results.map(r => `
-            <tr>
+            <tr data-id="${r.employee_id}"
+                data-name="${r.name || ''}"
+                data-area="${r.area || ''}"
+                data-dept="${r.department || ''}">
               <td>${r.employee_id}</td>
+              <td>${r.name || '-'}</td>
+              <td>${r.area || '-'}</td>
+              <td>${r.department || '-'}</td>
               <td>${r.job_type === 'warehouse' ? '仓库' : '职能'}</td>
               <td>$${r.hourly_rate.toFixed(2)}</td>
               <td>$${r.performance_base.toFixed(2)}</td>
@@ -709,27 +791,27 @@ el.btnCloseCalcChain?.addEventListener('click', () => {
 // ═══ Export ═══
 
 async function exportData(type) {
-  if (!state.currentActivity) return;
+  if (!state.currentActivity) {
+    showNotification('请先选择或创建活动', 'error');
+    return;
+  }
 
   try {
-    let endpoint = '';
-    if (type === 'attendance') {
-      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
-    } else if (type === 'salary') {
-      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
-    } else if (type === 'performance') {
-      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
-    } else if (type === 'results') {
-      endpoint = `${API_BASE}/runs/${state.currentActivity.run_id}/export`;
-    }
-
-    const response = await fetch(endpoint);
+    // 调用后端导出API
+    const response = await fetch(`${API_BASE}/runs/${state.currentActivity.run_id}/export-excel?type=${type}`);
     const data = await response.json();
 
-    if (data.file_path) {
-      const downloadUrl = `${API_BASE}/runs/${state.currentActivity.run_id}/download/${data.file_name}`;
-      window.open(downloadUrl, '_blank');
+    if (data.success) {
+      // 下载文件（URL编码文件名）
+      const encodedFilename = encodeURIComponent(data.filename);
+      const downloadUrl = `${API_BASE}/runs/${state.currentActivity.run_id}/download/${encodedFilename}`;
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = data.filename;
+      link.click();
       showNotification('导出成功', 'success');
+    } else {
+      showNotification('导出失败: ' + (data.detail || '未知错误'), 'error');
     }
   } catch (error) {
     showNotification('导出失败: ' + error.message, 'error');
@@ -740,6 +822,146 @@ el.btnExportAttendance?.addEventListener('click', () => exportData('attendance')
 el.btnExportSalary?.addEventListener('click', () => exportData('salary'));
 el.btnExportPerformance?.addEventListener('click', () => exportData('performance'));
 el.btnExportResults?.addEventListener('click', () => exportData('results'));
+
+// ═══ Attendance Filter ═══
+
+function filterAttendanceData() {
+  const filterId = document.getElementById('filterAttendanceId')?.value.toLowerCase() || '';
+  const filterName = document.getElementById('filterAttendanceName')?.value.toLowerCase() || '';
+  const filterArea = document.getElementById('filterAttendanceArea')?.value.toLowerCase() || '';
+  const filterDept = document.getElementById('filterAttendanceDept')?.value.toLowerCase() || '';
+
+  const table = document.getElementById('attendanceTable');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tbody tr');
+  rows.forEach(row => {
+    const id = (row.dataset.id || '').toLowerCase();
+    const name = (row.dataset.name || '').toLowerCase();
+    const area = (row.dataset.area || '').toLowerCase();
+    const dept = (row.dataset.dept || '').toLowerCase();
+
+    const matchId = !filterId || id.includes(filterId);
+    const matchName = !filterName || name.includes(filterName);
+    const matchArea = !filterArea || area.includes(filterArea);
+    const matchDept = !filterDept || dept.includes(filterDept);
+
+    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
+  });
+}
+
+function resetAttendanceFilter() {
+  document.getElementById('filterAttendanceId').value = '';
+  document.getElementById('filterAttendanceName').value = '';
+  document.getElementById('filterAttendanceArea').value = '';
+  document.getElementById('filterAttendanceDept').value = '';
+  filterAttendanceData();
+}
+
+// ═══ Salary Filter ═══
+
+function filterSalaryData() {
+  const filterId = document.getElementById('filterSalaryId')?.value.toLowerCase() || '';
+  const filterName = document.getElementById('filterSalaryName')?.value.toLowerCase() || '';
+  const filterArea = document.getElementById('filterSalaryArea')?.value.toLowerCase() || '';
+  const filterDept = document.getElementById('filterSalaryDept')?.value.toLowerCase() || '';
+
+  const table = document.getElementById('salaryTable');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tbody tr');
+  rows.forEach(row => {
+    const id = (row.dataset.id || '').toLowerCase();
+    const name = (row.dataset.name || '').toLowerCase();
+    const area = (row.dataset.area || '').toLowerCase();
+    const dept = (row.dataset.dept || '').toLowerCase();
+
+    const matchId = !filterId || id.includes(filterId);
+    const matchName = !filterName || name.includes(filterName);
+    const matchArea = !filterArea || area.includes(filterArea);
+    const matchDept = !filterDept || dept.includes(filterDept);
+
+    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
+  });
+}
+
+function resetSalaryFilter() {
+  document.getElementById('filterSalaryId').value = '';
+  document.getElementById('filterSalaryName').value = '';
+  document.getElementById('filterSalaryArea').value = '';
+  document.getElementById('filterSalaryDept').value = '';
+  filterSalaryData();
+}
+
+// ═══ Performance Filter ═══
+
+function filterPerformanceData() {
+  const filterId = document.getElementById('filterPerfId')?.value.toLowerCase() || '';
+  const filterName = document.getElementById('filterPerfName')?.value.toLowerCase() || '';
+  const filterArea = document.getElementById('filterPerfArea')?.value.toLowerCase() || '';
+  const filterDept = document.getElementById('filterPerfDept')?.value.toLowerCase() || '';
+
+  const table = document.getElementById('performanceTable');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tbody tr');
+  rows.forEach(row => {
+    const id = (row.dataset.id || '').toLowerCase();
+    const name = (row.dataset.name || '').toLowerCase();
+    const area = (row.dataset.area || '').toLowerCase();
+    const dept = (row.dataset.dept || '').toLowerCase();
+
+    const matchId = !filterId || id.includes(filterId);
+    const matchName = !filterName || name.includes(filterName);
+    const matchArea = !filterArea || area.includes(filterArea);
+    const matchDept = !filterDept || dept.includes(filterDept);
+
+    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
+  });
+}
+
+function resetPerformanceFilter() {
+  document.getElementById('filterPerfId').value = '';
+  document.getElementById('filterPerfName').value = '';
+  document.getElementById('filterPerfArea').value = '';
+  document.getElementById('filterPerfDept').value = '';
+  filterPerformanceData();
+}
+
+// ═══ Results Filter ═══
+
+function filterResultsData() {
+  const filterId = document.getElementById('filterResultsId')?.value.toLowerCase() || '';
+  const filterName = document.getElementById('filterResultsName')?.value.toLowerCase() || '';
+  const filterArea = document.getElementById('filterResultsArea')?.value.toLowerCase() || '';
+  const filterDept = document.getElementById('filterResultsDept')?.value.toLowerCase() || '';
+
+  const table = document.getElementById('resultsTable');
+  if (!table) return;
+
+  const rows = table.querySelectorAll('tbody tr');
+  rows.forEach(row => {
+    const id = (row.dataset.id || '').toLowerCase();
+    const name = (row.dataset.name || '').toLowerCase();
+    const area = (row.dataset.area || '').toLowerCase();
+    const dept = (row.dataset.dept || '').toLowerCase();
+
+    const matchId = !filterId || id.includes(filterId);
+    const matchName = !filterName || name.includes(filterName);
+    const matchArea = !filterArea || area.includes(filterArea);
+    const matchDept = !filterDept || dept.includes(filterDept);
+
+    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
+  });
+}
+
+function resetResultsFilter() {
+  document.getElementById('filterResultsId').value = '';
+  document.getElementById('filterResultsName').value = '';
+  document.getElementById('filterResultsArea').value = '';
+  document.getElementById('filterResultsDept').value = '';
+  filterResultsData();
+}
 
 // ═══ Notification ═══
 
