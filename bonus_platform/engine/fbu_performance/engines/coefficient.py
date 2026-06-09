@@ -41,7 +41,8 @@ class CoefficientCalculator:
     @classmethod
     def calc_functional_coefficient(cls, level: str) -> float:
         """职能端：等级映射绩效系数"""
-        return cls.LEVEL_MAP.get(level, 0.0)
+        normalized_level = str(level).strip() if level is not None else ""
+        return cls.LEVEL_MAP.get(normalized_level, 0.0)
 
     @classmethod
     def calculate(

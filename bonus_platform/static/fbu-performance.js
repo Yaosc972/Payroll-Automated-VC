@@ -18,6 +18,24 @@ const state = {
 
 const API_BASE = '/api/fbu-performance';
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+async function apiJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || data.message || `请求失败 (${response.status})`);
+  }
+  return data;
+}
+
 // ═══ Element References ═══
 
 const el = {
@@ -134,8 +152,7 @@ el.navItems.forEach(item => {
 
 async function loadActivities() {
   try {
-    const response = await fetch(`${API_BASE}/runs`);
-    const data = await response.json();
+    const data = await apiJson(`${API_BASE}/runs`);
 
     state.activities = data.runs || [];
     renderActivities();
@@ -155,15 +172,15 @@ function renderActivities() {
 
     return `
       <tr>
-        <td><strong>${activity.calc_month}</strong></td>
+        <td><strong>${escapeHtml(activity.calc_month)}</strong></td>
         <td><span class="status-badge ${statusClass}">${statusText}</span></td>
         <td>${progress}</td>
         <td>${activity.total_employees || '-'}</td>
         <td>${activity.total_bonus ? '$' + activity.total_bonus.toLocaleString() : '-'}</td>
-        <td>${new Date(activity.created_at).toLocaleDateString()}</td>
+        <td>${escapeHtml(new Date(activity.created_at).toLocaleDateString())}</td>
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="enterActivity('${activity.run_id}')">进入</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteActivity('${activity.run_id}')">删除</button>
+          <button class="btn btn-secondary btn-sm" onclick="enterActivity('${escapeHtml(activity.run_id)}')">进入</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteActivity('${escapeHtml(activity.run_id)}')">删除</button>
         </td>
       </tr>
     `;
@@ -181,8 +198,7 @@ function updateActivityKPIs() {
 
 async function enterActivity(activityId) {
   try {
-    const response = await fetch(`${API_BASE}/runs/${activityId}`);
-    const activity = await response.json();
+    const activity = await apiJson(`${API_BASE}/runs/${activityId}`);
 
     state.currentActivity = activity;
 
@@ -223,13 +239,12 @@ el.btnNewActivity.addEventListener('click', async () => {
   if (!calcMonth) return;
 
   try {
-    const response = await fetch(`${API_BASE}/runs`, {
+    const data = await apiJson(`${API_BASE}/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ calc_month: calcMonth }),
     });
 
-    const data = await response.json();
     if (data.run_id) {
       showNotification('月度活动创建成功', 'success');
       enterActivity(data.run_id);
@@ -246,7 +261,7 @@ async function deleteActivity(activityId) {
   if (!confirm('确定删除此活动？')) return;
 
   try {
-    await fetch(`${API_BASE}/runs/${activityId}`, { method: 'DELETE' });
+    await apiJson(`${API_BASE}/runs/${activityId}`, { method: 'DELETE' });
     showNotification('已删除', 'success');
     loadActivities();
   } catch (error) {
@@ -324,25 +339,24 @@ el.btnConfirmUpload.addEventListener('click', async () => {
       endpoint = `${API_BASE}/import-performance`;
     }
 
-    const response = await fetch(endpoint, {
+    const data = await apiJson(endpoint, {
       method: 'POST',
       body: formData,
     });
 
-    const data = await response.json();
-
     if (data.success) {
+      const completedUploadType = uploadType;
       showNotification('上传成功', 'success');
       closeUploadModal();
 
       // Update state
-      if (uploadType === 'attendance') {
+      if (completedUploadType === 'attendance') {
         state.attendanceData = data.preview;
         renderAttendanceData();
-      } else if (uploadType === 'salary') {
+      } else if (completedUploadType === 'salary') {
         state.salaryData = data.preview;
         renderSalaryData();
-      } else if (uploadType === 'performance') {
+      } else if (completedUploadType === 'performance') {
         state.performanceData = data.preview;
         renderPerformanceData();
       }
@@ -421,14 +435,14 @@ function renderAttendanceData() {
         <tbody>
           ${employees.map(emp => `
             <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}"
-                data-id="${emp.employee_id}"
-                data-name="${emp.name || ''}"
-                data-area="${emp.area || ''}"
-                data-dept="${emp.department || ''}">
-              <td>${emp.employee_id}</td>
-              <td>${emp.name || '-'}</td>
-              <td>${emp.area || '-'}</td>
-              <td>${emp.department || '-'}</td>
+                data-id="${escapeHtml(emp.employee_id)}"
+                data-name="${escapeHtml(emp.name || '')}"
+                data-area="${escapeHtml(emp.area || '')}"
+                data-dept="${escapeHtml(emp.department || '')}">
+              <td>${escapeHtml(emp.employee_id)}</td>
+              <td>${escapeHtml(emp.name || '-')}</td>
+              <td>${escapeHtml(emp.area || '-')}</td>
+              <td>${escapeHtml(emp.department || '-')}</td>
               <td>${emp.job_type === 'warehouse' ? '仓库' : '职能'}</td>
               <td>${emp.has_night_shift ? '✓' : '-'}</td>
               <td>${emp.total_base_hours.toFixed(2)}h</td>
@@ -512,14 +526,14 @@ function renderSalaryData() {
         </thead>
         <tbody>
           ${employees.map(emp => `
-            <tr data-id="${emp.employee_id}"
-                data-name="${emp.name || ''}"
-                data-area="${emp.area || ''}"
-                data-dept="${emp.department || ''}">
-              <td>${emp.employee_id}</td>
-              <td>${emp.name || '-'}</td>
-              <td>${emp.area || '-'}</td>
-              <td>${emp.department || '-'}</td>
+            <tr data-id="${escapeHtml(emp.employee_id)}"
+                data-name="${escapeHtml(emp.name || '')}"
+                data-area="${escapeHtml(emp.area || '')}"
+                data-dept="${escapeHtml(emp.department || '')}">
+              <td>${escapeHtml(emp.employee_id)}</td>
+              <td>${escapeHtml(emp.name || '-')}</td>
+              <td>${escapeHtml(emp.area || '-')}</td>
+              <td>${escapeHtml(emp.department || '-')}</td>
               <td>$${emp.hourly_rate.toFixed(2)}</td>
               <td>${(emp.ratio * 100).toFixed(1)}%</td>
             </tr>
@@ -587,17 +601,17 @@ function renderPerformanceData() {
         </thead>
         <tbody>
           ${employees.map(emp => `
-            <tr data-id="${emp.employee_id}"
-                data-name="${emp.name || ''}"
-                data-area="${emp.area || ''}"
-                data-dept="${emp.department || ''}">
-              <td>${emp.employee_id}</td>
-              <td>${emp.name || '-'}</td>
-              <td>${emp.area || '-'}</td>
-              <td>${emp.department || '-'}</td>
+            <tr data-id="${escapeHtml(emp.employee_id)}"
+                data-name="${escapeHtml(emp.name || '')}"
+                data-area="${escapeHtml(emp.area || '')}"
+                data-dept="${escapeHtml(emp.department || '')}">
+              <td>${escapeHtml(emp.employee_id)}</td>
+              <td>${escapeHtml(emp.name || '-')}</td>
+              <td>${escapeHtml(emp.area || '-')}</td>
+              <td>${escapeHtml(emp.department || '-')}</td>
               <td>${emp.job_type === 'warehouse' ? '仓库' : '职能'}</td>
               <td>${emp.score !== null ? emp.score.toFixed(2) : '-'}</td>
-              <td>${emp.level || '-'}</td>
+              <td>${escapeHtml(emp.level || '-')}</td>
               <td>${emp.coefficient !== null ? emp.coefficient.toFixed(2) : '-'}</td>
             </tr>
           `).join('')}
@@ -643,6 +657,7 @@ function renderResultsData() {
   const results = state.resultsData;
   const totalBonus = results.reduce((sum, r) => sum + r.performance_bonus, 0);
   const avgBonus = totalBonus / results.length;
+  const exceptionCount = results.filter(r => (r.exceptions || []).length > 0).length;
 
   el.resultsContent.innerHTML = `
     <!-- 筛选条件 -->
@@ -669,26 +684,28 @@ function renderResultsData() {
             <th>绩效比例</th>
             <th>绩效系数</th>
             <th>绩效奖金</th>
+            <th>异常</th>
             <th>计算过程</th>
           </tr>
         </thead>
         <tbody>
           ${results.map(r => `
-            <tr data-id="${r.employee_id}"
-                data-name="${r.name || ''}"
-                data-area="${r.area || ''}"
-                data-dept="${r.department || ''}">
-              <td>${r.employee_id}</td>
-              <td>${r.name || '-'}</td>
-              <td>${r.area || '-'}</td>
-              <td>${r.department || '-'}</td>
+            <tr data-id="${escapeHtml(r.employee_id)}"
+                data-name="${escapeHtml(r.name || '')}"
+                data-area="${escapeHtml(r.area || '')}"
+                data-dept="${escapeHtml(r.department || '')}">
+              <td>${escapeHtml(r.employee_id)}</td>
+              <td>${escapeHtml(r.name || '-')}</td>
+              <td>${escapeHtml(r.area || '-')}</td>
+              <td>${escapeHtml(r.department || '-')}</td>
               <td>${r.job_type === 'warehouse' ? '仓库' : '职能'}</td>
               <td>$${r.hourly_rate.toFixed(2)}</td>
               <td>$${r.performance_base.toFixed(2)}</td>
               <td>${(r.performance_ratio * 100).toFixed(1)}%</td>
               <td>${r.performance_coefficient.toFixed(2)}</td>
               <td><strong>$${r.performance_bonus.toFixed(2)}</strong></td>
-              <td><button class="btn btn-secondary btn-sm" onclick="showCalcChain('${r.employee_id}')">查看</button></td>
+              <td>${(r.exceptions || []).length ? `<span class="status-badge danger">${escapeHtml((r.exceptions || []).length)}项</span>` : '-'}</td>
+              <td><button class="btn btn-secondary btn-sm" onclick="showCalcChain('${escapeHtml(r.employee_id)}')">查看</button></td>
             </tr>
           `).join('')}
         </tbody>
@@ -714,6 +731,7 @@ function renderResultsData() {
   el.kpiResultEmployees.textContent = results.length;
   el.kpiResultBonus.textContent = '$' + totalBonus.toLocaleString();
   el.kpiResultAvg.textContent = '$' + avgBonus.toFixed(2);
+  el.kpiResultErrors.textContent = exceptionCount;
 }
 
 // ═══ Calculate ═══
@@ -722,11 +740,9 @@ async function executeCalculate() {
   if (!state.currentActivity) return;
 
   try {
-    const response = await fetch(`${API_BASE}/calculate/${state.currentActivity.run_id}`, {
+    const data = await apiJson(`${API_BASE}/calculate/${state.currentActivity.run_id}`, {
       method: 'POST',
     });
-
-    const data = await response.json();
 
     if (data.success) {
       showNotification('核算完成', 'success');
@@ -764,7 +780,7 @@ function showCalcChain(employeeId) {
   const holidayPay = holidayHours * hourlyRate;
 
   el.calcChainContent.innerHTML = `
-    <div class="calc-chain-title">绩效奖金计算过程 - ${employeeId}</div>
+    <div class="calc-chain-title">绩效奖金计算过程 - ${escapeHtml(employeeId)}</div>
     <div class="calc-chain-item">绩效基数 = $${emp.performance_base.toFixed(2)}</div>
     <div class="calc-chain-item" style="padding-left: 32px;">├── 基础工资 = ${baseHours}h × $${hourlyRate.toFixed(2)} = $${baseSalary.toFixed(2)}</div>
     <div class="calc-chain-item" style="padding-left: 32px;">├── OT1.5工资 = ${ot15Hours}h × $${hourlyRate.toFixed(2)} × 1.5 = $${ot15Salary.toFixed(2)}</div>
@@ -775,6 +791,7 @@ function showCalcChain(employeeId) {
     <div class="calc-chain-item">绩效比例 = ${(emp.performance_ratio * 100).toFixed(1)}%</div>
     <div class="calc-chain-item">绩效系数 = ${emp.performance_coefficient.toFixed(2)}</div>
     <div class="calc-chain-item calc-chain-result">绩效奖金 = $${emp.performance_base.toFixed(2)} × ${(emp.performance_ratio * 100).toFixed(1)}% × ${emp.performance_coefficient.toFixed(2)} = $${emp.performance_bonus.toFixed(2)}</div>
+    ${(emp.exceptions || []).length ? `<div class="calc-chain-item">异常提示 = ${escapeHtml(emp.exceptions.join('；'))}</div>` : ''}
   `;
 
   el.calcChainModal.classList.add('active');
@@ -798,8 +815,7 @@ async function exportData(type) {
 
   try {
     // 调用后端导出API
-    const response = await fetch(`${API_BASE}/runs/${state.currentActivity.run_id}/export-excel?type=${type}`);
-    const data = await response.json();
+    const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/export-excel?type=${type}`);
 
     if (data.success) {
       // 下载文件（URL编码文件名）

@@ -61,14 +61,14 @@ class FBUPerformanceExporter:
     def _write_detail_sheet(self, ws, employees: list[EmployeeData]):
         """写入明细表"""
         headers = [
-            "工号", "姓名", "岗位类型",
+            "核算工号", "原始工号", "姓名", "岗位类型",
             "计薪出勤时长", "OT1.5时长", "OT2.0时长",
             "病假时长", "年假时长", "节假日时长",
             "时薪", "绩效比例",
             "基础工资", "OT1.5工资", "OT2.0工资",
             "病假工资", "年假补贴", "节日补贴",
-            "绩效基数", "绩效得分", "绩效等级", "绩效系数",
-            "绩效奖金",
+            "绩效基数", "绩效得分", "绩效等级", "上传绩效系数", "系统绩效系数",
+            "绩效奖金", "异常提示",
         ]
 
         # 写入表头
@@ -83,6 +83,7 @@ class FBUPerformanceExporter:
         for row, emp in enumerate(employees, 2):
             data = [
                 emp.employee_id,
+                emp.source_employee_id,
                 emp.name,
                 "仓库" if emp.job_type == "warehouse" else "职能",
                 emp.base_hours,
@@ -102,8 +103,10 @@ class FBUPerformanceExporter:
                 emp.performance_base,
                 emp.performance_score or "",
                 emp.performance_level or "",
+                emp.uploaded_coefficient if emp.uploaded_coefficient is not None else "",
                 emp.performance_coefficient,
                 emp.performance_bonus,
+                "；".join(emp.exceptions),
             ]
 
             for col, value in enumerate(data, 1):

@@ -9,12 +9,14 @@ class EmployeeData:
     """员工数据模型"""
     employee_id: str
     name: str
+    source_employee_id: str = ""
     department: str = ""
     area: str = ""
     hourly_rate: float = 0.0
     performance_ratio: float = 0.0
     performance_score: Optional[float] = None
     performance_level: Optional[str] = None
+    uploaded_coefficient: Optional[float] = None
     job_type: str = "warehouse"  # warehouse / functional
 
     # 考勤数据
@@ -36,6 +38,11 @@ class EmployeeData:
     performance_base: float = 0.0
     performance_coefficient: float = 0.0
     performance_bonus: float = 0.0
+    exceptions: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.source_employee_id:
+            self.source_employee_id = self.employee_id
 
 
 class FBUPerformanceEngine:

@@ -26,6 +26,21 @@ class AttendanceProcessor:
     }
 
     @staticmethod
+    def cell(row, index: int, default=None):
+        """安全读取固定列模板单元格。"""
+        return row[index] if len(row) > index else default
+
+    @staticmethod
+    def number(value) -> float:
+        if value is None or value == "":
+            return 0.0
+        if isinstance(value, str):
+            value = value.strip().replace(",", "")
+            if not value:
+                return 0.0
+        return float(value)
+
+    @staticmethod
     def is_night_shift(shift_start_time) -> bool:
         """判断是否夜班：班次上班时间 >= 14:00"""
         if shift_start_time is None:
@@ -70,9 +85,9 @@ class AttendanceProcessor:
         # 筛选当月数据
         monthly_data = []
         for row in rows:
-            if not row or row[0] is None:
+            if not row or self.cell(row, 0) is None:
                 continue
-            dt = self.parse_date(row[0])
+            dt = self.parse_date(self.cell(row, 0))
             if dt and dt.month == target_month:
                 monthly_data.append(row)
 
@@ -84,12 +99,12 @@ class AttendanceProcessor:
         })
 
         for row in monthly_data:
-            emp_id = str(row[2]).strip() if row[2] else None
+            emp_id = str(self.cell(row, 2)).strip() if self.cell(row, 2) else None
             if not emp_id:
                 continue
 
             # 判断夜班
-            shift_start = row[21]
+            shift_start = self.cell(row, 21)
             is_night = self.is_night_shift(shift_start)
             shift_type = '夜班' if is_night else '白班'
 
@@ -97,11 +112,11 @@ class AttendanceProcessor:
                 employee_hours[emp_id]['has_night_shift'] = True
 
             # 累加工时
-            employee_hours[emp_id][shift_type]['计薪出勤'] += (row[117] or 0)
-            employee_hours[emp_id][shift_type]['OT1.5'] += (row[100] or 0)
-            employee_hours[emp_id][shift_type]['OT2.0'] += (row[103] or 0)
-            employee_hours[emp_id][shift_type]['病假'] += (row[48] or 0)
-            employee_hours[emp_id][shift_type]['年假'] += (row[47] or 0)
-            employee_hours[emp_id][shift_type]['节假日'] += (row[46] or 0)
+            employee_hours[emp_id][shift_type]['计薪出勤'] += self.number(self.cell(row, 117))
+            employee_hours[emp_id][shift_type]['OT1.5'] += self.number(self.cell(row, 100))
+            employee_hours[emp_id][shift_type]['OT2.0'] += self.number(self.cell(row, 103))
+            employee_hours[emp_id][shift_type]['病假'] += self.number(self.cell(row, 48))
+            employee_hours[emp_id][shift_type]['年假'] += self.number(self.cell(row, 47))
+            employee_hours[emp_id][shift_type]['节假日'] += self.number(self.cell(row, 46))
 
         return dict(employee_hours)

@@ -144,6 +144,7 @@ class FBURunManager:
         for emp in employees:
             results.append({
                 "employee_id": emp.employee_id,
+                "source_employee_id": emp.source_employee_id,
                 "name": emp.name,
                 "department": emp.department,
                 "area": emp.area,
@@ -159,8 +160,10 @@ class FBURunManager:
                 "performance_base": emp.performance_base,
                 "performance_score": emp.performance_score,
                 "performance_level": emp.performance_level,
+                "uploaded_coefficient": emp.uploaded_coefficient,
                 "performance_coefficient": emp.performance_coefficient,
                 "performance_bonus": emp.performance_bonus,
+                "exceptions": emp.exceptions,
             })
             total_bonus += emp.performance_bonus
 
@@ -183,7 +186,10 @@ class FBURunManager:
         for r in run.results:
             emp = EmployeeData(
                 employee_id=r["employee_id"],
+                source_employee_id=r.get("source_employee_id", r["employee_id"]),
                 name=r["name"],
+                department=r.get("department", ""),
+                area=r.get("area", ""),
                 job_type=r["job_type"],
                 hourly_rate=r["hourly_rate"],
                 performance_ratio=r["performance_ratio"],
@@ -196,8 +202,10 @@ class FBURunManager:
                 performance_base=r["performance_base"],
                 performance_score=r["performance_score"],
                 performance_level=r["performance_level"],
+                uploaded_coefficient=r.get("uploaded_coefficient"),
                 performance_coefficient=r["performance_coefficient"],
                 performance_bonus=r["performance_bonus"],
+                exceptions=r.get("exceptions", []),
             )
             employees.append(emp)
 

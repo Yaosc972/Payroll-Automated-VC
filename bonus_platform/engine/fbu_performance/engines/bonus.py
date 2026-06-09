@@ -76,6 +76,13 @@ class BonusCalculator:
             score=emp.performance_score,
             level=emp.performance_level,
         )
+        if (
+            emp.uploaded_coefficient is not None
+            and round(emp.uploaded_coefficient, 2) != round(emp.performance_coefficient, 2)
+        ):
+            emp.exceptions.append(
+                f"上传绩效系数与系统计算系数不一致: 上传={emp.uploaded_coefficient:.2f}, 系统={emp.performance_coefficient:.2f}"
+            )
 
         # 3. 计算绩效奖金
         cls.calc_bonus(emp)

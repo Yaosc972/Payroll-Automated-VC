@@ -1,6 +1,5 @@
 """FBU绩效核算引擎 - 薪资数据处理"""
 from __future__ import annotations
-from typing import Optional
 
 
 class SalaryProcessor:
@@ -17,6 +16,22 @@ class SalaryProcessor:
     def __init__(self):
         self.salary_data: dict[str, dict] = {}
 
+    @staticmethod
+    def _cell(row, index: int, default=None):
+        return row[index] if len(row) > index else default
+
+    @staticmethod
+    def _to_float(value, default: float = 0.0) -> float:
+        if value is None or value == "":
+            return default
+        if isinstance(value, str):
+            cleaned = value.strip().replace(",", "").replace("$", "")
+            if cleaned.endswith("%"):
+                cleaned = cleaned[:-1].strip()
+                return float(cleaned) / 100
+            return float(cleaned)
+        return float(value)
+
     def load(self, rows: list) -> dict[str, dict]:
         """
         加载薪资档案数据
@@ -30,21 +45,22 @@ class SalaryProcessor:
         self.salary_data = {}
 
         for row in rows:
-            if not row or row[1] is None:
+            if not row or self._cell(row, self.COLUMN_MAP['工号']) is None:
                 continue
 
-            emp_id = str(row[1]).strip()
-            hourly_rate = row[11]  # 时薪标准
-            ratio = row[9]        # 绩效比例
+            emp_id = str(self._cell(row, self.COLUMN_MAP['工号'])).strip()
+            hourly_rate = self._cell(row, self.COLUMN_MAP['时薪标准'])
+            ratio = self._cell(row, self.COLUMN_MAP['绩效比例'])
 
             if emp_id and hourly_rate:
+                ratio_value = self._to_float(ratio)
                 # 绩效比例可能是百分比形式，需要转换
-                if ratio and ratio > 1:
-                    ratio = ratio / 100
+                if ratio_value > 1:
+                    ratio_value = ratio_value / 100
 
                 self.salary_data[emp_id] = {
-                    'hourly_rate': float(hourly_rate),
-                    'ratio': float(ratio) if ratio else 0.0,
+                    'hourly_rate': self._to_float(hourly_rate),
+                    'ratio': ratio_value,
                 }
 
         return self.salary_data
