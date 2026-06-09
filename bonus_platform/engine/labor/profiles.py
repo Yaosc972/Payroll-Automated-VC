@@ -125,8 +125,10 @@ def _profiles_for_resolution(profiles_path: str | Path | None) -> List[SupplierE
 
 def load_supplier_profiles(path: str | Path) -> List[SupplierExtractionProfile]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        raw = [raw]
     if not isinstance(raw, list):
-        raise ValueError("供应商抽取 Profile 配置必须是数组。")
+        raise ValueError("供应商抽取 Profile 配置必须是数组或对象。")
     profiles: List[SupplierExtractionProfile] = []
     for item in raw:
         if not isinstance(item, dict):

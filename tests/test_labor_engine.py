@@ -848,6 +848,27 @@ def test_supplier_profiles_can_load_from_json_config(tmp_path):
     assert "Charge Summary" in profiles[0].prompt_notes[0]
 
 
+def test_supplier_profiles_can_load_single_object_config(tmp_path):
+    path = tmp_path / "invoice.json"
+    path.write_text(
+        json.dumps(
+            {
+                "key": "invoice",
+                "aliases": ["invoice"],
+                "prompt_notes": ["Use every invoice page."],
+                "image_page_policy": "all",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = load_supplier_profiles(path)
+
+    assert len(profiles) == 1
+    assert profiles[0].key == "invoice"
+    assert profiles[0].image_page_policy == "all"
+
+
 def test_supplier_profile_resolver_prefers_external_config(tmp_path):
     path = tmp_path / "profiles.json"
     path.write_text(
