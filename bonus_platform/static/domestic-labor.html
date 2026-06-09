@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-module-id="domestic">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,139 +7,1207 @@
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=30" />
     <script src="permission-guard.js?v=8"></script>
-    <style>html { color-scheme: light; }</style>
+    <style>
+      html { color-scheme: light; }
+
+      body.domestic-labor-shell {
+        /* 🎨 英伦复古墨绿设计系统变量 */
+        --dl-bg: #F4F6F4;             /* 带有微弱绿意和木质感的暖灰底 */
+        --dl-panel: #FFFFFF;
+        --dl-panel-soft: #F8FAF8;
+        --dl-ink: #1C2421;            /* 极其深沉的绿黑墨色 */
+        --dl-muted: #52605B;          /* 苔藓灰绿 */
+        --dl-faint: #8A9A94;
+        --dl-line: #E4EAE7;
+        --dl-line-strong: #CDD7D2;
+        --dl-accent: #1B4D3E;         /* 核心强调色：复古华贵墨绿 */
+        --dl-accent-strong: #113329;
+        --dl-accent-soft: #E8F0EC;    /* 极其舒适的淡绿底色 */
+        --dl-info: #2E5A88;
+        --dl-ok: #1B4D3E;
+        --dl-ok-soft: #E8F0EC;
+        --dl-warn: #B37D14;           /* 复古熟栗色/暗金 */
+        --dl-warn-soft: #FAF5E8;
+        --dl-danger: #962D2D;         /* 勃艮第红/暗红 */
+        --dl-danger-soft: #F9EEEE;
+        --dl-shadow-sm: 0 1px 2px 0 rgba(27, 77, 62, 0.02);
+        --dl-shadow: 0 4px 10px rgba(27, 77, 62, 0.03);
+        --dl-shadow-lg: 0 16px 28px rgba(27, 77, 62, 0.06);
+        
+        margin: 0;
+        background: var(--dl-bg);
+        color: var(--dl-ink);
+        
+        /* 🔤 柔和无锯齿的经典中文字体排版 */
+        font-family: "Garamond", "STHeiti", "MHei", "Microsoft YaHei", sans-serif;
+        font-variant-numeric: tabular-nums;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .domestic-labor-shell * { box-sizing: border-box; }
+      .domestic-labor-shell button,
+      .domestic-labor-shell input,
+      .domestic-labor-shell textarea { font: inherit; }
+
+      /* ═══ 顶部导航栏：收窄高度，改用纯白衬底与极细分界线 ═══ */
+      .dl-topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: grid;
+        grid-template-columns: minmax(580px, 0.98fr) minmax(320px, 0.95fr) auto;
+        gap: 24px;
+        align-items: center;
+        min-height: 88px;
+        padding: 10px 32px;
+        border-bottom: 1px solid var(--dl-line);
+        background:
+          linear-gradient(90deg, rgba(232, 240, 236, 0.92) 0%, rgba(255, 255, 255, 0.96) 55%, rgba(250, 245, 232, 0.32) 100%),
+          radial-gradient(circle at 22% 20%, rgba(27, 77, 62, 0.13), transparent 32%),
+          #FFFFFF;
+        box-shadow: inset 0 4px 0 rgba(27, 77, 62, 0.48);
+      }
+
+      .dl-brand-row,
+      .dl-actions,
+      .dl-batch-meta,
+      .dl-toolbar,
+      .dl-filter-row,
+      .dl-status-row,
+      .dl-panel-head,
+      .dl-drawer-head {
+        display: flex;
+        align-items: center;
+      }
+
+      .dl-brand-row { gap: 14px; min-width: 0; }
+
+      .dl-brand-copy {
+        min-width: 0;
+        width: 100%;
+      }
+
+      .dl-logo {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        border: 0;
+        border-radius: 16px;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .dl-logo img {
+        max-width: 36px;
+        max-height: 36px;
+        filter: drop-shadow(0 3px 6px rgba(27, 77, 62, 0.10));
+      }
+
+      .dl-eyebrow {
+        margin: 0 0 1px;
+        color: #61706A;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .dl-title {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.25;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      .dl-product-heading {
+        min-width: 0;
+        padding-top: 0;
+      }
+
+      .dl-product-title {
+        margin: 0;
+        color: var(--dl-ink);
+        font-size: 22px;
+        line-height: 1.15;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+
+      .dl-product-subtitle {
+        margin: 5px 0 0;
+        color: var(--dl-muted);
+        font-size: 13px;
+        line-height: 1.45;
+        font-weight: 400;
+      }
+
+      .dl-batch-meta {
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 4px;
+        max-width: 560px;
+      }
+
+      /* 胶囊状态标签：微弱轻底色，消灭突兀的粗边框 */
+      .dl-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 20px;
+        padding: 2px 9px;
+        border: 0;
+        border-radius: 999px;
+        background: #F1F5F9;
+        color: var(--dl-muted);
+        font-size: 11px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+
+      .dl-chip strong { color: var(--dl-ink); font-weight: 600; }
+      .dl-chip.is-warn { color: #B45309; background: var(--dl-warn-soft); }
+      .dl-chip.is-ok { color: #047857; background: var(--dl-ok-soft); }
+
+      .dl-actions {
+        gap: 10px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        align-self: center;
+        padding-top: 0;
+      }
+
+      /* 按钮重构：全面引入微弱双层投影与果冻平滑微动效 */
+      .dl-btn,
+      .btn-new-batch,
+      .btn-download,
+      .btn-secondary,
+      .btn-primary,
+      .btn-primary-lg {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 7px 14px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: var(--dl-ink);
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        box-shadow: var(--dl-shadow-sm);
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .dl-btn:hover,
+      .btn-download:hover,
+      .btn-secondary:hover {
+        border-color: var(--dl-faint);
+        background: var(--dl-bg);
+        box-shadow: var(--dl-shadow);
+      }
+
+      .dl-btn:active,
+      .btn-new-batch:active,
+      .btn-download:active,
+      .btn-secondary:active,
+      .btn-primary:active,
+      .btn-primary-lg:active {
+        opacity: 0.85;
+        box-shadow: none;
+      }
+
+      .dl-btn-primary,
+      .btn-new-batch,
+      .btn-primary,
+      .btn-primary-lg {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent);
+        color: #FFFFFF;
+        box-shadow: 0 1px 2px rgba(37, 99, 235, 0.12);
+      }
+
+      .dl-btn-primary:hover,
+      .btn-new-batch:hover,
+      .btn-primary:hover,
+      .btn-primary-lg:hover {
+        background: var(--dl-accent-strong);
+        border-color: var(--dl-accent-strong);
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+      }
+
+      .btn-download.disabled {
+        opacity: 0.4;
+        pointer-events: none;
+        box-shadow: none;
+        background: #F1F5F9;
+        border-color: var(--dl-line);
+      }
+
+      /* ═══ 侧边左流程轨重构：消灭厚重感，改用悬浮卡片过渡 ═══ */
+      .dl-shell {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        min-height: calc(100dvh - 88px);
+      }
+
+      .dl-rail {
+        position: sticky;
+        top: 88px;
+        height: calc(100dvh - 88px);
+        padding: 32px 16px;
+        border-right: 1px solid var(--dl-line);
+        background: transparent;
+        overflow: auto;
+      }
+
+      .dl-rail-title {
+        margin: 0 0 16px;
+        padding: 0 12px;
+        color: var(--dl-faint);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .dl-step {
+        position: relative;
+        width: 100%;
+        display: grid;
+        grid-template-columns: 24px 1fr auto;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 6px;
+        padding: 10px 12px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--dl-muted);
+        text-align: left;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      /* 将左侧指示条改造得更加精致内敛 */
+      .dl-step::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 12px;
+        bottom: 12px;
+        width: 3px;
+        border-radius: 999px;
+        background: transparent;
+        transition: background 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .dl-step:hover {
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--dl-ink);
+      }
+
+      .dl-step.active {
+        background: #FFFFFF;
+        color: var(--dl-accent);
+        box-shadow: var(--dl-shadow);
+      }
+
+      .dl-step.active::before { background: var(--dl-accent); }
+
+      .dl-step-index {
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 6px; /* 国际流行的小方圆角 */
+        background: #FFFFFF;
+        color: var(--dl-faint);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .dl-step.active .dl-step-index {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
+      }
+
+      .dl-step-name { font-size: 13px; font-weight: 500; }
+
+      .dl-step-state {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--dl-line-strong);
+      }
+
+      .dl-step.done .dl-step-state { background: var(--dl-ok); }
+      .dl-step.warn .dl-step-state { background: var(--dl-warn); }
+
+      /* ═══ 主工作台区域 ═══ */
+      .dl-main {
+        min-width: 0;
+        padding: 32px;
+      }
+
+      .dl-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        gap: 24px;
+        align-items: start;
+      }
+
+      .dl-stack {
+        display: grid;
+        gap: 24px;
+        min-width: 0;
+      }
+
+      .dl-panel {
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: var(--dl-panel);
+        box-shadow: var(--dl-shadow);
+        overflow: hidden;
+      }
+
+      .dl-panel-head {
+        justify-content: space-between;
+        gap: 16px;
+        padding: 24px;
+        border-bottom: 1px solid var(--dl-line);
+        background: #FFFFFF;
+      }
+
+      .dl-panel-title {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.35;
+        font-weight: 600;
+      }
+
+      .dl-panel-sub {
+        margin: 6px 0 0;
+        color: var(--dl-muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .dl-panel-body { padding: 24px; }
+
+      /* ═══ 财务 KPI 看板：消灭大色块与黑线，改用宽阔的呼吸感分隔 ═══ */
+      .dl-metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(150px, 1fr));
+        border-top: 1px solid var(--dl-line);
+        background: #FFFFFF;
+      }
+
+      .dl-metric {
+        min-width: 0;
+        padding: 24px;
+        border-right: 1px solid var(--dl-line);
+        background: #FFFFFF;
+      }
+
+      .dl-metric:last-child { border-right: 0; }
+
+      .dl-metric-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .dl-metric-value {
+        display: block;
+        margin-top: 12px;
+        color: var(--dl-ink);
+        font-size: 26px; /* 黄金比例字号 */
+        line-height: 1;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .dl-metric-meta {
+        margin-top: 8px;
+        color: var(--dl-faint);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .dl-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--dl-accent);
+      }
+
+      .dl-toolbar {
+        justify-content: space-between;
+        gap: 14px;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--dl-line);
+        background: #FFFFFF;
+      }
+
+      .dl-filter-row { gap: 8px; flex-wrap: wrap; }
+
+      /* 状态分段选择器 */
+      .dl-segment {
+        min-height: 32px;
+        padding: 6px 14px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 999px;
+        background: #FFFFFF;
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .dl-segment:hover {
+        border-color: var(--dl-faint);
+        color: var(--dl-ink);
+      }
+
+      .dl-segment.active {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
+        font-weight: 600;
+      }
+
+      .dl-table-wrap { overflow: auto; }
+
+      /* ═══ 高级数据表格：消灭深重边框，转换为清爽的横向信息流 ═══ */
+      .dl-table {
+        width: 100%;
+        min-width: 980px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 13px;
+      }
+
+      .dl-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--dl-line-strong);
+        background: #F8FAFC;
+        color: var(--dl-muted);
+        text-align: left;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        line-height: 1.4;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .dl-table td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--dl-line);
+        background: #FFFFFF;
+        color: #334155;
+        line-height: 1.45;
+        white-space: nowrap;
+      }
+
+      .dl-table tbody tr {
+        cursor: pointer;
+        transition: background 0.15s ease;
+      }
+
+      /* 极其轻微的 Hover 反馈，拒绝刺眼色块 */
+      .dl-table tbody tr:hover td { background: var(--dl-bg); }
+
+      .dl-num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dl-strong { font-weight: 600; color: var(--dl-ink); }
+
+      /* 财务异常/正常状态标签 */
+      .dl-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        border: 0;
+        background: #F1F5F9;
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .dl-badge.warn { background: var(--dl-warn-soft); color: #B45309; }
+      .dl-badge.ok { background: var(--dl-ok-soft); color: #15803D; }
+      .dl-badge.block { background: var(--dl-danger-soft); color: #B91C1C; }
+
+      .dl-aside {
+        position: sticky;
+        top: 88px;
+        display: grid;
+        gap: 24px;
+      }
+
+      /* 异常项卡片重构：更干净的警示边缘 */
+      .dl-exception-list { display: grid; gap: 12px; }
+
+      .dl-exception {
+        width: 100%;
+        padding: 16px;
+        border: 1px solid var(--dl-line);
+        border-left: 3px solid var(--dl-warn);
+        border-radius: 10px;
+        background: #FFFFFF;
+        text-align: left;
+        box-shadow: var(--dl-shadow-sm);
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .dl-exception:hover {
+        border-color: var(--dl-line-strong);
+        box-shadow: var(--dl-shadow);
+        transform: translateY(-1px);
+      }
+
+      .dl-exception.block { border-left-color: var(--dl-danger); }
+
+      .dl-exception-title {
+        margin: 0;
+        color: var(--dl-ink);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .dl-exception-meta {
+        margin: 6px 0 0;
+        color: var(--dl-muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      /* ═══ 空状态样式 ═══ */
+      .dl-empty {
+        display: grid;
+        grid-template-columns: 1fr 320px;
+        gap: 32px;
+        align-items: center;
+        padding: 32px;
+      }
+
+      .dl-empty h2 {
+        margin: 12px 0 0;
+        font-size: 22px;
+        line-height: 1.25;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .dl-empty p {
+        max-width: 62ch;
+        margin: 12px 0 0;
+        color: var(--dl-muted);
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .dl-empty-map {
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: #FFFFFF;
+        box-shadow: var(--dl-shadow);
+        overflow: hidden;
+      }
+
+      .dl-empty-map-row {
+        display: grid;
+        grid-template-columns: 80px 1fr;
+        gap: 12px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--dl-line);
+        font-size: 12px;
+      }
+
+      .dl-empty-map-row:last-child { border-bottom: 0; }
+      .dl-empty-map-row strong { color: var(--dl-accent); font-weight: 600; }
+
+      /* ═══ 右侧向导侧滑抽屉：现代 SaaS 高级毛玻璃叠层 ═══ */
+      .wizard-drawer {
+        position: fixed;
+        top: 0;
+        right: 0;
+        z-index: 60;
+        width: min(640px, 94vw);
+        height: 100dvh;
+        transform: translateX(105%);
+        transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        border-left: 1px solid var(--dl-line);
+        background: #FFFFFF;
+        box-shadow: -10px 0 30px -5px rgba(15, 23, 42, 0.08);
+        overflow: auto;
+      }
+
+      .wizard-drawer.open { transform: translateX(0); }
+
+      .drawer-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: none;
+        background: rgba(15, 23, 42, 0.15); /* 柔和阴影遮罩 */
+        backdrop-filter: blur(4px);         /* 现代高质感高斯模糊 */
+      }
+
+      .drawer-overlay.visible { display: block; }
+
+      .drawer-chrome {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        padding: 24px 24px 16px;
+        border-bottom: 1px solid var(--dl-line);
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(12px);
+      }
+
+      .drawer-header { display: flex; justify-content: space-between; gap: 14px; }
+
+      .drawer-eyebrow {
+        margin: 0 0 4px;
+        color: var(--dl-faint);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .drawer-title { margin: 0; font-size: 18px; font-weight: 600; }
+
+      .btn-close-drawer {
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: var(--dl-muted);
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .btn-close-drawer:hover {
+        background: var(--dl-bg);
+        color: var(--dl-ink);
+        border-color: var(--dl-faint);
+      }
+
+      /* 抽屉内部步骤切换条：更具空气感的下划线连通器 */
+      .wizard-steps {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 0;
+        margin-top: 24px;
+        border-bottom: 1px solid var(--dl-line-strong);
+      }
+
+      .wz-step {
+        position: relative;
+        min-height: 40px;
+        padding: 0 4px 12px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--dl-faint);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .wz-step::after {
+        content: "";
+        position: absolute;
+        left: 4px;
+        right: 4px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 999px;
+        background: transparent;
+        transition: background 0.2s ease;
+      }
+
+      .wz-step span {
+        display: inline-grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        margin-right: 6px;
+        border-radius: 5px;
+        background: #F1F5F9;
+        color: var(--dl-muted);
+        font-size: 10px;
+        font-weight: 600;
+      }
+
+      .wz-step:hover { color: var(--dl-ink); }
+
+      .wz-step.active {
+        color: var(--dl-accent);
+        font-weight: 600;
+      }
+
+      .wz-step.active::after { background: var(--dl-accent); }
+      .wz-step.active span { background: var(--dl-accent-soft); color: var(--dl-accent); }
+
+      .drawer-body { padding: 24px; }
+      .wz-panel { display: none; }
+      .wz-panel.active { display: block; }
+
+      .field-section { margin-bottom: 24px; }
+      .field-hint { margin: 0 0 14px; color: var(--dl-muted); font-size: 13px; line-height: 1.6; }
+      .field-group { display: grid; gap: 8px; }
+      .field-label { color: var(--dl-muted); font-size: 12px; font-weight: 600; }
+
+      /* 输入框重构：极致平滑聚焦 */
+      .field-input,
+      .field-textarea {
+        width: 100%;
+        min-height: 40px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
+        padding: 10px 14px;
+        color: var(--dl-ink);
+        background: #FFFFFF;
+        outline: none;
+        box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.02);
+        transition: all 0.2s ease;
+      }
+
+      .field-input:focus,
+      .field-textarea:focus {
+        border-color: var(--dl-accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+      }
+
+      .field-textarea { resize: vertical; }
+
+      /* 引擎选择卡片重构 */
+      .engine-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+      .engine-card {
+        display: grid;
+        grid-template-columns: 36px 1fr 20px;
+        gap: 12px;
+        align-items: center;
+        padding: 16px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 12px;
+        background: #FFFFFF;
+        cursor: pointer;
+        box-shadow: var(--dl-shadow-sm);
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .engine-card:hover {
+        border-color: var(--dl-faint);
+        background: var(--dl-bg);
+      }
+
+      .engine-card.selected {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent-soft);
+      }
+
+      .engine-card-icon {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border: 1px solid #DBEAFE;
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: var(--dl-accent);
+        font-weight: 700;
+      }
+
+      .engine-card-name { margin: 0; font-size: 14px; font-weight: 600; }
+      .engine-card-desc { margin: 4px 0 0; color: var(--dl-muted); font-size: 12px; line-height: 1.45; }
+      .engine-card-check { opacity: 0; color: var(--dl-accent); transition: opacity 0.2s ease; }
+      .engine-card.selected .engine-card-check { opacity: 1; }
+
+      /* ═══ 拖拽上传区：摒弃生硬粗虚线，改用高级空气呼吸感虚线 ═══ */
+      .upload-zone {
+        position: relative;
+        display: grid;
+        place-items: center;
+        min-height: 160px;
+        padding: 24px;
+        border: 1.5px dashed var(--dl-line-strong);
+        border-radius: 12px;
+        background: #FFFFFF;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .upload-zone:hover,
+      .upload-zone.has-file {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent-soft);
+      }
+
+      .upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+      .upload-title { margin: 12px 0 4px; font-weight: 600; font-size: 14px; }
+      
+      .upload-sub,
+      .template-hint,
+      .inline-status { color: var(--dl-muted); font-size: 12px; line-height: 1.5; }
+
+      .template-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 24px; }
+      .template-hint { width: 100%; margin: 0; }
+
+      .template-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 4px 12px;
+        border: 1px solid #DBEAFE;
+        border-radius: 999px;
+        background: #FFFFFF;
+        color: var(--dl-accent);
+        text-decoration: none;
+        font-size: 12px;
+        font-weight: 500;
+        transition: all 0.2s ease;
+      }
+
+      .template-link:hover { background: var(--dl-accent-soft); border-color: var(--dl-accent); }
+
+      .drawer-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding-top: 20px;
+        border-top: 1px solid var(--dl-line);
+      }
+
+      /* 核算结果总结网格 */
+      .confirm-summary {
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: #FFFFFF;
+        box-shadow: var(--dl-shadow-sm);
+        overflow: hidden;
+      }
+
+      .confirm-summary h3 { margin: 0; padding: 16px; border-bottom: 1px solid var(--dl-line); font-size: 14px; font-weight: 600; }
+      .confirm-grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+      
+      .confirm-item {
+        display: grid;
+        gap: 4px;
+        padding: 16px;
+        border-right: 1px solid var(--dl-line);
+        border-bottom: 1px solid var(--dl-line);
+      }
+
+      .confirm-label { color: var(--dl-muted); font-size: 12px; font-weight: 500; }
+      .confirm-value { color: var(--dl-ink); font-weight: 600; }
+
+      /* ═══ 解释说明侧滑抽屉重构 ═══ */
+      .dl-explain-drawer {
+        position: fixed;
+        top: 0;
+        right: 0;
+        z-index: 70;
+        width: min(580px, 96vw);
+        height: 100dvh;
+        transform: translateX(105%);
+        transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        border-left: 1px solid var(--dl-line);
+        background: #FFFFFF;
+        box-shadow: -10px 0 30px -5px rgba(15, 23, 42, 0.08);
+        overflow: auto;
+      }
+
+      .dl-explain-drawer.open { transform: translateX(0); }
+
+      .dl-drawer-head {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 24px;
+        border-bottom: 1px solid var(--dl-line);
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(12px);
+      }
+
+      .dl-drawer-body { padding: 24px; display: grid; gap: 16px; }
+      .dl-kv-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+      .dl-kv {
+        padding: 14px;
+        border: 1px solid var(--dl-line);
+        border-radius: 10px;
+        background: #F8FAFC;
+      }
+
+      .dl-kv span { display: block; color: var(--dl-muted); font-size: 12px; }
+      .dl-kv strong { display: block; margin-top: 4px; color: var(--dl-ink); font-size: 14px; font-weight: 600; }
+
+      /* 规则详情定义卡片 */
+      .dl-rule-card {
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: #FFFFFF;
+        box-shadow: var(--dl-shadow-sm);
+        overflow: hidden;
+      }
+
+      .dl-rule-card h3 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--dl-line); font-size: 13px; font-weight: 600; }
+      .dl-rule-card dl { display: grid; grid-template-columns: 120px 1fr; gap: 0; margin: 0; }
+      
+      .dl-rule-card dt,
+      .dl-rule-card dd { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--dl-line); font-size: 13px; line-height: 1.5; }
+      .dl-rule-card dt { color: var(--dl-muted); background: #F8FAFC; font-weight: 500; }
+      .dl-rule-card dd { color: #334155; }
+
+      /* ═══ 全局黑金吐司提示（Toast） ═══ */
+      .dl-toast,
+      .labor-toast {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        z-index: 90;
+        max-width: 380px;
+        padding: 14px 18px;
+        border: 1px solid #1E293B;
+        border-radius: 8px;
+        background: #0F172A;
+        color: #FFFFFF;
+        font-size: 13px;
+        font-weight: 500;
+        box-shadow: var(--dl-shadow-lg);
+        opacity: 0;
+        transform: translateY(12px);
+        transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+        pointer-events: none;
+      }
+
+      .labor-toast.visible { opacity: 1; transform: translateY(0); }
+      .error-text { color: var(--dl-danger); }
+
+      /* ═══ 响应式超宽屏/窄屏体验调优 ═══ */
+      @media (max-width: 1100px) {
+        .dl-shell { grid-template-columns: 1fr; }
+        .dl-rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--dl-line); padding: 16px 24px; }
+        .dl-grid { grid-template-columns: 1fr; }
+        .dl-aside { position: static; }
+        .dl-metrics { grid-template-columns: repeat(2, 1fr); }
+      }
+
+      @media (max-width: 720px) {
+        .dl-topbar {
+          grid-template-columns: 1fr;
+          min-height: auto;
+          padding: 22px 18px;
+        }
+        .dl-brand-row { gap: 16px; }
+        .dl-logo { width: 62px; height: 62px; }
+        .dl-logo img { max-width: 58px; max-height: 58px; }
+        .dl-title { font-size: 30px; }
+        .dl-product-title { font-size: 28px; }
+        .dl-product-subtitle { font-size: 16px; }
+        .dl-actions { justify-content: flex-start; }
+        .dl-main { padding: 16px; }
+        .dl-empty { grid-template-columns: 1fr; padding: 20px; }
+        .dl-metrics, .engine-card-grid, .confirm-grid, .dl-kv-grid { grid-template-columns: 1fr; }
+        .wizard-steps { grid-template-columns: 1fr 1fr; row-gap: 8px; border-bottom: 0; }
+        .wz-step { border-bottom: 1px solid var(--dl-line); }
+      }
+    </style>
   </head>
   <body class="domestic-labor-shell">
 
-    <!-- ═══ TOP CHROME ═══ -->
-    <header class="app-chrome">
-      <div class="chrome-left">
-        <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
-          <span class="brand-mark-frame">
-            <img src="assets/bonus-logo-header-blue.png" alt="" />
-          </span>
-          <span class="brand-copy">
-            <span class="brand-name">Σ-WORKBENCH</span>
-            <span class="brand-note">西格玛工作台</span>
-          </span>
+    <header class="dl-topbar">
+      <div class="dl-brand-row">
+        <a class="dl-logo" href="/" aria-label="返回西格玛工作台首页">
+          <img src="assets/bonus-logo-header-blue.png" alt="" />
         </a>
-        <div class="chrome-divider"></div>
-        <div class="chrome-context">
-          <span class="chrome-label">Domestic Labor Payroll</span>
-          <span class="chrome-title">劳务工薪酬核算</span>
-          <span class="chrome-desc">上传考勤数据，自动计算全勤奖、餐补、外宿补贴、工龄奖</span>
+        <div class="dl-brand-copy">
+          <p class="dl-eyebrow">Σ-WORKBENCH</p>
+          <h1 class="dl-title">西格玛工作台</h1>
+          <div class="dl-batch-meta">
+            <span class="dl-chip">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
+            <span class="dl-chip">规则包 <strong>DL-PAYROLL.v1</strong></span>
+            <span class="dl-chip is-warn" id="batchStatusText">草稿</span>
+            <span class="dl-chip" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
+          </div>
         </div>
       </div>
-      <div class="chrome-right">
-        <div class="chrome-run-badge" id="chromeRunBadge" hidden>
-          <span class="run-dot"></span>
-          <span id="chromeRunLabel">任务 #—</span>
-        </div>
+      <div class="dl-product-heading">
+        <p class="dl-product-title">国内劳务薪酬中台</p>
+        <p class="dl-product-subtitle">把薪酬核算、异常复核和导出归档集中到一个批次流程。</p>
+      </div>
+      <div class="dl-actions">
+        <button class="dl-btn" id="btnRefreshStatus" type="button">刷新状态</button>
         <button class="btn-new-batch" id="btnOpenDrawer" type="button">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           新建计算任务
         </button>
         <a id="reportLink" class="btn-download disabled" href="#" aria-disabled="true">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           下载报告
         </a>
       </div>
     </header>
 
-    <!-- ═══ KPI SUMMARY BANNER (6 columns) ═══ -->
-    <div class="kpi-banner kpi-6col" id="kpiBanner">
-      <div class="kpi-card kpi-neutral" id="kpiTotalEmployees">
-        <span class="kpi-label">员工总数</span>
-        <span class="kpi-value" id="kpiTotalVal">—</span>
-        <span class="kpi-sub">Total Employees</span>
-      </div>
-      <div class="kpi-card kpi-success" id="kpiProcessed">
-        <span class="kpi-label">已计算</span>
-        <span class="kpi-value" id="kpiProcessedVal">—</span>
-        <span class="kpi-sub">Processed</span>
-      </div>
-      <div class="kpi-card kpi-brand" id="kpiQuanqinjiang">
-        <span class="kpi-label">全勤奖</span>
-        <span class="kpi-value" id="kpiQuanqinVal">—</span>
-        <span class="kpi-sub">Attendance Bonus</span>
-      </div>
-      <div class="kpi-card kpi-info" id="kpiCanbu">
-        <span class="kpi-label">餐补</span>
-        <span class="kpi-value" id="kpiCanbuVal">—</span>
-        <span class="kpi-sub">Meal Allowance</span>
-      </div>
-      <div class="kpi-card kpi-warning" id="kpiWaisu">
-        <span class="kpi-label">外宿补贴</span>
-        <span class="kpi-value" id="kpiWaisuVal">—</span>
-        <span class="kpi-sub">Housing Allowance</span>
-      </div>
-      <div class="kpi-card kpi-violet" id="kpiGongling">
-        <span class="kpi-label">工龄奖</span>
-        <span class="kpi-value" id="kpiGonglingVal">—</span>
-        <span class="kpi-sub">Seniority Bonus</span>
-      </div>
+    <div class="dl-shell">
+      <aside class="dl-rail" aria-label="薪酬批次流程">
+        <p class="dl-rail-title">批次流程</p>
+        <button class="dl-step done" data-workspace-tab="overview" type="button">
+          <span class="dl-step-index">01</span><span class="dl-step-name">数据导入</span><span class="dl-step-state"></span>
+        </button>
+        <button class="dl-step done" data-workspace-tab="mapping" type="button">
+          <span class="dl-step-index">02</span><span class="dl-step-name">字段映射</span><span class="dl-step-state"></span>
+        </button>
+        <button class="dl-step active warn" data-workspace-tab="validation" type="button">
+          <span class="dl-step-index">03</span><span class="dl-step-name">数据校验</span><span class="dl-step-state"></span>
+        </button>
+        <button class="dl-step" data-workspace-tab="results" type="button">
+          <span class="dl-step-index">04</span><span class="dl-step-name">科目核算</span><span class="dl-step-state"></span>
+        </button>
+        <button class="dl-step warn" data-workspace-tab="exceptions" type="button">
+          <span class="dl-step-index">05</span><span class="dl-step-name">异常复核</span><span class="dl-step-state"></span>
+        </button>
+        <button class="dl-step" data-workspace-tab="audit" type="button">
+          <span class="dl-step-index">06</span><span class="dl-step-name">审计解释</span><span class="dl-step-state"></span>
+        </button>
+        <button class="dl-step" data-workspace-tab="approval" type="button">
+          <span class="dl-step-index">07</span><span class="dl-step-name">审批发放</span><span class="dl-step-state"></span>
+        </button>
+      </aside>
+
+      <main class="dl-main">
+        <div class="dl-grid">
+          <div class="dl-stack">
+            <section class="dl-panel" id="taskStatusSection">
+              <div class="dl-panel-head">
+                <div>
+                  <h2 class="dl-panel-title">批次状态</h2>
+                  <p class="dl-panel-sub" id="taskStatusSub">当前批次尚未提交计算。先创建任务，系统会进入数据校验和科目核算流程。</p>
+                </div>
+                <button id="btnExport" class="btn-primary" type="button" hidden>导出 Excel</button>
+              </div>
+              <div id="taskStatusCard" class="dl-panel-body"></div>
+              <div class="dl-metrics kpi-6col" id="kpiBanner">
+                <div class="dl-metric">
+                  <span class="dl-metric-label">员工总数 <span class="dl-dot"></span></span>
+                  <span class="dl-metric-value" id="kpiTotalVal">—</span>
+                  <span class="dl-metric-meta">批次覆盖人数</span>
+                </div>
+                <div class="dl-metric">
+                  <span class="dl-metric-label">已计算 <span class="dl-dot"></span></span>
+                  <span class="dl-metric-value" id="kpiProcessedVal">—</span>
+                  <span class="dl-metric-meta">已产出结果行</span>
+                </div>
+                <div class="dl-metric">
+                  <span class="dl-metric-label">异常记录 <span class="dl-dot"></span></span>
+                  <span class="dl-metric-value" id="kpiWarningsVal">—</span>
+                  <span class="dl-metric-meta">待复核或留痕</span>
+                </div>
+                <div class="dl-metric">
+                  <span class="dl-metric-label">应发合计 <span class="dl-dot"></span></span>
+                  <span class="dl-metric-value" id="kpiGrandVal">—</span>
+                  <span class="dl-metric-meta">本批次合计金额</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="dl-panel" id="engineSummarySection">
+              <div class="dl-panel-head">
+                <div>
+                  <h2 class="dl-panel-title">科目金额摘要</h2>
+                  <p class="dl-panel-sub">按科目查看人数、金额与异常分布。</p>
+                </div>
+              </div>
+              <div id="engineSummaryGrid" class="dl-metrics">
+                <div class="dl-metric"><span class="dl-metric-label">全勤奖</span><span class="dl-metric-value" id="kpiQuanqinVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
+                <div class="dl-metric"><span class="dl-metric-label">餐补</span><span class="dl-metric-value" id="kpiCanbuVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
+                <div class="dl-metric"><span class="dl-metric-label">外宿补贴</span><span class="dl-metric-value" id="kpiWaisuVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
+                <div class="dl-metric"><span class="dl-metric-label">工龄奖</span><span class="dl-metric-value" id="kpiGonglingVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
+              </div>
+            </section>
+
+            <section class="dl-panel" id="resultsSection">
+              <div class="dl-panel-head">
+                <div>
+                  <h2 class="dl-panel-title">员工薪酬结果表</h2>
+                  <p class="dl-panel-sub">点击员工行查看规则命中、异常、调整和审批解释。</p>
+                </div>
+              </div>
+              <div class="dl-toolbar">
+                <div class="dl-filter-row" id="subjectTabs">
+                  <button class="dl-segment active" data-subject="all" type="button">全部科目</button>
+                  <button class="dl-segment" data-subject="quanqinjiang" type="button">全勤奖</button>
+                  <button class="dl-segment" data-subject="canbu" type="button">餐补</button>
+                  <button class="dl-segment" data-subject="waisu_butie" type="button">外宿补贴</button>
+                  <button class="dl-segment" data-subject="gonglingjiang" type="button">工龄奖</button>
+                  <button class="dl-segment" data-subject="warnings" type="button">只看异常</button>
+                </div>
+              </div>
+              <div id="resultsTable" class="dl-table-wrap"></div>
+            </section>
+          </div>
+
+          <aside class="dl-aside">
+            <section class="dl-panel">
+              <div class="dl-panel-head">
+                <div>
+                  <h2 class="dl-panel-title">异常工作队列</h2>
+                  <p class="dl-panel-sub">阻断、高风险、提示会在这里集中处理。</p>
+                </div>
+              </div>
+              <div class="dl-panel-body">
+                <div id="exceptionQueue" class="dl-exception-list"></div>
+              </div>
+            </section>
+            <section class="dl-panel">
+              <div class="dl-panel-head">
+                <div>
+                  <h2 class="dl-panel-title">审批发放</h2>
+                  <p class="dl-panel-sub">当前原型保留状态入口，后续接复核和审批流。</p>
+                </div>
+              </div>
+              <div class="dl-panel-body">
+                <div class="dl-status-row"><span class="dl-badge warn">待计算</span></div>
+                <p class="dl-panel-sub">完成核算和异常复核后，可进入提交审批与导出发放。</p>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </main>
     </div>
-
-    <!-- ═══ MAIN WORKSPACE ═══ -->
-    <main class="workspace">
-
-      <!-- Task status section -->
-      <section class="workspace-section" id="taskStatusSection" hidden>
-        <div class="section-header">
-          <div>
-            <h2 class="section-title">计算任务状态</h2>
-            <p class="section-sub" id="taskStatusSub">Task Status</p>
-          </div>
-          <div class="section-actions">
-            <button id="btnRefreshStatus" class="btn-secondary" type="button">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 7a6 6 0 0111.2-3M13 7a6 6 0 01-11.2 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 1v3h-3M2 13v-3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              刷新状态
-            </button>
-            <button id="btnExport" class="btn-primary" type="button" hidden>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              导出 Excel
-            </button>
-          </div>
-        </div>
-        <div id="taskStatusCard" class="task-status-card"></div>
-      </section>
-
-      <!-- Results table -->
-      <section class="workspace-section" id="resultsSection" hidden>
-        <div class="section-header">
-          <div>
-            <h2 class="section-title">计算结果明细</h2>
-            <p class="section-sub">Payroll Calculation Results · 各引擎计算结果汇总</p>
-          </div>
-        </div>
-        <div id="resultsTable" class="audit-table premium-grid"></div>
-      </section>
-
-      <!-- Engine summary cards -->
-      <section class="workspace-section" id="engineSummarySection" hidden>
-        <div class="section-header">
-          <div>
-            <h2 class="section-title">引擎计算汇总</h2>
-            <p class="section-sub">Engine Summary · 各引擎计算人数与金额</p>
-          </div>
-        </div>
-        <div id="engineSummaryGrid" class="engine-summary-grid"></div>
-      </section>
-
-      <!-- Empty state -->
-      <div class="workspace-empty" id="workspaceEmpty">
-        <div class="empty-icon-large">
-          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-            <rect x="8" y="12" width="48" height="40" rx="6" stroke="#D2D2D7" stroke-width="2"/>
-            <path d="M20 28h24M20 36h16M20 44h8" stroke="#D2D2D7" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="32" cy="20" r="4" stroke="#D2D2D7" stroke-width="2"/>
-          </svg>
-        </div>
-        <p class="empty-title-large">选择引擎并上传考勤数据</p>
-        <p class="empty-desc-large">点击右上角「新建计算任务」开始薪酬核算</p>
-      </div>
-
-    </main>
 
     <!-- ═══ WIZARD DRAWER (slides in from right) ═══ -->
     <div class="drawer-overlay" id="drawerOverlay"></div>
@@ -217,10 +1285,10 @@
         <!-- ── STEP 3: Parameters (HRBP) ── -->
         <div class="wz-panel" data-panel="3">
           <div class="field-section">
-            <p class="field-hint">配置 HRBP 名单（可选）。填写后只计算名单内的员工。</p>
+            <p class="field-hint">配置工龄奖揽收发放名单（可选）。莞深广珠揽收员工需在名单内才发放工龄奖。</p>
             <label class="field-group">
-              <span class="field-label">HRBP 名单（JSON 数组）</span>
-              <textarea id="hrbpList" class="field-textarea" name="hrbpList" rows="4" placeholder='例如: ["张三", "李四"]&#10;留空则计算全部员工'></textarea>
+              <span class="field-label">揽收发放工号名单（JSON 数组）</span>
+              <textarea id="hrbpList" class="field-textarea" name="hrbpList" rows="4" placeholder='例如: ["OWHN001", "OWHN002"]&#10;留空则揽收工龄奖提示需补充名单'></textarea>
             </label>
           </div>
           <div class="drawer-footer">
@@ -247,7 +1315,7 @@
                 <span class="confirm-value" id="confirmFile">—</span>
               </div>
               <div class="confirm-item">
-                <span class="confirm-label">HRBP 过滤</span>
+                <span class="confirm-label">揽收工龄奖名单</span>
                 <span class="confirm-value" id="confirmHrbp">未配置</span>
               </div>
             </div>
@@ -266,6 +1334,16 @@
 
     <!-- ═══ TOAST ═══ -->
     <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
+    <aside id="explainDrawer" class="dl-explain-drawer" aria-label="员工审计解释">
+      <div class="dl-drawer-head">
+        <div>
+          <p class="dl-eyebrow">Audit explanation</p>
+          <h2 class="dl-title" id="explainTitle">员工解释</h2>
+        </div>
+        <button class="btn-close-drawer" id="btnCloseExplain" type="button" aria-label="关闭解释抽屉">×</button>
+      </div>
+      <div class="dl-drawer-body" id="explainBody"></div>
+    </aside>
 
     <script src="domestic-labor.js?v=1"></script>
     <script>
