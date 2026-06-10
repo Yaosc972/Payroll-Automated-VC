@@ -43,6 +43,21 @@ const ENGINE_META = {
   },
 };
 
+const DEFAULT_HRBP_LIST = [
+  'OWHN2313',
+  'OWHN0424',
+  'OWHN6172',
+  'OWHN0474',
+  'OWHN2248',
+  'OWHN6887',
+  'OWHN10141',
+  'OWHN10605',
+  'OWHN10863',
+  'OWHN10892',
+  'OWHN11388',
+  'OWHN11405',
+];
+
 // ── Element references ──
 const el = {
   // KPI
@@ -111,6 +126,7 @@ function init() {
   loadTemplateLinks();
   bindEvents();
   setDefaultMonth();
+  setDefaultHrbpList();
   renderEmptyWorkbench();
 }
 
@@ -119,6 +135,13 @@ function setDefaultMonth() {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
   el.attendanceMonth.value = `${y}-${m}`;
+}
+
+function setDefaultHrbpList() {
+  if (!el.hrbpList || el.hrbpList.value.trim()) return;
+  el.hrbpList.value = JSON.stringify(DEFAULT_HRBP_LIST, null, 2);
+  state.hrbpList = [...DEFAULT_HRBP_LIST];
+  setText(el.paramStatus, `已预置莞深区揽收工龄奖名单 ${DEFAULT_HRBP_LIST.length} 人，可继续补充。`);
 }
 
 function loadEngineCards() {
@@ -240,7 +263,7 @@ function renderConfirmSummary() {
     try {
       const arr = JSON.parse(hrbpText);
       state.hrbpList = arr;
-      el.confirmHrbp.textContent = `已配置 ${arr.length} 个工号`;
+      el.confirmHrbp.textContent = `已配置 ${arr.length} 个工号（含预置名单）`;
     } catch {
       state.hrbpList = null;
       el.confirmHrbp.textContent = '格式错误（揽收工龄奖将按未配置处理）';
