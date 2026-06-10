@@ -347,8 +347,8 @@ def test_gonglingjiang_returns_audit_explanation_for_hrbp_match():
     assert result.details["exceptions"] == []
 
 
-def test_gonglingjiang_collection_employee_outside_hrbp_list_is_reviewable():
-    """HRBP 名单存在但员工不在名单内时，产出可复核结构化异常"""
+def test_gonglingjiang_collection_employee_outside_hrbp_list_is_normal_zero():
+    """HRBP 名单存在但员工不在名单内时，正常不发放且不进入异常队列"""
     result = GongLingJiangEngine().calculate(
         _gongling_collection_employee(),
         hrbp_list=["OWHN999"],
@@ -357,8 +357,8 @@ def test_gonglingjiang_collection_employee_outside_hrbp_list_is_reviewable():
 
     assert result.amount == 0
     assert result.details["reason"] == "不符合工龄奖标准"
-    assert result.details["exceptions"][0]["code"] == "NOT_IN_HRBP_LIST"
-    assert "不在本月HRBP发放名单内" in result.warnings[0]
+    assert result.details["exceptions"] == []
+    assert result.warnings == []
 
 
 def _gongling_collection_employee() -> dict:
