@@ -404,7 +404,8 @@
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0,0,0,0.5);
+        background: rgba(15, 23, 42, 0.48);
+        backdrop-filter: blur(4px);
         display: flex;
         align-items: center;
         justify-content: center;
@@ -421,16 +422,18 @@
 
       .modal {
         background: var(--bg-card);
-        border-radius: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 8px;
         width: 480px;
         max-width: 90%;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        transform: translateY(-20px);
-        transition: transform 0.3s;
+        box-shadow: 0 22px 60px rgba(15, 23, 42, 0.22);
+        transform: translateY(-12px) scale(0.98);
+        transition: transform 0.22s ease;
+        overflow: hidden;
       }
 
       .modal-overlay.active .modal {
-        transform: translateY(0);
+        transform: translateY(0) scale(1);
       }
 
       .modal-header {
@@ -473,6 +476,82 @@
         gap: 12px;
         padding: 16px 24px;
         border-top: 1px solid var(--border);
+        background: #F8FAFC;
+      }
+
+      .app-dialog {
+        width: 520px;
+      }
+
+      .app-dialog-accent {
+        height: 4px;
+        background: var(--primary-deep);
+      }
+
+      .app-dialog.warning .app-dialog-accent { background: var(--warning); }
+      .app-dialog.danger .app-dialog-accent { background: var(--danger); }
+
+      .app-dialog-message {
+        color: var(--text-secondary);
+        font-size: 14px;
+        line-height: 1.7;
+        margin-bottom: 18px;
+      }
+
+      .app-dialog-field {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .app-dialog-field[hidden] {
+        display: none;
+      }
+
+      .app-dialog-field label {
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .app-dialog-field input {
+        height: 42px;
+        padding: 9px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text-primary);
+        font-family: var(--mono);
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0;
+        outline: none;
+        transition: border-color 0.16s ease, box-shadow 0.16s ease;
+      }
+
+      .app-dialog-field input:focus {
+        border-color: var(--primary-deep);
+        box-shadow: 0 0 0 3px rgba(47, 84, 235, 0.10);
+      }
+
+      .app-dialog-help {
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .app-dialog-error {
+        color: var(--danger);
+        font-size: 12px;
+        min-height: 16px;
+      }
+
+      .btn-warning {
+        background: var(--warning);
+        color: #111827;
+      }
+
+      .btn-warning:hover {
+        background: #D97706;
+        color: white;
       }
 
       /* ═══ Steps Indicator ═══ */
@@ -1440,6 +1519,32 @@
       </div>
     </div>
 
+    <!-- App Dialog -->
+    <div class="modal-overlay" id="appDialog">
+      <div class="modal app-dialog" id="appDialogCard" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
+        <div class="app-dialog-accent"></div>
+        <div class="modal-header">
+          <h3 class="modal-title" id="appDialogTitle">确认操作</h3>
+          <button class="modal-close" id="btnCloseAppDialog" type="button" aria-label="关闭">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="app-dialog-message" id="appDialogMessage"></p>
+          <div class="app-dialog-field" id="appDialogField" hidden>
+            <label for="appDialogInput" id="appDialogInputLabel">输入</label>
+            <input type="text" id="appDialogInput" autocomplete="off" />
+            <div class="app-dialog-help" id="appDialogInputHelp"></div>
+            <div class="app-dialog-error" id="appDialogInputError"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelAppDialog" type="button">取消</button>
+          <button class="btn btn-primary" id="btnConfirmAppDialog" type="button">确定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Calculation Chain Modal -->
     <div class="modal-overlay" id="calcChainModal">
       <div class="modal" style="width: 560px;">
@@ -1459,6 +1564,6 @@
       </div>
     </div>
 
-    <script src="fbu-performance.js"></script>
+    <script src="fbu-performance.js?v=dialog-20260610"></script>
   </body>
 </html>

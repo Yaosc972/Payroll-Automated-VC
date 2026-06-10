@@ -159,12 +159,140 @@ const el = {
   btnCancelUpload: document.getElementById('btnCancelUpload'),
   btnConfirmUpload: document.getElementById('btnConfirmUpload'),
 
+  // App Dialog
+  appDialog: document.getElementById('appDialog'),
+  appDialogCard: document.getElementById('appDialogCard'),
+  appDialogTitle: document.getElementById('appDialogTitle'),
+  appDialogMessage: document.getElementById('appDialogMessage'),
+  appDialogField: document.getElementById('appDialogField'),
+  appDialogInputLabel: document.getElementById('appDialogInputLabel'),
+  appDialogInput: document.getElementById('appDialogInput'),
+  appDialogInputHelp: document.getElementById('appDialogInputHelp'),
+  appDialogInputError: document.getElementById('appDialogInputError'),
+  btnCloseAppDialog: document.getElementById('btnCloseAppDialog'),
+  btnCancelAppDialog: document.getElementById('btnCancelAppDialog'),
+  btnConfirmAppDialog: document.getElementById('btnConfirmAppDialog'),
+
   // Calc Chain Modal
   calcChainModal: document.getElementById('calcChainModal'),
   calcChainContent: document.getElementById('calcChainContent'),
   btnCloseCalcChainModal: document.getElementById('btnCloseCalcChainModal'),
   btnCloseCalcChain: document.getElementById('btnCloseCalcChain'),
 };
+
+// ═══ App Dialog ═══
+
+let appDialogResolve = null;
+let appDialogValidate = null;
+
+function getDefaultCalcMonth() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
+function setDialogTone(tone = 'primary') {
+  el.appDialogCard.classList.remove('warning', 'danger');
+  el.btnConfirmAppDialog.classList.remove('btn-primary', 'btn-warning', 'btn-danger');
+
+  if (tone === 'warning') {
+    el.appDialogCard.classList.add('warning');
+    el.btnConfirmAppDialog.classList.add('btn-warning');
+  } else if (tone === 'danger') {
+    el.appDialogCard.classList.add('danger');
+    el.btnConfirmAppDialog.classList.add('btn-danger');
+  } else {
+    el.btnConfirmAppDialog.classList.add('btn-primary');
+  }
+}
+
+function openAppDialog(options = {}) {
+  const {
+    title = '确认操作',
+    message = '',
+    confirmText = '确定',
+    cancelText = '取消',
+    tone = 'primary',
+    input = null,
+  } = options;
+
+  return new Promise(resolve => {
+    appDialogResolve = resolve;
+    appDialogValidate = input?.validate || null;
+
+    setDialogTone(tone);
+    el.appDialogTitle.textContent = title;
+    el.appDialogMessage.textContent = message;
+    el.btnConfirmAppDialog.textContent = confirmText;
+    el.btnCancelAppDialog.textContent = cancelText;
+    el.appDialogInputError.textContent = '';
+
+    if (input) {
+      el.appDialogField.hidden = false;
+      el.appDialogInputLabel.textContent = input.label || '';
+      el.appDialogInput.placeholder = input.placeholder || '';
+      el.appDialogInput.value = input.value || '';
+      el.appDialogInputHelp.textContent = input.help || '';
+      el.appDialogInput.inputMode = input.inputMode || 'text';
+      el.appDialogInput.maxLength = input.maxLength || 64;
+    } else {
+      el.appDialogField.hidden = true;
+      el.appDialogInput.value = '';
+      el.appDialogInputHelp.textContent = '';
+    }
+
+    el.appDialog.classList.add('active');
+
+    setTimeout(() => {
+      if (input) {
+        el.appDialogInput.focus();
+        el.appDialogInput.select();
+      } else {
+        el.btnConfirmAppDialog.focus();
+      }
+    }, 0);
+  });
+}
+
+function closeAppDialog(result) {
+  el.appDialog.classList.remove('active');
+  const resolve = appDialogResolve;
+  appDialogResolve = null;
+  appDialogValidate = null;
+  if (resolve) resolve(result);
+}
+
+function confirmAppDialog() {
+  const value = el.appDialogInput.value.trim();
+  if (!el.appDialogField.hidden && appDialogValidate) {
+    const validation = appDialogValidate(value);
+    if (validation !== true) {
+      el.appDialogInputError.textContent = validation || '请检查输入内容';
+      el.appDialogInput.focus();
+      return;
+    }
+  }
+  closeAppDialog({ confirmed: true, value });
+}
+
+el.btnCloseAppDialog?.addEventListener('click', () => closeAppDialog({ confirmed: false }));
+el.btnCancelAppDialog?.addEventListener('click', () => closeAppDialog({ confirmed: false }));
+el.btnConfirmAppDialog?.addEventListener('click', confirmAppDialog);
+el.appDialog?.addEventListener('click', (event) => {
+  if (event.target === el.appDialog) closeAppDialog({ confirmed: false });
+});
+el.appDialogInput?.addEventListener('input', () => {
+  el.appDialogInputError.textContent = '';
+});
+el.appDialogInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') confirmAppDialog();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && el.appDialog?.classList.contains('active')) {
+    closeAppDialog({ confirmed: false });
+  }
+});
 
 // ═══ Navigation ═══
 
@@ -301,8 +429,28 @@ async function enterActivity(activityId) {
 // ═══ New Activity ═══
 
 el.btnNewActivity.addEventListener('click', async () => {
-  const calcMonth = prompt('请输入核算月份（格式：2026-04）：');
-  if (!calcMonth) return;
+  const dialogResult = await openAppDialog({
+    title: '新建月度活动',
+    message: '为本月绩效奖金创建一个独立核算空间。',
+    confirmText: '创建活动',
+    cancelText: '取消',
+    input: {
+      label: '核算月份',
+      value: state.currentActivity?.calc_month || getDefaultCalcMonth(),
+      placeholder: '2026-04',
+      help: '格式：YYYY-MM',
+      maxLength: 7,
+      inputMode: 'numeric',
+      validate: (value) => {
+        if (!value) return '请输入核算月份';
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return '月份格式应为 YYYY-MM，例如 2026-04';
+        return true;
+      },
+    },
+  });
+
+  if (!dialogResult.confirmed) return;
+  const calcMonth = dialogResult.value;
 
   try {
     const data = await apiJson(`${API_BASE}/runs`, {
@@ -324,7 +472,15 @@ el.btnNewActivity.addEventListener('click', async () => {
 // ═══ Delete Activity ═══
 
 async function deleteActivity(activityId) {
-  if (!confirm('确定删除此活动？')) return;
+  const activity = state.activities.find(item => item.run_id === activityId);
+  const dialogResult = await openAppDialog({
+    title: '删除月度活动',
+    message: `将删除 ${activity?.calc_month || '该月度'} 的活动记录和已导入数据。`,
+    confirmText: '删除',
+    cancelText: '保留',
+    tone: 'danger',
+  });
+  if (!dialogResult.confirmed) return;
 
   try {
     await apiJson(`${API_BASE}/runs/${activityId}`, { method: 'DELETE' });
@@ -1102,8 +1258,14 @@ async function executeCalculate() {
 
   const summary = state.diagnosticsData?.summary;
   if (summary?.error_count > 0) {
-    const confirmed = confirm(`当前仍有 ${summary.error_count} 个严重匹配问题，可能影响核算结果。是否继续核算？`);
-    if (!confirmed) return;
+    const dialogResult = await openAppDialog({
+      title: '继续执行核算？',
+      message: `当前仍有 ${summary.error_count} 个严重匹配问题，可能影响核算结果。`,
+      confirmText: '继续核算',
+      cancelText: '先处理',
+      tone: 'warning',
+    });
+    if (!dialogResult.confirmed) return;
   }
 
   try {
