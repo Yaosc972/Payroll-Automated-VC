@@ -1818,6 +1818,74 @@ async def import_fbu_adjustments(
         raise HTTPException(500, f"调薪拆分表解析失败: {str(e)}")
 
 
+@app.get("/api/fbu-performance/templates/adjustments/download")
+def download_fbu_adjustments_template() -> FileResponse:
+    """下载FBU调薪/转正拆分表模板"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "调薪拆分"
+
+    headers = ["工号", "姓名", "分段期间", "分段绩效基数", "核算标识", "备注"]
+    examples = [
+        ["zt0021990", "张海冰", "4.1-4.11", 1404.90, "调薪前", "试用期，不参与绩效奖金"],
+        ["zt0021990", "张海冰", "4.12-4.25", 1667.88, "调薪前", "试用期，不参与绩效奖金"],
+        ["zt0021990", "张海冰", "4.26-4.30", 732.42, "调薪后", "转正后，按薪资档案绩效比例核算"],
+    ]
+    notes = [
+        "填报说明：",
+        "1. 必填列：工号、分段期间、分段绩效基数、核算标识。",
+        "2. 核算标识只填写“调薪前”或“调薪后”。调薪前按0%核算，调薪后使用薪资档案中的绩效比例。",
+        "3. 同一员工可填写多行，平台会按分段逐行计算后汇总。",
+        "4. 分段绩效基数请直接填线下拆分后的基数金额，不需要再填时薪或工时。",
+    ]
+
+    header_fill = PatternFill(start_color="1E88E5", end_color="1E88E5", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF")
+    note_font = Font(color="475569")
+    thin_border = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+
+    for row_idx, row in enumerate(examples, 2):
+        for col_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+
+    note_start = len(examples) + 4
+    for offset, note in enumerate(notes):
+        cell = ws.cell(row=note_start + offset, column=1, value=note)
+        cell.font = Font(bold=(offset == 0), color="334155") if offset == 0 else note_font
+
+    widths = [16, 14, 18, 18, 14, 38]
+    for idx, width in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + idx)].width = width
+    ws.freeze_panes = "A2"
+
+    output_path = EXPORT_DIR / "FBU调薪转正拆分表模板.xlsx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+    return FileResponse(
+        output_path,
+        filename=output_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @app.post("/api/fbu-performance/import")
 async def import_fbu_performance_data(
     attendance: UploadFile = File(...),

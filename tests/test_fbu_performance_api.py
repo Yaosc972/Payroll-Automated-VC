@@ -116,3 +116,17 @@ def test_fbu_adjustment_upload_is_saved_as_optional_run_data(monkeypatch, tmp_pa
     run_detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
     assert run_detail["adjustment_file"] == "adjustments.xlsx"
     assert run_detail["adjustment_data"]["employees"][0]["segments"][0]["reason"] == "调薪后"
+
+
+def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
+
+    client = TestClient(app_module.app)
+
+    response = client.get("/api/fbu-performance/templates/adjustments/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert response.content[:2] == b"PK"

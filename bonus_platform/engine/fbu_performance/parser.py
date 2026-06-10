@@ -573,24 +573,47 @@ class FBUPerformanceParser:
         """
         解析调薪/转正拆分表并返回预览。
 
-        目前支持线下《仓库管理绩效基数》中的“调薪拆分”sheet：
-        工号、姓名、期间、分段绩效基数、调薪前/调薪后标识分别位于固定列。
+        支持两种格式：
+        1. 平台标准模板：按表头读取“工号/姓名/分段期间/分段绩效基数/核算标识”。
+        2. 线下《仓库管理绩效基数》中的“调薪拆分”sheet固定列。
         """
         wb = self.load_excel(filepath)
         if "调薪拆分" not in wb.sheetnames:
             raise ValueError("未找到“调薪拆分”工作表")
 
         ws = wb["调薪拆分"]
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            raise ValueError("调薪拆分工作表为空")
+
+        headers = rows[0]
+        template_map = {
+            "employee_id": _find_column(headers, ["工号", "员工工号", "employee_id"]),
+            "name": _find_column(headers, ["姓名", "员工姓名", "name"]),
+            "period": _find_column(headers, ["分段期间", "期间", "核算期间", "period"]),
+            "performance_base": _find_column(headers, ["分段绩效基数", "绩效基数", "分段基数", "performance_base"]),
+            "reason": _find_column(headers, ["核算标识", "调薪标识", "拆分标识", "reason"]),
+        }
+        use_template = all(template_map[key] is not None for key in ("employee_id", "period", "performance_base", "reason"))
         grouped: dict[str, dict] = {}
 
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            emp_id = str(_cell(row, 3) or "").strip()
+        for row in rows[1:]:
+            if use_template:
+                emp_id = str(_cell(row, template_map["employee_id"]) or "").strip()
+                name = str(_cell(row, template_map["name"]) or "").strip()
+                period = str(_cell(row, template_map["period"]) or "").strip()
+                amount = _to_float(_cell(row, template_map["performance_base"]), 0)
+                reason = str(_cell(row, template_map["reason"]) or "").strip()
+            else:
+                emp_id = str(_cell(row, 3) or "").strip()
+                name = str(_cell(row, 4) or "").strip()
+                period = str(_cell(row, 9) or "").strip()
+                amount = _to_float(_cell(row, 28), 0)
+                reason = str(_cell(row, 31) or "").strip()
+
             if not emp_id or not emp_id.lower().startswith("zt"):
                 continue
 
-            amount = _to_float(_cell(row, 28), 0)
-            reason = str(_cell(row, 31) or "").strip()
-            period = str(_cell(row, 9) or "").strip()
             if amount is None or not reason:
                 continue
 
@@ -599,7 +622,7 @@ class FBUPerformanceParser:
                 emp_id,
                 {
                     "employee_id": emp_id,
-                    "name": emp_info["name"] or str(_cell(row, 4) or "").strip(),
+                    "name": emp_info["name"] or name,
                     "department": emp_info["department"],
                     "area": emp_info["area"],
                     "segments": [],

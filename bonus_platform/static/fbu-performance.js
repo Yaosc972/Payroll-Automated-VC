@@ -64,6 +64,7 @@ const el = {
   btnUploadPerformance: document.getElementById('btnUploadPerformance'),
   btnUploadPerformanceEmpty: document.getElementById('btnUploadPerformanceEmpty'),
   btnUploadAdjustments: document.getElementById('btnUploadAdjustments'),
+  btnDownloadAdjustmentsTemplate: document.getElementById('btnDownloadAdjustmentsTemplate'),
   btnExportPerformance: document.getElementById('btnExportPerformance'),
   btnCalculate: document.getElementById('btnCalculate'),
   btnCalculateEmpty: document.getElementById('btnCalculateEmpty'),
@@ -458,6 +459,12 @@ el.btnUploadSalaryEmpty?.addEventListener('click', () => openUploadModal('salary
 el.btnUploadPerformance?.addEventListener('click', () => openUploadModal('performance'));
 el.btnUploadPerformanceEmpty?.addEventListener('click', () => openUploadModal('performance'));
 el.btnUploadAdjustments?.addEventListener('click', () => openUploadModal('adjustments'));
+el.btnDownloadAdjustmentsTemplate?.addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.href = `${API_BASE}/templates/adjustments/download`;
+  link.download = 'FBU调薪转正拆分表模板.xlsx';
+  link.click();
+});
 
 // ═══ Render Attendance Data ═══
 

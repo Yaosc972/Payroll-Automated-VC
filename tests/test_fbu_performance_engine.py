@@ -137,6 +137,26 @@ def test_adjustment_split_preview_reads_zhang_haibing_style_segments(tmp_path):
     }
 
 
+def test_adjustment_split_preview_accepts_platform_template_headers(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "调薪拆分"
+    sheet.append(["工号", "姓名", "分段期间", "分段绩效基数", "核算标识", "备注"])
+    sheet.append(["zt0021990", "张海冰", "4.26-4.30", 732.42, "调薪后", "转正"])
+    path = tmp_path / "adjustments_template.xlsx"
+    workbook.save(path)
+
+    preview = FBUPerformanceParser().parse_adjustments_preview(str(path))
+
+    assert preview["summary"]["total_employees"] == 1
+    assert preview["summary"]["active_performance_base"] == 732.42
+    assert preview["employees"][0]["segments"] == [
+        {"period": "4.26-4.30", "reason": "调薪后", "performance_base": 732.42}
+    ]
+
+
 def test_adjustment_split_uses_post_adjustment_base_ratio_and_fixed_coefficient():
     parser = FBUPerformanceParser()
     engine = parser.parse_all_from_step_data(
