@@ -296,11 +296,19 @@ async def upload_labor_files(
         raise HTTPException(status_code=400, detail="请上传线下账单 Excel 文件。")
     _EXCEL_EXTS = (".xlsx", ".xlsm", ".xls")
     pdf_records = []
-    for upload in pdf_files:
-        if not upload.filename.lower().endswith(".pdf"):
-            raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
-        path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
-        pdf_records.append(attach_labor_file(run_id, path, "PDF发票"))
+    saved_pdf_paths: list[Path] = []
+    try:
+        for upload in pdf_files:
+            if not upload.filename.lower().endswith(".pdf"):
+                raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
+            path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
+            saved_pdf_paths.append(path)
+            _validate_labor_pdf(path, upload.filename)
+            pdf_records.append(attach_labor_file(run_id, path, "PDF发票"))
+    except HTTPException:
+        for path in saved_pdf_paths:
+            path.unlink(missing_ok=True)
+        raise
     workbook_records = []
     for upload in workbook_files:
         if not upload.filename.lower().endswith(_EXCEL_EXTS):
@@ -1151,6 +1159,20 @@ async def _save_upload_to(file: UploadFile, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(await file.read())
     return path
+
+
+def _validate_labor_pdf(path: Path, original_name: str) -> None:
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(path))
+        if len(reader.pages) < 1:
+            raise ValueError("PDF 没有可读取页面")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"供应商发票 PDF 无法读取或已损坏：{original_name}",
+        ) from exc
 
 
 def _safe_output_name(original_name: str, suffix: str) -> str:

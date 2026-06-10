@@ -20,6 +20,16 @@ def _excel_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _pdf_bytes() -> bytes:
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    buffer = BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def _excel_bytes_with_warehouse() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
@@ -47,7 +57,7 @@ def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
     upload = client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n% sample", "application/pdf")),
+            ("pdf_files", ("invoice.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
@@ -80,6 +90,28 @@ def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
     assert mapping.json()["manualNameMapping"]["Gamboa, Arilene"] == "Arlene Gamboa"
 
 
+def test_labor_upload_rejects_unreadable_pdf_invoice():
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+
+    upload = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+
+    assert upload.status_code == 400
+    assert "PDF 无法读取或已损坏" in upload.json()["detail"]
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert body["status"] == "已创建"
+    assert body["files"] == {}
+
+
 def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_rows(monkeypatch):
     import bonus_platform.app as app_module
 
@@ -93,7 +125,7 @@ def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_r
     upload = client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("scan.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
@@ -150,8 +182,8 @@ def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(mon
     client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("Invoice-5058871.pdf", b"%PDF-1.4\n", "application/pdf")),
-            ("pdf_files", ("Invoice-5058872.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("Invoice-5058871.pdf", _pdf_bytes(), "application/pdf")),
+            ("pdf_files", ("Invoice-5058872.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes_with_warehouse(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
@@ -270,7 +302,7 @@ def test_labor_compare_response_includes_candidate_matches(monkeypatch):
     client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("scan.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
@@ -306,7 +338,7 @@ def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(
     client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("scan.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
@@ -347,7 +379,7 @@ def test_labor_compare_uses_excel_candidates_on_initial_extract(monkeypatch):
     client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("scan.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
@@ -415,7 +447,7 @@ def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatc
     client.post(
         f"/api/labor/runs/{run['id']}/files",
         files=[
-            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("scan.pdf", _pdf_bytes(), "application/pdf")),
             ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
         ],
     )
