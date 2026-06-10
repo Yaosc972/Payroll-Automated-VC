@@ -11,6 +11,11 @@ except ImportError:
     openpyxl = None
 
 try:
+    import xlrd
+except ImportError:
+    xlrd = None
+
+try:
     import msoffcrypto
 except ImportError:
     msoffcrypto = None
@@ -29,15 +34,26 @@ class ExcelParser:
     """Excel file parser."""
 
     def __init__(self, file_path: str):
-        if openpyxl is None:
-            raise ImportError("openpyxl is required: pip install openpyxl")
         self.file_path = Path(file_path)
         if not self.file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         self.workbook = None
+        self._engine = None
 
     def load(self, password: str = None):
         """Load workbook. Supports encrypted files with password."""
+        suffix = self.file_path.suffix.lower()
+        if suffix == ".xls":
+            if xlrd is None:
+                raise ImportError("xlrd is required to read .xls files: pip install xlrd")
+            if password:
+                raise ValueError("老式 .xls 加密文件暂不支持密码解密，请先另存为 .xlsx 后上传。")
+            self.workbook = xlrd.open_workbook(str(self.file_path))
+            self._engine = "xlrd"
+            return self
+
+        if openpyxl is None:
+            raise ImportError("openpyxl is required: pip install openpyxl")
         if password and msoffcrypto:
             # Decrypt encrypted file
             output_buffer = io.BytesIO()
@@ -49,11 +65,12 @@ class ExcelParser:
             self.workbook = openpyxl.load_workbook(output_buffer, data_only=True, read_only=True)
         else:
             self.workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
+        self._engine = "openpyxl"
         return self
 
     def close(self):
         """Close workbook."""
-        if self.workbook:
+        if self.workbook and self._engine == "openpyxl":
             self.workbook.close()
 
     def __enter__(self):
@@ -67,12 +84,17 @@ class ExcelParser:
         """Get all sheet names."""
         if not self.workbook:
             self.load()
+        if self._engine == "xlrd":
+            return self.workbook.sheet_names()
         return self.workbook.sheetnames
 
     def parse_sheet(self, sheet_name: str) -> SheetData:
         """Parse a single sheet into structured data."""
         if not self.workbook:
             self.load()
+
+        if self._engine == "xlrd":
+            return self._parse_xls_sheet(sheet_name)
 
         if sheet_name not in self.workbook.sheetnames:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {self.workbook.sheetnames}")
@@ -98,6 +120,47 @@ class ExcelParser:
             rows=rows,
             row_count=len(rows),
         )
+
+    def _parse_xls_sheet(self, sheet_name: str) -> SheetData:
+        sheet_names = self.workbook.sheet_names()
+        if sheet_name not in sheet_names:
+            raise ValueError(f"Sheet '{sheet_name}' not found. Available: {sheet_names}")
+
+        ws = self.workbook.sheet_by_name(sheet_name)
+        if ws.nrows == 0:
+            return SheetData(name=sheet_name, headers=[], rows=[], row_count=0)
+
+        headers = [
+            str(ws.cell_value(0, j)).strip() if ws.cell_value(0, j) not in ("", None) else f"col_{j}"
+            for j in range(ws.ncols)
+        ]
+        rows = []
+        for i in range(1, ws.nrows):
+            row_dict = {}
+            for j, header in enumerate(headers):
+                row_dict[header] = self._read_xls_cell(ws, i, j)
+            rows.append(row_dict)
+
+        return SheetData(
+            name=sheet_name,
+            headers=headers,
+            rows=rows,
+            row_count=len(rows),
+        )
+
+    def _read_xls_cell(self, ws, row_idx: int, col_idx: int) -> Any:
+        cell = ws.cell(row_idx, col_idx)
+        if xlrd and cell.ctype == xlrd.XL_CELL_DATE:
+            try:
+                dt = xlrd.xldate.xldate_as_datetime(cell.value, self.workbook.datemode)
+                if dt.time() == time(0, 0):
+                    return dt.date()
+                return dt
+            except (ValueError, OverflowError):
+                return cell.value
+        if xlrd and cell.ctype == xlrd.XL_CELL_NUMBER and float(cell.value).is_integer():
+            return int(cell.value)
+        return cell.value
 
     def parse_monthly_attendance(self, sheet_name: str = "月考勤") -> SheetData:
         """Parse monthly attendance sheet (Sheet2)."""

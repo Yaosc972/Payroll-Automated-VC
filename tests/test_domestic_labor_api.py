@@ -8,6 +8,8 @@ from openpyxl import Workbook
 
 from bonus_platform.app import app
 from bonus_platform.engine.domestic_labor.engines.gonglingjiang import GongLingJiangEngine
+from bonus_platform.engine.domestic_labor import parser as domestic_parser
+from bonus_platform.engine.domestic_labor.parser import ExcelParser
 
 
 def _create_test_excel(sheet_names: dict[str, list[list]]) -> bytes:
@@ -24,6 +26,50 @@ def _create_test_excel(sheet_names: dict[str, list[list]]) -> bytes:
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def test_excel_parser_supports_legacy_xls(monkeypatch, tmp_path):
+    """老式 .xls 文件走 xlrd 解析分支，避免被 openpyxl 拒绝"""
+    class FakeCell:
+        def __init__(self, value):
+            self.value = value
+            self.ctype = domestic_parser.xlrd.XL_CELL_NUMBER if isinstance(value, (int, float)) else domestic_parser.xlrd.XL_CELL_TEXT
+
+    class FakeSheet:
+        name = "Sheet"
+        nrows = 2
+        ncols = 4
+        values = [
+            ["工号", "姓名", "正班出勤天数", "旷工天数"],
+            ["OWHN001", "张三", 20.0, 1.0],
+        ]
+
+        def cell_value(self, row, col):
+            return self.values[row][col]
+
+        def cell(self, row, col):
+            return FakeCell(self.values[row][col])
+
+    class FakeBook:
+        datemode = 0
+
+        def sheet_names(self):
+            return ["Sheet"]
+
+        def sheet_by_name(self, name):
+            assert name == "Sheet"
+            return FakeSheet()
+
+    xls_path = tmp_path / "attendance.xls"
+    xls_path.write_bytes(b"fake xls")
+    monkeypatch.setattr(domestic_parser.xlrd, "open_workbook", lambda _: FakeBook())
+
+    parser = ExcelParser(str(xls_path)).load()
+    parsed = parser.parse_sheet("Sheet")
+
+    assert parser.get_sheet_names() == ["Sheet"]
+    assert parsed.headers == ["工号", "姓名", "正班出勤天数", "旷工天数"]
+    assert parsed.rows == [{"工号": "OWHN001", "姓名": "张三", "正班出勤天数": 20, "旷工天数": 1}]
 
 
 def _quanqinjiang_data() -> bytes:
