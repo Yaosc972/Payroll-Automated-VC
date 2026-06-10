@@ -482,6 +482,7 @@ function renderResultsTable(results) {
   const visible = filtered.slice(0, 100);
   const tbody = visible.map((row, index) => {
     const warningLevel = getWarningLevel(row);
+    const needsReview = hasReviewIssue(row);
     return `
       <tr data-result-index="${results.indexOf(row)}">
         <td class="dl-strong">${escapeHtml(row.employee_id || '')}</td>
@@ -494,7 +495,7 @@ function renderResultsTable(results) {
         <td class="dl-num">${formatMoney(row.gonglingjiang)}</td>
         <td class="dl-num dl-strong">${formatMoney(row.total)}</td>
         <td><span class="dl-badge ${warningLevel.className}">${warningLevel.label}</span></td>
-        <td><span class="dl-badge">${row.warnings ? '待复核' : '自动通过'}</span></td>
+        <td><span class="dl-badge">${needsReview ? '待复核' : '自动通过'}</span></td>
         <td><button class="dl-segment" data-explain-index="${results.indexOf(row)}" type="button">解释</button></td>
       </tr>
     `;
@@ -553,14 +554,14 @@ function renderEmptyWorkbench() {
 
 function filterResults(results) {
   if (state.activeSubject === 'warnings') {
-    return results.filter(row => row.warnings || getRowExceptions(row).length);
+    return results.filter(hasReviewIssue);
   }
   if (state.activeSubject === 'all') return results;
   return results.filter(row => Number(row[state.activeSubject] || 0) !== 0);
 }
 
 function renderExceptionQueue(results) {
-  const rows = results.filter(row => row.warnings || getRowExceptions(row).length).slice(0, 8);
+  const rows = results.filter(hasReviewIssue).slice(0, 8);
   if (!rows.length) {
     el.exceptionQueue.innerHTML = `
       <div class="dl-exception">
@@ -572,8 +573,8 @@ function renderExceptionQueue(results) {
   }
   el.exceptionQueue.innerHTML = rows.map(row => {
     const level = getWarningLevel(row);
-    const firstException = getRowExceptions(row)[0];
-    const message = firstException?.message || row.warnings;
+    const firstException = getEffectiveExceptions(row)[0];
+    const message = firstException?.message || getEffectiveWarningText(row);
     return `
       <button class="dl-exception ${level.className}" data-exception-id="${escapeHtml(row.employee_id)}" type="button">
         <p class="dl-exception-title">${level.label} · ${escapeHtml(row.employee_id)} ${escapeHtml(row.employee_name)}</p>
@@ -610,12 +611,14 @@ function openExplainDrawer(row) {
       </div>
     `;
   }).join('');
-  const rowExceptions = getRowExceptions(row);
+  const rowExceptions = getEffectiveExceptions(row);
+  const warningText = getEffectiveWarningText(row);
+  const needsReview = hasReviewIssue(row);
   el.explainBody.innerHTML = `
     <div class="dl-kv-grid">
       <div class="dl-kv"><span>部门</span><strong>${escapeHtml(row.department || '—')}</strong></div>
       <div class="dl-kv"><span>应发合计</span><strong>${formatMoney(row.total)}</strong></div>
-      <div class="dl-kv"><span>异常状态</span><strong>${row.warnings ? '待复核' : '自动通过'}</strong></div>
+      <div class="dl-kv"><span>异常状态</span><strong>${needsReview ? '待复核' : '自动通过'}</strong></div>
       <div class="dl-kv"><span>审批状态</span><strong>未提交</strong></div>
     </div>
     ${subjectCards}
@@ -623,8 +626,8 @@ function openExplainDrawer(row) {
       <h3>异常与处理</h3>
       <dl>
         <dt>异常等级</dt><dd>${getWarningLevel(row).label}</dd>
-        <dt>异常说明</dt><dd>${formatExceptions(rowExceptions) || escapeHtml(row.warnings || '暂无异常')}</dd>
-        <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : (row.warnings ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，可随批次提交审批。')}</dd>
+        <dt>异常说明</dt><dd>${formatExceptions(rowExceptions) || escapeHtml(warningText || '暂无异常')}</dd>
+        <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : (warningText ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，可随批次提交审批。')}</dd>
       </dl>
     </div>
   `;
@@ -644,23 +647,23 @@ function buildRuleExplanation(key, row) {
 }
 
 function getWarningLevel(row) {
-  const exceptions = getRowExceptions(row);
+  const exceptions = getEffectiveExceptions(row);
   if (exceptions.some(item => item.level === 'blocking')) return { label: '阻断', className: 'block' };
   if (exceptions.length) return { label: '高风险', className: 'warn' };
-  const text = String(row.warnings || '');
+  const text = getEffectiveWarningText(row);
   if (!text) return { label: '通过', className: 'ok' };
   if (/失败|异常|不存在|缺失|请提供/.test(text)) return { label: '高风险', className: 'warn' };
   return { label: '提示', className: 'warn' };
 }
 
 function countWarnings(results) {
-  return results.filter(row => row.warnings || getRowExceptions(row).length).length;
+  return results.filter(hasReviewIssue).length;
 }
 
 function countSubjectWarnings(results, key) {
   return results.filter(row => {
-    const subjectExceptions = getSubjectDetail(row, key)?.exceptions || [];
-    return subjectExceptions.length || (row.warnings && Number(row[key] || 0) !== 0);
+    const subjectExceptions = (getSubjectDetail(row, key)?.exceptions || []).filter(item => !isNormalHrbpListExclusionException(item));
+    return subjectExceptions.length || (getEffectiveWarningText(row) && Number(row[key] || 0) !== 0);
   }).length;
 }
 
@@ -676,6 +679,35 @@ function getRowExceptions(row) {
   if (Array.isArray(row.exceptions)) return row.exceptions;
   const details = row.subject_details || {};
   return Object.values(details).flatMap(item => item?.exceptions || []);
+}
+
+function getEffectiveExceptions(row) {
+  return getRowExceptions(row).filter(item => !isNormalHrbpListExclusionException(item));
+}
+
+function getEffectiveWarningText(row) {
+  const text = String(row.warnings || '').trim();
+  if (!text) return '';
+  return text
+    .split(';')
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter(item => !isNormalHrbpListExclusionText(item))
+    .join('; ');
+}
+
+function hasReviewIssue(row) {
+  return getEffectiveExceptions(row).length > 0 || Boolean(getEffectiveWarningText(row));
+}
+
+function isNormalHrbpListExclusionException(item) {
+  if (!item) return false;
+  return item.code === 'NOT_IN_HRBP_LIST' || isNormalHrbpListExclusionText(item.message);
+}
+
+function isNormalHrbpListExclusionText(value) {
+  const text = String(value || '');
+  return /不在本月HRBP发放名单|不在.*HRBP.*发放名单|揽收工龄奖不发放/.test(text);
 }
 
 function formatAuditMap(value) {
