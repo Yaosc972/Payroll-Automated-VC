@@ -596,9 +596,13 @@
       }
 
       .app-dialog-accent {
-        height: 4px;
+        display: none;
+        height: 3px;
         background: var(--primary-deep);
       }
+
+      .app-dialog.warning .app-dialog-accent,
+      .app-dialog.danger .app-dialog-accent { display: block; }
 
       .app-dialog.warning .app-dialog-accent { background: var(--warning); }
       .app-dialog.danger .app-dialog-accent { background: var(--danger); }
@@ -643,6 +647,92 @@
       .app-dialog-field input:focus {
         border-color: var(--primary-deep);
         box-shadow: 0 0 0 3px rgba(47, 84, 235, 0.10);
+      }
+
+      .app-dialog-field input[readonly] {
+        background: #F8FAFC;
+        cursor: default;
+      }
+
+      .app-dialog-month-picker {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 2px;
+      }
+
+      .app-dialog-month-picker[hidden] {
+        display: none;
+      }
+
+      .month-picker-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #F8FAFC;
+      }
+
+      .month-picker-year {
+        color: var(--text-primary);
+        font-family: var(--mono);
+        font-size: 15px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .month-picker-nav {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #FFFFFF;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+      }
+
+      .month-picker-nav:hover {
+        border-color: var(--primary);
+        color: var(--primary-deep);
+        background: rgba(24, 144, 255, 0.06);
+      }
+
+      .month-picker-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .month-picker-option {
+        height: 36px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #FFFFFF;
+        color: var(--text-secondary);
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+      }
+
+      .month-picker-option:hover {
+        border-color: var(--primary);
+        color: var(--primary-deep);
+        background: rgba(24, 144, 255, 0.06);
+      }
+
+      .month-picker-option.selected {
+        border-color: var(--primary-deep);
+        background: var(--primary-deep);
+        color: #FFFFFF;
+        box-shadow: 0 8px 18px rgba(47, 84, 235, 0.20);
       }
 
       .app-dialog-help {
@@ -1769,6 +1859,18 @@
           <div class="app-dialog-field" id="appDialogField" hidden>
             <label for="appDialogInput" id="appDialogInputLabel">输入</label>
             <input type="text" id="appDialogInput" autocomplete="off" />
+            <div class="app-dialog-month-picker" id="appDialogMonthPicker" hidden>
+              <div class="month-picker-head">
+                <button class="month-picker-nav" id="btnAppDialogMonthPrev" type="button" aria-label="上一年">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M8.5 3L4.5 7L8.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="month-picker-year" id="appDialogMonthYear">2026</div>
+                <button class="month-picker-nav" id="btnAppDialogMonthNext" type="button" aria-label="下一年">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M5.5 3L9.5 7L5.5 11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+              <div class="month-picker-grid" id="appDialogMonthGrid" role="listbox" aria-label="选择月份"></div>
+            </div>
             <div class="app-dialog-help" id="appDialogInputHelp"></div>
             <div class="app-dialog-error" id="appDialogInputError"></div>
           </div>
@@ -1801,6 +1903,6 @@
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
 
-    <script src="fbu-performance.js?v=upload-receipt-20260610"></script>
+    <script src="fbu-performance.js?v=custom-month-dialog-20260610"></script>
   </body>
 </html>

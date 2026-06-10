@@ -181,6 +181,11 @@ const el = {
   appDialogInput: document.getElementById('appDialogInput'),
   appDialogInputHelp: document.getElementById('appDialogInputHelp'),
   appDialogInputError: document.getElementById('appDialogInputError'),
+  appDialogMonthPicker: document.getElementById('appDialogMonthPicker'),
+  appDialogMonthYear: document.getElementById('appDialogMonthYear'),
+  appDialogMonthGrid: document.getElementById('appDialogMonthGrid'),
+  btnAppDialogMonthPrev: document.getElementById('btnAppDialogMonthPrev'),
+  btnAppDialogMonthNext: document.getElementById('btnAppDialogMonthNext'),
   btnCloseAppDialog: document.getElementById('btnCloseAppDialog'),
   btnCancelAppDialog: document.getElementById('btnCancelAppDialog'),
   btnConfirmAppDialog: document.getElementById('btnConfirmAppDialog'),
@@ -199,12 +204,60 @@ const el = {
 
 let appDialogResolve = null;
 let appDialogValidate = null;
+let appDialogInputKind = 'text';
+let appDialogMonthYear = new Date().getFullYear();
+
+const APP_DIALOG_MONTH_LABELS = Array.from({ length: 12 }, (_, index) => `${String(index + 1).padStart(2, '0')}月`);
 
 function getDefaultCalcMonth() {
   const date = new Date();
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   return `${year}-${month}`;
+}
+
+function parseCalcMonth(value) {
+  const match = String(value || '').match(/^(\d{4})-(0[1-9]|1[0-2])$/);
+  if (match) {
+    return { year: Number(match[1]), month: Number(match[2]) };
+  }
+
+  const [year, month] = getDefaultCalcMonth().split('-').map(Number);
+  return { year, month };
+}
+
+function renderAppDialogMonthPicker() {
+  if (!el.appDialogMonthGrid || !el.appDialogMonthYear) return;
+
+  const current = parseCalcMonth(el.appDialogInput.value);
+  el.appDialogMonthYear.textContent = String(appDialogMonthYear);
+
+  const buttons = APP_DIALOG_MONTH_LABELS.map((label, index) => {
+    const month = index + 1;
+    const button = document.createElement('button');
+    const selected = current.year === appDialogMonthYear && current.month === month;
+
+    button.type = 'button';
+    button.className = `month-picker-option${selected ? ' selected' : ''}`;
+    button.dataset.month = String(month);
+    button.textContent = label;
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', selected ? 'true' : 'false');
+
+    return button;
+  });
+
+  el.appDialogMonthGrid.replaceChildren(...buttons);
+}
+
+function setAppDialogMonthValue(year, month) {
+  const safeYear = Number.isFinite(year) ? year : new Date().getFullYear();
+  const safeMonth = Math.min(12, Math.max(1, Number(month) || 1));
+
+  appDialogMonthYear = safeYear;
+  el.appDialogInput.value = `${safeYear}-${String(safeMonth).padStart(2, '0')}`;
+  el.appDialogInputError.textContent = '';
+  renderAppDialogMonthPicker();
 }
 
 function setDialogTone(tone = 'primary') {
@@ -244,17 +297,48 @@ function openAppDialog(options = {}) {
     el.appDialogInputError.textContent = '';
 
     if (input) {
+      const isMonthPicker = input.kind === 'month';
+
+      appDialogInputKind = isMonthPicker ? 'month' : 'text';
       el.appDialogField.hidden = false;
       el.appDialogInputLabel.textContent = input.label || '';
       el.appDialogInput.placeholder = input.placeholder || '';
-      el.appDialogInput.value = input.value || '';
       el.appDialogInputHelp.textContent = input.help || '';
-      el.appDialogInput.inputMode = input.inputMode || 'text';
-      el.appDialogInput.maxLength = input.maxLength || 64;
+      el.appDialogInput.type = 'text';
+      el.appDialogInput.readOnly = isMonthPicker || Boolean(input.readOnly);
+
+      if (input.inputMode) {
+        el.appDialogInput.inputMode = input.inputMode;
+      } else {
+        el.appDialogInput.removeAttribute('inputmode');
+      }
+
+      if (input.maxLength) {
+        el.appDialogInput.maxLength = input.maxLength;
+      } else {
+        el.appDialogInput.removeAttribute('maxlength');
+      }
+
+      if (isMonthPicker) {
+        const monthParts = parseCalcMonth(input.value || getDefaultCalcMonth());
+        el.appDialogInput.value = `${monthParts.year}-${String(monthParts.month).padStart(2, '0')}`;
+        appDialogMonthYear = monthParts.year;
+        el.appDialogMonthPicker.hidden = false;
+        renderAppDialogMonthPicker();
+      } else {
+        el.appDialogInput.value = input.value || '';
+        el.appDialogMonthPicker.hidden = true;
+      }
     } else {
+      appDialogInputKind = 'text';
       el.appDialogField.hidden = true;
       el.appDialogInput.value = '';
       el.appDialogInputHelp.textContent = '';
+      el.appDialogInput.readOnly = false;
+      el.appDialogInput.type = 'text';
+      el.appDialogInput.removeAttribute('inputmode');
+      el.appDialogInput.removeAttribute('maxlength');
+      el.appDialogMonthPicker.hidden = true;
     }
 
     el.appDialog.classList.add('active');
@@ -262,7 +346,9 @@ function openAppDialog(options = {}) {
     setTimeout(() => {
       if (input) {
         el.appDialogInput.focus();
-        el.appDialogInput.select();
+        if (appDialogInputKind !== 'month') {
+          el.appDialogInput.select();
+        }
       } else {
         el.btnConfirmAppDialog.focus();
       }
@@ -302,6 +388,20 @@ el.appDialogInput?.addEventListener('input', () => {
 });
 el.appDialogInput?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') confirmAppDialog();
+});
+el.btnAppDialogMonthPrev?.addEventListener('click', () => {
+  appDialogMonthYear -= 1;
+  renderAppDialogMonthPicker();
+});
+el.btnAppDialogMonthNext?.addEventListener('click', () => {
+  appDialogMonthYear += 1;
+  renderAppDialogMonthPicker();
+});
+el.appDialogMonthGrid?.addEventListener('click', (event) => {
+  const button = event.target.closest('.month-picker-option');
+  if (!button || !el.appDialogMonthGrid.contains(button)) return;
+
+  setAppDialogMonthValue(appDialogMonthYear, Number(button.dataset.month));
 });
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && el.appDialog?.classList.contains('active')) {
@@ -456,12 +556,12 @@ el.btnNewActivity.addEventListener('click', async () => {
     confirmText: '创建活动',
     cancelText: '取消',
     input: {
+      kind: 'month',
       label: '核算月份',
       value: state.currentActivity?.calc_month || getDefaultCalcMonth(),
-      placeholder: '2026-04',
-      help: '格式：YYYY-MM',
+      placeholder: '选择月份',
+      help: '请选择核算月份，年份可用左右按钮切换。',
       maxLength: 7,
-      inputMode: 'numeric',
       validate: (value) => {
         if (!value) return '请输入核算月份';
         if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return '月份格式应为 YYYY-MM，例如 2026-04';
