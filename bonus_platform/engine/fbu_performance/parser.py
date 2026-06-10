@@ -433,14 +433,22 @@ class FBUPerformanceParser:
                 "ratio": info.get('ratio', 0),
             })
 
-        # 汇总统计
+        # 汇总统计：薪资档案常包含离职或未维护时薪的员工，预览中拆开显示。
         total_employees = len(employee_list)
-        avg_hourly_rate = sum(e['hourly_rate'] for e in employee_list) / total_employees if total_employees > 0 else 0
+        valid_hourly_count = sum(1 for e in employee_list if e['hourly_rate'] > 0)
+        zero_hourly_count = sum(1 for e in employee_list if e['hourly_rate'] == 0)
+        avg_hourly_rate = (
+            sum(e['hourly_rate'] for e in employee_list if e['hourly_rate'] > 0) / valid_hourly_count
+            if valid_hourly_count > 0
+            else 0
+        )
 
         return {
             "employees": employee_list,
             "summary": {
                 "total_employees": total_employees,
+                "valid_hourly_count": valid_hourly_count,
+                "zero_hourly_count": zero_hourly_count,
                 "avg_hourly_rate": round(avg_hourly_rate, 2),
             }
         }

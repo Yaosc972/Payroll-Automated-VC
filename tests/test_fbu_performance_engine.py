@@ -65,12 +65,34 @@ def test_salary_processor_accepts_percent_strings():
     rows = [
         ["Ana", "E001", None, None, None, None, None, None, None, "10%", None, "20.5"],
         ["Ben", "E002", None, None, None, None, None, None, None, 15, None, 18],
+        ["Cara", "E003", None, None, None, None, None, None, None, None, None, 0],
     ]
 
     data = SalaryProcessor().load(rows)
 
     assert data["E001"] == {"hourly_rate": 20.5, "ratio": 0.1}
     assert data["E002"] == {"hourly_rate": 18.0, "ratio": 0.15}
+    assert data["E003"] == {"hourly_rate": 0.0, "ratio": 0.0}
+
+
+def test_salary_preview_reports_total_valid_and_zero_hourly_counts(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["姓名", "工号", "", "", "", "", "", "", "", "月度绩效奖金比例(%)", "", "时薪标准"])
+    sheet.append(["Ana", "E001", "", "", "", "", "", "", "", "10%", "", 20])
+    sheet.append(["Ben", "E002", "", "", "", "", "", "", "", "", "", 0])
+    sheet.append(["Cara", "E003", "", "", "", "", "", "", "", 20, "", 30])
+    path = tmp_path / "salary.xlsx"
+    workbook.save(path)
+
+    preview = FBUPerformanceParser().parse_salary_preview(str(path))
+
+    assert preview["summary"]["total_employees"] == 3
+    assert preview["summary"]["valid_hourly_count"] == 2
+    assert preview["summary"]["zero_hourly_count"] == 1
+    assert preview["summary"]["avg_hourly_rate"] == 25
 
 
 def test_build_employees_splits_night_shift_and_flags_missing_matches():

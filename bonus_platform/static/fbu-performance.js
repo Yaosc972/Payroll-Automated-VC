@@ -603,11 +603,19 @@ function renderSalaryData() {
     </div>
     <div class="summary-stats">
       <div class="summary-stat">
-        <span class="summary-stat-label">员工总数</span>
+        <span class="summary-stat-label">档案人数</span>
         <span class="summary-stat-value">${summary.total_employees}</span>
       </div>
       <div class="summary-stat">
-        <span class="summary-stat-label">平均时薪</span>
+        <span class="summary-stat-label">有效时薪</span>
+        <span class="summary-stat-value">${summary.valid_hourly_count ?? summary.total_employees}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">0时薪</span>
+        <span class="summary-stat-value">${summary.zero_hourly_count ?? 0}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">有效平均时薪</span>
         <span class="summary-stat-value">$${summary.avg_hourly_rate.toFixed(2)}</span>
       </div>
     </div>

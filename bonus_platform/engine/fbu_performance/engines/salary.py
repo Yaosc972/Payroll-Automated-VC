@@ -52,7 +52,7 @@ class SalaryProcessor:
             hourly_rate = self._cell(row, self.COLUMN_MAP['时薪标准'])
             ratio = self._cell(row, self.COLUMN_MAP['绩效比例'])
 
-            if emp_id and hourly_rate:
+            if emp_id and hourly_rate is not None and hourly_rate != "":
                 ratio_value = self._to_float(ratio)
                 # 绩效比例可能是百分比形式，需要转换
                 if ratio_value > 1:
