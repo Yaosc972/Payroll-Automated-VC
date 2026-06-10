@@ -11,6 +11,7 @@ const state = {
   attendanceData: null,
   salaryData: null,
   performanceData: null,
+  adjustmentData: null,
   resultsData: null,
   baseRoster: null,
 };
@@ -62,6 +63,7 @@ const el = {
   btnExportSalary: document.getElementById('btnExportSalary'),
   btnUploadPerformance: document.getElementById('btnUploadPerformance'),
   btnUploadPerformanceEmpty: document.getElementById('btnUploadPerformanceEmpty'),
+  btnUploadAdjustments: document.getElementById('btnUploadAdjustments'),
   btnExportPerformance: document.getElementById('btnExportPerformance'),
   btnCalculate: document.getElementById('btnCalculate'),
   btnCalculateEmpty: document.getElementById('btnCalculateEmpty'),
@@ -230,6 +232,10 @@ async function enterActivity(activityId) {
       state.performanceData = activity.performance_data;
       renderPerformanceData();
     }
+    if (activity.adjustment_data) {
+      state.adjustmentData = activity.adjustment_data;
+      renderPerformanceData();
+    }
     if (activity.results) {
       state.resultsData = activity.results;
       renderResultsData();
@@ -343,6 +349,7 @@ function openUploadModal(type) {
     attendance: '上传考勤日报表',
     salary: '上传薪资档案',
     performance: '上传绩效报表',
+    adjustments: '上传调薪/转正拆分表',
   };
 
   el.uploadModalTitle.textContent = titles[type];
@@ -399,6 +406,9 @@ el.btnConfirmUpload.addEventListener('click', async () => {
     } else if (uploadType === 'performance') {
       formData.append('run_id', state.currentActivity.run_id);
       endpoint = `${API_BASE}/import-performance`;
+    } else if (uploadType === 'adjustments') {
+      formData.append('run_id', state.currentActivity.run_id);
+      endpoint = `${API_BASE}/import-adjustments`;
     }
 
     const data = await apiJson(endpoint, {
@@ -420,6 +430,9 @@ el.btnConfirmUpload.addEventListener('click', async () => {
         renderSalaryData();
       } else if (completedUploadType === 'performance') {
         state.performanceData = data.preview;
+        renderPerformanceData();
+      } else if (completedUploadType === 'adjustments') {
+        state.adjustmentData = data.preview;
         renderPerformanceData();
       }
 
@@ -444,6 +457,7 @@ el.btnUploadSalary?.addEventListener('click', () => openUploadModal('salary'));
 el.btnUploadSalaryEmpty?.addEventListener('click', () => openUploadModal('salary'));
 el.btnUploadPerformance?.addEventListener('click', () => openUploadModal('performance'));
 el.btnUploadPerformanceEmpty?.addEventListener('click', () => openUploadModal('performance'));
+el.btnUploadAdjustments?.addEventListener('click', () => openUploadModal('adjustments'));
 
 // ═══ Render Attendance Data ═══
 
@@ -647,8 +661,25 @@ function renderPerformanceData() {
 
   const employees = state.performanceData.employees;
   const summary = state.performanceData.summary;
+  const adjustmentSummary = state.adjustmentData?.summary;
 
   el.performanceContent.innerHTML = `
+    ${adjustmentSummary ? `
+      <div class="summary-stats" style="margin-bottom: 16px;">
+        <div class="summary-stat">
+          <span class="summary-stat-label">拆分员工</span>
+          <span class="summary-stat-value">${adjustmentSummary.total_employees}</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">拆分段数</span>
+          <span class="summary-stat-value">${adjustmentSummary.total_segments}</span>
+        </div>
+        <div class="summary-stat">
+          <span class="summary-stat-label">有效拆分基数</span>
+          <span class="summary-stat-value">$${Number(adjustmentSummary.active_performance_base || 0).toFixed(2)}</span>
+        </div>
+      </div>
+    ` : ''}
     <!-- 筛选条件 -->
     <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <input type="text" id="filterPerfId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
@@ -837,6 +868,27 @@ el.btnCalculateEmpty?.addEventListener('click', executeCalculate);
 function showCalcChain(employeeId) {
   const emp = state.resultsData?.find(r => r.employee_id === employeeId);
   if (!emp) return;
+  const segments = emp.calculation_segments || [];
+
+  if (segments.length) {
+    el.calcChainContent.innerHTML = `
+      <div class="calc-chain-title">绩效奖金计算过程 - ${escapeHtml(employeeId)}</div>
+      <div class="calc-chain-item">调薪/转正拆分核算</div>
+      ${segments.map(segment => `
+        <div class="calc-chain-item" style="padding-left: 32px;">
+          ${escapeHtml(segment.period || '-')} · ${escapeHtml(segment.reason || '-')}：
+          $${Number(segment.performance_base || 0).toFixed(2)}
+          × ${(Number(segment.performance_ratio || 0) * 100).toFixed(1)}%
+          × ${Number(segment.performance_coefficient || 0).toFixed(2)}
+          = $${Number(segment.performance_bonus || 0).toFixed(2)}
+        </div>
+      `).join('')}
+      <div class="calc-chain-item calc-chain-result">绩效奖金合计 = $${emp.performance_bonus.toFixed(2)}</div>
+      ${(emp.exceptions || []).length ? `<div class="calc-chain-item">异常提示 = ${escapeHtml(emp.exceptions.join('；'))}</div>` : ''}
+    `;
+    el.calcChainModal.classList.add('active');
+    return;
+  }
 
   const hourlyRate = emp.hourly_rate;
   const baseHours = emp.base_hours;

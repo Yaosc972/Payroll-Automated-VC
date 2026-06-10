@@ -55,6 +55,28 @@ class BonusCalculator:
 
         绩效奖金 = 绩效基数 × 绩效比例 × 绩效系数
         """
+        if emp.calculation_segments:
+            total_bonus = 0.0
+            active_segments = []
+            for segment in emp.calculation_segments:
+                segment.performance_bonus = (
+                    segment.performance_base
+                    * segment.performance_ratio
+                    * segment.performance_coefficient
+                )
+                total_bonus += segment.performance_bonus
+                if segment.performance_ratio > 0:
+                    active_segments.append(segment)
+
+            if active_segments:
+                emp.performance_base = sum(segment.performance_base for segment in active_segments)
+                emp.performance_ratio = active_segments[-1].performance_ratio
+                emp.performance_coefficient = active_segments[-1].performance_coefficient
+            else:
+                emp.performance_base = 0.0
+            emp.performance_bonus = total_bonus
+            return emp.performance_bonus
+
         if emp.job_type == "district_manager" and emp.fixed_performance_base:
             emp.performance_bonus = emp.performance_base * emp.performance_coefficient
             return emp.performance_bonus

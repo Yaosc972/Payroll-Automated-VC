@@ -1782,6 +1782,42 @@ async def import_fbu_performance(
         raise HTTPException(500, f"绩效数据解析失败: {str(e)}")
 
 
+@app.post("/api/fbu-performance/import-adjustments")
+async def import_fbu_adjustments(
+    run_id: str = Body(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """可选：导入调薪/转正拆分表"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    file_path = run_dir / "adjustments.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    fbu_run_manager.update_run(run_id, adjustment_file=file.filename)
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        preview = parser.parse_adjustments_preview(str(file_path))
+        fbu_run_manager.save_step_data(run_id, 4, preview)
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 4,
+            "preview": preview,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"调薪拆分表解析失败: {str(e)}")
+
+
 @app.post("/api/fbu-performance/import")
 async def import_fbu_performance_data(
     attendance: UploadFile = File(...),
@@ -1836,6 +1872,7 @@ def calculate_fbu_performance(run_id: str) -> dict:
                 attendance_data=run.attendance_data.get('employees', []),
                 salary_data=run.salary_data.get('employees', []),
                 performance_data=run.performance_data.get('employees', []),
+                adjustment_data=run.adjustment_data.get('employees', []),
             )
         else:
             # 一次性导入模式：从文件计算

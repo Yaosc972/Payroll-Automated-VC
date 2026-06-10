@@ -5,6 +5,17 @@ from typing import Optional
 
 
 @dataclass
+class CalculationSegment:
+    """绩效奖金核算拆分段。"""
+    period: str
+    reason: str
+    performance_base: float
+    performance_ratio: float
+    performance_coefficient: float
+    performance_bonus: float = 0.0
+
+
+@dataclass
 class EmployeeData:
     """员工数据模型"""
     employee_id: str
@@ -39,6 +50,7 @@ class EmployeeData:
     performance_base: float = 0.0
     performance_coefficient: float = 0.0
     performance_bonus: float = 0.0
+    calculation_segments: list[CalculationSegment] = field(default_factory=list)
     exceptions: list[str] = field(default_factory=list)
 
     def __post_init__(self):

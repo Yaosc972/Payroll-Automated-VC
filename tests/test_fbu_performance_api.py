@@ -43,6 +43,21 @@ def _attendance_bytes() -> bytes:
     return _workbook_bytes(workbook)
 
 
+def _adjustment_bytes() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "调薪拆分"
+    sheet.append(["header"] * 32)
+    row = [""] * 32
+    row[3] = "zt001"
+    row[4] = "Ana Roster"
+    row[9] = "4.26-4.30"
+    row[28] = 500
+    row[31] = "调薪后"
+    sheet.append(row)
+    return _workbook_bytes(workbook)
+
+
 def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
@@ -74,3 +89,30 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     assert employee["area"] == "US-West"
     assert employee["job_type"] == "functional"
     assert employee["roster_matched"] is True
+
+
+def test_fbu_adjustment_upload_is_saved_as_optional_run_data(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    client = TestClient(app_module.app)
+
+    run_response = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"})
+    assert run_response.status_code == 200
+    run_id = run_response.json()["run_id"]
+
+    adjustment_response = client.post(
+        "/api/fbu-performance/import-adjustments",
+        data={"run_id": run_id},
+        files={"file": ("adjustments.xlsx", _adjustment_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert adjustment_response.status_code == 200
+    payload = adjustment_response.json()
+    assert payload["preview"]["summary"]["total_employees"] == 1
+    assert payload["preview"]["summary"]["active_performance_base"] == 500
+
+    run_detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
+    assert run_detail["adjustment_file"] == "adjustments.xlsx"
+    assert run_detail["adjustment_data"]["employees"][0]["segments"][0]["reason"] == "调薪后"

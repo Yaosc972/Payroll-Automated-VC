@@ -100,6 +100,89 @@ def test_district_manager_uses_fixed_base_and_uploaded_coefficient():
     assert round(emp.performance_bonus, 2) == 4050
 
 
+def test_adjustment_split_preview_reads_zhang_haibing_style_segments(tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "调薪拆分"
+    sheet.append(["header"] * 32)
+    for period, amount, reason in [
+        ("4.1-4.11", 1404.9, "调薪前"),
+        ("4.12-4.25", 1667.88, "调薪前"),
+        ("4.26-4.30", 732.42, "调薪后"),
+    ]:
+        row = [""] * 32
+        row[3] = "zt0021990"
+        row[4] = "张海冰"
+        row[9] = period
+        row[28] = amount
+        row[31] = reason
+        sheet.append(row)
+    path = tmp_path / "adjustments.xlsx"
+    workbook.save(path)
+
+    preview = FBUPerformanceParser().parse_adjustments_preview(str(path))
+
+    assert preview["summary"]["total_employees"] == 1
+    assert preview["summary"]["total_segments"] == 3
+    assert preview["summary"]["active_performance_base"] == 732.42
+    employee = preview["employees"][0]
+    assert employee["employee_id"] == "zt0021990"
+    assert employee["name"] == "张海冰"
+    assert employee["segments"][2] == {
+        "period": "4.26-4.30",
+        "reason": "调薪后",
+        "performance_base": 732.42,
+    }
+
+
+def test_adjustment_split_uses_post_adjustment_base_ratio_and_fixed_coefficient():
+    parser = FBUPerformanceParser()
+    engine = parser.parse_all_from_step_data(
+        attendance_data=[
+            {
+                "employee_id": "zt0021990",
+                "name": "张海冰",
+                "department": "新泽西21号仓（SN）",
+                "area": "新泽西区",
+                "job_type": "warehouse",
+                "has_night_shift": False,
+                "day_shift": {"计薪出勤": 183.95, "OT1.5": 18.3, "OT2.0": 0, "病假": 0, "年假": 0, "节假日": 0},
+                "night_shift": {"计薪出勤": 0, "OT1.5": 0, "OT2.0": 0, "病假": 0, "年假": 0, "节假日": 0},
+            }
+        ],
+        salary_data=[
+            {
+                "employee_id": "zt0021990",
+                "hourly_rate": 18,
+                "ratio": 0.05,
+                "calculation_method": "固定比例核算",
+                "fixed_performance_base": 0,
+            }
+        ],
+        performance_data=[],
+        adjustment_data=[
+            {
+                "employee_id": "zt0021990",
+                "segments": [
+                    {"period": "4.1-4.11", "reason": "调薪前", "performance_base": 1404.9},
+                    {"period": "4.12-4.25", "reason": "调薪前", "performance_base": 1667.88},
+                    {"period": "4.26-4.30", "reason": "调薪后", "performance_base": 732.42},
+                ],
+            }
+        ],
+    )
+
+    emp = engine.get_employee("zt0021990")
+
+    assert emp.performance_base == 732.42
+    assert emp.performance_ratio == 0.05
+    assert emp.performance_coefficient == 1.0
+    assert round(emp.performance_bonus, 2) == 36.62
+    assert [round(segment.performance_bonus, 2) for segment in emp.calculation_segments] == [0, 0, 36.62]
+
+
 def test_salary_preview_reports_total_valid_and_zero_hourly_counts(tmp_path):
     from openpyxl import Workbook
 

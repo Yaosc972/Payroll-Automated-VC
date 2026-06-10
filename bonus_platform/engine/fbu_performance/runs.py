@@ -8,7 +8,7 @@ import shutil
 import json
 import uuid
 
-from .engines.base import EmployeeData
+from .engines.base import CalculationSegment, EmployeeData
 from .exporter import FBUPerformanceExporter
 
 
@@ -23,12 +23,14 @@ class FBURun:
     attendance_file: str = ""
     salary_file: str = ""
     performance_file: str = ""
+    adjustment_file: str = ""
     roster_file: str = ""
     roster_source: str = ""  # activity / base
     # 分步数据
     attendance_data: dict = field(default_factory=dict)  # 考勤解析结果
     salary_data: dict = field(default_factory=dict)  # 薪资解析结果
     performance_data: dict = field(default_factory=dict)  # 绩效解析结果
+    adjustment_data: dict = field(default_factory=dict)  # 调薪/转正拆分解析结果
     # 最终结果
     total_employees: int = 0
     total_bonus: float = 0.0
@@ -112,6 +114,8 @@ class FBURunManager:
             run.performance_data = data
             run.current_step = 3
             run.status = "step3"
+        elif step == 4:
+            run.adjustment_data = data
 
         self._save_runs()
 
@@ -166,6 +170,17 @@ class FBURunManager:
                 "uploaded_coefficient": emp.uploaded_coefficient,
                 "performance_coefficient": emp.performance_coefficient,
                 "performance_bonus": emp.performance_bonus,
+                "calculation_segments": [
+                    {
+                        "period": segment.period,
+                        "reason": segment.reason,
+                        "performance_base": segment.performance_base,
+                        "performance_ratio": segment.performance_ratio,
+                        "performance_coefficient": segment.performance_coefficient,
+                        "performance_bonus": segment.performance_bonus,
+                    }
+                    for segment in emp.calculation_segments
+                ],
                 "exceptions": emp.exceptions,
             })
             total_bonus += emp.performance_bonus
@@ -208,6 +223,17 @@ class FBURunManager:
                 uploaded_coefficient=r.get("uploaded_coefficient"),
                 performance_coefficient=r["performance_coefficient"],
                 performance_bonus=r["performance_bonus"],
+                calculation_segments=[
+                    CalculationSegment(
+                        period=s.get("period", ""),
+                        reason=s.get("reason", ""),
+                        performance_base=s.get("performance_base", 0),
+                        performance_ratio=s.get("performance_ratio", 0),
+                        performance_coefficient=s.get("performance_coefficient", 0),
+                        performance_bonus=s.get("performance_bonus", 0),
+                    )
+                    for s in r.get("calculation_segments", [])
+                ],
                 exceptions=r.get("exceptions", []),
             )
             employees.append(emp)

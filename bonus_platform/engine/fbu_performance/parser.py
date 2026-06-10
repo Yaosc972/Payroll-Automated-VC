@@ -8,7 +8,7 @@ import msoffcrypto
 import io
 import xlrd
 
-from .engines.base import EmployeeData, FBUPerformanceEngine
+from .engines.base import CalculationSegment, EmployeeData, FBUPerformanceEngine
 from .engines.attendance import AttendanceProcessor
 from .engines.salary import SalaryProcessor
 from .engines.bonus import BonusCalculator
@@ -223,10 +223,13 @@ class FBUPerformanceParser:
         salary_data: dict,
         performance_data: dict,
         employee_info: dict = None,
+        adjustment_data: dict = None,
     ) -> list[EmployeeData]:
         """构建员工数据"""
         if employee_info is None:
             employee_info = {}
+        if adjustment_data is None:
+            adjustment_data = {}
 
         employees = []
 
@@ -256,6 +259,13 @@ class FBUPerformanceParser:
             level = perf_info.get('level')
             uploaded_coefficient = perf_info.get('coefficient')
             job_type = info.get('job_type', 'warehouse') if info else 'warehouse'
+            adjustment_segments = self._build_calculation_segments(
+                adjustment_data.get(emp_id, []),
+                ratio=ratio,
+                coefficient=uploaded_coefficient,
+            )
+            if adjustment_segments and "未匹配绩效报表" in exceptions:
+                exceptions.remove("未匹配绩效报表")
 
             # 处理白班
             if hours['白班']['计薪出勤'] > 0 or hours['白班']['OT1.5'] > 0:
@@ -279,6 +289,7 @@ class FBUPerformanceParser:
                     annual_hours=hours['白班']['年假'],
                     holiday_hours=hours['白班']['节假日'],
                     is_night_shift=False,
+                    calculation_segments=list(adjustment_segments),
                     exceptions=list(exceptions),
                 )
                 employees.append(emp)
@@ -305,11 +316,35 @@ class FBUPerformanceParser:
                     annual_hours=hours['夜班']['年假'],
                     holiday_hours=hours['夜班']['节假日'],
                     is_night_shift=True,
+                    calculation_segments=list(adjustment_segments),
                     exceptions=list(exceptions),
                 )
                 employees.append(emp)
 
         return employees
+
+    @staticmethod
+    def _build_calculation_segments(
+        raw_segments: list[dict],
+        ratio: float,
+        coefficient: float | None,
+    ) -> list[CalculationSegment]:
+        """把调薪拆分预览数据转成核算段。"""
+        segments = []
+        effective_coefficient = coefficient if coefficient is not None else 1.0
+        for raw in raw_segments:
+            reason = str(raw.get("reason", "")).strip()
+            segment_ratio = 0.0 if "前" in reason else ratio
+            segments.append(
+                CalculationSegment(
+                    period=str(raw.get("period", "")).strip(),
+                    reason=reason,
+                    performance_base=_to_float(raw.get("performance_base"), 0) or 0.0,
+                    performance_ratio=segment_ratio,
+                    performance_coefficient=effective_coefficient,
+                )
+            )
+        return segments
 
     def parse_all(
         self,
@@ -534,11 +569,72 @@ class FBUPerformanceParser:
             }
         }
 
+    def parse_adjustments_preview(self, filepath: str) -> dict:
+        """
+        解析调薪/转正拆分表并返回预览。
+
+        目前支持线下《仓库管理绩效基数》中的“调薪拆分”sheet：
+        工号、姓名、期间、分段绩效基数、调薪前/调薪后标识分别位于固定列。
+        """
+        wb = self.load_excel(filepath)
+        if "调薪拆分" not in wb.sheetnames:
+            raise ValueError("未找到“调薪拆分”工作表")
+
+        ws = wb["调薪拆分"]
+        grouped: dict[str, dict] = {}
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            emp_id = str(_cell(row, 3) or "").strip()
+            if not emp_id or not emp_id.lower().startswith("zt"):
+                continue
+
+            amount = _to_float(_cell(row, 28), 0)
+            reason = str(_cell(row, 31) or "").strip()
+            period = str(_cell(row, 9) or "").strip()
+            if amount is None or not reason:
+                continue
+
+            emp_info = self.get_employee_info(emp_id)
+            entry = grouped.setdefault(
+                emp_id,
+                {
+                    "employee_id": emp_id,
+                    "name": emp_info["name"] or str(_cell(row, 4) or "").strip(),
+                    "department": emp_info["department"],
+                    "area": emp_info["area"],
+                    "segments": [],
+                },
+            )
+            entry["segments"].append({
+                "period": period,
+                "reason": reason,
+                "performance_base": round(amount, 2),
+            })
+
+        employees = list(grouped.values())
+        total_segments = sum(len(emp["segments"]) for emp in employees)
+        active_base = sum(
+            segment["performance_base"]
+            for emp in employees
+            for segment in emp["segments"]
+            if "前" not in segment["reason"]
+        )
+
+        return {
+            "employees": employees,
+            "summary": {
+                "total_employees": len(employees),
+                "total_segments": total_segments,
+                "active_performance_base": round(active_base, 2),
+            },
+        }
+
     def parse_all_from_step_data(
         self,
         attendance_data: list,
         salary_data: list,
         performance_data: list,
+        adjustment_data: list = None,
     ) -> FBUPerformanceEngine:
         """
         从分步数据计算最终结果
@@ -547,6 +643,7 @@ class FBUPerformanceParser:
             attendance_data: 考勤预览数据中的employees列表
             salary_data: 薪资预览数据中的employees列表
             performance_data: 绩效预览数据中的employees列表
+            adjustment_data: 调薪拆分预览数据中的employees列表
 
         Returns:
             计算完成的引擎实例
@@ -589,8 +686,19 @@ class FBUPerformanceParser:
                 'coefficient': emp['coefficient'],
             }
 
+        adjustment_dict = {}
+        for emp in adjustment_data or []:
+            emp_id = emp['employee_id']
+            adjustment_dict[emp_id] = emp.get('segments', [])
+
         # 构建员工数据
-        employees = self.build_employees(attendance_dict, salary_dict, performance_dict, employee_info)
+        employees = self.build_employees(
+            attendance_dict,
+            salary_dict,
+            performance_dict,
+            employee_info,
+            adjustment_dict,
+        )
 
         # 计算绩效奖金
         for emp in employees:
