@@ -1,6 +1,7 @@
 from io import BytesIO
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from openpyxl import Workbook
 
 import bonus_platform.app as app_module
@@ -130,3 +131,22 @@ def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     assert response.content[:2] == b"PK"
+
+    workbook = load_workbook(BytesIO(response.content), data_only=True)
+    assert workbook.sheetnames == ["调薪拆分", "填写示例"]
+    main_sheet = workbook["调薪拆分"]
+    assert [main_sheet.cell(1, col).value for col in range(1, 7)] == [
+        "工号",
+        "姓名",
+        "分段期间",
+        "分段绩效基数",
+        "核算标识",
+        "备注",
+    ]
+    assert main_sheet.cell(2, 1).value is None
+    validations = list(main_sheet.data_validations.dataValidation)
+    assert len(validations) == 1
+    assert validations[0].type == "list"
+    assert validations[0].formula1 == '"调薪前,调薪后"'
+    assert "E2:E1000" in str(validations[0].sqref)
+    assert workbook["填写示例"].cell(2, 1).value == "zt0021990"

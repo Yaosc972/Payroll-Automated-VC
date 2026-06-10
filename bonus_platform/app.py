@@ -1822,6 +1822,7 @@ async def import_fbu_adjustments(
 def download_fbu_adjustments_template() -> FileResponse:
     """下载FBU调薪/转正拆分表模板"""
     import openpyxl
+    from openpyxl.worksheet.datavalidation import DataValidation
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
     wb = openpyxl.Workbook()
@@ -1829,17 +1830,17 @@ def download_fbu_adjustments_template() -> FileResponse:
     ws.title = "调薪拆分"
 
     headers = ["工号", "姓名", "分段期间", "分段绩效基数", "核算标识", "备注"]
-    examples = [
-        ["zt0021990", "张海冰", "4.1-4.11", 1404.90, "调薪前", "试用期，不参与绩效奖金"],
-        ["zt0021990", "张海冰", "4.12-4.25", 1667.88, "调薪前", "试用期，不参与绩效奖金"],
-        ["zt0021990", "张海冰", "4.26-4.30", 732.42, "调薪后", "转正后，按薪资档案绩效比例核算"],
-    ]
     notes = [
         "填报说明：",
         "1. 必填列：工号、分段期间、分段绩效基数、核算标识。",
         "2. 核算标识只填写“调薪前”或“调薪后”。调薪前按0%核算，调薪后使用薪资档案中的绩效比例。",
         "3. 同一员工可填写多行，平台会按分段逐行计算后汇总。",
         "4. 分段绩效基数请直接填线下拆分后的基数金额，不需要再填时薪或工时。",
+    ]
+    examples = [
+        ["zt0021990", "张海冰", "4.1-4.11", 1404.90, "调薪前", "试用期，不参与绩效奖金"],
+        ["zt0021990", "张海冰", "4.12-4.25", 1667.88, "调薪前", "试用期，不参与绩效奖金"],
+        ["zt0021990", "张海冰", "4.26-4.30", 732.42, "调薪后", "转正后，按薪资档案绩效比例核算"],
     ]
 
     header_fill = PatternFill(start_color="1E88E5", end_color="1E88E5", fill_type="solid")
@@ -1859,13 +1860,7 @@ def download_fbu_adjustments_template() -> FileResponse:
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = thin_border
 
-    for row_idx, row in enumerate(examples, 2):
-        for col_idx, value in enumerate(row, 1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.border = thin_border
-            cell.alignment = Alignment(vertical="center")
-
-    note_start = len(examples) + 4
+    note_start = 4
     for offset, note in enumerate(notes):
         cell = ws.cell(row=note_start + offset, column=1, value=note)
         cell.font = Font(bold=(offset == 0), color="334155") if offset == 0 else note_font
@@ -1874,6 +1869,34 @@ def download_fbu_adjustments_template() -> FileResponse:
     for idx, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + idx)].width = width
     ws.freeze_panes = "A2"
+    reason_validation = DataValidation(
+        type="list",
+        formula1='"调薪前,调薪后"',
+        allow_blank=False,
+        showErrorMessage=True,
+        errorTitle="核算标识无效",
+        error="请选择“调薪前”或“调薪后”。",
+    )
+    ws.add_data_validation(reason_validation)
+    reason_validation.add("E2:E1000")
+
+    example_ws = wb.create_sheet("填写示例")
+    for col_idx, header in enumerate(headers, 1):
+        cell = example_ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+
+    for row_idx, row in enumerate(examples, 2):
+        for col_idx, value in enumerate(row, 1):
+            cell = example_ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+
+    for idx, width in enumerate(widths, 1):
+        example_ws.column_dimensions[chr(64 + idx)].width = width
+    example_ws.freeze_panes = "A2"
 
     output_path = EXPORT_DIR / "FBU调薪转正拆分表模板.xlsx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
