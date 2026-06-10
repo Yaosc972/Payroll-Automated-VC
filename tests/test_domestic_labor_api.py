@@ -55,8 +55,8 @@ def _gonglingjiang_data() -> bytes:
     """工龄奖 API 工作流测试数据"""
     return _create_test_excel({
         "月考勤": [
-            ["工号", "姓名", "考勤月份", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "请假时数"],
-            ["OWHN001", "张三", "202606", "第四纵队", "内勤专员", "2023-01-01", 26, 26, 0],
+            ["工号", "姓名", "考勤月份", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "正班出勤天数", "事假时数", "病假时数", "旷工天数", "排休请假天数"],
+            ["OWHN001", "张三", "202606", "第四纵队", "内勤专员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
         ],
     })
 
@@ -361,6 +361,69 @@ def test_gonglingjiang_collection_employee_outside_hrbp_list_is_normal_zero():
     assert result.warnings == []
 
 
+def test_gonglingjiang_uses_raw_absence_fields_instead_of_leave_hours():
+    """工龄奖缺勤折算不读取月报聚合的请假时数，按规则卡原始字段计算"""
+    employee = {
+        **_gongling_collection_employee(),
+        "请假时数": 80,
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+        "排休请假天数": 0,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
+
+    assert result.amount == 450
+    explanation = result.details["audit_explanation"]
+    assert explanation["intermediate_values"]["事病旷排休时数"] == 0
+    assert "未达到56小时门槛" in " ".join(explanation["steps"])
+
+
+def test_gonglingjiang_absence_components_trigger_proration():
+    """事假+病假+旷工天数×8+排休请假天数×8 达到56小时后按天折算"""
+    employee = {
+        **_gongling_collection_employee(),
+        "事假时数": 8,
+        "病假时数": 8,
+        "旷工天数": 1,
+        "排休请假天数": 4,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
+
+    assert result.amount == 328.85
+    explanation = result.details["audit_explanation"]
+    assert explanation["intermediate_values"]["事病旷排休时数"] == 56
+    assert explanation["intermediate_values"]["旷工折算时数"] == 8
+    assert explanation["intermediate_values"]["排休请假折算时数"] == 32
+    assert "达到56小时门槛" in " ".join(explanation["steps"])
+
+
+def test_gonglingjiang_final_amount_floors_at_zero():
+    """工龄奖折算后金额为负时按规则卡兜底为0"""
+    employee = {
+        **_gongling_collection_employee(),
+        "实际在职工作日天数": -10,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
+
+    assert result.amount == 0
+    assert result.details["audit_explanation"]["intermediate_values"]["入离职折算后金额"] < 0
+
+
+def test_gonglingjiang_zero_regular_attendance_days_is_zero():
+    """月报正班出勤天数为0时，视为未出勤，工龄奖直接为0"""
+    employee = {
+        **_gongling_collection_employee(),
+        "正班出勤天数": 0,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "正班出勤天数为0"
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖出勤判断"
+    assert result.warnings == []
+
+
 def _gongling_collection_employee() -> dict:
     return {
         "工号": "OWHN001",
@@ -371,5 +434,10 @@ def _gongling_collection_employee() -> dict:
         "考勤月份": "202606",
         "排班天数": 26,
         "实际在职工作日天数": 26,
+        "正班出勤天数": 26,
         "请假时数": 0,
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+        "排休请假天数": 0,
     }

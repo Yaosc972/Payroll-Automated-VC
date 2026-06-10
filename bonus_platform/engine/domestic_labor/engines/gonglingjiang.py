@@ -1,7 +1,7 @@
 """工龄奖计算引擎 (Seniority Bonus Engine)."""
 from datetime import date, datetime
 from typing import Any, Dict, List
-from .base import BaseEngine, CalculationResult
+from .base import BaseEngine, CalculationResult, safe_float
 from ..models import AuditExplanation, PayrollException
 
 
@@ -269,6 +269,25 @@ class GongLingJiangEngine(BaseEngine):
                 warnings=warnings
             )
 
+        regular_attendance_days = employee_data.get("正班出勤天数")
+        if regular_attendance_days is not None and safe_float(regular_attendance_days) == 0:
+            return CalculationResult(
+                employee_id=employee_id,
+                employee_name=employee_name,
+                amount=0,
+                details=_details(
+                    {"reason": "正班出勤天数为0", "regular_attendance_days": 0},
+                    amount=0,
+                    rule_name="工龄奖出勤判断",
+                    inputs={**input_snapshot, "部门类别": dept_category, "正班出勤天数": safe_float(regular_attendance_days)},
+                    intermediate_values={"正班出勤天数": 0},
+                    steps=["员工本月正班出勤天数为0，视为未出勤", "工龄奖金额为0"],
+                    formula="正班出勤天数=0 → 工龄奖=0",
+                    exceptions=exceptions,
+                ),
+                warnings=[]
+            )
+
         # F2.5: 检查备注异常
         remark = str(employee_data.get("备注", "") or "")
         remark_keywords = ["事假未出勤", "全月事假", "事假全月", "未出勤"]
@@ -347,16 +366,14 @@ class GongLingJiangEngine(BaseEngine):
         # F5: 应发工龄奖
         yingfa = min(standard * years, cap)
 
-        # F6: 请假时数（事假+病假+旷工+排休，小时）— 对应月报"请假时数"列
-        spk_hours = float(employee_data.get("请假时数", 0) or 0)
-        # 如果没有请假时数字段，回退到单独计算
-        if spk_hours == 0:
-            spk_hours = (
-                float(employee_data.get("事假时数", 0) or 0)
-                + float(employee_data.get("病假时数", 0) or 0)
-                + float(employee_data.get("旷工时数", 0) or 0)
-                + float(employee_data.get("排休请假天数", 0) or 0)
-            )
+        # F6: 事病旷排休时数（小时）= 事假时数 + 病假时数 + 旷工天数×8 + 排休请假天数×8
+        personal_leave_hours = safe_float(employee_data.get("事假时数", 0))
+        sick_leave_hours = safe_float(employee_data.get("病假时数", 0))
+        absenteeism_days = safe_float(employee_data.get("旷工天数", 0))
+        rest_leave_days = safe_float(employee_data.get("排休请假天数", 0))
+        absenteeism_hours = absenteeism_days * 8
+        rest_leave_hours = rest_leave_days * 8
+        spk_hours = personal_leave_hours + sick_leave_hours + absenteeism_hours + rest_leave_hours
 
         # F7: 排班天数
         paiban = float(employee_data.get("排班天数", 0) or 0)
@@ -394,8 +411,19 @@ class GongLingJiangEngine(BaseEngine):
         day_rate = yingfa / paiban
         after_spk = day_rate * (paiban - spk_hours / 8) if spk_hours >= 56 else yingfa
         after_ruli = after_spk - day_rate * (ruli_hours / 8)
-        # 允许负数（表示需从工资中扣除）
-        final = round(min(after_ruli, cap), 2)
+        final = round(max(min(after_ruli, cap), 0), 2)
+
+        absence_step = (
+            f"事病旷排休合计{spk_hours}小时，达到56小时门槛，按出勤天数比例折算"
+            if spk_hours >= 56
+            else f"事病旷排休合计{spk_hours}小时，未达到56小时门槛，应发金额全额保留"
+        )
+        ruli_step = (
+            f"入离职缺勤时数{ruli_hours}小时，按天比例扣减"
+            if ruli_hours > 0
+            else "入离职缺勤时数为0，不额外扣减"
+        )
+        floor_step = "折算后金额低于0，最终金额按0兜底" if after_ruli < 0 else "最终金额按0到上限区间兜底"
 
         return CalculationResult(
             employee_id=employee_id,
@@ -430,9 +458,16 @@ class GongLingJiangEngine(BaseEngine):
                         "上限": cap,
                         "应发": yingfa,
                         "日折算金额": round(day_rate, 6),
+                        "事假时数": personal_leave_hours,
+                        "病假时数": sick_leave_hours,
+                        "旷工天数": absenteeism_days,
+                        "旷工折算时数": absenteeism_hours,
+                        "排休请假天数": rest_leave_days,
+                        "排休请假折算时数": rest_leave_hours,
                         "事病旷排休时数": spk_hours,
                         "入离职缺勤时数": ruli_hours,
                         "请假折算后金额": round(after_spk, 2),
+                        "入离职折算后金额": round(after_ruli, 2),
                         "最终金额": final,
                     },
                     steps=[
@@ -440,8 +475,10 @@ class GongLingJiangEngine(BaseEngine):
                         f"岗位{position}匹配工龄奖资格",
                         f"按{ref_date.isoformat()}计算工龄为{years}年",
                         f"应发金额=min({standard}×{years}, {cap})={yingfa}",
-                        "请假时数达到56小时及以上时按日折算扣减",
-                        f"入离职缺勤时数{ruli_hours}小时参与折算",
+                        "事病旷排休时数=事假时数+病假时数+旷工天数×8+排休请假天数×8",
+                        absence_step,
+                        ruli_step,
+                        floor_step,
                         f"最终工龄奖为{final}",
                     ],
                 ),
