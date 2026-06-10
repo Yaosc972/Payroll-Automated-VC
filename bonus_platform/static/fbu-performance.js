@@ -63,6 +63,13 @@ function formatHours(value) {
   return `${toNumber(value).toFixed(2)}h`;
 }
 
+function formatFileSize(bytes) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) return '-';
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
 function formatResultJobType(jobType) {
   const label = formatJobType(jobType);
   const className = jobType === 'functional'
@@ -155,6 +162,11 @@ const el = {
   uploadZoneTitle: document.getElementById('uploadZoneTitle'),
   uploadZoneSub: document.getElementById('uploadZoneSub'),
   uploadFileInput: document.getElementById('uploadFileInput'),
+  uploadResultPanel: document.getElementById('uploadResultPanel'),
+  uploadResultTitle: document.getElementById('uploadResultTitle'),
+  uploadResultSub: document.getElementById('uploadResultSub'),
+  uploadResultStats: document.getElementById('uploadResultStats'),
+  uploadResultFile: document.getElementById('uploadResultFile'),
   btnCloseUploadModal: document.getElementById('btnCloseUploadModal'),
   btnCancelUpload: document.getElementById('btnCancelUpload'),
   btnConfirmUpload: document.getElementById('btnConfirmUpload'),
@@ -178,6 +190,9 @@ const el = {
   calcChainContent: document.getElementById('calcChainContent'),
   btnCloseCalcChainModal: document.getElementById('btnCloseCalcChainModal'),
   btnCloseCalcChain: document.getElementById('btnCloseCalcChain'),
+
+  // Toasts
+  toastRegion: document.getElementById('toastRegion'),
 };
 
 // ═══ App Dialog ═══
@@ -385,7 +400,9 @@ function updateActivityKPIs() {
 
 // ═══ Enter Activity ═══
 
-async function enterActivity(activityId) {
+async function enterActivity(activityId, options = {}) {
+  const { preservePage = false } = options;
+
   try {
     const activity = await apiJson(`${API_BASE}/runs/${activityId}`);
 
@@ -397,7 +414,11 @@ async function enterActivity(activityId) {
                  activity.current_step >= 2 ? 'performance' :
                  activity.current_step >= 1 ? 'salary' : 'attendance';
 
-    navigateTo(page);
+    if (preservePage && state.currentPage !== 'activities') {
+      navigateTo(state.currentPage);
+    } else {
+      navigateTo(page);
+    }
 
     // Load data if available
     if (activity.attendance_data) {
@@ -547,33 +568,154 @@ el.btnUploadRoster?.addEventListener('click', chooseRosterFile);
 
 let uploadType = '';
 let uploadFile = null;
+let uploadStage = 'select';
+
+const uploadTypeLabels = {
+  attendance: '考勤日报表',
+  salary: '薪资档案',
+  performance: '绩效报表',
+  adjustments: '调薪/转正拆分表',
+};
+
+function getUploadTitle(type) {
+  const label = uploadTypeLabels[type] || '文件';
+  return `上传${label}`;
+}
+
+function getUploadHint(type) {
+  if (type === 'attendance' && state.baseRoster?.has_roster) {
+    return `点击选择或拖拽文件到此处 · 将自动引用基础花名册 ${state.baseRoster.filename || ''}`;
+  }
+  if (type === 'adjustments') {
+    return '点击选择或拖拽文件到此处 · 支持平台模板或线下调薪拆分表';
+  }
+  return '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
+}
+
+function resetUploadSelection() {
+  uploadStage = 'select';
+  uploadFile = null;
+  el.uploadFileInput.value = '';
+  el.uploadZone.hidden = false;
+  el.uploadResultPanel.hidden = true;
+  el.uploadZone.classList.remove('has-file', 'is-dragover');
+  el.uploadZoneTitle.textContent = '选择文件';
+  el.uploadZoneSub.textContent = getUploadHint(uploadType);
+  el.btnCancelUpload.disabled = false;
+  el.btnCloseUploadModal.disabled = false;
+  el.btnCancelUpload.textContent = '取消';
+  el.btnConfirmUpload.textContent = '确认上传';
+  el.btnConfirmUpload.disabled = true;
+}
+
+function setUploadFile(file) {
+  if (!file) return;
+  if (!/\.(xlsx|xls)$/i.test(file.name)) {
+    showNotification('仅支持 .xlsx / .xls 格式，请重新选择文件', 'error', { title: '文件格式不支持' });
+    return;
+  }
+  uploadFile = file;
+  uploadStage = 'select';
+  el.uploadZone.classList.add('has-file');
+  el.uploadZoneTitle.textContent = file.name;
+  el.uploadZoneSub.textContent = `${formatFileSize(file.size)} · 已选择，点击确认上传`;
+  el.btnConfirmUpload.disabled = false;
+}
+
+function setUploadBusy() {
+  uploadStage = 'uploading';
+  el.btnConfirmUpload.disabled = true;
+  el.btnConfirmUpload.textContent = '上传中...';
+  el.btnCancelUpload.disabled = true;
+  el.btnCloseUploadModal.disabled = true;
+}
+
+function buildUploadReceiptStats(type, summary = {}) {
+  if (type === 'attendance') {
+    const total = toNumber(summary.total_employees);
+    const matched = toNumber(summary.roster_matched);
+    const missing = toNumber(summary.roster_missing);
+    return [
+      { label: '解析员工', value: total },
+      { label: '花名册匹配', value: `${matched}/${total}`, tone: total && matched < total ? 'warning' : '' },
+      { label: '花名册缺失', value: missing, tone: missing ? 'warning' : '' },
+      { label: '计薪工时', value: formatHours(summary.total_base_hours) },
+    ];
+  }
+
+  if (type === 'salary') {
+    const zeroHourly = toNumber(summary.zero_hourly_count);
+    return [
+      { label: '薪资档案人数', value: toNumber(summary.total_employees) },
+      { label: '有效时薪', value: toNumber(summary.valid_hourly_count) },
+      { label: '0时薪', value: zeroHourly, tone: zeroHourly ? 'danger' : '' },
+      { label: '平均时薪', value: formatCurrency(summary.avg_hourly_rate) },
+    ];
+  }
+
+  if (type === 'performance') {
+    const distribution = summary.level_distribution || {};
+    return [
+      { label: '绩效员工', value: toNumber(summary.total_employees) },
+      { label: '有分数', value: toNumber(summary.scored_employees) },
+      { label: '平均得分', value: toNumber(summary.avg_score).toFixed(2) },
+      { label: '等级种类', value: Object.keys(distribution).length },
+    ];
+  }
+
+  if (type === 'adjustments') {
+    return [
+      { label: '拆分员工', value: toNumber(summary.total_employees) },
+      { label: '分段数量', value: toNumber(summary.total_segments) },
+      { label: '有效拆分基数', value: formatCurrency(summary.active_performance_base) },
+      { label: '状态', value: '已并入核算', tone: 'warning' },
+    ];
+  }
+
+  return [];
+}
+
+function renderUploadReceipt(type, data, file) {
+  const label = uploadTypeLabels[type] || '报表';
+  const summary = data.preview?.summary || {};
+  const resultFile = data.result_file;
+  const stats = buildUploadReceiptStats(type, summary);
+
+  uploadStage = 'result';
+  el.uploadZone.hidden = true;
+  el.uploadResultPanel.hidden = false;
+  el.uploadResultTitle.textContent = `${label}上传完成`;
+  el.uploadResultSub.textContent = '本次文件已完成解析，当前页面的数据预览已刷新。';
+  el.uploadResultStats.innerHTML = stats.map(item => `
+    <div class="upload-result-stat ${escapeHtml(item.tone || '')}">
+      <span class="upload-result-label">${escapeHtml(item.label)}</span>
+      <span class="upload-result-value">${escapeHtml(item.value)}</span>
+    </div>
+  `).join('');
+  el.uploadResultFile.innerHTML = `
+    <span><strong>源文件</strong><br>${escapeHtml(file?.name || '-')} · ${escapeHtml(formatFileSize(file?.size))}</span>
+    <span><strong>结果文件</strong><br>${resultFile ? '已生成，可通过本页导出按钮下载' : '未生成'}</span>
+  `;
+  el.btnCancelUpload.disabled = false;
+  el.btnCloseUploadModal.disabled = false;
+  el.btnCancelUpload.textContent = '关闭';
+  el.btnConfirmUpload.disabled = false;
+  el.btnConfirmUpload.textContent = '继续上传';
+}
 
 function openUploadModal(type) {
   uploadType = type;
-  uploadFile = null;
-  el.uploadFileInput.value = '';
-
-  const titles = {
-    attendance: '上传考勤日报表',
-    salary: '上传薪资档案',
-    performance: '上传绩效报表',
-    adjustments: '上传调薪/转正拆分表',
-  };
-
-  el.uploadModalTitle.textContent = titles[type];
-  el.uploadZoneTitle.textContent = '选择文件';
-  el.uploadZoneSub.textContent = type === 'attendance' && state.baseRoster?.has_roster
-    ? `点击选择或拖拽文件到此处 · 将自动引用基础花名册 ${state.baseRoster.filename || ''}`
-    : '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
-  el.btnConfirmUpload.disabled = true;
-
+  el.uploadModalTitle.textContent = getUploadTitle(type);
+  resetUploadSelection();
   el.uploadModal.classList.add('active');
 }
 
 function closeUploadModal() {
+  if (uploadStage === 'uploading') return;
   el.uploadModal.classList.remove('active');
   uploadType = '';
   uploadFile = null;
+  uploadStage = 'select';
 }
 
 el.btnCloseUploadModal.addEventListener('click', closeUploadModal);
@@ -584,24 +726,40 @@ el.uploadZone.addEventListener('click', () => {
 });
 
 el.uploadFileInput.addEventListener('change', (e) => {
-  const file = e.target.files[0];
-  if (file) {
-    uploadFile = file;
-    el.uploadZoneTitle.textContent = file.name;
-    el.uploadZoneSub.textContent = '已选择文件，点击确认上传';
-    el.btnConfirmUpload.disabled = false;
-  }
+  setUploadFile(e.target.files[0]);
+});
+
+['dragenter', 'dragover'].forEach(eventName => {
+  el.uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    el.uploadZone.classList.add('is-dragover');
+  });
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+  el.uploadZone.addEventListener(eventName, (event) => {
+    event.preventDefault();
+    el.uploadZone.classList.remove('is-dragover');
+  });
+});
+
+el.uploadZone.addEventListener('drop', (event) => {
+  setUploadFile(event.dataTransfer?.files?.[0]);
 });
 
 el.btnConfirmUpload.addEventListener('click', async () => {
+  if (uploadStage === 'result') {
+    resetUploadSelection();
+    return;
+  }
   if (!uploadFile || !state.currentActivity) return;
 
-  el.btnConfirmUpload.disabled = true;
-  el.btnConfirmUpload.textContent = '上传中...';
+  setUploadBusy();
 
   try {
     const formData = new FormData();
     formData.append('file', uploadFile);
+    const selectedFile = uploadFile;
 
     let endpoint = '';
     if (uploadType === 'attendance') {
@@ -629,10 +787,11 @@ el.btnConfirmUpload.addEventListener('click', async () => {
       state.lastImportResult = {
         type: completedUploadType,
         hasResultFile: Boolean(data.result_file),
+        filename: selectedFile.name,
+        summary: data.preview?.summary || {},
         at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
       };
-      showNotification(data.result_file ? '上传成功，结果文件已生成，可点导出下载' : '上传成功', 'success');
-      closeUploadModal();
+      showNotification('本次文件已解析，预览和导入回执已更新', 'success', { title: `${uploadTypeLabels[completedUploadType]}导入完成` });
 
       // Update state
       if (completedUploadType === 'attendance') {
@@ -649,16 +808,20 @@ el.btnConfirmUpload.addEventListener('click', async () => {
         renderPerformanceData();
       }
 
-      // Refresh activity data
-      enterActivity(state.currentActivity.run_id);
+      await enterActivity(state.currentActivity.run_id, { preservePage: true });
+      renderUploadReceipt(completedUploadType, data, selectedFile);
     } else {
-      showNotification('上传失败: ' + (data.detail || '未知错误'), 'error');
+      showNotification(data.detail || '未知错误', 'error', { title: '上传失败' });
     }
   } catch (error) {
-    showNotification('上传失败: ' + error.message, 'error');
+    showNotification(error.message, 'error', { title: '上传失败' });
   } finally {
-    el.btnConfirmUpload.disabled = false;
-    el.btnConfirmUpload.textContent = '确认上传';
+    if (uploadStage === 'uploading') {
+      el.btnConfirmUpload.disabled = false;
+      el.btnConfirmUpload.textContent = '确认上传';
+      el.btnCancelUpload.disabled = false;
+      el.btnCloseUploadModal.disabled = false;
+    }
   }
 });
 
@@ -1531,26 +1694,40 @@ function resetResultsFilter() {
 
 // ═══ Notification ═══
 
-function showNotification(message, type = 'info') {
-  const notification = document.createElement('div');
-  notification.className = `notification notification-${type}`;
-  notification.textContent = message;
-  notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 12px 24px;
-    background: ${type === 'success' ? '#10B981' : type === 'error' ? '#EF4444' : '#3B82F6'};
-    color: white;
-    border-radius: 8px;
-    z-index: 1000;
-    animation: slideIn 0.3s ease;
-  `;
-  document.body.appendChild(notification);
+function showNotification(message, type = 'info', options = {}) {
+  const toastConfig = {
+    success: { title: '操作完成', icon: 'OK' },
+    error: { title: '操作失败', icon: '!' },
+    warning: { title: '需要注意', icon: '!' },
+    info: { title: '提示', icon: 'i' },
+  };
+  const config = toastConfig[type] || toastConfig.info;
+  const title = options.title || config.title;
+  const duration = options.duration ?? (type === 'error' ? 5200 : 3600);
+  const region = el.toastRegion || document.getElementById('toastRegion');
+  if (!region) return;
 
-  setTimeout(() => {
-    notification.remove();
-  }, 3000);
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  toast.innerHTML = `
+    <div class="toast-icon" aria-hidden="true">${escapeHtml(config.icon)}</div>
+    <div>
+      <div class="toast-title">${escapeHtml(title)}</div>
+      <div class="toast-message">${escapeHtml(message)}</div>
+    </div>
+    <button class="toast-close" type="button" aria-label="关闭通知">×</button>
+  `;
+
+  const dismiss = () => {
+    if (!toast.isConnected || toast.classList.contains('is-leaving')) return;
+    toast.classList.add('is-leaving');
+    setTimeout(() => toast.remove(), 180);
+  };
+
+  toast.querySelector('.toast-close')?.addEventListener('click', dismiss);
+  region.appendChild(toast);
+  setTimeout(dismiss, duration);
 }
 
 // ═══ Init ═══

@@ -382,6 +382,17 @@
         background: rgba(0,113,227,0.02);
       }
 
+      .upload-zone.is-dragover,
+      .upload-zone.has-file {
+        border-color: var(--primary-deep);
+        background: rgba(47, 84, 235, 0.04);
+      }
+
+      .upload-zone[hidden],
+      .upload-result-panel[hidden] {
+        display: none;
+      }
+
       .upload-zone-icon {
         margin-bottom: 12px;
       }
@@ -395,6 +406,107 @@
       .upload-zone-sub {
         font-size: 14px;
         color: var(--text-secondary);
+      }
+
+      .upload-modal {
+        width: 560px;
+      }
+
+      .upload-result-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
+      .upload-result-header {
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        gap: 12px;
+        align-items: start;
+      }
+
+      .upload-result-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: #D1FAE5;
+        color: #047857;
+      }
+
+      .upload-result-title {
+        color: var(--text-primary);
+        font-size: 16px;
+        font-weight: 750;
+        line-height: 1.4;
+      }
+
+      .upload-result-sub {
+        margin-top: 4px;
+        color: var(--text-secondary);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .upload-result-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .upload-result-stat {
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 8px;
+        background: #FFFFFF;
+      }
+
+      .upload-result-stat.warning {
+        border-color: #FDE68A;
+        background: #FFFBEB;
+      }
+
+      .upload-result-stat.danger {
+        border-color: #FECACA;
+        background: #FEF2F2;
+      }
+
+      .upload-result-label {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .upload-result-value {
+        color: var(--text-primary);
+        font-family: var(--mono);
+        font-size: 18px;
+        font-weight: 750;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0;
+      }
+
+      .upload-result-file {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #F8FAFC;
+        color: var(--text-secondary);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .upload-result-file strong {
+        color: var(--text-primary);
+        font-weight: 700;
       }
 
       /* ═══ Modal ═══ */
@@ -755,6 +867,116 @@
         position: sticky;
         top: 0;
         z-index: 2;
+      }
+
+      /* ═══ Toasts ═══ */
+      .toast-region {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        z-index: 1200;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: min(360px, calc(100vw - 32px));
+        pointer-events: none;
+      }
+
+      .toast {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) 28px;
+        gap: 10px;
+        align-items: start;
+        padding: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 16px 40px rgba(15, 23, 42, 0.14);
+        backdrop-filter: blur(10px);
+        pointer-events: auto;
+        animation: toastIn 0.22s ease;
+      }
+
+      .toast.is-leaving {
+        animation: toastOut 0.18s ease forwards;
+      }
+
+      .toast-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .toast-title {
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 760;
+        line-height: 1.4;
+      }
+
+      .toast-message {
+        margin-top: 2px;
+        color: var(--text-secondary);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .toast-close {
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+      }
+
+      .toast-close:hover {
+        background: #F1F5F9;
+        color: var(--text-primary);
+      }
+
+      .toast-success .toast-icon {
+        background: #D1FAE5;
+        color: #047857;
+      }
+
+      .toast-error .toast-icon {
+        background: #FEE2E2;
+        color: #B91C1C;
+      }
+
+      .toast-warning .toast-icon {
+        background: #FEF3C7;
+        color: #B45309;
+      }
+
+      .toast-info .toast-icon {
+        background: #DBEAFE;
+        color: #1D4ED8;
+      }
+
+      @keyframes toastIn {
+        from {
+          opacity: 0;
+          transform: translateY(-6px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes toastOut {
+        to {
+          opacity: 0;
+          transform: translateY(-6px);
+        }
       }
 
       /* ═══ Results Workbench ═══ */
@@ -1495,10 +1717,10 @@
 
     <!-- Upload Modal -->
     <div class="modal-overlay" id="uploadModal">
-      <div class="modal">
+      <div class="modal upload-modal">
         <div class="modal-header">
           <h3 class="modal-title" id="uploadModalTitle">上传文件</h3>
-          <button class="modal-close" id="btnCloseUploadModal">
+          <button class="modal-close" id="btnCloseUploadModal" type="button" aria-label="关闭">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           </button>
         </div>
@@ -1511,10 +1733,23 @@
             <h3 class="upload-zone-title" id="uploadZoneTitle">选择文件</h3>
             <p class="upload-zone-sub" id="uploadZoneSub">点击选择或拖拽文件到此处 · 支持 .xlsx / .xls</p>
           </div>
+          <div class="upload-result-panel" id="uploadResultPanel" hidden>
+            <div class="upload-result-header">
+              <div class="upload-result-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 10.5l4 4L16 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div>
+                <div class="upload-result-title" id="uploadResultTitle">上传完成</div>
+                <p class="upload-result-sub" id="uploadResultSub"></p>
+              </div>
+            </div>
+            <div class="upload-result-stats" id="uploadResultStats"></div>
+            <div class="upload-result-file" id="uploadResultFile"></div>
+          </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="btnCancelUpload">取消</button>
-          <button class="btn btn-primary" id="btnConfirmUpload" disabled>确认上传</button>
+          <button class="btn btn-secondary" id="btnCancelUpload" type="button">取消</button>
+          <button class="btn btn-primary" id="btnConfirmUpload" type="button" disabled>确认上传</button>
         </div>
       </div>
     </div>
@@ -1564,6 +1799,8 @@
       </div>
     </div>
 
-    <script src="fbu-performance.js?v=dialog-20260610"></script>
+    <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
+
+    <script src="fbu-performance.js?v=upload-receipt-20260610"></script>
   </body>
 </html>
