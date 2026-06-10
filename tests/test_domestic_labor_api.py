@@ -51,6 +51,16 @@ def _multi_engine_data() -> bytes:
     })
 
 
+def _gonglingjiang_data() -> bytes:
+    """工龄奖 API 工作流测试数据"""
+    return _create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "请假时数"],
+            ["OWHN001", "张三", "202606", "第四纵队", "内勤专员", "2023-01-01", 26, 26, 0],
+        ],
+    })
+
+
 # ── 测试用例 ──
 
 
@@ -262,6 +272,45 @@ def test_full_workflow():
     assert len(download_response.content) > 0
 
     # Cleanup
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
+    """API 结果暴露引擎详情，供前端解释抽屉使用"""
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("gongling.xlsx", _gonglingjiang_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={
+            "engines": "gonglingjiang",
+            "attendance_month": "202606",
+            "hrbp_list": '["OWHN001"]',
+        },
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.5)
+        status_response = client.get(f"/api/domestic-labor/runs/{run_id}")
+        metadata = status_response.json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    row = metadata["results"][0]
+    subject_detail = row["subject_details"]["gonglingjiang"]
+    explanation = subject_detail["audit_explanation"]
+
+    assert row["gonglingjiang"] == 450
+    assert subject_detail["amount"] == 450
+    assert subject_detail["exceptions"] == []
+    assert explanation["subject"] == "gonglingjiang"
+    assert explanation["intermediate_values"]["工龄(年)"] == 3
+    assert row["exceptions"] == []
+
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 

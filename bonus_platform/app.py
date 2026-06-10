@@ -6868,6 +6868,22 @@ PAYROLL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 payroll_logger = logging.getLogger("bonus_platform.payroll")
 
 
+def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> None:
+    """Attach one engine result while keeping the legacy flat response fields."""
+    result[subject] = calculation.amount
+    result["warnings"].extend(calculation.warnings)
+
+    details = calculation.details or {}
+    subject_detail = {
+        "amount": calculation.amount,
+        "details": details,
+        "exceptions": details.get("exceptions", []),
+        "audit_explanation": details.get("audit_explanation"),
+    }
+    result["subject_details"][subject] = subject_detail
+    result["exceptions"].extend(subject_detail["exceptions"])
+
+
 def _run_payroll_calculation(run_id: str, file_path: str, attendance_month: str,
                               engines: list, password: str = None,
                               hrbp_list: list = None):
@@ -6894,28 +6910,24 @@ def _run_payroll_calculation(run_id: str, file_path: str, attendance_month: str,
                 dept = str(row.get("二级部门名称", ""))
                 r = {"employee_id": emp_id, "employee_name": emp_name, "department": dept,
                      "quanqinjiang": 0, "canbu": 0, "waisu_butie": 0, "gonglingjiang": 0,
-                     "total": 0, "warnings": []}
+                     "total": 0, "warnings": [], "exceptions": [], "subject_details": {}}
 
                 if "quanqinjiang" in engines:
                     cr = QuanQinJiangEngine().calculate(row, daily_by_emp.get(emp_id, []))
-                    r["quanqinjiang"] = cr.amount
-                    r["warnings"].extend(cr.warnings)
+                    _attach_domestic_engine_result(r, "quanqinjiang", cr)
 
                 if "canbu" in engines:
                     cr = CanBuEngine().calculate(row, daily_by_emp.get(emp_id, []))
-                    r["canbu"] = cr.amount
-                    r["warnings"].extend(cr.warnings)
+                    _attach_domestic_engine_result(r, "canbu", cr)
 
                 if "waisu_butie" in engines:
                     cr = WaiSuBuTieEngine().calculate(row, daily_by_emp.get(emp_id, []),
                                                        housing_by_emp.get(emp_id, []))
-                    r["waisu_butie"] = cr.amount
-                    r["warnings"].extend(cr.warnings)
+                    _attach_domestic_engine_result(r, "waisu_butie", cr)
 
                 if "gonglingjiang" in engines:
                     cr = GongLingJiangEngine().calculate(row, hrbp_list or [], region=region)
-                    r["gonglingjiang"] = cr.amount
-                    r["warnings"].extend(cr.warnings)
+                    _attach_domestic_engine_result(r, "gonglingjiang", cr)
 
                 r["total"] = r["quanqinjiang"] + r["canbu"] + r["waisu_butie"] + r["gonglingjiang"]
                 r["warnings"] = "; ".join(r["warnings"]) if r["warnings"] else ""
