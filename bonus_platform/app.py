@@ -46,7 +46,7 @@ from .engine.labor.profiles import (
 
 # --- FBU Performance engine imports ---
 from .engine.fbu_performance.parser import FBUPerformanceParser
-from .engine.fbu_performance.runs import FBURosterStore, FBURunManager
+from .engine.fbu_performance.runs import FBURosterStore, FBURun, FBURunManager
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -1582,6 +1582,99 @@ def _fbu_result_file_payload(run_id: str, result_type: str) -> dict:
     }
 
 
+def _fbu_run_diagnostics(run: FBURun) -> dict:
+    """生成紧凑的数据匹配诊断。"""
+    attendance_employees = run.attendance_data.get("employees", []) if run.attendance_data else []
+    salary_employees = run.salary_data.get("employees", []) if run.salary_data else []
+    performance_employees = run.performance_data.get("employees", []) if run.performance_data else []
+    adjustment_employees = run.adjustment_data.get("employees", []) if run.adjustment_data else []
+
+    attendance_by_id = {emp.get("employee_id"): emp for emp in attendance_employees if emp.get("employee_id")}
+    salary_by_id = {emp.get("employee_id"): emp for emp in salary_employees if emp.get("employee_id")}
+    performance_by_id = {emp.get("employee_id"): emp for emp in performance_employees if emp.get("employee_id")}
+    adjustment_by_id = {emp.get("employee_id"): emp for emp in adjustment_employees if emp.get("employee_id")}
+
+    attendance_ids = set(attendance_by_id)
+    salary_ids = set(salary_by_id)
+    performance_ids = set(performance_by_id)
+    adjustment_ids = set(adjustment_by_id)
+
+    def name_for(emp_id: str) -> str:
+        for source in (attendance_by_id, salary_by_id, performance_by_id, adjustment_by_id):
+            if emp_id in source:
+                return source[emp_id].get("name", "")
+        return ""
+
+    issues = []
+
+    def add_issue(kind: str, emp_id: str, detail: str, severity: str = "warning"):
+        issues.append({
+            "severity": severity,
+            "type": kind,
+            "employee_id": emp_id,
+            "name": name_for(emp_id),
+            "detail": detail,
+        })
+
+    for emp_id in sorted(attendance_ids - salary_ids):
+        add_issue("考勤有薪资无", emp_id, "该员工有考勤记录，但薪资档案未匹配", "error")
+
+    for emp_id in sorted(attendance_ids - performance_ids - adjustment_ids):
+        add_issue("考勤有绩效无", emp_id, "该员工有考勤记录，但绩效报表未匹配", "warning")
+
+    for emp_id in sorted(salary_ids - attendance_ids):
+        add_issue("薪资有考勤无", emp_id, "薪资档案存在该员工，但本月考勤未出现", "info")
+
+    for emp_id in sorted(performance_ids - attendance_ids):
+        add_issue("绩效有考勤无", emp_id, "绩效报表存在该员工，但本月考勤未出现", "info")
+
+    for emp_id in sorted(adjustment_ids - attendance_ids):
+        add_issue("拆分有考勤无", emp_id, "调薪/转正拆分表存在该员工，但本月考勤未出现", "error")
+
+    for emp_id in sorted(adjustment_ids - salary_ids):
+        add_issue("拆分有薪资无", emp_id, "调薪/转正拆分表存在该员工，但薪资档案未匹配", "error")
+
+    for emp_id in sorted(attendance_ids & salary_ids):
+        salary = salary_by_id[emp_id]
+        if (salary.get("hourly_rate") or 0) <= 0:
+            add_issue("时薪为0", emp_id, "薪资档案时薪为0，绩效基数可能无法计算", "error")
+        if (salary.get("ratio") or 0) <= 0:
+            add_issue("绩效比例为空", emp_id, "薪资档案绩效比例为空或为0", "warning")
+
+    for emp in adjustment_employees:
+        emp_id = emp.get("employee_id", "")
+        active_base = sum(
+            (segment.get("performance_base") or 0)
+            for segment in emp.get("segments", [])
+            if "前" not in str(segment.get("reason", ""))
+        )
+        if active_base <= 0:
+            add_issue("拆分有效基数为0", emp_id, "调薪/转正拆分表未识别到调薪后有效基数", "warning")
+
+    severity_rank = {"error": 0, "warning": 1, "info": 2}
+    issues.sort(key=lambda item: (severity_rank.get(item["severity"], 9), item["type"], item["employee_id"]))
+
+    matched_salary = len(attendance_ids & salary_ids)
+    matched_performance = len(attendance_ids & performance_ids)
+    can_calculate = len(attendance_ids & salary_ids)
+
+    return {
+        "summary": {
+            "attendance_count": len(attendance_ids),
+            "salary_count": len(salary_ids),
+            "performance_count": len(performance_ids),
+            "adjustment_count": len(adjustment_ids),
+            "matched_salary_count": matched_salary,
+            "matched_performance_count": matched_performance,
+            "can_calculate_count": can_calculate,
+            "issue_count": len(issues),
+            "error_count": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warning_count": sum(1 for issue in issues if issue["severity"] == "warning"),
+        },
+        "issues": issues,
+    }
+
+
 def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
     """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
@@ -2070,7 +2163,18 @@ def get_fbu_performance_run(run_id: str) -> dict:
     run = fbu_run_manager.get_run(run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
-    return vars(run)
+    payload = vars(run).copy()
+    payload["diagnostics"] = _fbu_run_diagnostics(run)
+    return payload
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/diagnostics")
+def get_fbu_performance_diagnostics(run_id: str) -> dict:
+    """获取FBU数据匹配诊断"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    return _fbu_run_diagnostics(run)
 
 
 @app.get("/api/fbu-performance/runs/{run_id}/results")
@@ -2152,6 +2256,11 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 })
         title = "调薪拆分"
         filename = f"调薪拆分_{run.calc_month}_{run_id}.xlsx"
+    elif type == "diagnostics":
+        diagnostics = _fbu_run_diagnostics(run)
+        data = diagnostics.get("issues", [])
+        title = "数据诊断"
+        filename = f"数据诊断_{run.calc_month}_{run_id}.xlsx"
     elif type == "results" and run.results:
         data = run.results
         title = "核算结果"
@@ -2253,6 +2362,14 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             ('分段期间', 'period', 'data', 16),
             ('分段绩效基数($)', 'performance_base', 'money', 18),
             ('核算标识', 'reason', 'calc', 14),
+        ]
+    elif type == "diagnostics":
+        columns = [
+            ('严重程度', 'severity', 'calc', 12),
+            ('问题类型', 'type', 'data', 18),
+            ('工号', 'employee_id', 'emp', 15),
+            ('姓名', 'name', 'emp', 12),
+            ('说明', 'detail', 'data', 42),
         ]
     elif type == "results":
         columns = [

@@ -12,6 +12,7 @@ const state = {
   salaryData: null,
   performanceData: null,
   adjustmentData: null,
+  diagnosticsData: null,
   resultsData: null,
   baseRoster: null,
 };
@@ -212,6 +213,7 @@ async function enterActivity(activityId) {
     const activity = await apiJson(`${API_BASE}/runs/${activityId}`);
 
     state.currentActivity = activity;
+    state.diagnosticsData = activity.diagnostics || null;
 
     // Navigate to appropriate page based on step
     const page = activity.current_step >= 3 ? 'results' :
@@ -475,11 +477,89 @@ el.btnDownloadAdjustmentsTemplate?.addEventListener('click', () => {
   link.click();
 });
 
+// ═══ Diagnostics ═══
+
+function renderDiagnosticsPanel() {
+  const diagnostics = state.diagnosticsData;
+  const summary = diagnostics?.summary;
+  if (!summary || (
+    !summary.attendance_count
+    && !summary.salary_count
+    && !summary.performance_count
+    && !summary.adjustment_count
+  )) {
+    return '';
+  }
+
+  const issues = diagnostics.issues || [];
+  const visibleIssues = issues.slice(0, 8);
+  const severityLabel = {
+    error: '严重',
+    warning: '提醒',
+    info: '信息',
+  };
+
+  return `
+    <div class="summary-stats" style="margin-bottom: 16px;">
+      <div class="summary-stat">
+        <span class="summary-stat-label">考勤</span>
+        <span class="summary-stat-value">${summary.attendance_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">薪资匹配</span>
+        <span class="summary-stat-value">${summary.matched_salary_count}/${summary.attendance_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">绩效匹配</span>
+        <span class="summary-stat-value">${summary.matched_performance_count}/${summary.attendance_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">拆分</span>
+        <span class="summary-stat-value">${summary.adjustment_count}</span>
+      </div>
+      <div class="summary-stat">
+        <span class="summary-stat-label">异常</span>
+        <span class="summary-stat-value">${summary.error_count}/${summary.issue_count}</span>
+      </div>
+      ${issues.length ? `
+        <button class="btn btn-secondary btn-sm" onclick="exportData('diagnostics')">导出诊断</button>
+      ` : ''}
+    </div>
+    ${visibleIssues.length ? `
+      <div class="data-table-container" style="margin-bottom: 16px;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>级别</th>
+              <th>问题类型</th>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${visibleIssues.map(issue => `
+              <tr>
+                <td>${escapeHtml(severityLabel[issue.severity] || issue.severity || '-')}</td>
+                <td>${escapeHtml(issue.type || '-')}</td>
+                <td>${escapeHtml(issue.employee_id || '-')}</td>
+                <td>${escapeHtml(issue.name || '-')}</td>
+                <td>${escapeHtml(issue.detail || '-')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : ''}
+  `;
+}
+
 // ═══ Render Attendance Data ═══
 
 function renderAttendanceData() {
   if (!state.attendanceData || !state.attendanceData.employees) {
     el.attendanceContent.innerHTML = `
+      ${renderDiagnosticsPanel()}
       <div class="empty-state">
         <div class="empty-state-icon">
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 8v24l12 12" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/><circle cx="32" cy="32" r="28" stroke="#94A3B8" stroke-width="3"/></svg>
@@ -496,6 +576,7 @@ function renderAttendanceData() {
   const summary = state.attendanceData.summary;
 
   el.attendanceContent.innerHTML = `
+    ${renderDiagnosticsPanel()}
     <!-- 筛选条件 -->
     <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <input type="text" id="filterAttendanceId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
@@ -582,6 +663,7 @@ function renderAttendanceData() {
 function renderSalaryData() {
   if (!state.salaryData || !state.salaryData.employees) {
     el.salaryContent.innerHTML = `
+      ${renderDiagnosticsPanel()}
       <div class="empty-state">
         <div class="empty-state-icon">
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 16v32M20 24h24M20 40h24M16 32h32" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
@@ -598,6 +680,7 @@ function renderSalaryData() {
   const summary = state.salaryData.summary;
 
   el.salaryContent.innerHTML = `
+    ${renderDiagnosticsPanel()}
     <!-- 筛选条件 -->
     <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <input type="text" id="filterSalaryId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
@@ -663,6 +746,7 @@ function renderSalaryData() {
 function renderPerformanceData() {
   if (!state.performanceData || !state.performanceData.employees) {
     el.performanceContent.innerHTML = `
+      ${renderDiagnosticsPanel()}
       <div class="empty-state">
         <div class="empty-state-icon">
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M12 48V20l12-12 12 12 16-16v44H12z" stroke="#94A3B8" stroke-width="3" stroke-linejoin="round"/></svg>
@@ -680,6 +764,7 @@ function renderPerformanceData() {
   const adjustmentSummary = state.adjustmentData?.summary;
 
   el.performanceContent.innerHTML = `
+    ${renderDiagnosticsPanel()}
     ${adjustmentSummary ? `
       <div class="summary-stats" style="margin-bottom: 16px;">
         <div class="summary-stat">
@@ -763,6 +848,7 @@ function renderPerformanceData() {
 function renderResultsData() {
   if (!state.resultsData || state.resultsData.length === 0) {
     el.resultsContent.innerHTML = `
+      ${renderDiagnosticsPanel()}
       <div class="empty-state">
         <div class="empty-state-icon">
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="12" y="12" width="40" height="40" rx="4" stroke="#94A3B8" stroke-width="3"/><path d="M24 28h16M24 36h16" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
@@ -781,6 +867,7 @@ function renderResultsData() {
   const exceptionCount = results.filter(r => (r.exceptions || []).length > 0).length;
 
   el.resultsContent.innerHTML = `
+    ${renderDiagnosticsPanel()}
     <!-- 筛选条件 -->
     <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
       <input type="text" id="filterResultsId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">

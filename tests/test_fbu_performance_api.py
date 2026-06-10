@@ -198,3 +198,53 @@ def test_fbu_export_escapes_formula_like_values_and_selects_header(monkeypatch, 
     values = [cell.value for row in sheet.iter_rows() for cell in row if isinstance(cell.value, str)]
     assert not any(value.startswith("=") for value in values)
     assert "'=SUM(A1:A2)" in values
+
+
+def test_fbu_diagnostics_reports_matching_issues_and_exports(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+
+    run = app_module.fbu_run_manager.create_run(calc_month="2026-04")
+    app_module.fbu_run_manager.save_step_data(run.run_id, 1, {
+        "employees": [
+            {"employee_id": "zt001", "name": "Ana"},
+            {"employee_id": "zt002", "name": "Ben"},
+        ]
+    })
+    app_module.fbu_run_manager.save_step_data(run.run_id, 2, {
+        "employees": [
+            {"employee_id": "zt001", "name": "Ana", "hourly_rate": 18, "ratio": 0.05},
+            {"employee_id": "zt003", "name": "Cara", "hourly_rate": 0, "ratio": 0},
+        ]
+    })
+    app_module.fbu_run_manager.save_step_data(run.run_id, 3, {
+        "employees": [
+            {"employee_id": "zt001", "name": "Ana"},
+            {"employee_id": "zt004", "name": "Dora"},
+        ]
+    })
+    app_module.fbu_run_manager.save_step_data(run.run_id, 4, {
+        "employees": [
+            {"employee_id": "zt005", "name": "Eli", "segments": [{"reason": "调薪后", "performance_base": 0}]},
+        ]
+    })
+
+    client = TestClient(app_module.app)
+    response = client.get(f"/api/fbu-performance/runs/{run.run_id}/diagnostics")
+
+    assert response.status_code == 200
+    diagnostics = response.json()
+    assert diagnostics["summary"]["attendance_count"] == 2
+    assert diagnostics["summary"]["matched_salary_count"] == 1
+    assert diagnostics["summary"]["matched_performance_count"] == 1
+    issue_types = {issue["type"] for issue in diagnostics["issues"]}
+    assert "考勤有薪资无" in issue_types
+    assert "薪资有考勤无" in issue_types
+    assert "绩效有考勤无" in issue_types
+    assert "拆分有考勤无" in issue_types
+    assert "拆分有薪资无" in issue_types
+
+    export_response = client.get(f"/api/fbu-performance/runs/{run.run_id}/export-excel?type=diagnostics")
+    assert export_response.status_code == 200
+    workbook = load_workbook(tmp_path / export_response.json()["filename"], data_only=True)
+    assert workbook["数据诊断"].cell(3, 1).value == "严重程度"
