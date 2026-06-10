@@ -200,6 +200,83 @@ const el = {
   toastRegion: document.getElementById('toastRegion'),
 };
 
+// ═══ Accessibility Helpers ═══
+
+const FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled]):not([type="hidden"])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+let activeModal = null;
+let modalReturnFocus = null;
+const filterTimers = {};
+
+function getFocusableElements(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR))
+    .filter(element => !element.hidden && element.getClientRects().length > 0);
+}
+
+function openModal(modal, focusTarget = null) {
+  if (!modal) return;
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  activeModal = modal;
+  modal.classList.add('active');
+
+  const focusInsideModal = () => {
+    const focusable = getFocusableElements(modal);
+    const target = focusTarget && !focusTarget.disabled && focusTarget.getClientRects().length
+      ? focusTarget
+      : focusable[0];
+    target?.focus({ preventScroll: true });
+  };
+
+  window.setTimeout(focusInsideModal, 0);
+  window.setTimeout(focusInsideModal, 60);
+}
+
+function closeModal(modal, { restoreFocus = true } = {}) {
+  if (!modal) return;
+  modal.classList.remove('active');
+  if (activeModal === modal) activeModal = null;
+
+  if (restoreFocus && modalReturnFocus?.isConnected) {
+    modalReturnFocus.focus();
+  }
+  modalReturnFocus = null;
+}
+
+function trapModalFocus(event) {
+  if (!activeModal || event.key !== 'Tab') return;
+  const focusable = getFocusableElements(activeModal);
+  if (!focusable.length) {
+    event.preventDefault();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function queueFilter(filterName) {
+  clearTimeout(filterTimers[filterName]);
+  filterTimers[filterName] = setTimeout(() => {
+    window[filterName]?.();
+  }, 180);
+}
+
 // ═══ App Dialog ═══
 
 let appDialogResolve = null;
@@ -341,23 +418,22 @@ function openAppDialog(options = {}) {
       el.appDialogMonthPicker.hidden = true;
     }
 
-    el.appDialog.classList.add('active');
+    const focusTarget = appDialogInputKind === 'month'
+      ? el.appDialogMonthGrid?.querySelector('.month-picker-option.selected')
+      : input
+        ? el.appDialogInput
+        : el.btnConfirmAppDialog;
 
-    setTimeout(() => {
-      if (input) {
-        el.appDialogInput.focus();
-        if (appDialogInputKind !== 'month') {
-          el.appDialogInput.select();
-        }
-      } else {
-        el.btnConfirmAppDialog.focus();
-      }
-    }, 0);
+    openModal(el.appDialog, focusTarget);
+
+    if (input && appDialogInputKind !== 'month') {
+      requestAnimationFrame(() => el.appDialogInput.select());
+    }
   });
 }
 
 function closeAppDialog(result) {
-  el.appDialog.classList.remove('active');
+  closeModal(el.appDialog);
   const resolve = appDialogResolve;
   appDialogResolve = null;
   appDialogValidate = null;
@@ -402,10 +478,55 @@ el.appDialogMonthGrid?.addEventListener('click', (event) => {
   if (!button || !el.appDialogMonthGrid.contains(button)) return;
 
   setAppDialogMonthValue(appDialogMonthYear, Number(button.dataset.month));
+  button.focus();
+});
+el.appDialogMonthGrid?.addEventListener('keydown', (event) => {
+  const options = Array.from(el.appDialogMonthGrid.querySelectorAll('.month-picker-option'));
+  const currentIndex = options.indexOf(document.activeElement);
+  if (currentIndex === -1) return;
+
+  const keyMoves = {
+    ArrowRight: 1,
+    ArrowLeft: -1,
+    ArrowDown: 3,
+    ArrowUp: -3,
+  };
+
+  if (event.key in keyMoves) {
+    event.preventDefault();
+    const nextIndex = (currentIndex + keyMoves[event.key] + options.length) % options.length;
+    options[nextIndex]?.focus();
+  } else if (event.key === 'Home') {
+    event.preventDefault();
+    options[0]?.focus();
+  } else if (event.key === 'End') {
+    event.preventDefault();
+    options[options.length - 1]?.focus();
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    const option = options[currentIndex];
+    setAppDialogMonthValue(appDialogMonthYear, Number(option.dataset.month));
+    requestAnimationFrame(() => {
+      el.appDialogMonthGrid
+        ?.querySelector(`.month-picker-option[data-month="${option.dataset.month}"]`)
+        ?.focus();
+    });
+  }
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && el.appDialog?.classList.contains('active')) {
+  trapModalFocus(event);
+
+  if (event.key !== 'Escape') return;
+
+  if (activeModal === el.appDialog) {
+    event.preventDefault();
     closeAppDialog({ confirmed: false });
+  } else if (activeModal === el.uploadModal) {
+    event.preventDefault();
+    closeUploadModal();
+  } else if (activeModal === el.calcChainModal) {
+    event.preventDefault();
+    closeCalcChainModal();
   }
 });
 
@@ -416,7 +537,13 @@ function navigateTo(page) {
 
   // Update nav items
   el.navItems.forEach(item => {
-    item.classList.toggle('active', item.dataset.page === page);
+    const isActive = item.dataset.page === page;
+    item.classList.toggle('active', isActive);
+    if (isActive) {
+      item.setAttribute('aria-current', 'page');
+    } else {
+      item.removeAttribute('aria-current');
+    }
   });
 
   // Show/hide pages
@@ -807,12 +934,12 @@ function openUploadModal(type) {
   uploadType = type;
   el.uploadModalTitle.textContent = getUploadTitle(type);
   resetUploadSelection();
-  el.uploadModal.classList.add('active');
+  openModal(el.uploadModal, el.uploadZone);
 }
 
 function closeUploadModal() {
   if (uploadStage === 'uploading') return;
-  el.uploadModal.classList.remove('active');
+  closeModal(el.uploadModal);
   uploadType = '';
   uploadFile = null;
   uploadStage = 'select';
@@ -822,6 +949,12 @@ el.btnCloseUploadModal.addEventListener('click', closeUploadModal);
 el.btnCancelUpload.addEventListener('click', closeUploadModal);
 
 el.uploadZone.addEventListener('click', () => {
+  el.uploadFileInput.click();
+});
+
+el.uploadZone.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
   el.uploadFileInput.click();
 });
 
@@ -1066,7 +1199,7 @@ function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn }) {
           ${filters.map(filter => `
             <div class="filter-field">
               <label for="${escapeHtml(filter.id)}">${escapeHtml(filter.label)}</label>
-              <input type="text" id="${escapeHtml(filter.id)}" placeholder="${escapeHtml(filter.placeholder)}" oninput="${escapeHtml(filterFn)}()">
+              <input type="text" id="${escapeHtml(filter.id)}" placeholder="${escapeHtml(filter.placeholder)}" oninput="queueFilter('${escapeHtml(filterFn)}')">
             </div>
           `).join('')}
         </div>
@@ -1366,19 +1499,19 @@ function renderResultsToolbar() {
         <div class="result-filter-grid">
           <div class="filter-field">
             <label for="filterResultsId">工号</label>
-            <input type="text" id="filterResultsId" placeholder="zt0000000" oninput="filterResultsData()">
+            <input type="text" id="filterResultsId" placeholder="zt0000000" oninput="queueFilter('filterResultsData')">
           </div>
           <div class="filter-field">
             <label for="filterResultsName">姓名</label>
-            <input type="text" id="filterResultsName" placeholder="员工姓名" oninput="filterResultsData()">
+            <input type="text" id="filterResultsName" placeholder="员工姓名" oninput="queueFilter('filterResultsData')">
           </div>
           <div class="filter-field">
             <label for="filterResultsArea">划分区域</label>
-            <input type="text" id="filterResultsArea" placeholder="区域" oninput="filterResultsData()">
+            <input type="text" id="filterResultsArea" placeholder="区域" oninput="queueFilter('filterResultsData')">
           </div>
           <div class="filter-field">
             <label for="filterResultsDept">部门</label>
-            <input type="text" id="filterResultsDept" placeholder="部门全称" oninput="filterResultsData()">
+            <input type="text" id="filterResultsDept" placeholder="部门全称" oninput="queueFilter('filterResultsData')">
           </div>
         </div>
       </div>
@@ -1454,7 +1587,7 @@ function renderBonusResultRow(result) {
       <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
       <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
-      <td>${exceptions.length ? `<span class="exception-chip" title="${exceptionTitle}">${exceptions.length}项</span>` : '<span class="muted-cell">-</span>'}</td>
+      <td>${exceptions.length ? `<span class="exception-chip" tabindex="0" title="${exceptionTitle}" aria-label="异常：${exceptionTitle}">${exceptions.length}项</span>` : '<span class="muted-cell">-</span>'}</td>
       <td class="sticky-bonus"><span class="bonus-value">${formatCurrency(result.performance_bonus)}</span></td>
       <td class="sticky-action">
         <button class="btn btn-secondary btn-sm detail-btn" onclick="showCalcChain(${formatJsArg(employeeId)})" title="查看计算过程">查看</button>
@@ -1573,7 +1706,7 @@ function showCalcChain(employeeId) {
       <div class="calc-chain-item calc-chain-result">绩效奖金合计 = $${emp.performance_bonus.toFixed(2)}</div>
       ${(emp.exceptions || []).length ? `<div class="calc-chain-item">异常提示 = ${escapeHtml(emp.exceptions.join('；'))}</div>` : ''}
     `;
-    el.calcChainModal.classList.add('active');
+    openModal(el.calcChainModal, el.btnCloseCalcChain);
     return;
   }
 
@@ -1607,16 +1740,15 @@ function showCalcChain(employeeId) {
     ${(emp.exceptions || []).length ? `<div class="calc-chain-item">异常提示 = ${escapeHtml(emp.exceptions.join('；'))}</div>` : ''}
   `;
 
-  el.calcChainModal.classList.add('active');
+  openModal(el.calcChainModal, el.btnCloseCalcChain);
 }
 
-el.btnCloseCalcChainModal?.addEventListener('click', () => {
-  el.calcChainModal.classList.remove('active');
-});
+function closeCalcChainModal() {
+  closeModal(el.calcChainModal);
+}
 
-el.btnCloseCalcChain?.addEventListener('click', () => {
-  el.calcChainModal.classList.remove('active');
-});
+el.btnCloseCalcChainModal?.addEventListener('click', closeCalcChainModal);
+el.btnCloseCalcChain?.addEventListener('click', closeCalcChainModal);
 
 // ═══ Export ═══
 
@@ -1803,7 +1935,7 @@ function showNotification(message, type = 'info', options = {}) {
   };
   const config = toastConfig[type] || toastConfig.info;
   const title = options.title || config.title;
-  const duration = options.duration ?? (type === 'error' ? 5200 : 3600);
+  const duration = options.duration ?? (type === 'error' ? null : 3600);
   const region = el.toastRegion || document.getElementById('toastRegion');
   if (!region) return;
 
@@ -1827,7 +1959,9 @@ function showNotification(message, type = 'info', options = {}) {
 
   toast.querySelector('.toast-close')?.addEventListener('click', dismiss);
   region.appendChild(toast);
-  setTimeout(dismiss, duration);
+  if (duration !== null && duration !== false && duration > 0) {
+    setTimeout(dismiss, duration);
+  }
 }
 
 // ═══ Init ═══

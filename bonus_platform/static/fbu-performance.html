@@ -1664,6 +1664,8 @@
 
       .btn:focus-visible,
       .modal-close:focus-visible,
+      .upload-zone:focus-visible,
+      .exception-chip:focus-visible,
       .month-picker-nav:focus-visible,
       .month-picker-option:focus-visible,
       .filter-field input:focus-visible,
@@ -2138,31 +2140,31 @@
         <nav class="sidebar-nav">
           <div class="nav-section">
             <div class="nav-section-title">绩效核算</div>
-            <a class="nav-item active" data-page="activities">
+            <a class="nav-item active" href="#activities" data-page="activities" aria-current="page">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 3h14a2 2 0 012 2v10a2 2 0 01-2 2H3a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
               </span>
               <span class="nav-item-text">月度活动</span>
             </a>
-            <a class="nav-item" data-page="attendance">
+            <a class="nav-item" href="#attendance" data-page="attendance">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
               </span>
               <span class="nav-item-text">考勤汇总</span>
             </a>
-            <a class="nav-item" data-page="salary">
+            <a class="nav-item" href="#salary" data-page="salary">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2v16M6 6h8M6 14h8M4 10h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
               </span>
               <span class="nav-item-text">薪资匹配</span>
             </a>
-            <a class="nav-item" data-page="performance">
+            <a class="nav-item" href="#performance" data-page="performance">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 17V7l4-4 4 4 6-6v16H3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
               </span>
               <span class="nav-item-text">绩效明细</span>
             </a>
-            <a class="nav-item" data-page="results">
+            <a class="nav-item" href="#results" data-page="results">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
               </span>
@@ -2462,7 +2464,7 @@
 
     <!-- Upload Modal -->
     <div class="modal-overlay" id="uploadModal">
-      <div class="modal upload-modal">
+      <div class="modal upload-modal" role="dialog" aria-modal="true" aria-labelledby="uploadModalTitle" aria-describedby="uploadZoneSub">
         <div class="modal-header">
           <h3 class="modal-title" id="uploadModalTitle">上传文件</h3>
           <button class="modal-close" id="btnCloseUploadModal" type="button" aria-label="关闭">
@@ -2470,7 +2472,7 @@
           </button>
         </div>
         <div class="modal-body">
-          <div class="upload-zone" id="uploadZone">
+          <div class="upload-zone" id="uploadZone" role="button" tabindex="0" aria-labelledby="uploadZoneTitle" aria-describedby="uploadZoneSub">
             <input type="file" id="uploadFileInput" accept=".xlsx,.xls" hidden />
             <div class="upload-zone-icon">
               <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><path d="M24 32V16M16 24l8-8 8 8" stroke="#0071E3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="32" width="32" height="8" rx="4" stroke="#D2D2D7" stroke-width="2"/></svg>
@@ -2539,10 +2541,10 @@
 
     <!-- Calculation Chain Modal -->
     <div class="modal-overlay" id="calcChainModal">
-      <div class="modal" style="width: 560px;">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="calcChainTitle" style="width: 560px;">
         <div class="modal-header">
-          <h3 class="modal-title">计算过程</h3>
-          <button class="modal-close" id="btnCloseCalcChainModal">
+          <h3 class="modal-title" id="calcChainTitle">计算过程</h3>
+          <button class="modal-close" id="btnCloseCalcChainModal" type="button" aria-label="关闭">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           </button>
         </div>
@@ -2551,7 +2553,7 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="btnCloseCalcChain">关闭</button>
+          <button class="btn btn-secondary" id="btnCloseCalcChain" type="button">关闭</button>
         </div>
       </div>
     </div>
