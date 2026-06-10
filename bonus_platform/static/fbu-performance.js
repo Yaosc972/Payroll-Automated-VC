@@ -27,6 +27,7 @@ const state = {
     salary: { page: 1, pageSize: 50 },
     performance: { page: 1, pageSize: 50 },
     results: { page: 1, pageSize: 50 },
+    exceptions: { page: 1, pageSize: 50 },
   },
 };
 
@@ -82,6 +83,19 @@ function formatFileSize(bytes) {
   if (!Number.isFinite(size) || size <= 0) return '-';
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function formatResultJobType(jobType) {
@@ -285,10 +299,13 @@ const el = {
   btnCalculate: document.getElementById('btnCalculate'),
   btnCalculateEmpty: document.getElementById('btnCalculateEmpty'),
   btnExportResults: document.getElementById('btnExportResults'),
+  btnExportDiagnostics: document.getElementById('btnExportDiagnostics'),
 
   // Pages
   pages: {
     activities: document.getElementById('pageActivities'),
+    foundation: document.getElementById('pageFoundation'),
+    exceptions: document.getElementById('pageExceptions'),
     attendance: document.getElementById('pageAttendance'),
     salary: document.getElementById('pageSalary'),
     performance: document.getElementById('pagePerformance'),
@@ -309,6 +326,11 @@ const el = {
   activitiesBody: document.getElementById('activitiesBody'),
 
   // Content areas
+  foundationLeadMeta: document.getElementById('foundationLeadMeta'),
+  foundationActivityCount: document.getElementById('foundationActivityCount'),
+  foundationLatestMonth: document.getElementById('foundationLatestMonth'),
+  foundationContent: document.getElementById('foundationContent'),
+  exceptionsContent: document.getElementById('exceptionsContent'),
   attendanceContent: document.getElementById('attendanceContent'),
   salaryContent: document.getElementById('salaryContent'),
   performanceContent: document.getElementById('performanceContent'),
@@ -713,18 +735,25 @@ function navigateTo(page) {
   // Update title
   const titles = {
     activities: { title: 'FBU美洲绩效核算', subtitle: '月度活动管理' },
+    foundation: { title: '基础数据', subtitle: '组织人员与模板资产' },
+    exceptions: { title: '异常队列', subtitle: state.currentActivity?.calc_month || '待选择活动' },
     attendance: { title: '考勤汇总', subtitle: state.currentActivity?.calc_month || '' },
     salary: { title: '薪资匹配', subtitle: state.currentActivity?.calc_month || '' },
     performance: { title: '绩效明细', subtitle: state.currentActivity?.calc_month || '' },
     results: { title: '核算结果', subtitle: state.currentActivity?.calc_month || '' },
   };
 
-  el.pageTitle.textContent = titles[page].title;
-  el.pageSubtitle.textContent = titles[page].subtitle;
+  const title = titles[page] || titles.activities;
+  el.pageTitle.textContent = title.title;
+  el.pageSubtitle.textContent = title.subtitle;
 
   // Load page data
   if (page === 'activities') {
     loadActivities();
+  } else if (page === 'foundation') {
+    renderFoundationData();
+  } else if (page === 'exceptions') {
+    renderExceptionQueue();
   }
 }
 
@@ -747,6 +776,9 @@ async function loadActivities() {
     state.activities = data.runs || [];
     renderActivities();
     updateActivityKPIs();
+    if (state.currentPage === 'foundation') {
+      renderFoundationData();
+    }
   } catch (error) {
     console.error('加载活动列表失败:', error);
   }
@@ -782,6 +814,177 @@ function updateActivityKPIs() {
   el.kpiCompleted.textContent = state.activities.filter(a => a.status === 'completed').length;
   el.kpiInProgress.textContent = state.activities.filter(a => a.status !== 'completed' && a.status !== 'failed').length;
   el.kpiErrors.textContent = state.activities.filter(a => a.status === 'failed').length;
+}
+
+function getLatestActivity() {
+  return [...state.activities].sort((a, b) => {
+    const timeA = new Date(a.created_at || 0).getTime();
+    const timeB = new Date(b.created_at || 0).getTime();
+    return timeB - timeA;
+  })[0] || null;
+}
+
+function renderFoundationData() {
+  const roster = state.baseRoster || {};
+  const hasRoster = Boolean(roster.has_roster);
+  const latestActivity = getLatestActivity();
+
+  if (el.foundationLeadMeta) {
+    el.foundationLeadMeta.textContent = hasRoster
+      ? `${roster.filename || '已上传花名册'} · ${roster.total_employees || 0}人`
+      : '尚未上传基础花名册';
+  }
+  if (el.foundationActivityCount) {
+    el.foundationActivityCount.textContent = state.activities.length;
+  }
+  if (el.foundationLatestMonth) {
+    el.foundationLatestMonth.textContent = latestActivity?.calc_month || '-';
+  }
+  if (!el.foundationContent) return;
+
+  const rosterStatus = hasRoster
+    ? '<span class="status-badge success">可用</span>'
+    : '<span class="status-badge warning">待上传</span>';
+
+  el.foundationContent.innerHTML = `
+    <div class="foundation-grid">
+      <section>
+        <h3 class="module-section-title">基础花名册</h3>
+        <p class="module-description">
+          基础花名册是月度活动引用员工姓名、部门、区域和岗位类型的底座。更新后，新建或重新导入的活动会引用最新版本。
+        </p>
+        <div class="meta-list">
+          <div class="meta-row">
+            <div class="meta-label">状态</div>
+            <div class="meta-value">${rosterStatus}</div>
+          </div>
+          <div class="meta-row">
+            <div class="meta-label">员工数</div>
+            <div class="meta-value">${hasRoster ? `${roster.total_employees || 0}人` : '-'}</div>
+          </div>
+          <div class="meta-row">
+            <div class="meta-label">文件名</div>
+            <div class="meta-value">${escapeHtml(roster.filename || '-')}</div>
+          </div>
+          <div class="meta-row">
+            <div class="meta-label">更新时间</div>
+            <div class="meta-value">${escapeHtml(formatDateTime(roster.uploaded_at))}</div>
+          </div>
+        </div>
+      </section>
+
+      <aside>
+        <h3 class="module-section-title">常用资料</h3>
+        <div class="module-action-list">
+          <div class="module-action-card">
+            <strong>更新基础花名册</strong>
+            <span>上传员工基础资料，供月度活动匹配姓名、部门和岗位类型。</span>
+            <button class="btn btn-primary btn-sm" type="button" onclick="chooseRosterFile()">上传花名册</button>
+          </div>
+          <div class="module-action-card">
+            <strong>调薪/转正拆分模板</strong>
+            <span>用于处理试用期转正、调薪分段等线下拆分场景。</span>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="downloadAdjustmentsTemplate()">下载模板</button>
+          </div>
+          <div class="module-action-card">
+            <strong>月度活动</strong>
+            <span>按月份创建独立核算空间，逐份导入报表并生成结果。</span>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="navigateTo('activities')">查看活动</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  `;
+}
+
+function renderExceptionQueue() {
+  if (!el.exceptionsContent) return;
+
+  const diagnostics = state.diagnosticsData;
+  const summary = diagnostics?.summary;
+  const issues = diagnostics?.issues || [];
+  const pageInfo = getPaginatedRows('exceptions', issues);
+  if (el.btnExportDiagnostics) {
+    el.btnExportDiagnostics.disabled = !state.currentActivity || !summary;
+  }
+
+  if (!state.currentActivity || !summary) {
+    el.exceptionsContent.innerHTML = `
+      <div class="empty-state compact">
+        <h3 class="empty-state-title">先选择一个月度活动</h3>
+        <p class="empty-state-sub">进入活动后，这里会汇总考勤、薪资、绩效和拆分表之间的匹配问题。</p>
+        <button class="btn btn-secondary" type="button" onclick="navigateTo('activities')">返回月度活动</button>
+      </div>
+    `;
+    return;
+  }
+
+  const severityLabel = {
+    error: '严重',
+    warning: '提醒',
+    info: '信息',
+  };
+  const safeSeverity = (severity) => {
+    const value = String(severity || 'info');
+    return value === 'error' || value === 'warning' || value === 'info' ? value : 'info';
+  };
+
+  el.exceptionsContent.innerHTML = `
+    <div class="exception-summary">
+      <div class="exception-summary-item">
+        <span class="exception-summary-label">考勤人数</span>
+        <span class="exception-summary-value">${summary.attendance_count || 0}</span>
+      </div>
+      <div class="exception-summary-item">
+        <span class="exception-summary-label">薪资匹配</span>
+        <span class="exception-summary-value">${summary.matched_salary_count || 0}/${summary.attendance_count || 0}</span>
+      </div>
+      <div class="exception-summary-item">
+        <span class="exception-summary-label">绩效匹配</span>
+        <span class="exception-summary-value">${summary.matched_performance_count || 0}/${summary.attendance_count || 0}</span>
+      </div>
+      <div class="exception-summary-item">
+        <span class="exception-summary-label">问题数</span>
+        <span class="exception-summary-value">${summary.issue_count || 0}</span>
+      </div>
+    </div>
+
+    ${issues.length ? `
+      <div class="data-table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>级别</th>
+              <th>问题类型</th>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.map(issue => {
+              const severity = safeSeverity(issue.severity);
+              return `
+              <tr class="${severity === 'error' ? 'row-danger' : ''}">
+                <td><span class="severity-pill ${severity}">${escapeHtml(severityLabel[severity] || '信息')}</span></td>
+                <td>${escapeHtml(issue.type || '-')}</td>
+                <td>${escapeHtml(issue.employee_id || '-')}</td>
+                <td>${escapeHtml(issue.name || '-')}</td>
+                <td>${escapeHtml(issue.detail || '-')}</td>
+              </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${renderTablePagination('exceptions', pageInfo)}
+    ` : `
+      <div class="empty-state compact">
+        <h3 class="empty-state-title">暂无匹配异常</h3>
+        <p class="empty-state-sub">${escapeHtml(state.currentActivity.calc_month || '')} 当前没有需要处理的诊断问题。</p>
+      </div>
+    `}
+  `;
 }
 
 // ═══ Enter Activity ═══
@@ -910,6 +1113,9 @@ async function loadBaseRoster() {
     const roster = await apiJson(`${API_BASE}/roster`);
     state.baseRoster = roster;
     updateRosterButton();
+    if (state.currentPage === 'foundation') {
+      renderFoundationData();
+    }
   } catch (error) {
     console.error('加载基础花名册状态失败:', error);
   }
@@ -942,6 +1148,7 @@ function chooseRosterFile() {
       });
       state.baseRoster = data.roster;
       updateRosterButton();
+      renderFoundationData();
       showNotification('基础花名册已更新，后续新活动会自动引用', 'success');
     } catch (error) {
       showNotification('花名册上传失败: ' + error.message, 'error');
@@ -1231,12 +1438,14 @@ el.btnUploadSalaryEmpty?.addEventListener('click', () => openUploadModal('salary
 el.btnUploadPerformance?.addEventListener('click', () => openUploadModal('performance'));
 el.btnUploadPerformanceEmpty?.addEventListener('click', () => openUploadModal('performance'));
 el.btnUploadAdjustments?.addEventListener('click', () => openUploadModal('adjustments'));
-el.btnDownloadAdjustmentsTemplate?.addEventListener('click', () => {
+function downloadAdjustmentsTemplate() {
   const link = document.createElement('a');
   link.href = `${API_BASE}/templates/adjustments/download`;
   link.download = 'FBU调薪转正拆分表模板.xlsx';
   link.click();
-});
+}
+
+el.btnDownloadAdjustmentsTemplate?.addEventListener('click', downloadAdjustmentsTemplate);
 
 // ═══ Diagnostics ═══
 
@@ -2009,6 +2218,7 @@ function renderTableByType(type, focusSnapshot = null) {
   if (type === 'salary') renderSalaryData();
   if (type === 'performance') renderPerformanceData();
   if (type === 'results') renderResultsData();
+  if (type === 'exceptions') renderExceptionQueue();
   restoreInputFocus(focusSnapshot);
 }
 

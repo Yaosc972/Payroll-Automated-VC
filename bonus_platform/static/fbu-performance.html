@@ -2145,6 +2145,195 @@
         font-family: var(--mono);
       }
 
+      .module-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, 1.35fr) repeat(2, minmax(180px, 0.6fr));
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .module-panel,
+      .panel.module-table-panel {
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: none;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+
+      .module-panel {
+        min-height: 132px;
+        padding: 22px 24px;
+      }
+
+      .module-panel-primary {
+        background: #FFFCF5;
+      }
+
+      .module-panel-label {
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 12px;
+      }
+
+      .module-panel-title {
+        color: var(--text-primary);
+        font-size: 30px;
+        font-weight: 780;
+        line-height: 1.1;
+      }
+
+      .module-panel-meta {
+        color: var(--text-secondary);
+        font-size: 13px;
+        line-height: 1.5;
+        margin-top: 12px;
+      }
+
+      .foundation-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 0.75fr);
+        gap: 20px;
+      }
+
+      .module-section-title {
+        color: var(--text-primary);
+        font-size: 15px;
+        font-weight: 780;
+        margin-bottom: 14px;
+      }
+
+      .module-description {
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin-bottom: 18px;
+        max-width: 760px;
+      }
+
+      .meta-list {
+        display: grid;
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .meta-row {
+        display: grid;
+        grid-template-columns: 160px minmax(0, 1fr);
+        min-height: 48px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.82);
+      }
+
+      .meta-row:last-child {
+        border-bottom: 0;
+      }
+
+      .meta-label,
+      .meta-value {
+        display: flex;
+        align-items: center;
+        padding: 12px 14px;
+      }
+
+      .meta-label {
+        color: var(--text-secondary);
+        background: rgba(248, 250, 252, 0.82);
+        font-weight: 700;
+      }
+
+      .meta-value {
+        color: var(--text-primary);
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .module-action-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .module-action-card {
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+        padding: 14px;
+        background: #FFFFFF;
+      }
+
+      .module-action-card strong {
+        display: block;
+        color: var(--text-primary);
+        font-size: 14px;
+        margin-bottom: 6px;
+      }
+
+      .module-action-card span {
+        color: var(--text-secondary);
+        display: block;
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+      }
+
+      .exception-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(120px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .exception-summary-item {
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+        padding: 14px;
+        background: #FFFFFF;
+      }
+
+      .exception-summary-label {
+        color: var(--text-secondary);
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+
+      .exception-summary-value {
+        color: var(--text-primary);
+        display: block;
+        font-family: var(--mono);
+        font-size: 24px;
+        font-weight: 780;
+      }
+
+      .severity-pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 760;
+        padding: 4px 9px;
+      }
+
+      .severity-pill.error {
+        background: #FEE2E2;
+        color: #991B1B;
+      }
+
+      .severity-pill.warning {
+        background: #FEF3C7;
+        color: #92400E;
+      }
+
+      .severity-pill.info {
+        background: #E0F2FE;
+        color: #075985;
+      }
+
+      .empty-state.compact {
+        padding: 44px 20px;
+      }
+
       @keyframes panelIn {
         from {
           opacity: 0;
@@ -2241,13 +2430,28 @@
         </div>
         <nav class="sidebar-nav">
           <div class="nav-section">
-            <div class="nav-section-title">绩效核算</div>
+            <div class="nav-section-title">平台模块</div>
             <a class="nav-item active" href="#activities" data-page="activities" aria-current="page">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 3h14a2 2 0 012 2v10a2 2 0 01-2 2H3a2 2 0 01-2-2V5a2 2 0 012-2z" stroke="currentColor" stroke-width="1.5"/><path d="M7 7h6M7 10h6M7 13h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
               </span>
               <span class="nav-item-text">月度活动</span>
             </a>
+            <a class="nav-item" href="#foundation" data-page="foundation">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 5.5h12M4 10h12M4 14.5h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M3 3h14v14H3V3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+              </span>
+              <span class="nav-item-text">基础数据</span>
+            </a>
+            <a class="nav-item" href="#exceptions" data-page="exceptions">
+              <span class="nav-item-icon">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3l7 12H3L10 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M10 7.5v3.5M10 14h.01" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              </span>
+              <span class="nav-item-text">异常队列</span>
+            </a>
+          </div>
+          <div class="nav-section">
+            <div class="nav-section-title">活动工作流</div>
             <a class="nav-item" href="#attendance" data-page="attendance">
               <span class="nav-item-icon">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l2.5 2.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -2343,6 +2547,52 @@
                     <tbody id="activitiesBody">
                     </tbody>
                   </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Foundation Page -->
+          <div class="page-content" id="pageFoundation" hidden>
+            <div class="module-grid">
+              <section class="module-panel module-panel-primary">
+                <div class="module-panel-label">基础数据</div>
+                <h2 class="module-panel-title">组织人员底座</h2>
+                <div class="module-panel-meta" id="foundationLeadMeta">基础花名册状态</div>
+              </section>
+              <section class="module-panel">
+                <div class="module-panel-label">活动引用</div>
+                <h2 class="module-panel-title" id="foundationActivityCount">0</h2>
+                <div class="module-panel-meta">月度活动</div>
+              </section>
+              <section class="module-panel">
+                <div class="module-panel-label">最近核算</div>
+                <h2 class="module-panel-title" id="foundationLatestMonth">-</h2>
+                <div class="module-panel-meta">核算月份</div>
+              </section>
+            </div>
+
+            <div class="panel module-table-panel">
+              <div class="panel-header">
+                <h2 class="panel-title">基础资料</h2>
+                <button class="btn btn-primary btn-sm" type="button" onclick="chooseRosterFile()">更新花名册</button>
+              </div>
+              <div class="panel-body" id="foundationContent">
+              </div>
+            </div>
+          </div>
+
+          <!-- Exceptions Page -->
+          <div class="page-content" id="pageExceptions" hidden>
+            <div class="panel module-table-panel">
+              <div class="panel-header">
+                <h2 class="panel-title">异常队列</h2>
+                <button class="btn btn-secondary btn-sm" id="btnExportDiagnostics" type="button" onclick="exportData('diagnostics')" disabled>导出诊断</button>
+              </div>
+              <div class="panel-body" id="exceptionsContent">
+                <div class="empty-state compact">
+                  <h3 class="empty-state-title">暂无异常队列</h3>
+                  <p class="empty-state-sub">进入月度活动后查看数据匹配提醒。</p>
                 </div>
               </div>
             </div>
