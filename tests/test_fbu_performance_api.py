@@ -85,12 +85,18 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
         files={"file": ("attendance.xlsx", _attendance_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert attendance_response.status_code == 200
-    employee = attendance_response.json()["preview"]["employees"][0]
+    attendance_payload = attendance_response.json()
+    employee = attendance_payload["preview"]["employees"][0]
     assert employee["name"] == "Ana Roster"
     assert employee["department"] == "HRAS人力综合条线-FBU HRBP Dept."
     assert employee["area"] == "US-West"
     assert employee["job_type"] == "functional"
     assert employee["roster_matched"] is True
+    assert attendance_payload["result_file"]["type"] == "attendance"
+    assert attendance_payload["result_file"]["filename"].startswith("考勤汇总_2026-04_")
+    download_response = client.get(attendance_payload["result_file"]["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content[:2] == b"PK"
 
 
 def test_fbu_adjustment_upload_is_saved_as_optional_run_data(monkeypatch, tmp_path):
@@ -114,6 +120,11 @@ def test_fbu_adjustment_upload_is_saved_as_optional_run_data(monkeypatch, tmp_pa
     payload = adjustment_response.json()
     assert payload["preview"]["summary"]["total_employees"] == 1
     assert payload["preview"]["summary"]["active_performance_base"] == 500
+    assert payload["result_file"]["type"] == "adjustments"
+    assert payload["result_file"]["filename"].startswith("调薪拆分_2026-04_")
+    download_response = client.get(payload["result_file"]["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content[:2] == b"PK"
 
     run_detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
     assert run_detail["adjustment_file"] == "adjustments.xlsx"

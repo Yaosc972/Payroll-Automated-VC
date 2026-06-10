@@ -13,6 +13,7 @@ logging.basicConfig(
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
+from urllib.parse import quote
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
 from openpyxl import load_workbook
 
@@ -1571,6 +1572,16 @@ fbu_run_manager = FBURunManager(str(FBU_PERFORMANCE_RUNS_DIR))
 fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
 
 
+def _fbu_result_file_payload(run_id: str, result_type: str) -> dict:
+    export_payload = export_fbu_excel(run_id, type=result_type)
+    filename = export_payload["filename"]
+    return {
+        "type": result_type,
+        "filename": filename,
+        "download_url": f"/api/fbu-performance/runs/{run_id}/download/{quote(filename)}",
+    }
+
+
 def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
     """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
@@ -1684,12 +1695,14 @@ async def import_fbu_attendance(
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run.run_id, 1, preview)
+        result_file = _fbu_result_file_payload(run.run_id, "attendance")
 
         return {
             "success": True,
             "run_id": run.run_id,
             "step": 1,
             "preview": preview,
+            "result_file": result_file,
         }
     except Exception as e:
         fbu_run_manager.update_run(run.run_id, status="failed", error=str(e))
@@ -1727,12 +1740,14 @@ async def import_fbu_salary(
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run_id, 2, preview)
+        result_file = _fbu_result_file_payload(run_id, "salary")
 
         return {
             "success": True,
             "run_id": run_id,
             "step": 2,
             "preview": preview,
+            "result_file": result_file,
         }
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
@@ -1770,12 +1785,14 @@ async def import_fbu_performance(
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run_id, 3, preview)
+        result_file = _fbu_result_file_payload(run_id, "performance")
 
         return {
             "success": True,
             "run_id": run_id,
             "step": 3,
             "preview": preview,
+            "result_file": result_file,
         }
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
@@ -1806,12 +1823,14 @@ async def import_fbu_adjustments(
         _load_fbu_roster_for_run(parser, run_id)
         preview = parser.parse_adjustments_preview(str(file_path))
         fbu_run_manager.save_step_data(run_id, 4, preview)
+        result_file = _fbu_result_file_payload(run_id, "adjustments")
 
         return {
             "success": True,
             "run_id": run_id,
             "step": 4,
             "preview": preview,
+            "result_file": result_file,
         }
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
@@ -2118,6 +2137,21 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
         data = run.performance_data.get('employees', [])
         title = "绩效明细"
         filename = f"绩效明细_{run.calc_month}_{run_id}.xlsx"
+    elif type == "adjustments" and run.adjustment_data:
+        data = []
+        for employee in run.adjustment_data.get('employees', []):
+            for segment in employee.get("segments", []):
+                data.append({
+                    "employee_id": employee.get("employee_id", ""),
+                    "name": employee.get("name", ""),
+                    "area": employee.get("area", ""),
+                    "department": employee.get("department", ""),
+                    "period": segment.get("period", ""),
+                    "performance_base": segment.get("performance_base", 0),
+                    "reason": segment.get("reason", ""),
+                })
+        title = "调薪拆分"
+        filename = f"调薪拆分_{run.calc_month}_{run_id}.xlsx"
     elif type == "results" and run.results:
         data = run.results
         title = "核算结果"
@@ -2209,6 +2243,16 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             ('绩效得分', 'score', 'data', 12),
             ('绩效等级', 'level', 'data', 12),
             ('绩效系数', 'coefficient', 'calc', 12),
+        ]
+    elif type == "adjustments":
+        columns = [
+            ('工号', 'employee_id', 'emp', 15),
+            ('姓名', 'name', 'emp', 12),
+            ('划分区域', 'area', 'emp', 15),
+            ('部门全称', 'department', 'emp', 40),
+            ('分段期间', 'period', 'data', 16),
+            ('分段绩效基数($)', 'performance_base', 'money', 18),
+            ('核算标识', 'reason', 'calc', 14),
         ]
     elif type == "results":
         columns = [
