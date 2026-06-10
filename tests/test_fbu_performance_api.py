@@ -16,14 +16,14 @@ def _workbook_bytes(workbook: Workbook) -> bytes:
 def _roster_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
-    sheet.append(["header"] * 108)
-    row = [""] * 108
+    sheet.append(["header"] * 123)
+    row = [""] * 123
     row[0] = "Ana Roster"
     row[3] = "E001"
-    row[19] = "FBU"
-    row[20] = "Americas"
+    row[19] = "HRAS人力综合条线"
+    row[20] = "FBU HRBP Dept."
     row[89] = "US-West"
-    row[107] = "白领"
+    row[122] = "蓝领"
     sheet.append(row)
     return _workbook_bytes(workbook)
 
@@ -70,7 +70,7 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     assert attendance_response.status_code == 200
     employee = attendance_response.json()["preview"]["employees"][0]
     assert employee["name"] == "Ana Roster"
-    assert employee["department"] == "FBU-Americas"
+    assert employee["department"] == "HRAS人力综合条线-FBU HRBP Dept."
     assert employee["area"] == "US-West"
     assert employee["job_type"] == "functional"
     assert employee["roster_matched"] is True

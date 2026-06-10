@@ -14,6 +14,10 @@ class BonusCalculator:
 
         绩效基数 = 基础工资 + OT1.5工资 + OT2.0工资 + 病假工资 + 年假补贴 + 节日补贴
         """
+        if emp.job_type == "district_manager" and emp.fixed_performance_base:
+            emp.performance_base = emp.fixed_performance_base
+            return emp.performance_base
+
         # 基础工资
         emp.base_salary = emp.base_hours * emp.hourly_rate
 
@@ -51,6 +55,10 @@ class BonusCalculator:
 
         绩效奖金 = 绩效基数 × 绩效比例 × 绩效系数
         """
+        if emp.job_type == "district_manager" and emp.fixed_performance_base:
+            emp.performance_bonus = emp.performance_base * emp.performance_coefficient
+            return emp.performance_bonus
+
         emp.performance_bonus = (
             emp.performance_base
             * emp.performance_ratio
@@ -71,11 +79,14 @@ class BonusCalculator:
         cls.calc_performance_base(emp)
 
         # 2. 计算绩效系数
-        emp.performance_coefficient = CoefficientCalculator.calculate(
-            job_type=emp.job_type,
-            score=emp.performance_score,
-            level=emp.performance_level,
-        )
+        if emp.job_type == "district_manager" and emp.uploaded_coefficient is not None:
+            emp.performance_coefficient = emp.uploaded_coefficient
+        else:
+            emp.performance_coefficient = CoefficientCalculator.calculate(
+                job_type=emp.job_type,
+                score=emp.performance_score,
+                level=emp.performance_level,
+            )
         if (
             emp.uploaded_coefficient is not None
             and round(emp.uploaded_coefficient, 2) != round(emp.performance_coefficient, 2)

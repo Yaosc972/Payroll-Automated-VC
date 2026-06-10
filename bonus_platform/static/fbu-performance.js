@@ -28,6 +28,12 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function formatJobType(jobType) {
+  if (jobType === 'district_manager') return '区长';
+  if (jobType === 'functional') return '职能';
+  return '仓库';
+}
+
 async function apiJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
@@ -499,7 +505,7 @@ function renderAttendanceData() {
               <td>${escapeHtml(emp.name || '-')}</td>
               <td>${escapeHtml(emp.area || '-')}</td>
               <td>${escapeHtml(emp.department || '-')}</td>
-              <td>${emp.job_type === 'warehouse' ? '仓库' : '职能'}</td>
+              <td>${formatJobType(emp.job_type)}</td>
               <td>${emp.has_night_shift ? '✓' : '-'}</td>
               <td>${emp.total_base_hours.toFixed(2)}h</td>
               <td>${emp.total_ot15.toFixed(2)}h</td>
@@ -677,7 +683,7 @@ function renderPerformanceData() {
               <td>${escapeHtml(emp.name || '-')}</td>
               <td>${escapeHtml(emp.area || '-')}</td>
               <td>${escapeHtml(emp.department || '-')}</td>
-              <td>${emp.job_type === 'warehouse' ? '仓库' : '职能'}</td>
+              <td>${formatJobType(emp.job_type)}</td>
               <td>${emp.score !== null ? emp.score.toFixed(2) : '-'}</td>
               <td>${escapeHtml(emp.level || '-')}</td>
               <td>${emp.coefficient !== null ? emp.coefficient.toFixed(2) : '-'}</td>
@@ -766,7 +772,7 @@ function renderResultsData() {
               <td>${escapeHtml(r.name || '-')}</td>
               <td>${escapeHtml(r.area || '-')}</td>
               <td>${escapeHtml(r.department || '-')}</td>
-              <td>${r.job_type === 'warehouse' ? '仓库' : '职能'}</td>
+              <td>${formatJobType(r.job_type)}</td>
               <td>$${r.hourly_rate.toFixed(2)}</td>
               <td>$${r.performance_base.toFixed(2)}</td>
               <td>${(r.performance_ratio * 100).toFixed(1)}%</td>

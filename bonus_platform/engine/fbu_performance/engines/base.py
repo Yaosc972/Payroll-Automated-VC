@@ -17,7 +17,8 @@ class EmployeeData:
     performance_score: Optional[float] = None
     performance_level: Optional[str] = None
     uploaded_coefficient: Optional[float] = None
-    job_type: str = "warehouse"  # warehouse / functional
+    job_type: str = "warehouse"  # warehouse / functional / district_manager
+    fixed_performance_base: Optional[float] = None
 
     # 考勤数据
     base_hours: float = 0.0      # 计薪出勤时长

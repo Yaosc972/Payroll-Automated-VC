@@ -46,6 +46,24 @@ def _find_column(headers, names: list[str], fallback: int | None = None) -> int 
     return fallback
 
 
+DISTRICT_MANAGER_IDS = {"zt15638"}
+FUNCTIONAL_DEPARTMENT_KEYWORDS = (
+    "FBU HRBP Dept.",
+    "渠道管理部",
+    "新泽西区行政部",
+)
+
+
+def classify_job_type(employee_id: str, department: str) -> str:
+    """按FBU美洲业务口径区分仓库端、职能端和区长。"""
+    normalized_id = str(employee_id or "").strip().lower()
+    if normalized_id in DISTRICT_MANAGER_IDS:
+        return "district_manager"
+    if any(keyword in (department or "") for keyword in FUNCTIONAL_DEPARTMENT_KEYWORDS):
+        return "functional"
+    return "warehouse"
+
+
 class FBUPerformanceParser:
     """FBU绩效数据解析器"""
 
@@ -128,9 +146,7 @@ class FBUPerformanceParser:
             # 划分区域
             area = str(_cell(row, col_map['划分区域'])).strip() if _cell(row, col_map['划分区域']) else ''
 
-            # 岗位类型：蓝领/灰领走仓库端公式，白领走职能端等级映射
-            job_type_raw = str(_cell(row, col_map['领色'])).strip() if _cell(row, col_map['领色']) else ''
-            job_type = 'warehouse' if job_type_raw in {'蓝领', '灰领'} else 'functional'
+            job_type = classify_job_type(emp_id, department_full)
 
             roster[emp_id] = {
                 'name': name,
@@ -222,6 +238,7 @@ class FBUPerformanceParser:
                 exceptions.append("未匹配薪资档案")
             hourly_rate = salary_info.get('hourly_rate', 0)
             ratio = salary_info.get('ratio', 0)
+            fixed_performance_base = salary_info.get('fixed_performance_base', 0)
 
             # 获取绩效信息
             perf_info = performance_data.get(emp_id, {})
@@ -254,6 +271,7 @@ class FBUPerformanceParser:
                     performance_level=level,
                     uploaded_coefficient=uploaded_coefficient,
                     job_type=job_type,
+                    fixed_performance_base=fixed_performance_base,
                     base_hours=hours['白班']['计薪出勤'],
                     ot15_hours=hours['白班']['OT1.5'],
                     ot20_hours=hours['白班']['OT2.0'],
@@ -279,6 +297,7 @@ class FBUPerformanceParser:
                     performance_level=level,
                     uploaded_coefficient=uploaded_coefficient,
                     job_type=job_type,
+                    fixed_performance_base=fixed_performance_base,
                     base_hours=hours['夜班']['计薪出勤'],
                     ot15_hours=hours['夜班']['OT1.5'],
                     ot20_hours=hours['夜班']['OT2.0'],
@@ -431,6 +450,8 @@ class FBUPerformanceParser:
                 "area": emp_info['area'],
                 "hourly_rate": info.get('hourly_rate', 0),
                 "ratio": info.get('ratio', 0),
+                "calculation_method": info.get('calculation_method', ''),
+                "fixed_performance_base": info.get('fixed_performance_base', 0),
             })
 
         # 汇总统计：薪资档案常包含离职或未维护时薪的员工，预览中拆开显示。
@@ -555,6 +576,8 @@ class FBUPerformanceParser:
             salary_dict[emp_id] = {
                 'hourly_rate': emp['hourly_rate'],
                 'ratio': emp['ratio'],
+                'calculation_method': emp.get('calculation_method', ''),
+                'fixed_performance_base': emp.get('fixed_performance_base', 0),
             }
 
         performance_dict = {}

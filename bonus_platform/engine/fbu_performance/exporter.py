@@ -8,6 +8,14 @@ from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from .engines.base import EmployeeData
 
 
+def _format_job_type(job_type: str) -> str:
+    if job_type == "district_manager":
+        return "区长"
+    if job_type == "functional":
+        return "职能"
+    return "仓库"
+
+
 class FBUPerformanceExporter:
     """FBU绩效结果导出器"""
 
@@ -85,7 +93,7 @@ class FBUPerformanceExporter:
                 emp.employee_id,
                 emp.source_employee_id,
                 emp.name,
-                "仓库" if emp.job_type == "warehouse" else "职能",
+                _format_job_type(emp.job_type),
                 emp.base_hours,
                 emp.ot15_hours,
                 emp.ot20_hours,

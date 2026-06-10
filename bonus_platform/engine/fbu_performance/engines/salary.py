@@ -9,6 +9,8 @@ class SalaryProcessor:
     COLUMN_MAP = {
         '姓名': 0,
         '工号': 1,
+        '绩效奖金计算方式': 7,
+        '月度绩效奖金基数': 8,
         '时薪标准': 11,
         '绩效比例': 9,  # 月度绩效奖金比例(%)
     }
@@ -49,6 +51,8 @@ class SalaryProcessor:
                 continue
 
             emp_id = str(self._cell(row, self.COLUMN_MAP['工号'])).strip()
+            calculation_method = str(self._cell(row, self.COLUMN_MAP['绩效奖金计算方式']) or "").strip()
+            fixed_performance_base = self._cell(row, self.COLUMN_MAP['月度绩效奖金基数'])
             hourly_rate = self._cell(row, self.COLUMN_MAP['时薪标准'])
             ratio = self._cell(row, self.COLUMN_MAP['绩效比例'])
 
@@ -61,6 +65,8 @@ class SalaryProcessor:
                 self.salary_data[emp_id] = {
                     'hourly_rate': self._to_float(hourly_rate),
                     'ratio': ratio_value,
+                    'calculation_method': calculation_method,
+                    'fixed_performance_base': self._to_float(fixed_performance_base, default=0.0),
                 }
 
         return self.salary_data

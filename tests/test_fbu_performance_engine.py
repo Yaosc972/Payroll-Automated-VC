@@ -70,9 +70,34 @@ def test_salary_processor_accepts_percent_strings():
 
     data = SalaryProcessor().load(rows)
 
-    assert data["E001"] == {"hourly_rate": 20.5, "ratio": 0.1}
-    assert data["E002"] == {"hourly_rate": 18.0, "ratio": 0.15}
-    assert data["E003"] == {"hourly_rate": 0.0, "ratio": 0.0}
+    assert data["E001"]["hourly_rate"] == 20.5
+    assert data["E001"]["ratio"] == 0.1
+    assert data["E002"]["hourly_rate"] == 18.0
+    assert data["E002"]["ratio"] == 0.15
+    assert data["E003"]["hourly_rate"] == 0.0
+    assert data["E003"]["ratio"] == 0.0
+
+
+def test_district_manager_uses_fixed_base_and_uploaded_coefficient():
+    emp = EmployeeData(
+        employee_id="zt15638",
+        name="万其鑫",
+        hourly_rate=40.384615,
+        performance_ratio=0,
+        performance_score=112.72,
+        performance_level="超出预期",
+        uploaded_coefficient=1.35,
+        job_type="district_manager",
+        fixed_performance_base=3000,
+        base_hours=171.5,
+        sick_hours=4.5,
+    )
+
+    BonusCalculator.calculate(emp)
+
+    assert emp.performance_base == 3000
+    assert emp.performance_coefficient == 1.35
+    assert round(emp.performance_bonus, 2) == 4050
 
 
 def test_salary_preview_reports_total_valid_and_zero_hourly_counts(tmp_path):
@@ -188,16 +213,19 @@ def test_roster_loader_finds_shifted_lingse_column_by_header(tmp_path):
     headers[122] = "领色"
     sheet.append(headers)
 
-    for employee_id, name, lingse in [
-        ("E001", "Ana Roster", "蓝领"),
-        ("E002", "Ben Roster", "灰领"),
-        ("E003", "Cara Roster", "白领"),
+    for employee_id, name, department_parts, lingse in [
+        ("E001", "Ana Roster", ("FBU", "Americas"), "蓝领"),
+        ("E002", "Ben Roster", ("FBU", "Americas"), "白领"),
+        ("E003", "Cara Roster", ("HRAS人力综合条线", "FBU HRBP Dept.", "新泽西区HRBP部"), "蓝领"),
+        ("zt15638", "万其鑫", ("FBU仓储事业部", "美洲区", "新泽西区"), "白领"),
     ]:
         row = [""] * 123
         row[0] = name
         row[3] = employee_id
-        row[19] = "FBU"
-        row[20] = "Americas"
+        row[19] = department_parts[0]
+        row[20] = department_parts[1]
+        if len(department_parts) > 2:
+            row[21] = department_parts[2]
         row[89] = "US-West"
         row[122] = lingse
         sheet.append(row)
@@ -213,6 +241,7 @@ def test_roster_loader_finds_shifted_lingse_column_by_header(tmp_path):
     assert roster["E001"]["job_type"] == "warehouse"
     assert roster["E002"]["job_type"] == "warehouse"
     assert roster["E003"]["job_type"] == "functional"
+    assert roster["zt15638"]["job_type"] == "district_manager"
 
 
 def test_base_roster_store_saves_metadata_and_copies_snapshot(tmp_path):
