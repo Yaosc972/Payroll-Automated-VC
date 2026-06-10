@@ -586,7 +586,13 @@ class FBUPerformanceParser:
         if not rows:
             raise ValueError("调薪拆分工作表为空")
 
+        header_row_index = 0
         headers = rows[0]
+        for index, row in enumerate(rows[:20]):
+            if _find_column(row, ["工号", "员工工号", "employee_id"]) is not None:
+                header_row_index = index
+                headers = row
+                break
         template_map = {
             "employee_id": _find_column(headers, ["工号", "员工工号", "employee_id"]),
             "name": _find_column(headers, ["姓名", "员工姓名", "name"]),
@@ -597,7 +603,9 @@ class FBUPerformanceParser:
         use_template = all(template_map[key] is not None for key in ("employee_id", "period", "performance_base", "reason"))
         grouped: dict[str, dict] = {}
 
-        for row in rows[1:]:
+        data_rows = rows[header_row_index + 1:] if use_template else rows[1:]
+
+        for row in data_rows:
             if use_template:
                 emp_id = str(_cell(row, template_map["employee_id"]) or "").strip()
                 name = str(_cell(row, template_map["name"]) or "").strip()

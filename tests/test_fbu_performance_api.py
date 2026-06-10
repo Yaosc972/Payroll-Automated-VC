@@ -5,6 +5,7 @@ from openpyxl import load_workbook
 from openpyxl import Workbook
 
 import bonus_platform.app as app_module
+from bonus_platform.engine.fbu_performance.engines.base import EmployeeData
 from bonus_platform.engine.fbu_performance.runs import FBURosterStore, FBURunManager
 
 
@@ -133,9 +134,11 @@ def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path
     assert response.content[:2] == b"PK"
 
     workbook = load_workbook(BytesIO(response.content), data_only=True)
-    assert workbook.sheetnames == ["调薪拆分", "填写示例"]
+    assert workbook.sheetnames == ["调薪拆分"]
     main_sheet = workbook["调薪拆分"]
-    assert [main_sheet.cell(1, col).value for col in range(1, 7)] == [
+    assert main_sheet.cell(3, 1).value == "zt0000001"
+    assert main_sheet.cell(3, 2).value == "花名一"
+    assert [main_sheet.cell(6, col).value for col in range(1, 7)] == [
         "工号",
         "姓名",
         "分段期间",
@@ -143,10 +146,44 @@ def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path
         "核算标识",
         "备注",
     ]
-    assert main_sheet.cell(2, 1).value is None
+    assert main_sheet.cell(7, 1).value is None
     validations = list(main_sheet.data_validations.dataValidation)
     assert len(validations) == 1
     assert validations[0].type == "list"
     assert validations[0].formula1 == '"调薪前,调薪后"'
-    assert "E2:E1000" in str(validations[0].sqref)
-    assert workbook["填写示例"].cell(2, 1).value == "zt0021990"
+    assert "E7:E1000" in str(validations[0].sqref)
+
+
+def test_fbu_export_escapes_formula_like_values_and_selects_header(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+
+    run = app_module.fbu_run_manager.create_run(calc_month="2026-04")
+    app_module.fbu_run_manager.save_results(
+        run.run_id,
+        [
+            EmployeeData(
+                employee_id="zt001",
+                name="=SUM(A1:A2)",
+                department="+Formula Dept",
+                area="@Area",
+                hourly_rate=18,
+                performance_ratio=0.05,
+                performance_base=1000,
+                performance_coefficient=1,
+                performance_bonus=50,
+            )
+        ],
+    )
+
+    client = TestClient(app_module.app)
+    response = client.get(f"/api/fbu-performance/runs/{run.run_id}/export-excel?type=results")
+
+    assert response.status_code == 200
+    filename = response.json()["filename"]
+    workbook = load_workbook(tmp_path / filename, data_only=False)
+    sheet = workbook["核算结果"]
+    assert sheet.sheet_view.selection[0].activeCell == "A3"
+    values = [cell.value for row in sheet.iter_rows() for cell in row if isinstance(cell.value, str)]
+    assert not any(value.startswith("=") for value in values)
+    assert "'=SUM(A1:A2)" in values

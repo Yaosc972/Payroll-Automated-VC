@@ -1830,17 +1830,16 @@ def download_fbu_adjustments_template() -> FileResponse:
     ws.title = "调薪拆分"
 
     headers = ["工号", "姓名", "分段期间", "分段绩效基数", "核算标识", "备注"]
+    header_row = 6
+    data_start_row = header_row + 1
     notes = [
         "填报说明：",
-        "1. 必填列：工号、分段期间、分段绩效基数、核算标识。",
-        "2. 核算标识只填写“调薪前”或“调薪后”。调薪前按0%核算，调薪后使用薪资档案中的绩效比例。",
-        "3. 同一员工可填写多行，平台会按分段逐行计算后汇总。",
-        "4. 分段绩效基数请直接填线下拆分后的基数金额，不需要再填时薪或工时。",
+        "下面三行为脱敏填写示例，不参与导入；请从第7行开始填写真实数据。",
+        "必填列：工号、分段期间、分段绩效基数、核算标识。核算标识请从下拉选项选择。",
     ]
     examples = [
-        ["zt0021990", "张海冰", "4.1-4.11", 1404.90, "调薪前", "试用期，不参与绩效奖金"],
-        ["zt0021990", "张海冰", "4.12-4.25", 1667.88, "调薪前", "试用期，不参与绩效奖金"],
-        ["zt0021990", "张海冰", "4.26-4.30", 732.42, "调薪后", "转正后，按薪资档案绩效比例核算"],
+        ["zt0000001", "花名一", "4.1-4.15", 1200.00, "调薪前", "示例：调薪前不参与绩效奖金"],
+        ["zt0000001", "花名一", "4.16-4.30", 900.00, "调薪后", "示例：调薪后按薪资档案绩效比例核算"],
     ]
 
     header_fill = PatternFill(start_color="1E88E5", end_color="1E88E5", fill_type="solid")
@@ -1853,22 +1852,29 @@ def download_fbu_adjustments_template() -> FileResponse:
         bottom=Side(style="thin", color="CBD5E1"),
     )
 
+    for offset, note in enumerate(notes, 1):
+        cell = ws.cell(row=offset, column=1, value=note)
+        cell.font = Font(bold=(offset == 1), color="334155") if offset == 1 else note_font
+
+    for row_idx, row in enumerate(examples, 3):
+        for col_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+            if col_idx == 5:
+                cell.fill = PatternFill(start_color="E0F2FE", end_color="E0F2FE", fill_type="solid")
+
     for col_idx, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center")
         cell.border = thin_border
 
-    note_start = 4
-    for offset, note in enumerate(notes):
-        cell = ws.cell(row=note_start + offset, column=1, value=note)
-        cell.font = Font(bold=(offset == 0), color="334155") if offset == 0 else note_font
-
     widths = [16, 14, 18, 18, 14, 38]
     for idx, width in enumerate(widths, 1):
         ws.column_dimensions[chr(64 + idx)].width = width
-    ws.freeze_panes = "A2"
+    ws.freeze_panes = f"A{data_start_row}"
     reason_validation = DataValidation(
         type="list",
         formula1='"调薪前,调薪后"',
@@ -1878,25 +1884,7 @@ def download_fbu_adjustments_template() -> FileResponse:
         error="请选择“调薪前”或“调薪后”。",
     )
     ws.add_data_validation(reason_validation)
-    reason_validation.add("E2:E1000")
-
-    example_ws = wb.create_sheet("填写示例")
-    for col_idx, header in enumerate(headers, 1):
-        cell = example_ws.cell(row=1, column=col_idx, value=header)
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = thin_border
-
-    for row_idx, row in enumerate(examples, 2):
-        for col_idx, value in enumerate(row, 1):
-            cell = example_ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.border = thin_border
-            cell.alignment = Alignment(vertical="center")
-
-    for idx, width in enumerate(widths, 1):
-        example_ws.column_dimensions[chr(64 + idx)].width = width
-    example_ws.freeze_panes = "A2"
+    reason_validation.add(f"E{data_start_row}:E1000")
 
     output_path = EXPORT_DIR / "FBU调薪转正拆分表模板.xlsx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2103,6 +2091,11 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+    def safe_excel_value(value):
+        if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
+            return "'" + value
+        return value
+
     # 检查任务是否存在
     run = fbu_run_manager.get_run(run_id)
     if not run:
@@ -2173,10 +2166,9 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
         bottom=Side(style='thin', color='BDBDBD')
     )
 
-    # 写入标题
-    ws.merge_cells('A1:L1')
+    # 写入标题。保持普通单元格，避免部分表格软件打开时误触发公式编辑状态。
     title_cell = ws['A1']
-    title_cell.value = f"FBU美洲绩效核算 - {title} ({run.calc_month})"
+    title_cell.value = safe_excel_value(f"FBU美洲绩效核算 - {title} ({run.calc_month})")
     title_cell.font = title_font
     title_cell.fill = title_fill
     title_cell.alignment = Alignment(horizontal='center', vertical='center')
@@ -2235,7 +2227,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
     # 写入表头
     header_row = 3
     for col_idx, (header, _, style_type, width) in enumerate(columns, 1):
-        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell = ws.cell(row=header_row, column=col_idx, value=safe_excel_value(header))
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal='center', vertical='center')
@@ -2279,7 +2271,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 elif field in ['score', 'coefficient', 'performance_coefficient']:
                     value = round(value, 2)
 
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = ws.cell(row=row_idx, column=col_idx, value=safe_excel_value(value))
             cell.border = thin_border
             cell.alignment = Alignment(horizontal='center', vertical='center')
 
@@ -2297,20 +2289,24 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
 
     # 添加汇总行
     summary_row = len(data) + header_row + 2
-    ws.cell(row=summary_row, column=1, value="汇总").font = Font(bold=True, size=12)
+    ws.cell(row=summary_row, column=1, value=safe_excel_value("汇总")).font = Font(bold=True, size=12)
 
     if type == "attendance":
         total_base = sum(e.get('total_base_hours', 0) for e in data)
         total_ot15 = sum(e.get('total_ot15', 0) for e in data)
         total_ot20 = sum(e.get('total_ot20', 0) for e in data)
-        ws.cell(row=summary_row, column=2, value=f"员工数: {len(data)}")
-        ws.cell(row=summary_row, column=7, value=f"{total_base:.2f}h")
-        ws.cell(row=summary_row, column=8, value=f"{total_ot15:.2f}h")
-        ws.cell(row=summary_row, column=9, value=f"{total_ot20:.2f}h")
+        ws.cell(row=summary_row, column=2, value=safe_excel_value(f"员工数: {len(data)}"))
+        ws.cell(row=summary_row, column=7, value=safe_excel_value(f"{total_base:.2f}h"))
+        ws.cell(row=summary_row, column=8, value=safe_excel_value(f"{total_ot15:.2f}h"))
+        ws.cell(row=summary_row, column=9, value=safe_excel_value(f"{total_ot20:.2f}h"))
     elif type == "results":
         total_bonus = sum(e.get('performance_bonus', 0) for e in data)
-        ws.cell(row=summary_row, column=2, value=f"员工数: {len(data)}")
-        ws.cell(row=summary_row, column=10, value=f"${total_bonus:,.2f}")
+        ws.cell(row=summary_row, column=2, value=safe_excel_value(f"员工数: {len(data)}"))
+        ws.cell(row=summary_row, column=10, value=safe_excel_value(f"${total_bonus:,.2f}"))
+
+    if ws.sheet_view.selection:
+        ws.sheet_view.selection[0].activeCell = f"A{header_row}"
+        ws.sheet_view.selection[0].sqref = f"A{header_row}"
 
     # 保存文件
     output_path = EXPORT_DIR / filename

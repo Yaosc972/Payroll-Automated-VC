@@ -143,6 +143,11 @@ def test_adjustment_split_preview_accepts_platform_template_headers(tmp_path):
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "调薪拆分"
+    sheet.append(["填报说明："])
+    sheet.append(["以下为脱敏示例，不参与导入"])
+    sheet.append(["zt0000001", "花名一", "4.1-4.15", 1200, "调薪前", "示例"])
+    sheet.append([])
+    sheet.append([])
     sheet.append(["工号", "姓名", "分段期间", "分段绩效基数", "核算标识", "备注"])
     sheet.append(["zt0021990", "张海冰", "4.26-4.30", 732.42, "调薪后", "转正"])
     path = tmp_path / "adjustments_template.xlsx"
