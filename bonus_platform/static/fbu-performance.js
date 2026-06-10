@@ -371,14 +371,6 @@ function closeUploadModal() {
   uploadFile = null;
 }
 
-function downloadGeneratedResult(resultFile) {
-  if (!resultFile?.download_url) return;
-  const link = document.createElement('a');
-  link.href = resultFile.download_url;
-  link.download = resultFile.filename || '';
-  link.click();
-}
-
 el.btnCloseUploadModal.addEventListener('click', closeUploadModal);
 el.btnCancelUpload.addEventListener('click', closeUploadModal);
 
@@ -429,9 +421,8 @@ el.btnConfirmUpload.addEventListener('click', async () => {
 
     if (data.success) {
       const completedUploadType = uploadType;
-      showNotification(data.result_file ? `上传成功，已生成 ${data.result_file.filename}` : '上传成功', 'success');
+      showNotification(data.result_file ? '上传成功，结果文件已生成，可点导出下载' : '上传成功', 'success');
       closeUploadModal();
-      downloadGeneratedResult(data.result_file);
 
       // Update state
       if (completedUploadType === 'attendance') {
