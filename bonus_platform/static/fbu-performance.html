@@ -1481,6 +1481,11 @@
         letter-spacing: 0;
       }
 
+      html,
+      body {
+        height: 100%;
+      }
+
       body {
         position: relative;
         overflow: hidden;
@@ -1508,13 +1513,16 @@
       .app-layout {
         gap: 16px;
         padding: 16px;
-        min-height: 100vh;
+        height: 100vh;
+        min-height: 0;
+        overflow: hidden;
         isolation: isolate;
       }
 
       .sidebar {
         width: 236px;
-        min-height: calc(100vh - 32px);
+        height: calc(100vh - 32px);
+        min-height: 0;
         align-self: flex-start;
         position: sticky;
         top: 16px;
@@ -1597,8 +1605,10 @@
       }
 
       .main-content {
-        min-height: calc(100vh - 32px);
+        height: calc(100vh - 32px);
+        min-height: 0;
         gap: 16px;
+        overflow: hidden;
       }
 
       .top-bar {
@@ -1627,6 +1637,11 @@
       }
 
       .content-area {
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
         padding: 0 0 8px;
       }
 
@@ -1779,6 +1794,8 @@
 
       .data-table-container,
       .bonus-table-shell {
+        overflow: auto;
+        -webkit-overflow-scrolling: touch;
         border-radius: 8px;
         scrollbar-color: rgba(99, 91, 255, 0.35) rgba(226, 232, 240, 0.60);
       }
@@ -2043,17 +2060,27 @@
         .app-layout {
           flex-direction: column;
           padding: 12px;
+          height: auto;
+          min-height: 100vh;
+          overflow: visible;
         }
 
         .sidebar {
           width: 100%;
+          height: auto;
           min-height: auto;
           position: relative;
           top: 0;
         }
 
         .main-content {
+          height: auto;
           min-height: auto;
+          overflow: visible;
+        }
+
+        .content-area {
+          overflow: visible;
         }
 
         .top-bar {
