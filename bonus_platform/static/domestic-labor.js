@@ -199,7 +199,14 @@ function bindEvents() {
   // Submit
   el.btnSubmitTask.addEventListener('click', submitTask);
   el.btnRefreshStatus.addEventListener('click', refreshStatus);
-  el.btnExport.addEventListener('click', exportResults);
+  el.btnExport.addEventListener('click', () => exportResults(false));
+  el.reportLink?.addEventListener('click', (event) => {
+    if (el.reportLink.classList.contains('disabled')) return;
+    if (el.reportLink.dataset.readyToExport === 'true') {
+      event.preventDefault();
+      exportResults(true);
+    }
+  });
   el.subjectTabs?.addEventListener('click', (event) => {
     const tab = event.target.closest('[data-subject]');
     if (!tab) return;
@@ -280,6 +287,7 @@ async function submitTask() {
 
   setText(el.submitStatus, '正在提交计算任务...');
   el.btnSubmitTask.disabled = true;
+  resetReportLink();
 
   try {
     const form = new FormData();
@@ -430,6 +438,8 @@ function renderResults(metadata) {
   const results = metadata.results || [];
   const summary = metadata.summary || {};
   state.currentResults = results;
+  if (results.length) enableReportExportLink();
+  else resetReportLink();
 
   // Update KPI - 适配后端字段名
   el.kpiTotalVal.textContent = summary.total_employees || summary.totalEmployees || '—';
@@ -550,6 +560,7 @@ function renderEmptyWorkbench() {
   renderTaskStatusCard('draft');
   renderResultsTable([]);
   renderExceptionQueue([]);
+  resetReportLink();
 }
 
 function filterResults(results) {
@@ -730,17 +741,40 @@ function formatExceptions(exceptions) {
   }).join('');
 }
 
-async function exportResults() {
+function resetReportLink() {
+  if (!el.reportLink) return;
+  el.reportLink.href = '#';
+  el.reportLink.dataset.readyToExport = 'false';
+  el.reportLink.classList.add('disabled');
+  el.reportLink.setAttribute('aria-disabled', 'true');
+}
+
+function enableReportExportLink() {
+  if (!el.reportLink) return;
+  el.reportLink.href = '#';
+  el.reportLink.dataset.readyToExport = 'true';
+  el.reportLink.classList.remove('disabled');
+  el.reportLink.removeAttribute('aria-disabled');
+}
+
+async function exportResults(autoDownload = false) {
   if (!state.currentRun) return toast('暂无任务。');
   setText(el.taskStatusSub, '正在生成 Excel...');
   try {
     const data = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}/export`);
     const downloadUrl = `/api/domestic-labor/runs/${state.currentRun.id}/download/${encodeURIComponent(data.file_name)}`;
     el.reportLink.href = downloadUrl;
+    el.reportLink.dataset.readyToExport = 'false';
     el.reportLink.classList.remove('disabled');
     el.reportLink.removeAttribute('aria-disabled');
-    toast('Excel 已生成，点击下载。');
-    setText(el.taskStatusSub, 'Excel 已生成。');
+    if (autoDownload) {
+      window.location.href = downloadUrl;
+      toast('Excel 已生成，正在下载。');
+      setText(el.taskStatusSub, 'Excel 已生成，正在下载。');
+    } else {
+      toast('Excel 已生成，点击下载。');
+      setText(el.taskStatusSub, 'Excel 已生成。');
+    }
   } catch (error) {
     toast(error.message);
     setText(el.taskStatusSub, error.message, true);
