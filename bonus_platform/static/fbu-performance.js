@@ -15,6 +15,7 @@ const state = {
   diagnosticsData: null,
   resultsData: null,
   baseRoster: null,
+  lastImportResult: null,
 };
 
 // ═══ API Base ═══
@@ -58,6 +59,10 @@ function formatCoefficient(value) {
   return toNumber(value).toFixed(2);
 }
 
+function formatHours(value) {
+  return `${toNumber(value).toFixed(2)}h`;
+}
+
 function formatResultJobType(jobType) {
   const label = formatJobType(jobType);
   const className = jobType === 'functional'
@@ -74,6 +79,10 @@ function formatJsArg(value) {
     .replaceAll('<', '\\u003C')
     .replaceAll('>', '\\u003E')
     .replaceAll('"', '&quot;');
+}
+
+function getShiftHours(employee, shiftName) {
+  return toNumber(employee.day_shift?.[shiftName]) + toNumber(employee.night_shift?.[shiftName]);
 }
 
 async function apiJson(url, options = {}) {
@@ -461,6 +470,11 @@ el.btnConfirmUpload.addEventListener('click', async () => {
 
     if (data.success) {
       const completedUploadType = uploadType;
+      state.lastImportResult = {
+        type: completedUploadType,
+        hasResultFile: Boolean(data.result_file),
+        at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+      };
       showNotification(data.result_file ? '上传成功，结果文件已生成，可点导出下载' : '上传成功', 'success');
       closeUploadModal();
 
@@ -585,6 +599,98 @@ function renderDiagnosticsPanel() {
   `;
 }
 
+function renderImportResultNote(type) {
+  const last = state.lastImportResult;
+  const typeMatches = last && (
+    last.type === type
+    || (type === 'performance' && last.type === 'adjustments')
+  );
+  if (!typeMatches) return '';
+
+  const typeLabel = {
+    attendance: '考勤报表',
+    salary: '薪资档案',
+    performance: '绩效报表',
+    adjustments: '调薪/转正拆分表',
+  }[last.type] || '报表';
+
+  return `
+    <div class="import-result-note">
+      <span><strong>${typeLabel}</strong> 已上传并刷新预览${last.hasResultFile ? '，导出结果已生成' : ''}</span>
+      <span>${escapeHtml(last.at || '')}</span>
+    </div>
+  `;
+}
+
+function renderImportSummary(items) {
+  return `
+    <div class="import-summary-strip">
+      ${items.map(item => `
+        <div class="import-summary-item ${escapeHtml(item.tone || '')}">
+          <span class="import-summary-label">${escapeHtml(item.label)}</span>
+          <span class="import-summary-value ${item.mono ? 'mono' : ''}">${escapeHtml(item.value)}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn }) {
+  return `
+    <div class="import-toolbar">
+      <div>
+        <div class="import-toolbar-heading">
+          <div class="import-toolbar-title">${escapeHtml(title)}</div>
+          <div class="import-toolbar-sub">${escapeHtml(subtitle)}</div>
+        </div>
+        <div class="import-filter-grid">
+          ${filters.map(filter => `
+            <div class="filter-field">
+              <label for="${escapeHtml(filter.id)}">${escapeHtml(filter.label)}</label>
+              <input type="text" id="${escapeHtml(filter.id)}" placeholder="${escapeHtml(filter.placeholder)}" oninput="${escapeHtml(filterFn)}()">
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="import-toolbar-actions">
+        <button class="btn btn-secondary btn-sm" onclick="${escapeHtml(filterFn)}()">筛选</button>
+        <button class="btn btn-secondary btn-sm" onclick="${escapeHtml(resetFn)}()">重置</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderImportTable(markup) {
+  return `
+    <div class="import-table-card">
+      <div class="data-table-container">
+        ${markup}
+      </div>
+    </div>
+  `;
+}
+
+const employeeFilters = {
+  attendance: [
+    { id: 'filterAttendanceId', label: '工号', placeholder: 'zt0000000' },
+    { id: 'filterAttendanceName', label: '姓名', placeholder: '员工姓名' },
+    { id: 'filterAttendanceArea', label: '划分区域', placeholder: '区域' },
+    { id: 'filterAttendanceDept', label: '部门', placeholder: '部门全称' },
+  ],
+  salary: [
+    { id: 'filterSalaryId', label: '工号', placeholder: 'zt0000000' },
+    { id: 'filterSalaryName', label: '姓名', placeholder: '员工姓名' },
+    { id: 'filterSalaryArea', label: '划分区域', placeholder: '区域' },
+    { id: 'filterSalaryDept', label: '部门', placeholder: '部门全称' },
+  ],
+  performance: [
+    { id: 'filterPerfId', label: '工号', placeholder: 'zt0000000' },
+    { id: 'filterPerfName', label: '姓名', placeholder: '员工姓名' },
+    { id: 'filterPerfArea', label: '划分区域', placeholder: '区域' },
+    { id: 'filterPerfDept', label: '部门', placeholder: '部门全称' },
+  ],
+};
+
 // ═══ Render Attendance Data ═══
 
 function renderAttendanceData() {
@@ -608,17 +714,22 @@ function renderAttendanceData() {
 
   el.attendanceContent.innerHTML = `
     ${renderDiagnosticsPanel()}
-    <!-- 筛选条件 -->
-    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
-      <input type="text" id="filterAttendanceId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterAttendanceName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterAttendanceArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
-      <input type="text" id="filterAttendanceDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
-      <button class="btn btn-secondary btn-sm" onclick="filterAttendanceData()">筛选</button>
-      <button class="btn btn-secondary btn-sm" onclick="resetAttendanceFilter()">重置</button>
-    </div>
-
-    <div class="data-table-container">
+    ${renderImportResultNote('attendance')}
+    <div class="import-workbench">
+      ${renderImportSummary([
+        { label: '员工总数', value: summary.total_employees, mono: true },
+        { label: '花名册匹配', value: `${summary.roster_matched || 0}/${summary.total_employees}`, mono: true, tone: (summary.roster_matched || 0) === summary.total_employees ? 'success' : 'warning' },
+        { label: '总工时', value: formatHours(summary.total_base_hours), mono: true },
+        { label: '总OT1.5', value: formatHours(summary.total_ot15), mono: true },
+      ])}
+      ${renderImportToolbar({
+        title: '筛选考勤数据',
+        subtitle: '按员工信息快速定位，表格内展示本次上传后的考勤解析结果。',
+        filters: employeeFilters.attendance,
+        filterFn: 'filterAttendanceData',
+        resetFn: 'resetAttendanceFilter',
+      })}
+      ${renderImportTable(`
       <table class="data-table" id="attendanceTable">
         <thead>
           <tr>
@@ -649,42 +760,17 @@ function renderAttendanceData() {
               <td>${escapeHtml(emp.department || '-')}</td>
               <td>${formatJobType(emp.job_type)}</td>
               <td>${emp.has_night_shift ? '✓' : '-'}</td>
-              <td>${emp.total_base_hours.toFixed(2)}h</td>
-              <td>${emp.total_ot15.toFixed(2)}h</td>
-              <td>${emp.total_ot20.toFixed(2)}h</td>
-              <td>${(emp.day_shift['病假'] + emp.night_shift['病假']).toFixed(2)}h</td>
-              <td>${(emp.day_shift['年假'] + emp.night_shift['年假']).toFixed(2)}h</td>
-              <td>${(emp.day_shift['节假日'] + emp.night_shift['节假日']).toFixed(2)}h</td>
+              <td>${formatHours(emp.total_base_hours)}</td>
+              <td>${formatHours(emp.total_ot15)}</td>
+              <td>${formatHours(emp.total_ot20)}</td>
+              <td>${formatHours(getShiftHours(emp, '病假'))}</td>
+              <td>${formatHours(getShiftHours(emp, '年假'))}</td>
+              <td>${formatHours(getShiftHours(emp, '节假日'))}</td>
             </tr>
           `).join('')}
         </tbody>
       </table>
-    </div>
-    <div class="summary-stats">
-      <div class="summary-stat">
-        <span class="summary-stat-label">员工总数</span>
-        <span class="summary-stat-value">${summary.total_employees}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">白班人数</span>
-        <span class="summary-stat-value">${summary.day_shift_count}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">夜班人数</span>
-        <span class="summary-stat-value">${summary.night_shift_count}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">花名册匹配</span>
-        <span class="summary-stat-value">${summary.roster_matched || 0}/${summary.total_employees}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">总工时</span>
-        <span class="summary-stat-value">${summary.total_base_hours.toFixed(2)}h</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">总OT1.5</span>
-        <span class="summary-stat-value">${summary.total_ot15.toFixed(2)}h</span>
-      </div>
+      `)}
     </div>
   `;
 }
@@ -712,17 +798,22 @@ function renderSalaryData() {
 
   el.salaryContent.innerHTML = `
     ${renderDiagnosticsPanel()}
-    <!-- 筛选条件 -->
-    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
-      <input type="text" id="filterSalaryId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterSalaryName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterSalaryArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
-      <input type="text" id="filterSalaryDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
-      <button class="btn btn-secondary btn-sm" onclick="filterSalaryData()">筛选</button>
-      <button class="btn btn-secondary btn-sm" onclick="resetSalaryFilter()">重置</button>
-    </div>
-
-    <div class="data-table-container">
+    ${renderImportResultNote('salary')}
+    <div class="import-workbench">
+      ${renderImportSummary([
+        { label: '薪资档案人数', value: summary.total_employees, mono: true },
+        { label: '有效时薪', value: summary.valid_hourly_count ?? summary.total_employees, mono: true, tone: 'success' },
+        { label: '0时薪', value: summary.zero_hourly_count ?? 0, mono: true, tone: (summary.zero_hourly_count ?? 0) ? 'danger' : '' },
+        { label: '有效平均时薪', value: formatCurrency(summary.avg_hourly_rate), mono: true },
+      ])}
+      ${renderImportToolbar({
+        title: '筛选薪资档案',
+        subtitle: '这里展示本次上传薪资档案解析出的员工，不代表最终参与核算人数。',
+        filters: employeeFilters.salary,
+        filterFn: 'filterSalaryData',
+        resetFn: 'resetSalaryFilter',
+      })}
+      ${renderImportTable(`
       <table class="data-table" id="salaryTable">
         <thead>
           <tr>
@@ -744,30 +835,13 @@ function renderSalaryData() {
               <td>${escapeHtml(emp.name || '-')}</td>
               <td>${escapeHtml(emp.area || '-')}</td>
               <td>${escapeHtml(emp.department || '-')}</td>
-              <td>$${emp.hourly_rate.toFixed(2)}</td>
-              <td>${(emp.ratio * 100).toFixed(1)}%</td>
+              <td>${formatCurrency(emp.hourly_rate)}</td>
+              <td>${formatPercent(emp.ratio)}</td>
             </tr>
           `).join('')}
         </tbody>
       </table>
-    </div>
-    <div class="summary-stats">
-      <div class="summary-stat">
-        <span class="summary-stat-label">档案人数</span>
-        <span class="summary-stat-value">${summary.total_employees}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">有效时薪</span>
-        <span class="summary-stat-value">${summary.valid_hourly_count ?? summary.total_employees}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">0时薪</span>
-        <span class="summary-stat-value">${summary.zero_hourly_count ?? 0}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">有效平均时薪</span>
-        <span class="summary-stat-value">$${summary.avg_hourly_rate.toFixed(2)}</span>
-      </div>
+      `)}
     </div>
   `;
 }
@@ -793,36 +867,33 @@ function renderPerformanceData() {
   const employees = state.performanceData.employees;
   const summary = state.performanceData.summary;
   const adjustmentSummary = state.adjustmentData?.summary;
+  const performanceSummaryItems = [
+    { label: '绩效员工数', value: summary.total_employees, mono: true },
+    { label: '平均得分', value: toNumber(summary.avg_score).toFixed(2), mono: true },
+    ...(adjustmentSummary ? [
+      { label: '拆分员工', value: adjustmentSummary.total_employees, mono: true, tone: 'warning' },
+      { label: '有效拆分基数', value: formatCurrency(adjustmentSummary.active_performance_base || 0), mono: true },
+    ] : []),
+    ...Object.entries(summary.level_distribution || {}).map(([level, count]) => ({
+      label: level,
+      value: `${count}人`,
+      mono: true,
+    })),
+  ];
 
   el.performanceContent.innerHTML = `
     ${renderDiagnosticsPanel()}
-    ${adjustmentSummary ? `
-      <div class="summary-stats" style="margin-bottom: 16px;">
-        <div class="summary-stat">
-          <span class="summary-stat-label">拆分员工</span>
-          <span class="summary-stat-value">${adjustmentSummary.total_employees}</span>
-        </div>
-        <div class="summary-stat">
-          <span class="summary-stat-label">拆分段数</span>
-          <span class="summary-stat-value">${adjustmentSummary.total_segments}</span>
-        </div>
-        <div class="summary-stat">
-          <span class="summary-stat-label">有效拆分基数</span>
-          <span class="summary-stat-value">$${Number(adjustmentSummary.active_performance_base || 0).toFixed(2)}</span>
-        </div>
-      </div>
-    ` : ''}
-    <!-- 筛选条件 -->
-    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
-      <input type="text" id="filterPerfId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterPerfName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterPerfArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
-      <input type="text" id="filterPerfDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
-      <button class="btn btn-secondary btn-sm" onclick="filterPerformanceData()">筛选</button>
-      <button class="btn btn-secondary btn-sm" onclick="resetPerformanceFilter()">重置</button>
-    </div>
-
-    <div class="data-table-container">
+    ${renderImportResultNote('performance')}
+    <div class="import-workbench">
+      ${renderImportSummary(performanceSummaryItems)}
+      ${renderImportToolbar({
+        title: '筛选绩效明细',
+        subtitle: '绩效得分、等级、系数来自本次上传绩效报表，调薪拆分会在核算时按员工汇总。',
+        filters: employeeFilters.performance,
+        filterFn: 'filterPerformanceData',
+        resetFn: 'resetPerformanceFilter',
+      })}
+      ${renderImportTable(`
       <table class="data-table" id="performanceTable">
         <thead>
           <tr>
@@ -847,29 +918,14 @@ function renderPerformanceData() {
               <td>${escapeHtml(emp.area || '-')}</td>
               <td>${escapeHtml(emp.department || '-')}</td>
               <td>${formatJobType(emp.job_type)}</td>
-              <td>${emp.score !== null ? emp.score.toFixed(2) : '-'}</td>
+              <td>${emp.score !== null ? toNumber(emp.score).toFixed(2) : '-'}</td>
               <td>${escapeHtml(emp.level || '-')}</td>
-              <td>${emp.coefficient !== null ? emp.coefficient.toFixed(2) : '-'}</td>
+              <td>${emp.coefficient !== null ? formatCoefficient(emp.coefficient) : '-'}</td>
             </tr>
           `).join('')}
         </tbody>
       </table>
-    </div>
-    <div class="summary-stats">
-      <div class="summary-stat">
-        <span class="summary-stat-label">员工总数</span>
-        <span class="summary-stat-value">${summary.total_employees}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">平均得分</span>
-        <span class="summary-stat-value">${summary.avg_score.toFixed(2)}</span>
-      </div>
-      ${Object.entries(summary.level_distribution || {}).map(([level, count]) => `
-        <div class="summary-stat">
-          <span class="summary-stat-label">${level}</span>
-          <span class="summary-stat-value">${count}人</span>
-        </div>
-      `).join('')}
+      `)}
     </div>
   `;
 }
