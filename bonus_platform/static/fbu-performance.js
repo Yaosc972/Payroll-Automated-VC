@@ -36,6 +36,46 @@ function formatJobType(jobType) {
   return '仓库';
 }
 
+function toNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function formatCurrency(value, decimals = 2) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(toNumber(value));
+}
+
+function formatPercent(value) {
+  return `${(toNumber(value) * 100).toFixed(1)}%`;
+}
+
+function formatCoefficient(value) {
+  return toNumber(value).toFixed(2);
+}
+
+function formatResultJobType(jobType) {
+  const label = formatJobType(jobType);
+  const className = jobType === 'functional'
+    ? 'functional'
+    : jobType === 'district_manager'
+      ? 'district'
+      : '';
+  return `<span class="job-pill ${className}">${escapeHtml(label)}</span>`;
+}
+
+function formatJsArg(value) {
+  return JSON.stringify(String(value ?? ''))
+    .replaceAll('&', '\\u0026')
+    .replaceAll('<', '\\u003C')
+    .replaceAll('>', '\\u003E')
+    .replaceAll('"', '&quot;');
+}
+
 async function apiJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
@@ -836,8 +876,121 @@ function renderPerformanceData() {
 
 // ═══ Render Results Data ═══
 
+function updateResultKpis(totalEmployees, totalBonus, avgBonus, exceptionCount) {
+  el.kpiResultEmployees.textContent = totalEmployees;
+  el.kpiResultBonus.textContent = formatCurrency(totalBonus);
+  el.kpiResultAvg.textContent = formatCurrency(avgBonus);
+  el.kpiResultErrors.textContent = exceptionCount;
+}
+
+function renderResultsToolbar() {
+  return `
+    <div class="result-toolbar">
+      <div>
+        <div class="result-toolbar-title">核算明细</div>
+        <div class="result-filter-grid">
+          <div class="filter-field">
+            <label for="filterResultsId">工号</label>
+            <input type="text" id="filterResultsId" placeholder="zt0000000" oninput="filterResultsData()">
+          </div>
+          <div class="filter-field">
+            <label for="filterResultsName">姓名</label>
+            <input type="text" id="filterResultsName" placeholder="员工姓名" oninput="filterResultsData()">
+          </div>
+          <div class="filter-field">
+            <label for="filterResultsArea">划分区域</label>
+            <input type="text" id="filterResultsArea" placeholder="区域" oninput="filterResultsData()">
+          </div>
+          <div class="filter-field">
+            <label for="filterResultsDept">部门</label>
+            <input type="text" id="filterResultsDept" placeholder="部门全称" oninput="filterResultsData()">
+          </div>
+        </div>
+      </div>
+      <div class="result-toolbar-actions">
+        <button class="btn btn-secondary btn-sm" onclick="filterResultsData()">筛选</button>
+        <button class="btn btn-secondary btn-sm" onclick="resetResultsFilter()">重置</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderBonusResultTable(results) {
+  return `
+    <div class="bonus-table-shell" role="region" aria-label="绩效奖金核算明细">
+      <table class="bonus-table" id="resultsTable">
+        <colgroup>
+          <col style="width: 128px;">
+          <col style="width: 140px;">
+          <col style="width: 160px;">
+          <col style="width: 260px;">
+          <col style="width: 110px;">
+          <col style="width: 110px;">
+          <col style="width: 140px;">
+          <col style="width: 110px;">
+          <col style="width: 110px;">
+          <col style="width: 120px;">
+          <col style="width: 156px;">
+          <col style="width: 112px;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="sticky-id">工号</th>
+            <th class="sticky-name">姓名</th>
+            <th>划分区域</th>
+            <th>部门全称</th>
+            <th>岗位类型</th>
+            <th class="amount-cell">时薪</th>
+            <th class="amount-cell">绩效基数</th>
+            <th class="metric-cell">绩效比例</th>
+            <th class="metric-cell">绩效系数</th>
+            <th>异常</th>
+            <th class="sticky-bonus">最终奖金</th>
+            <th class="sticky-action">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${results.map(renderBonusResultRow).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderBonusResultRow(result) {
+  const exceptions = Array.isArray(result.exceptions)
+    ? result.exceptions.filter(Boolean)
+    : [];
+  const exceptionTitle = exceptions.length ? escapeHtml(exceptions.join('；')) : '';
+  const employeeId = String(result.employee_id ?? '');
+
+  return `
+    <tr class="${exceptions.length ? 'has-exception' : ''}"
+        data-id="${escapeHtml(employeeId)}"
+        data-name="${escapeHtml(result.name || '')}"
+        data-area="${escapeHtml(result.area || '')}"
+        data-dept="${escapeHtml(result.department || '')}">
+      <td class="sticky-id employee-id" title="${escapeHtml(employeeId)}">${escapeHtml(employeeId)}</td>
+      <td class="sticky-name" title="${escapeHtml(result.name || '-')}">${escapeHtml(result.name || '-')}</td>
+      <td class="muted-cell" title="${escapeHtml(result.area || '-')}">${escapeHtml(result.area || '-')}</td>
+      <td class="muted-cell" title="${escapeHtml(result.department || '-')}">${escapeHtml(result.department || '-')}</td>
+      <td>${formatResultJobType(result.job_type)}</td>
+      <td class="amount-cell">${formatCurrency(result.hourly_rate)}</td>
+      <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
+      <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
+      <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
+      <td>${exceptions.length ? `<span class="exception-chip" title="${exceptionTitle}">${exceptions.length}项</span>` : '<span class="muted-cell">-</span>'}</td>
+      <td class="sticky-bonus"><span class="bonus-value">${formatCurrency(result.performance_bonus)}</span></td>
+      <td class="sticky-action">
+        <button class="btn btn-secondary btn-sm detail-btn" onclick="showCalcChain(${formatJsArg(employeeId)})" title="查看计算过程">查看</button>
+      </td>
+    </tr>
+  `;
+}
+
 function renderResultsData() {
   if (!state.resultsData || state.resultsData.length === 0) {
+    updateResultKpis(0, 0, 0, 0);
     el.resultsContent.innerHTML = `
       ${renderDiagnosticsPanel()}
       <div class="empty-state">
@@ -853,84 +1006,37 @@ function renderResultsData() {
   }
 
   const results = state.resultsData;
-  const totalBonus = results.reduce((sum, r) => sum + r.performance_bonus, 0);
-  const avgBonus = totalBonus / results.length;
+  const totalBonus = results.reduce((sum, r) => sum + toNumber(r.performance_bonus), 0);
+  const avgBonus = results.length ? totalBonus / results.length : 0;
   const exceptionCount = results.filter(r => (r.exceptions || []).length > 0).length;
 
   el.resultsContent.innerHTML = `
     ${renderDiagnosticsPanel()}
-    <!-- 筛选条件 -->
-    <div style="display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap;">
-      <input type="text" id="filterResultsId" placeholder="工号" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterResultsName" placeholder="姓名" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 120px;">
-      <input type="text" id="filterResultsArea" placeholder="划分区域" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 150px;">
-      <input type="text" id="filterResultsDept" placeholder="部门" style="padding: 8px 12px; border: 1px solid #E2E8F0; border-radius: 6px; width: 200px;">
-      <button class="btn btn-secondary btn-sm" onclick="filterResultsData()">筛选</button>
-      <button class="btn btn-secondary btn-sm" onclick="resetResultsFilter()">重置</button>
-    </div>
-
-    <div class="data-table-container">
-      <table class="data-table" id="resultsTable">
-        <thead>
-          <tr>
-            <th>工号</th>
-            <th>姓名</th>
-            <th>划分区域</th>
-            <th>部门全称</th>
-            <th>岗位类型</th>
-            <th>时薪</th>
-            <th>绩效基数</th>
-            <th>绩效比例</th>
-            <th>绩效系数</th>
-            <th>绩效奖金</th>
-            <th>异常</th>
-            <th>计算过程</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${results.map(r => `
-            <tr data-id="${escapeHtml(r.employee_id)}"
-                data-name="${escapeHtml(r.name || '')}"
-                data-area="${escapeHtml(r.area || '')}"
-                data-dept="${escapeHtml(r.department || '')}">
-              <td>${escapeHtml(r.employee_id)}</td>
-              <td>${escapeHtml(r.name || '-')}</td>
-              <td>${escapeHtml(r.area || '-')}</td>
-              <td>${escapeHtml(r.department || '-')}</td>
-              <td>${formatJobType(r.job_type)}</td>
-              <td>$${r.hourly_rate.toFixed(2)}</td>
-              <td>$${r.performance_base.toFixed(2)}</td>
-              <td>${(r.performance_ratio * 100).toFixed(1)}%</td>
-              <td>${r.performance_coefficient.toFixed(2)}</td>
-              <td><strong>$${r.performance_bonus.toFixed(2)}</strong></td>
-              <td>${(r.exceptions || []).length ? `<span class="status-badge danger">${escapeHtml((r.exceptions || []).length)}项</span>` : '-'}</td>
-              <td><button class="btn btn-secondary btn-sm" onclick="showCalcChain('${escapeHtml(r.employee_id)}')">查看</button></td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    </div>
-    <div class="summary-stats">
-      <div class="summary-stat">
-        <span class="summary-stat-label">员工总数</span>
-        <span class="summary-stat-value">${results.length}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">奖金总额</span>
-        <span class="summary-stat-value">$${totalBonus.toLocaleString()}</span>
-      </div>
-      <div class="summary-stat">
-        <span class="summary-stat-label">平均奖金</span>
-        <span class="summary-stat-value">$${avgBonus.toFixed(2)}</span>
+    <div class="results-workbench">
+      ${renderResultsToolbar()}
+      ${renderBonusResultTable(results)}
+      <div class="result-summary-bar">
+        <div class="result-summary-item">
+          <span>参与核算</span>
+          <span>${results.length}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>奖金总额</span>
+          <span>${formatCurrency(totalBonus)}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>平均奖金</span>
+          <span>${formatCurrency(avgBonus)}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>异常记录</span>
+          <span>${exceptionCount}</span>
+        </div>
       </div>
     </div>
   `;
 
-  // Update KPIs
-  el.kpiResultEmployees.textContent = results.length;
-  el.kpiResultBonus.textContent = '$' + totalBonus.toLocaleString();
-  el.kpiResultAvg.textContent = '$' + avgBonus.toFixed(2);
-  el.kpiResultErrors.textContent = exceptionCount;
+  updateResultKpis(results.length, totalBonus, avgBonus, exceptionCount);
 }
 
 // ═══ Calculate ═══

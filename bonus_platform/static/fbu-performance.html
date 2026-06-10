@@ -9,6 +9,8 @@
     <style>
       :root {
         --primary: #0071E3;
+        --primary-deep: #2F54EB;
+        --primary-ink: #1E2A78;
         --success: #10B981;
         --danger: #EF4444;
         --warning: #F59E0B;
@@ -17,6 +19,8 @@
         --text-primary: #1E293B;
         --text-secondary: #64748B;
         --border: #E2E8F0;
+        --border-strong: #CBD5E1;
+        --mono: "SF Mono", "Roboto Mono", ui-monospace, Menlo, Consolas, monospace;
         --sidebar-bg: #1E293B;
         --sidebar-text: #94A3B8;
         --sidebar-active: #FFFFFF;
@@ -553,6 +557,341 @@
         color: var(--text-primary);
       }
 
+      /* ═══ Results Workbench ═══ */
+      .result-kpi-grid {
+        grid-template-columns: 1.1fr 1.5fr 1.1fr 1fr;
+        gap: 16px;
+      }
+
+      .result-kpi-grid .kpi-card {
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 8px;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .result-kpi-grid .kpi-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 4px;
+        background: var(--primary-deep);
+      }
+
+      .result-kpi-grid .kpi-card.success::before { background: var(--success); }
+      .result-kpi-grid .kpi-card.warning::before { background: var(--warning); }
+
+      .result-kpi-grid .kpi-card-value {
+        font-family: var(--mono);
+        font-size: 30px;
+        letter-spacing: 0;
+        line-height: 1.1;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .result-panel {
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 8px;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+        overflow: hidden;
+      }
+
+      .result-panel .panel-body {
+        padding: 0;
+      }
+
+      .results-workbench {
+        background: #FFFFFF;
+      }
+
+      .result-toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: end;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, #FFFFFF 0%, #FBFCFE 100%);
+      }
+
+      .result-toolbar-title {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-bottom: 12px;
+      }
+
+      .result-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(120px, 1fr));
+        gap: 12px;
+      }
+
+      .filter-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .filter-field label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+      }
+
+      .filter-field input {
+        height: 36px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #FFFFFF;
+        color: var(--text-primary);
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.16s ease, box-shadow 0.16s ease;
+      }
+
+      .filter-field input:focus {
+        border-color: var(--primary-deep);
+        box-shadow: 0 0 0 3px rgba(47, 84, 235, 0.10);
+      }
+
+      .result-toolbar-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .bonus-table-shell {
+        overflow: auto;
+        max-height: calc(100vh - 360px);
+        min-height: 360px;
+        background: #FFFFFF;
+      }
+
+      .bonus-table {
+        min-width: 1656px;
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        table-layout: fixed;
+        font-size: 13px;
+      }
+
+      .bonus-table th,
+      .bonus-table td {
+        border-bottom: 1px solid var(--border);
+        padding: 12px 14px;
+        vertical-align: middle;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        background: #FFFFFF;
+      }
+
+      .bonus-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 4;
+        height: 42px;
+        background: #F5F7FA;
+        color: #526173;
+        font-size: 12px;
+        font-weight: 700;
+        border-bottom: 1px solid var(--border-strong);
+      }
+
+      .bonus-table tbody tr:nth-child(even) td {
+        background: #FAFCFF;
+      }
+
+      .bonus-table tbody tr:hover td {
+        background: #EEF6FF;
+      }
+
+      .bonus-table tbody tr.has-exception td {
+        background: #FFF7F7;
+      }
+
+      .bonus-table tbody tr.has-exception:hover td {
+        background: #FFEDED;
+      }
+
+      .bonus-table .sticky-id {
+        position: sticky;
+        left: 0;
+        z-index: 3;
+        width: 128px;
+        min-width: 128px;
+        box-shadow: 1px 0 0 var(--border);
+      }
+
+      .bonus-table .sticky-name {
+        position: sticky;
+        left: 128px;
+        z-index: 3;
+        width: 140px;
+        min-width: 140px;
+        box-shadow: 1px 0 0 var(--border-strong);
+      }
+
+      .bonus-table thead .sticky-id,
+      .bonus-table thead .sticky-name,
+      .bonus-table thead .sticky-bonus,
+      .bonus-table thead .sticky-action {
+        z-index: 6;
+        background: #EEF3FA;
+      }
+
+      .bonus-table .sticky-action {
+        position: sticky;
+        right: 0;
+        z-index: 3;
+        width: 112px;
+        min-width: 112px;
+        text-align: center;
+        box-shadow: -1px 0 0 var(--border);
+      }
+
+      .bonus-table .sticky-bonus {
+        position: sticky;
+        right: 112px;
+        z-index: 3;
+        width: 156px;
+        min-width: 156px;
+        text-align: right;
+        box-shadow: -1px 0 0 var(--border-strong);
+      }
+
+      .employee-id,
+      .amount-cell,
+      .metric-cell,
+      .bonus-value {
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0;
+      }
+
+      .employee-id {
+        color: #2B3A55;
+        font-weight: 650;
+      }
+
+      .amount-cell,
+      .metric-cell {
+        color: #334155;
+        text-align: right;
+      }
+
+      .bonus-value {
+        color: var(--primary-ink);
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .muted-cell {
+        color: var(--text-secondary);
+      }
+
+      .job-pill {
+        display: inline-flex;
+        align-items: center;
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #EEF2FF;
+        color: #3730A3;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .job-pill.functional {
+        background: #ECFDF5;
+        color: #047857;
+      }
+
+      .job-pill.district {
+        background: #FFF7ED;
+        color: #C2410C;
+      }
+
+      .exception-chip {
+        display: inline-flex;
+        align-items: center;
+        height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #FEE2E2;
+        color: #B91C1C;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: help;
+      }
+
+      .detail-btn {
+        justify-content: center;
+        width: 72px;
+        padding: 6px 10px;
+      }
+
+      .result-summary-bar {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 20px;
+        border-top: 1px solid var(--border);
+        background: #F8FAFC;
+      }
+
+      .result-summary-item {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .result-summary-item span:first-child {
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
+      .result-summary-item span:last-child {
+        color: var(--text-primary);
+        font-family: var(--mono);
+        font-size: 15px;
+        font-weight: 750;
+        font-variant-numeric: tabular-nums;
+      }
+
+      @media (max-width: 1100px) {
+        .result-kpi-grid {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        .result-toolbar {
+          grid-template-columns: 1fr;
+        }
+
+        .result-toolbar-actions {
+          justify-content: flex-start;
+        }
+
+        .result-filter-grid {
+          grid-template-columns: repeat(2, minmax(120px, 1fr));
+        }
+      }
+
+      @media (max-width: 720px) {
+        .result-kpi-grid,
+        .result-filter-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .bonus-table-shell {
+          max-height: none;
+        }
+      }
+
       /* ═══ Empty State ═══ */
       .empty-state {
         text-align: center;
@@ -889,7 +1228,7 @@
               </div>
             </div>
 
-            <div class="kpi-grid">
+            <div class="kpi-grid result-kpi-grid">
               <div class="kpi-card">
                 <div class="kpi-card-label">员工总数</div>
                 <div class="kpi-card-value" id="kpiResultEmployees">0</div>
@@ -912,7 +1251,7 @@
               </div>
             </div>
 
-            <div class="panel">
+            <div class="panel result-panel">
               <div class="panel-header">
                 <h2 class="panel-title">核算结果</h2>
                 <div style="display: flex; gap: 8px;">
