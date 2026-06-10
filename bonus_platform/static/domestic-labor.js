@@ -530,14 +530,14 @@ function renderEmptyWorkbench() {
 
 function filterResults(results) {
   if (state.activeSubject === 'warnings') {
-    return results.filter(row => row.warnings);
+    return results.filter(row => row.warnings || getRowExceptions(row).length);
   }
   if (state.activeSubject === 'all') return results;
   return results.filter(row => Number(row[state.activeSubject] || 0) !== 0);
 }
 
 function renderExceptionQueue(results) {
-  const rows = results.filter(row => row.warnings).slice(0, 8);
+  const rows = results.filter(row => row.warnings || getRowExceptions(row).length).slice(0, 8);
   if (!rows.length) {
     el.exceptionQueue.innerHTML = `
       <div class="dl-exception">
@@ -549,10 +549,12 @@ function renderExceptionQueue(results) {
   }
   el.exceptionQueue.innerHTML = rows.map(row => {
     const level = getWarningLevel(row);
+    const firstException = getRowExceptions(row)[0];
+    const message = firstException?.message || row.warnings;
     return `
       <button class="dl-exception ${level.className}" data-exception-id="${escapeHtml(row.employee_id)}" type="button">
         <p class="dl-exception-title">${level.label} · ${escapeHtml(row.employee_id)} ${escapeHtml(row.employee_name)}</p>
-        <p class="dl-exception-meta">${escapeHtml(row.warnings)}</p>
+        <p class="dl-exception-meta">${escapeHtml(message)}</p>
       </button>
     `;
   }).join('');
@@ -570,17 +572,22 @@ function openExplainDrawer(row) {
   const subjectCards = ['quanqinjiang', 'canbu', 'waisu_butie', 'gonglingjiang'].map(key => {
     const meta = ENGINE_META[key];
     const amount = Number(row[key] || 0);
+    const subjectDetail = getSubjectDetail(row, key);
+    const explanation = subjectDetail?.audit_explanation;
     return `
       <div class="dl-rule-card">
         <h3>${meta.name}：${formatMoney(amount)}</h3>
         <dl>
-          <dt>规则状态</dt><dd>${amount ? '已命中发放规则' : '未产生发放金额或无资格'}</dd>
-          <dt>输入依据</dt><dd>来自本批次月考勤、日考勤、住宿名单及科目参数</dd>
-          <dt>审计说明</dt><dd>${buildRuleExplanation(key, row)}</dd>
+          <dt>规则状态</dt><dd>${explanation?.rule_name ? escapeHtml(explanation.rule_name) : (amount ? '已命中发放规则' : '未产生发放金额或无资格')}</dd>
+          <dt>计算公式</dt><dd>${escapeHtml(explanation?.formula || '来自本批次月考勤、日考勤、住宿名单及科目参数')}</dd>
+          <dt>关键输入</dt><dd>${formatAuditMap(explanation?.inputs)}</dd>
+          <dt>中间值</dt><dd>${formatAuditMap(explanation?.intermediate_values)}</dd>
+          <dt>计算步骤</dt><dd>${formatAuditSteps(explanation?.steps) || buildRuleExplanation(key, row)}</dd>
         </dl>
       </div>
     `;
   }).join('');
+  const rowExceptions = getRowExceptions(row);
   el.explainBody.innerHTML = `
     <div class="dl-kv-grid">
       <div class="dl-kv"><span>部门</span><strong>${escapeHtml(row.department || '—')}</strong></div>
@@ -593,8 +600,8 @@ function openExplainDrawer(row) {
       <h3>异常与处理</h3>
       <dl>
         <dt>异常等级</dt><dd>${getWarningLevel(row).label}</dd>
-        <dt>异常说明</dt><dd>${escapeHtml(row.warnings || '暂无异常')}</dd>
-        <dt>建议动作</dt><dd>${row.warnings ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，可随批次提交审批。'}</dd>
+        <dt>异常说明</dt><dd>${formatExceptions(rowExceptions) || escapeHtml(row.warnings || '暂无异常')}</dd>
+        <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : (row.warnings ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，可随批次提交审批。')}</dd>
       </dl>
     </div>
   `;
@@ -614,6 +621,9 @@ function buildRuleExplanation(key, row) {
 }
 
 function getWarningLevel(row) {
+  const exceptions = getRowExceptions(row);
+  if (exceptions.some(item => item.level === 'blocking')) return { label: '阻断', className: 'block' };
+  if (exceptions.length) return { label: '高风险', className: 'warn' };
   const text = String(row.warnings || '');
   if (!text) return { label: '通过', className: 'ok' };
   if (/失败|异常|不存在|缺失|请提供/.test(text)) return { label: '高风险', className: 'warn' };
@@ -621,15 +631,48 @@ function getWarningLevel(row) {
 }
 
 function countWarnings(results) {
-  return results.filter(row => row.warnings).length;
+  return results.filter(row => row.warnings || getRowExceptions(row).length).length;
 }
 
 function countSubjectWarnings(results, key) {
-  return results.filter(row => row.warnings && Number(row[key] || 0) !== 0).length;
+  return results.filter(row => {
+    const subjectExceptions = getSubjectDetail(row, key)?.exceptions || [];
+    return subjectExceptions.length || (row.warnings && Number(row[key] || 0) !== 0);
+  }).length;
 }
 
 function sumField(results, key) {
   return results.reduce((sum, row) => sum + Number(row[key] || 0), 0);
+}
+
+function getSubjectDetail(row, key) {
+  return row.subject_details?.[key] || null;
+}
+
+function getRowExceptions(row) {
+  if (Array.isArray(row.exceptions)) return row.exceptions;
+  const details = row.subject_details || {};
+  return Object.values(details).flatMap(item => item?.exceptions || []);
+}
+
+function formatAuditMap(value) {
+  if (!value || typeof value !== 'object' || !Object.keys(value).length) return '—';
+  return Object.entries(value)
+    .map(([key, val]) => `<span class="dl-badge" style="margin:0 6px 6px 0;">${escapeHtml(key)}: ${escapeHtml(String(val ?? ''))}</span>`)
+    .join('');
+}
+
+function formatAuditSteps(steps) {
+  if (!Array.isArray(steps) || !steps.length) return '';
+  return `<ol style="margin:0; padding-left:18px;">${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`;
+}
+
+function formatExceptions(exceptions) {
+  if (!Array.isArray(exceptions) || !exceptions.length) return '';
+  return exceptions.map(item => {
+    const code = item.code ? `[${item.code}] ` : '';
+    return `<p style="margin:0 0 6px;">${escapeHtml(code + (item.message || ''))}</p>`;
+  }).join('');
 }
 
 async function exportResults() {
