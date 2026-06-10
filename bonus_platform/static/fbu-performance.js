@@ -947,6 +947,12 @@ function renderResultsData() {
 async function executeCalculate() {
   if (!state.currentActivity) return;
 
+  const summary = state.diagnosticsData?.summary;
+  if (summary?.error_count > 0) {
+    const confirmed = confirm(`当前仍有 ${summary.error_count} 个严重匹配问题，可能影响核算结果。是否继续核算？`);
+    if (!confirmed) return;
+  }
+
   try {
     const data = await apiJson(`${API_BASE}/calculate/${state.currentActivity.run_id}`, {
       method: 'POST',
