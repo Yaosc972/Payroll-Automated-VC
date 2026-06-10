@@ -16,11 +16,25 @@ const state = {
   resultsData: null,
   baseRoster: null,
   lastImportResult: null,
+  tableFilters: {
+    attendance: {},
+    salary: {},
+    performance: {},
+    results: {},
+  },
+  tablePagination: {
+    attendance: { page: 1, pageSize: 50 },
+    salary: { page: 1, pageSize: 50 },
+    performance: { page: 1, pageSize: 50 },
+    results: { page: 1, pageSize: 50 },
+  },
 };
 
 // ═══ API Base ═══
 
 const API_BASE = '/api/fbu-performance';
+const TABLE_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
+const DEFAULT_TABLE_PAGE_SIZE = 50;
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -86,6 +100,151 @@ function formatJsArg(value) {
     .replaceAll('<', '\\u003C')
     .replaceAll('>', '\\u003E')
     .replaceAll('"', '&quot;');
+}
+
+function getTableFilter(type) {
+  if (!state.tableFilters[type]) state.tableFilters[type] = {};
+  return state.tableFilters[type];
+}
+
+function getTablePagination(type) {
+  if (!state.tablePagination[type]) {
+    state.tablePagination[type] = { page: 1, pageSize: DEFAULT_TABLE_PAGE_SIZE };
+  }
+  return state.tablePagination[type];
+}
+
+function resetTableControls(type = null) {
+  const types = type ? [type] : Object.keys(state.tablePagination);
+  types.forEach(tableType => {
+    state.tableFilters[tableType] = {};
+    state.tablePagination[tableType] = { page: 1, pageSize: DEFAULT_TABLE_PAGE_SIZE };
+  });
+}
+
+function normalizeSearch(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function matchesEmployeeFilters(row, filters) {
+  const id = normalizeSearch(row.employee_id);
+  const name = normalizeSearch(row.name);
+  const area = normalizeSearch(row.area);
+  const dept = normalizeSearch(row.department);
+  const filterId = normalizeSearch(filters.id);
+  const filterName = normalizeSearch(filters.name);
+  const filterArea = normalizeSearch(filters.area);
+  const filterDept = normalizeSearch(filters.dept);
+
+  return (!filterId || id.includes(filterId))
+    && (!filterName || name.includes(filterName))
+    && (!filterArea || area.includes(filterArea))
+    && (!filterDept || dept.includes(filterDept));
+}
+
+function getFilteredRows(type, rows) {
+  const filters = getTableFilter(type);
+  return (rows || []).filter(row => matchesEmployeeFilters(row, filters));
+}
+
+function getPaginatedRows(type, rows) {
+  const pagination = getTablePagination(type);
+  const pageSize = TABLE_PAGE_SIZE_OPTIONS.includes(Number(pagination.pageSize))
+    ? Number(pagination.pageSize)
+    : DEFAULT_TABLE_PAGE_SIZE;
+  const total = rows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(1, Number(pagination.page) || 1), totalPages);
+  const startIndex = (page - 1) * pageSize;
+
+  pagination.page = page;
+  pagination.pageSize = pageSize;
+
+  return {
+    items: rows.slice(startIndex, startIndex + pageSize),
+    page,
+    pageSize,
+    total,
+    totalPages,
+    start: total ? startIndex + 1 : 0,
+    end: Math.min(startIndex + pageSize, total),
+  };
+}
+
+function getPaginationPages(page, totalPages) {
+  const candidates = [1, page - 1, page, page + 1, totalPages]
+    .filter(value => value >= 1 && value <= totalPages);
+  return [...new Set(candidates)].sort((a, b) => a - b);
+}
+
+function renderTablePagination(type, pageInfo) {
+  const pages = getPaginationPages(pageInfo.page, pageInfo.totalPages);
+  const pageButtons = [];
+
+  pages.forEach((page, index) => {
+    if (index > 0 && page - pages[index - 1] > 1) {
+      pageButtons.push('<span class="table-pagination-ellipsis">...</span>');
+    }
+    pageButtons.push(`
+      <button class="pagination-btn ${page === pageInfo.page ? 'active' : ''}"
+              type="button"
+              ${page === pageInfo.page ? 'aria-current="page"' : ''}
+              onclick="changeTablePage(${formatJsArg(type)}, ${page})">${page}</button>
+    `);
+  });
+
+  return `
+    <div class="table-pagination" aria-label="表格分页">
+      <div class="table-pagination-summary">
+        显示 <strong>${pageInfo.start}-${pageInfo.end}</strong> / ${pageInfo.total} 条
+      </div>
+      <div class="table-pagination-controls">
+        <button class="pagination-btn" type="button" ${pageInfo.page <= 1 ? 'disabled' : ''} onclick="changeTablePage(${formatJsArg(type)}, ${pageInfo.page - 1})">上一页</button>
+        <div class="table-pagination-pages">
+          ${pageButtons.join('')}
+        </div>
+        <button class="pagination-btn" type="button" ${pageInfo.page >= pageInfo.totalPages ? 'disabled' : ''} onclick="changeTablePage(${formatJsArg(type)}, ${pageInfo.page + 1})">下一页</button>
+        <label class="page-size-select">
+          每页
+          <select onchange="changeTablePageSize(${formatJsArg(type)}, this.value)" aria-label="每页条数">
+            ${TABLE_PAGE_SIZE_OPTIONS.map(size => `
+              <option value="${size}" ${size === pageInfo.pageSize ? 'selected' : ''}>${size}</option>
+            `).join('')}
+          </select>
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function renderEmptyTableRow(colspan, message = '没有匹配的数据') {
+  return `
+    <tr class="table-empty-row">
+      <td colspan="${colspan}">${escapeHtml(message)}</td>
+    </tr>
+  `;
+}
+
+function captureInputFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLInputElement) || !active.id) return null;
+  return {
+    id: active.id,
+    start: active.selectionStart,
+    end: active.selectionEnd,
+  };
+}
+
+function restoreInputFocus(snapshot) {
+  if (!snapshot?.id) return;
+  requestAnimationFrame(() => {
+    const input = document.getElementById(snapshot.id);
+    if (!(input instanceof HTMLInputElement)) return;
+    input.focus({ preventScroll: true });
+    if (Number.isInteger(snapshot.start) && Number.isInteger(snapshot.end)) {
+      input.setSelectionRange(snapshot.start, snapshot.end);
+    }
+  });
 }
 
 function getShiftHours(employee, shiftName) {
@@ -631,7 +790,12 @@ async function enterActivity(activityId, options = {}) {
   const { preservePage = false } = options;
 
   try {
+    const isDifferentActivity = state.currentActivity?.run_id !== activityId;
     const activity = await apiJson(`${API_BASE}/runs/${activityId}`);
+
+    if (isDifferentActivity) {
+      resetTableControls();
+    }
 
     state.currentActivity = activity;
     state.diagnosticsData = activity.diagnostics || null;
@@ -1187,7 +1351,7 @@ function renderImportSummary(items) {
   `;
 }
 
-function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn }) {
+function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn, filterValues = {} }) {
   return `
     <div class="import-toolbar">
       <div>
@@ -1199,7 +1363,7 @@ function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn }) {
           ${filters.map(filter => `
             <div class="filter-field">
               <label for="${escapeHtml(filter.id)}">${escapeHtml(filter.label)}</label>
-              <input type="text" id="${escapeHtml(filter.id)}" placeholder="${escapeHtml(filter.placeholder)}" oninput="queueFilter('${escapeHtml(filterFn)}')">
+              <input type="text" id="${escapeHtml(filter.id)}" value="${escapeHtml(filterValues[filter.key] || '')}" placeholder="${escapeHtml(filter.placeholder)}" oninput="queueFilter('${escapeHtml(filterFn)}')">
             </div>
           `).join('')}
         </div>
@@ -1212,34 +1376,35 @@ function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn }) {
   `;
 }
 
-function renderImportTable(markup) {
+function renderImportTable(markup, paginationMarkup = '') {
   return `
     <div class="import-table-card">
       <div class="data-table-container">
         ${markup}
       </div>
+      ${paginationMarkup}
     </div>
   `;
 }
 
 const employeeFilters = {
   attendance: [
-    { id: 'filterAttendanceId', label: '工号', placeholder: 'zt0000000' },
-    { id: 'filterAttendanceName', label: '姓名', placeholder: '员工姓名' },
-    { id: 'filterAttendanceArea', label: '划分区域', placeholder: '区域' },
-    { id: 'filterAttendanceDept', label: '部门', placeholder: '部门全称' },
+    { id: 'filterAttendanceId', key: 'id', label: '工号', placeholder: 'zt0000000' },
+    { id: 'filterAttendanceName', key: 'name', label: '姓名', placeholder: '员工姓名' },
+    { id: 'filterAttendanceArea', key: 'area', label: '划分区域', placeholder: '区域' },
+    { id: 'filterAttendanceDept', key: 'dept', label: '部门', placeholder: '部门全称' },
   ],
   salary: [
-    { id: 'filterSalaryId', label: '工号', placeholder: 'zt0000000' },
-    { id: 'filterSalaryName', label: '姓名', placeholder: '员工姓名' },
-    { id: 'filterSalaryArea', label: '划分区域', placeholder: '区域' },
-    { id: 'filterSalaryDept', label: '部门', placeholder: '部门全称' },
+    { id: 'filterSalaryId', key: 'id', label: '工号', placeholder: 'zt0000000' },
+    { id: 'filterSalaryName', key: 'name', label: '姓名', placeholder: '员工姓名' },
+    { id: 'filterSalaryArea', key: 'area', label: '划分区域', placeholder: '区域' },
+    { id: 'filterSalaryDept', key: 'dept', label: '部门', placeholder: '部门全称' },
   ],
   performance: [
-    { id: 'filterPerfId', label: '工号', placeholder: 'zt0000000' },
-    { id: 'filterPerfName', label: '姓名', placeholder: '员工姓名' },
-    { id: 'filterPerfArea', label: '划分区域', placeholder: '区域' },
-    { id: 'filterPerfDept', label: '部门', placeholder: '部门全称' },
+    { id: 'filterPerfId', key: 'id', label: '工号', placeholder: 'zt0000000' },
+    { id: 'filterPerfName', key: 'name', label: '姓名', placeholder: '员工姓名' },
+    { id: 'filterPerfArea', key: 'area', label: '划分区域', placeholder: '区域' },
+    { id: 'filterPerfDept', key: 'dept', label: '部门', placeholder: '部门全称' },
   ],
 };
 
@@ -1262,6 +1427,8 @@ function renderAttendanceData() {
   }
 
   const employees = state.attendanceData.employees;
+  const filteredEmployees = getFilteredRows('attendance', employees);
+  const pageInfo = getPaginatedRows('attendance', filteredEmployees);
   const summary = state.attendanceData.summary;
 
   el.attendanceContent.innerHTML = `
@@ -1280,6 +1447,7 @@ function renderAttendanceData() {
         filters: employeeFilters.attendance,
         filterFn: 'filterAttendanceData',
         resetFn: 'resetAttendanceFilter',
+        filterValues: getTableFilter('attendance'),
       })}
       ${renderImportTable(`
       <table class="data-table" id="attendanceTable">
@@ -1300,7 +1468,7 @@ function renderAttendanceData() {
           </tr>
         </thead>
         <tbody>
-          ${employees.map(emp => `
+          ${pageInfo.items.length ? pageInfo.items.map(emp => `
             <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}"
                 data-id="${escapeHtml(emp.employee_id)}"
                 data-name="${escapeHtml(emp.name || '')}"
@@ -1319,10 +1487,10 @@ function renderAttendanceData() {
               <td>${formatHours(getShiftHours(emp, '年假'))}</td>
               <td>${formatHours(getShiftHours(emp, '节假日'))}</td>
             </tr>
-          `).join('')}
+          `).join('') : renderEmptyTableRow(12, '没有匹配的考勤记录')}
         </tbody>
       </table>
-      `)}
+      `, renderTablePagination('attendance', pageInfo))}
     </div>
   `;
 }
@@ -1346,6 +1514,8 @@ function renderSalaryData() {
   }
 
   const employees = state.salaryData.employees;
+  const filteredEmployees = getFilteredRows('salary', employees);
+  const pageInfo = getPaginatedRows('salary', filteredEmployees);
   const summary = state.salaryData.summary;
 
   el.salaryContent.innerHTML = `
@@ -1364,6 +1534,7 @@ function renderSalaryData() {
         filters: employeeFilters.salary,
         filterFn: 'filterSalaryData',
         resetFn: 'resetSalaryFilter',
+        filterValues: getTableFilter('salary'),
       })}
       ${renderImportTable(`
       <table class="data-table" id="salaryTable">
@@ -1378,7 +1549,7 @@ function renderSalaryData() {
           </tr>
         </thead>
         <tbody>
-          ${employees.map(emp => `
+          ${pageInfo.items.length ? pageInfo.items.map(emp => `
             <tr data-id="${escapeHtml(emp.employee_id)}"
                 data-name="${escapeHtml(emp.name || '')}"
                 data-area="${escapeHtml(emp.area || '')}"
@@ -1390,10 +1561,10 @@ function renderSalaryData() {
               <td>${formatCurrency(emp.hourly_rate)}</td>
               <td>${formatPercent(emp.ratio)}</td>
             </tr>
-          `).join('')}
+          `).join('') : renderEmptyTableRow(6, '没有匹配的薪资记录')}
         </tbody>
       </table>
-      `)}
+      `, renderTablePagination('salary', pageInfo))}
     </div>
   `;
 }
@@ -1417,6 +1588,8 @@ function renderPerformanceData() {
   }
 
   const employees = state.performanceData.employees;
+  const filteredEmployees = getFilteredRows('performance', employees);
+  const pageInfo = getPaginatedRows('performance', filteredEmployees);
   const summary = state.performanceData.summary;
   const adjustmentSummary = state.adjustmentData?.summary;
   const performanceSummaryItems = [
@@ -1444,6 +1617,7 @@ function renderPerformanceData() {
         filters: employeeFilters.performance,
         filterFn: 'filterPerformanceData',
         resetFn: 'resetPerformanceFilter',
+        filterValues: getTableFilter('performance'),
       })}
       ${renderImportTable(`
       <table class="data-table" id="performanceTable">
@@ -1460,7 +1634,7 @@ function renderPerformanceData() {
           </tr>
         </thead>
         <tbody>
-          ${employees.map(emp => `
+          ${pageInfo.items.length ? pageInfo.items.map(emp => `
             <tr data-id="${escapeHtml(emp.employee_id)}"
                 data-name="${escapeHtml(emp.name || '')}"
                 data-area="${escapeHtml(emp.area || '')}"
@@ -1474,10 +1648,10 @@ function renderPerformanceData() {
               <td>${escapeHtml(emp.level || '-')}</td>
               <td>${emp.coefficient !== null ? formatCoefficient(emp.coefficient) : '-'}</td>
             </tr>
-          `).join('')}
+          `).join('') : renderEmptyTableRow(8, '没有匹配的绩效记录')}
         </tbody>
       </table>
-      `)}
+      `, renderTablePagination('performance', pageInfo))}
     </div>
   `;
 }
@@ -1492,6 +1666,8 @@ function updateResultKpis(totalEmployees, totalBonus, avgBonus, exceptionCount) 
 }
 
 function renderResultsToolbar() {
+  const filterValues = getTableFilter('results');
+
   return `
     <div class="result-toolbar">
       <div>
@@ -1499,19 +1675,19 @@ function renderResultsToolbar() {
         <div class="result-filter-grid">
           <div class="filter-field">
             <label for="filterResultsId">工号</label>
-            <input type="text" id="filterResultsId" placeholder="zt0000000" oninput="queueFilter('filterResultsData')">
+            <input type="text" id="filterResultsId" value="${escapeHtml(filterValues.id || '')}" placeholder="zt0000000" oninput="queueFilter('filterResultsData')">
           </div>
           <div class="filter-field">
             <label for="filterResultsName">姓名</label>
-            <input type="text" id="filterResultsName" placeholder="员工姓名" oninput="queueFilter('filterResultsData')">
+            <input type="text" id="filterResultsName" value="${escapeHtml(filterValues.name || '')}" placeholder="员工姓名" oninput="queueFilter('filterResultsData')">
           </div>
           <div class="filter-field">
             <label for="filterResultsArea">划分区域</label>
-            <input type="text" id="filterResultsArea" placeholder="区域" oninput="queueFilter('filterResultsData')">
+            <input type="text" id="filterResultsArea" value="${escapeHtml(filterValues.area || '')}" placeholder="区域" oninput="queueFilter('filterResultsData')">
           </div>
           <div class="filter-field">
             <label for="filterResultsDept">部门</label>
-            <input type="text" id="filterResultsDept" placeholder="部门全称" oninput="queueFilter('filterResultsData')">
+            <input type="text" id="filterResultsDept" value="${escapeHtml(filterValues.dept || '')}" placeholder="部门全称" oninput="queueFilter('filterResultsData')">
           </div>
         </div>
       </div>
@@ -1523,44 +1699,47 @@ function renderResultsToolbar() {
   `;
 }
 
-function renderBonusResultTable(results) {
+function renderBonusResultTable(results, pageInfo) {
   return `
-    <div class="bonus-table-shell" role="region" aria-label="绩效奖金核算明细">
-      <table class="bonus-table" id="resultsTable">
-        <colgroup>
-          <col style="width: 128px;">
-          <col style="width: 140px;">
-          <col style="width: 160px;">
-          <col style="width: 260px;">
-          <col style="width: 110px;">
-          <col style="width: 110px;">
-          <col style="width: 140px;">
-          <col style="width: 110px;">
-          <col style="width: 110px;">
-          <col style="width: 120px;">
-          <col style="width: 156px;">
-          <col style="width: 112px;">
-        </colgroup>
-        <thead>
-          <tr>
-            <th class="sticky-id">工号</th>
-            <th class="sticky-name">姓名</th>
-            <th>划分区域</th>
-            <th>部门全称</th>
-            <th>岗位类型</th>
-            <th class="amount-cell">时薪</th>
-            <th class="amount-cell">绩效基数</th>
-            <th class="metric-cell">绩效比例</th>
-            <th class="metric-cell">绩效系数</th>
-            <th>异常</th>
-            <th class="sticky-bonus">最终奖金</th>
-            <th class="sticky-action">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${results.map(renderBonusResultRow).join('')}
-        </tbody>
-      </table>
+    <div class="bonus-table-card">
+      <div class="bonus-table-shell" role="region" aria-label="绩效奖金核算明细">
+        <table class="bonus-table" id="resultsTable">
+          <colgroup>
+            <col style="width: 128px;">
+            <col style="width: 140px;">
+            <col style="width: 160px;">
+            <col style="width: 260px;">
+            <col style="width: 110px;">
+            <col style="width: 110px;">
+            <col style="width: 140px;">
+            <col style="width: 110px;">
+            <col style="width: 110px;">
+            <col style="width: 120px;">
+            <col style="width: 156px;">
+            <col style="width: 112px;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="sticky-id">工号</th>
+              <th class="sticky-name">姓名</th>
+              <th>划分区域</th>
+              <th>部门全称</th>
+              <th>岗位类型</th>
+              <th class="amount-cell">时薪</th>
+              <th class="amount-cell">绩效基数</th>
+              <th class="metric-cell">绩效比例</th>
+              <th class="metric-cell">绩效系数</th>
+              <th>异常</th>
+              <th class="sticky-bonus">最终奖金</th>
+              <th class="sticky-action">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${results.length ? results.map(renderBonusResultRow).join('') : renderEmptyTableRow(12, '没有匹配的核算结果')}
+          </tbody>
+        </table>
+      </div>
+      ${renderTablePagination('results', pageInfo)}
     </div>
   `;
 }
@@ -1614,6 +1793,8 @@ function renderResultsData() {
   }
 
   const results = state.resultsData;
+  const filteredResults = getFilteredRows('results', results);
+  const pageInfo = getPaginatedRows('results', filteredResults);
   const totalBonus = results.reduce((sum, r) => sum + toNumber(r.performance_bonus), 0);
   const avgBonus = results.length ? totalBonus / results.length : 0;
   const exceptionCount = results.filter(r => (r.exceptions || []).length > 0).length;
@@ -1622,7 +1803,7 @@ function renderResultsData() {
     ${renderDiagnosticsPanel()}
     <div class="results-workbench">
       ${renderResultsToolbar()}
-      ${renderBonusResultTable(results)}
+      ${renderBonusResultTable(pageInfo.items, pageInfo)}
       <div class="result-summary-bar">
         <div class="result-summary-item">
           <span>参与核算</span>
@@ -1786,142 +1967,112 @@ el.btnExportResults?.addEventListener('click', () => exportData('results'));
 
 // ═══ Attendance Filter ═══
 
+const tableFilterInputIds = {
+  attendance: {
+    id: 'filterAttendanceId',
+    name: 'filterAttendanceName',
+    area: 'filterAttendanceArea',
+    dept: 'filterAttendanceDept',
+  },
+  salary: {
+    id: 'filterSalaryId',
+    name: 'filterSalaryName',
+    area: 'filterSalaryArea',
+    dept: 'filterSalaryDept',
+  },
+  performance: {
+    id: 'filterPerfId',
+    name: 'filterPerfName',
+    area: 'filterPerfArea',
+    dept: 'filterPerfDept',
+  },
+  results: {
+    id: 'filterResultsId',
+    name: 'filterResultsName',
+    area: 'filterResultsArea',
+    dept: 'filterResultsDept',
+  },
+};
+
+function readTableFilters(type) {
+  const ids = tableFilterInputIds[type] || {};
+  return {
+    id: String(document.getElementById(ids.id)?.value ?? '').trim(),
+    name: String(document.getElementById(ids.name)?.value ?? '').trim(),
+    area: String(document.getElementById(ids.area)?.value ?? '').trim(),
+    dept: String(document.getElementById(ids.dept)?.value ?? '').trim(),
+  };
+}
+
+function renderTableByType(type, focusSnapshot = null) {
+  if (type === 'attendance') renderAttendanceData();
+  if (type === 'salary') renderSalaryData();
+  if (type === 'performance') renderPerformanceData();
+  if (type === 'results') renderResultsData();
+  restoreInputFocus(focusSnapshot);
+}
+
+function applyTableFilter(type) {
+  const focusSnapshot = captureInputFocus();
+  state.tableFilters[type] = readTableFilters(type);
+  getTablePagination(type).page = 1;
+  renderTableByType(type, focusSnapshot);
+}
+
+function resetTableFilter(type) {
+  resetTableControls(type);
+  renderTableByType(type);
+}
+
+function changeTablePage(type, page) {
+  getTablePagination(type).page = Number(page) || 1;
+  renderTableByType(type);
+}
+
+function changeTablePageSize(type, pageSize) {
+  const size = Number(pageSize);
+  const pagination = getTablePagination(type);
+  pagination.pageSize = TABLE_PAGE_SIZE_OPTIONS.includes(size) ? size : DEFAULT_TABLE_PAGE_SIZE;
+  pagination.page = 1;
+  renderTableByType(type);
+}
+
 function filterAttendanceData() {
-  const filterId = document.getElementById('filterAttendanceId')?.value.toLowerCase() || '';
-  const filterName = document.getElementById('filterAttendanceName')?.value.toLowerCase() || '';
-  const filterArea = document.getElementById('filterAttendanceArea')?.value.toLowerCase() || '';
-  const filterDept = document.getElementById('filterAttendanceDept')?.value.toLowerCase() || '';
-
-  const table = document.getElementById('attendanceTable');
-  if (!table) return;
-
-  const rows = table.querySelectorAll('tbody tr');
-  rows.forEach(row => {
-    const id = (row.dataset.id || '').toLowerCase();
-    const name = (row.dataset.name || '').toLowerCase();
-    const area = (row.dataset.area || '').toLowerCase();
-    const dept = (row.dataset.dept || '').toLowerCase();
-
-    const matchId = !filterId || id.includes(filterId);
-    const matchName = !filterName || name.includes(filterName);
-    const matchArea = !filterArea || area.includes(filterArea);
-    const matchDept = !filterDept || dept.includes(filterDept);
-
-    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
-  });
+  applyTableFilter('attendance');
 }
 
 function resetAttendanceFilter() {
-  document.getElementById('filterAttendanceId').value = '';
-  document.getElementById('filterAttendanceName').value = '';
-  document.getElementById('filterAttendanceArea').value = '';
-  document.getElementById('filterAttendanceDept').value = '';
-  filterAttendanceData();
+  resetTableFilter('attendance');
 }
 
 // ═══ Salary Filter ═══
 
 function filterSalaryData() {
-  const filterId = document.getElementById('filterSalaryId')?.value.toLowerCase() || '';
-  const filterName = document.getElementById('filterSalaryName')?.value.toLowerCase() || '';
-  const filterArea = document.getElementById('filterSalaryArea')?.value.toLowerCase() || '';
-  const filterDept = document.getElementById('filterSalaryDept')?.value.toLowerCase() || '';
-
-  const table = document.getElementById('salaryTable');
-  if (!table) return;
-
-  const rows = table.querySelectorAll('tbody tr');
-  rows.forEach(row => {
-    const id = (row.dataset.id || '').toLowerCase();
-    const name = (row.dataset.name || '').toLowerCase();
-    const area = (row.dataset.area || '').toLowerCase();
-    const dept = (row.dataset.dept || '').toLowerCase();
-
-    const matchId = !filterId || id.includes(filterId);
-    const matchName = !filterName || name.includes(filterName);
-    const matchArea = !filterArea || area.includes(filterArea);
-    const matchDept = !filterDept || dept.includes(filterDept);
-
-    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
-  });
+  applyTableFilter('salary');
 }
 
 function resetSalaryFilter() {
-  document.getElementById('filterSalaryId').value = '';
-  document.getElementById('filterSalaryName').value = '';
-  document.getElementById('filterSalaryArea').value = '';
-  document.getElementById('filterSalaryDept').value = '';
-  filterSalaryData();
+  resetTableFilter('salary');
 }
 
 // ═══ Performance Filter ═══
 
 function filterPerformanceData() {
-  const filterId = document.getElementById('filterPerfId')?.value.toLowerCase() || '';
-  const filterName = document.getElementById('filterPerfName')?.value.toLowerCase() || '';
-  const filterArea = document.getElementById('filterPerfArea')?.value.toLowerCase() || '';
-  const filterDept = document.getElementById('filterPerfDept')?.value.toLowerCase() || '';
-
-  const table = document.getElementById('performanceTable');
-  if (!table) return;
-
-  const rows = table.querySelectorAll('tbody tr');
-  rows.forEach(row => {
-    const id = (row.dataset.id || '').toLowerCase();
-    const name = (row.dataset.name || '').toLowerCase();
-    const area = (row.dataset.area || '').toLowerCase();
-    const dept = (row.dataset.dept || '').toLowerCase();
-
-    const matchId = !filterId || id.includes(filterId);
-    const matchName = !filterName || name.includes(filterName);
-    const matchArea = !filterArea || area.includes(filterArea);
-    const matchDept = !filterDept || dept.includes(filterDept);
-
-    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
-  });
+  applyTableFilter('performance');
 }
 
 function resetPerformanceFilter() {
-  document.getElementById('filterPerfId').value = '';
-  document.getElementById('filterPerfName').value = '';
-  document.getElementById('filterPerfArea').value = '';
-  document.getElementById('filterPerfDept').value = '';
-  filterPerformanceData();
+  resetTableFilter('performance');
 }
 
 // ═══ Results Filter ═══
 
 function filterResultsData() {
-  const filterId = document.getElementById('filterResultsId')?.value.toLowerCase() || '';
-  const filterName = document.getElementById('filterResultsName')?.value.toLowerCase() || '';
-  const filterArea = document.getElementById('filterResultsArea')?.value.toLowerCase() || '';
-  const filterDept = document.getElementById('filterResultsDept')?.value.toLowerCase() || '';
-
-  const table = document.getElementById('resultsTable');
-  if (!table) return;
-
-  const rows = table.querySelectorAll('tbody tr');
-  rows.forEach(row => {
-    const id = (row.dataset.id || '').toLowerCase();
-    const name = (row.dataset.name || '').toLowerCase();
-    const area = (row.dataset.area || '').toLowerCase();
-    const dept = (row.dataset.dept || '').toLowerCase();
-
-    const matchId = !filterId || id.includes(filterId);
-    const matchName = !filterName || name.includes(filterName);
-    const matchArea = !filterArea || area.includes(filterArea);
-    const matchDept = !filterDept || dept.includes(filterDept);
-
-    row.style.display = (matchId && matchName && matchArea && matchDept) ? '' : 'none';
-  });
+  applyTableFilter('results');
 }
 
 function resetResultsFilter() {
-  document.getElementById('filterResultsId').value = '';
-  document.getElementById('filterResultsName').value = '';
-  document.getElementById('filterResultsArea').value = '';
-  document.getElementById('filterResultsDept').value = '';
-  filterResultsData();
+  resetTableFilter('results');
 }
 
 // ═══ Notification ═══

@@ -1182,6 +1182,13 @@
         justify-content: flex-end;
       }
 
+      .bonus-table-card {
+        overflow: hidden;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 8px;
+        background: #FFFFFF;
+      }
+
       .bonus-table-shell {
         overflow: auto;
         max-height: calc(100vh - 360px);
@@ -1352,6 +1359,98 @@
         justify-content: center;
         width: 72px;
         padding: 6px 10px;
+      }
+
+      .table-empty-row td {
+        height: 120px;
+        color: var(--text-secondary);
+        text-align: center;
+        font-weight: 650;
+      }
+
+      .table-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        border-top: 1px solid var(--border);
+        background: #F8FAFC;
+      }
+
+      .table-pagination-summary {
+        color: var(--text-secondary);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .table-pagination-summary strong {
+        color: var(--text-primary);
+        font-family: var(--mono);
+        font-weight: 780;
+      }
+
+      .table-pagination-controls,
+      .table-pagination-pages,
+      .page-size-select {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .pagination-btn {
+        min-width: 34px;
+        height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.16s ease;
+      }
+
+      .pagination-btn:hover:not(:disabled) {
+        border-color: var(--primary);
+        color: var(--primary);
+        background: #F8FAFF;
+      }
+
+      .pagination-btn.active {
+        border-color: transparent;
+        background: var(--primary);
+        color: #FFFFFF;
+        box-shadow: 0 10px 20px rgba(99, 91, 255, 0.18);
+      }
+
+      .pagination-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      .table-pagination-ellipsis {
+        color: var(--text-secondary);
+        font-family: var(--mono);
+        font-weight: 700;
+      }
+
+      .page-size-select {
+        color: var(--text-secondary);
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .page-size-select select {
+        height: 34px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: #FFFFFF;
+        color: var(--text-primary);
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 700;
       }
 
       .result-summary-bar {
@@ -1668,6 +1767,8 @@
       .exception-chip:focus-visible,
       .month-picker-nav:focus-visible,
       .month-picker-option:focus-visible,
+      .pagination-btn:focus-visible,
+      .page-size-select select:focus-visible,
       .filter-field input:focus-visible,
       .app-dialog-field input:focus-visible {
         outline: none;
@@ -1912,6 +2013,7 @@
 
       .upload-result-file,
       .result-summary-bar,
+      .table-pagination,
       .modal-footer,
       .month-picker-head,
       .calc-chain {
@@ -2011,6 +2113,7 @@
       }
 
       .results-workbench,
+      .bonus-table-card,
       .bonus-table-shell {
         background: rgba(255, 255, 255, 0.62);
       }
