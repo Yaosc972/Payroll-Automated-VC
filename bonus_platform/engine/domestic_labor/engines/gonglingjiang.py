@@ -230,17 +230,6 @@ class GongLingJiangEngine(BaseEngine):
                             message,
                             "补充本月HRBP发放工号名单，或人工确认该员工不发放工龄奖。",
                         ))
-                    elif employee_id not in hrbp_list:
-                        message = f"员工{employee_id}不在本月HRBP发放名单内，揽收工龄奖不发放"
-                        warnings.append(message)
-                        exceptions.append(_exception(
-                            "NOT_IN_HRBP_LIST",
-                            "warning",
-                            employee_id,
-                            employee_name,
-                            message,
-                            "确认名单是否遗漏；如需发放，请补充名单后重新计算。",
-                        ))
             elif dept_category == "FBU":
                 standard = SENIORITY_RATE_GSDG["FBU"]
 
