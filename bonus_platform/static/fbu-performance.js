@@ -159,9 +159,114 @@ function matchesEmployeeFilters(row, filters) {
     && (!filterDept || dept.includes(filterDept));
 }
 
+function isBlankImportValue(value) {
+  return value === null || value === undefined || String(value).trim() === '';
+}
+
+function getAdjustmentEmployeeIds() {
+  return new Set((state.adjustmentData?.employees || []).map(emp => normalizeSearch(emp.employee_id)).filter(Boolean));
+}
+
+function getSalaryQualityFlags(row) {
+  const hourlyRate = toNumber(row.hourly_rate);
+  const ratio = toNumber(row.ratio);
+  const fixedBase = toNumber(row.fixed_performance_base);
+
+  return {
+    complete: hourlyRate > 0 && ratio > 0,
+    zeroHourly: hourlyRate <= 0,
+    emptyRatio: ratio <= 0,
+    fixedBase: fixedBase > 0,
+  };
+}
+
+function getPerformanceQualityFlags(row, adjustmentIds = getAdjustmentEmployeeIds()) {
+  const hasAdjustment = adjustmentIds.has(normalizeSearch(row.employee_id));
+  const missingScore = isBlankImportValue(row.score);
+  const missingCoefficient = isBlankImportValue(row.coefficient);
+
+  return {
+    complete: !missingScore && !missingCoefficient,
+    missingScore,
+    missingCoefficient,
+    hasAdjustment,
+  };
+}
+
+function findKnownEmployeeInfo(employeeId) {
+  const normalizedId = normalizeSearch(employeeId);
+  const datasets = [
+    state.attendanceData?.employees,
+    state.salaryData?.employees,
+    state.performanceData?.employees,
+  ];
+
+  for (const employees of datasets) {
+    const match = (employees || []).find(emp => normalizeSearch(emp.employee_id) === normalizedId);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+function getPerformanceReviewRows(employees) {
+  const rows = (employees || []).map(emp => ({ ...emp }));
+  const seenIds = new Set(rows.map(emp => normalizeSearch(emp.employee_id)).filter(Boolean));
+
+  (state.adjustmentData?.employees || []).forEach(adjustmentEmployee => {
+    const normalizedId = normalizeSearch(adjustmentEmployee.employee_id);
+    if (!normalizedId || seenIds.has(normalizedId)) return;
+
+    const knownInfo = findKnownEmployeeInfo(adjustmentEmployee.employee_id) || {};
+    rows.push({
+      employee_id: adjustmentEmployee.employee_id,
+      name: adjustmentEmployee.name || knownInfo.name || '',
+      area: adjustmentEmployee.area || knownInfo.area || '',
+      department: adjustmentEmployee.department || knownInfo.department || '',
+      job_type: knownInfo.job_type || 'warehouse',
+      score: null,
+      level: null,
+      coefficient: null,
+      import_source: 'adjustment',
+    });
+    seenIds.add(normalizedId);
+  });
+
+  return rows;
+}
+
+function matchesQualityFilter(type, row, quality, context = {}) {
+  const value = String(quality || 'all');
+  if (!value || value === 'all') return true;
+
+  if (type === 'salary') {
+    const flags = getSalaryQualityFlags(row);
+    return {
+      complete: flags.complete,
+      'zero-hourly': flags.zeroHourly,
+      'empty-ratio': flags.emptyRatio,
+      'fixed-base': flags.fixedBase,
+    }[value] ?? true;
+  }
+
+  if (type === 'performance') {
+    const flags = getPerformanceQualityFlags(row, context.adjustmentIds || getAdjustmentEmployeeIds());
+    return {
+      complete: flags.complete,
+      'missing-score': flags.missingScore,
+      'missing-coefficient': flags.missingCoefficient,
+      'has-adjustment': flags.hasAdjustment,
+    }[value] ?? true;
+  }
+
+  return true;
+}
+
 function getFilteredRows(type, rows) {
   const filters = getTableFilter(type);
-  return (rows || []).filter(row => matchesEmployeeFilters(row, filters));
+  const context = type === 'performance' ? { adjustmentIds: getAdjustmentEmployeeIds() } : {};
+  return (rows || []).filter(row => matchesEmployeeFilters(row, filters)
+    && matchesQualityFilter(type, row, filters.quality, context));
 }
 
 function getPaginatedRows(type, rows) {
@@ -1868,7 +1973,15 @@ function renderImportToolbar({ title, subtitle, filters, filterFn, resetFn, filt
           ${filters.map(filter => `
             <div class="filter-field">
               <label for="${escapeHtml(filter.id)}">${escapeHtml(filter.label)}</label>
-              <input type="text" id="${escapeHtml(filter.id)}" value="${escapeHtml(filterValues[filter.key] || '')}" placeholder="${escapeHtml(filter.placeholder)}" oninput="queueFilter('${escapeHtml(filterFn)}')">
+              ${filter.type === 'select' ? `
+                <select id="${escapeHtml(filter.id)}" onchange="queueFilter('${escapeHtml(filterFn)}')">
+                  ${(filter.options || []).map(option => `
+                    <option value="${escapeHtml(option.value)}" ${String(filterValues[filter.key] || 'all') === String(option.value) ? 'selected' : ''}>${escapeHtml(option.label)}</option>
+                  `).join('')}
+                </select>
+              ` : `
+                <input type="text" id="${escapeHtml(filter.id)}" value="${escapeHtml(filterValues[filter.key] || '')}" placeholder="${escapeHtml(filter.placeholder || '')}" oninput="queueFilter('${escapeHtml(filterFn)}')">
+              `}
             </div>
           `).join('')}
         </div>
@@ -1904,14 +2017,74 @@ const employeeFilters = {
     { id: 'filterSalaryName', key: 'name', label: '姓名', placeholder: '员工姓名' },
     { id: 'filterSalaryArea', key: 'area', label: '划分区域', placeholder: '区域' },
     { id: 'filterSalaryDept', key: 'dept', label: '部门', placeholder: '部门全称' },
+    {
+      id: 'filterSalaryQuality',
+      key: 'quality',
+      label: '导入状态',
+      type: 'select',
+      options: [
+        { value: 'all', label: '全部状态' },
+        { value: 'complete', label: '完整' },
+        { value: 'zero-hourly', label: '0时薪' },
+        { value: 'empty-ratio', label: '绩效比例空' },
+        { value: 'fixed-base', label: '固定基数' },
+      ],
+    },
   ],
   performance: [
     { id: 'filterPerfId', key: 'id', label: '工号', placeholder: 'zt0000000' },
     { id: 'filterPerfName', key: 'name', label: '姓名', placeholder: '员工姓名' },
     { id: 'filterPerfArea', key: 'area', label: '划分区域', placeholder: '区域' },
     { id: 'filterPerfDept', key: 'dept', label: '部门', placeholder: '部门全称' },
+    {
+      id: 'filterPerfQuality',
+      key: 'quality',
+      label: '导入状态',
+      type: 'select',
+      options: [
+        { value: 'all', label: '全部状态' },
+        { value: 'complete', label: '完整' },
+        { value: 'missing-score', label: '缺绩效得分' },
+        { value: 'missing-coefficient', label: '缺绩效系数' },
+        { value: 'has-adjustment', label: '有调薪拆分' },
+      ],
+    },
   ],
 };
+
+function renderQualityPills(items) {
+  const visibleItems = items.filter(item => item.show !== false);
+  if (!visibleItems.length) return '-';
+
+  return visibleItems.map(item => `
+    <span class="quality-pill ${escapeHtml(item.tone || '')}">
+      ${escapeHtml(item.label)}
+    </span>
+  `).join('');
+}
+
+function renderSalaryQualityStatus(emp) {
+  const flags = getSalaryQualityFlags(emp);
+
+  return renderQualityPills([
+    { label: '完整', tone: 'success', show: flags.complete },
+    { label: '0时薪', tone: 'danger', show: flags.zeroHourly },
+    { label: '绩效比例空', tone: 'warning', show: flags.emptyRatio },
+    { label: '固定基数', tone: 'neutral', show: flags.fixedBase },
+  ]);
+}
+
+function renderPerformanceQualityStatus(emp, adjustmentIds = getAdjustmentEmployeeIds()) {
+  const flags = getPerformanceQualityFlags(emp, adjustmentIds);
+
+  return renderQualityPills([
+    { label: '完整', tone: 'success', show: flags.complete },
+    { label: '缺得分', tone: 'warning', show: flags.missingScore },
+    { label: '缺系数', tone: 'warning', show: flags.missingCoefficient },
+    { label: '调薪拆分', tone: 'neutral', show: flags.hasAdjustment },
+    { label: '补充行', tone: 'neutral', show: emp.import_source === 'adjustment' },
+  ]);
+}
 
 // ═══ Render Attendance Data ═══
 
@@ -2022,6 +2195,14 @@ function renderSalaryData() {
   const filteredEmployees = getFilteredRows('salary', employees);
   const pageInfo = getPaginatedRows('salary', filteredEmployees);
   const summary = state.salaryData.summary;
+  const salaryQualityCounts = employees.reduce((counts, emp) => {
+    const flags = getSalaryQualityFlags(emp);
+    if (flags.complete) counts.complete += 1;
+    if (flags.zeroHourly) counts.zeroHourly += 1;
+    if (flags.emptyRatio) counts.emptyRatio += 1;
+    if (flags.fixedBase) counts.fixedBase += 1;
+    return counts;
+  }, { complete: 0, zeroHourly: 0, emptyRatio: 0, fixedBase: 0 });
 
   el.salaryContent.innerHTML = `
     ${renderDiagnosticsPanel()}
@@ -2032,6 +2213,8 @@ function renderSalaryData() {
         { label: '有效时薪', value: summary.valid_hourly_count ?? summary.total_employees, mono: true, tone: 'success' },
         { label: '0时薪', value: summary.zero_hourly_count ?? 0, mono: true, tone: (summary.zero_hourly_count ?? 0) ? 'danger' : '' },
         { label: '有效平均时薪', value: formatCurrency(summary.avg_hourly_rate), mono: true },
+        { label: '绩效比例为空', value: salaryQualityCounts.emptyRatio, mono: true, tone: salaryQualityCounts.emptyRatio ? 'warning' : '' },
+        { label: '固定基数', value: salaryQualityCounts.fixedBase, mono: true },
       ])}
       ${renderImportToolbar({
         title: '筛选薪资档案',
@@ -2051,11 +2234,14 @@ function renderSalaryData() {
             <th>部门全称</th>
             <th>时薪</th>
             <th>绩效比例</th>
+            <th>固定绩效基数</th>
+            <th>导入状态</th>
           </tr>
         </thead>
         <tbody>
           ${pageInfo.items.length ? pageInfo.items.map(emp => `
-            <tr data-id="${escapeHtml(emp.employee_id)}"
+            <tr class="${getSalaryQualityFlags(emp).zeroHourly || getSalaryQualityFlags(emp).emptyRatio ? 'row-danger' : ''}"
+                data-id="${escapeHtml(emp.employee_id)}"
                 data-name="${escapeHtml(emp.name || '')}"
                 data-area="${escapeHtml(emp.area || '')}"
                 data-dept="${escapeHtml(emp.department || '')}">
@@ -2065,8 +2251,10 @@ function renderSalaryData() {
               <td>${escapeHtml(emp.department || '-')}</td>
               <td>${formatCurrency(emp.hourly_rate)}</td>
               <td>${formatPercent(emp.ratio)}</td>
+              <td>${toNumber(emp.fixed_performance_base) > 0 ? formatCurrency(emp.fixed_performance_base) : '-'}</td>
+              <td>${renderSalaryQualityStatus(emp)}</td>
             </tr>
-          `).join('') : renderEmptyTableRow(6, '没有匹配的薪资记录')}
+          `).join('') : renderEmptyTableRow(8, '没有匹配的薪资记录')}
         </tbody>
       </table>
       `, renderTablePagination('salary', pageInfo))}
@@ -2092,14 +2280,26 @@ function renderPerformanceData() {
     return;
   }
 
-  const employees = state.performanceData.employees;
+  const employees = getPerformanceReviewRows(state.performanceData.employees);
   const filteredEmployees = getFilteredRows('performance', employees);
   const pageInfo = getPaginatedRows('performance', filteredEmployees);
   const summary = state.performanceData.summary;
   const adjustmentSummary = state.adjustmentData?.summary;
+  const adjustmentIds = getAdjustmentEmployeeIds();
+  const performanceQualityCounts = employees.reduce((counts, emp) => {
+    const flags = getPerformanceQualityFlags(emp, adjustmentIds);
+    if (flags.complete) counts.complete += 1;
+    if (flags.missingScore) counts.missingScore += 1;
+    if (flags.missingCoefficient) counts.missingCoefficient += 1;
+    if (flags.hasAdjustment) counts.hasAdjustment += 1;
+    return counts;
+  }, { complete: 0, missingScore: 0, missingCoefficient: 0, hasAdjustment: 0 });
   const performanceSummaryItems = [
-    { label: '绩效员工数', value: summary.total_employees, mono: true },
+    { label: '绩效报表人数', value: summary.total_employees, mono: true },
+    { label: '审查行数', value: employees.length, mono: true },
     { label: '平均得分', value: toNumber(summary.avg_score).toFixed(2), mono: true },
+    { label: '缺绩效得分', value: performanceQualityCounts.missingScore, mono: true, tone: performanceQualityCounts.missingScore ? 'warning' : '' },
+    { label: '缺绩效系数', value: performanceQualityCounts.missingCoefficient, mono: true, tone: performanceQualityCounts.missingCoefficient ? 'warning' : '' },
     ...(adjustmentSummary ? [
       { label: '拆分员工', value: adjustmentSummary.total_employees, mono: true, tone: 'warning' },
       { label: '有效拆分基数', value: formatCurrency(adjustmentSummary.active_performance_base || 0), mono: true },
@@ -2136,11 +2336,13 @@ function renderPerformanceData() {
             <th>绩效得分</th>
             <th>绩效等级</th>
             <th>绩效系数</th>
+            <th>导入状态</th>
           </tr>
         </thead>
         <tbody>
           ${pageInfo.items.length ? pageInfo.items.map(emp => `
-            <tr data-id="${escapeHtml(emp.employee_id)}"
+            <tr class="${getPerformanceQualityFlags(emp, adjustmentIds).missingScore || getPerformanceQualityFlags(emp, adjustmentIds).missingCoefficient ? 'row-danger' : ''}"
+                data-id="${escapeHtml(emp.employee_id)}"
                 data-name="${escapeHtml(emp.name || '')}"
                 data-area="${escapeHtml(emp.area || '')}"
                 data-dept="${escapeHtml(emp.department || '')}">
@@ -2149,11 +2351,12 @@ function renderPerformanceData() {
               <td>${escapeHtml(emp.area || '-')}</td>
               <td>${escapeHtml(emp.department || '-')}</td>
               <td>${formatJobType(emp.job_type)}</td>
-              <td>${emp.score !== null ? toNumber(emp.score).toFixed(2) : '-'}</td>
+              <td>${!isBlankImportValue(emp.score) ? toNumber(emp.score).toFixed(2) : '-'}</td>
               <td>${escapeHtml(emp.level || '-')}</td>
-              <td>${emp.coefficient !== null ? formatCoefficient(emp.coefficient) : '-'}</td>
+              <td>${!isBlankImportValue(emp.coefficient) ? formatCoefficient(emp.coefficient) : '-'}</td>
+              <td>${renderPerformanceQualityStatus(emp, adjustmentIds)}</td>
             </tr>
-          `).join('') : renderEmptyTableRow(8, '没有匹配的绩效记录')}
+          `).join('') : renderEmptyTableRow(9, '没有匹配的绩效记录')}
         </tbody>
       </table>
       `, renderTablePagination('performance', pageInfo))}
@@ -2484,12 +2687,14 @@ const tableFilterInputIds = {
     name: 'filterSalaryName',
     area: 'filterSalaryArea',
     dept: 'filterSalaryDept',
+    quality: 'filterSalaryQuality',
   },
   performance: {
     id: 'filterPerfId',
     name: 'filterPerfName',
     area: 'filterPerfArea',
     dept: 'filterPerfDept',
+    quality: 'filterPerfQuality',
   },
   results: {
     id: 'filterResultsId',
@@ -2514,6 +2719,7 @@ function readTableFilters(type) {
     name: String(document.getElementById(ids.name)?.value ?? '').trim(),
     area: String(document.getElementById(ids.area)?.value ?? '').trim(),
     dept: String(document.getElementById(ids.dept)?.value ?? '').trim(),
+    quality: String(document.getElementById(ids.quality)?.value ?? 'all').trim(),
   };
 }
 

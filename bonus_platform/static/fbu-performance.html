@@ -868,7 +868,7 @@
 
       .import-summary-strip {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
         gap: 12px;
       }
 
@@ -1154,7 +1154,8 @@
         color: var(--text-secondary);
       }
 
-      .filter-field input {
+      .filter-field input,
+      .filter-field select {
         height: 36px;
         padding: 8px 10px;
         border: 1px solid var(--border);
@@ -1166,9 +1167,54 @@
         transition: border-color 0.16s ease, box-shadow 0.16s ease;
       }
 
-      .filter-field input:focus {
+      .filter-field select {
+        cursor: pointer;
+      }
+
+      .filter-field input:focus,
+      .filter-field select:focus {
         border-color: var(--primary-deep);
         box-shadow: 0 0 0 3px rgba(47, 84, 235, 0.10);
+      }
+
+      .quality-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        margin: 2px 4px 2px 0;
+        padding: 2px 8px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: #FFFDF7;
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 650;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .quality-pill.success {
+        border-color: #B7DEC8;
+        background: #F3FBF5;
+        color: #286145;
+      }
+
+      .quality-pill.warning {
+        border-color: #EBD5A1;
+        background: #FFF8E8;
+        color: #7A4F00;
+      }
+
+      .quality-pill.danger {
+        border-color: #F2B6B2;
+        background: #FFF1EF;
+        color: #9D332C;
+      }
+
+      .quality-pill.neutral {
+        border-color: #D9D0C4;
+        background: #F8F2E8;
+        color: #554A3F;
       }
 
       .result-toolbar-actions {
