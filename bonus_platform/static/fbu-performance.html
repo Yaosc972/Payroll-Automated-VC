@@ -1789,6 +1789,109 @@
         margin-bottom: 16px;
       }
 
+      .exception-workbench {
+        display: grid;
+        gap: 16px;
+      }
+
+      .exception-filter-panel {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.7fr) minmax(180px, 0.7fr) minmax(240px, 1fr) auto;
+        gap: 12px;
+        align-items: end;
+        padding: 16px;
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+        background: #FFFFFF;
+      }
+
+      .exception-filter-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .exception-type-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .exception-type-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 32px;
+        padding: 5px 10px;
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 999px;
+        background: #FFFFFF;
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .exception-type-chip span {
+        color: var(--text-secondary);
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .exception-table-shell {
+        overflow-x: auto;
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+      }
+
+      .exception-table-shell .data-table {
+        min-width: 900px;
+        table-layout: fixed;
+      }
+
+      .exception-table-shell .data-table td {
+        white-space: normal;
+        line-height: 1.55;
+        vertical-align: top;
+      }
+
+      .exception-table-shell .data-table th:nth-child(1),
+      .exception-table-shell .data-table td:nth-child(1) {
+        width: 88px;
+      }
+
+      .exception-table-shell .data-table th:nth-child(2),
+      .exception-table-shell .data-table td:nth-child(2) {
+        width: 110px;
+      }
+
+      .exception-table-shell .data-table th:nth-child(3),
+      .exception-table-shell .data-table td:nth-child(3) {
+        width: 150px;
+      }
+
+      .exception-table-shell .data-table th:nth-child(4),
+      .exception-table-shell .data-table td:nth-child(4) {
+        width: 120px;
+      }
+
+      .exception-table-shell .data-table td:nth-child(1),
+      .exception-table-shell .data-table td:nth-child(2),
+      .exception-table-shell .data-table td:nth-child(3),
+      .exception-table-shell .data-table td:nth-child(4) {
+        white-space: nowrap;
+      }
+
+      .exception-table-shell .data-table th:nth-child(5),
+      .exception-table-shell .data-table td:nth-child(5) {
+        width: 150px;
+      }
+
+      .exception-table-shell .data-table td:nth-child(5),
+      .exception-table-shell .data-table td:last-child {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
       .exception-summary-item {
         border: 1px solid rgba(226, 232, 240, 0.92);
         border-radius: 8px;
@@ -2171,6 +2274,7 @@
       .pagination-btn:focus-visible,
       .page-size-select select:focus-visible,
       .filter-field input:focus-visible,
+      .filter-field select:focus-visible,
       .app-dialog-field input:focus-visible {
         outline: none;
         box-shadow: var(--focus-ring);
@@ -2407,6 +2511,7 @@
 
       .app-dialog-field input,
       .filter-field input,
+      .filter-field select,
       .page-size-select select {
         border: 1px solid var(--border-strong);
         border-radius: 6px;
@@ -2416,6 +2521,7 @@
 
       .app-dialog-field input:focus,
       .filter-field input:focus,
+      .filter-field select:focus,
       .page-size-select select:focus {
         border-color: var(--primary);
         box-shadow: var(--focus-ring);

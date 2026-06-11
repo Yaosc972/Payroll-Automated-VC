@@ -23,6 +23,7 @@ const state = {
     salary: {},
     performance: {},
     results: {},
+    exceptions: {},
   },
   tablePagination: {
     attendance: { page: 1, pageSize: 50 },
@@ -1074,13 +1075,87 @@ function renderFoundationData() {
   `;
 }
 
+const exceptionSeverityLabel = {
+  error: '严重',
+  warning: '提醒',
+  info: '信息',
+};
+
+const exceptionSourceOptions = [
+  { key: 'all', label: '全部数据源' },
+  { key: 'attendance', label: '考勤报表' },
+  { key: 'salary', label: '薪资档案' },
+  { key: 'performance', label: '绩效报表' },
+  { key: 'adjustments', label: '调薪拆分' },
+  { key: 'system', label: '系统校验' },
+];
+
+function safeExceptionSeverity(severity) {
+  const value = String(severity || 'info');
+  return value === 'error' || value === 'warning' || value === 'info' ? value : 'info';
+}
+
+function getExceptionSource(issue) {
+  const type = String(issue?.type || '');
+  const detail = String(issue?.detail || '');
+  const text = `${type} ${detail}`;
+  if (text.includes('拆分') || text.includes('调薪') || text.includes('转正')) {
+    return { key: 'adjustments', label: '调薪拆分' };
+  }
+  if (text.includes('薪资') || text.includes('时薪') || text.includes('绩效比例')) {
+    return { key: 'salary', label: '薪资档案' };
+  }
+  if (text.includes('绩效')) {
+    return { key: 'performance', label: '绩效报表' };
+  }
+  if (text.includes('考勤')) {
+    return { key: 'attendance', label: '考勤报表' };
+  }
+  return { key: 'system', label: '系统校验' };
+}
+
+function getFilteredExceptionIssues(issues, filters = {}) {
+  const severityFilter = String(filters.severity || 'all');
+  const sourceFilter = String(filters.source || 'all');
+  const query = normalizeSearch(filters.query);
+
+  return (issues || []).filter(issue => {
+    const severity = safeExceptionSeverity(issue.severity);
+    const source = getExceptionSource(issue);
+    const queryText = normalizeSearch([
+      source.label,
+      issue.type,
+      issue.employee_id,
+      issue.name,
+      issue.detail,
+    ].join(' '));
+
+    return (severityFilter === 'all' || severity === severityFilter)
+      && (sourceFilter === 'all' || source.key === sourceFilter)
+      && (!query || queryText.includes(query));
+  });
+}
+
+function getExceptionTypeBreakdown(issues) {
+  const counts = new Map();
+  (issues || []).forEach(issue => {
+    const type = issue.type || '未分类';
+    counts.set(type, (counts.get(type) || 0) + 1);
+  });
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
+    .slice(0, 8);
+}
+
 function renderExceptionQueue() {
   if (!el.exceptionsContent) return;
 
   const diagnostics = state.diagnosticsData;
   const summary = diagnostics?.summary;
   const issues = diagnostics?.issues || [];
-  const pageInfo = getPaginatedRows('exceptions', issues);
+  const filters = getTableFilter('exceptions');
+  const filteredIssues = getFilteredExceptionIssues(issues, filters);
+  const pageInfo = getPaginatedRows('exceptions', filteredIssues);
   if (el.btnExportDiagnostics) {
     el.btnExportDiagnostics.disabled = !state.currentActivity || !summary;
   }
@@ -1096,71 +1171,114 @@ function renderExceptionQueue() {
     return;
   }
 
-  const severityLabel = {
-    error: '严重',
-    warning: '提醒',
-    info: '信息',
-  };
-  const safeSeverity = (severity) => {
-    const value = String(severity || 'info');
-    return value === 'error' || value === 'warning' || value === 'info' ? value : 'info';
-  };
+  const infoCount = Math.max(0, (summary.issue_count || 0) - (summary.error_count || 0) - (summary.warning_count || 0));
+  const typeBreakdown = getExceptionTypeBreakdown(issues);
 
   el.exceptionsContent.innerHTML = `
-    <div class="exception-summary">
-      <div class="exception-summary-item">
-        <span class="exception-summary-label">考勤人数</span>
-        <span class="exception-summary-value">${summary.attendance_count || 0}</span>
+    <div class="exception-workbench">
+      <div class="exception-summary">
+        <div class="exception-summary-item">
+          <span class="exception-summary-label">严重</span>
+          <span class="exception-summary-value">${summary.error_count || 0}</span>
+        </div>
+        <div class="exception-summary-item">
+          <span class="exception-summary-label">提醒</span>
+          <span class="exception-summary-value">${summary.warning_count || 0}</span>
+        </div>
+        <div class="exception-summary-item">
+          <span class="exception-summary-label">信息</span>
+          <span class="exception-summary-value">${infoCount}</span>
+        </div>
+        <div class="exception-summary-item">
+          <span class="exception-summary-label">可计算人数</span>
+          <span class="exception-summary-value">${summary.can_calculate_count || 0}/${summary.attendance_count || 0}</span>
+        </div>
       </div>
-      <div class="exception-summary-item">
-        <span class="exception-summary-label">薪资匹配</span>
-        <span class="exception-summary-value">${summary.matched_salary_count || 0}/${summary.attendance_count || 0}</span>
-      </div>
-      <div class="exception-summary-item">
-        <span class="exception-summary-label">绩效匹配</span>
-        <span class="exception-summary-value">${summary.matched_performance_count || 0}/${summary.attendance_count || 0}</span>
-      </div>
-      <div class="exception-summary-item">
-        <span class="exception-summary-label">问题数</span>
-        <span class="exception-summary-value">${summary.issue_count || 0}</span>
-      </div>
-    </div>
 
-    ${issues.length ? `
-      <div class="data-table-container">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>级别</th>
-              <th>问题类型</th>
-              <th>工号</th>
-              <th>姓名</th>
-              <th>说明</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pageInfo.items.map(issue => {
-              const severity = safeSeverity(issue.severity);
-              return `
-              <tr class="${severity === 'error' ? 'row-danger' : ''}">
-                <td><span class="severity-pill ${severity}">${escapeHtml(severityLabel[severity] || '信息')}</span></td>
-                <td>${escapeHtml(issue.type || '-')}</td>
-                <td>${escapeHtml(issue.employee_id || '-')}</td>
-                <td>${escapeHtml(issue.name || '-')}</td>
-                <td>${escapeHtml(issue.detail || '-')}</td>
-              </tr>
-              `;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>
-      ${renderTablePagination('exceptions', pageInfo)}
-    ` : `
-      <div class="empty-state compact">
-        <h3 class="empty-state-title">暂无匹配异常</h3>
-        <p class="empty-state-sub">${escapeHtml(state.currentActivity.calc_month || '')} 当前没有需要处理的诊断问题。</p>
-      </div>
-    `}
+      ${issues.length ? `
+        <div class="exception-filter-panel">
+          <div class="filter-field">
+            <label for="filterExceptionSeverity">严重程度</label>
+            <select id="filterExceptionSeverity" onchange="filterExceptionData()">
+              ${[
+                ['all', '全部级别'],
+                ['error', '严重'],
+                ['warning', '提醒'],
+                ['info', '信息'],
+              ].map(([value, label]) => `
+                <option value="${value}" ${String(filters.severity || 'all') === value ? 'selected' : ''}>${label}</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="filter-field">
+            <label for="filterExceptionSource">数据源</label>
+            <select id="filterExceptionSource" onchange="filterExceptionData()">
+              ${exceptionSourceOptions.map(option => `
+                <option value="${escapeHtml(option.key)}" ${String(filters.source || 'all') === option.key ? 'selected' : ''}>${escapeHtml(option.label)}</option>
+              `).join('')}
+            </select>
+          </div>
+          <div class="filter-field">
+            <label for="filterExceptionQuery">员工 / 问题</label>
+            <input type="text" id="filterExceptionQuery" value="${escapeHtml(filters.query || '')}" placeholder="工号、姓名、问题类型、说明" oninput="queueFilter('filterExceptionData')">
+          </div>
+          <div class="exception-filter-actions">
+            <button class="btn btn-secondary btn-sm" type="button" onclick="filterExceptionData()">筛选</button>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="resetExceptionFilter()">重置</button>
+          </div>
+        </div>
+
+        <div class="exception-type-list" aria-label="问题类型分布">
+          ${typeBreakdown.map(([type, count]) => `
+            <span class="exception-type-chip">${escapeHtml(type)} <span>${count}</span></span>
+          `).join('')}
+        </div>
+
+        ${filteredIssues.length ? `
+          <div class="exception-table-shell">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>级别</th>
+                  <th>数据源</th>
+                  <th>问题类型</th>
+                  <th>工号</th>
+                  <th>姓名</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${pageInfo.items.map(issue => {
+                  const severity = safeExceptionSeverity(issue.severity);
+                  const source = getExceptionSource(issue);
+                  return `
+                  <tr class="${severity === 'error' ? 'row-danger' : ''}">
+                    <td><span class="severity-pill ${severity}">${escapeHtml(exceptionSeverityLabel[severity] || '信息')}</span></td>
+                    <td>${escapeHtml(source.label)}</td>
+                    <td>${escapeHtml(issue.type || '-')}</td>
+                    <td>${escapeHtml(issue.employee_id || '-')}</td>
+                    <td>${escapeHtml(issue.name || '-')}</td>
+                    <td>${escapeHtml(issue.detail || '-')}</td>
+                  </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+          ${renderTablePagination('exceptions', pageInfo)}
+        ` : `
+          <div class="empty-state compact">
+            <h3 class="empty-state-title">当前筛选没有异常</h3>
+            <p class="empty-state-sub">调整严重程度、数据源或关键词后再查看。</p>
+          </div>
+        `}
+      ` : `
+        <div class="empty-state compact">
+          <h3 class="empty-state-title">暂无匹配异常</h3>
+          <p class="empty-state-sub">${escapeHtml(state.currentActivity.calc_month || '')} 当前没有需要处理的诊断问题。</p>
+        </div>
+      `}
+    </div>
   `;
 }
 
@@ -2382,6 +2500,14 @@ const tableFilterInputIds = {
 };
 
 function readTableFilters(type) {
+  if (type === 'exceptions') {
+    return {
+      severity: String(document.getElementById('filterExceptionSeverity')?.value ?? 'all').trim(),
+      source: String(document.getElementById('filterExceptionSource')?.value ?? 'all').trim(),
+      query: String(document.getElementById('filterExceptionQuery')?.value ?? '').trim(),
+    };
+  }
+
   const ids = tableFilterInputIds[type] || {};
   return {
     id: String(document.getElementById(ids.id)?.value ?? '').trim(),
@@ -2461,6 +2587,16 @@ function filterResultsData() {
 
 function resetResultsFilter() {
   resetTableFilter('results');
+}
+
+// ═══ Exception Filter ═══
+
+function filterExceptionData() {
+  applyTableFilter('exceptions');
+}
+
+function resetExceptionFilter() {
+  resetTableFilter('exceptions');
 }
 
 // ═══ Notification ═══
