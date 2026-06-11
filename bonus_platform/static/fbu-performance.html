@@ -2527,26 +2527,31 @@
 
       #activitiesTable th:nth-child(1),
       #activitiesTable td:nth-child(1) {
-        width: 24%;
+        width: 20%;
       }
 
       #activitiesTable th:nth-child(2),
       #activitiesTable td:nth-child(2) {
-        width: 25%;
+        width: 22%;
       }
 
       #activitiesTable th:nth-child(3),
       #activitiesTable td:nth-child(3) {
-        width: 9%;
+        width: 8%;
       }
 
       #activitiesTable th:nth-child(4),
       #activitiesTable td:nth-child(4) {
-        width: 12%;
+        width: 15%;
       }
 
       #activitiesTable th:nth-child(5),
       #activitiesTable td:nth-child(5) {
+        width: 10%;
+      }
+
+      #activitiesTable th:nth-child(6),
+      #activitiesTable td:nth-child(6) {
         width: 12%;
       }
 
@@ -2654,6 +2659,47 @@
         display: inline-flex;
         align-items: center;
         gap: 8px;
+      }
+
+      .activity-diagnostics {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .activity-diagnostics-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .activity-diagnostics-meta,
+      .activity-diagnostics-muted {
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .activity-link-btn {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 760;
+        cursor: pointer;
+      }
+
+      .activity-link-btn:hover {
+        color: var(--primary-deep);
+        text-decoration: underline;
       }
 
       .bonus-table .sticky-id,
@@ -3073,6 +3119,7 @@
                         <th>任务</th>
                         <th>阶段</th>
                         <th>范围</th>
+                        <th>诊断</th>
                         <th>奖金总额</th>
                         <th>创建时间</th>
                         <th>操作</th>

@@ -18,6 +18,7 @@ const state = {
   lastImportResult: null,
   foundationRunDetails: {},
   foundationLoadingRunId: '',
+  activityListLoadingRunIds: new Set(),
   tableFilters: {
     attendance: {},
     salary: {},
@@ -898,6 +899,7 @@ async function loadActivities() {
     state.activities = data.runs || [];
     renderActivities();
     updateActivityKPIs();
+    loadActivityListDetails();
     if (state.currentPage === 'foundation') {
       renderFoundationData();
       loadFoundationActivityDetail();
@@ -909,7 +911,7 @@ async function loadActivities() {
 
 function renderActivities() {
   if (!state.activities.length) {
-    el.activitiesBody.innerHTML = renderEmptyTableRow(6, '暂无月度活动');
+    el.activitiesBody.innerHTML = renderEmptyTableRow(7, '暂无月度活动');
     return;
   }
 
@@ -956,6 +958,7 @@ function renderActivities() {
             <span class="activity-metric-value">${escapeHtml(totalEmployees)}</span>
           </div>
         </td>
+        <td>${renderActivityDiagnostics(activity)}</td>
         <td><span class="money-cell">${escapeHtml(totalBonus)}</span></td>
         <td>${escapeHtml(formatDateOnly(activity.created_at))}</td>
         <td>
@@ -977,6 +980,70 @@ function updateActivityKPIs() {
 }
 
 const activityStepLabels = ['考勤汇总', '薪资匹配', '绩效明细', '核算结果'];
+
+function getActivityDetail(activity) {
+  if (!activity) return null;
+  if (state.currentActivity?.run_id === activity.run_id) return state.currentActivity;
+  return state.foundationRunDetails[activity.run_id] || activity;
+}
+
+async function loadActivityListDetails() {
+  const pendingActivities = state.activities.filter(activity => activity.run_id
+    && state.currentActivity?.run_id !== activity.run_id
+    && !state.foundationRunDetails[activity.run_id]
+    && !state.activityListLoadingRunIds.has(activity.run_id));
+
+  if (!pendingActivities.length) return;
+
+  pendingActivities.forEach(activity => state.activityListLoadingRunIds.add(activity.run_id));
+  if (state.currentPage === 'activities') renderActivities();
+
+  await Promise.allSettled(pendingActivities.map(async activity => {
+    try {
+      const detail = await apiJson(`${API_BASE}/runs/${activity.run_id}`);
+      state.foundationRunDetails[activity.run_id] = detail;
+    } finally {
+      state.activityListLoadingRunIds.delete(activity.run_id);
+    }
+  }));
+
+  if (state.currentPage === 'activities') {
+    renderActivities();
+  }
+}
+
+function renderActivityDiagnostics(activity) {
+  const detail = getActivityDetail(activity);
+  const summary = detail?.diagnostics?.summary;
+  const isLoading = state.activityListLoadingRunIds.has(activity.run_id);
+
+  if (!summary) {
+    return `
+      <div class="activity-diagnostics">
+        <span class="activity-diagnostics-muted">${isLoading ? '诊断加载中' : '未生成诊断'}</span>
+        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">异常队列</button>
+      </div>
+    `;
+  }
+
+  const errorCount = toNumber(summary.error_count);
+  const warningCount = toNumber(summary.warning_count);
+  const issueCount = toNumber(summary.issue_count);
+  const badgeClass = errorCount ? 'danger' : warningCount ? 'warning' : 'success';
+  const badgeText = errorCount ? `${errorCount}严重` : warningCount ? `${warningCount}提醒` : '无阻断';
+
+  return `
+    <div class="activity-diagnostics">
+      <div class="activity-diagnostics-line">
+        <span class="status-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
+        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">异常队列</button>
+      </div>
+      <div class="activity-diagnostics-meta">
+        ${escapeHtml(`${issueCount}项 · 可算 ${toNumber(summary.can_calculate_count)}/${toNumber(summary.attendance_count)}`)}
+      </div>
+    </div>
+  `;
+}
 
 function getActivityStatusMeta(activity) {
   if (activity.status === 'completed') {
