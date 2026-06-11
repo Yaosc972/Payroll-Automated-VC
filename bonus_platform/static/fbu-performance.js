@@ -101,6 +101,17 @@ function formatDateTime(value) {
   });
 }
 
+function formatDateOnly(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+}
+
 function formatResultJobType(jobType) {
   const label = formatJobType(jobType);
   const className = jobType === 'functional'
@@ -897,24 +908,61 @@ async function loadActivities() {
 }
 
 function renderActivities() {
+  if (!state.activities.length) {
+    el.activitiesBody.innerHTML = renderEmptyTableRow(6, '暂无月度活动');
+    return;
+  }
+
   el.activitiesBody.innerHTML = state.activities.map(activity => {
-    const statusClass = activity.status === 'completed' ? 'success' :
-                       activity.status === 'failed' ? 'danger' : 'warning';
-    const statusText = activity.status === 'completed' ? '已完成' :
-                      activity.status === 'failed' ? '失败' : '进行中';
-    const progress = `${activity.current_step || 0}/4`;
+    const statusMeta = getActivityStatusMeta(activity);
+    const completedSteps = getActivityCompletedSteps(activity);
+    const progress = `${completedSteps}/${activityStepLabels.length}`;
+    const stageCaption = getActivityStageCaption(activity, completedSteps);
+    const totalEmployees = activity.total_employees ?? '-';
+    const totalBonus = activity.total_bonus === null
+      || activity.total_bonus === undefined
+      || (activity.status !== 'completed' && toNumber(activity.total_bonus) === 0)
+      ? '-'
+      : formatCurrency(activity.total_bonus);
+    const primaryAction = statusMeta.page
+      ? `openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg(statusMeta.page)})`
+      : `enterActivity(${formatJsArg(activity.run_id)})`;
 
     return `
-      <tr>
-        <td><strong>${escapeHtml(activity.calc_month)}</strong></td>
-        <td><span class="status-badge ${statusClass}">${statusText}</span></td>
-        <td>${progress}</td>
-        <td>${activity.total_employees || '-'}</td>
-        <td>${activity.total_bonus ? '$' + activity.total_bonus.toLocaleString() : '-'}</td>
-        <td>${escapeHtml(new Date(activity.created_at).toLocaleDateString())}</td>
+      <tr class="activity-row ${statusMeta.rowClass}">
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="enterActivity('${escapeHtml(activity.run_id)}')">进入</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteActivity('${escapeHtml(activity.run_id)}')">删除</button>
+          <div class="activity-task">
+            <div class="activity-task-main">
+              <span class="activity-month">${escapeHtml(activity.calc_month || '-')}</span>
+              <span class="status-badge ${statusMeta.className}">${statusMeta.text}</span>
+            </div>
+            <div class="activity-task-meta">活动 ID ${escapeHtml(activity.run_id || '-')}</div>
+          </div>
+        </td>
+        <td>
+          <div class="activity-stage">
+            <div class="activity-stage-head">
+              <span class="activity-stage-caption">${escapeHtml(stageCaption)}</span>
+              <span class="activity-progress-value">${escapeHtml(progress)}</span>
+            </div>
+            <div class="activity-progress-track" aria-label="核算进度 ${escapeHtml(progress)}">
+              ${renderActivityProgress(completedSteps)}
+            </div>
+          </div>
+        </td>
+        <td>
+          <div class="activity-metric">
+            <span class="activity-metric-label">员工</span>
+            <span class="activity-metric-value">${escapeHtml(totalEmployees)}</span>
+          </div>
+        </td>
+        <td><span class="money-cell">${escapeHtml(totalBonus)}</span></td>
+        <td>${escapeHtml(formatDateOnly(activity.created_at))}</td>
+        <td>
+          <div class="activity-action-cell">
+            <button class="btn btn-secondary btn-sm" onclick="${primaryAction}">${escapeHtml(statusMeta.action)}</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteActivity(${formatJsArg(activity.run_id)})">删除</button>
+          </div>
         </td>
       </tr>
     `;
@@ -926,6 +974,36 @@ function updateActivityKPIs() {
   el.kpiCompleted.textContent = state.activities.filter(a => a.status === 'completed').length;
   el.kpiInProgress.textContent = state.activities.filter(a => a.status !== 'completed' && a.status !== 'failed').length;
   el.kpiErrors.textContent = state.activities.filter(a => a.status === 'failed').length;
+}
+
+const activityStepLabels = ['考勤汇总', '薪资匹配', '绩效明细', '核算结果'];
+
+function getActivityStatusMeta(activity) {
+  if (activity.status === 'completed') {
+    return { className: 'success', text: '已完成', rowClass: 'completed', action: '查看结果', page: 'results' };
+  }
+  if (activity.status === 'failed') {
+    return { className: 'danger', text: '失败', rowClass: 'failed', action: '查看异常', page: 'exceptions' };
+  }
+  return { className: 'warning', text: '进行中', rowClass: 'running', action: '继续处理', page: '' };
+}
+
+function getActivityCompletedSteps(activity) {
+  if (activity.status === 'completed') return activityStepLabels.length;
+  return Math.min(Math.max(toNumber(activity.current_step), 0), activityStepLabels.length);
+}
+
+function getActivityStageCaption(activity, completedSteps) {
+  if (activity.status === 'completed') return '核算完成';
+  if (activity.status === 'failed') return '需要处理异常';
+  const nextStep = activityStepLabels[Math.min(completedSteps, activityStepLabels.length - 1)];
+  return `下一步：${nextStep}`;
+}
+
+function renderActivityProgress(completedSteps) {
+  return activityStepLabels.map((label, index) => `
+    <span class="activity-progress-segment ${index < completedSteps ? 'done' : ''}" title="${escapeHtml(label)}"></span>
+  `).join('');
 }
 
 function getLatestActivity() {
@@ -1390,6 +1468,11 @@ function renderExceptionQueue() {
 }
 
 // ═══ Enter Activity ═══
+
+async function openActivityPage(activityId, page) {
+  await enterActivity(activityId);
+  navigateTo(page);
+}
 
 async function enterActivity(activityId, options = {}) {
   const { preservePage = false } = options;

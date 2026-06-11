@@ -2362,6 +2362,18 @@
         font-weight: 760;
       }
 
+      .panel-title-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .panel-subtitle {
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
       .panel-body {
         padding: 24px;
       }
@@ -2513,10 +2525,35 @@
         min-width: 100%;
       }
 
+      #activitiesTable th:nth-child(1),
+      #activitiesTable td:nth-child(1) {
+        width: 24%;
+      }
+
+      #activitiesTable th:nth-child(2),
+      #activitiesTable td:nth-child(2) {
+        width: 25%;
+      }
+
+      #activitiesTable th:nth-child(3),
+      #activitiesTable td:nth-child(3) {
+        width: 9%;
+      }
+
+      #activitiesTable th:nth-child(4),
+      #activitiesTable td:nth-child(4) {
+        width: 12%;
+      }
+
+      #activitiesTable th:nth-child(5),
+      #activitiesTable td:nth-child(5) {
+        width: 12%;
+      }
+
       #activitiesTable th:last-child,
       #activitiesTable td:last-child {
-        width: 144px;
-        min-width: 144px;
+        width: 174px;
+        min-width: 174px;
       }
 
       #activitiesTable td:last-child {
@@ -2525,6 +2562,98 @@
 
       #activitiesTable td:last-child .btn + .btn {
         margin-left: 8px;
+      }
+
+      .activity-task {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .activity-task-main {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .activity-month {
+        font-family: var(--mono);
+        font-size: 15px;
+        font-weight: 760;
+        color: var(--text-primary);
+      }
+
+      .activity-task-meta,
+      .activity-stage-caption,
+      .activity-metric-label {
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .activity-task-meta {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .activity-stage {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .activity-stage-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .activity-progress-value,
+      .activity-metric-value {
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-weight: 760;
+        color: var(--text-primary);
+      }
+
+      .activity-progress-track {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 5px;
+      }
+
+      .activity-progress-segment {
+        height: 6px;
+        border-radius: 999px;
+        background: #E8DED1;
+      }
+
+      .activity-progress-segment.done {
+        background: #2F2A24;
+      }
+
+      .activity-row.failed .activity-progress-segment.done {
+        background: var(--danger);
+      }
+
+      .activity-row.running .activity-progress-segment.done {
+        background: var(--warning);
+      }
+
+      .activity-metric {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .activity-action-cell {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
       }
 
       .bonus-table .sticky-id,
@@ -2931,17 +3060,19 @@
 
             <div class="panel">
               <div class="panel-header">
-                <h2 class="panel-title">月度活动列表</h2>
+                <div class="panel-title-stack">
+                  <h2 class="panel-title">月度活动列表</h2>
+                  <span class="panel-subtitle">按月度任务处理</span>
+                </div>
               </div>
               <div class="panel-body">
                 <div class="data-table-container">
                   <table class="data-table" id="activitiesTable">
                     <thead>
                       <tr>
-                        <th>核算月份</th>
-                        <th>状态</th>
-                        <th>进度</th>
-                        <th>员工数</th>
+                        <th>任务</th>
+                        <th>阶段</th>
+                        <th>范围</th>
                         <th>奖金总额</th>
                         <th>创建时间</th>
                         <th>操作</th>
