@@ -1912,12 +1912,43 @@
         justify-content: flex-end;
       }
 
+      .exception-result-strip {
+        align-items: center;
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        background: #FFFDF7;
+      }
+
+      .exception-result-count {
+        color: var(--text-primary);
+        font-size: 13px;
+        font-weight: 760;
+      }
+
+      .exception-result-meta {
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 650;
+        margin-left: 8px;
+      }
+
+      .exception-source-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
       .exception-type-list {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
       }
 
+      .exception-source-chip,
       .exception-type-chip {
         display: inline-flex;
         align-items: center;
@@ -1930,8 +1961,18 @@
         color: var(--text-primary);
         font-size: 13px;
         font-weight: 700;
+        cursor: pointer;
       }
 
+      .exception-source-chip.active,
+      .exception-type-chip.active,
+      .exception-source-chip:hover,
+      .exception-type-chip:hover {
+        border-color: var(--primary);
+        background: #F3EEE3;
+      }
+
+      .exception-source-chip span,
       .exception-type-chip span {
         color: var(--text-secondary);
         font-family: var(--mono);
@@ -1945,7 +1986,7 @@
       }
 
       .exception-table-shell .data-table {
-        min-width: 900px;
+        min-width: 1060px;
         table-layout: fixed;
       }
 
@@ -1987,10 +2028,32 @@
         width: 150px;
       }
 
+      .exception-table-shell .data-table th:nth-child(7),
+      .exception-table-shell .data-table td:nth-child(7) {
+        width: 104px;
+      }
+
       .exception-table-shell .data-table td:nth-child(5),
-      .exception-table-shell .data-table td:last-child {
+      .exception-table-shell .data-table td:nth-child(6) {
         overflow-wrap: anywhere;
         word-break: break-word;
+      }
+
+      .exception-row-action {
+        background: transparent;
+        border: 0;
+        color: var(--primary);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 760;
+        padding: 0;
+        text-align: left;
+        white-space: nowrap;
+      }
+
+      .exception-row-action:hover {
+        color: var(--primary-deep);
+        text-decoration: underline;
       }
 
       .exception-summary-item {

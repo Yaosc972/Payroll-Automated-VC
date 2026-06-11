@@ -1399,6 +1399,61 @@ function getExceptionTypeBreakdown(issues) {
     .slice(0, 8);
 }
 
+function getExceptionSourceBreakdown(issues) {
+  const counts = new Map();
+  (issues || []).forEach(issue => {
+    const source = getExceptionSource(issue);
+    const current = counts.get(source.key) || { ...source, count: 0 };
+    current.count += 1;
+    counts.set(source.key, current);
+  });
+
+  return [...counts.values()]
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'zh-CN'));
+}
+
+function renderExceptionFilterSummary(filters, filteredCount, totalCount) {
+  const activeLabels = [];
+  if (filters.severity && filters.severity !== 'all') {
+    activeLabels.push(exceptionSeverityLabel[filters.severity] || filters.severity);
+  }
+  if (filters.source && filters.source !== 'all') {
+    const sourceOption = exceptionSourceOptions.find(option => option.key === filters.source);
+    activeLabels.push(sourceOption?.label || filters.source);
+  }
+  if (normalizeSearch(filters.query)) {
+    activeLabels.push(`关键词：${filters.query}`);
+  }
+
+  return `
+    <div class="exception-result-strip">
+      <div>
+        <span class="exception-result-count">显示 ${filteredCount} / ${totalCount} 条</span>
+        <span class="exception-result-meta">${escapeHtml(activeLabels.length ? activeLabels.join(' · ') : '全部问题')}</span>
+      </div>
+      ${activeLabels.length ? '<button class="activity-link-btn" type="button" onclick="resetExceptionFilter()">清空条件</button>' : ''}
+    </div>
+  `;
+}
+
+const exceptionSourceTargetMeta = {
+  attendance: { page: 'attendance', label: '查看考勤' },
+  salary: { page: 'salary', label: '查看薪资' },
+  performance: { page: 'performance', label: '查看绩效' },
+  adjustments: { page: 'performance', label: '查看拆分' },
+  system: { page: 'exceptions', label: '聚焦问题' },
+};
+
+function renderExceptionAction(issue, source) {
+  const meta = exceptionSourceTargetMeta[source.key] || exceptionSourceTargetMeta.system;
+  return `
+    <button class="exception-row-action" type="button"
+            onclick="locateExceptionIssue(${formatJsArg(source.key)}, ${formatJsArg(issue.employee_id || '')}, ${formatJsArg(issue.name || '')}, ${formatJsArg(issue.type || '')})">
+      ${escapeHtml(meta.label)}
+    </button>
+  `;
+}
+
 function renderExceptionQueue() {
   if (!el.exceptionsContent) return;
 
@@ -1425,6 +1480,7 @@ function renderExceptionQueue() {
 
   const infoCount = Math.max(0, (summary.issue_count || 0) - (summary.error_count || 0) - (summary.warning_count || 0));
   const typeBreakdown = getExceptionTypeBreakdown(issues);
+  const sourceBreakdown = getExceptionSourceBreakdown(issues);
 
   el.exceptionsContent.innerHTML = `
     <div class="exception-workbench">
@@ -1480,9 +1536,25 @@ function renderExceptionQueue() {
           </div>
         </div>
 
+        ${renderExceptionFilterSummary(filters, filteredIssues.length, issues.length)}
+
+        <div class="exception-source-list" aria-label="数据源分布">
+          ${sourceBreakdown.map(source => `
+            <button class="exception-source-chip ${String(filters.source || 'all') === source.key ? 'active' : ''}"
+                    type="button"
+                    onclick="quickFilterExceptionSource(${formatJsArg(source.key)})">
+              ${escapeHtml(source.label)} <span>${source.count}</span>
+            </button>
+          `).join('')}
+        </div>
+
         <div class="exception-type-list" aria-label="问题类型分布">
           ${typeBreakdown.map(([type, count]) => `
-            <span class="exception-type-chip">${escapeHtml(type)} <span>${count}</span></span>
+            <button class="exception-type-chip ${String(filters.query || '') === type ? 'active' : ''}"
+                    type="button"
+                    onclick="quickFilterExceptionType(${formatJsArg(type)})">
+              ${escapeHtml(type)} <span>${count}</span>
+            </button>
           `).join('')}
         </div>
 
@@ -1497,6 +1569,7 @@ function renderExceptionQueue() {
                   <th>工号</th>
                   <th>姓名</th>
                   <th>说明</th>
+                  <th>处理</th>
                 </tr>
               </thead>
               <tbody>
@@ -1511,6 +1584,7 @@ function renderExceptionQueue() {
                     <td>${escapeHtml(issue.employee_id || '-')}</td>
                     <td>${escapeHtml(issue.name || '-')}</td>
                     <td>${escapeHtml(issue.detail || '-')}</td>
+                    <td>${renderExceptionAction(issue, source)}</td>
                   </tr>
                   `;
                 }).join('')}
@@ -2955,6 +3029,50 @@ function filterExceptionData() {
 
 function resetExceptionFilter() {
   resetTableFilter('exceptions');
+}
+
+function quickFilterExceptionSource(sourceKey) {
+  state.tableFilters.exceptions = {
+    ...getTableFilter('exceptions'),
+    source: sourceKey || 'all',
+  };
+  getTablePagination('exceptions').page = 1;
+  renderExceptionQueue();
+}
+
+function quickFilterExceptionType(type) {
+  state.tableFilters.exceptions = {
+    ...getTableFilter('exceptions'),
+    query: type || '',
+  };
+  getTablePagination('exceptions').page = 1;
+  renderExceptionQueue();
+}
+
+function locateExceptionIssue(sourceKey, employeeId = '', name = '', issueType = '') {
+  const meta = exceptionSourceTargetMeta[sourceKey] || exceptionSourceTargetMeta.system;
+
+  if (meta.page === 'exceptions') {
+    state.tableFilters.exceptions = {
+      ...getTableFilter('exceptions'),
+      source: sourceKey || 'all',
+      query: employeeId || name || issueType || '',
+    };
+    getTablePagination('exceptions').page = 1;
+    renderExceptionQueue();
+    return;
+  }
+
+  state.tableFilters[meta.page] = {
+    id: employeeId || '',
+    name: employeeId ? '' : name,
+    area: '',
+    dept: '',
+    quality: 'all',
+  };
+  getTablePagination(meta.page).page = 1;
+  navigateTo(meta.page);
+  renderTableByType(meta.page);
 }
 
 // ═══ Notification ═══
