@@ -1696,6 +1696,92 @@
         margin-bottom: 12px;
       }
 
+      .foundation-import-ledger {
+        display: grid;
+        gap: 14px;
+        margin-top: 22px;
+      }
+
+      .foundation-ledger-head {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .foundation-ledger-title {
+        color: var(--text-primary);
+        font-size: 15px;
+        font-weight: 780;
+      }
+
+      .foundation-ledger-sub {
+        margin-top: 4px;
+        color: var(--text-secondary);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .foundation-ledger-period {
+        color: var(--text-secondary);
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .foundation-ledger-table {
+        overflow: hidden;
+        border: 1px solid rgba(226, 232, 240, 0.92);
+        border-radius: 8px;
+      }
+
+      .foundation-ledger-table .data-table {
+        min-width: 100%;
+        table-layout: fixed;
+      }
+
+      .foundation-ledger-table .data-table th,
+      .foundation-ledger-table .data-table td {
+        vertical-align: middle;
+      }
+
+      .foundation-ledger-table .data-table th:nth-child(1),
+      .foundation-ledger-table .data-table td:nth-child(1) {
+        width: 110px;
+      }
+
+      .foundation-ledger-table .data-table th:nth-child(3),
+      .foundation-ledger-table .data-table td:nth-child(3),
+      .foundation-ledger-table .data-table th:nth-child(4),
+      .foundation-ledger-table .data-table td:nth-child(4) {
+        width: 150px;
+      }
+
+      .foundation-ledger-table .data-table th:nth-child(5),
+      .foundation-ledger-table .data-table td:nth-child(5) {
+        width: 100px;
+      }
+
+      .foundation-ledger-table .data-table th:nth-child(6),
+      .foundation-ledger-table .data-table td:nth-child(6) {
+        width: 88px;
+      }
+
+      .batch-file-name {
+        color: var(--text-primary);
+        font-weight: 700;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .batch-file-meta {
+        margin-top: 3px;
+        color: var(--text-secondary);
+        font-size: 12px;
+      }
+
       .exception-summary {
         display: grid;
         grid-template-columns: repeat(4, minmax(120px, 1fr));
@@ -2234,6 +2320,11 @@
       .severity-pill.error {
         background: #FDEBEC;
         color: #9F2F2D;
+      }
+
+      .status-badge.neutral {
+        background: #F1ECE3;
+        color: #5F574D;
       }
 
       .job-pill {

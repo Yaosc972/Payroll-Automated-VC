@@ -16,6 +16,8 @@ const state = {
   resultsData: null,
   baseRoster: null,
   lastImportResult: null,
+  foundationRunDetails: {},
+  foundationLoadingRunId: '',
   tableFilters: {
     attendance: {},
     salary: {},
@@ -752,6 +754,7 @@ function navigateTo(page) {
     loadActivities();
   } else if (page === 'foundation') {
     renderFoundationData();
+    loadFoundationActivityDetail();
   } else if (page === 'exceptions') {
     renderExceptionQueue();
   }
@@ -778,6 +781,7 @@ async function loadActivities() {
     updateActivityKPIs();
     if (state.currentPage === 'foundation') {
       renderFoundationData();
+      loadFoundationActivityDetail();
     }
   } catch (error) {
     console.error('加载活动列表失败:', error);
@@ -824,10 +828,182 @@ function getLatestActivity() {
   })[0] || null;
 }
 
+function getFoundationActivity() {
+  return state.currentActivity || getLatestActivity();
+}
+
+function getFoundationRunDetail(activity = getFoundationActivity()) {
+  if (!activity) return null;
+  if (state.currentActivity?.run_id === activity.run_id) return state.currentActivity;
+  return state.foundationRunDetails[activity.run_id] || activity;
+}
+
+async function loadFoundationActivityDetail(activity = getFoundationActivity()) {
+  if (!activity?.run_id) return;
+  if (state.currentActivity?.run_id === activity.run_id) return;
+  if (state.foundationRunDetails[activity.run_id]) return;
+  if (state.foundationLoadingRunId === activity.run_id) return;
+
+  state.foundationLoadingRunId = activity.run_id;
+  try {
+    const detail = await apiJson(`${API_BASE}/runs/${activity.run_id}`);
+    state.foundationRunDetails[activity.run_id] = detail;
+    if (state.currentPage === 'foundation') {
+      renderFoundationData();
+    }
+  } catch (error) {
+    console.error('加载基础数据活动详情失败:', error);
+  } finally {
+    if (state.foundationLoadingRunId === activity.run_id) {
+      state.foundationLoadingRunId = '';
+    }
+  }
+}
+
+function getBatchStatus({ required, hasFile }) {
+  if (hasFile) {
+    return '<span class="status-badge success">已解析</span>';
+  }
+  if (required) {
+    return '<span class="status-badge warning">待上传</span>';
+  }
+  return '<span class="status-badge neutral">可选</span>';
+}
+
+function buildImportBatchRows(activity) {
+  if (!activity) return [];
+
+  const rows = [];
+  const addRow = ({ type, file, required = true, metric = '-', quality = '-', meta = '' }) => {
+    const hasFile = Boolean(file);
+    rows.push({
+      type,
+      file: file || '未上传',
+      meta,
+      metric,
+      quality,
+      status: getBatchStatus({ required, hasFile }),
+      runId: activity.run_id,
+    });
+  };
+
+  const attendanceSummary = activity.attendance_data?.summary || {};
+  addRow({
+    type: '考勤报表',
+    file: activity.attendance_file,
+    metric: activity.attendance_file ? `${toNumber(attendanceSummary.total_employees)}人` : '-',
+    quality: activity.attendance_file
+      ? `${toNumber(attendanceSummary.roster_matched)}/${toNumber(attendanceSummary.total_employees)}匹配`
+      : '-',
+    meta: activity.attendance_file ? `计薪工时 ${formatHours(attendanceSummary.total_base_hours)}` : '月度工时来源',
+  });
+
+  const salarySummary = activity.salary_data?.summary || {};
+  addRow({
+    type: '薪资档案',
+    file: activity.salary_file,
+    metric: activity.salary_file ? `${toNumber(salarySummary.total_employees)}人` : '-',
+    quality: activity.salary_file
+      ? `${toNumber(salarySummary.valid_hourly_count)}有效时薪`
+      : '-',
+    meta: activity.salary_file ? `0时薪 ${toNumber(salarySummary.zero_hourly_count)}人` : '时薪与绩效比例来源',
+  });
+
+  const performanceSummary = activity.performance_data?.summary || {};
+  addRow({
+    type: '绩效报表',
+    file: activity.performance_file,
+    metric: activity.performance_file ? `${toNumber(performanceSummary.total_employees)}人` : '-',
+    quality: activity.performance_file
+      ? `${toNumber(performanceSummary.scored_employees)}有分数`
+      : '-',
+    meta: activity.performance_file ? `平均分 ${toNumber(performanceSummary.avg_score).toFixed(2)}` : '绩效得分与等级来源',
+  });
+
+  const adjustmentSummary = activity.adjustment_data?.summary || {};
+  addRow({
+    type: '调薪拆分',
+    file: activity.adjustment_file,
+    required: false,
+    metric: activity.adjustment_file ? `${toNumber(adjustmentSummary.total_employees)}人` : '-',
+    quality: activity.adjustment_file
+      ? `${toNumber(adjustmentSummary.total_segments)}段`
+      : '-',
+    meta: activity.adjustment_file ? `有效基数 ${formatCurrency(adjustmentSummary.active_performance_base)}` : '试用期/转正/调薪分段',
+  });
+
+  return rows;
+}
+
+function renderImportBatchLedger(activity) {
+  if (!activity) {
+    return `
+      <div class="foundation-import-ledger">
+        <div class="foundation-ledger-head">
+          <div>
+            <div class="foundation-ledger-title">导入批次台账</div>
+            <div class="foundation-ledger-sub">创建月度活动后，这里会展示该月已导入的报表和解析结果。</div>
+          </div>
+        </div>
+        <div class="empty-state compact">
+          <h3 class="empty-state-title">暂无月度活动</h3>
+          <p class="empty-state-sub">先创建月度活动，再逐份导入考勤、薪资、绩效和拆分表。</p>
+          <button class="btn btn-secondary" type="button" onclick="navigateTo('activities')">查看月度活动</button>
+        </div>
+      </div>
+    `;
+  }
+
+  const rows = buildImportBatchRows(activity);
+  const isLoading = state.foundationLoadingRunId === activity.run_id && !state.foundationRunDetails[activity.run_id];
+  return `
+    <div class="foundation-import-ledger">
+      <div class="foundation-ledger-head">
+        <div>
+          <div class="foundation-ledger-title">导入批次台账</div>
+          <div class="foundation-ledger-sub">按报表维度追踪本月数据来源、解析结果和可计算状态。</div>
+        </div>
+        <div class="foundation-ledger-period">${escapeHtml(activity.calc_month || '-')}</div>
+      </div>
+      <div class="foundation-ledger-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>数据源</th>
+              <th>源文件</th>
+              <th>解析结果</th>
+              <th>匹配/异常</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td><strong>${escapeHtml(row.type)}</strong></td>
+                <td>
+                  <div class="batch-file-name" title="${escapeHtml(row.file)}">${escapeHtml(row.file)}</div>
+                  <div class="batch-file-meta">${escapeHtml(row.meta)}</div>
+                </td>
+                <td>${escapeHtml(row.metric)}</td>
+                <td>${escapeHtml(row.quality)}</td>
+                <td>${row.status}</td>
+                <td><button class="btn btn-secondary btn-sm" type="button" onclick="enterActivity('${escapeHtml(row.runId)}')">进入</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${isLoading ? '<div class="import-result-note"><span><strong>正在读取活动详情</strong> 解析统计加载后会自动刷新。</span></div>' : ''}
+    </div>
+  `;
+}
+
 function renderFoundationData() {
   const roster = state.baseRoster || {};
   const hasRoster = Boolean(roster.has_roster);
   const latestActivity = getLatestActivity();
+  const ledgerActivity = getFoundationRunDetail();
 
   if (el.foundationLeadMeta) {
     el.foundationLeadMeta.textContent = hasRoster
@@ -894,6 +1070,7 @@ function renderFoundationData() {
         </div>
       </aside>
     </div>
+    ${renderImportBatchLedger(ledgerActivity)}
   `;
 }
 
@@ -1001,6 +1178,7 @@ async function enterActivity(activityId, options = {}) {
     }
 
     state.currentActivity = activity;
+    state.foundationRunDetails[activity.run_id] = activity;
     state.diagnosticsData = activity.diagnostics || null;
 
     // Navigate to appropriate page based on step
