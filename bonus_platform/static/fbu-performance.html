@@ -165,6 +165,61 @@
         display: flex;
         align-items: center;
         gap: 16px;
+        min-width: 0;
+      }
+
+      .top-brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text-primary);
+        text-decoration: none;
+        flex: 0 0 auto;
+      }
+
+      .top-brand-mark {
+        width: 40px;
+        height: 40px;
+        object-fit: contain;
+      }
+
+      .top-brand-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        line-height: 1;
+      }
+
+      .top-brand-en {
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+      }
+
+      .top-brand-cn {
+        color: var(--text-primary);
+        font-size: 17px;
+        font-weight: 760;
+      }
+
+      .top-module-divider {
+        width: 1px;
+        height: 34px;
+        background: var(--border);
+        flex: 0 0 auto;
+      }
+
+      .top-module-copy {
+        min-width: 0;
+      }
+
+      .module-eyebrow {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-weight: 700;
       }
 
       .top-bar-title {
@@ -2079,15 +2134,15 @@
 
       .sidebar-logo {
         align-items: center;
-        gap: 16px;
+        gap: 14px;
       }
 
       .sidebar-logo img {
-        width: 56px;
-        height: 56px;
+        width: 42px;
+        height: 42px;
         flex: 0 0 42px;
-        margin-left: -8px;
-        margin-right: -6px;
+        margin: 0;
+        object-fit: contain;
       }
 
       .sidebar-logo-text {
@@ -2182,6 +2237,43 @@
       .top-bar {
         min-height: 72px;
         padding: 16px 20px;
+        gap: 20px;
+      }
+
+      .top-brand-lockup {
+        gap: 12px;
+      }
+
+      .top-brand-mark {
+        width: 44px;
+        height: 44px;
+      }
+
+      .top-brand-en {
+        color: #7B746B;
+        font-size: 13px;
+        font-weight: 760;
+        letter-spacing: 0.12em;
+      }
+
+      .top-brand-cn {
+        color: #1F1D1A;
+        font-size: 23px;
+        font-weight: 800;
+        line-height: 1.05;
+      }
+
+      .top-module-divider {
+        height: 42px;
+        background: var(--border-strong);
+      }
+
+      .module-eyebrow {
+        margin-bottom: 4px;
+        color: #7B746B;
+        font-size: 12px;
+        font-weight: 760;
+        letter-spacing: 0;
       }
 
       .top-bar-title {
@@ -2719,8 +2811,8 @@
       <!-- ═══ Sidebar ═══ -->
       <aside class="sidebar">
         <div class="sidebar-header">
-          <a class="sidebar-logo" href="/">
-            <img src="assets/bonus-logo-header-blue.png" alt="" />
+          <a class="sidebar-logo" href="/" aria-label="返回西格玛工作台首页">
+            <img src="assets/bonus-logo-header-transparent.png" alt="" />
             <div class="sidebar-logo-text">
               <span class="sidebar-logo-sigma">Σ-</span>
               <span class="sidebar-logo-brand">WORKBENCH</span>
@@ -2785,8 +2877,19 @@
         <!-- Top Bar -->
         <header class="top-bar">
           <div class="top-bar-left">
-            <h1 class="top-bar-title">FBU美洲绩效核算</h1>
-            <span class="top-bar-subtitle">月度活动管理</span>
+            <a class="top-brand-lockup" href="/" aria-label="返回西格玛工作台首页">
+              <img class="top-brand-mark" src="assets/bonus-logo-header-blue.png" alt="" />
+              <span class="top-brand-copy">
+                <span class="top-brand-en">Σ-WORKBENCH</span>
+                <span class="top-brand-cn">西格玛工作台</span>
+              </span>
+            </a>
+            <div class="top-module-divider" aria-hidden="true"></div>
+            <div class="top-module-copy">
+              <span class="module-eyebrow">绩效管理模块</span>
+              <h1 class="top-bar-title">FBU美洲绩效核算</h1>
+              <span class="top-bar-subtitle">月度活动管理</span>
+            </div>
           </div>
           <div class="top-bar-right">
             <button class="btn btn-secondary" id="btnUploadRoster">

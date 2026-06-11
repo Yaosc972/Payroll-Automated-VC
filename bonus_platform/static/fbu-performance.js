@@ -387,6 +387,7 @@ async function apiJson(url, options = {}) {
 const el = {
   // Navigation
   navItems: document.querySelectorAll('.nav-item'),
+  moduleEyebrow: document.querySelector('.module-eyebrow'),
   pageTitle: document.querySelector('.top-bar-title'),
   pageSubtitle: document.querySelector('.top-bar-subtitle'),
 
@@ -842,16 +843,17 @@ function navigateTo(page) {
 
   // Update title
   const titles = {
-    activities: { title: 'FBU美洲绩效核算', subtitle: '月度活动管理' },
-    foundation: { title: '基础数据', subtitle: '组织人员与模板资产' },
-    exceptions: { title: '异常队列', subtitle: state.currentActivity?.calc_month || '待选择活动' },
-    attendance: { title: '考勤汇总', subtitle: state.currentActivity?.calc_month || '' },
-    salary: { title: '薪资匹配', subtitle: state.currentActivity?.calc_month || '' },
-    performance: { title: '绩效明细', subtitle: state.currentActivity?.calc_month || '' },
-    results: { title: '核算结果', subtitle: state.currentActivity?.calc_month || '' },
+    activities: { module: '绩效管理模块', title: 'FBU美洲绩效核算', subtitle: '月度活动管理' },
+    foundation: { module: '平台基础数据', title: '基础数据', subtitle: '组织人员与模板资产' },
+    exceptions: { module: '异常处理中心', title: '异常队列', subtitle: state.currentActivity?.calc_month || '待选择活动' },
+    attendance: { module: '活动工作流 · 1/4', title: '考勤汇总', subtitle: state.currentActivity?.calc_month || '' },
+    salary: { module: '活动工作流 · 2/4', title: '薪资匹配', subtitle: state.currentActivity?.calc_month || '' },
+    performance: { module: '活动工作流 · 3/4', title: '绩效明细', subtitle: state.currentActivity?.calc_month || '' },
+    results: { module: '活动工作流 · 4/4', title: '核算结果', subtitle: state.currentActivity?.calc_month || '' },
   };
 
   const title = titles[page] || titles.activities;
+  if (el.moduleEyebrow) el.moduleEyebrow.textContent = title.module;
   el.pageTitle.textContent = title.title;
   el.pageSubtitle.textContent = title.subtitle;
 
