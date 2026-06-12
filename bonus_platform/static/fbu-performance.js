@@ -2089,6 +2089,8 @@ function renderDiagnosticsPanel() {
   }
 
   const issues = diagnostics.issues || [];
+  const hasSalaryData = toNumber(summary.salary_count) > 0;
+  const hasPerformanceData = toNumber(summary.performance_count) > 0 || toNumber(summary.adjustment_count) > 0;
   const visibleIssues = issues.slice(0, 8);
   const severityLabel = {
     error: '严重',
@@ -2104,11 +2106,11 @@ function renderDiagnosticsPanel() {
       </div>
       <div class="summary-stat">
         <span class="summary-stat-label">薪资匹配</span>
-        <span class="summary-stat-value">${summary.matched_salary_count}/${summary.attendance_count}</span>
+        <span class="summary-stat-value">${hasSalaryData ? `${summary.matched_salary_count}/${summary.attendance_count}` : '待上传'}</span>
       </div>
       <div class="summary-stat">
         <span class="summary-stat-label">绩效匹配</span>
-        <span class="summary-stat-value">${summary.matched_performance_count}/${summary.attendance_count}</span>
+        <span class="summary-stat-value">${hasPerformanceData ? `${summary.matched_performance_count}/${summary.attendance_count}` : '待上传'}</span>
       </div>
       <div class="summary-stat">
         <span class="summary-stat-label">拆分</span>

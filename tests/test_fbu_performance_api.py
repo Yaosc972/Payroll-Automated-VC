@@ -248,3 +248,27 @@ def test_fbu_diagnostics_reports_matching_issues_and_exports(monkeypatch, tmp_pa
     assert export_response.status_code == 200
     workbook = load_workbook(tmp_path / export_response.json()["filename"], data_only=True)
     assert workbook["数据诊断"].cell(3, 1).value == "严重程度"
+
+
+def test_fbu_diagnostics_does_not_flag_future_steps_before_upload(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+
+    run = app_module.fbu_run_manager.create_run(calc_month="2026-04")
+    app_module.fbu_run_manager.save_step_data(run.run_id, 1, {
+        "employees": [
+            {"employee_id": "zt001", "name": "Ana"},
+            {"employee_id": "zt002", "name": "Ben"},
+        ]
+    })
+
+    client = TestClient(app_module.app)
+    response = client.get(f"/api/fbu-performance/runs/{run.run_id}/diagnostics")
+
+    assert response.status_code == 200
+    diagnostics = response.json()
+    issue_types = {issue["type"] for issue in diagnostics["issues"]}
+    assert "考勤有薪资无" not in issue_types
+    assert "考勤有绩效无" not in issue_types
+    assert diagnostics["summary"]["issue_count"] == 0
+    assert diagnostics["summary"]["error_count"] == 0

@@ -1606,6 +1606,8 @@ def _fbu_run_diagnostics(run: FBURun) -> dict:
         return ""
 
     issues = []
+    has_salary_data = bool(salary_ids) or bool(run.salary_file)
+    has_performance_data = bool(performance_ids) or bool(adjustment_ids) or bool(run.performance_file) or bool(run.adjustment_file)
 
     def add_issue(kind: str, emp_id: str, detail: str, severity: str = "warning"):
         issues.append({
@@ -1616,11 +1618,13 @@ def _fbu_run_diagnostics(run: FBURun) -> dict:
             "detail": detail,
         })
 
-    for emp_id in sorted(attendance_ids - salary_ids):
-        add_issue("考勤有薪资无", emp_id, "该员工有考勤记录，但薪资档案未匹配", "error")
+    if has_salary_data:
+        for emp_id in sorted(attendance_ids - salary_ids):
+            add_issue("考勤有薪资无", emp_id, "该员工有考勤记录，但薪资档案未匹配", "error")
 
-    for emp_id in sorted(attendance_ids - performance_ids - adjustment_ids):
-        add_issue("考勤有绩效无", emp_id, "该员工有考勤记录，但绩效报表未匹配", "warning")
+    if has_performance_data:
+        for emp_id in sorted(attendance_ids - performance_ids - adjustment_ids):
+            add_issue("考勤有绩效无", emp_id, "该员工有考勤记录，但绩效报表未匹配", "warning")
 
     for emp_id in sorted(salary_ids - attendance_ids):
         add_issue("薪资有考勤无", emp_id, "薪资档案存在该员工，但本月考勤未出现", "info")
@@ -1631,8 +1635,9 @@ def _fbu_run_diagnostics(run: FBURun) -> dict:
     for emp_id in sorted(adjustment_ids - attendance_ids):
         add_issue("拆分有考勤无", emp_id, "调薪/转正拆分表存在该员工，但本月考勤未出现", "error")
 
-    for emp_id in sorted(adjustment_ids - salary_ids):
-        add_issue("拆分有薪资无", emp_id, "调薪/转正拆分表存在该员工，但薪资档案未匹配", "error")
+    if has_salary_data:
+        for emp_id in sorted(adjustment_ids - salary_ids):
+            add_issue("拆分有薪资无", emp_id, "调薪/转正拆分表存在该员工，但薪资档案未匹配", "error")
 
     for emp_id in sorted(attendance_ids & salary_ids):
         salary = salary_by_id[emp_id]
