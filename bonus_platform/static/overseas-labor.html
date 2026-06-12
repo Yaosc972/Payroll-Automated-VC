@@ -9,9 +9,446 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css?v=notion-31" />
-    <style>html { color-scheme: light; }</style>
+    <style>
+      html { color-scheme: light; }
+
+      body.overseas-labor-shell.overseas-workbench-shell {
+        min-height: 100vh;
+        overflow-x: hidden;
+        background:
+          radial-gradient(circle at 14% 0%, rgba(34, 211, 238, 0.2), transparent 30%),
+          radial-gradient(circle at 82% 8%, rgba(99, 102, 241, 0.16), transparent 28%),
+          linear-gradient(135deg, #eef4fb 0%, #f8fafc 46%, #e7edf5 100%);
+        color: #111827;
+        font-family: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      body.overseas-labor-shell.overseas-workbench-shell::before {
+        opacity: 0.72;
+      }
+
+      .overseas-ambient {
+        top: 108px;
+        color: rgba(255, 255, 255, 0.62);
+        font-size: clamp(74px, 12vw, 172px);
+      }
+
+      .overseas-labor-shell .app-chrome {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        min-height: 82px;
+        padding: 14px clamp(20px, 3vw, 42px);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.72);
+        background: rgba(255, 255, 255, 0.66);
+        box-shadow: 0 18px 46px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.84);
+        backdrop-filter: blur(30px) saturate(1.45);
+        -webkit-backdrop-filter: blur(30px) saturate(1.45);
+      }
+
+      .overseas-labor-shell .chrome-left,
+      .overseas-labor-shell .chrome-right {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 0;
+      }
+
+      .overseas-labor-shell .portal-logo-mark {
+        display: inline-flex;
+        align-items: center;
+        gap: 13px;
+        min-width: 222px;
+        color: #111827;
+        text-decoration: none;
+      }
+
+      .overseas-labor-shell .brand-mark-frame {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 52px;
+        height: 52px;
+        border: 1px solid rgba(255, 255, 255, 0.82);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.58);
+        box-shadow: 0 18px 30px rgba(37, 99, 235, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+      }
+
+      .overseas-labor-shell .brand-mark-frame img {
+        width: 42px;
+        height: 42px;
+        object-fit: contain;
+      }
+
+      .overseas-labor-shell .brand-copy,
+      .overseas-labor-shell .chrome-context {
+        display: grid;
+        gap: 3px;
+      }
+
+      .overseas-labor-shell .brand-name {
+        color: #64748b;
+        font-size: 13px;
+        font-weight: 900;
+        letter-spacing: 0;
+        line-height: 1;
+      }
+
+      .overseas-labor-shell .brand-note {
+        color: #0f172a;
+        font-size: 24px;
+        font-weight: 900;
+        letter-spacing: 0;
+        line-height: 1.08;
+      }
+
+      .overseas-labor-shell .chrome-divider {
+        width: 1px;
+        height: 48px;
+        background: rgba(148, 163, 184, 0.32);
+      }
+
+      .overseas-labor-shell .chrome-label {
+        color: #2563eb;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .overseas-labor-shell .chrome-title {
+        color: #0f172a;
+        font-size: 18px;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      .overseas-labor-shell .chrome-desc {
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      .overseas-labor-shell .chrome-run-badge,
+      .overseas-labor-shell .btn-download,
+      .overseas-labor-shell .btn-new-batch,
+      .overseas-labor-shell .btn-extract,
+      .overseas-labor-shell .btn-primary-lg,
+      .overseas-labor-shell .btn-secondary {
+        min-height: 36px;
+        border-radius: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .overseas-labor-shell .chrome-run-badge {
+        border: 1px solid rgba(255, 255, 255, 0.76);
+        background: rgba(255, 255, 255, 0.62);
+        color: #334155;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      }
+
+      .overseas-labor-shell .btn-new-batch,
+      .overseas-labor-shell .btn-extract,
+      .overseas-labor-shell .btn-primary-lg {
+        border: 1px solid rgba(37, 99, 235, 0.2);
+        background: linear-gradient(135deg, #2563eb, #0f62fe);
+        box-shadow: 0 14px 28px rgba(37, 99, 235, 0.2);
+        color: #fff;
+      }
+
+      .overseas-labor-shell .btn-download,
+      .overseas-labor-shell .btn-secondary {
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        background: rgba(255, 255, 255, 0.62);
+        color: #0f172a;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+      }
+
+      .overseas-labor-shell .kpi-banner {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        max-width: 1280px;
+        margin: 18px auto 0;
+        padding: 0 clamp(20px, 3vw, 42px);
+        background: transparent;
+        border: 0;
+      }
+
+      .overseas-labor-shell .kpi-card {
+        min-height: 112px;
+        border: 1px solid rgba(255, 255, 255, 0.72);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.64);
+        box-shadow: 0 24px 54px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(22px) saturate(1.24);
+        -webkit-backdrop-filter: blur(22px) saturate(1.24);
+      }
+
+      .overseas-labor-shell .kpi-card:hover,
+      .overseas-labor-shell .kpi-card.active-filter {
+        border-color: rgba(37, 99, 235, 0.38);
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 26px 58px rgba(37, 99, 235, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+      }
+
+      .overseas-labor-shell .kpi-label {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .overseas-labor-shell .kpi-value {
+        color: #0f172a;
+        font-size: clamp(22px, 2.2vw, 30px);
+        font-weight: 900;
+        letter-spacing: 0;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .kpi-sub {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .overseas-labor-shell .kpi-success .kpi-value { color: #047857; }
+      .overseas-labor-shell .kpi-warning .kpi-value { color: #b45309; }
+      .overseas-labor-shell .kpi-danger .kpi-value { color: #dc2626; }
+
+      .overseas-labor-shell .workspace {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 28px clamp(20px, 3vw, 42px) 72px;
+      }
+
+      .overseas-labor-shell .workspace-section,
+      .overseas-labor-shell .diagnostics-fold,
+      .overseas-labor-shell .pending-group,
+      .overseas-labor-shell .audit-table,
+      .overseas-labor-shell .conclusion-section {
+        border: 1px solid rgba(255, 255, 255, 0.7);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.66);
+        box-shadow: 0 24px 54px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(24px) saturate(1.22);
+        -webkit-backdrop-filter: blur(24px) saturate(1.22);
+      }
+
+      .overseas-labor-shell .workspace-section {
+        overflow: hidden;
+        margin-bottom: 18px;
+        padding: 18px;
+      }
+
+      .overseas-labor-shell .section-header {
+        align-items: center;
+        margin-bottom: 16px;
+      }
+
+      .overseas-labor-shell .section-title {
+        color: #0f172a;
+        font-size: 20px;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      .overseas-labor-shell .section-sub,
+      .overseas-labor-shell .inline-status {
+        color: #64748b;
+        font-size: 12px;
+      }
+
+      .overseas-labor-shell .audit-table {
+        overflow: auto;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .overseas-labor-shell .workspace-section > .audit-table {
+        margin: 0;
+      }
+
+      .overseas-labor-shell .audit-table th,
+      .overseas-labor-shell .group-content th,
+      .overseas-labor-shell .mapping-preview-table th {
+        border-bottom: 1px solid rgba(226, 232, 240, 0.92);
+        background: rgba(248, 250, 252, 0.86);
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: 0;
+        text-transform: none;
+      }
+
+      .overseas-labor-shell .audit-table td,
+      .overseas-labor-shell .group-content td,
+      .overseas-labor-shell .mapping-preview-table td {
+        border-bottom: 1px solid rgba(226, 232, 240, 0.78);
+        color: #334155;
+        font-weight: 650;
+      }
+
+      .overseas-labor-shell .recon-row.variance {
+        background: linear-gradient(90deg, rgba(255, 237, 213, 0.82), rgba(255, 247, 237, 0.62));
+      }
+
+      .overseas-labor-shell .recon-row.matched {
+        background: rgba(255, 255, 255, 0.42);
+      }
+
+      .overseas-labor-shell .recon-summary-bar {
+        border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+        background: rgba(255, 255, 255, 0.48);
+      }
+
+      .overseas-labor-shell .conclusion-section {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 20px;
+        padding: 18px 20px;
+      }
+
+      .overseas-labor-shell .conclusion-section.warning,
+      .overseas-labor-shell .conclusion-section.critical {
+        border-color: rgba(245, 158, 11, 0.45);
+        background: rgba(255, 251, 235, 0.76);
+      }
+
+      .overseas-labor-shell .conclusion-section.pass {
+        border-color: rgba(16, 185, 129, 0.35);
+        background: rgba(236, 253, 245, 0.76);
+      }
+
+      .overseas-labor-shell .conclusion-main {
+        margin: 0;
+      }
+
+      .overseas-labor-shell .conclusion-text {
+        color: #0f172a;
+        font-size: 15px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .conclusion-details {
+        justify-content: flex-end;
+        color: #475569;
+        font-weight: 750;
+      }
+
+      .overseas-labor-shell .diagnostics-fold {
+        margin-bottom: 18px;
+        padding: 0;
+        overflow: hidden;
+      }
+
+      .overseas-labor-shell .diagnostics-fold summary {
+        padding: 16px 18px;
+        color: #0f172a;
+        cursor: pointer;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .drawer-overlay.visible {
+        background: rgba(15, 23, 42, 0.22);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+      }
+
+      .overseas-labor-shell .wizard-drawer {
+        top: 12px;
+        right: 12px;
+        bottom: 12px;
+        width: min(540px, calc(100vw - 24px));
+        border: 1px solid rgba(255, 255, 255, 0.7);
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: -30px 0 70px rgba(7, 18, 35, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(36px) saturate(1.36);
+        -webkit-backdrop-filter: blur(36px) saturate(1.36);
+      }
+
+      .overseas-labor-shell .drawer-chrome,
+      .overseas-labor-shell .drawer-footer {
+        border-color: rgba(226, 232, 240, 0.82);
+        background: rgba(248, 250, 252, 0.56);
+      }
+
+      .overseas-labor-shell .drawer-title {
+        color: #0f172a;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .drawer-eyebrow {
+        color: #2563eb;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .field-input,
+      .overseas-labor-shell .mapping-field-card,
+      .overseas-labor-shell .mapping-preview-table,
+      .overseas-labor-shell .upload-zone {
+        border-color: rgba(148, 163, 184, 0.36);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .overseas-labor-shell .field-input:focus {
+        border-color: rgba(37, 99, 235, 0.62);
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+      }
+
+      @media (max-width: 980px) {
+        .overseas-labor-shell .app-chrome {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .overseas-labor-shell .chrome-right {
+          width: 100%;
+          flex-wrap: wrap;
+        }
+
+        .overseas-labor-shell .kpi-banner {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-width: 640px) {
+        .overseas-labor-shell .chrome-left {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .overseas-labor-shell .chrome-divider,
+        .overseas-labor-shell .chrome-desc {
+          display: none;
+        }
+
+        .overseas-labor-shell .kpi-banner,
+        .overseas-labor-shell .pending-groups-row {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .section-header,
+        .overseas-labor-shell .conclusion-section {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
   </head>
-  <body class="overseas-labor-shell">
+  <body class="overseas-labor-shell brushed-metal overseas-workbench-shell">
+    <div class="ambient-brand overseas-ambient" aria-hidden="true">SIGMA</div>
 
     <!-- ═══ TOP CHROME ═══ -->
     <header class="app-chrome">
@@ -370,35 +807,7 @@
         });
       });
 
-      // ── Auto advance step after create ──
-      const createBtn = document.getElementById('createLaborRun');
-      if (createBtn) {
-        createBtn.addEventListener('click', () => {
-          setTimeout(() => {
-            const step2Btn = document.querySelector('.wz-step[data-step="2"]');
-            if (step2Btn) step2Btn.click();
-          }, 800);
-        });
-      }
-
-      // ── Auto advance to step 3 after upload ──
-      const uploadBtn = document.getElementById('uploadLaborFiles');
-      if (uploadBtn) {
-        uploadBtn.addEventListener('click', () => {
-          setTimeout(() => {
-            const step3Btn = document.querySelector('.wz-step[data-step="3"]');
-            if (step3Btn) step3Btn.click();
-          }, 800);
-        });
-      }
-
-      // ── Close drawer after saveMapping ──
-      const saveBtn = document.getElementById('saveMapping');
-      if (saveBtn) {
-        saveBtn.addEventListener('click', () => {
-          setTimeout(closeDrawer, 600);
-        });
-      }
+      window.closeDrawer = closeDrawer;
 
       // ── KPI filter buttons ──
       document.querySelectorAll('.kpi-card').forEach(card => {
