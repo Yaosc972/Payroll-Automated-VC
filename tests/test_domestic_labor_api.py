@@ -470,6 +470,89 @@ def test_gonglingjiang_zero_regular_attendance_days_is_zero():
     assert result.warnings == []
 
 
+def test_gonglingjiang_dongguan_operation_uses_work_area_position_rules():
+    """东莞操作按工作地区和新岗位范围发放"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 450
+    explanation = result.details["audit_explanation"]
+    assert explanation["inputs"]["工作地区"] == "东莞"
+    assert explanation["intermediate_values"]["标准"] == 150
+    assert explanation["intermediate_values"]["上限"] == 600
+
+
+def test_gonglingjiang_dongguan_operation_excludes_non_allowed_position():
+    """东莞操作内勤专员不再按操作岗位发放工龄奖"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "内勤专员",
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "东莞操作岗位不享有工龄奖"
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖资格判断"
+
+
+def test_gonglingjiang_jiashan_operation_has_no_seniority_bonus():
+    """嘉善操作区域无工龄奖"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "嘉善",
+        "二级部门名称": "华东枢纽",
+        "岗位名称": "操作员",
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "嘉善区域无工龄奖"
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖工作地区判断"
+
+
+def test_gonglingjiang_jinjiang_operation_uses_50_rate_and_150_cap():
+    """晋江操作员按50元/年且150封顶"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "晋江",
+        "一级部门名称": "东南区",
+        "二级部门名称": "东南枢纽",
+        "岗位名称": "操作员",
+        "入职日期": date(2020, 1, 1),
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 150
+    explanation = result.details["audit_explanation"]
+    assert explanation["intermediate_values"]["工龄(年)"] == 6
+    assert explanation["intermediate_values"]["标准"] == 50
+    assert explanation["intermediate_values"]["上限"] == 150
+
+
+def test_gonglingjiang_operation_deducts_work_injury_days():
+    """操作类工龄奖按工伤假天数×8折算扣减"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+        "工伤假天数": 2,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 405
+    explanation = result.details["audit_explanation"]
+    assert explanation["intermediate_values"]["工伤假天数"] == 2
+    assert explanation["intermediate_values"]["工伤折算时数"] == 16
+    assert "工伤假天数2" in " ".join(explanation["steps"])
+
+
 def _gongling_collection_employee() -> dict:
     return {
         "工号": "OWHN001",
@@ -486,4 +569,25 @@ def _gongling_collection_employee() -> dict:
         "病假时数": 0,
         "旷工天数": 0,
         "排休请假天数": 0,
+    }
+
+
+def _operation_employee() -> dict:
+    return {
+        "工号": "OWHN888",
+        "姓名": "李四",
+        "一级部门名称": "莞深操作",
+        "二级部门名称": "中国操作部",
+        "岗位名称": "操作员",
+        "工作地区": "东莞",
+        "入职日期": date(2023, 1, 1),
+        "考勤月份": "202606",
+        "排班天数": 26,
+        "实际在职工作日天数": 26,
+        "正班出勤天数": 26,
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+        "排休请假天数": 0,
+        "工伤假天数": 0,
     }
