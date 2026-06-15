@@ -22,6 +22,22 @@ OPERATION_POSITIONS_GSDG = {
     "安检员", "操作文员", "查验员", "叉车司机", "揽收充电司机",
 }
 
+# 操作归属部门按月考勤字段逐行判断，工作地区明确时优先套用地区规则。
+OPERATION_DEPARTMENTS = {
+    "东南枢纽", "华东B2B枢纽", "华东枢纽", "中国操作部",
+}
+
+DONGGUAN_OPERATION_POSITIONS = {
+    "安检员", "操作文员", "操作员", "叉车司机", "查验员", "监察员",
+}
+
+DONGGUAN_EXCLUDED_POSITIONS = {
+    "HRBP专员", "安检组长", "保洁", "操作组长", "高级HRBP专员",
+    "高级招聘专员", "稽查副主管", "稽查组长", "物流专员",
+}
+
+JINJIANG_OPERATION_POSITIONS = {"操作员"}
+
 # 工龄奖上限
 SENIORITY_CAP_GSDG = {
     "操作": 600,
@@ -165,18 +181,62 @@ class GongLingJiangEngine(BaseEngine):
         exceptions = []
 
         # F1: 归属部门大类（自动检测区域或使用指定区域）
+        primary_department = str(employee_data.get("一级部门名称", ""))
         department = str(employee_data.get("二级部门名称", ""))
         position = str(employee_data.get("岗位名称", ""))
+        work_area = str(employee_data.get("工作地区", ""))
         input_snapshot = {
             "工号": employee_id,
             "姓名": employee_name,
+            "一级部门名称": primary_department,
             "二级部门名称": department,
             "岗位名称": position,
+            "工作地区": work_area,
             "考勤月份": employee_data.get("考勤月份", ""),
             "入职日期": str(employee_data.get("入职日期", "")),
         }
+        zero_reason = ""
+        zero_rule_name = "工龄奖资格判断"
+        zero_steps = ["部门已匹配，但岗位或名单条件未满足", "工龄奖金额为0"]
 
-        if region == "wes":
+        is_operation_department = department in OPERATION_DEPARTMENTS or (
+            primary_department == "东南区" and department == "HRBP部"
+        )
+
+        if is_operation_department:
+            dept_category = "操作"
+            standard = 0
+            cap = SENIORITY_CAP_GSDG["操作"]
+
+            if work_area == "东莞":
+                if position in DONGGUAN_OPERATION_POSITIONS and position not in DONGGUAN_EXCLUDED_POSITIONS:
+                    standard = SENIORITY_RATE_GSDG["操作"]
+                else:
+                    zero_reason = "东莞操作岗位不享有工龄奖"
+                    zero_steps = ["工作地区为东莞，部门归属操作", "岗位不在东莞操作享有范围或命中不享有岗位", "工龄奖金额为0"]
+            elif work_area == "嘉善":
+                zero_reason = "嘉善区域无工龄奖"
+                zero_rule_name = "工龄奖工作地区判断"
+                zero_steps = ["工作地区为嘉善", "嘉善区域无工龄奖", "工龄奖金额为0"]
+            elif work_area == "晋江":
+                cap = SENIORITY_CAP_WES
+                if position in JINJIANG_OPERATION_POSITIONS:
+                    standard = SENIORITY_RATE_WES
+                else:
+                    zero_reason = "晋江操作岗位不享有工龄奖"
+                    zero_steps = ["工作地区为晋江，部门归属操作", "岗位不是晋江一线操作员", "工龄奖金额为0"]
+            else:
+                # 未明确覆盖的工作地区继续沿用现平台操作规则，避免扩大规则变更范围。
+                if department in DEPARTMENT_MAP_GSDG and position in OPERATION_POSITIONS_GSDG:
+                    standard = SENIORITY_RATE_GSDG["操作"]
+                elif region == "wes" and department in DEPARTMENT_MAP_WES and position in OPERATION_POSITIONS_WES:
+                    standard = SENIORITY_RATE_WES
+                    cap = SENIORITY_CAP_WES
+                else:
+                    zero_reason = "工作地区未配置操作工龄奖规则"
+                    zero_steps = ["部门归属操作", "工作地区未命中东莞、嘉善或晋江", "岗位未命中现有兜底规则", "工龄奖金额为0"]
+
+        elif region == "wes":
             # 华西华东东南区域
             dept_category = DEPARTMENT_MAP_WES.get(department, "其他")
             standard = 0
@@ -258,11 +318,11 @@ class GongLingJiangEngine(BaseEngine):
                 employee_name=employee_name,
                 amount=0,
                 details=_details(
-                    {"reason": "不符合工龄奖标准", "department": dept_category, "position": position},
+                    {"reason": zero_reason or "不符合工龄奖标准", "department": dept_category, "position": position},
                     amount=0,
-                    rule_name="工龄奖资格判断",
+                    rule_name=zero_rule_name,
                     inputs={**input_snapshot, "部门类别": dept_category, "HRBP名单人数": len(hrbp_list or [])},
-                    steps=["部门已匹配，但岗位或名单条件未满足", "工龄奖金额为0"],
+                    steps=zero_steps,
                     formula="资格不满足 = 0",
                     exceptions=exceptions,
                 ),
@@ -374,6 +434,8 @@ class GongLingJiangEngine(BaseEngine):
         absenteeism_hours = absenteeism_days * 8
         rest_leave_hours = rest_leave_days * 8
         spk_hours = personal_leave_hours + sick_leave_hours + absenteeism_hours + rest_leave_hours
+        work_injury_days = safe_float(employee_data.get("工伤假天数", 0))
+        work_injury_hours = work_injury_days * 8 if dept_category == "操作" else 0
 
         # F7: 排班天数
         paiban = float(employee_data.get("排班天数", 0) or 0)
@@ -411,7 +473,8 @@ class GongLingJiangEngine(BaseEngine):
         day_rate = yingfa / paiban
         after_spk = day_rate * (paiban - spk_hours / 8) if spk_hours >= 56 else yingfa
         after_ruli = after_spk - day_rate * (ruli_hours / 8)
-        final = round(max(min(after_ruli, cap), 0), 2)
+        after_work_injury = after_ruli - day_rate * (work_injury_hours / 8)
+        final = round(max(min(after_work_injury, cap), 0), 2)
 
         absence_step = (
             f"事病旷排休合计{spk_hours}小时，达到56小时门槛，按出勤天数比例折算"
@@ -423,7 +486,12 @@ class GongLingJiangEngine(BaseEngine):
             if ruli_hours > 0
             else "入离职缺勤时数为0，不额外扣减"
         )
-        floor_step = "折算后金额低于0，最终金额按0兜底" if after_ruli < 0 else "最终金额按0到上限区间兜底"
+        work_injury_step = (
+            f"工伤假天数{work_injury_days}天，折算{work_injury_hours}小时，按天比例扣减"
+            if work_injury_hours > 0
+            else "工伤假天数为0，不额外扣减"
+        )
+        floor_step = "折算后金额低于0，最终金额按0兜底" if after_work_injury < 0 else "最终金额按0到上限区间兜底"
 
         return CalculationResult(
             employee_id=employee_id,
@@ -466,8 +534,11 @@ class GongLingJiangEngine(BaseEngine):
                         "排休请假折算时数": rest_leave_hours,
                         "事病旷排休时数": spk_hours,
                         "入离职缺勤时数": ruli_hours,
+                        "工伤假天数": work_injury_days,
+                        "工伤折算时数": work_injury_hours,
                         "请假折算后金额": round(after_spk, 2),
                         "入离职折算后金额": round(after_ruli, 2),
+                        "工伤折算后金额": round(after_work_injury, 2),
                         "最终金额": final,
                     },
                     steps=[
@@ -478,6 +549,7 @@ class GongLingJiangEngine(BaseEngine):
                         "事病旷排休时数=事假时数+病假时数+旷工天数×8+排休请假天数×8",
                         absence_step,
                         ruli_step,
+                        work_injury_step,
                         floor_step,
                         f"最终工龄奖为{final}",
                     ],
