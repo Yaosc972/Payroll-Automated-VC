@@ -329,6 +329,19 @@ class GongLingJiangEngine(BaseEngine):
                 warnings=warnings
             )
 
+        regular_attendance_days = employee_data.get("正班出勤天数")
+        if regular_attendance_days is not None and safe_float(regular_attendance_days) == 0:
+            message = f"员工{employee_id}正班出勤天数为0，工龄奖已按缺勤折算规则计算，请复核是否应发放"
+            warnings.append(message)
+            exceptions.append(_exception(
+                "ZERO_REGULAR_ATTENDANCE_DAYS",
+                "info",
+                employee_id,
+                employee_name,
+                message,
+                "复核月报正班出勤天数、请假/旷工/排休记录；如确认无误，可按系统折算结果发放。",
+            ))
+
         # F2.5: 检查备注异常
         remark = str(employee_data.get("备注", "") or "")
         remark_keywords = ["事假未出勤", "全月事假", "事假全月", "未出勤"]

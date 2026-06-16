@@ -457,7 +457,7 @@ def test_gonglingjiang_final_amount_floors_at_zero():
 
 
 def test_gonglingjiang_zero_regular_attendance_days_still_prorates():
-    """正班出勤天数为0不再直接归0，继续按缺勤规则折算"""
+    """正班出勤天数为0不直接归0，继续折算并给出提示异常"""
     employee = {
         **_gongling_collection_employee(),
         "正班出勤天数": 0,
@@ -470,7 +470,9 @@ def test_gonglingjiang_zero_regular_attendance_days_still_prorates():
     assert result.amount == 90
     assert result.details["audit_explanation"]["rule_name"] == "工龄奖标准与缺勤折算"
     assert result.details["audit_explanation"]["intermediate_values"]["事病旷排休时数"] == 128
-    assert result.warnings == []
+    assert result.details["exceptions"][0]["code"] == "ZERO_REGULAR_ATTENDANCE_DAYS"
+    assert result.details["exceptions"][0]["level"] == "info"
+    assert "正班出勤天数为0" in result.warnings[0]
 
 
 def test_gonglingjiang_dongguan_operation_uses_work_area_position_rules():
