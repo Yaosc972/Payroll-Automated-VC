@@ -173,6 +173,20 @@ def _overseas_labor_access_config() -> dict:
     }
 
 
+def _uses_ephemeral_serverless_storage() -> bool:
+    workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
+    return bool(os.environ.get("VERCEL")) and workbench_home.startswith("/tmp/")
+
+
+def _raise_labor_run_missing(exc: FileNotFoundError) -> None:
+    if _uses_ephemeral_serverless_storage():
+        raise HTTPException(
+            status_code=409,
+            detail="当前 Vercel UAT 环境不保存上传批次。上传后跨请求会丢失文件，暂不支持在线抽取并比对。请改用本地/内网持久化环境，或使用“测试材料验证”。",
+        ) from exc
+    raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+
+
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
@@ -645,7 +659,7 @@ def get_labor_run(run_id: str) -> dict:
     try:
         metadata = load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+        _raise_labor_run_missing(exc)
     return _with_labor_readiness(_check_stale_extracting(metadata))
 
 
@@ -659,7 +673,7 @@ async def upload_labor_files(
         run_dir = get_labor_run_dir(run_id)
         metadata = load_labor_metadata(run_dir)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+        _raise_labor_run_missing(exc)
     if not pdf_files:
         raise HTTPException(status_code=400, detail="请至少上传一张 PDF 发票。")
     if not workbook_files:
@@ -5165,7 +5179,7 @@ def _labor_metadata_or_404(run_id: str) -> dict:
     try:
         return load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+        _raise_labor_run_missing(exc)
 
 
 def _labor_workbook_path(metadata: dict) -> Path:
