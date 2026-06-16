@@ -4,3 +4,4 @@ python-multipart
 openpyxl
 pypdf
 pypdfium2
+msoffcrypto-tool
