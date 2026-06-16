@@ -1,6 +1,29 @@
 """餐补计算引擎 (Meal Allowance Engine)."""
 from typing import Any, Dict, List
 from .base import BaseEngine, CalculationResult
+from ..models import AuditExplanation
+
+
+SUBJECT = "canbu"
+
+
+def _audit_explanation(
+    amount: float,
+    rule_name: str,
+    formula: str,
+    inputs: Dict[str, Any],
+    intermediate_values: Dict[str, Any] = None,
+    steps: List[str] = None,
+) -> Dict[str, Any]:
+    return AuditExplanation(
+        subject=SUBJECT,
+        amount=amount,
+        rule_name=rule_name,
+        formula=formula,
+        inputs=inputs,
+        intermediate_values=intermediate_values or {},
+        steps=steps or [],
+    ).to_dict()
 
 
 class CanBuEngine(BaseEngine):
@@ -20,6 +43,12 @@ class CanBuEngine(BaseEngine):
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
         warnings = []
+        input_snapshot = {
+            "工号": employee_id,
+            "姓名": employee_name,
+            "餐补标准": str(employee_data.get("餐补标准", "")),
+            "日考勤记录数": len(daily_attendance or []),
+        }
 
         # 补贴资格判断
         meal_standard = str(employee_data.get("餐补标准", ""))
@@ -28,7 +57,17 @@ class CanBuEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "无补贴资格"},
+                details={
+                    "reason": "无补贴资格",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "餐补资格判断",
+                        "餐补标准不匹配 = 0",
+                        input_snapshot,
+                        {"餐补标准": meal_standard},
+                        ["员工餐补标准未匹配 19元/天，封顶500元/月", "餐补金额为0"],
+                    ),
+                },
                 warnings=[]
             )
 
@@ -37,7 +76,17 @@ class CanBuEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "无日考勤数据"},
+                details={
+                    "reason": "无日考勤数据",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "餐补日考勤校验",
+                        "无日考勤数据 = 0",
+                        input_snapshot,
+                        {"日考勤记录数": 0},
+                        ["员工无日考勤记录", "无法逐日计算餐补", "餐补金额为0"],
+                    ),
+                },
                 warnings=[f"员工{employee_id}无日考勤数据"]
             )
 
@@ -63,6 +112,25 @@ class CanBuEngine(BaseEngine):
                 "月累计": round(monthly_total, 2),
                 "封顶金额": self.monthly_cap,
                 "是否触发封顶": monthly_total > self.monthly_cap,
+                "audit_explanation": _audit_explanation(
+                    final_amount,
+                    "餐补逐日累计与封顶",
+                    "min(Σ单日餐补, 月封顶500)",
+                    input_snapshot,
+                    {
+                        "日考勤记录数": len(daily_attendance),
+                        "日餐补合计": round(monthly_total, 2),
+                        "月封顶": self.monthly_cap,
+                        "是否触发封顶": monthly_total > self.monthly_cap,
+                        "最终金额": final_amount,
+                    },
+                    [
+                        "按日考勤逐日计算餐补",
+                        "单日餐补优先使用日考勤预计算值；否则按有效出勤时数折算",
+                        f"月累计餐补为{round(monthly_total, 2)}",
+                        f"最终餐补=min({round(monthly_total, 2)}, {self.monthly_cap})={final_amount}",
+                    ],
+                ),
             },
             warnings=warnings
         )
