@@ -48,18 +48,20 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
     "canbu": {
         "name": "餐补计算模板",
-        "description": "用于计算员工餐补（19元/天，封顶500元/月）",
+        "description": "用于计算员工餐补（按工作地区、部门、岗位适用平台规则）",
         "columns": [
             {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN2313"},
             {"name": "姓名", "desc": "员工姓名", "required": True, "example": "何俊伟"},
-            {"name": "餐补标准", "desc": "填'19元/天，封顶500元/月'或'/'", "required": True, "example": "19元/天，封顶500元/月"},
-            {"name": "出勤天数", "desc": "当月实际出勤天数", "required": True, "example": "22"},
-            {"name": "正班时数合计", "desc": "当月正班总时数", "required": False, "example": "176"},
-            {"name": "预计算餐补", "desc": "如有预计算值直接填入（优先使用）", "required": False, "example": "418"},
+            {"name": "工作地区", "desc": "东莞/晋江；嘉善规则待补充", "required": True, "example": "东莞"},
+            {"name": "一级部门名称", "desc": "东莞需命中寮步区或莞深操作", "required": True, "example": "莞深操作"},
+            {"name": "岗位名称", "desc": "用于判断是否享有餐补", "required": True, "example": "操作员"},
+            {"name": "餐补标准", "desc": "历史字段，当前不作为发放资格入口", "required": False, "example": ""},
+            {"name": "出勤天数", "desc": "历史字段，东莞按日考勤工作状态和时数逐日计算", "required": False, "example": "22"},
+            {"name": "正班时数合计", "desc": "历史字段，东莞按日考勤逐日计算", "required": False, "example": "176"},
         ],
         "example_extra": [
-            {"工号": "OWHN0424", "姓名": "韩录阳", "餐补标准": "19元/天，封顶500元/月",
-             "出勤天数": "22", "正班时数合计": "176", "预计算餐补": "418"},
+            {"工号": "OWHN0424", "姓名": "韩录阳", "工作地区": "东莞", "一级部门名称": "莞深操作",
+             "岗位名称": "操作员", "餐补标准": "", "出勤天数": "22", "正班时数合计": "176"},
         ],
     },
     "waisu_butie": {
