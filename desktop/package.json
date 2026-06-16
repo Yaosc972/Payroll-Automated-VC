@@ -1,6 +1,6 @@
 {
   "name": "sigma-workbench-desktop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Σ-Workbench desktop shell for local recruitment bonus calculation.",
   "main": "main.js",
@@ -61,5 +61,8 @@
   "devDependencies": {
     "electron": "^31.7.7",
     "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "gsap": "^3.15.0"
   }
 }

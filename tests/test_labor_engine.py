@@ -16,6 +16,8 @@ from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as e
 from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
+from bonus_platform.engine.labor.governance import audit_ai_page_cache_candidates, build_ai_cache_reconciliation_preview, build_reocr_candidate_plan, build_rule_change_candidate, confirm_rule_candidate, replay_reocr_candidate_result, rollback_rule_version, summarize_rule_auto_replay, summarize_rule_replay
+from bonus_platform.engine.labor.materials import build_material_dry_run, build_material_index, build_material_replay_plan
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
 from bonus_platform.engine.labor.layout import InvoiceLayoutPlan, analyze_invoice_layout, extract_rows_from_layout_plan
 from bonus_platform.engine.labor.parsing import normalize_employee_name, normalize_workbuddy_name, parse_number
@@ -31,7 +33,7 @@ from bonus_platform.engine.labor.profiles import (
 )
 from bonus_platform.app import _non_payable_pdf_names
 from bonus_platform.engine.labor.report import build_labor_report
-from bonus_platform.engine.labor.workbook import read_workbook_rows, suggest_mapping
+from bonus_platform.engine.labor.workbook import parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 
 
 def _workbook_bytes() -> bytes:
@@ -52,6 +54,228 @@ def _workbook_with_tax_columns_bytes() -> bytes:
     sheet.title = "账单"
     sheet.append(["姓名", "时长总计(H)", "费用总计(不含税)", "费用总计(含税)", "币种"])
     sheet.append(["Jose Perez", 40.14, 1000.00, 1037.81, "USD"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _workbook_with_hours_only_summary_bytes() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet1"
+    sheet.append(["Employee Name", "Job Type", "求和项:Total Hours"])
+    sheet.append(["Alberto Nunez", "Labor", 35.08])
+    sheet.append(["Ivis Martinez", "Labor", 6.55])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _workbook_with_two_header_rows_bytes() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Employee-expenses-detail"
+    sheet.append([
+        "Company Name",
+        "Physical warehouse",
+        "group",
+        "Employee name",
+        "Employee number",
+        "Type of work",
+        "工作日",
+        None,
+        "Total staff cost accounting time",
+        "Total cost",
+    ])
+    sheet.append([
+        "Company Name",
+        "Physical warehouse",
+        "group",
+        "Employee name",
+        "Employee number",
+        "Type of work",
+        "Day shift working hours",
+        "Regular pay for day shift",
+        "Total staff cost accounting time",
+        "Total cost",
+    ])
+    sheet.append([
+        "Strategic Staffing Solutions Corp.",
+        "New Jersey Warehouse 13",
+        "warehousing group",
+        "JOSE MAGANA",
+        "EUS031468",
+        "操作员",
+        8,
+        188,
+        8,
+        188,
+    ])
+    sheet.append([
+        "Total:",
+        None,
+        None,
+        None,
+        None,
+        None,
+        8,
+        188,
+        8,
+        188,
+    ])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _otws_cost_workbook_bytes() -> bytes:
+    workbook = Workbook()
+    warehouse = workbook.active
+    warehouse.title = "Warehouse-information"
+    warehouse.append([
+        "Region",
+        "Physical warehouse",
+        "Financial reimbursement process number",
+        "Company Name",
+        "Total employees during attendance period",
+        "Contract Start Date",
+        "currency",
+        "Total hourly salary",
+        "Total bonus",
+        "Total vehicle compensation",
+        "Total Meal Supplement",
+        "Hourly Rate Difference",
+        "Lot And Scot(Employment Insurance)",
+        "Income Tax",
+        "Total other expenses",
+        "total.handling.fee",
+        "additional fees",
+        "Total",
+        "Status",
+        "Week Month Split Status",
+        "Accounting start date",
+        "Accounting end date",
+        "实际付款金额",
+        "remark",
+    ])
+    warehouse.append([
+        "USNJ",
+        "New Jersey Warehouse 13",
+        "--",
+        "Strategic Staffing Solutions Corp.",
+        "64",
+        "US ELOGISTICS SERVICE CORP",
+        "USD",
+        48055.81,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        162.15,
+        0,
+        0,
+        48217.96,
+        "Confirm the bill",
+        "未拆分",
+        "2026-05-11",
+        "2026-05-17",
+        0,
+        "--",
+    ])
+
+    expenses = workbook.create_sheet("Employee-expenses-detail")
+    expenses.append([
+        "Company Name",
+        "Physical warehouse",
+        "group",
+        "Employee name",
+        "Employee number",
+        "Type of work",
+        "工作日",
+        None,
+        "Total staff cost accounting time",
+        "Total cost",
+    ])
+    expenses.append([
+        "Company Name",
+        "Physical warehouse",
+        "group",
+        "Employee name",
+        "Employee number",
+        "Type of work",
+        "Day shift working hours",
+        "Regular pay for day shift",
+        "Total staff cost accounting time",
+        "Total cost",
+    ])
+    expenses.append([
+        "Strategic Staffing Solutions Corp.",
+        "New Jersey Warehouse 13",
+        "warehousing group",
+        "JOSE MAGANA",
+        "EUS031468",
+        "操作员",
+        8,
+        188,
+        8,
+        188,
+    ])
+    expenses.append([
+        "Total:",
+        None,
+        None,
+        None,
+        None,
+        None,
+        8,
+        188,
+        8,
+        188,
+    ])
+
+    benefits = workbook.create_sheet("Employee-benefits-detail")
+    benefits.append([
+        "Physical warehouse",
+        "Employee name",
+        "Employee number",
+        "Bonus",
+        "Car allowance",
+        "Meal allowance",
+        "Hourly Rate Difference",
+        "Lot And Scot(Employment Insurance)",
+        "Income Tax",
+        "Other",
+        "Total cost",
+        "remark",
+    ])
+    benefits.append([
+        "New Jersey Warehouse 13",
+        "KRISTEL CONTRERAS MONTIEL",
+        "EUS033091",
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        162.15,
+        162.15,
+        "missing hours",
+    ])
+    benefits.append(["Total:", None, None, 0, 0, 0, 0, 0, 0, 162.15, 162.15, None])
+
+    workbook.create_sheet("The-loading-and-unloading-of-ta").append([
+        "group",
+        "Employee name",
+        "Loading and unloading date",
+        "Ark type",
+        "Container Number",
+        "Number of unloading cabinets",
+        "Unit price",
+        "Total cost",
+    ])
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
@@ -91,9 +315,22 @@ def test_fairway_warehouse_id_parses_from_filename_and_text():
 def test_warehouse_id_patterns_cover_common_filename_and_text_variants():
     assert extract_warehouse_id_from_filename("INVOICE_WH-30.pdf") == "30"
     assert extract_warehouse_id_from_filename("CITISTAFF_LOC_29_20260602.pdf") == "29"
+    assert extract_warehouse_id_from_filename("NJ12 Invoice Report WE 051726 JF.pdf") == "12"
+    assert extract_warehouse_id_from_filename("US Elogis Service #17 Invoice W.E 05.24.26.pdf") == "17"
     assert _warehouse_id_from_text("Location: 3号仓") == "3"
     assert _warehouse_id_from_text("Warehouse: WH 28") == "28"
     assert _warehouse_id_from_text("LOC #21") == "21"
+    assert _warehouse_id_from_text("Purchase Order Number\nFlanders Location NJ 8") == "8"
+
+
+def test_warehouse_id_from_text_does_not_treat_invoice_period_as_location():
+    assert (
+        _warehouse_id_from_text(
+            "Period Cust. ID Tax ID PAYMENT TERMS Location\n"
+            "05/18/2026-05/24/2026 E-LOG 30 SHEIN\n"
+        )
+        == ""
+    )
 
 
 def test_warehouse_id_conflict_is_reported_when_filename_and_text_disagree():
@@ -119,6 +356,32 @@ def test_warehouse_comparison_reports_pdf_warehouse_conflict_errors():
     assert result["errors"] == ["仓库号冲突: CHINA_EXPRESS__3_INVOICE.pdf 文件名=3, 内容=30"]
 
 
+def test_warehouse_comparison_infers_missing_pdf_warehouse_from_unique_excel_total():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "Invoice-5058871.pdf", "warehouse_id": "", "total_amount": 8500.67},
+            {"source_file": "Invoice-5058872.pdf", "warehouse_id": "", "total_amount": 3223.94},
+        ],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="Invoice-5058871.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Worker One", hours=10, amount=8500.67, currency="USD", confidence=0.98, evidence_text=""),
+            LaborLineItem(source_type="pdf_invoice", source_file="Invoice-5058872.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Worker Two", hours=8, amount=3223.94, currency="USD", confidence=0.98, evidence_text=""),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Worker One", "warehouse_id": "19", "hours": 10, "amount": 8500.67},
+            {"employee_name": "Worker Two", "warehouse_id": "18", "hours": 8, "amount": 3223.94},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["errors"] == []
+    assert result["summary"]["totalPassed"] is True
+    assert result["summary"]["passedCount"] == 2
+    rows_by_wh = {row["warehouseId"]: row for row in result["rows"]}
+    assert set(rows_by_wh) == {"18", "19"}
+    assert rows_by_wh["19"]["pdfEmployeeCount"] == 1
+    assert rows_by_wh["18"]["pdfEmployeeCount"] == 1
+
+
 def test_classify_pdf_distinguishes_invoice_support_and_attachments():
     assert _classify_pdf("Invoice_123.pdf", "Invoice Total $1,000.00\nEmployee A") == "primary"
     assert _classify_pdf("Supplement1.pdf", "Timecard Detail\nDaily Log\nEmployee hours only") == "supporting"
@@ -140,6 +403,20 @@ def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment()
         "US ELOGISTICS SERVICE CORP\n"
         "15,089.88$"
     ) == 15089.88
+
+
+def test_sss_invoice_total_reads_billable_total_row():
+    assert _extract_invoice_total_from_text(
+        """
+        Billable Billable Total
+        Hours Fee Fees
+        -$
+        1 48,293.06$ 48,293.06$
+        See Attached : Worksheets -$
+        Total Due
+        48,293.06$
+        """
+    ) == 48293.06
 
 
 def test_grande_solutions_simple_table_extracts_all_employee_rows():
@@ -421,6 +698,37 @@ def test_warehouse_comparison_still_runs_when_totals_offset_between_warehouses()
     assert {row["warehouseId"]: row["amountDelta"] for row in result["rows"]} == {"3": 1000.0, "5": -1000.0}
 
 
+def test_warehouse_comparison_flags_employee_allocation_offsets_across_warehouses():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="fairway_25.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="PEREZ, JOSE", hours=4.0, amount=101.26, currency="USD", confidence=0.95, evidence_text="", warehouse_id="25"),
+        LaborLineItem(source_type="pdf_invoice", source_file="fairway_25.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="JIMENEZ, ENEAS", hours=5.0, amount=118.04, currency="USD", confidence=0.95, evidence_text="", warehouse_id="25"),
+        LaborLineItem(source_type="pdf_invoice", source_file="fairway_28.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="PEREZ, JOSE", hours=40.0, amount=935.00, currency="USD", confidence=0.95, evidence_text="", warehouse_id="28"),
+        LaborLineItem(source_type="pdf_invoice", source_file="fairway_28.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="JIMENEZ, ENEAS", hours=40.0, amount=928.67, currency="USD", confidence=0.95, evidence_text="", warehouse_id="28"),
+    ]
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "fairway_25.pdf", "warehouse_id": "25", "total_amount": 219.30},
+            {"source_file": "fairway_28.pdf", "warehouse_id": "28", "total_amount": 1863.67},
+        ],
+        pdf_rows=pdf_rows,
+        excel_rows_with_warehouse=[
+            {"employee_name": "PEREZ, JOSE", "warehouse_id": "25", "amount": 100.67, "hours": 4.0},
+            {"employee_name": "JIMENEZ, ENEAS", "warehouse_id": "25", "amount": 116.85, "hours": 5.0},
+            {"employee_name": "PEREZ, JOSE", "warehouse_id": "28", "amount": 935.59, "hours": 40.0},
+            {"employee_name": "JIMENEZ, ENEAS", "warehouse_id": "28", "amount": 929.87, "hours": 40.0},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["summary"]["amountDeltaTotal"] == -0.01
+    assert result["summary"]["allocationIssueCount"] == 2
+    assert result["summary"]["diffWarehouses"] == ["25", "28"]
+    issues_by_employee = {issue["employeeName"]: issue for issue in result["allocationIssues"]}
+    assert issues_by_employee["PEREZ, JOSE"]["netAmountDelta"] == 0.0
+    assert [row["warehouseId"] for row in issues_by_employee["PEREZ, JOSE"]["warehouses"]] == ["25", "28"]
+    assert [row["amountDelta"] for row in issues_by_employee["JIMENEZ, ENEAS"]["warehouses"]] == [1.19, -1.2]
+
+
 def test_reconciliation_diagnostics_suppresses_missing_warehouse_when_single_pdf_was_safely_attributed():
     diagnostics = build_reconciliation_diagnostics(
         pdf_totals=[{"source_file": "GS_invoice-ELOG-466-FL.pdf", "warehouse_id": "", "total_amount": 25487.5}],
@@ -477,6 +785,185 @@ def test_reconciliation_diagnostics_passes_when_totals_align():
     assert diagnostics["nextStep"] == "可按当前结论使用报告。"
 
 
+def test_reconciliation_diagnostics_explains_otws_amount_basis_mismatch(tmp_path):
+    path = tmp_path / "OTWS - Warehouse Bill-NJ13.xlsx"
+    path.write_bytes(_otws_cost_workbook_bytes())
+    cost_summary = summarize_otws_costs(path)
+
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[{"source_file": "NJ13 Invoice Report WE 051726 JF.pdf", "warehouse_id": "13", "total_amount": 48293.06}],
+        comparison_summary={"pdfAmountTotal": 0, "excelAmountTotal": 48217.96},
+        warehouse_comparison={"summary": {"pdfAmountTotal": 48293.06, "excelAmountTotal": 48217.96}, "errors": []},
+        cost_summaries=[cost_summary],
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "warning"
+    assert "amount_basis_mismatch" in issue_codes
+    assert diagnostics["signals"]["amountBasis"] == [
+        {
+            "warehouseId": "13",
+            "sourceFile": "OTWS - Warehouse Bill-NJ13.xlsx",
+            "pdfTotal": 48293.06,
+            "reportedTotal": 48217.96,
+            "pdfVsReportedDelta": 75.1,
+            "componentTotal": 48217.96,
+            "componentDelta": 0.0,
+            "detailTotal": 350.15,
+            "summaryDelta": 47867.81,
+            "employeeExpenses": 188.0,
+            "employeeBenefits": 162.15,
+            "loadingAndUnloading": 0.0,
+            "summaryEvidence": "Warehouse-information!2",
+            "detailEvidence": "Employee-expenses-detail!3; Employee-benefits-detail!2",
+            "withinTolerance": False,
+        }
+    ]
+    mismatch = next(issue for issue in diagnostics["issues"] if issue["code"] == "amount_basis_mismatch")
+    assert "仓库 13" in mismatch["items"][0]
+    assert "OTWS汇总 $48,217.96" in mismatch["items"][0]
+
+
+def test_reconciliation_diagnostics_flags_offsetting_warehouse_deltas():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[
+            {"source_file": "135616 US Elogistics Service Corp (#25).pdf", "warehouse_id": "25", "total_amount": 17465.12},
+            {"source_file": "135617 US Elogistics Service Corp (#28).pdf", "warehouse_id": "28", "total_amount": 4537.46},
+        ],
+        comparison_summary={"pdfAmountTotal": 22002.58, "excelAmountTotal": 22002.59},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 22002.58, "excelAmountTotal": 22002.59},
+            "errors": [],
+            "rows": [
+                {
+                    "warehouseId": "25",
+                    "pdfAmountTotal": 17465.12,
+                    "excelAmountTotal": 17463.34,
+                    "amountDelta": 1.78,
+                    "attribution": [{"employeeName": "JIMENEZ, ENEAS", "delta": 1.19}],
+                },
+                {
+                    "warehouseId": "28",
+                    "pdfAmountTotal": 4537.46,
+                    "excelAmountTotal": 4539.25,
+                    "amountDelta": -1.79,
+                    "attribution": [{"employeeName": "JIMENEZ, ENEAS", "delta": -1.2}],
+                },
+            ],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "warning"
+    assert "warehouse_offsetting_deltas" in issue_codes
+    assert diagnostics["signals"]["offsettingWarehouseDeltas"] == [
+        {
+            "warehouseId": "25",
+            "pdfAmountTotal": 17465.12,
+            "excelAmountTotal": 17463.34,
+            "amountDelta": 1.78,
+            "attribution": [{"employeeName": "JIMENEZ, ENEAS", "delta": 1.19}],
+        },
+        {
+            "warehouseId": "28",
+            "pdfAmountTotal": 4537.46,
+            "excelAmountTotal": 4539.25,
+            "amountDelta": -1.79,
+            "attribution": [{"employeeName": "JIMENEZ, ENEAS", "delta": -1.2}],
+        },
+    ]
+    offset_issue = next(issue for issue in diagnostics["issues"] if issue["code"] == "warehouse_offsetting_deltas")
+    assert "多个仓库分别超出容差" in offset_issue["message"]
+    assert "仓库 25" in offset_issue["items"][0]
+
+
+def test_reconciliation_diagnostics_flags_cross_warehouse_employee_allocation():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[
+            {"source_file": "fairway_25.pdf", "warehouse_id": "25", "total_amount": 219.30},
+            {"source_file": "fairway_28.pdf", "warehouse_id": "28", "total_amount": 1863.67},
+        ],
+        comparison_summary={"pdfAmountTotal": 2082.97, "excelAmountTotal": 2083.08, "exceptionCount": 0},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 2082.97, "excelAmountTotal": 2083.08, "allocationIssueCount": 1},
+            "errors": [],
+            "allocationIssues": [
+                {
+                    "employeeName": "PEREZ, JOSE",
+                    "netAmountDelta": 0.0,
+                    "warehouseCount": 2,
+                    "warehouses": [
+                        {"warehouseId": "25", "amountDelta": 0.59},
+                        {"warehouseId": "28", "amountDelta": -0.59},
+                    ],
+                    "recommendation": "员工总额可抵消，但仓库归属金额不一致，需按仓库复核发票与账单归属。",
+                }
+            ],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "warning"
+    assert "cross_warehouse_employee_allocation" in issue_codes
+    assert diagnostics["signals"]["crossWarehouseEmployeeAllocation"][0]["employeeName"] == "PEREZ, JOSE"
+    allocation_issue = next(issue for issue in diagnostics["issues"] if issue["code"] == "cross_warehouse_employee_allocation")
+    assert "PEREZ, JOSE" in allocation_issue["items"][0]
+    assert "仓库 25" in allocation_issue["items"][0]
+
+
+def test_reconciliation_diagnostics_flags_employee_attribution_for_warehouse_delta():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[{"source_file": "US ELogistics Service Corp. 34794.pdf", "warehouse_id": "25", "total_amount": 62761.99}],
+        comparison_summary={"pdfAmountTotal": 62761.99, "excelAmountTotal": 62803.2},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 62761.99, "excelAmountTotal": 62803.2},
+            "errors": [],
+            "rows": [
+                {
+                    "warehouseId": "25",
+                    "pdfAmountTotal": 62761.99,
+                    "excelAmountTotal": 62803.2,
+                    "amountDelta": -41.21,
+                    "attribution": [
+                        {
+                            "employeeName": "Fontes, Stevie ⇄ Stevie Fontes",
+                            "pdfAmount": 822.12,
+                            "excelAmount": 863.22,
+                            "delta": -41.1,
+                        },
+                        {
+                            "employeeName": "Sanchez Reveles, Jose ⇄ Jose Sanchez Reveles",
+                            "pdfAmount": 919.56,
+                            "excelAmount": 919.54,
+                            "delta": 0.02,
+                        },
+                    ],
+                }
+            ],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "warning"
+    assert "warehouse_employee_attribution" in issue_codes
+    assert diagnostics["signals"]["employeeAttribution"] == [
+        {
+            "warehouseId": "25",
+            "employeeName": "Fontes, Stevie ⇄ Stevie Fontes",
+            "pdfAmount": 822.12,
+            "excelAmount": 863.22,
+            "delta": -41.1,
+            "warehouseDelta": -41.21,
+        }
+    ]
+    attribution_issue = next(issue for issue in diagnostics["issues"] if issue["code"] == "warehouse_employee_attribution")
+    assert "Fontes, Stevie" in attribution_issue["items"][0]
+
+
 def test_suggest_mapping_and_read_workbook_rows_extract_required_fields(tmp_path):
     path = tmp_path / "账单.xlsx"
     path.write_bytes(_workbook_bytes())
@@ -509,6 +996,70 @@ def test_suggest_mapping_prefers_amount_excluding_tax_when_available(tmp_path):
     assert suggestion["suggestedMapping"]["amount"] == "费用总计(不含税)"
 
 
+def test_suggest_mapping_does_not_use_hours_column_as_amount(tmp_path):
+    path = tmp_path / "GRANDE-5.18-5.24.xlsx"
+    path.write_bytes(_workbook_with_hours_only_summary_bytes())
+
+    suggestion = suggest_mapping(path, "Sheet1")
+
+    assert suggestion["suggestedMapping"]["name"] == "Employee Name"
+    assert suggestion["suggestedMapping"]["hours"] == "求和项:Total Hours"
+    assert suggestion["suggestedMapping"]["amount"] == ""
+
+
+def test_suggest_mapping_handles_two_row_otws_employee_expense_headers(tmp_path):
+    path = tmp_path / "OTWS.xlsx"
+    path.write_bytes(_workbook_with_two_header_rows_bytes())
+
+    suggestion = suggest_mapping(path, "Employee-expenses-detail")
+
+    assert suggestion["suggestedMapping"] == {
+        "employeeId": "Employee number",
+        "name": "Employee name",
+        "hours": "Total staff cost accounting time",
+        "amount": "Total cost",
+        "currency": "",
+    }
+
+    rows = read_workbook_rows(path, "Employee-expenses-detail", suggestion["suggestedMapping"])
+
+    assert len(rows) == 1
+    assert rows[0].employee_id == "EUS031468"
+    assert rows[0].employee_name_raw == "JOSE MAGANA"
+    assert rows[0].hours == 8
+    assert rows[0].amount == 188
+    assert rows[0].warehouse_id == "13"
+
+
+def test_summarize_otws_costs_explains_summary_and_detail_bases(tmp_path):
+    path = tmp_path / "OTWS - Warehouse Bill-NJ13.xlsx"
+    path.write_bytes(_otws_cost_workbook_bytes())
+
+    summary = summarize_otws_costs(path)
+
+    assert summary["sourceFile"] == "OTWS - Warehouse Bill-NJ13.xlsx"
+    assert summary["warehouseId"] == "13"
+    assert summary["supplier"] == "Strategic Staffing Solutions Corp."
+    assert summary["currency"] == "USD"
+    assert summary["periodStart"] == "2026-05-11"
+    assert summary["periodEnd"] == "2026-05-17"
+    assert summary["employeeCount"] == 64
+    assert summary["summary"]["components"]["hourlySalary"] == 48055.81
+    assert summary["summary"]["components"]["otherExpenses"] == 162.15
+    assert summary["summary"]["componentTotal"] == 48217.96
+    assert summary["summary"]["reportedTotal"] == 48217.96
+    assert summary["summary"]["componentDelta"] == 0
+    assert summary["summary"]["evidence"] == "Warehouse-information!2"
+    assert summary["details"]["employeeExpenses"]["amount"] == 188
+    assert summary["details"]["employeeExpenses"]["hours"] == 8
+    assert summary["details"]["employeeExpenses"]["rowCount"] == 1
+    assert summary["details"]["employeeExpenses"]["evidence"] == "Employee-expenses-detail!3"
+    assert summary["details"]["employeeBenefits"]["amount"] == 162.15
+    assert summary["details"]["employeeBenefits"]["rowCount"] == 1
+    assert summary["details"]["detailTotal"] == 350.15
+    assert summary["details"]["summaryDelta"] == 47867.81
+
+
 def test_compare_labor_items_flags_amount_delta_and_ignores_one_cent():
     pdf_rows = [
         LaborLineItem(source_type="pdf_invoice", source_file="a.pdf", source_page_or_row="1", employee_id="", employee_name_raw="PEREZ, JOSE", hours=40.14, amount=1037.81, currency="USD", confidence=0.96, evidence_text="invoice row"),
@@ -527,6 +1078,40 @@ def test_compare_labor_items_flags_amount_delta_and_ignores_one_cent():
     assert any(row["matchStatus"] == "金额差异" and row["employeeName"] == "MARTINEZ, WILFREDO" for row in result["rows"])
     assert any(row["matchStatus"] == "低置信度抽取" for row in result["rows"])
     assert all(not (row["employeeName"] == "PEREZ, JOSE" and row["matchStatus"] == "金额差异") for row in result["rows"])
+
+
+def test_compare_labor_items_treats_tiny_unmatched_excel_residual_as_passed_risk():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="a.pdf", source_page_or_row="1", employee_id="", employee_name_raw="PEREZ, JOSE", hours=40, amount=1000, currency="USD", confidence=0.96, evidence_text="invoice row"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Jose Perez", hours=40, amount=1000, currency="USD", confidence=1, evidence_text=""),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!3", employee_id="EUS000001", employee_name_raw="TINY RESIDUAL", hours=0.02, amount=0.41, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.25, hours_tolerance=0.1)
+
+    residual = next(row for row in result["rows"] if row["employeeName"] == "TINY RESIDUAL")
+    assert residual["matchStatus"] == "通过"
+    assert "微小残差" in residual["riskFlags"]
+    assert result["summary"]["unmatchedExcelCount"] == 0
+    assert result["summary"]["exceptionCount"] == 0
+
+
+def test_compare_labor_items_matches_minor_name_typos_when_totals_align():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="osi.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Montealvo, Sergio", hours=46.2, amount=1345.89, currency="USD", confidence=0.98, evidence_text="invoice row"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!20", employee_id="WUS038206", employee_name_raw="Sergio Montalvo", hours=46.2, amount=1345.89, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["fuzzyMatchCount"] == 1
+    assert result["rows"][0]["matchStatus"] == "通过"
+    assert result["rows"][0]["employeeName"] == "Montealvo, Sergio ⇄ Sergio Montalvo"
 
 
 def test_compare_labor_items_treats_exact_name_match_without_pdf_id_as_passed():
@@ -662,6 +1247,57 @@ def test_compare_labor_items_fuzzy_match_can_still_surface_amount_delta():
     assert "疑似姓名匹配" in result["rows"][0]["riskFlags"]
 
 
+def test_compare_labor_items_promotes_same_hours_name_candidate_to_amount_diff():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="sss.pdf", source_page_or_row="p29", employee_id="", employee_name_raw="Ruben Cadiz, Carlos", hours=7.82, amount=183.73, currency="USD", confidence=0.95, evidence_text="Ruben Cadiz, Carlos 20844 7.82 $183.73"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Employee-expenses-detail!42", employee_id="EUS020844", employee_name_raw="CARLOS RUBEN CADIZ RODRIGUEZ", hours=7.82, amount=168.83, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.25, hours_tolerance=0.1)
+
+    assert result["summary"]["amountDiffCount"] == 1
+    assert result["summary"]["unmatchedPdfCount"] == 0
+    assert result["summary"]["unmatchedExcelCount"] == 0
+    assert result["summary"]["exceptionCount"] == 1
+    assert result["summary"]["candidateMatchCount"] == 1
+    row = result["rows"][0]
+    assert row["employeeName"] == "Ruben Cadiz, Carlos ⇄ CARLOS RUBEN CADIZ RODRIGUEZ"
+    assert row["matchStatus"] == "金额差异"
+    assert row["amountDelta"] == 14.9
+    assert "疑似姓名匹配" in row["riskFlags"]
+    candidate = result["candidateMatches"][0]
+    assert candidate["recommendation"] == "姓名疑似同一人，金额/费率差异需人工复核"
+
+
+def test_compare_labor_items_flags_offsetting_unmatched_excel_as_combined_pdf_row():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="oss.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Lozano, Manuel", hours=19.59, amount=439.82, currency="USD", confidence=0.95, evidence_text="Lozano, Manuel ... 19.50 0.09 ... 439.82"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!21", employee_id="WUS045753", employee_name_raw="Manuel Lozano", hours=16.09, amount=361.42, currency="USD", confidence=1, evidence_text=""),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!24", employee_id="WUS045746", employee_name_raw="Massiel Castillo", hours=3.5, amount=78.4, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 2
+    assert result["summary"]["candidateMatchCount"] == 1
+    candidate = result["candidateMatches"][0]
+    assert candidate["issueType"] == "combined_pdf_row"
+    assert candidate["pdfEmployeeName"] == "Lozano, Manuel ⇄ Manuel Lozano"
+    assert candidate["excelEmployeeName"] == "Massiel Castillo"
+    assert candidate["recommendation"] == "疑似PDF合并员工，需人工核对原始发票"
+    assert candidate["hoursDelta"] == 3.5
+    assert candidate["amountDelta"] == 78.4
+    assert "oss.pdf p1" in candidate["sourceRefs"]
+    assert "账单.xlsx 账单!24" in candidate["sourceRefs"]
+    flagged = {row["employeeName"]: row for row in result["rows"]}
+    assert "疑似PDF合并员工" in flagged["Lozano, Manuel ⇄ Manuel Lozano"]["riskFlags"]
+    assert "疑似PDF合并员工" in flagged["Massiel Castillo"]["riskFlags"]
+
+
 def test_compare_labor_items_fuzzy_matches_pdf_name_to_excel_employee_id_group():
     pdf_rows = [
         LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alvarez Mitrache, Rosa", hours=31.19, amount=701.9, currency="USD", confidence=0.95, evidence_text="Total $701.90"),
@@ -695,6 +1331,27 @@ def test_compare_labor_items_suggests_unmatched_name_candidates_without_merging(
     assert candidate["pdfEmployeeName"] == "Alvarez Mitrache, Ross"
     assert candidate["excelEmployeeName"] == "Rosa Alvarez Minchaca"
     assert candidate["recommendation"] == "人工复核"
+
+
+def test_compare_labor_items_suggests_low_similarity_candidate_when_totals_align():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="In291943.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Rozo Panche, Deisy V", hours=37.84, amount=847.84, currency="USD", confidence=0.98, evidence_text="$847.84"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="员工账单明细!3", employee_id="WUS040020", employee_name_raw="Deisi Pozo", hours=37.84, amount=847.84, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["unmatchedPdfCount"] == 1
+    assert result["summary"]["unmatchedExcelCount"] == 1
+    assert result["summary"]["candidateMatchCount"] == 1
+    candidate = result["candidateMatches"][0]
+    assert candidate["pdfEmployeeName"] == "Rozo Panche, Deisy V"
+    assert candidate["excelEmployeeName"] == "Deisi Pozo"
+    assert candidate["nameSimilarity"] == 0.4
+    assert candidate["amountDelta"] == 0
+    assert candidate["hoursDelta"] == 0
 
 
 def test_rule_pdf_extractor_adds_meal_premium_amount_without_hours():
@@ -791,6 +1448,92 @@ def test_rule_pdf_extractor_handles_osi_vertical_invoice_rows():
     assert round(sum(row.amount for row in rows), 2) == 939.25
 
 
+def test_extract_invoice_items_handles_oss_bill_rate_summary_rows(monkeypatch, tmp_path):
+    pdf = tmp_path / "US Elogis Service #7 Invoice W.E 05.24.26.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    page = {
+        "source_file": pdf.name,
+        "page": 1,
+        "text": "\n".join(
+            [
+                "Associate Base Rate Bill Rate OT Rate Reg. Time O.T Dbl. Time RT OT DT TOTAL",
+                "Benitez, Anuar $20.00 25.60$     38.40$   16.00 0.19 409.60$         7.30$         -$             416.90$",
+                "Briseno Mandujano, Gabriela $17.50 22.40$     33.60$   13.40 300.16$         -$           -$             300.16$",
+                "Totals 29.40 0.19 0.00 $709.76 $7.30 $0.00 $717.06",
+                "Customer US Elogistics Service Corp #7",
+            ]
+        ),
+    }
+    import bonus_platform.engine.labor.extract as extract_module
+
+    monkeypatch.setattr(extract_module, "_extract_pdf_pages", lambda paths: [page])
+
+    rows = extract_invoice_items([pdf], {"enabled": False, "parallel_extraction_enabled": False}, supplier="oss", currency="USD")
+
+    assert len(rows) == 2
+    assert rows[0].employee_name_raw == "Benitez, Anuar"
+    assert rows[0].hours == 16.19
+    assert rows[0].amount == 416.90
+    assert rows[0].warehouse_id == "7"
+    assert rows[1].employee_name_raw == "Briseno Mandujano, Gabriela"
+    assert rows[1].hours == 13.40
+    assert rows[1].amount == 300.16
+
+
+def test_extract_invoice_items_handles_sss_employee_summary_rows(monkeypatch, tmp_path):
+    pdf = tmp_path / "NJ13 Invoice Report WE 051726 JF.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    page = {
+        "source_file": pdf.name,
+        "page": 18,
+        "text": "\n".join(
+            [
+                "Candidate Number Employee Name Candidate Notes Job Code Assignment Wage Rate Service Multiplier Bill Rate Standard Hours Worked Overtime Hours Worked Fee for Regular Hours Fee for Overtime Hours Total SSS Fee",
+                "1 Flexible Workforce Shift 1 37 $16.00 27.00% $20.32 1327.15 0.00 $ 26,967.69 $ - $ 26,967.69",
+                "2 Open, Open Open CUE1LD2 Loaders Shift 1 Level 2 $17.00 27.00% $21.59 0.00 0.00 $ - $ - $ -",
+                "1 Contreras, Kristel 20132 CUE1C1 Cordinator Shift 1 Level 1 $17.00 27.00% $21.59 40.00 8.00 $ 863.60 $ 259.08 $ 1,122.68",
+                "2 Contreras, Kristel 20132 CUE1C1 Cordinator Shift 1 Level 1 $17.00 27.00% $21.59 (40.00) (8.00) $ (863.60) $ (259.08) $ (1,122.68)",
+                "3 Gonzalez, Felix 20597 CUE1LD2 Loaders Shift 1 Level 2 $17.00 27.00% $21.59 40.00 0.00 $ 863.60 $ - $ 863.60",
+                "Antonio 20680 CUE1LD2 Loaders Shift 1 Level 2 $17.00 27.00% $21.59 40.00 0.00 $ 863.60 $ - $ 863.60",
+                "4 Hernandez, Gabriel 20125 CUE1LD2 Loaders Shift 1 Level 2 $17.00 27.00% $21.59 40.00 8.00 $ 863.60 $ 259.08 $ 1,122.68",
+                "5 Aparicio, Emilio 20253 SD Shift Differential $1.00 27.00% $1.27 40.00 0.00 $ 50.80 $ - $ 50.80",
+                "6 Lopez Bellis,",
+                "Dalila 20683 CUE1GL2 General Labor Shift 1",
+                "Level 2 $16.00 27.00% $20.32 24.00 0.00 $ 487.68 $ - $ 487.68",
+                "AM Loaders Summary Confidential Page 18",
+            ]
+        ),
+    }
+    import bonus_platform.engine.labor.extract as extract_module
+
+    monkeypatch.setattr(extract_module, "_extract_pdf_pages", lambda paths: [page])
+
+    rows = extract_invoice_items([pdf], {"enabled": False, "parallel_extraction_enabled": False}, supplier="sss", currency="USD")
+
+    assert [row.employee_name_raw for row in rows] == [
+        "Gonzalez, Felix",
+        "Antonio",
+        "Hernandez, Gabriel",
+        "Aparicio, Emilio",
+        "Lopez Bellis, Dalila",
+    ]
+    assert rows[0].employee_id == "20597"
+    assert rows[0].hours == 40.0
+    assert rows[0].amount == 863.60
+    assert rows[1].employee_id == "20680"
+    assert rows[1].amount == 863.60
+    assert rows[2].hours == 48.0
+    assert rows[2].amount == 1122.68
+    assert rows[3].employee_id == "20253"
+    assert rows[3].hours == 0.0
+    assert rows[3].amount == 50.80
+    assert rows[4].employee_id == "20683"
+    assert rows[4].hours == 24.0
+    assert rows[4].amount == 487.68
+    assert all("Contreras" not in row.employee_name_raw for row in rows)
+    assert rows[0].warehouse_id == "13"
+
+
 def test_mimo_uses_api_key_header_instead_of_bearer_authorization():
     headers = _request_headers({"provider": "mimo", "api_key": "token"})
 
@@ -815,6 +1558,26 @@ def test_supplier_profile_adds_onesource_specific_extraction_guidance():
     assert profile.image_page_policy == "first_page_only"
     assert "timecard" in instruction.lower()
     assert "handwritten rg/ot" in instruction.lower()
+
+
+def test_supplier_profile_adds_prompt_priority_dept_guidance():
+    profile = resolve_supplier_profile("Prompt Priority INC")
+    instruction = _ai_instruction(profile)
+
+    assert profile.key == "prompt"
+    assert profile.image_page_policy == "all"
+    assert "dept" in instruction.lower()
+    assert "warehouse_id" in instruction
+
+
+def test_supplier_profile_adds_citistaff_loc_guidance():
+    profile = resolve_supplier_profile("CitiStaff Solutions")
+    instruction = _ai_instruction(profile)
+
+    assert profile.key == "citistaff"
+    assert profile.image_page_policy == "all"
+    assert "loc.#" in instruction.lower()
+    assert "name mappings" in instruction.lower()
 
 
 def test_unknown_supplier_uses_default_extraction_profile():
@@ -845,6 +1608,27 @@ def test_supplier_profiles_can_load_from_json_config(tmp_path):
     assert profiles[0].key == "demo"
     assert profiles[0].aliases == ["demo staffing"]
     assert "Charge Summary" in profiles[0].prompt_notes[0]
+
+
+def test_supplier_profiles_can_load_single_json_object(tmp_path):
+    path = tmp_path / "profile.json"
+    path.write_text(
+        json.dumps(
+            {
+                "key": "grande",
+                "aliases": ["grande solutions staffing"],
+                "prompt_notes": ["Use the simple numbered labor table."],
+                "image_page_policy": "all",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = load_supplier_profiles(path)
+
+    assert len(profiles) == 1
+    assert profiles[0].key == "grande"
+    assert profiles[0].aliases == ["grande solutions staffing"]
 
 
 def test_supplier_profile_resolver_prefers_external_config(tmp_path):
@@ -1065,6 +1849,633 @@ def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tm
     )
 
     assert totals == [{"source_file": "invoice.pdf", "total_amount": 1963.51, "warehouse_id": "", "pdf_type": "unknown"}]
+
+
+def test_quick_extract_totals_runs_rule_extraction_without_ai_config(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "NJ13 Invoice Report WE 051726 JF.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "NJ13 Invoice Report WE 051726 JF.pdf",
+                "page": 1,
+                "text": "\n".join(
+                    [
+                        "Billable Billable Total",
+                        "Hours Fee Fees",
+                        "-$",
+                        "1 48,293.06$ 48,293.06$",
+                    ]
+                ),
+            }
+        ],
+    )
+
+    totals = quick_extract_totals([pdf], {}, supplier="Strategic Staffing Solutions Corp.")
+
+    assert totals == [
+        {
+            "source_file": "NJ13 Invoice Report WE 051726 JF.pdf",
+            "total_amount": 48293.06,
+            "warehouse_id": "13",
+            "pdf_type": "unknown",
+        }
+    ]
+
+
+def test_audit_ai_page_cache_candidates_are_confirmation_only(tmp_path):
+    pdf = tmp_path / "elog1-1_20260520204104.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    cache_dir = tmp_path / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "elog1-1_20260520204104_p1_mimo-v2.5_v6.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "Alvarez Michalec Rosa",
+                    "source_page_or_row": "1",
+                    "amount": "$701.88",
+                    "confidence": 0.98,
+                    "evidence_text": "Alvarez Michalec Rosa | $701.88",
+                },
+                {
+                    "employee_name_raw": "Bernavides Jennifer",
+                    "source_page": 1,
+                    "amount": "$698.01",
+                    "confidence": 0.92,
+                    "evidence_text": "Bernavides Jennifer | $698.01",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    audit = audit_ai_page_cache_candidates([pdf])
+
+    assert audit["decision"] == "candidate_only"
+    assert audit["requiresConfirmation"] is True
+    assert audit["summary"] == {"fileCount": 1, "candidateFileCount": 1, "candidateAmountTotal": 1399.89}
+    assert audit["files"][0]["sourceFile"] == "elog1-1_20260520204104.pdf"
+    assert audit["files"][0]["warehouseId"] == "1"
+    assert audit["files"][0]["rowCount"] == 2
+    assert audit["files"][0]["candidateAmountTotal"] == 1399.89
+    assert audit["files"][0]["averageConfidence"] == 0.95
+    assert audit["files"][0]["decision"] == "candidate_only"
+    assert audit["files"][0]["requiresConfirmation"] is True
+    assert audit["files"][0]["evidence"][0]["employeeName"] == "Alvarez Michalec Rosa"
+    assert audit["files"][0]["evidence"][0]["sourcePageOrRow"] == "p1"
+    assert audit["files"][0]["evidence"][1]["sourcePageOrRow"] == "p1"
+
+
+def test_ai_cache_reconciliation_preview_compares_candidates_without_promoting(tmp_path):
+    pdf = tmp_path / "elog1-1_20260520204104.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    cache_dir = tmp_path / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "elog1-1_20260520204104_p1_mimo-v2.5_v4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "Alice Worker",
+                    "source_page": 1,
+                    "hours": 8,
+                    "amount": 100,
+                    "confidence": 0.95,
+                    "evidence_text": "Alice Worker TOTAL $100.00",
+                },
+                {
+                    "employee_name_raw": "Bob Cache",
+                    "source_page": 1,
+                    "hours": 4,
+                    "amount": 50,
+                    "confidence": 0.9,
+                    "evidence_text": "Bob Cache TOTAL $50.00",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=1, evidence_text="", warehouse_id="1"),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!3", employee_id="", employee_name_raw="Carol Workbook", hours=4, amount=55, currency="USD", confidence=1, evidence_text="", warehouse_id="1"),
+    ]
+
+    preview = build_ai_cache_reconciliation_preview(
+        [pdf],
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    assert preview["decision"] == "candidate_only"
+    assert preview["requiresConfirmation"] is True
+    assert preview["summary"]["candidateRowCount"] == 2
+    assert preview["summary"]["excelRowCount"] == 2
+    assert preview["summary"]["passedCount"] == 1
+    assert preview["summary"]["exceptionCount"] == 2
+    assert preview["summary"]["cacheAmountTotal"] == 150
+    assert preview["summary"]["excelAmountTotal"] == 155
+    assert preview["summary"]["reviewableFileCount"] == 0
+    assert preview["summary"]["needsReocrFileCount"] == 1
+    file_quality = preview["fileQuality"][0]
+    assert file_quality["sourceFile"] == "elog1-1_20260520204104.pdf"
+    assert file_quality["warehouseId"] == "1"
+    assert file_quality["cacheRowCount"] == 2
+    assert file_quality["excelRowCount"] == 2
+    assert file_quality["cacheAmountTotal"] == 150
+    assert file_quality["excelAmountTotal"] == 155
+    assert file_quality["amountDelta"] == -5
+    assert file_quality["averageConfidence"] == 0.925
+    assert file_quality["decision"] == "needs_reocr"
+    assert file_quality["recommendation"] == "历史识别金额与账单同仓库金额不一致，建议重新识别后预览影响。"
+    assert file_quality["diagnostics"]["summary"]["exceptionCount"] == 2
+    assert file_quality["diagnostics"]["summary"]["unmatchedCacheCount"] == 1
+    assert file_quality["diagnostics"]["summary"]["unmatchedExcelCount"] == 1
+    assert file_quality["diagnostics"]["summary"]["suspectedNamePairCount"] == 0
+    assert file_quality["diagnostics"]["extraInCache"][0]["employeeName"] == "Bob Cache"
+    assert file_quality["diagnostics"]["missingInCache"][0]["employeeName"] == "Carol Workbook"
+    assert file_quality["diagnostics"]["topDifferences"][0]["amountDelta"] == -55
+    assert file_quality["diagnostics"]["rootCauseHints"] == ["possible_missing_cache_rows", "possible_extra_cache_rows"]
+    assert file_quality["diagnostics"]["recommendedAction"] == "reocr_with_employee_level_review"
+    assert any(row["matchStatus"] == "PDF有Excel无" and row["employeeName"] == "Bob Cache" for row in preview["exceptionRows"])
+    assert any(row["matchStatus"] == "Excel有PDF无" and row["employeeName"] == "Carol Workbook" for row in preview["exceptionRows"])
+
+
+def test_ai_cache_reconciliation_preview_marks_file_reviewable_when_warehouse_total_aligns(tmp_path):
+    pdf = tmp_path / "elog25-3_20260520204328.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    cache_dir = tmp_path / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "elog25-3_20260520204328_p1_mimo-v2.5_v4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "David Lopez",
+                    "source_page": 1,
+                    "hours": 24,
+                    "amount": 696.12,
+                    "confidence": 0.98,
+                    "evidence_text": "David Lopez TOTAL $696.12",
+                },
+                {
+                    "employee_name_raw": "Kenneth Rosales",
+                    "source_page": 1,
+                    "hours": 48.46,
+                    "amount": 1330.43,
+                    "confidence": 0.98,
+                    "evidence_text": "Kenneth Rosales TOTAL $1,330.43",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="David Lopez", hours=24, amount=696.12, currency="USD", confidence=1, evidence_text="", warehouse_id="25"),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!3", employee_id="", employee_name_raw="Kenneth Rosales", hours=48.46, amount=1330.43, currency="USD", confidence=1, evidence_text="", warehouse_id="25"),
+    ]
+
+    preview = build_ai_cache_reconciliation_preview(
+        [pdf],
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    assert preview["summary"]["reviewableFileCount"] == 1
+    assert preview["summary"]["needsReocrFileCount"] == 0
+    assert preview["fileQuality"][0]["decision"] == "reviewable_candidate"
+    assert preview["fileQuality"][0]["amountDelta"] == 0
+    assert preview["fileQuality"][0]["recommendation"] == "历史识别金额与账单同仓库金额一致，可作为人工复核证据。"
+
+
+def test_ai_cache_file_diagnostics_suggests_name_mapping_before_reocr(tmp_path):
+    pdf = tmp_path / "elog27-1_20260520204231.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    cache_dir = tmp_path / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "elog27-1_20260520204231_p1_mimo-v2.5_v4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "Coria, Virgilio",
+                    "source_page": 1,
+                    "hours": 14.47,
+                    "amount": 353.68,
+                    "confidence": 0.95,
+                    "evidence_text": "Coria, Virgilio 14.47 $353.68",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!34", employee_id="", employee_name_raw="Brayan Gomez Vargas", hours=14.17, amount=353.69, currency="USD", confidence=1, evidence_text="", warehouse_id="27"),
+    ]
+
+    preview = build_ai_cache_reconciliation_preview(
+        [pdf],
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    diagnostics = preview["fileQuality"][0]["diagnostics"]
+    assert diagnostics["summary"]["suspectedNamePairCount"] == 1
+    pair = diagnostics["suspectedNamePairs"][0]
+    assert pair["cacheEmployeeName"] == "Coria, Virgilio"
+    assert pair["excelEmployeeName"] == "Brayan Gomez Vargas"
+    assert pair["amountGap"] == -0.01
+    assert pair["hoursGap"] == 0.3
+    assert "possible_name_mapping" in diagnostics["rootCauseHints"]
+    assert diagnostics["recommendedAction"] == "review_name_mapping_then_reocr_if_amounts_remain_unexplained"
+
+
+def test_reocr_candidate_plan_is_confirmation_only():
+    plan = build_reocr_candidate_plan(
+        [
+            {
+                "sourceFile": "elog7-5_20260520204043.pdf",
+                "warehouseId": "7",
+                "cacheRowCount": 13,
+                "excelRowCount": 13,
+                "cacheAmountTotal": 10945.47,
+                "excelAmountTotal": 8473.21,
+                "amountDelta": 2472.26,
+                "decision": "needs_reocr",
+                "recommendation": "历史识别金额与账单同仓库金额不一致，建议重新识别后预览影响。",
+                "diagnostics": {
+                    "summary": {"exceptionCount": 3, "unmatchedCacheCount": 1, "unmatchedExcelCount": 2},
+                    "topDifferences": [{"employeeName": "Alice Worker", "amountDelta": 120.5}],
+                    "missingInCache": [{"employeeName": "Missing Worker"}],
+                    "extraInCache": [{"employeeName": "Extra Worker"}],
+                },
+            },
+            {
+                "sourceFile": "elog25-3_20260520204328.pdf",
+                "warehouseId": "25",
+                "cacheRowCount": 2,
+                "excelRowCount": 2,
+                "cacheAmountTotal": 2026.55,
+                "excelAmountTotal": 2026.55,
+                "amountDelta": 0,
+                "decision": "reviewable_candidate",
+                "recommendation": "历史识别金额与账单同仓库金额一致，可作为人工复核证据。",
+            },
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert plan["decision"] == "candidate_only"
+    assert plan["requiresConfirmation"] is True
+    assert plan["summary"] == {
+        "taskCount": 1,
+        "reviewableCandidateCount": 1,
+        "totalExpectedExcelAmount": 8473.21,
+        "totalCurrentCacheAmount": 10945.47,
+    }
+    assert plan["tasks"][0]["sourceFile"] == "elog7-5_20260520204043.pdf"
+    assert plan["tasks"][0]["amountTolerance"] == 0.1
+    assert plan["tasks"][0]["diagnostics"]["summary"]["exceptionCount"] == 3
+    assert plan["tasks"][0]["diagnostics"]["missingInCache"][0]["employeeName"] == "Missing Worker"
+    assert plan["tasks"][0]["focusEmployees"][0]["employeeName"] == "Alice Worker"
+    assert plan["tasks"][0]["focusEmployees"][1]["employeeName"] == "Missing Worker"
+    assert plan["tasks"][0]["focusEmployees"][2]["employeeName"] == "Extra Worker"
+    assert "必须人工确认" in plan["tasks"][0]["confirmationGate"]
+    assert plan["reviewableCandidates"][0]["sourceFile"] == "elog25-3_20260520204328.pdf"
+
+
+def test_parse_reocr_candidate_rows_from_csv(tmp_path):
+    path = tmp_path / "reocr.csv"
+    path.write_text(
+        "Employee,Hours,Amount,Page,Confidence,Evidence\n"
+        "Alice Worker,8,100,p1,96%,Alice Worker 8 $100\n"
+        "Bob Worker,10,200,p2,0.95,Bob Worker 10 $200\n",
+        encoding="utf-8",
+    )
+
+    rows = parse_reocr_candidate_rows(path, default_currency="USD")
+
+    assert rows == [
+        {
+            "employeeName": "Alice Worker",
+            "sourcePageOrRow": "p1",
+            "hours": 8,
+            "amount": 100,
+            "currency": "USD",
+            "confidence": 0.96,
+            "evidenceText": "Alice Worker 8 $100",
+        },
+        {
+            "employeeName": "Bob Worker",
+            "sourcePageOrRow": "p2",
+            "hours": 10,
+            "amount": 200,
+            "currency": "USD",
+            "confidence": 0.95,
+            "evidenceText": "Bob Worker 10 $200",
+        },
+    ]
+
+
+def test_parse_reocr_candidate_rows_preserves_scope_and_employee_id(tmp_path):
+    path = tmp_path / "reocr_scoped.csv"
+    path.write_text(
+        "SourceFile,WarehouseId,EmployeeId,Employee,Hours,Amount,Page,Confidence,Currency,Evidence,ExcelRef,ExpectedHours,ExpectedAmount\n"
+        "elog1.pdf,1,WUS001,Alice Worker,8,100,p1,0.95,USD,Alice Worker 8 $100,账单.xlsx 员工账单!2,8,100\n",
+        encoding="utf-8",
+    )
+
+    rows = parse_reocr_candidate_rows(path, default_currency="USD")
+
+    assert rows == [
+        {
+            "employeeName": "Alice Worker",
+            "sourcePageOrRow": "p1",
+            "hours": 8,
+            "amount": 100,
+            "currency": "USD",
+            "confidence": 0.95,
+            "evidenceText": "Alice Worker 8 $100",
+            "sourceFile": "elog1.pdf",
+            "warehouseId": "1",
+            "employeeId": "WUS001",
+        }
+    ]
+
+
+def test_parse_reocr_candidate_rows_requires_name_and_amount(tmp_path):
+    path = tmp_path / "bad.csv"
+    path.write_text("Employee,Hours\nAlice Worker,8\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="员工姓名列和金额列"):
+        parse_reocr_candidate_rows(path)
+
+
+def test_reocr_candidate_replay_can_be_ready_for_user_confirmation():
+    task = {
+        "sourceFile": "elog7-5_20260520204043.pdf",
+        "warehouseId": "7",
+        "expectedExcelAmount": 300,
+        "amountDelta": 2472.26,
+        "confirmationGate": "新图片识别结果金额需与同仓库 Excel 金额在容差内，员工级异常需可解释，且必须人工确认。",
+    }
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=1, evidence_text="", warehouse_id="7"),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!3", employee_id="", employee_name_raw="Bob Worker", hours=10, amount=200, currency="USD", confidence=1, evidence_text="", warehouse_id="7"),
+    ]
+    candidate_rows = [
+        {"employee_name_raw": "Alice Worker", "source_page_or_row": "p1", "hours": 8, "amount": 100, "confidence": 0.96},
+        {"employee_name_raw": "Bob Worker", "source_page_or_row": "p1", "hours": 10, "amount": 200, "confidence": 0.96},
+    ]
+
+    replay = replay_reocr_candidate_result(
+        task,
+        candidate_rows,
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    assert replay["decision"] == "ready_for_user_confirmation"
+    assert replay["requiresConfirmation"] is True
+    assert replay["summary"]["candidateAmountTotal"] == 300
+    assert replay["summary"]["amountPassed"] is True
+    assert replay["summary"]["exceptionCount"] == 0
+    assert replay["summary"]["fixedCacheDelta"] == 2472.26
+    assert replay["blockers"] == []
+    assert len(replay["previewRows"]) == 2
+    assert all(row["matchStatus"] == "通过" for row in replay["previewRows"])
+
+
+def test_reocr_candidate_replay_blocks_amount_mismatch():
+    task = {
+        "sourceFile": "elog7-5_20260520204043.pdf",
+        "warehouseId": "7",
+        "expectedExcelAmount": 300,
+        "amountDelta": 2472.26,
+        "diagnostics": {
+            "recommendedAction": "review_name_mapping_then_reocr_if_amounts_remain_unexplained",
+            "rootCauseHints": ["possible_name_mapping"],
+            "suspectedNamePairs": [{"cacheEmployeeName": "Bob Worker", "excelEmployeeName": "Bob Worker"}],
+        },
+    }
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=1, evidence_text="", warehouse_id="7"),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!3", employee_id="", employee_name_raw="Bob Worker", hours=10, amount=200, currency="USD", confidence=1, evidence_text="", warehouse_id="7"),
+    ]
+    candidate_rows = [
+        {"employee_name_raw": "Alice Worker", "source_page_or_row": "p1", "hours": 8, "amount": 100, "confidence": 0.96},
+        {"employee_name_raw": "Bob Worker", "source_page_or_row": "p1", "hours": 10, "amount": 210, "confidence": 0.96},
+    ]
+
+    replay = replay_reocr_candidate_result(
+        task,
+        candidate_rows,
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    assert replay["decision"] == "blocked_by_replay"
+    assert "candidate_amount_mismatch" in replay["blockers"]
+    assert "employee_level_exceptions" in replay["blockers"]
+    assert replay["summary"]["amountDelta"] == 10
+    assert replay["summary"]["exceptionCount"] == 1
+    assert replay["diagnostics"]["recommendedAction"] == "review_name_mapping_then_reocr_if_amounts_remain_unexplained"
+
+
+def test_reocr_candidate_replay_blocks_employee_exceptions_even_when_total_matches():
+    task = {"sourceFile": "elog7-5_20260520204043.pdf", "warehouseId": "7", "expectedExcelAmount": 300, "amountDelta": 2472.26}
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=1, evidence_text="", warehouse_id="7"),
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!3", employee_id="", employee_name_raw="Bob Worker", hours=10, amount=200, currency="USD", confidence=1, evidence_text="", warehouse_id="7"),
+    ]
+    candidate_rows = [
+        {"employee_name_raw": "Alice Worker", "source_page_or_row": "p1", "hours": 8, "amount": 100, "confidence": 0.96},
+        {"employee_name_raw": "Wrong Worker", "source_page_or_row": "p1", "hours": 10, "amount": 200, "confidence": 0.96},
+    ]
+
+    replay = replay_reocr_candidate_result(
+        task,
+        candidate_rows,
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    assert replay["decision"] == "blocked_by_replay"
+    assert replay["summary"]["amountPassed"] is True
+    assert replay["summary"]["exceptionCount"] == 2
+    assert replay["blockers"] == ["employee_level_exceptions"]
+
+
+def test_rule_change_candidate_requires_user_confirmation():
+    candidate = build_rule_change_candidate(
+        rule_id="warehouse-filename-hash-number",
+        title="从 OSS 文件名 #N 提取仓库号",
+        description="识别 US Elogis Service #17 Invoice 这类文件名中的仓库号。",
+        supplier="OSS",
+        source="oss 2 real replay",
+        proposed_by="ai",
+        evidence=[{"sourceFile": "US Elogis Service #17 Invoice W.E 05.24.26.pdf", "warehouseId": "17"}],
+        conditions={"filenamePattern": "#<warehouse_id> Invoice"},
+    )
+
+    assert candidate["decision"] == "candidate_only"
+    assert candidate["status"] == "pending_user_confirmation"
+    assert candidate["requiresConfirmation"] is True
+    assert candidate["version"] == 1
+    assert candidate["auditTrail"][0]["action"] == "created"
+    assert candidate["conditions"]["filenamePattern"] == "#<warehouse_id> Invoice"
+
+
+def test_rule_replay_summary_blocks_regressions_before_confirmation():
+    candidate = build_rule_change_candidate(
+        rule_id="minor-name-typo-match",
+        title="轻微姓名拼写差异匹配",
+        description="当姓名相似且工时金额一致时匹配。",
+        supplier="OSI",
+        source="osi real replay",
+    )
+
+    replay = summarize_rule_replay(
+        candidate,
+        [
+            {
+                "runId": "osi_34794",
+                "supplier": "OSI",
+                "periodStart": "2026-05-18",
+                "periodEnd": "2026-05-24",
+                "beforeStatus": "warning",
+                "afterStatus": "ok",
+                "beforeIssueCount": 2,
+                "afterIssueCount": 0,
+            },
+            {
+                "runId": "fairway_135612",
+                "supplier": "Fairway",
+                "periodStart": "2026-05-18",
+                "periodEnd": "2026-05-24",
+                "beforeStatus": "ok",
+                "afterStatus": "warning",
+                "beforeIssueCount": 0,
+                "afterIssueCount": 1,
+            },
+        ],
+    )
+
+    assert replay["decision"] == "blocked_by_replay_regression"
+    assert replay["requiresConfirmation"] is True
+    assert replay["summary"] == {"replayedCount": 2, "fixedCount": 1, "regressionCount": 1, "unchangedCount": 0}
+    assert replay["fixed"][0]["runId"] == "osi_34794"
+    assert replay["regressions"][0]["runId"] == "fairway_135612"
+
+
+def test_rule_auto_replay_uses_historical_metadata_diagnostics():
+    candidate = build_rule_change_candidate(
+        rule_id="oss-hash-warehouse-v1",
+        title="OSS # warehouse id extraction",
+        description="Parse warehouse id from US Elogis Service #N invoice names.",
+        supplier="OSS",
+        source="oss 2 real replay",
+        conditions={"supplier": "OSS", "fixIssueCodes": ["missing_warehouse_id"]},
+    )
+    replay = summarize_rule_auto_replay(
+        candidate,
+        [
+            {
+                "id": "oss2_warehouse_7",
+                "supplierName": "OSS",
+                "periodStart": "2026-05-18",
+                "periodEnd": "2026-05-24",
+                "reconciliationDiagnostics": {
+                    "level": "warning",
+                    "issues": [{"code": "missing_warehouse_id", "level": "warning"}],
+                },
+                "comparisonSummary": {"exceptionCount": 0},
+            },
+            {
+                "id": "fairway_135612",
+                "supplierName": "Fairway",
+                "reconciliationDiagnostics": {
+                    "level": "ok",
+                    "issues": [],
+                },
+                "comparisonSummary": {"exceptionCount": 0},
+            },
+        ],
+        current_run_id="oss2_warehouse_7",
+    )
+
+    assert replay["mode"] == "metadata_signal_replay"
+    assert replay["decision"] == "ready_for_user_confirmation"
+    assert replay["summary"] == {"replayedCount": 2, "fixedCount": 1, "regressionCount": 0, "unchangedCount": 1}
+    assert replay["replayResults"][0]["matchedIssueCodes"] == ["missing_warehouse_id"]
+    assert replay["replayResults"][1]["impactReason"] == "out_of_scope_supplier"
+    assert replay["requiresConfirmation"] is True
+    assert replay["limitations"]
+
+
+def test_confirm_rule_candidate_requires_successful_replay():
+    candidate = build_rule_change_candidate(
+        rule_id="warehouse-filename-hash-number",
+        title="从 OSS 文件名 #N 提取仓库号",
+        description="识别 US Elogis Service #17 Invoice 这类文件名中的仓库号。",
+        supplier="OSS",
+        source="oss 2 real replay",
+    )
+    blocked_replay = {
+        "decision": "blocked_by_replay_regression",
+        "summary": {"replayedCount": 1, "fixedCount": 0, "regressionCount": 1, "unchangedCount": 0},
+    }
+
+    with pytest.raises(ValueError, match="未通过历史影响预览"):
+        confirm_rule_candidate(candidate, blocked_replay, confirmed_by="ops-user", reason="误伤已通过批次")
+
+
+def test_confirm_and_rollback_rule_version_records_audit_trail():
+    candidate = build_rule_change_candidate(
+        rule_id="warehouse-filename-hash-number",
+        title="从 OSS 文件名 #N 提取仓库号",
+        description="识别 US Elogis Service #17 Invoice 这类文件名中的仓库号。",
+        supplier="OSS",
+        source="oss 2 real replay",
+    )
+    replay = {
+        "decision": "ready_for_user_confirmation",
+        "summary": {"replayedCount": 2, "fixedCount": 1, "regressionCount": 0, "unchangedCount": 1},
+    }
+
+    active = confirm_rule_candidate(candidate, replay, confirmed_by="ops-user", reason="OSS2 仓库号回放通过")
+
+    assert active["decision"] == "active"
+    assert active["status"] == "active"
+    assert active["requiresConfirmation"] is False
+    assert active["confirmedBy"] == "ops-user"
+    assert active["replaySummary"] == replay["summary"]
+    assert active["auditTrail"][-1]["action"] == "confirmed"
+
+    rolled_back = rollback_rule_version(active, rolled_back_by="ops-user", reason="后续批次发现误伤", target_version=0)
+
+    assert rolled_back["decision"] == "rolled_back"
+    assert rolled_back["status"] == "rolled_back"
+    assert rolled_back["rollbackToVersion"] == 0
+    assert rolled_back["auditTrail"][-1] == {
+        "action": "rolled_back",
+        "actor": "ops-user",
+        "reason": "后续批次发现误伤",
+        "fromVersion": 1,
+        "toVersion": 0,
+    }
 
 
 def test_quick_extract_totals_uses_citi_bill_rate_rows(monkeypatch, tmp_path):
@@ -1715,6 +3126,121 @@ def test_build_labor_report_contains_expected_sheets(tmp_path):
     assert workbook["全员对账明细"].max_row == 2
 
 
+def test_build_labor_report_can_include_reconciliation_diagnostics(tmp_path):
+    output = tmp_path / "report.xlsx"
+    comparison = {"summary": {"pdfEmployeeCount": 0, "excelEmployeeCount": 0}, "rows": []}
+    diagnostics = {
+        "level": "warning",
+        "message": "核对信号有不稳定项，建议复核。",
+        "nextStep": "先确认费用口径。",
+        "signals": {
+            "fastPdfTotal": 48293.06,
+            "employeePdfTotal": 0,
+            "excelTotal": 48217.96,
+            "warehouseTotal": 48293.06,
+            "amountBasis": [
+                {
+                    "warehouseId": "13",
+                    "pdfTotal": 48293.06,
+                    "reportedTotal": 48217.96,
+                    "pdfVsReportedDelta": 75.1,
+                    "componentTotal": 48217.96,
+                    "employeeExpenses": 48055.81,
+                    "employeeBenefits": 162.15,
+                    "loadingAndUnloading": 0.0,
+                    "summaryEvidence": "Warehouse-information!2",
+                    "detailEvidence": "Employee-expenses-detail!3:Employee-expenses-detail!289; Employee-benefits-detail!2",
+                }
+            ],
+            "offsettingWarehouseDeltas": [
+                {
+                    "warehouseId": "25",
+                    "pdfAmountTotal": 17465.12,
+                    "excelAmountTotal": 17463.34,
+                    "amountDelta": 1.78,
+                    "attribution": [{"employeeName": "JIMENEZ, ENEAS", "delta": 1.19}],
+                }
+            ],
+            "employeeAttribution": [
+                {
+                    "warehouseId": "25",
+                    "employeeName": "Fontes, Stevie ⇄ Stevie Fontes",
+                    "pdfAmount": 822.12,
+                    "excelAmount": 863.22,
+                    "delta": -41.1,
+                    "warehouseDelta": -41.21,
+                }
+            ],
+        },
+        "issues": [
+            {
+                "code": "amount_basis_mismatch",
+                "level": "warning",
+                "title": "PDF 总额与账单费用口径不一致",
+                "message": "账单内部费用组成已闭合，但 PDF 发票总额与 OTWS 汇总总额不同。",
+                "items": ["仓库 13: PDF $48,293.06，OTWS汇总 $48,217.96，差异 $75.10"],
+            }
+        ],
+    }
+
+    build_labor_report(
+        output,
+        comparison,
+        [],
+        [],
+        {"name": "姓名", "hours": "时长", "amount": "金额"},
+        reconciliation_diagnostics=diagnostics,
+    )
+
+    workbook = load_workbook(output, read_only=True)
+    assert "信号诊断" in workbook.sheetnames
+    rows = list(workbook["信号诊断"].iter_rows(values_only=True))
+    assert any(row[:2] == ("诊断级别", "warning") for row in rows)
+    assert any(row[0] == "PDF 总额与账单费用口径不一致" for row in rows)
+    assert any(row[0] == "13" and row[3] == 75.1 for row in rows)
+    assert any(row[0] == "25" and row[3] == 1.78 and "JIMENEZ" in str(row[4]) for row in rows)
+    assert any(row[0] == "25" and "Fontes" in str(row[1]) and row[4] == -41.1 for row in rows)
+
+
+def test_build_labor_report_can_include_ai_cache_audit(tmp_path):
+    output = tmp_path / "report.xlsx"
+    comparison = {"summary": {"pdfEmployeeCount": 0, "excelEmployeeCount": 0}, "rows": []}
+    audit = {
+        "decision": "candidate_only",
+        "requiresConfirmation": True,
+        "message": "历史图片识别记录只能作为待复核证据，不能直接覆盖确定性核对结论。",
+        "summary": {"fileCount": 1, "candidateFileCount": 1, "candidateAmountTotal": 1399.89},
+        "files": [
+            {
+                "sourceFile": "elog1-1_20260520204104.pdf",
+                "warehouseId": "1",
+                "rowCount": 2,
+                "candidateAmountTotal": 1399.89,
+                "averageConfidence": 0.95,
+                "decision": "candidate_only",
+                "cacheFiles": ["elog1-1_20260520204104_p1_mimo-v2.5_v6.json"],
+                "evidence": [{"employeeName": "Alvarez Michalec Rosa", "amount": 701.88, "evidenceText": "Total $701.88"}],
+            }
+        ],
+    }
+
+    build_labor_report(
+        output,
+        comparison,
+        [],
+        [],
+        {"name": "姓名", "hours": "时长", "amount": "金额"},
+        ai_cache_audit=audit,
+    )
+
+    workbook = load_workbook(output, read_only=True)
+    assert "AI候选证据" in workbook.sheetnames
+    rows = list(workbook["AI候选证据"].iter_rows(values_only=True))
+    assert any(row[:2] == ("处理决策", "candidate_only") for row in rows)
+    assert any(row[:2] == ("需要人工确认", "是") for row in rows)
+    assert any(row[0] == "elog1-1_20260520204104.pdf" and row[5] == "candidate_only" for row in rows)
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 Tests
 # ---------------------------------------------------------------------------
@@ -1979,3 +3505,1067 @@ def test_profiles_for_resolution_filters_deprecated_T_P4_7(tmp_path):
     profile = resolve_supplier_profile("deprecated supplier", profiles_path=tmp_path)
     # Should fall back to DEFAULT_PROFILE because the deprecated one is filtered
     assert profile.key == "default"
+
+
+def test_build_material_index_identifies_replay_ready_batches_and_ignores_temp_files(tmp_path):
+    batch = tmp_path / "workforce已报账"
+    batch.mkdir()
+    (batch / "Invoice-5058871.pdf").write_bytes(b"%PDF-1.4\n")
+    (batch / "员工账单明细 - 2026-06-01T112149.990.xlsx").write_bytes(b"fake workbook")
+    (batch / "~$OTWS - Warehouse Bill-NJ8.xlsx").write_bytes(b"temp")
+    (batch / "Timecard for 05.11.2026-05.17.2026.eml").write_text("context", encoding="utf-8")
+    warehouse_29 = tmp_path / "29仓"
+    warehouse_29.mkdir()
+    (warehouse_29 / "In291943.pdf").write_bytes(b"%PDF-1.4\n")
+    (warehouse_29 / "员工账单明细 - 2026-05-28T141945.414.xlsx").write_bytes(b"fake workbook")
+    (tmp_path / "README.md").write_text("notes", encoding="utf-8")
+
+    index = build_material_index(tmp_path)
+
+    assert index["summary"]["candidateBatchCount"] == 2
+    assert index["summary"]["invoicePdfCount"] == 2
+    assert index["summary"]["workbookCount"] == 2
+    assert index["batches"] == index["candidateBatches"]
+    batch_index = next(batch for batch in index["candidateBatches"] if batch["supplier"] == "workforce")
+    assert batch_index["supplier"] == "workforce"
+    assert batch_index["replayReady"] is True
+    assert batch_index["invoiceFiles"][0]["filename"] == "Invoice-5058871.pdf"
+    assert batch_index["pdfFiles"] == batch_index["invoiceFiles"]
+    assert batch_index["workbookFiles"][0]["filename"].startswith("员工账单明细")
+    assert "邮件上下文" in batch_index["limitations"][0]
+    assert batch_index["expectedRisks"] == batch_index["limitations"]
+    warehouse_batch = next(batch for batch in index["candidateBatches"] if batch["directory"] == "29仓")
+    assert warehouse_batch["warehouseIds"] == ["29"]
+    assert all("~$" not in item["filename"] for item in index["files"])
+
+
+def test_build_material_index_groups_nested_bill_workbooks_with_parent_invoices(tmp_path):
+    batch = tmp_path / "SSS 5.11-5.17"
+    bill_dir = batch / "Strategic Staffing Solutions Corp 账单"
+    bill_dir.mkdir(parents=True)
+    (batch / "NJ8 Invoice Report WE 051726 JF.pdf").write_bytes(b"%PDF-1.4\n")
+    (batch / "NJ13 Invoice Report WE 051726 JF.pdf").write_bytes(b"%PDF-1.4\n")
+    (bill_dir / "OTWS - Warehouse Bill-NJ8.xlsx").write_bytes(b"fake workbook")
+    (bill_dir / "~$OTWS - Warehouse Bill-NJ8.xlsx").write_bytes(b"temp")
+
+    index = build_material_index(tmp_path)
+
+    sss_batch = next(batch for batch in index["candidateBatches"] if batch["batchKey"] == "SSS_5_11_5_17")
+    assert sss_batch["directory"] == "SSS 5.11-5.17"
+    assert sss_batch["supplier"] == "sss"
+    assert sss_batch["invoicePdfCount"] == 2
+    assert sss_batch["workbookCount"] == 1
+    assert sss_batch["uploadableFileCount"] == 3
+    assert sss_batch["workbookFiles"][0]["relativePath"] == "SSS 5.11-5.17/Strategic Staffing Solutions Corp 账单/OTWS - Warehouse Bill-NJ8.xlsx"
+    assert any("子目录" in limitation for limitation in sss_batch["limitations"])
+
+
+def test_build_material_replay_plan_accepts_multi_warehouse_bill_workbooks(tmp_path):
+    batch = tmp_path / "SSS 5.11-5.17"
+    bill_dir = batch / "Strategic Staffing Solutions Corp 账单"
+    bill_dir.mkdir(parents=True)
+    for warehouse_id in ("8", "13"):
+        (batch / f"NJ{warehouse_id} Invoice Report WE 051726 JF.pdf").write_bytes(b"%PDF-1.4\n")
+        _write_labor_bill_workbook_with_rows(
+            bill_dir / f"OTWS - Warehouse Bill-NJ{warehouse_id}.xlsx",
+            [["WUS001", f"Worker {warehouse_id}", 8, 100, "USD", f"New Jersey Warehouse {warehouse_id}"]],
+        )
+
+    plan = build_material_replay_plan(tmp_path, batch_key="SSS_5_11_5_17")
+
+    item = plan["plans"][0]
+    assert item["supplier"] == "sss"
+    assert item["warehouseIds"] == ["8", "13"]
+    assert set(item["uploadPlan"]["workbookFiles"]) == {
+        "SSS 5.11-5.17/Strategic Staffing Solutions Corp 账单/OTWS - Warehouse Bill-NJ13.xlsx",
+        "SSS 5.11-5.17/Strategic Staffing Solutions Corp 账单/OTWS - Warehouse Bill-NJ8.xlsx",
+    }
+    assert {tuple(candidate["warehouseIds"]) for candidate in item["mappingCandidates"]} == {("8",), ("13",)}
+    assert "需要确认主账单" not in " ".join(item["expectedRisks"])
+    assert item["replayReady"] is True
+
+
+def test_build_material_replay_plan_suggests_uploads_mapping_and_risks(tmp_path):
+    batch = tmp_path / "oss 2"
+    batch.mkdir()
+    (batch / "US Elogis Service #7 Invoice W.E 05.24.26.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook_path = batch / "员工账单明细 - 2026-06-04T094719.972.xlsx"
+    _write_labor_bill_workbook(workbook_path)
+
+    plan = build_material_replay_plan(tmp_path, batch_key="oss_2")
+
+    assert plan["summary"]["planCount"] == 1
+    item = plan["plans"][0]
+    assert item["supplier"] == "oss"
+    assert item["periodHint"] == "W.E 05.24.26"
+    assert item["warehouseIds"] == ["7"]
+    assert item["uploadPlan"]["pdfFiles"] == ["oss 2/US Elogis Service #7 Invoice W.E 05.24.26.pdf"]
+    assert item["uploadPlan"]["workbookFiles"] == ["oss 2/员工账单明细 - 2026-06-04T094719.972.xlsx"]
+    mapping = item["mappingCandidates"][0]["suggestedMapping"]
+    assert mapping["name"] == "姓名"
+    assert mapping["hours"] == "时长总计(H)"
+    assert mapping["amount"] == "费用总计(含税)"
+    assert item["replayReady"] is True
+    assert item["replayMode"] == "deterministic_first"
+    assert "异常解释" in item["aiAllowedFor"]
+
+
+def test_build_material_replay_plan_excludes_hours_only_supporting_workbook(tmp_path):
+    batch = tmp_path / "Grande-"
+    batch.mkdir()
+    (batch / "GS invoice-ELOG-466-FL.pdf").write_bytes(b"%PDF-1.4\n")
+    bill_path = batch / "员工账单明细 - 2026-05-28T172347.826.xlsx"
+    _write_labor_bill_workbook(bill_path)
+    support_path = batch / "GRANDE-5.18-5.24.xlsx"
+    support_path.write_bytes(_workbook_with_hours_only_summary_bytes())
+
+    plan = build_material_replay_plan(tmp_path, batch_key="Grande")
+
+    item = plan["plans"][0]
+    assert item["uploadPlan"]["workbookFiles"] == ["Grande-/员工账单明细 - 2026-05-28T172347.826.xlsx"]
+    assert len(item["mappingCandidates"]) == 1
+    assert item["mappingCandidates"][0]["filename"].startswith("员工账单明细")
+    assert item["excludedWorkbookFiles"] == [
+        {
+            "relativePath": "Grande-/GRANDE-5.18-5.24.xlsx",
+            "filename": "GRANDE-5.18-5.24.xlsx",
+            "reason": "缺少必要映射: amount",
+        }
+    ]
+    assert any("辅助材料排除" in risk for risk in item["expectedRisks"])
+    assert item["replayReady"] is True
+
+
+def test_build_material_replay_plan_identifies_prompt_priority_batch(tmp_path):
+    batch = tmp_path / "prompt"
+    batch.mkdir()
+    (batch / "CHINA EXPRESS #3.pdf").write_bytes(b"%PDF-1.4\n")
+    (batch / "DEPT#27.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook(batch / "员工账单明细 - 2026-05-28T151400.642.xlsx")
+
+    plan = build_material_replay_plan(tmp_path, batch_key="prompt")
+
+    item = plan["plans"][0]
+    assert item["supplier"] == "prompt"
+    assert item["warehouseIds"] == ["3", "27"]
+    assert "未识别供应商" not in " ".join(item["expectedRisks"])
+    assert item["replayReady"] is True
+
+
+def test_build_material_replay_plan_uses_workbook_accounting_period(tmp_path):
+    batch = tmp_path / "prompt"
+    batch.mkdir()
+    (batch / "DEPT#27.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单明细"
+    sheet.append(["工号", "姓名", "时长总计(H)", "费用总计(含税)", "币种", "物理仓", "核算开始日期", "核算结束日期"])
+    sheet.append(["WUS001", "Alice Worker", 8, 100, "USD", "27号仓", "2026-05-11", "2026-05-17"])
+    workbook.save(batch / "员工账单明细 - exported.xlsx")
+
+    plan = build_material_replay_plan(tmp_path, batch_key="prompt")
+
+    item = plan["plans"][0]
+    assert item["periodHint"] == "2026-05-11~2026-05-17"
+    assert "未识别到账期" not in " ".join(item["expectedRisks"])
+
+
+def test_build_material_replay_plan_uses_workbook_supplier_hint(tmp_path):
+    batch = tmp_path / "29仓"
+    batch.mkdir()
+    (batch / "In291943.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单明细"
+    sheet.append(["供应商名称", "工号", "姓名", "时长总计(H)", "费用总计(含税)", "币种", "物理仓", "核算开始日期", "核算结束日期"])
+    sheet.append(["CitiStaff Solutions", "WUS001", "Alice Worker", 8, 100, "USD", "29号仓", "2026-05-11", "2026-05-17"])
+    workbook.save(batch / "员工账单明细 - 2026-05-28T141945.414.xlsx")
+
+    plan = build_material_replay_plan(tmp_path, batch_key="29仓")
+
+    item = plan["plans"][0]
+    assert item["supplier"] == "citistaff"
+    assert item["periodHint"] == "2026-05-11~2026-05-17"
+    assert "未识别供应商" not in " ".join(item["expectedRisks"])
+
+
+def test_build_material_dry_run_uses_deterministic_extract_and_does_not_write(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "oss 2"
+    batch.mkdir()
+    (batch / "US Elogis Service #7 Invoice W.E 05.24.26.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook(batch / "员工账单明细 - 2026-06-04T094719.972.xlsx")
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 100.0, "warehouse_id": "7"}],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(source_type="pdf_invoice", source_file=paths[0].name, source_page_or_row="p1", employee_id="WUS001", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=0.95, evidence_text="Alice Worker 8 $100")
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": "Alice Worker 8 $100"}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "oss_2")
+
+    assert dry_run["decision"] == "dry_run_only"
+    assert dry_run["writesRun"] is False
+    assert dry_run["aiInvoked"] is False
+    assert dry_run["summary"]["pdfRowCount"] == 1
+    assert dry_run["summary"]["excelRowCount"] == 1
+    assert dry_run["summary"]["comparison"]["exceptionCount"] == 0
+    assert dry_run["summary"]["warehouse"]["totalPassed"] is True
+    assert dry_run["summary"]["tierStatus"]["employeeDetailAvailable"] is True
+    assert dry_run["reviewQueues"]["primary"] == "cleared"
+    assert "无需继续处理" in dry_run["reviewQueues"]["primaryReason"]
+    assert dry_run["deliveryGate"]["status"] == "ready"
+    assert dry_run["deliveryGate"]["label"] == "可交付"
+    assert dry_run["deliveryGate"]["summary"]["blockedCount"] == 0
+    assert dry_run["deliveryGate"]["summary"]["reviewCount"] == 0
+    assert dry_run["deliveryGate"]["issues"] == []
+    assert dry_run["reviewQueues"]["employeeExceptions"]["count"] == 0
+    assert dry_run["reviewQueues"]["employeeExceptions"]["suppressedByPrimary"] is False
+    assert dry_run["summary"]["pdfTextCoverage"]["textReadableFileCount"] == 1
+    assert dry_run["summary"]["pdfTextCoverage"]["imageOnlyFileCount"] == 0
+    assert dry_run["sampleRows"][0]["matchStatus"] == "通过"
+    assert dry_run["exceptionRows"] == []
+    assert dry_run["candidateMatches"] == []
+    assert dry_run["nameMappingGovernance"]["decision"] == "candidate_only"
+    assert dry_run["nameMappingGovernance"]["summary"]["candidateCount"] == 0
+    assert dry_run["aiCacheAudit"]["summary"]["candidateFileCount"] == 0
+
+
+def test_material_review_queue_marks_zero_exception_batches_as_cleared():
+    from bonus_platform.engine.labor.materials import _build_material_review_queues
+
+    queues = _build_material_review_queues(
+        comparison_summary={"exceptionCount": 0},
+        warehouse_summary={"exceptionCount": 0},
+        exception_rows=[],
+        pdf_text_coverage={"summary": {"imageOnlyFileCount": 2}},
+        reocr_plan={"summary": {"taskCount": 2, "reviewableCandidateCount": 0}},
+        ai_cache_preview={"summary": {"exceptionCount": 2, "needsReocrFileCount": 2}},
+        name_mapping_governance={"summary": {"candidateCount": 0}},
+        combined_row_governance={"summary": {"candidateCount": 0}},
+        allocation_issues=[],
+        hours_tolerance=0.01,
+    )
+
+    assert queues["primary"] == "cleared"
+    assert "无需继续处理" in queues["primaryReason"]
+    assert queues["employeeExceptions"]["count"] == 0
+    assert queues["employeeExceptions"]["suppressedByPrimary"] is False
+
+
+def test_material_review_queue_preserves_all_reocr_tasks_for_frontend_collapse():
+    from bonus_platform.engine.labor.materials import _build_material_review_queues
+
+    tasks = [
+        {
+            "sourceFile": f"DEPT#{index}.pdf",
+            "warehouseId": str(index),
+            "amountDelta": -100 * index,
+            "pdfTextCoverage": {"needsOcr": True},
+            "diagnostics": {"summary": {"exceptionCount": index, "unmatchedCacheCount": 0, "unmatchedExcelCount": index}},
+        }
+        for index in range(1, 13)
+    ]
+
+    queues = _build_material_review_queues(
+        comparison_summary={"exceptionCount": 12},
+        warehouse_summary={"exceptionCount": 12},
+        exception_rows=[],
+        pdf_text_coverage={"summary": {"imageOnlyFileCount": 12}},
+        reocr_plan={"summary": {"taskCount": 12, "reviewableCandidateCount": 0}, "tasks": tasks},
+        ai_cache_preview={"summary": {"exceptionCount": 12, "needsReocrFileCount": 12}},
+        name_mapping_governance={"summary": {"candidateCount": 0}},
+        combined_row_governance={"summary": {"candidateCount": 0}},
+        allocation_issues=[],
+        hours_tolerance=0.01,
+    )
+
+    assert queues["primary"] == "reocr"
+    assert queues["reocr"]["taskCount"] == 12
+    assert len(queues["reocr"]["tasks"]) == 12
+    assert queues["reocr"]["tasks"][-1]["sourceFile"] == "DEPT#12.pdf"
+    assert queues["reocr"]["summaryText"] == "12 个 PDF 无文本层 · 12 个需图片识别复核 · 12 项员工级异常"
+    assert len(queues["reocr"]["groups"]) == 12
+    assert queues["reocr"]["groups"][0]["sourceFile"] == "DEPT#12.pdf"
+    assert queues["reocr"]["groups"][0]["statusLabel"] == "需重新识别"
+    assert queues["reocr"]["groups"][0]["needsTextRecognition"] is True
+    assert queues["reocr"]["groups"][0]["exceptionCount"] == 12
+    assert queues["reocr"]["groups"][0]["unmatchedExcelCount"] == 12
+
+
+def test_build_material_dry_run_applies_sss_rounding_tolerance(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "SSS 5.11-5.17"
+    batch.mkdir()
+    (batch / "NJ8 Invoice Report WE 051726 JF.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(batch / "OTWS - Warehouse Bill-NJ8.xlsx", [["WUS001", "Alice Worker", 8, 100.20, "USD", "New Jersey-8"]])
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 100.0, "warehouse_id": "8"}],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=paths[0].name,
+                source_page_or_row="p1",
+                employee_id="WUS001",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=100.0,
+                currency="USD",
+                confidence=0.95,
+                evidence_text="Alice Worker 8 $100.00",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": "Alice Worker 8 $100"}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "SSS_5_11_5_17")
+
+    assert dry_run["summary"]["tolerances"]["amount"] == 0.25
+    assert any("SSS" in note for note in dry_run["summary"]["tolerances"]["notes"])
+    assert dry_run["summary"]["comparison"]["exceptionCount"] == 0
+    assert dry_run["summary"]["warehouse"]["totalPassed"] is True
+
+
+def test_build_material_dry_run_prioritizes_amount_rate_review_for_same_hours_delta(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "SSS 5.11-5.17"
+    batch.mkdir()
+    (batch / "NJ13 Invoice Report WE 051726 JF.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "OTWS - Warehouse Bill-NJ13.xlsx",
+        [["WUS001", "ALVARO TEJADA CAMPOS", 8, 162.56, "USD", "New Jersey Warehouse 13"]],
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 172.72, "warehouse_id": "13"}],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=paths[0].name,
+                source_page_or_row="p19",
+                employee_id="WUS001",
+                employee_name_raw="Tejada, Alvaro",
+                hours=8,
+                amount=172.72,
+                currency="USD",
+                confidence=0.96,
+                evidence_text="Tejada, Alvaro 8 $21.59 $172.72",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 19, "text": "Tejada, Alvaro 8 $21.59 $172.72"}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "SSS_5_11_5_17")
+
+    assert dry_run["summary"]["comparison"]["exceptionCount"] == 1
+    assert dry_run["reviewQueues"]["primary"] == "amount_rate_review"
+    assert "费率" in dry_run["reviewQueues"]["primaryReason"]
+    queue = dry_run["reviewQueues"]["amountRateReview"]
+    assert queue["count"] == 1
+    assert queue["reviewMode"] == "amount_basis"
+    assert queue["amountOnlyCount"] == 1
+    assert queue["hoursMismatchCount"] == 0
+    assert queue["amountImpactTotal"] == 10.16
+    assert queue["amountOnlyImpactTotal"] == 10.16
+    assert queue["largestAmountDelta"] == 10.16
+    assert "工时已经对齐" in queue["businessQuestion"]
+    assert "金额计算口径" in queue["businessMeaning"]
+    assert "不能由系统自动" in queue["cannotAutoResolveReason"]
+    row = queue["rows"][0]
+    assert row["reviewType"] == "amount_basis_mismatch"
+    assert row["reviewLabel"] == "工时一致，仅金额不同"
+    assert row["reviewFocus"] == "先核金额口径"
+    assert row["employeeName"] == "Tejada, Alvaro"
+    assert row["pdfAmountTotal"] == 172.72
+    assert row["excelAmountTotal"] == 162.56
+    assert row["amountDelta"] == 10.16
+    assert row["amountDirectionLabel"] == "PDF 高于 Excel"
+    assert row["hoursDelta"] == 0
+    assert row["hoursDirectionLabel"] == "工时一致"
+    assert "PDF 比 Excel 多 $10.16" in row["businessQuestion"]
+    assert "工时一致" in row["businessQuestion"]
+    assert "金额口径属于业务结算判断" in row["cannotAutoResolveReason"]
+    assert "确认前不能自动清账" in row["recommendation"]
+    actions = queue["nextActions"]
+    assert [item["action"] for item in actions] == [
+        "create_formal_run",
+        "review_source_evidence",
+        "record_business_conclusion",
+        "download_report",
+    ]
+    assert actions[0]["enabled"] is True
+    assert actions[0]["label"] == "建正式批次并保留差异"
+    assert actions[1]["label"] == "核对金额计算口径"
+    assert "自动清账" in actions[0]["description"]
+    assert "保留为待处理异常" in actions[2]["description"]
+    assert actions[3]["label"] == "导出给业务确认"
+
+
+def test_build_material_dry_run_demotes_stale_image_cache_when_deterministic_extract_is_ok(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "SSS 5.11-5.17"
+    batch.mkdir()
+    (batch / "NJ13 Invoice Report WE 051726 JF.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook_rows = [["WUS001", "Alice Worker", 8, 100.00, "USD", "New Jersey Warehouse 13"]]
+    workbook_rows.extend(
+        [f"WUS{idx:03d}", f"Worker {idx:02d}", 8, 100.00, "USD", "New Jersey Warehouse 13"]
+        for idx in range(2, 13)
+    )
+    _write_labor_bill_workbook_with_rows(
+        batch / "OTWS - Warehouse Bill-NJ13.xlsx",
+        workbook_rows,
+    )
+    cache_dir = batch / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "NJ13_Invoice_Report_WE_051726_JF_p1_mimo-v2.5_v4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "Wrong Cache Person",
+                    "source_page": 1,
+                    "hours": 8,
+                    "amount": 80,
+                    "confidence": 0.95,
+                    "evidence_text": "Wrong Cache Person 8 $80.00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 1220.0, "warehouse_id": "13"}],
+    )
+    pdf_rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="NJ13 Invoice Report WE 051726 JF.pdf",
+            source_page_or_row="p1",
+            employee_id="WUS001",
+            employee_name_raw="Alice Worker",
+            hours=8,
+            amount=120.0,
+            currency="USD",
+            confidence=0.96,
+            evidence_text="Alice Worker 8 $120.00",
+        )
+    ]
+    pdf_rows.extend(
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="NJ13 Invoice Report WE 051726 JF.pdf",
+            source_page_or_row="p1",
+            employee_id=f"WUS{idx:03d}",
+            employee_name_raw=f"Worker {idx:02d}",
+            hours=8,
+            amount=100.0,
+            currency="USD",
+            confidence=0.96,
+            evidence_text=f"Worker {idx:02d} 8 $100.00",
+        )
+        for idx in range(2, 13)
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: pdf_rows,
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": paths[0].name,
+                "page": 1,
+                "text": "\n".join(row.evidence_text for row in pdf_rows),
+            }
+        ],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "SSS_5_11_5_17")
+
+    assert dry_run["summary"]["pdfRowCount"] == 12
+    assert dry_run["summary"]["pdfTextCoverage"]["imageOnlyFileCount"] == 0
+    assert dry_run["summary"]["quality"]["level"] == "ok"
+    assert dry_run["aiCacheReconciliationPreview"]["summary"]["needsReocrFileCount"] == 1
+    assert dry_run["reocrPlan"]["demotedByDeterministicExtract"] is True
+    assert dry_run["reocrPlan"]["summary"]["taskCount"] == 0
+    assert dry_run["reocrPlan"]["summary"]["demotedTaskCount"] == 1
+    assert dry_run["reviewQueues"]["reocr"]["taskCount"] == 0
+    assert dry_run["reviewQueues"]["primary"] == "amount_rate_review"
+    assert dry_run["deliveryGate"]["status"] == "needs_review"
+    assert not any(issue["code"] == "reocr_required" for issue in dry_run["deliveryGate"]["issues"])
+    assert any("降级为审计参考" in risk for risk in dry_run["expectedRisks"])
+
+
+def test_build_material_dry_run_prioritizes_amount_hours_review_for_hours_delta(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "osi 2"
+    batch.mkdir()
+    (batch / "US ELogistics Service Corp. 34926.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "员工账单明细 - 2026-06-04T094636.978.xlsx",
+        [["WUS001", "Maria Elena Parraguirre", 12.25, 467.41, "USD", "1号仓"]],
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 557.76, "warehouse_id": "1"}],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=paths[0].name,
+                source_page_or_row="p3",
+                employee_id="WUS001",
+                employee_name_raw="Parraguirre, Maria",
+                hours=20.36,
+                amount=557.76,
+                currency="USD",
+                confidence=0.98,
+                evidence_text="Parraguirre, Maria 8.11 OT + 12.25 REG/OT $557.76",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 3, "text": "Parraguirre, Maria 20.36 $557.76"}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "osi_2")
+
+    assert dry_run["summary"]["comparison"]["exceptionCount"] == 1
+    assert dry_run["reviewQueues"]["primary"] == "amount_rate_review"
+    assert "工时/金额" in dry_run["reviewQueues"]["primaryReason"]
+    queue = dry_run["reviewQueues"]["amountRateReview"]
+    assert queue["count"] == 1
+    assert queue["reviewMode"] == "hours_and_amount"
+    assert queue["amountOnlyCount"] == 0
+    assert queue["hoursMismatchCount"] == 1
+    assert queue["hoursImpactTotal"] == 8.11
+    assert queue["hoursMismatchImpactTotal"] == 90.35
+    assert "同一账期" in queue["businessQuestion"]
+    assert "是否在核同一批工时" in queue["businessMeaning"]
+    assert "工时差会改变应付金额" in queue["cannotAutoResolveReason"]
+    row = queue["rows"][0]
+    assert row["reviewType"] == "hours_amount_mismatch"
+    assert row["reviewLabel"] == "工时和金额都不同"
+    assert row["reviewFocus"] == "先核工时口径"
+    assert row["employeeName"] == "Parraguirre, Maria"
+    assert row["amountDelta"] == 90.35
+    assert row["amountDirectionLabel"] == "PDF 高于 Excel"
+    assert row["hoursDelta"] == 8.11
+    assert row["hoursDirectionLabel"] == "PDF 工时多于 Excel"
+    assert "PDF 比 Excel 多 $90.35" in row["businessQuestion"]
+    assert "工时多 8.11" in row["businessQuestion"]
+    assert "工时差会改变应付金额" in row["cannotAutoResolveReason"]
+    assert "账期范围" in row["recommendation"]
+    actions = queue["nextActions"]
+    assert actions[1]["label"] == "核对账期、加班和工时"
+    assert "账期范围" in actions[1]["description"]
+
+
+def test_build_material_dry_run_surfaces_cross_warehouse_allocation_review(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "fairway已报账2"
+    batch.mkdir()
+    (batch / "fairway_25.pdf").write_bytes(b"%PDF-1.4\n")
+    (batch / "fairway_28.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "员工账单明细 - 2026-06-04T094719.972.xlsx",
+        [
+            ["WUS041037", "PEREZ, JOSE", 4.0, 100.67, "USD", "25号仓"],
+            ["WUS043938", "JIMENEZ, ENEAS", 5.0, 116.85, "USD", "25号仓"],
+            ["WUS041037", "PEREZ, JOSE", 40.0, 935.59, "USD", "28号仓"],
+            ["WUS043938", "JIMENEZ, ENEAS", 40.0, 929.87, "USD", "28号仓"],
+        ],
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [
+            {"source_file": "fairway_25.pdf", "total_amount": 219.30, "warehouse_id": "25"},
+            {"source_file": "fairway_28.pdf", "total_amount": 1863.67, "warehouse_id": "28"},
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(source_type="pdf_invoice", source_file="fairway_25.pdf", source_page_or_row="p1", employee_id="WUS041037", employee_name_raw="PEREZ, JOSE", hours=4.0, amount=101.26, currency="USD", confidence=0.95, evidence_text="PEREZ, JOSE 4.0 101.26", warehouse_id="25"),
+            LaborLineItem(source_type="pdf_invoice", source_file="fairway_25.pdf", source_page_or_row="p1", employee_id="WUS043938", employee_name_raw="JIMENEZ, ENEAS", hours=5.0, amount=118.04, currency="USD", confidence=0.95, evidence_text="JIMENEZ, ENEAS 5.0 118.04", warehouse_id="25"),
+            LaborLineItem(source_type="pdf_invoice", source_file="fairway_28.pdf", source_page_or_row="p1", employee_id="WUS041037", employee_name_raw="PEREZ, JOSE", hours=40.0, amount=935.00, currency="USD", confidence=0.95, evidence_text="PEREZ, JOSE 40.0 935.00", warehouse_id="28"),
+            LaborLineItem(source_type="pdf_invoice", source_file="fairway_28.pdf", source_page_or_row="p1", employee_id="WUS043938", employee_name_raw="JIMENEZ, ENEAS", hours=40.0, amount=928.67, currency="USD", confidence=0.95, evidence_text="JIMENEZ, ENEAS 40.0 928.67", warehouse_id="28"),
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [
+            {"source_file": "fairway_25.pdf", "page": 1, "text": "PEREZ, JOSE 101.26 JIMENEZ, ENEAS 118.04"},
+            {"source_file": "fairway_28.pdf", "page": 1, "text": "PEREZ, JOSE 935.00 JIMENEZ, ENEAS 928.67"},
+        ],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "fairway已报账2")
+
+    assert dry_run["summary"]["comparison"]["exceptionCount"] == 0
+    assert dry_run["summary"]["warehouse"]["allocationIssueCount"] == 2
+    assert dry_run["summary"]["tierStatus"]["allocationIssueCount"] == 2
+    assert dry_run["reviewQueues"]["primary"] == "allocation_review"
+    assert "仓库归属" in dry_run["reviewQueues"]["primaryReason"]
+    queue = dry_run["reviewQueues"]["allocationReview"]
+    assert queue["count"] == 2
+    assert queue["warehousePairCount"] == 4
+    assert queue["amountImpactTotal"] == 1.79
+    assert [item["action"] for item in queue["nextActions"]] == [
+        "create_formal_run",
+        "extract_compare",
+        "review_warehouse_allocation",
+        "confirm_or_rollback",
+    ]
+    assert queue["nextActions"][0]["enabled"] is True
+    assert "审计记录" in queue["nextActions"][3]["description"]
+    rows_by_employee = {row["employeeName"]: row for row in queue["rows"]}
+    assert rows_by_employee["JIMENEZ, ENEAS"]["maxWarehouseDelta"] == 1.2
+    assert rows_by_employee["PEREZ, JOSE"]["netAmountDelta"] == 0.0
+    assert dry_run["allocationIssues"][0]["employeeName"] in {"JIMENEZ, ENEAS", "PEREZ, JOSE"}
+    assert any("跨仓库金额抵消" in risk for risk in dry_run["expectedRisks"])
+
+
+def test_build_material_dry_run_surfaces_name_mapping_candidates_as_governance_preview(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "29仓"
+    batch.mkdir()
+    (batch / "In291943.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "员工账单明细 - 2026-05-28T141945.414.xlsx",
+        [
+            ["WUS040020", "Deisi Pozo", 37.84, 847.84, "USD", "29号仓"],
+            ["WUS033570", "Freddy Moran (MOR47K)", 40.48, 830.72, "USD", "29号仓"],
+        ],
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 1890.27, "warehouse_id": "29"}],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(source_type="pdf_invoice", source_file=paths[0].name, source_page_or_row="p1", employee_id="", employee_name_raw="Rozo Panche, Deisy V", hours=37.84, amount=847.84, currency="USD", confidence=0.98, evidence_text="Rozo Panche, Deisy V 37.84 $847.84"),
+            LaborLineItem(source_type="pdf_invoice", source_file=paths[0].name, source_page_or_row="p1", employee_id="", employee_name_raw="Moran Treminio, Freddy", hours=40.48, amount=1042.43, currency="USD", confidence=0.98, evidence_text="Moran Treminio, Freddy 40.48 $1042.43"),
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": "Rozo Panche, Deisy V 37.84 $847.84"}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "29仓")
+
+    assert dry_run["summary"]["comparison"]["candidateMatchCount"] == 2
+    governance = dry_run["nameMappingGovernance"]
+    assert governance["decision"] == "candidate_only"
+    assert governance["requiresConfirmation"] is True
+    assert governance["summary"]["candidateCount"] == 2
+    assert governance["summary"]["highConfidenceCount"] == 1
+    assert governance["summary"]["readyToReplayCount"] == 1
+    assert governance["summary"]["projectedFixedExceptionCount"] == 2
+    assert governance["summary"]["amountStillDifferentCount"] == 1
+    candidate = governance["candidates"][0]
+    assert candidate["status"] == "pending_user_confirmation"
+    assert candidate["sourceFile"] == "In291943.pdf"
+    assert candidate["cacheEmployeeName"] == "Rozo Panche, Deisy V"
+    assert candidate["excelEmployeeName"] == "Deisi Pozo"
+    assert candidate["proposedMapping"] == {"Rozo Panche, Deisy V": "Deisi Pozo"}
+    assert candidate["confidence"] == "high"
+    assert candidate["projectedFixedExceptionCount"] == 2
+    assert candidate["matchReason"] == "姓名相似且金额/工时一致"
+    assert "是否确认 PDF 名称 Rozo Panche, Deisy V 对应 Excel 员工 Deisi Pozo" in candidate["businessQuestion"]
+    assert "预计减少 2 项异常" in candidate["businessQuestion"]
+    assert candidate["impactSummary"] == "金额和工时均一致"
+    assert "必须预览影响" in candidate["cannotAutoResolveReason"]
+    medium_candidate = governance["candidates"][1]
+    assert medium_candidate["confidence"] == "medium"
+    assert medium_candidate["cacheEmployeeName"] == "Moran Treminio, Freddy"
+    assert medium_candidate["projectedFixedExceptionCount"] == 0
+    assert medium_candidate["matchReason"] == "姓名相似，但金额或工时仍需复核"
+    assert "需先复核差异口径" in medium_candidate["businessQuestion"]
+    assert "PDF 高于 Excel" in medium_candidate["impactSummary"]
+    assert "不能直接确认匹配" in medium_candidate["cannotAutoResolveReason"]
+    assert candidate["auditTrail"][0]["reason"] == "material_dry_run_candidate_match_name_pair"
+    assert dry_run["reviewQueues"]["primary"] == "name_mapping"
+    assert "先预览确认" in dry_run["reviewQueues"]["primaryReason"]
+    name_queue = dry_run["reviewQueues"]["nameMapping"]
+    assert name_queue["count"] == 2
+    assert name_queue["readyToReplayCount"] == 1
+    assert name_queue["highConfidenceCount"] == 1
+    assert name_queue["projectedFixedExceptionCount"] == 2
+    assert name_queue["rows"][0]["candidateId"] == candidate["candidateId"]
+    assert name_queue["rows"][0]["projectedFixedExceptionCount"] == 2
+    assert name_queue["rows"][1]["projectedFixedExceptionCount"] == 0
+    name_actions = name_queue["nextActions"]
+    assert [item["action"] for item in name_actions] == [
+        "create_formal_run",
+        "extract_compare",
+        "preview_impact",
+        "confirm_or_rollback",
+    ]
+    assert name_actions[0]["enabled"] is True
+    assert name_actions[1]["enabled"] is False
+    assert "预览" in name_actions[2]["description"]
+    assert "撤回" in name_actions[3]["description"]
+    assert any("姓名匹配建议" in risk for risk in dry_run["expectedRisks"])
+
+
+def test_build_material_dry_run_surfaces_combined_pdf_rows_as_governance_preview(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "oss 2"
+    batch.mkdir()
+    (batch / "US Elogis Service #1 Invoice W.E 05.24.26.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "员工账单明细 - 2026-06-04T094719.972.xlsx",
+        [
+            ["WUS045753", "Manuel Lozano", 16.09, 361.42, "USD", "1号仓"],
+            ["WUS045746", "Massiel Castillo", 3.50, 78.40, "USD", "1号仓"],
+        ],
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 439.82, "warehouse_id": "1"}],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "extract_invoice_items",
+        lambda paths, config, **kwargs: [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=paths[0].name,
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw="Lozano, Manuel",
+                hours=19.59,
+                amount=439.82,
+                currency="USD",
+                confidence=0.95,
+                evidence_text="Lozano, Manuel 19.50 0.09 439.82",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": "Lozano, Manuel 19.50 0.09 439.82"}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "oss_2")
+
+    assert dry_run["summary"]["comparison"]["candidateMatchCount"] == 1
+    assert dry_run["candidateMatches"][0]["issueType"] == "combined_pdf_row"
+    assert dry_run["nameMappingGovernance"]["summary"]["candidateCount"] == 0
+    combined = dry_run["combinedRowGovernance"]
+    assert combined["decision"] == "candidate_only"
+    assert combined["requiresConfirmation"] is True
+    assert combined["summary"]["candidateCount"] == 1
+    assert combined["summary"]["amountImpactTotal"] == 78.4
+    assert combined["summary"]["hoursImpactTotal"] == 3.5
+    candidate = combined["candidates"][0]
+    assert candidate["status"] == "pending_invoice_review"
+    assert candidate["issueType"] == "combined_pdf_row"
+    assert candidate["pdfEmployeeName"] == "Lozano, Manuel ⇄ Manuel Lozano"
+    assert candidate["excelEmployeeName"] == "Massiel Castillo"
+    assert candidate["amountGap"] == 78.4
+    assert candidate["hoursGap"] == 3.5
+    assert candidate["matchReason"] == "PDF 行疑似包含多名员工或剩余金额/工时"
+    assert "是否还包含 Excel 员工 Massiel Castillo" in candidate["businessQuestion"]
+    assert "PDF 高于 Excel $78.40" in candidate["impactSummary"]
+    assert "PDF 工时多于 Excel 3.50" in candidate["impactSummary"]
+    assert "不能仅凭差额接近自动清账" in candidate["cannotAutoResolveReason"]
+    assert candidate["auditTrail"][0]["reason"] == "material_dry_run_combined_pdf_row"
+    assert dry_run["reviewQueues"]["primary"] == "combined_pdf_row"
+    assert "原始发票" in dry_run["reviewQueues"]["primaryReason"]
+    combined_queue = dry_run["reviewQueues"]["combinedPdfRows"]
+    assert combined_queue["count"] == 1
+    assert combined_queue["amountImpactTotal"] == 78.4
+    assert combined_queue["hoursImpactTotal"] == 3.5
+    assert combined_queue["rows"][0]["candidateId"] == candidate["candidateId"]
+    assert any("合并员工行建议" in risk for risk in dry_run["expectedRisks"])
+
+
+def test_build_material_dry_run_surfaces_ai_cache_as_candidate_only(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "oss"
+    batch.mkdir()
+    (batch / "elog7-5_20260520204043.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook(batch / "员工账单明细 - 2026-05-27T110404.877.xlsx")
+    cache_dir = batch / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "elog7-5_20260520204043_p1_mimo-v2.5_v4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "Alice Worker",
+                    "source_page": 1,
+                    "hours": 8,
+                    "amount": 120,
+                    "confidence": 0.95,
+                    "evidence_text": "Alice Worker TOTAL $120.00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 120.0, "warehouse_id": "1"}],
+    )
+    monkeypatch.setattr(materials_module, "extract_invoice_items", lambda paths, config, **kwargs: [])
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": ""}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "oss")
+
+    assert dry_run["summary"]["pdfRowCount"] == 0
+    assert dry_run["summary"]["pdfTextCoverage"]["imageOnlyFileCount"] == 1
+    assert dry_run["pdfTextCoverage"]["files"][0]["needsOcr"] is True
+    assert dry_run["summary"]["comparison"]["unmatchedExcelCount"] == 1
+    assert dry_run["reviewQueues"]["primary"] == "reocr"
+    assert "图片识别复核" in dry_run["reviewQueues"]["primaryReason"]
+    assert dry_run["reviewQueues"]["reocr"]["taskCount"] == 1
+    assert dry_run["reviewQueues"]["reocr"]["imageOnlyFileCount"] == 1
+    assert dry_run["deliveryGate"]["status"] == "blocked"
+    assert dry_run["deliveryGate"]["label"] == "不可交付"
+    assert dry_run["deliveryGate"]["summary"]["blockedCount"] == 1
+    assert dry_run["deliveryGate"]["issues"][0]["code"] == "reocr_required"
+    assert "图片识别未闭环" in dry_run["deliveryGate"]["issues"][0]["title"]
+    reocr_actions = dry_run["reviewQueues"]["reocr"]["nextActions"]
+    assert [item["action"] for item in reocr_actions] == [
+        "create_formal_run",
+        "extract_compare",
+        "replay_candidate",
+        "confirm_apply",
+    ]
+    assert reocr_actions[0]["enabled"] is True
+    assert reocr_actions[1]["enabled"] is False
+    assert "识别结果" in reocr_actions[2]["description"]
+    assert "撤回" in reocr_actions[3]["description"]
+    assert dry_run["reviewQueues"]["employeeExceptions"]["count"] == 1
+    assert dry_run["reviewQueues"]["employeeExceptions"]["suppressedByPrimary"] is True
+    assert dry_run["aiCacheAudit"]["decision"] == "candidate_only"
+    assert dry_run["aiCacheAudit"]["requiresConfirmation"] is True
+    assert dry_run["aiCacheAudit"]["summary"]["candidateAmountTotal"] == 120
+    assert dry_run["aiCacheAudit"]["files"][0]["evidence"][0]["sourcePageOrRow"] == "p1"
+    assert dry_run["aiCacheReconciliationPreview"]["decision"] == "candidate_only"
+    assert dry_run["aiCacheReconciliationPreview"]["summary"]["candidateRowCount"] == 1
+    assert dry_run["aiCacheReconciliationPreview"]["summary"]["passedCount"] == 0
+    assert dry_run["aiCacheReconciliationPreview"]["summary"]["exceptionCount"] == 1
+    assert dry_run["aiCacheReconciliationPreview"]["summary"]["needsReocrFileCount"] == 1
+    assert dry_run["aiCacheReconciliationPreview"]["fileQuality"][0]["decision"] == "needs_reocr"
+    assert dry_run["reocrPlan"]["decision"] == "candidate_only"
+    assert dry_run["reocrPlan"]["summary"]["taskCount"] == 1
+    assert dry_run["reocrPlan"]["summary"]["imageOnlyTaskCount"] == 1
+    assert dry_run["reocrPlan"]["tasks"][0]["sourceFile"] == "elog7-5_20260520204043.pdf"
+    assert dry_run["reocrPlan"]["tasks"][0]["pdfTextCoverage"]["needsOcr"] is True
+    assert dry_run["reocrPlan"]["tasks"][0]["extractionPrerequisite"] == "pdf_text_layer_empty_requires_ocr"
+    assert dry_run["reocrPlan"]["tasks"][0]["reviewFocus"] == "需要重新图片识别"
+    user_visible_reocr_text = " ".join(
+        str(dry_run["reocrPlan"]["tasks"][0].get(field, ""))
+        for field in ("reason", "confirmationGate", "matchReason", "businessQuestion", "impactSummary", "cannotAutoResolveReason")
+    )
+    assert "OCR" not in user_visible_reocr_text
+    assert "AI" not in user_visible_reocr_text
+    assert "图片识别" in user_visible_reocr_text or "重新识别" in user_visible_reocr_text
+    assert "PDF 无可读取文本层" in dry_run["reocrPlan"]["tasks"][0]["matchReason"]
+    assert "员工级异常 1 项" in dry_run["reocrPlan"]["tasks"][0]["matchReason"]
+    assert "必须先预览员工级影响" in dry_run["reocrPlan"]["tasks"][0]["businessQuestion"]
+    assert "员工级异常 1 项" in dry_run["reocrPlan"]["tasks"][0]["impactSummary"]
+    assert "不能自动写入正式结果" in dry_run["reocrPlan"]["tasks"][0]["cannotAutoResolveReason"]
+    assert "Alice Worker" in dry_run["reocrPlan"]["tasks"][0]["focusEmployees"][0]["employeeName"]
+    assert "Alice Worker" in dry_run["reviewQueues"]["reocr"]["tasks"][0]["focusEmployees"][0]["employeeName"]
+    assert dry_run["reviewQueues"]["reocr"]["tasks"][0]["reviewFocus"] == "需要重新图片识别"
+    assert "必须人工确认" in dry_run["reocrPlan"]["tasks"][0]["confirmationGate"]
+    assert dry_run["writesRun"] is False
+    assert dry_run["aiInvoked"] is False
+    assert any("无可读取文本层" in risk for risk in dry_run["expectedRisks"])
+    assert any("历史图片识别" in risk for risk in dry_run["expectedRisks"])
+    assert any("不能直接作为 PDF 明细" in risk for risk in dry_run["expectedRisks"])
+    assert any("历史图片识别结果与账单仍有 1 项差异" in risk for risk in dry_run["expectedRisks"])
+    assert any("历史图片识别文件级评估：1 个 PDF 建议重新图片识别，0 个 PDF 可作为人工复核证据" in risk for risk in dry_run["expectedRisks"])
+    assert any("已生成 1 个图片识别复核任务" in risk for risk in dry_run["expectedRisks"])
+
+
+def test_build_material_dry_run_explains_image_only_pdf_without_history_cache(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "prompt"
+    batch.mkdir()
+    (batch / "DEPT#2.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "员工账单明细 - 2026-05-28T151400.642.xlsx",
+        [["WUS001", "Alice Worker", 8, 100, "USD", "2号仓"]],
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 0.0, "warehouse_id": "2"}],
+    )
+    monkeypatch.setattr(materials_module, "extract_invoice_items", lambda paths, config, **kwargs: [])
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": ""}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "prompt")
+
+    assert dry_run["reviewQueues"]["primary"] == "reocr"
+    assert dry_run["deliveryGate"]["status"] == "blocked"
+    assert dry_run["reocrPlan"]["summary"]["taskCount"] == 1
+    task = dry_run["reocrPlan"]["tasks"][0]
+    assert task["sourceFile"] == "DEPT#2.pdf"
+    assert "当前没有可用 PDF 明细覆盖账单" in task["matchReason"]
+    assert "账单有但当前明细缺失 1 人" in task["impactSummary"]
+    user_visible_text = " ".join(
+        str(task.get(field, ""))
+        for field in ("matchReason", "businessQuestion", "impactSummary", "cannotAutoResolveReason")
+    )
+    assert "缓存金额" not in user_visible_text
+    assert "历史识别" not in user_visible_text
+    assert any("已生成 1 个图片识别复核任务" in risk for risk in dry_run["expectedRisks"])
+
+
+def test_build_material_dry_run_promotes_reocr_suspected_name_pairs_to_governance(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.materials as materials_module
+
+    batch = tmp_path / "oss"
+    batch.mkdir()
+    (batch / "elog1-1_20260520204104.pdf").write_bytes(b"%PDF-1.4\n")
+    _write_labor_bill_workbook_with_rows(
+        batch / "员工账单明细 - 2026-05-27T110404.877.xlsx",
+        [
+            ["WUS045751", "Massiel Castillo", 30.92, 100.00, "USD", "1号仓"],
+            ["WUS045752", "Other Worker", 2.00, 50.00, "USD", "1号仓"],
+        ],
+    )
+    cache_dir = batch / ".ai_extract_cache"
+    cache_dir.mkdir()
+    (cache_dir / "elog1-1_20260520204104_p1_mimo-v2.5_v4.json").write_text(
+        json.dumps(
+            [
+                {
+                    "employee_name_raw": "Espinosa Manuel",
+                    "source_page": 1,
+                    "hours": 30.90,
+                    "amount": 100.00,
+                    "confidence": 0.95,
+                    "evidence_text": "Espinosa Manuel TOTAL $100.00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        materials_module,
+        "quick_extract_totals",
+        lambda paths, config, supplier="": [{"source_file": paths[0].name, "total_amount": 0.0, "warehouse_id": "1"}],
+    )
+    monkeypatch.setattr(materials_module, "extract_invoice_items", lambda paths, config, **kwargs: [])
+    monkeypatch.setattr(
+        materials_module,
+        "_extract_pdf_pages",
+        lambda paths: [{"source_file": paths[0].name, "page": 1, "text": ""}],
+    )
+
+    dry_run = build_material_dry_run(tmp_path, "oss")
+
+    assert dry_run["reocrPlan"]["summary"]["taskCount"] == 1
+    suspected = dry_run["reocrPlan"]["tasks"][0]["diagnostics"]["suspectedNamePairs"]
+    assert suspected[0]["cacheEmployeeName"] == "Espinosa Manuel"
+    governance = dry_run["nameMappingGovernance"]
+    assert governance["decision"] == "candidate_only"
+    assert governance["summary"]["candidateCount"] == 1
+    assert governance["summary"]["fromReocrDiagnosticsCount"] == 1
+    candidate = governance["candidates"][0]
+    assert candidate["sourceDiagnostic"] == "reocr_suspected_name_pair"
+    assert candidate["sourceFile"] == "elog1-1_20260520204104.pdf"
+    assert candidate["warehouseId"] == "1"
+    assert candidate["proposedMapping"] == {"Espinosa Manuel": "Massiel Castillo"}
+    assert candidate["auditTrail"][0]["reason"] == "material_dry_run_reocr_suspected_name_pair"
+    assert any("姓名匹配建议" in risk for risk in dry_run["expectedRisks"])
+
+
+def _write_labor_bill_workbook(path):
+    _write_labor_bill_workbook_with_rows(path, [["WUS001", "Alice Worker", 8, 100, "USD", "7号仓"]])
+
+
+def _write_labor_bill_workbook_with_rows(path, rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单"
+    sheet.append(["工号", "姓名", "时长总计(H)", "费用总计(含税)", "币种", "物理仓"])
+    for row in rows:
+        sheet.append(row)
+    workbook.save(path)

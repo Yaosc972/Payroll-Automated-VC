@@ -21,6 +21,8 @@ def build_labor_report(
     mapping: Dict[str, str],
     warehouse_comparison: Dict[str, Any] | None = None,
     extraction_quality: Dict[str, Any] | None = None,
+    reconciliation_diagnostics: Dict[str, Any] | None = None,
+    ai_cache_audit: Dict[str, Any] | None = None,
 ) -> None:
     workbook = Workbook()
     workbook.remove(workbook.active)
@@ -37,6 +39,10 @@ def build_labor_report(
     _write_reconciliation_detail(workbook, rows)
     if warehouse_comparison:
         _write_warehouse_summary(workbook, warehouse_comparison)
+    if reconciliation_diagnostics:
+        _write_reconciliation_diagnostics(workbook, reconciliation_diagnostics)
+    if ai_cache_audit:
+        _write_ai_cache_audit(workbook, ai_cache_audit)
     _write_rows(workbook, "金额差异员工", _filter(rows, "金额差异"))
     _write_rows(workbook, "工时风险项", [row for row in rows if row.get("matchStatus") == "工时不一致" or "工时需复核" in row.get("riskFlags", [])])
     _write_rows(workbook, "不在本批发票", [row for row in rows if row.get("matchStatus") in {"PDF有Excel无", "Excel有PDF无", "疑似姓名匹配"}])
@@ -47,6 +53,408 @@ def build_labor_report(
     _write_mapping(workbook, mapping)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
+
+
+def build_labor_projection_report(output_path: Path, preview: Dict[str, Any]) -> None:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+
+    _write_projection_summary(workbook, preview)
+    _write_projection_affected_rows(workbook, preview.get("affectedRows", []) or [])
+    _write_projection_corrections(workbook, preview.get("appliedCorrections", []) or [])
+    _write_projection_manual_review(workbook, preview.get("manualReview", []) or [])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+
+
+def build_labor_governance_report(output_path: Path, metadata: Dict[str, Any]) -> None:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+
+    _write_governance_overview(workbook, metadata)
+    _write_rule_governance(workbook, metadata.get("ruleGovernance", {}) or {})
+    _write_name_mapping_governance(workbook, metadata.get("nameMappingGovernance", {}) or {})
+    _write_profile_governance(workbook, metadata.get("profileGovernance", {}) or {})
+    _write_correction_governance(workbook, metadata.get("correctionGovernance", {}) or {})
+    _write_reocr_governance(workbook, metadata.get("reocrReplayGovernance", {}) or {})
+    _write_reocr_upload_coverage(workbook, ((metadata.get("files") or {}).get("reocrCandidateFiles") or []))
+    _write_governance_ai_evidence(workbook, metadata.get("aiCacheAudit", {}) or {})
+    _write_governance_audit_trail(workbook, metadata)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(output_path)
+
+
+def _write_governance_overview(workbook: Workbook, metadata: Dict[str, Any]) -> None:
+    rule = metadata.get("ruleGovernance", {}) or {}
+    name_mapping = metadata.get("nameMappingGovernance", {}) or {}
+    profile = metadata.get("profileGovernance", {}) or {}
+    correction = metadata.get("correctionGovernance", {}) or {}
+    reocr = metadata.get("reocrReplayGovernance", {}) or {}
+    ai_cache = metadata.get("aiCacheAudit", {}) or {}
+    sheet = workbook.create_sheet("治理总览")
+    sheet.append(["项目", "值"])
+    sheet.append(["批次ID", metadata.get("id", "")])
+    sheet.append(["供应商", metadata.get("supplierName", "")])
+    sheet.append(["账期", f"{metadata.get('periodStart', '')} ~ {metadata.get('periodEnd', '')}"])
+    sheet.append(["当前状态", metadata.get("status", "")])
+    sheet.append(["规则候选", len(rule.get("candidates") or [])])
+    sheet.append(["已确认规则", len(rule.get("activeRules") or [])])
+    sheet.append(["已回滚规则", len(rule.get("rolledBackRules") or [])])
+    sheet.append(["姓名映射候选", len(name_mapping.get("candidates") or [])])
+    sheet.append(["已确认姓名映射", len(name_mapping.get("activeMappings") or [])])
+    sheet.append(["已回滚姓名映射", len(name_mapping.get("rolledBackMappings") or [])])
+    sheet.append(["Profile候选", len(profile.get("candidates") or [])])
+    sheet.append(["已确认Profile", len(profile.get("activeProfiles") or [])])
+    sheet.append(["已回滚Profile", len(profile.get("rolledBackProfiles") or [])])
+    sheet.append(["修正候选", len(correction.get("candidates") or [])])
+    sheet.append(["已确认修正", len(correction.get("activeCorrections") or [])])
+    sheet.append(["已回滚修正", len(correction.get("rolledBackCorrections") or [])])
+    sheet.append(["图片识别预览", len(reocr.get("replays") or [])])
+    sheet.append(["已确认图片识别结果", len(reocr.get("activeCandidates") or [])])
+    sheet.append(["已回滚图片识别结果", len(reocr.get("rolledBackCandidates") or [])])
+    sheet.append(["AI候选证据决策", ai_cache.get("decision", "")])
+    sheet.append(["AI候选文件数", (ai_cache.get("summary") or {}).get("candidateFileCount", 0)])
+    _format(sheet)
+
+
+def _write_rule_governance(workbook: Workbook, governance: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("规则治理")
+    sheet.append(["类型", "规则ID", "标题", "状态", "决策", "版本", "回放决策", "回放摘要", "说明"])
+    replay = governance.get("replaySummaries") or {}
+    for kind, rows in (
+        ("候选", governance.get("candidates") or []),
+        ("已确认", governance.get("activeRules") or []),
+        ("已回滚", governance.get("rolledBackRules") or []),
+    ):
+        for row in rows:
+            rule_id = str(row.get("ruleId") or "")
+            replay_row = replay.get(rule_id) or {}
+            sheet.append([
+                kind,
+                rule_id,
+                row.get("title", ""),
+                row.get("status", ""),
+                row.get("decision", ""),
+                row.get("version", ""),
+                replay_row.get("decision", ""),
+                _governance_summary_text(replay_row.get("summary") or row.get("replaySummary") or {}),
+                row.get("description") or row.get("confirmationReason") or row.get("rollbackReason") or "",
+            ])
+    _format(sheet)
+
+
+def _write_profile_governance(workbook: Workbook, governance: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("Profile治理")
+    sheet.append(["类型", "候选ID", "供应商", "Profile", "状态", "决策", "版本", "回放决策", "回放摘要", "说明"])
+    replay = governance.get("replaySummaries") or {}
+    for kind, rows in (
+        ("候选", governance.get("candidates") or []),
+        ("已确认", governance.get("activeProfiles") or []),
+        ("已回滚", governance.get("rolledBackProfiles") or []),
+    ):
+        for row in rows:
+            candidate_id = str(row.get("candidateId") or "")
+            profile_data = row.get("profileData") if isinstance(row.get("profileData"), dict) else {}
+            replay_row = replay.get(candidate_id) or {}
+            sheet.append([
+                kind,
+                candidate_id,
+                row.get("supplier", ""),
+                row.get("profileKey") or profile_data.get("key", ""),
+                row.get("status", ""),
+                row.get("decision", ""),
+                row.get("version") or profile_data.get("version", ""),
+                replay_row.get("decision", ""),
+                _governance_summary_text(replay_row.get("summary") or row.get("replaySummary") or {}),
+                row.get("confirmationReason") or row.get("rollbackReason") or "",
+            ])
+    _format(sheet)
+
+
+def _write_correction_governance(workbook: Workbook, governance: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("修正治理")
+    sheet.append(["类型", "候选ID", "员工", "状态", "决策", "置信度", "来源", "回放决策", "回放摘要", "说明"])
+    replay = governance.get("replaySummaries") or {}
+    for kind, rows in (
+        ("候选", governance.get("candidates") or []),
+        ("已确认", governance.get("activeCorrections") or []),
+        ("已回滚", governance.get("rolledBackCorrections") or []),
+    ):
+        for row in rows:
+            candidate_id = str(row.get("candidateId") or "")
+            proposed = row.get("proposed") if isinstance(row.get("proposed"), dict) else {}
+            replay_row = replay.get(candidate_id) or {}
+            sheet.append([
+                kind,
+                candidate_id,
+                proposed.get("employeeName", ""),
+                row.get("status", ""),
+                row.get("decision", ""),
+                row.get("confidence", ""),
+                f"{proposed.get('sourceFile', '')} {proposed.get('sourcePageOrRow', '')}".strip(),
+                replay_row.get("decision", ""),
+                _governance_summary_text(replay_row.get("summary") or row.get("replaySummary") or {}),
+                row.get("confirmationReason") or row.get("rollbackReason") or row.get("reason") or "",
+            ])
+    _format(sheet)
+
+
+def _write_name_mapping_governance(workbook: Workbook, governance: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("姓名映射治理")
+    sheet.append(["类型", "候选ID", "PDF/缓存姓名", "Excel姓名", "文件", "仓库", "状态", "决策", "修复数", "回归数", "异常变化", "历史已检批次", "历史缺明细批次", "历史回归批次", "金额差", "工时差", "操作者", "说明", "证据"])
+    replays = governance.get("replaySummaries") if isinstance(governance.get("replaySummaries"), dict) else {}
+    for kind, rows in (
+        ("候选", governance.get("candidates") or []),
+        ("已确认", governance.get("activeMappings") or []),
+        ("已回滚", governance.get("rolledBackMappings") or []),
+    ):
+        for row in rows:
+            evidence = row.get("evidence") if isinstance(row.get("evidence"), dict) else {}
+            replay = replays.get(row.get("candidateId"), {})
+            if not replay and isinstance(row.get("replaySummary"), dict):
+                replay = {"summary": row.get("replaySummary")}
+            summary = replay.get("summary") if isinstance(replay, dict) and isinstance(replay.get("summary"), dict) else {}
+            sheet.append([
+                kind,
+                row.get("candidateId", ""),
+                row.get("cacheEmployeeName", ""),
+                row.get("excelEmployeeName", ""),
+                row.get("sourceFile", ""),
+                row.get("warehouseId", ""),
+                row.get("status", ""),
+                row.get("decision", ""),
+                summary.get("fixedCount", ""),
+                summary.get("regressionCount", ""),
+                summary.get("exceptionDelta", ""),
+                summary.get("historicalCheckedCount", ""),
+                summary.get("historicalInsufficientCount", ""),
+                summary.get("historicalRegressionCount", ""),
+                row.get("amountGap", ""),
+                row.get("hoursGap", ""),
+                row.get("confirmedBy") or row.get("rolledBackBy") or "",
+                row.get("confirmationReason") or row.get("rollbackReason") or row.get("recommendation") or "",
+                evidence.get("sourceRefs", ""),
+            ])
+    _format(sheet)
+
+
+def _write_reocr_governance(workbook: Workbook, governance: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("图片识别治理")
+    sheet.append(["类型", "候选ID", "文件", "仓库", "状态", "决策", "候选行数", "候选金额", "账单金额", "异常数", "建议动作", "根因提示", "疑似姓名配对", "操作者", "说明"])
+    for replay in governance.get("replays", []) or []:
+        summary = replay.get("summary") if isinstance(replay.get("summary"), dict) else {}
+        diagnostics = replay.get("diagnostics") if isinstance(replay.get("diagnostics"), dict) else {}
+        sheet.append([
+            "回放",
+            "",
+            replay.get("sourceFile", ""),
+            replay.get("warehouseId", ""),
+            replay.get("mode", ""),
+            replay.get("decision", ""),
+            summary.get("candidateRowCount", ""),
+            summary.get("candidateAmountTotal", ""),
+            summary.get("expectedExcelAmount", ""),
+            summary.get("exceptionCount", ""),
+            diagnostics.get("recommendedAction", ""),
+            "；".join(str(item) for item in diagnostics.get("rootCauseHints", []) or []),
+            _reocr_name_pairs_text(diagnostics),
+            "",
+            "；".join(str(item) for item in replay.get("blockers", []) or []),
+        ])
+    for kind, rows in (
+        ("已确认", governance.get("activeCandidates") or []),
+        ("已回滚", governance.get("rolledBackCandidates") or []),
+    ):
+        for row in rows:
+            replay = row.get("replay") if isinstance(row.get("replay"), dict) else {}
+            summary = replay.get("summary") if isinstance(replay.get("summary"), dict) else {}
+            diagnostics = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
+            if not diagnostics:
+                diagnostics = replay.get("diagnostics") if isinstance(replay.get("diagnostics"), dict) else {}
+            sheet.append([
+                kind,
+                row.get("candidateId", ""),
+                row.get("sourceFile", ""),
+                row.get("warehouseId", ""),
+                row.get("status", ""),
+                row.get("decision", ""),
+                summary.get("candidateRowCount", ""),
+                summary.get("candidateAmountTotal", ""),
+                summary.get("expectedExcelAmount", ""),
+                summary.get("exceptionCount", ""),
+                diagnostics.get("recommendedAction", ""),
+                "；".join(str(item) for item in diagnostics.get("rootCauseHints", []) or []),
+                _reocr_name_pairs_text(diagnostics),
+                row.get("appliedBy") or row.get("confirmedBy") or row.get("rolledBackBy") or "",
+                row.get("applicationReason") or row.get("confirmationReason") or row.get("rollbackReason") or "",
+            ])
+    _format(sheet)
+
+
+def _write_reocr_upload_coverage(workbook: Workbook, records: List[Dict[str, Any]]) -> None:
+    sheet = workbook.create_sheet("图片识别上传覆盖")
+    sheet.append(["类型", "候选文件", "计划任务", "已覆盖", "缺失任务", "计划外范围", "覆盖完整", "文件", "仓库", "行数"])
+    for record in records or []:
+        summary = record.get("summary") if isinstance(record.get("summary"), dict) else {}
+        coverage = record.get("coverage") if isinstance(record.get("coverage"), dict) else {}
+        filename = record.get("filename", "")
+        sheet.append([
+            "汇总",
+            filename,
+            summary.get("plannedTaskCount", coverage.get("plannedTaskCount", "")),
+            summary.get("coveredTaskCount", coverage.get("coveredTaskCount", "")),
+            summary.get("missingTaskCount", coverage.get("missingTaskCount", "")),
+            summary.get("extraScopeCount", coverage.get("extraScopeCount", "")),
+            "是" if coverage.get("coverageComplete") else "否",
+            "",
+            "",
+            summary.get("parsedRowCount", ""),
+        ])
+        for item in coverage.get("uploadedScopes", []) or []:
+            sheet.append(["已上传范围", filename, "", "", "", "", "", item.get("sourceFile", ""), item.get("warehouseId", ""), item.get("rowCount", "")])
+        for item in coverage.get("missingTasks", []) or []:
+            sheet.append(["缺失计划任务", filename, "", "", "", "", "", item.get("sourceFile", ""), item.get("warehouseId", ""), ""])
+        for item in coverage.get("extraScopes", []) or []:
+            sheet.append(["计划外范围", filename, "", "", "", "", "", item.get("sourceFile", ""), item.get("warehouseId", ""), item.get("rowCount", "")])
+    _format(sheet)
+
+
+def _reocr_name_pairs_text(diagnostics: Dict[str, Any]) -> str:
+    pairs = diagnostics.get("suspectedNamePairs") if isinstance(diagnostics, dict) else []
+    if not isinstance(pairs, list):
+        return ""
+    values = []
+    for pair in pairs[:5]:
+        if not isinstance(pair, dict):
+            continue
+        values.append(
+            f"{pair.get('cacheEmployeeName', '')} ⇄ {pair.get('excelEmployeeName', '')} "
+            f"${pair.get('cacheAmount', 0)} / ${pair.get('excelAmount', 0)}"
+        )
+    return "；".join(values)
+
+
+def _write_governance_ai_evidence(workbook: Workbook, audit: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("AI候选治理")
+    sheet.append(["项目", "值"])
+    sheet.append(["决策", audit.get("decision", "")])
+    sheet.append(["需要确认", "是" if audit.get("requiresConfirmation") else "否"])
+    sheet.append(["说明", audit.get("message", "")])
+    sheet.append([])
+    sheet.append(["文件", "仓库", "候选行数", "候选金额", "平均置信度", "决策", "证据样例"])
+    for item in audit.get("files", []) or []:
+        evidence = item.get("evidence", []) or []
+        sample = ""
+        if evidence:
+            first = evidence[0]
+            sample = f"{first.get('employeeName', '')}: ${float(first.get('amount') or 0):.2f} {first.get('sourcePageOrRow', '')}"
+        sheet.append([
+            item.get("sourceFile", ""),
+            item.get("warehouseId", ""),
+            item.get("rowCount", 0),
+            item.get("candidateAmountTotal", 0),
+            item.get("averageConfidence", 0),
+            item.get("decision", ""),
+            sample,
+        ])
+    _format(sheet)
+
+
+def _write_governance_audit_trail(workbook: Workbook, metadata: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("审计记录")
+    sheet.append(["对象类型", "对象ID", "动作", "操作者", "原因", "版本/摘要"])
+    sources = [
+        ("规则", "ruleId", (metadata.get("ruleGovernance", {}) or {}).get("candidates") or []),
+        ("规则", "ruleId", (metadata.get("ruleGovernance", {}) or {}).get("activeRules") or []),
+        ("规则", "ruleId", (metadata.get("ruleGovernance", {}) or {}).get("rolledBackRules") or []),
+        ("姓名映射", "candidateId", (metadata.get("nameMappingGovernance", {}) or {}).get("candidates") or []),
+        ("姓名映射", "candidateId", (metadata.get("nameMappingGovernance", {}) or {}).get("activeMappings") or []),
+        ("姓名映射", "candidateId", (metadata.get("nameMappingGovernance", {}) or {}).get("rolledBackMappings") or []),
+        ("Profile", "candidateId", (metadata.get("profileGovernance", {}) or {}).get("candidates") or []),
+        ("Profile", "candidateId", (metadata.get("profileGovernance", {}) or {}).get("activeProfiles") or []),
+        ("Profile", "candidateId", (metadata.get("profileGovernance", {}) or {}).get("rolledBackProfiles") or []),
+        ("修正", "candidateId", (metadata.get("correctionGovernance", {}) or {}).get("candidates") or []),
+        ("修正", "candidateId", (metadata.get("correctionGovernance", {}) or {}).get("activeCorrections") or []),
+        ("修正", "candidateId", (metadata.get("correctionGovernance", {}) or {}).get("rolledBackCorrections") or []),
+        ("图片识别", "candidateId", (metadata.get("reocrReplayGovernance", {}) or {}).get("activeCandidates") or []),
+        ("图片识别", "candidateId", (metadata.get("reocrReplayGovernance", {}) or {}).get("rolledBackCandidates") or []),
+    ]
+    for object_type, id_key, rows in sources:
+        for row in rows:
+            object_id = row.get(id_key, "")
+            for event in row.get("auditTrail", []) or []:
+                sheet.append([
+                    object_type,
+                    object_id,
+                    event.get("action", ""),
+                    event.get("actor", ""),
+                    event.get("reason", ""),
+                    _governance_summary_text(event.get("replaySummary") or {}),
+                ])
+    _format(sheet)
+
+
+def _governance_summary_text(summary: Dict[str, Any]) -> str:
+    if not isinstance(summary, dict) or not summary:
+        return ""
+    return "；".join(f"{key}={value}" for key, value in sorted(summary.items()))
+
+
+def _write_projection_summary(workbook: Workbook, preview: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("预览结论")
+    sheet.append(["项目", "值"])
+    sheet.append(["预览决策", preview.get("decision", "")])
+    sheet.append(["说明", preview.get("reason", "")])
+    sheet.append([])
+
+    original = preview.get("originalSummary", {}) or {}
+    projected = preview.get("projectedSummary", {}) or {}
+    delta = preview.get("summaryDelta", {}) or {}
+    sheet.append(["指标", "正式结果", "预览结果", "变化"])
+    for key in sorted(set(original) | set(projected) | set(delta)):
+        sheet.append([key, original.get(key, ""), projected.get(key, ""), delta.get(key, "")])
+    _format(sheet)
+
+
+def _write_projection_affected_rows(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
+    headers = ["employeeName", "matchStatus", "pdfHoursTotal", "excelHoursTotal", "hoursDelta", "pdfAmountTotal", "excelAmountTotal", "amountDelta", "riskFlags"]
+    sheet = workbook.create_sheet("预览影响员工")
+    sheet.append(headers)
+    for row in rows:
+        values = []
+        for header in headers:
+            value = row.get(header, "")
+            if isinstance(value, list):
+                value = "；".join(str(item) for item in value)
+            values.append(value)
+        sheet.append(values)
+    _format(sheet)
+    _apply_status_fills(sheet, status_column=2, delta_column=8)
+
+
+def _write_projection_corrections(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
+    sheet = workbook.create_sheet("已应用修正")
+    sheet.append(["候选ID", "员工", "来源文件", "页码/行", "金额变化", "工时变化"])
+    for row in rows:
+        sheet.append([
+            row.get("candidateId", ""),
+            row.get("employeeName", ""),
+            row.get("sourceFile", ""),
+            row.get("sourcePageOrRow", ""),
+            row.get("amountDelta", 0),
+            row.get("hoursDelta", 0),
+        ])
+    _format(sheet)
+
+
+def _write_projection_manual_review(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
+    sheet = workbook.create_sheet("需人工处理")
+    sheet.append(["候选ID", "员工", "原因"])
+    for row in rows:
+        sheet.append([row.get("candidateId", ""), row.get("employeeName", ""), row.get("reason", "")])
+    _format(sheet)
 
 
 def _write_conclusion(workbook: Workbook, summary: Dict[str, Any], warehouse_comparison: Dict[str, Any] | None = None) -> None:
@@ -230,6 +638,151 @@ def _write_warehouse_summary(workbook: Workbook, warehouse_comparison: Dict[str,
     _apply_status_fills(sheet, status_column=2, delta_column=9)
 
 
+def _write_reconciliation_diagnostics(workbook: Workbook, diagnostics: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("信号诊断")
+    sheet.append(["项目", "值"])
+    sheet.append(["诊断级别", diagnostics.get("level", "")])
+    sheet.append(["诊断结论", diagnostics.get("message", "")])
+    sheet.append(["下一步", diagnostics.get("nextStep", "")])
+    sheet.append([])
+
+    signals = diagnostics.get("signals", {}) or {}
+    sheet.append(["总额信号", "金额"])
+    sheet.append(["快速PDF总额", signals.get("fastPdfTotal", 0)])
+    sheet.append(["员工PDF明细总额", signals.get("employeePdfTotal", 0)])
+    sheet.append(["Excel账单总额", signals.get("excelTotal", 0)])
+    sheet.append(["仓库PDF总额", signals.get("warehouseTotal", 0)])
+    sheet.append([])
+
+    issues = diagnostics.get("issues", []) or []
+    if issues:
+        sheet.append(["诊断问题", "级别", "说明", "明细"])
+        for issue in issues:
+            items = issue.get("items", []) or []
+            sheet.append([
+                issue.get("title", issue.get("code", "")),
+                issue.get("level", ""),
+                issue.get("message", ""),
+                "；".join(str(item) for item in items),
+            ])
+        sheet.append([])
+
+    amount_basis = signals.get("amountBasis", []) or []
+    if amount_basis:
+        sheet.append([
+            "仓库",
+            "PDF总额",
+            "OTWS汇总总额",
+            "PDF-OTWS差异",
+            "费用组成合计",
+            "员工薪资明细",
+            "福利/补充费用",
+            "装卸费用",
+            "证据",
+        ])
+        for item in amount_basis:
+            evidence = "; ".join(value for value in (item.get("summaryEvidence", ""), item.get("detailEvidence", "")) if value)
+            sheet.append([
+                item.get("warehouseId", ""),
+                item.get("pdfTotal", 0),
+                item.get("reportedTotal", 0),
+                item.get("pdfVsReportedDelta", 0),
+                item.get("componentTotal", 0),
+                item.get("employeeExpenses", 0),
+                item.get("employeeBenefits", 0),
+                item.get("loadingAndUnloading", 0),
+                evidence,
+            ])
+        sheet.append([])
+
+    offsetting_deltas = signals.get("offsettingWarehouseDeltas", []) or []
+    if offsetting_deltas:
+        sheet.append(["互相抵消的仓库差异"])
+        sheet.append(["仓库", "PDF总额", "Excel总额", "差异", "主要归因"])
+        for item in offsetting_deltas:
+            attribution = "；".join(
+                f"{row.get('employeeName', '')}: ${float(row.get('delta') or 0):.2f}"
+                for row in (item.get("attribution", []) or [])[:5]
+            )
+            sheet.append([
+                item.get("warehouseId", ""),
+                item.get("pdfAmountTotal", 0),
+                item.get("excelAmountTotal", 0),
+                item.get("amountDelta", 0),
+                attribution,
+            ])
+        sheet.append([])
+
+    employee_attribution = signals.get("employeeAttribution", []) or []
+    if employee_attribution:
+        sheet.append(["员工主导的仓库差异"])
+        sheet.append(["仓库", "员工", "PDF金额", "Excel金额", "员工差异", "仓库总差异"])
+        for item in employee_attribution:
+            sheet.append([
+                item.get("warehouseId", ""),
+                item.get("employeeName", ""),
+                item.get("pdfAmount", 0),
+                item.get("excelAmount", 0),
+                item.get("delta", 0),
+                item.get("warehouseDelta", 0),
+            ])
+        sheet.append([])
+
+    allocation_issues = signals.get("crossWarehouseEmployeeAllocation", []) or []
+    if allocation_issues:
+        sheet.append(["员工跨仓库金额抵消"])
+        sheet.append(["员工", "净差异", "仓库数", "仓库明细", "建议"])
+        for item in allocation_issues:
+            details = "；".join(
+                (
+                    f"仓库 {row.get('warehouseId', '')}: "
+                    f"PDF ${float(row.get('pdfAmount') or 0):.2f}, "
+                    f"Excel ${float(row.get('excelAmount') or 0):.2f}, "
+                    f"差异 ${float(row.get('amountDelta') or 0):.2f}"
+                )
+                for row in (item.get("warehouses", []) or [])
+            )
+            sheet.append([
+                item.get("employeeName", ""),
+                item.get("netAmountDelta", 0),
+                item.get("warehouseCount", 0),
+                details,
+                item.get("recommendation", ""),
+            ])
+
+    _format(sheet)
+
+
+def _write_ai_cache_audit(workbook: Workbook, audit: Dict[str, Any]) -> None:
+    sheet = workbook.create_sheet("AI候选证据")
+    sheet.append(["项目", "值"])
+    sheet.append(["处理决策", audit.get("decision", "")])
+    sheet.append(["需要人工确认", "是" if audit.get("requiresConfirmation") else "否"])
+    sheet.append(["说明", audit.get("message", "")])
+    summary = audit.get("summary", {}) or {}
+    sheet.append(["候选文件数", summary.get("candidateFileCount", 0)])
+    sheet.append(["候选金额合计", summary.get("candidateAmountTotal", 0)])
+    sheet.append([])
+    sheet.append(["文件", "仓库", "候选行数", "候选金额", "平均置信度", "决策", "缓存文件", "证据样例"])
+    for item in audit.get("files", []) or []:
+        evidence = item.get("evidence", []) or []
+        sample = ""
+        if evidence:
+            first = evidence[0]
+            sample = f"{first.get('employeeName', '')}: ${float(first.get('amount') or 0):.2f} {first.get('evidenceText', '')}"
+        sheet.append([
+            item.get("sourceFile", ""),
+            item.get("warehouseId", ""),
+            item.get("rowCount", 0),
+            item.get("candidateAmountTotal", 0),
+            item.get("averageConfidence", 0),
+            item.get("decision", ""),
+            "；".join(str(name) for name in item.get("cacheFiles", []) or []),
+            sample,
+        ])
+    _format(sheet)
+
+
 def _write_rows(workbook: Workbook, title: str, rows: List[Dict[str, Any]]) -> None:
     headers = ["employeeName", "matchStatus", "pdfHoursTotal", "excelHoursTotal", "hoursDelta", "pdfAmountTotal", "excelAmountTotal", "amountDelta", "riskFlags", "sourceRefs"]
     sheet = workbook.create_sheet(title)
@@ -264,7 +817,7 @@ def _write_mapping(workbook: Workbook, mapping: Dict[str, str]) -> None:
 
 
 def _write_candidate_matches(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
-    headers = ["pdfEmployeeName", "excelEmployeeName", "nameSimilarity", "pdfHoursTotal", "excelHoursTotal", "hoursDelta", "pdfAmountTotal", "excelAmountTotal", "amountDelta", "recommendation", "sourceRefs"]
+    headers = ["issueType", "pdfEmployeeName", "excelEmployeeName", "nameSimilarity", "pdfHoursTotal", "excelHoursTotal", "hoursDelta", "pdfAmountTotal", "excelAmountTotal", "amountDelta", "recommendation", "sourceRefs"]
     sheet = workbook.create_sheet("姓名格式差异")
     sheet.append(headers)
     for row in rows:

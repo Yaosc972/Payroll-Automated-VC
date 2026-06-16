@@ -47,6 +47,26 @@ BUILTIN_PROFILES = [
         image_page_policy="first_page_only",
     ),
     SupplierExtractionProfile(
+        key="prompt",
+        aliases=["prompt", "prompt priority", "prompt priority inc", "china express"],
+        prompt_notes=[
+            "PROMPT Priority invoices may be scanned image PDFs named with DEPT# or CHINA EXPRESS warehouse identifiers.",
+            "Extract the warehouse_id from DEPT#/CHINA EXPRESS filename or visible DEPT field and keep only the numeric part.",
+            "Only extract employee billing rows with charge amounts; ignore summary/header/footer text and rows without payable amounts.",
+        ],
+        image_page_policy="all",
+    ),
+    SupplierExtractionProfile(
+        key="citistaff",
+        aliases=["citistaff", "citi staff", "citistaff solutions"],
+        prompt_notes=[
+            "CitiStaff invoices may use US Elogistics Service Corp pages with LOC.# warehouse identifiers.",
+            "Extract warehouse_id from LOC.# or invoice number context when visible.",
+            "Employee names can appear as Last, First on PDF and First Last in the workbook; propose name mappings as candidates before clearing differences.",
+        ],
+        image_page_policy="all",
+    ),
+    SupplierExtractionProfile(
         key="osi",
         aliases=["osi", "osi staffing", "osi staffing inc"],
         prompt_notes=[
@@ -125,8 +145,10 @@ def _profiles_for_resolution(profiles_path: str | Path | None) -> List[SupplierE
 
 def load_supplier_profiles(path: str | Path) -> List[SupplierExtractionProfile]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        raw = [raw]
     if not isinstance(raw, list):
-        raise ValueError("供应商抽取 Profile 配置必须是数组。")
+        raise ValueError("供应商抽取 Profile 配置必须是数组或对象。")
     profiles: List[SupplierExtractionProfile] = []
     for item in raw:
         if not isinstance(item, dict):

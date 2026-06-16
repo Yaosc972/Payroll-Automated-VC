@@ -27,6 +27,10 @@
         opacity: 0.72;
       }
 
+      .overseas-labor-shell [hidden] {
+        display: none !important;
+      }
+
       .overseas-ambient {
         top: 108px;
         color: rgba(255, 255, 255, 0.62);
@@ -133,6 +137,27 @@
         font-size: 12px;
       }
 
+      .overseas-labor-shell .uat-badge {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        margin-top: 2px;
+        border: 1px solid rgba(37, 99, 235, 0.18);
+        border-radius: 999px;
+        padding: 5px 9px;
+        background: rgba(219, 234, 254, 0.82);
+        color: #1d4ed8;
+        font-size: 11px;
+        font-weight: 900;
+        line-height: 1;
+      }
+
+      .overseas-labor-shell .uat-badge.blocked {
+        border-color: rgba(239, 68, 68, 0.22);
+        background: rgba(254, 226, 226, 0.86);
+        color: #b91c1c;
+      }
+
       .overseas-labor-shell .chrome-run-badge,
       .overseas-labor-shell .btn-download,
       .overseas-labor-shell .btn-new-batch,
@@ -167,6 +192,14 @@
         background: rgba(255, 255, 255, 0.62);
         color: #0f172a;
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+      }
+
+      .overseas-labor-shell .field-help {
+        margin: 0;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.5;
       }
 
       .overseas-labor-shell .kpi-banner {
@@ -249,9 +282,900 @@
         padding: 18px;
       }
 
+      .overseas-labor-shell .governance-panel {
+        display: grid;
+        gap: 14px;
+      }
+
+      .overseas-labor-shell .governance-command {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 14px;
+        border: 1px solid rgba(37, 99, 235, 0.14);
+        border-radius: 16px;
+        background: rgba(239, 246, 255, 0.72);
+      }
+
+      .overseas-labor-shell .governance-command strong {
+        display: block;
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .governance-command span {
+        display: block;
+        margin-top: 3px;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .overseas-labor-shell .governance-action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .overseas-labor-shell .amount-rate-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 1px;
+        overflow: hidden;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 14px;
+        background: rgba(148, 163, 184, 0.22);
+      }
+
+      .overseas-labor-shell .amount-rate-summary div {
+        min-width: 0;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.76);
+      }
+
+      .overseas-labor-shell .amount-rate-summary span {
+        display: block;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .amount-rate-summary strong {
+        display: block;
+        margin-top: 5px;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .amount-rate-summary p {
+        margin: 6px 0 0;
+        color: #64748b;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .overseas-labor-shell .reocr-guide {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .overseas-labor-shell .reocr-step {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 2px 8px;
+        align-items: center;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      .overseas-labor-shell .reocr-step-index {
+        grid-row: span 2;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.1);
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .reocr-step.ok .reocr-step-index {
+        background: rgba(34, 197, 94, 0.12);
+        color: #166534;
+      }
+
+      .overseas-labor-shell .reocr-step-label,
+      .overseas-labor-shell .reocr-step-value {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .reocr-step-label {
+        color: #0f172a;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .reocr-step-value {
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .material-action-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .overseas-labor-shell .material-action-steps-wrap {
+        display: grid;
+        gap: 8px;
+      }
+
+      .overseas-labor-shell .material-action-title {
+        display: block;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .material-action-step {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+        min-width: 0;
+        padding: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .overseas-labor-shell .material-action-step.active {
+        border-color: rgba(37, 99, 235, 0.28);
+        box-shadow: 0 12px 28px rgba(37, 99, 235, 0.08);
+      }
+
+      .overseas-labor-shell .material-action-index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.1);
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .material-action-step strong,
+      .overseas-labor-shell .material-action-step span {
+        display: block;
+        min-width: 0;
+      }
+
+      .overseas-labor-shell .material-action-step strong {
+        color: #0f172a;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .material-action-step span {
+        margin-top: 4px;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 750;
+        line-height: 1.45;
+      }
+
+      .overseas-labor-shell .material-action-state {
+        grid-column: 1 / -1;
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 0 10px;
+        border-radius: 10px;
+        background: rgba(241, 245, 249, 0.9);
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .material-action-step.active .material-action-state {
+        background: rgba(219, 234, 254, 0.92);
+        color: #1d4ed8;
+      }
+
+      .overseas-labor-shell .material-action-feedback {
+        display: none;
+        gap: 8px;
+        padding: 12px 14px;
+        border: 1px solid rgba(37, 99, 235, 0.22);
+        border-radius: 14px;
+        background: rgba(239, 246, 255, 0.82);
+        color: #334155;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .material-action-feedback.visible {
+        display: grid;
+      }
+
+      .overseas-labor-shell .material-action-feedback strong {
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .material-action-feedback.error {
+        border-color: rgba(239, 68, 68, 0.32);
+        background: rgba(254, 242, 242, 0.88);
+      }
+
+      .overseas-labor-shell .governance-card-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .overseas-labor-shell .governance-deck-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 14px 0 10px;
+        color: #0f172a;
+      }
+
+      .overseas-labor-shell .governance-deck-title strong {
+        font-size: 13px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .governance-deck-title span {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .governance-more {
+        margin-top: 10px;
+        border-top: 1px solid rgba(148, 163, 184, 0.22);
+        padding-top: 10px;
+      }
+
+      .overseas-labor-shell .governance-more summary {
+        cursor: pointer;
+        width: fit-content;
+        border: 1px solid rgba(148, 163, 184, 0.32);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #2563eb;
+        font-size: 12px;
+        font-weight: 900;
+        list-style-position: inside;
+        padding: 8px 12px;
+      }
+
+      .overseas-labor-shell .governance-more .governance-card-grid {
+        margin-top: 10px;
+      }
+
+      .overseas-labor-shell .governance-card {
+        min-width: 0;
+        padding: 14px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .overseas-labor-shell .governance-card h3 {
+        margin: 0 0 7px;
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .governance-card p {
+        margin: 0 0 10px;
+        color: #64748b;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .overseas-labor-shell .governance-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+
+      .overseas-labor-shell .governance-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: rgba(241, 245, 249, 0.9);
+        color: #475569;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .governance-pill.warning { background: rgba(254, 243, 199, 0.9); color: #92400e; }
+      .overseas-labor-shell .governance-pill.ok { background: rgba(220, 252, 231, 0.9); color: #166534; }
+      .overseas-labor-shell .governance-pill.danger { background: rgba(254, 226, 226, 0.9); color: #991b1b; }
+
+      .overseas-labor-shell .reocr-preflight {
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+        border: 1px solid rgba(37, 99, 235, 0.18);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .overseas-labor-shell .reocr-preflight.blocked {
+        border-color: rgba(245, 158, 11, 0.36);
+        background: rgba(255, 251, 235, 0.78);
+      }
+
+      .overseas-labor-shell .reocr-preflight-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .overseas-labor-shell .reocr-preflight-head strong {
+        display: block;
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .reocr-preflight-head span,
+      .overseas-labor-shell .reocr-preflight-meta > div > span {
+        display: block;
+        margin-top: 3px;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .reocr-preflight-stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .overseas-labor-shell .reocr-preflight-stats div {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 12px;
+        background: rgba(248, 250, 252, 0.7);
+      }
+
+      .overseas-labor-shell .reocr-preflight-stats span {
+        display: block;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .reocr-preflight-stats strong {
+        display: block;
+        margin-top: 4px;
+        color: #0f172a;
+        font-size: 15px;
+        font-weight: 950;
+        overflow-wrap: anywhere;
+      }
+
+      .overseas-labor-shell .reocr-preflight-warnings {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .overseas-labor-shell .reocr-preflight-warnings li,
+      .overseas-labor-shell .reocr-preflight-clear {
+        margin: 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(245, 158, 11, 0.28);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.62);
+        color: #92400e;
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .reocr-preflight-clear {
+        border-color: rgba(16, 185, 129, 0.28);
+        color: #166534;
+      }
+
+      .overseas-labor-shell .reocr-preflight-meta {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .overseas-labor-shell .governance-confirm {
+        display: grid;
+        gap: 12px;
+        padding: 16px;
+        border: 1px solid rgba(37, 99, 235, 0.32);
+        border-radius: 16px;
+        background: rgba(239, 246, 255, 0.86);
+        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+      }
+
+      .overseas-labor-shell .governance-confirm-field {
+        display: grid;
+        gap: 6px;
+        color: #0f172a;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .governance-confirm-field textarea {
+        width: 100%;
+        min-height: 84px;
+        resize: vertical;
+        border: 1px solid rgba(148, 163, 184, 0.36);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.86);
+        color: #0f172a;
+        font: inherit;
+        font-size: 13px;
+        line-height: 1.5;
+        padding: 10px 12px;
+      }
+
+      .overseas-labor-shell .governance-confirm-field textarea:focus {
+        border-color: rgba(37, 99, 235, 0.62);
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+        outline: none;
+      }
+
+      .overseas-labor-shell .reocr-diagnostics {
+        margin: 0 0 12px;
+        padding: 10px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 12px;
+        background: rgba(248, 250, 252, 0.78);
+      }
+
+      .overseas-labor-shell .reocr-diagnostics-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+        color: #0f172a;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .reocr-diagnostics-head small {
+        flex: 0 0 auto;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .reocr-evidence-list {
+        display: grid;
+        gap: 6px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .overseas-labor-shell .reocr-evidence-list li {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        color: #64748b;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .overseas-labor-shell .reocr-evidence-list strong {
+        min-width: 0;
+        overflow: hidden;
+        color: #0f172a;
+        font-weight: 900;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .governance-empty {
+        padding: 16px;
+        border: 1px dashed rgba(148, 163, 184, 0.4);
+        border-radius: 16px;
+        color: #64748b;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .overseas-labor-shell .pending-groups-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 12px;
+        align-items: start;
+      }
+
+      .overseas-labor-shell .pending-groups-row.is-single {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant {
+        display: block;
+      }
+
+      .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant .group-header {
+        grid-column: auto;
+      }
+
+      .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant .group-preview {
+        border-right: 0;
+      }
+
+      .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant:not(.is-expanded) .group-preview {
+        grid-column: auto;
+        border-right: 0;
+      }
+
+      .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant .group-content {
+        border-top: 1px solid rgba(226, 232, 240, 0.78);
+        max-height: 180px;
+      }
+
+      .overseas-labor-shell .pending-overview-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+        gap: 1px;
+        overflow: hidden;
+        margin-bottom: 12px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 14px;
+        background: rgba(148, 163, 184, 0.22);
+      }
+
+      .overseas-labor-shell .pending-overview-grid div {
+        min-width: 0;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .overseas-labor-shell .pending-overview-grid span {
+        display: block;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .pending-overview-grid strong {
+        display: block;
+        margin-top: 5px;
+        color: #0f172a;
+        font-size: 15px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .pending-overview-grid p {
+        margin: 6px 0 0;
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 750;
+        line-height: 1.45;
+      }
+
+      .overseas-labor-shell .pending-group {
+        overflow: hidden;
+        min-width: 0;
+        padding: 0;
+      }
+
+      .overseas-labor-shell .group-header {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto auto 18px;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-height: 48px;
+        border: 0;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.82);
+        background: rgba(248, 250, 252, 0.78);
+        color: #0f172a;
+        cursor: pointer;
+        font: inherit;
+        padding: 10px 12px;
+        text-align: left;
+      }
+
+      .overseas-labor-shell .group-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 24px;
+        height: 24px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .group-icon.amber { background: rgba(254, 243, 199, 0.9); color: #92400e; }
+      .overseas-labor-shell .group-icon.blue { background: rgba(219, 234, 254, 0.9); color: #1d4ed8; }
+      .overseas-labor-shell .group-icon.red { background: rgba(254, 226, 226, 0.9); color: #b91c1c; }
+
+      .overseas-labor-shell .group-label {
+        min-width: 0;
+        overflow: hidden;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 900;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .group-count {
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(241, 245, 249, 0.95);
+        color: #475569;
+        font-size: 11px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .group-action-label {
+        color: #2563eb;
+        font-size: 11px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .governance-action-feedback {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 0 14px;
+        padding: 12px 14px;
+        border: 1px solid rgba(203, 213, 225, 0.92);
+        border-radius: 10px;
+        background: rgba(248, 250, 252, 0.94);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+      }
+
+      .overseas-labor-shell .governance-action-feedback:focus {
+        outline: 3px solid rgba(37, 99, 235, 0.22);
+        outline-offset: 2px;
+      }
+
+      .overseas-labor-shell .governance-action-feedback strong {
+        display: block;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 950;
+        line-height: 1.35;
+      }
+
+      .overseas-labor-shell .governance-action-feedback p {
+        max-width: 72ch;
+        margin: 4px 0 0;
+        color: #475569;
+        font-size: 12px;
+        font-weight: 750;
+        line-height: 1.5;
+      }
+
+      .overseas-labor-shell .governance-action-feedback > span {
+        flex: 0 0 auto;
+        max-width: 160px;
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: rgba(241, 245, 249, 0.96);
+        color: #334155;
+        font-size: 11px;
+        font-weight: 900;
+        line-height: 1.35;
+        text-align: center;
+      }
+
+      .overseas-labor-shell .governance-action-feedback.success {
+        border-color: rgba(34, 197, 94, 0.32);
+        background: rgba(240, 253, 244, 0.92);
+      }
+
+      .overseas-labor-shell .governance-action-feedback.success > span {
+        background: rgba(220, 252, 231, 0.94);
+        color: #166534;
+      }
+
+      .overseas-labor-shell .governance-action-feedback.error {
+        border-color: rgba(248, 113, 113, 0.42);
+        background: rgba(254, 242, 242, 0.94);
+      }
+
+      .overseas-labor-shell .governance-action-feedback.error > span {
+        background: rgba(254, 226, 226, 0.94);
+        color: #991b1b;
+      }
+
+      .overseas-labor-shell .governance-action-feedback.loading,
+      .overseas-labor-shell .governance-action-feedback.info {
+        border-color: rgba(96, 165, 250, 0.34);
+        background: rgba(239, 246, 255, 0.9);
+      }
+
+      .overseas-labor-shell .governance-action-feedback.loading > span,
+      .overseas-labor-shell .governance-action-feedback.info > span {
+        background: rgba(219, 234, 254, 0.94);
+        color: #1d4ed8;
+      }
+
+      .overseas-labor-shell .expand-icon {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 950;
+        text-align: center;
+      }
+
+      .overseas-labor-shell .group-preview {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+      }
+
+      .overseas-labor-shell .pending-stat-row,
+      .overseas-labor-shell .pending-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .overseas-labor-shell .pending-stat,
+      .overseas-labor-shell .pending-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        max-width: 100%;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .pending-stat {
+        padding: 0 9px;
+        background: rgba(239, 246, 255, 0.9);
+        color: #1d4ed8;
+      }
+
+      .overseas-labor-shell .pending-chip {
+        padding: 0 8px;
+        background: rgba(248, 250, 252, 0.92);
+        color: #475569;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .pending-more {
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .group-content {
+        max-height: 176px;
+        overflow: auto;
+        border-top: 1px solid rgba(226, 232, 240, 0.78);
+      }
+
+      .overseas-labor-shell .pending-detail-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 8px;
+        padding: 10px;
+      }
+
+      .overseas-labor-shell .pending-detail-item {
+        display: grid;
+        gap: 4px;
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid rgba(226, 232, 240, 0.82);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .overseas-labor-shell .pending-detail-item strong,
+      .overseas-labor-shell .pending-detail-item span,
+      .overseas-labor-shell .pending-detail-item b {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .pending-detail-item strong {
+        color: #0f172a;
+        font-size: 12px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .pending-detail-item span {
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .pending-detail-item b {
+        color: #334155;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell [data-governance-action][aria-busy="true"] {
+        cursor: wait;
+        opacity: 0.82;
+      }
+
       .overseas-labor-shell .section-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
         align-items: center;
         margin-bottom: 16px;
+      }
+
+      .overseas-labor-shell .section-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .overseas-labor-shell .section-actions .btn-secondary {
+        flex: 0 0 auto;
+        min-width: max-content;
+        padding-inline: 14px;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .section-actions .field-input {
+        flex: 0 1 260px;
+        min-width: 180px;
+      }
+
+      .overseas-labor-shell .section-actions .inline-status {
+        max-width: 150px;
+        margin: 0;
+        line-height: 1.45;
       }
 
       .overseas-labor-shell .section-title {
@@ -305,14 +1229,73 @@
       }
 
       .overseas-labor-shell .recon-summary-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
         border-bottom: 1px solid rgba(226, 232, 240, 0.8);
         background: rgba(255, 255, 255, 0.48);
+      }
+
+      .overseas-labor-shell .recon-focus-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+        padding: 12px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.78);
+        background: rgba(248, 250, 252, 0.52);
+      }
+
+      .overseas-labor-shell .recon-focus-card {
+        min-width: 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(226, 232, 240, 0.86);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .overseas-labor-shell .recon-focus-card span,
+      .overseas-labor-shell .extract-evidence-summary span {
+        display: block;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .recon-focus-card strong,
+      .overseas-labor-shell .extract-evidence-summary strong {
+        display: block;
+        margin-top: 3px;
+        overflow: hidden;
+        color: #0f172a;
+        font-size: 16px;
+        font-weight: 950;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .extract-evidence-summary {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 10px;
+        padding: 12px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.78);
+        background: rgba(248, 250, 252, 0.52);
+      }
+
+      .overseas-labor-shell .extract-evidence-summary > div {
+        min-width: 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(226, 232, 240, 0.86);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
       }
 
       .overseas-labor-shell .conclusion-section {
         display: flex;
         align-items: center;
         justify-content: space-between;
+        flex-wrap: wrap;
         gap: 16px;
         margin-bottom: 20px;
         padding: 18px 20px;
@@ -343,6 +1326,79 @@
         justify-content: flex-end;
         color: #475569;
         font-weight: 750;
+      }
+
+      .overseas-labor-shell .readiness-gate {
+        flex: 1 1 100%;
+        display: grid;
+        gap: 10px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(148, 163, 184, 0.28);
+      }
+
+      .overseas-labor-shell .readiness-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        color: #475569;
+        font-size: 12px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .readiness-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 10px;
+        border-radius: 999px;
+        color: #0f172a;
+        background: rgba(255, 255, 255, 0.82);
+        font-size: 12px;
+        font-weight: 950;
+      }
+
+      .overseas-labor-shell .readiness-gate.ready .readiness-pill {
+        color: #166534;
+        background: rgba(220, 252, 231, 0.9);
+      }
+
+      .overseas-labor-shell .readiness-gate.needs_review .readiness-pill {
+        color: #92400e;
+        background: rgba(254, 243, 199, 0.92);
+      }
+
+      .overseas-labor-shell .readiness-gate.blocked .readiness-pill {
+        color: #991b1b;
+        background: rgba(254, 226, 226, 0.92);
+      }
+
+      .overseas-labor-shell .readiness-issues {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .overseas-labor-shell .readiness-issues li,
+      .overseas-labor-shell .readiness-clear {
+        margin: 0;
+        padding: 10px 12px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.58);
+        color: #475569;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .overseas-labor-shell .readiness-issues strong {
+        display: block;
+        margin-bottom: 3px;
+        color: #0f172a;
+        font-size: 13px;
+        font-weight: 950;
       }
 
       .overseas-labor-shell .diagnostics-fold {
@@ -439,10 +1495,62 @@
           grid-template-columns: 1fr;
         }
 
+        .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .pending-groups-row.is-single .pending-group.is-dominant .group-preview {
+          border-right: 0;
+        }
+
+        .overseas-labor-shell .pending-overview-grid {
+          grid-template-columns: 1fr;
+        }
+
         .overseas-labor-shell .section-header,
         .overseas-labor-shell .conclusion-section {
           align-items: flex-start;
           flex-direction: column;
+        }
+
+        .overseas-labor-shell .section-actions {
+          justify-content: flex-start;
+          flex-wrap: wrap;
+          width: 100%;
+        }
+
+        .overseas-labor-shell .section-actions .field-input {
+          flex: 1 1 220px;
+        }
+
+        .overseas-labor-shell .section-actions .inline-status {
+          max-width: none;
+        }
+
+        .overseas-labor-shell .governance-command {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .overseas-labor-shell .amount-rate-summary {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .governance-card-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .reocr-guide {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .material-action-steps {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .reocr-preflight-stats,
+        .overseas-labor-shell .reocr-preflight-meta {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -467,6 +1575,7 @@
           <span class="chrome-label">Overseas Labor Invoice Audit</span>
           <span class="chrome-title">海外劳务工报账核对</span>
           <span class="chrome-desc">AI 抽取供应商发票，按员工核对工时与金额差异</span>
+          <span class="uat-badge" id="moduleStageBadge">UAT试用版 · 人工复核后使用</span>
         </div>
       </div>
       <div class="chrome-right">
@@ -511,6 +1620,21 @@
 
     <!-- ═══ MAIN WORKSPACE ═══ -->
     <main class="workspace">
+      <section class="workspace-section" id="materialReplaySection">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">测试材料验证</h2>
+            <p class="section-sub">使用本地参考材料做测试验证 · 不创建批次、不写入规则</p>
+          </div>
+          <div class="section-actions">
+            <button id="loadMaterialBatches" class="btn-secondary" type="button">加载测试材料</button>
+            <select id="materialBatchSelect" class="field-input" aria-label="选择材料批次"></select>
+            <button id="runMaterialDryRun" class="btn-secondary" type="button">测试验证</button>
+            <p id="materialReplayStatus" class="inline-status">等待加载参考材料。</p>
+          </div>
+        </div>
+        <div id="materialReplayBody" class="governance-panel"></div>
+      </section>
 
       <!-- Conclusion section -->
       <div id="conclusionSection" class="conclusion-section" hidden>
@@ -545,40 +1669,70 @@
       </section>
       </details>
 
+      <!-- Rule governance -->
+      <section class="workspace-section" id="ruleGovernanceSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">系统建议与人工复核</h2>
+            <p class="section-sub">系统发现疑似误抽、姓名匹配、跨仓归属等问题；确认前只做预览，不会自动改结果</p>
+          </div>
+          <p id="governanceStatus" class="inline-status">等待核对结果。</p>
+        </div>
+        <div id="ruleGovernanceBody" class="governance-panel"></div>
+      </section>
+
       <!-- Pending items -->
       <section class="workspace-section" id="pendingItemsSection" hidden>
         <div class="section-header">
           <div>
             <h2 class="section-title">待处理事项</h2>
-            <p class="section-sub">Pending Items by Category</p>
+            <p class="section-sub">按类别汇总展示，展开后查看少量明细</p>
           </div>
         </div>
+        <div id="pendingItemsOverview"></div>
         <div class="pending-groups-row">
+          <div id="amountRateGroup" class="pending-group" hidden>
+            <button class="group-header" data-group="amountRate" aria-expanded="false" type="button">
+              <span class="group-icon amber">金</span>
+              <span class="group-label">金额口径待确认</span>
+              <span class="group-count"></span>
+              <span class="group-action-label">查看明细</span>
+              <span class="expand-icon">▸</span>
+            </button>
+            <div class="group-preview"></div>
+            <div class="group-content" hidden></div>
+          </div>
           <div id="hoursDiffGroup" class="pending-group" hidden>
-            <button class="group-header" data-group="hoursDiff" aria-expanded="true" type="button">
-              <span class="group-icon amber">H</span>
+            <button class="group-header" data-group="hoursDiff" aria-expanded="false" type="button">
+              <span class="group-icon amber">时</span>
               <span class="group-label">工时不一致</span>
               <span class="group-count"></span>
-              <span class="expand-icon">▾</span>
+              <span class="group-action-label">查看明细</span>
+              <span class="expand-icon">▸</span>
             </button>
-            <div class="group-content"></div>
+            <div class="group-preview"></div>
+            <div class="group-content" hidden></div>
           </div>
           <div id="candidateGroup" class="pending-group" hidden>
-            <button class="group-header" data-group="candidate" aria-expanded="true" type="button">
-              <span class="group-icon blue">N</span>
-              <span class="group-label">姓名格式差异</span>
+            <button class="group-header" data-group="candidate" aria-expanded="false" type="button">
+              <span class="group-icon blue">名</span>
+              <span class="group-label">疑似同一员工</span>
               <span class="group-count"></span>
-              <span class="expand-icon">▾</span>
+              <span class="group-action-label">查看明细</span>
+              <span class="expand-icon">▸</span>
             </button>
-            <div class="group-content"></div>
+            <div class="group-preview"></div>
+            <div class="group-content" hidden></div>
           </div>
           <div id="notInInvoiceGroup" class="pending-group" hidden>
             <button class="group-header" data-group="notInInvoice" aria-expanded="false" type="button">
-              <span class="group-icon red">U</span>
+              <span class="group-icon red">缺</span>
               <span class="group-label">不在本批发票</span>
               <span class="group-count"></span>
+              <span class="group-action-label">查看明细</span>
               <span class="expand-icon">▸</span>
             </button>
+            <div class="group-preview"></div>
             <div class="group-content" hidden></div>
           </div>
         </div>
@@ -642,7 +1796,8 @@
           <div class="field-section">
             <label class="field-group">
               <span class="field-label">供应商名称</span>
-              <input id="supplierName" class="field-input" name="supplierName" autocomplete="organization" placeholder="输入供应商名称…" />
+              <input id="supplierName" class="field-input" name="supplierName" autocomplete="organization" list="supplierOptions" placeholder="选择或输入供应商名称…" />
+              <datalist id="supplierOptions"></datalist>
             </label>
             <div class="field-row">
               <label class="field-group">
@@ -654,6 +1809,7 @@
                 <input id="periodEnd" class="field-input" name="periodEnd" type="date" autocomplete="off" />
               </label>
             </div>
+            <p class="field-help">账期用于告诉系统本批发票/账单对应的结算周期，会写入报告并辅助 PDF/AI 抽取和异常解释；不会单独替你过滤账单行。</p>
             <label class="field-group">
               <span class="field-label">结算币种</span>
               <input id="currency" class="field-input" name="currency" autocomplete="off" placeholder="USD / CNY / EUR…" />
@@ -773,7 +1929,7 @@
     <!-- ═══ TOAST ═══ -->
     <div id="laborToast" class="labor-toast" role="status" aria-live="polite"></div>
 
-    <script src="overseas-labor.js?v=8"></script>
+    <script src="overseas-labor.js?v=9"></script>
     <script>
       // ── Drawer open/close ──
       const drawer = document.getElementById('wizardDrawer');

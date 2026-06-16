@@ -20,6 +20,7 @@ def build_reconciliation_diagnostics(
     pdf_totals: List[Dict[str, Any]] | None,
     comparison_summary: Dict[str, Any],
     warehouse_comparison: Dict[str, Any] | None,
+    cost_summaries: List[Dict[str, Any]] | None = None,
     amount_tolerance: float = 0.1,
 ) -> Dict[str, Any]:
     """Explain whether reconciliation signals agree with each other.
@@ -29,6 +30,7 @@ def build_reconciliation_diagnostics(
     happens to align.
     """
     pdf_totals = pdf_totals or []
+    cost_summaries = cost_summaries or []
     wc_summary = (warehouse_comparison or {}).get("summary", {})
     wc_errors = (warehouse_comparison or {}).get("errors", []) or []
 
@@ -111,6 +113,95 @@ def build_reconciliation_diagnostics(
             }
         )
 
+    offsetting_warehouse_deltas = _build_offsetting_warehouse_delta_signals(
+        (warehouse_comparison or {}).get("rows", []) or [],
+        amount_tolerance,
+    )
+    if offsetting_warehouse_deltas:
+        net_delta = round(sum(float(item.get("amountDelta") or 0) for item in offsetting_warehouse_deltas), 2)
+        items = [
+            (
+                f"仓库 {item['warehouseId']}: PDF ${item['pdfAmountTotal']:,.2f}，"
+                f"Excel ${item['excelAmountTotal']:,.2f}，差异 ${item['amountDelta']:,.2f}"
+            )
+            for item in offsetting_warehouse_deltas[:8]
+        ]
+        issues.append(
+            {
+                "code": "warehouse_offsetting_deltas",
+                "level": "warning",
+                "title": "仓库差异互相抵消",
+                "message": f"多个仓库分别超出容差，但合计差异仅 ${net_delta:,.2f}，可能是跨仓员工分摊或仓库归属不一致。",
+                "items": items,
+            }
+        )
+
+    employee_attribution = _build_employee_attribution_signals(
+        (warehouse_comparison or {}).get("rows", []) or [],
+        amount_tolerance,
+    )
+    if employee_attribution:
+        items = [
+            (
+                f"仓库 {item['warehouseId']}: {item['employeeName']} 贡献差异 "
+                f"${item['delta']:,.2f}，仓库总差异 ${item['warehouseDelta']:,.2f}"
+            )
+            for item in employee_attribution[:8]
+        ]
+        issues.append(
+            {
+                "code": "warehouse_employee_attribution",
+                "level": "warning",
+                "title": "仓库差异集中在少数员工",
+                "message": "仓库金额差异主要由少数员工贡献，建议优先复核这些员工的工时、费率或补充费用。",
+                "items": items,
+            }
+        )
+
+    allocation_issues = list((warehouse_comparison or {}).get("allocationIssues", []) or [])
+    if allocation_issues:
+        items = [
+            (
+                f"{item.get('employeeName', '')}: "
+                + "；".join(
+                    f"仓库 {row.get('warehouseId', '')} 差异 ${float(row.get('amountDelta') or 0):,.2f}"
+                    for row in (item.get("warehouses", []) or [])[:4]
+                )
+            )
+            for item in allocation_issues[:8]
+        ]
+        issues.append(
+            {
+                "code": "cross_warehouse_employee_allocation",
+                "level": "warning",
+                "title": "员工跨仓库金额抵消",
+                "message": "员工汇总金额可通过，但同一员工在不同仓库存在正负差异，说明仓库归属或分摊口径需要复核。",
+                "items": items,
+            }
+        )
+
+    amount_basis = _build_amount_basis_signals(pdf_totals, cost_summaries, amount_tolerance)
+    basis_mismatches = [item for item in amount_basis if abs(float(item.get("pdfVsReportedDelta") or 0)) > amount_tolerance]
+    if basis_mismatches:
+        items = [
+            (
+                f"仓库 {item['warehouseId']}: PDF ${item['pdfTotal']:,.2f}，"
+                f"OTWS汇总 ${item['reportedTotal']:,.2f}，差异 ${item['pdfVsReportedDelta']:,.2f}；"
+                f"员工薪资 ${item['employeeExpenses']:,.2f}，补充费用 ${item['employeeBenefits']:,.2f}，"
+                f"证据 {item['summaryEvidence']}"
+            )
+            for item in basis_mismatches[:8]
+        ]
+        issues.append(
+            {
+                "code": "amount_basis_mismatch",
+                "level": "warning",
+                "title": "PDF 总额与账单费用口径不一致",
+                "message": "账单内部费用组成已闭合，但 PDF 发票总额与 OTWS 汇总总额不同，需确认供应商发票是否包含额外费用、抵扣或调整项。",
+                "items": items,
+            }
+        )
+
     blocking = any(issue["level"] == "critical" for issue in issues)
     level = "critical" if blocking else "warning" if issues else "ok"
     if level == "ok":
@@ -132,9 +223,126 @@ def build_reconciliation_diagnostics(
             "employeePdfTotal": employee_pdf_total,
             "excelTotal": excel_total,
             "warehouseTotal": round(float(wc_summary.get("pdfAmountTotal") or 0), 2),
+            "amountBasis": amount_basis,
+            "offsettingWarehouseDeltas": offsetting_warehouse_deltas,
+            "employeeAttribution": employee_attribution,
+            "crossWarehouseEmployeeAllocation": allocation_issues,
         },
         "issues": issues,
     }
+
+
+def _build_employee_attribution_signals(
+    warehouse_rows: List[Dict[str, Any]],
+    amount_tolerance: float,
+) -> List[Dict[str, Any]]:
+    signals: List[Dict[str, Any]] = []
+    for row in warehouse_rows:
+        warehouse_delta = round(float(row.get("amountDelta") or 0), 2)
+        if abs(warehouse_delta) <= amount_tolerance:
+            continue
+        attribution = row.get("attribution", []) or []
+        concrete = [
+            item for item in attribution
+            if item.get("employeeName") and item.get("pdfAmount") is not None and item.get("excelAmount") is not None
+        ]
+        if not concrete:
+            continue
+        concrete.sort(key=lambda item: abs(float(item.get("delta") or 0)), reverse=True)
+        top = concrete[0]
+        top_delta = round(float(top.get("delta") or 0), 2)
+        if abs(top_delta) < max(amount_tolerance, abs(warehouse_delta) * 0.8):
+            continue
+        signals.append(
+            {
+                "warehouseId": str(row.get("warehouseId") or ""),
+                "employeeName": str(top.get("employeeName") or ""),
+                "pdfAmount": round(float(top.get("pdfAmount") or 0), 2),
+                "excelAmount": round(float(top.get("excelAmount") or 0), 2),
+                "delta": top_delta,
+                "warehouseDelta": warehouse_delta,
+            }
+        )
+    return signals
+
+
+def _build_offsetting_warehouse_delta_signals(
+    warehouse_rows: List[Dict[str, Any]],
+    amount_tolerance: float,
+) -> List[Dict[str, Any]]:
+    diff_rows = [
+        row
+        for row in warehouse_rows
+        if abs(float(row.get("amountDelta") or 0)) > amount_tolerance
+    ]
+    if len(diff_rows) < 2:
+        return []
+    net_delta = round(sum(float(row.get("amountDelta") or 0) for row in diff_rows), 2)
+    if abs(net_delta) > amount_tolerance:
+        return []
+    return [
+        {
+            "warehouseId": str(row.get("warehouseId") or ""),
+            "pdfAmountTotal": round(float(row.get("pdfAmountTotal") or 0), 2),
+            "excelAmountTotal": round(float(row.get("excelAmountTotal") or 0), 2),
+            "amountDelta": round(float(row.get("amountDelta") or 0), 2),
+            "attribution": row.get("attribution", []) or [],
+        }
+        for row in diff_rows
+    ]
+
+
+def _build_amount_basis_signals(
+    pdf_totals: List[Dict[str, Any]],
+    cost_summaries: List[Dict[str, Any]],
+    amount_tolerance: float,
+) -> List[Dict[str, Any]]:
+    pdf_by_warehouse = {
+        str(item.get("warehouse_id") or "").strip(): round(float(item.get("total_amount") or 0), 2)
+        for item in pdf_totals
+        if str(item.get("warehouse_id") or "").strip()
+    }
+    signals: List[Dict[str, Any]] = []
+    for summary in cost_summaries:
+        warehouse_id = str(summary.get("warehouseId") or "").strip()
+        if not warehouse_id:
+            continue
+        summary_section = summary.get("summary") or {}
+        details = summary.get("details") or {}
+        employee_expenses = details.get("employeeExpenses") or {}
+        employee_benefits = details.get("employeeBenefits") or {}
+        loading = details.get("loadingAndUnloading") or {}
+        pdf_total = pdf_by_warehouse.get(warehouse_id, 0.0)
+        reported_total = round(float(summary_section.get("reportedTotal") or 0), 2)
+        detail_total = round(float(details.get("detailTotal") or 0), 2)
+        signals.append(
+            {
+                "warehouseId": warehouse_id,
+                "sourceFile": summary.get("sourceFile", ""),
+                "pdfTotal": pdf_total,
+                "reportedTotal": reported_total,
+                "pdfVsReportedDelta": round(pdf_total - reported_total, 2),
+                "componentTotal": round(float(summary_section.get("componentTotal") or 0), 2),
+                "componentDelta": round(float(summary_section.get("componentDelta") or 0), 2),
+                "detailTotal": detail_total,
+                "summaryDelta": round(float(details.get("summaryDelta") or 0), 2),
+                "employeeExpenses": round(float(employee_expenses.get("amount") or 0), 2),
+                "employeeBenefits": round(float(employee_benefits.get("amount") or 0), 2),
+                "loadingAndUnloading": round(float(loading.get("amount") or 0), 2),
+                "summaryEvidence": summary_section.get("evidence", ""),
+                "detailEvidence": "; ".join(
+                    value
+                    for value in (
+                        employee_expenses.get("evidence", ""),
+                        employee_benefits.get("evidence", ""),
+                        loading.get("evidence", ""),
+                    )
+                    if value
+                ),
+                "withinTolerance": abs(pdf_total - reported_total) <= amount_tolerance,
+            }
+        )
+    return signals
 
 
 def calculate_extraction_quality(

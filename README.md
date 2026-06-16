@@ -70,3 +70,20 @@ GitHub Actions 会分别在 macOS 和 Windows runner 上构建：
 - Windows: `.exe`
 
 tag 构建完成后，安装包会自动上传到 GitHub Release。第一阶段未配置代码签名，企业推广前建议补 Windows 证书签名和 macOS notarization。
+
+## 海外劳务报账核对 UAT 权限
+
+海外劳务报账核对当前发布为 `UAT试用版`。生产试用默认开放给薪酬 UAT 用户，所有结论仍需人工复核后使用。
+
+可通过环境变量控制模块入口和 API：
+
+```bash
+# 默认 uat：开放试用
+SIGMA_OVERSEAS_LABOR_ACCESS=uat
+
+# 关闭模块：页面和 /api/labor/* 会返回 403
+SIGMA_OVERSEAS_LABOR_ACCESS=disabled
+
+# 展示给前端的试用角色标签
+SIGMA_OVERSEAS_LABOR_UAT_ROLES="Payroll Admin,Compensation UAT"
+```

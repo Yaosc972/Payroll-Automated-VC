@@ -49,8 +49,18 @@ def compare_labor_items(
                                   confidence_threshold=confidence_threshold,
                                   manual_name_mapping=manual_name_mapping)
 
-    candidate_matches, promoted_pdf, promoted_excel = _suggest_unmatched_candidates(rows, pdf, excel)
+    candidate_matches, promoted_pdf, promoted_excel = _suggest_unmatched_candidates(
+        rows,
+        pdf,
+        excel,
+        amount_tolerance=amount_tolerance,
+        hours_tolerance=hours_tolerance,
+    )
     rows = _apply_promotions(rows, candidate_matches, promoted_pdf, promoted_excel)
+    offset_candidates = _suggest_residual_offset_candidates(rows)
+    if offset_candidates:
+        rows = _apply_residual_offset_flags(rows, offset_candidates)
+        candidate_matches.extend(offset_candidates)
     summary = _build_summary(rows, pdf_rows, excel_rows, candidate_matches)
     return {"summary": summary, "rows": rows, "candidateMatches": candidate_matches}
 
@@ -101,6 +111,14 @@ def compare_by_warehouse(
     errors.extend(excel_errors)
     fallback_warehouse_id = next(iter(excel_by_wh), "") if len(excel_by_wh) == 1 else ""
 
+    inferred_pdf_warehouses: Dict[str, str] = {}
+    if pdf_totals:
+        pdf_totals, inferred_pdf_warehouses = _infer_pdf_warehouses_from_excel_totals(
+            pdf_totals,
+            excel_by_wh,
+            amount_tolerance=amount_tolerance,
+        )
+
     # Tier 2: per-warehouse comparison
     if pdf_totals:
         pdf_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0})
@@ -127,7 +145,11 @@ def compare_by_warehouse(
 
     pdf_row_by_wh: Dict[str, List[LaborLineItem]] = {}
     if pdf_rows:
-        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(pdf_rows, fallback_warehouse_id=fallback_warehouse_id)
+        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(
+            pdf_rows,
+            fallback_warehouse_id=fallback_warehouse_id,
+            source_file_warehouse_map=inferred_pdf_warehouses,
+        )
         errors.extend(pdf_errors)
 
     all_wh = sorted(set(pdf_wh_amounts) | set(pdf_row_by_wh) | set(excel_by_wh))
@@ -186,6 +208,10 @@ def compare_by_warehouse(
 
     passed = sum(1 for r in warehouse_rows if r["matchStatus"] == "通过")
     diff_warehouses = [r["warehouseId"] for r in warehouse_rows if r["matchStatus"] != "通过"]
+    allocation_issues = _build_cross_warehouse_allocation_issues(
+        warehouse_rows,
+        amount_tolerance=amount_tolerance,
+    )
     # 即使总金额一致，也要保留仓库级核对结果，避免仓库 A 多付、仓库 B 少付后在总额上互相抵消。
     if total_passed and diff_warehouses:
         summary["totalPassed"] = False
@@ -194,8 +220,9 @@ def compare_by_warehouse(
         "passedCount": passed,
         "exceptionCount": len(warehouse_rows) - passed,
         "diffWarehouses": diff_warehouses,
+        "allocationIssueCount": len(allocation_issues),
     })
-    return {"summary": summary, "rows": warehouse_rows, "errors": errors}
+    return {"summary": summary, "rows": warehouse_rows, "errors": errors, "allocationIssues": allocation_issues}
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +267,17 @@ def _match_employee_groups(
             risk_flags.append("低置信度抽取")
         if fuzzy_matched:
             risk_flags.append("疑似姓名匹配")
+        de_minimis_unmatched = _is_de_minimis_unmatched(
+            has_pdf=bool(pdf_group["items"]),
+            has_excel=bool(excel_group["items"]),
+            amount_delta=amount_delta,
+            hours_delta=hours_delta,
+            amount_tolerance=amount_tolerance,
+            hours_tolerance=hours_tolerance,
+            low_confidence=low_confidence,
+        )
+        if de_minimis_unmatched:
+            risk_flags.append("微小残差")
         amount_matches = abs(amount_delta) <= amount_tolerance
         if amount_matches and abs(hours_delta) > hours_tolerance:
             risk_flags.append("工时需复核")
@@ -253,6 +291,7 @@ def _match_employee_groups(
             hours_tolerance=hours_tolerance,
             low_confidence=low_confidence,
             fuzzy_matched=fuzzy_matched,
+            de_minimis_unmatched=de_minimis_unmatched,
         )
         rows.append({
             "employeeKey": key,
@@ -265,6 +304,7 @@ def _match_employee_groups(
             "amountDelta": amount_delta,
             "matchStatus": status,
             "riskFlags": risk_flags,
+            "sourceRefs": "; ".join(pdf_group["refs"] + excel_group["refs"]),
         })
     return rows
 
@@ -276,13 +316,17 @@ def _match_employee_groups(
 def _group_pdf_by_warehouse(
     pdf_rows: List[LaborLineItem],
     fallback_warehouse_id: str = "",
+    source_file_warehouse_map: Dict[str, str] | None = None,
 ) -> tuple[Dict[str, List[LaborLineItem]], List[str]]:
     grouped: Dict[str, List[LaborLineItem]] = defaultdict(list)
     errors: List[str] = []
+    source_file_warehouse_map = source_file_warehouse_map or {}
     for item in pdf_rows:
         wh = _warehouse_id_from_filename(item.source_file)
         if not wh:
             wh = str(item.warehouse_id or "")
+        if not wh:
+            wh = source_file_warehouse_map.get(item.source_file, "")
         if not wh:
             if fallback_warehouse_id:
                 wh = fallback_warehouse_id
@@ -291,6 +335,57 @@ def _group_pdf_by_warehouse(
                 continue
         grouped[wh].append(item)
     return dict(grouped), errors
+
+
+def _infer_pdf_warehouses_from_excel_totals(
+    pdf_totals: List[Dict[str, Any]],
+    excel_by_wh: Dict[str, List[Dict[str, Any]]],
+    amount_tolerance: float,
+) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
+    """Infer missing PDF warehouse ids when totals uniquely match Excel warehouses."""
+    if not pdf_totals or not excel_by_wh:
+        return pdf_totals, {}
+
+    excel_amounts = {
+        wh: round(sum(float(row.get("amount") or 0) for row in rows), 2)
+        for wh, rows in excel_by_wh.items()
+    }
+    used_warehouses: set[str] = {
+        str(total.get("warehouse_id") or "")
+        for total in pdf_totals
+        if str(total.get("warehouse_id") or "")
+    }
+    used_sources: set[str] = set()
+    source_map: Dict[str, str] = {}
+    enriched: List[Dict[str, Any]] = []
+
+    for total in pdf_totals:
+        current_wh = str(total.get("warehouse_id") or "")
+        if current_wh:
+            enriched.append(total)
+            continue
+
+        amount = round(float(total.get("total_amount") or 0), 2)
+        candidates = [
+            wh
+            for wh, excel_amount in excel_amounts.items()
+            if wh not in used_warehouses and abs(round(amount - excel_amount, 2)) <= amount_tolerance
+        ]
+        if len(candidates) == 1:
+            wh = candidates[0]
+            updated = dict(total)
+            updated["warehouse_id"] = wh
+            updated["warehouse_inferred_from"] = "excel_total_amount"
+            source = str(total.get("source_file") or "")
+            if source and source not in used_sources:
+                source_map[source] = wh
+                used_sources.add(source)
+            used_warehouses.add(wh)
+            enriched.append(updated)
+        else:
+            enriched.append(total)
+
+    return enriched, source_map
 
 
 def _group_excel_by_warehouse(
@@ -348,7 +443,10 @@ def _status(
     hours_tolerance: float,
     low_confidence: bool,
     fuzzy_matched: bool = False,
+    de_minimis_unmatched: bool = False,
 ) -> str:
+    if de_minimis_unmatched:
+        return "通过"
     if has_pdf and not has_excel:
         return "低置信度抽取" if low_confidence else "PDF有Excel无"
     if has_excel and not has_pdf:
@@ -361,6 +459,21 @@ def _status(
     # bucket differences while the billed total is still correct, so they remain a
     # risk flag instead of failing the row.
     return "通过"
+
+
+def _is_de_minimis_unmatched(
+    *,
+    has_pdf: bool,
+    has_excel: bool,
+    amount_delta: float,
+    hours_delta: float,
+    amount_tolerance: float,
+    hours_tolerance: float,
+    low_confidence: bool,
+) -> bool:
+    if low_confidence or has_pdf == has_excel:
+        return False
+    return abs(amount_delta) <= max(float(amount_tolerance), 0.50) and abs(hours_delta) <= max(float(hours_tolerance), 0.05)
 
 
 def _name_similarity_improved(left: str, right: str) -> float:
@@ -464,9 +577,17 @@ def _fuzzy_match_unmatched_groups(
             if excel_key in used_excel:
                 continue
             jaccard = _workbuddy_jaccard(pdf[pdf_key]["name"], excel[excel_key]["name"])
-            if jaccard < 0.35:
+            score = _name_similarity(pdf[pdf_key]["name"], excel[excel_key]["name"])
+            if not _fuzzy_totals_support_match(
+                pdf[pdf_key],
+                excel[excel_key],
+                score=score,
+                jaccard=jaccard,
+                amount_tolerance=amount_tolerance,
+                hours_tolerance=hours_tolerance,
+            ):
                 continue
-            scored.append((jaccard, pdf_key, excel_key))
+            scored.append((max(jaccard, score), pdf_key, excel_key))
     for _score, pdf_key, excel_key in sorted(scored, reverse=True):
         if pdf_key in matches or excel_key in used_excel:
             continue
@@ -525,7 +646,14 @@ def _matched_name(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], fuzzy_
     return pdf_group["name"] or excel_group["name"]
 
 
-def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dict[str, Any]], excel: Dict[str, Dict[str, Any]]) -> tuple[List[Dict[str, Any]], set, set]:
+def _suggest_unmatched_candidates(
+    rows: List[Dict[str, Any]],
+    pdf: Dict[str, Dict[str, Any]],
+    excel: Dict[str, Dict[str, Any]],
+    *,
+    amount_tolerance: float,
+    hours_tolerance: float,
+) -> tuple[List[Dict[str, Any]], set, set]:
     unmatched_pdf_keys = [row["employeeKey"] for row in rows if row.get("matchStatus") == "PDF有Excel无"]
     unmatched_excel_keys = [row["employeeKey"] for row in rows if row.get("matchStatus") == "Excel有PDF无"]
     candidates = []
@@ -540,10 +668,11 @@ def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dic
             pdf_group = pdf.get(pdf_key, _empty_group())
             excel_group = excel.get(excel_key, _empty_group())
             score = _name_similarity(pdf_group["name"], excel_group["name"])
-            if score < 0.55:
-                continue
             amount_delta = round(pdf_group["amount"] - excel_group["amount"], 2)
             hours_delta = round(pdf_group["hours"] - excel_group["hours"], 2)
+            totals_align = abs(amount_delta) <= amount_tolerance and abs(hours_delta) <= hours_tolerance
+            if score < 0.55 and not (totals_align and score >= 0.35):
+                continue
             candidate = {
                 "pdfEmployeeKey": pdf_key,
                 "excelEmployeeKey": excel_key,
@@ -562,9 +691,98 @@ def _suggest_unmatched_candidates(rows: List[Dict[str, Any]], pdf: Dict[str, Dic
             if best is None or candidate["nameSimilarity"] > best["nameSimilarity"]:
                 best = candidate
         if best:
+            if _should_promote_name_amount_candidate(best, hours_tolerance=hours_tolerance):
+                best["recommendation"] = "姓名疑似同一人，金额/费率差异需人工复核"
+                promoted_pdf.add(pdf_key)
+                promoted_excel.add(best["excelEmployeeKey"])
             candidates.append(best)
             used_excel.add(best["excelEmployeeKey"])
     return sorted(candidates, key=lambda row: row["nameSimilarity"], reverse=True), promoted_pdf, promoted_excel
+
+
+def _should_promote_name_amount_candidate(candidate: Dict[str, Any], *, hours_tolerance: float) -> bool:
+    """Collapse same-person rate deltas into one review row without passing them."""
+    score = float(candidate.get("nameSimilarity") or 0)
+    hours_delta = abs(float(candidate.get("hoursDelta") or 0))
+    amount_delta = abs(float(candidate.get("amountDelta") or 0))
+    if amount_delta <= 0:
+        return False
+    return score >= 0.55 and hours_delta <= max(float(hours_tolerance), 0.05)
+
+
+def _suggest_residual_offset_candidates(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Find offsetting employee exceptions that indicate a combined PDF row.
+
+    Real OSS invoices can contain a PDF line whose hours/amount include another
+    Excel employee without listing that employee name in the PDF text. This must
+    remain an exception, but the exact offset is useful review evidence.
+    """
+    amount_diff_rows = [
+        row for row in rows
+        if row.get("matchStatus") == "金额差异"
+        and row.get("pdfAmountTotal", 0) > row.get("excelAmountTotal", 0)
+        and row.get("pdfHoursTotal", 0) > row.get("excelHoursTotal", 0)
+    ]
+    unmatched_excel_rows = [row for row in rows if row.get("matchStatus") == "Excel有PDF无"]
+    candidates: List[Dict[str, Any]] = []
+    used_excel: set = set()
+
+    for pdf_row in sorted(amount_diff_rows, key=lambda row: abs(row.get("amountDelta", 0)), reverse=True):
+        pdf_amount_delta = round(float(pdf_row.get("amountDelta") or 0), 2)
+        pdf_hours_delta = round(float(pdf_row.get("hoursDelta") or 0), 2)
+        best: Dict[str, Any] | None = None
+        for excel_row in unmatched_excel_rows:
+            excel_key = str(excel_row.get("employeeKey") or "")
+            if excel_key in used_excel:
+                continue
+            excel_amount = round(float(excel_row.get("excelAmountTotal") or 0), 2)
+            excel_hours = round(float(excel_row.get("excelHoursTotal") or 0), 2)
+            amount_residual = round(pdf_amount_delta - excel_amount, 2)
+            hours_residual = round(pdf_hours_delta - excel_hours, 2)
+            if abs(amount_residual) > 0.01 or abs(hours_residual) > 0.01:
+                continue
+            candidate = {
+                "issueType": "combined_pdf_row",
+                "pdfEmployeeKey": pdf_row.get("employeeKey", ""),
+                "excelEmployeeKey": excel_key,
+                "pdfEmployeeName": pdf_row.get("employeeName", ""),
+                "excelEmployeeName": excel_row.get("employeeName", ""),
+                "nameSimilarity": round(_name_similarity(str(pdf_row.get("employeeName") or ""), str(excel_row.get("employeeName") or "")), 3),
+                "pdfHoursTotal": round(float(pdf_row.get("pdfHoursTotal") or 0), 2),
+                "excelHoursTotal": round(float(excel_row.get("excelHoursTotal") or 0), 2),
+                "hoursDelta": pdf_hours_delta,
+                "pdfAmountTotal": round(float(pdf_row.get("pdfAmountTotal") or 0), 2),
+                "excelAmountTotal": excel_amount,
+                "amountDelta": pdf_amount_delta,
+                "recommendation": "疑似PDF合并员工，需人工核对原始发票",
+                "sourceRefs": "; ".join(ref for ref in [
+                    str(pdf_row.get("sourceRefs") or ""),
+                    str(excel_row.get("sourceRefs") or ""),
+                ] if ref),
+            }
+            if best is None or abs(candidate["amountDelta"]) > abs(best["amountDelta"]):
+                best = candidate
+        if best:
+            candidates.append(best)
+            used_excel.add(str(best["excelEmployeeKey"]))
+
+    return candidates
+
+
+def _apply_residual_offset_flags(rows: List[Dict[str, Any]], candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    pdf_keys = {str(candidate.get("pdfEmployeeKey") or "") for candidate in candidates}
+    excel_keys = {str(candidate.get("excelEmployeeKey") or "") for candidate in candidates}
+    flagged: List[Dict[str, Any]] = []
+    for row in rows:
+        key = str(row.get("employeeKey") or "")
+        if key in pdf_keys or key in excel_keys:
+            row = dict(row)
+            risk_flags = list(row.get("riskFlags") or [])
+            if "疑似PDF合并员工" not in risk_flags:
+                risk_flags.append("疑似PDF合并员工")
+            row["riskFlags"] = risk_flags
+        flagged.append(row)
+    return flagged
 
 
 def _apply_promotions(
@@ -589,8 +807,8 @@ def _apply_promotions(
                     "pdfAmountTotal": cand["pdfAmountTotal"],
                     "excelAmountTotal": cand["excelAmountTotal"],
                     "amountDelta": cand["amountDelta"],
-                    "matchStatus": "疑似姓名匹配",
-                    "riskFlags": ["名字相似，金额/工时未对齐"],
+                    "matchStatus": "金额差异",
+                    "riskFlags": ["疑似姓名匹配", "金额/费率需复核"],
                     "sourceRefs": cand["sourceRefs"],
                 })
             continue
@@ -664,20 +882,91 @@ def _build_attribution(employee_rows: List[Dict[str, Any]], max_items: int = 5) 
     attribution = []
     for row in diff_rows[:max_items]:
         attribution.append({
+            "employeeKey": row.get("employeeKey", ""),
             "employeeName": row.get("employeeName", ""),
             "pdfAmount": row.get("pdfAmountTotal", 0),
             "excelAmount": row.get("excelAmountTotal", 0),
             "delta": row.get("amountDelta", 0),
+            "sourceRefs": row.get("sourceRefs", ""),
         })
 
     # Add "other" entry if there are more rows
     if len(diff_rows) > max_items:
         other_delta = sum(r.get("amountDelta", 0) for r in diff_rows[max_items:])
         attribution.append({
+            "employeeKey": "",
             "employeeName": f"其他{len(diff_rows) - max_items}人",
             "pdfAmount": None,
             "excelAmount": None,
             "delta": round(other_delta, 2),
+            "sourceRefs": "",
         })
 
     return attribution
+
+
+def _build_cross_warehouse_allocation_issues(
+    warehouse_rows: List[Dict[str, Any]],
+    *,
+    amount_tolerance: float,
+    max_items: int = 20,
+) -> List[Dict[str, Any]]:
+    """Detect employees whose warehouse deltas offset across locations.
+
+    Employee-level aggregation can pass when the same employee is over-billed in
+    one warehouse and under-billed in another. These are allocation issues, not
+    employee total issues, and must stay visible for warehouse ownership review.
+    """
+    by_employee: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for warehouse in warehouse_rows:
+        warehouse_delta = round(float(warehouse.get("amountDelta") or 0), 2)
+        if abs(warehouse_delta) <= amount_tolerance:
+            continue
+        for item in warehouse.get("attribution", []) or []:
+            employee_name = str(item.get("employeeName") or "").strip()
+            if not employee_name or employee_name.startswith("其他"):
+                continue
+            delta = round(float(item.get("delta") or 0), 2)
+            if abs(delta) <= amount_tolerance:
+                continue
+            employee_key = str(item.get("employeeKey") or "").strip() or f"name:{normalize_employee_name(employee_name)}"
+            by_employee[employee_key].append(
+                {
+                    "warehouseId": str(warehouse.get("warehouseId") or ""),
+                    "employeeName": employee_name,
+                    "pdfAmount": round(float(item.get("pdfAmount") or 0), 2) if item.get("pdfAmount") is not None else None,
+                    "excelAmount": round(float(item.get("excelAmount") or 0), 2) if item.get("excelAmount") is not None else None,
+                    "amountDelta": delta,
+                    "warehouseDelta": warehouse_delta,
+                    "sourceRefs": str(item.get("sourceRefs") or ""),
+                }
+            )
+
+    issues: List[Dict[str, Any]] = []
+    for employee_key, rows in by_employee.items():
+        if len(rows) < 2:
+            continue
+        has_positive = any(float(row["amountDelta"]) > amount_tolerance for row in rows)
+        has_negative = any(float(row["amountDelta"]) < -amount_tolerance for row in rows)
+        if not has_positive or not has_negative:
+            continue
+        net_delta = round(sum(float(row["amountDelta"]) for row in rows), 2)
+        if abs(net_delta) > amount_tolerance:
+            continue
+        rows = sorted(rows, key=lambda row: (row["warehouseId"], -abs(float(row["amountDelta"]))))
+        issues.append(
+            {
+                "employeeKey": employee_key,
+                "employeeName": rows[0]["employeeName"],
+                "netAmountDelta": net_delta,
+                "warehouseCount": len({row["warehouseId"] for row in rows}),
+                "warehouses": rows,
+                "recommendation": "员工总额可抵消，但仓库归属金额不一致，需按仓库复核发票与账单归属。",
+            }
+        )
+
+    return sorted(
+        issues,
+        key=lambda item: max(abs(float(row.get("amountDelta") or 0)) for row in item["warehouses"]),
+        reverse=True,
+    )[:max_items]
