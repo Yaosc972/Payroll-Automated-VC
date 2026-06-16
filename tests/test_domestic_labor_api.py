@@ -392,26 +392,92 @@ def test_quanqinjiang_returns_audit_explanation():
     assert explanation["steps"]
 
 
-def test_canbu_returns_audit_explanation():
-    """餐补返回逐日累计与封顶公式"""
+def test_canbu_dongguan_uses_platform_rule_without_meal_standard():
+    """东莞餐补使用平台规则，不依赖月报餐补标准"""
     employee = {
         "工号": "OWHN001",
         "姓名": "张三",
-        "餐补标准": "19元/天，封顶500元/月",
+        "工作地区": "",
+        "一级部门名称": "莞深操作",
+        "岗位名称": "操作员",
+        "餐补标准": "",
     }
     daily_attendance = [
-        {"工号": "OWHN001", "正班时数": 8, "刷卡加班": 0},
-        {"工号": "OWHN001", "正班时数": 4, "刷卡加班": 0},
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 8, "刷卡加班": 0},
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 4, "刷卡加班": 0},
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "星期天休息", "正班时数": 0, "刷卡加班": 3},
     ]
 
     result = CanBuEngine().calculate(employee, daily_attendance)
     explanation = result.details["audit_explanation"]
 
-    assert result.amount == 28.5
+    assert result.amount == 35.62
     assert explanation["subject"] == "canbu"
-    assert explanation["formula"] == "min(Σ单日餐补, 月封顶500)"
-    assert explanation["intermediate_values"]["日餐补合计"] == 28.5
+    assert explanation["formula"] == "min(Σ单日餐补, 500)"
+    assert explanation["inputs"]["工作地区"] == "东莞"
+    assert explanation["intermediate_values"]["日餐补合计"] == 35.62
     assert explanation["steps"]
+
+
+def test_canbu_dongguan_keeps_existing_piecework_exclusion():
+    """东莞保留理货操作组计件排除规则"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "一级部门名称": "莞深操作",
+        "岗位名称": "操作员",
+    }
+    daily_attendance = [
+        {
+            "工号": "OWHN001",
+            "工作地区": "东莞",
+            "工作状态": "工作日",
+            "正班时数": 8,
+            "刷卡加班": 0,
+            "四级部门名称": "理货操作组",
+            "计时": "计件",
+        },
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.amount == 0
+    assert result.details["日餐补明细"] == [0]
+
+
+def test_canbu_jinjiang_is_not_eligible():
+    """晋江区域不享有餐补"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "晋江",
+        "一级部门名称": "东南区",
+        "岗位名称": "操作员",
+    }
+
+    result = CanBuEngine().calculate(employee, daily_attendance=[])
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 0
+    assert result.details["reason"] == "晋江区域不享有餐补"
+    assert explanation["formula"] == "晋江区域 = 0"
+
+
+def test_canbu_jiashan_is_pending_rule():
+    """嘉善餐补口径待补充，暂不计算"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": "操作员",
+    }
+
+    result = CanBuEngine().calculate(employee, daily_attendance=[])
+
+    assert result.amount == 0
+    assert result.details["reason"] == "嘉善餐补规则待补充"
+    assert "嘉善餐补规则待补充" in result.warnings[0]
 
 
 def test_waisu_butie_returns_audit_explanation():

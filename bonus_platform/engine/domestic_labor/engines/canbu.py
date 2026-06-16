@@ -1,10 +1,28 @@
 """餐补计算引擎 (Meal Allowance Engine)."""
+from collections import Counter
 from typing import Any, Dict, List
-from .base import BaseEngine, CalculationResult
+
+from .base import BaseEngine, CalculationResult, safe_float
 from ..models import AuditExplanation
 
 
 SUBJECT = "canbu"
+
+DONGGUAN_DAILY_RATE = 19.0
+DONGGUAN_MONTHLY_CAP = 500.0
+
+DONGGUAN_ELIGIBLE_POSITIONS = {
+    "安检员",
+    "操作文员",
+    "操作员",
+    "叉车司机",
+    "揽收充电司机",
+    "查验员",
+    "监察员",
+}
+DONGGUAN_DEPARTMENT_KEYWORDS = {"寮步区", "莞深操作"}
+
+REST_DAY_STATUSES = {"星期六休息", "星期天休息", "法定节假日", "休息"}
 
 
 def _audit_explanation(
@@ -26,161 +44,256 @@ def _audit_explanation(
     ).to_dict()
 
 
+def _first_non_empty(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and text != "None":
+            return text
+    return ""
+
+
+def _text_from_fields(row: Dict[str, Any], field_names: List[str]) -> str:
+    return " ".join(str(row.get(field, "") or "") for field in field_names)
+
+
+def _department_text(employee_data: Dict[str, Any], daily_attendance: List[Dict[str, Any]]) -> str:
+    fields = [
+        "一级部门名称",
+        "二级部门名称",
+        "三级部门名称",
+        "四级部门名称",
+        "部门",
+        "部门名称",
+    ]
+    parts = [_text_from_fields(employee_data, fields)]
+    for day in daily_attendance or []:
+        parts.append(_text_from_fields(day, fields))
+    return " ".join(parts)
+
+
+def _work_area(employee_data: Dict[str, Any], daily_attendance: List[Dict[str, Any]]) -> str:
+    daily_areas = [
+        str(day.get("工作地区", "") or "").strip()
+        for day in daily_attendance or []
+        if str(day.get("工作地区", "") or "").strip()
+    ]
+    if daily_areas:
+        return Counter(daily_areas).most_common(1)[0][0]
+    return str(employee_data.get("工作地区", "") or "").strip()
+
+
+def _position(employee_data: Dict[str, Any], daily_attendance: List[Dict[str, Any]]) -> str:
+    return _first_non_empty(
+        employee_data.get("岗位名称"),
+        employee_data.get("岗位"),
+        *(day.get("岗位名称") or day.get("岗位") for day in (daily_attendance or [])),
+    )
+
+
 class CanBuEngine(BaseEngine):
     """餐补计算引擎"""
 
-    def __init__(self, daily_rate: float = 19.0, monthly_cap: float = 500.0):
-        self.daily_rate = daily_rate
-        self.monthly_cap = monthly_cap
-
     def calculate(self, employee_data: Dict[str, Any], daily_attendance: List[Dict[str, Any]] = None) -> CalculationResult:
-        """计算单个员工的餐补
-
-        Args:
-            employee_data: 月考勤数据 (Sheet2)
-            daily_attendance: 日考勤数据列表 (Sheet1)
-        """
+        """计算单个员工的餐补。"""
+        daily_attendance = daily_attendance or []
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
-        warnings = []
+        work_area = _work_area(employee_data, daily_attendance)
+        position = _position(employee_data, daily_attendance)
+        department_text = _department_text(employee_data, daily_attendance)
         input_snapshot = {
             "工号": employee_id,
             "姓名": employee_name,
-            "餐补标准": str(employee_data.get("餐补标准", "")),
-            "日考勤记录数": len(daily_attendance or []),
+            "工作地区": work_area,
+            "岗位名称": position,
+            "部门字段": department_text,
+            "日考勤记录数": len(daily_attendance),
         }
 
-        # 补贴资格判断
-        meal_standard = str(employee_data.get("餐补标准", ""))
-        if meal_standard != "19元/天，封顶500元/月" or meal_standard in ["/", ""]:
-            return CalculationResult(
-                employee_id=employee_id,
-                employee_name=employee_name,
-                amount=0,
-                details={
-                    "reason": "无补贴资格",
-                    "audit_explanation": _audit_explanation(
-                        0,
-                        "餐补资格判断",
-                        "餐补标准不匹配 = 0",
-                        input_snapshot,
-                        {"餐补标准": meal_standard},
-                        ["员工餐补标准未匹配 19元/天，封顶500元/月", "餐补金额为0"],
-                    ),
+        if work_area == "东莞":
+            return self._calculate_dongguan(
+                employee_id,
+                employee_name,
+                employee_data,
+                daily_attendance,
+                position,
+                department_text,
+                input_snapshot,
+            )
+        if work_area == "嘉善":
+            return self._zero_result(
+                employee_id,
+                employee_name,
+                "嘉善餐补规则待补充",
+                "嘉善餐补规则待补充",
+                "规则待补充 = 0",
+                input_snapshot,
+                {"工作地区": work_area},
+                ["工作地区为嘉善", "嘉善餐补计算口径待补充", "本次暂不计算餐补"],
+                warnings=[f"员工{employee_id}嘉善餐补规则待补充"],
+            )
+        if work_area == "晋江":
+            return self._zero_result(
+                employee_id,
+                employee_name,
+                "晋江区域不享有餐补",
+                "餐补工作地区判断",
+                "晋江区域 = 0",
+                input_snapshot,
+                {"工作地区": work_area},
+                ["工作地区为晋江", "晋江区域不享有餐补", "餐补金额为0"],
+            )
+
+        return self._zero_result(
+            employee_id,
+            employee_name,
+            "工作地区未配置餐补规则",
+            "餐补工作地区判断",
+            "未命中已配置工作地区 = 0",
+            input_snapshot,
+            {"工作地区": work_area},
+            ["工作地区未命中东莞、嘉善或晋江", "餐补金额为0"],
+        )
+
+    def _calculate_dongguan(
+        self,
+        employee_id: str,
+        employee_name: str,
+        employee_data: Dict[str, Any],
+        daily_attendance: List[Dict[str, Any]],
+        position: str,
+        department_text: str,
+        input_snapshot: Dict[str, Any],
+    ) -> CalculationResult:
+        is_eligible_dept = any(keyword in department_text for keyword in DONGGUAN_DEPARTMENT_KEYWORDS)
+        if not is_eligible_dept or position not in DONGGUAN_ELIGIBLE_POSITIONS:
+            return self._zero_result(
+                employee_id,
+                employee_name,
+                "东莞餐补资格不满足",
+                "东莞餐补资格判断",
+                "部门或岗位不在适用范围 = 0",
+                input_snapshot,
+                {
+                    "部门是否命中寮步区/莞深操作": is_eligible_dept,
+                    "岗位名称": position,
+                    "岗位是否享有": position in DONGGUAN_ELIGIBLE_POSITIONS,
                 },
-                warnings=[]
+                ["工作地区为东莞", "检查部门和岗位适用范围", "餐补金额为0"],
             )
 
         if not daily_attendance:
-            return CalculationResult(
-                employee_id=employee_id,
-                employee_name=employee_name,
-                amount=0,
-                details={
-                    "reason": "无日考勤数据",
-                    "audit_explanation": _audit_explanation(
-                        0,
-                        "餐补日考勤校验",
-                        "无日考勤数据 = 0",
-                        input_snapshot,
-                        {"日考勤记录数": 0},
-                        ["员工无日考勤记录", "无法逐日计算餐补", "餐补金额为0"],
-                    ),
-                },
-                warnings=[f"员工{employee_id}无日考勤数据"]
+            return self._zero_result(
+                employee_id,
+                employee_name,
+                "无日考勤数据",
+                "东莞餐补日考勤校验",
+                "无日考勤数据 = 0",
+                input_snapshot,
+                {"日考勤记录数": 0},
+                ["东莞餐补需要按日考勤逐日折算", "员工无日考勤记录", "餐补金额为0"],
+                warnings=[f"员工{employee_id}无日考勤数据"],
             )
 
-        # 逐日计算
         daily_totals = []
         for day in daily_attendance:
-            daily_amount = self._calculate_daily(day)
-            daily_totals.append(daily_amount)
+            daily_totals.append(self._calculate_dongguan_daily(day))
 
-        # 汇总并封顶
         monthly_total = sum(daily_totals)
-        final_amount = round(min(monthly_total, self.monthly_cap), 2)
-
-        if monthly_total > self.monthly_cap:
-            warnings.append(f"触发封顶: 累计{monthly_total:.2f}元 > {self.monthly_cap}元")
+        final_amount = round(min(monthly_total, DONGGUAN_MONTHLY_CAP), 2)
+        warnings = []
+        if monthly_total > DONGGUAN_MONTHLY_CAP:
+            warnings.append(f"触发封顶: 累计{monthly_total:.2f}元 > {DONGGUAN_MONTHLY_CAP}元")
 
         return CalculationResult(
             employee_id=employee_id,
             employee_name=employee_name,
             amount=final_amount,
             details={
+                "地区规则": "东莞",
                 "日餐补明细": daily_totals,
                 "月累计": round(monthly_total, 2),
-                "封顶金额": self.monthly_cap,
-                "是否触发封顶": monthly_total > self.monthly_cap,
+                "封顶金额": DONGGUAN_MONTHLY_CAP,
+                "是否触发封顶": monthly_total > DONGGUAN_MONTHLY_CAP,
                 "audit_explanation": _audit_explanation(
                     final_amount,
-                    "餐补逐日累计与封顶",
-                    "min(Σ单日餐补, 月封顶500)",
+                    "东莞餐补逐日折算与封顶",
+                    "min(Σ单日餐补, 500)",
                     input_snapshot,
                     {
+                        "日标准": DONGGUAN_DAILY_RATE,
+                        "月封顶": DONGGUAN_MONTHLY_CAP,
                         "日考勤记录数": len(daily_attendance),
                         "日餐补合计": round(monthly_total, 2),
-                        "月封顶": self.monthly_cap,
-                        "是否触发封顶": monthly_total > self.monthly_cap,
+                        "是否触发封顶": monthly_total > DONGGUAN_MONTHLY_CAP,
                         "最终金额": final_amount,
                     },
                     [
-                        "按日考勤逐日计算餐补",
-                        "单日餐补优先使用日考勤预计算值；否则按有效出勤时数折算",
-                        f"月累计餐补为{round(monthly_total, 2)}",
-                        f"最终餐补=min({round(monthly_total, 2)}, {self.monthly_cap})={final_amount}",
+                        "工作地区为东莞，按平台内置餐补规则计算，不依赖月报餐补标准字段",
+                        "工作日按正班时数折算，休息日/节假日按刷卡加班时数折算",
+                        "保留原排除规则：四级部门名称=理货操作组且计时=计件时，当天餐补为0",
+                        f"最终餐补=min({round(monthly_total, 2)}, {DONGGUAN_MONTHLY_CAP})={final_amount}",
                     ],
                 ),
             },
-            warnings=warnings
+            warnings=warnings,
         )
 
-    def _calculate_daily(self, day_data: Dict[str, Any]) -> float:
-        """计算单日餐补
-
-        优先使用日考勤文件中的预计算"餐补"值；
-        如无则从正班时数等原始数据计算。
-        """
-        # 如果日考勤数据已有预计算的餐补值，直接使用
-        pre_calc = day_data.get("餐补")
-        if pre_calc is not None and pre_calc != "" and pre_calc != "None":
-            try:
-                return float(pre_calc)
-            except (ValueError, TypeError):
-                pass
-
-        # 理货操作组计件排除
+    def _calculate_dongguan_daily(self, day_data: Dict[str, Any]) -> float:
         department = str(day_data.get("四级部门名称", ""))
         timing = str(day_data.get("计时", ""))
         if department == "理货操作组" and timing == "计件":
             return 0
 
-        # 旷工排除
         is_abnormal = str(day_data.get("是否异常", ""))
         abnormal_reason = str(day_data.get("异常原因", ""))
         if is_abnormal == "是" and abnormal_reason == "旷工":
             return 0
 
-        # 日有效出勤时数
-        regular_hours = float(day_data.get("正班时数", 0) or 0)
-        overtime_hours = float(day_data.get("刷卡加班", 0) or 0)
-        effective_hours = max(regular_hours, overtime_hours)
-
-        # 日餐补计算
-        if effective_hours > 8:
-            return self.daily_rate
-        elif effective_hours == 0:
-            return 0
+        work_status = str(day_data.get("工作状态", "") or "")
+        if work_status in REST_DAY_STATUSES:
+            effective_hours = safe_float(day_data.get("刷卡加班", 0))
         else:
-            return effective_hours * (self.daily_rate / 8)
+            effective_hours = safe_float(day_data.get("正班时数", 0))
+
+        if effective_hours >= 8:
+            return DONGGUAN_DAILY_RATE
+        if effective_hours <= 0:
+            return 0
+        return round(effective_hours * (DONGGUAN_DAILY_RATE / 8), 2)
+
+    def _zero_result(
+        self,
+        employee_id: str,
+        employee_name: str,
+        reason: str,
+        rule_name: str,
+        formula: str,
+        inputs: Dict[str, Any],
+        intermediate_values: Dict[str, Any],
+        steps: List[str],
+        warnings: List[str] = None,
+    ) -> CalculationResult:
+        return CalculationResult(
+            employee_id=employee_id,
+            employee_name=employee_name,
+            amount=0,
+            details={
+                "reason": reason,
+                "audit_explanation": _audit_explanation(
+                    0,
+                    rule_name,
+                    formula,
+                    inputs,
+                    intermediate_values,
+                    steps,
+                ),
+            },
+            warnings=warnings or [],
+        )
 
     def calculate_batch(self, employees: List[Dict[str, Any]], daily_data: Dict[str, List[Dict[str, Any]]]) -> List[CalculationResult]:
-        """批量计算餐补
-
-        Args:
-            employees: 员工月考勤数据列表
-            daily_data: 按工号分组的日考勤数据 {工号: [日考勤数据]}
-        """
+        """批量计算餐补。"""
         results = []
         for emp in employees:
             employee_id = str(emp.get("工号", ""))
@@ -190,7 +303,7 @@ class CanBuEngine(BaseEngine):
         return results
 
     def verify(self, results: List[CalculationResult]) -> Dict[str, Any]:
-        """验证计算结果"""
+        """验证计算结果。"""
         total = len(results)
         capped = sum(1 for r in results if r.details.get("是否触发封顶", False))
         total_amount = sum(r.amount for r in results)
