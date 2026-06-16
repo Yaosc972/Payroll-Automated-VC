@@ -660,7 +660,8 @@ function buildRuleExplanation(key, row) {
 function getWarningLevel(row) {
   const exceptions = getEffectiveExceptions(row);
   if (exceptions.some(item => item.level === 'blocking')) return { label: '阻断', className: 'block' };
-  if (exceptions.length) return { label: '高风险', className: 'warn' };
+  if (exceptions.some(item => item.level !== 'info')) return { label: '高风险', className: 'warn' };
+  if (exceptions.length) return { label: '提示', className: 'warn' };
   const text = getEffectiveWarningText(row);
   if (!text) return { label: '通过', className: 'ok' };
   if (/失败|异常|不存在|缺失|请提供/.test(text)) return { label: '高风险', className: 'warn' };
