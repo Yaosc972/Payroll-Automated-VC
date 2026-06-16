@@ -7,7 +7,10 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from bonus_platform.app import app
+from bonus_platform.engine.domestic_labor.engines.canbu import CanBuEngine
 from bonus_platform.engine.domestic_labor.engines.gonglingjiang import GongLingJiangEngine
+from bonus_platform.engine.domestic_labor.engines.quanqinjiang import QuanQinJiangEngine
+from bonus_platform.engine.domestic_labor.engines.waisu_butie import WaiSuBuTieEngine
 from bonus_platform.engine.domestic_labor import parser as domestic_parser
 from bonus_platform.engine.domestic_labor.parser import ExcelParser
 
@@ -358,6 +361,84 @@ def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
     assert row["exceptions"] == []
 
     client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_quanqinjiang_returns_audit_explanation():
+    """全勤奖返回计算公式和审计解释"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "考勤月份": "202606",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "旷工天数": 0,
+        "正班迟到次数": 0,
+        "早退次数": 0,
+        "签卡次数": 0,
+        "工伤假天数": 0,
+        "事假时数": 0,
+        "病假时数": 0,
+        "入离职缺勤时数": 0,
+        "迟到早退30分钟内扣款": 0,
+    }
+
+    result = QuanQinJiangEngine().calculate(employee)
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 100
+    assert explanation["subject"] == "quanqinjiang"
+    assert explanation["formula"] == "满足全勤条件 = 100"
+    assert explanation["intermediate_values"]["旷工天数"] == 0
+    assert explanation["steps"]
+
+
+def test_canbu_returns_audit_explanation():
+    """餐补返回逐日累计与封顶公式"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "餐补标准": "19元/天，封顶500元/月",
+    }
+    daily_attendance = [
+        {"工号": "OWHN001", "正班时数": 8, "刷卡加班": 0},
+        {"工号": "OWHN001", "正班时数": 4, "刷卡加班": 0},
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 28.5
+    assert explanation["subject"] == "canbu"
+    assert explanation["formula"] == "min(Σ单日餐补, 月封顶500)"
+    assert explanation["intermediate_values"]["日餐补合计"] == 28.5
+    assert explanation["steps"]
+
+
+def test_waisu_butie_returns_audit_explanation():
+    """外宿补贴返回按天折算公式"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "考勤月份": "202606",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "事假时数": 0,
+        "排休请假时数": 0,
+        "病假时数": 0,
+        "旷工时数": 0,
+        "入离职缺勤时数": 0,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 150
+    assert explanation["subject"] == "waisu_butie"
+    assert explanation["formula"] == "补贴标准/月天数 × 有效补贴天数"
+    assert explanation["intermediate_values"]["外宿补贴天数"] == 30
+    assert explanation["steps"]
 
 
 def test_gonglingjiang_returns_structured_exception_for_missing_hrbp_list():

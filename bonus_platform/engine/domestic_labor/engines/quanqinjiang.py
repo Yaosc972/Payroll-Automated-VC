@@ -3,6 +3,10 @@ import calendar
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 from .base import BaseEngine, CalculationResult, safe_float, safe_int
+from ..models import AuditExplanation
+
+
+SUBJECT = "quanqinjiang"
 
 
 # 硬编码排除名单
@@ -10,6 +14,25 @@ EXCLUDED_EMPLOYEE_IDS = {"OWHN9535", "OWHN9353", "OWHX0190"}
 
 # 日考勤中的非工作日状态
 NON_WORK_STATUS = {"星期六休息", "星期天休息", "法定节假日"}
+
+
+def _audit_explanation(
+    amount: float,
+    rule_name: str,
+    formula: str,
+    inputs: Dict[str, Any],
+    intermediate_values: Dict[str, Any] = None,
+    steps: List[str] = None,
+) -> Dict[str, Any]:
+    return AuditExplanation(
+        subject=SUBJECT,
+        amount=amount,
+        rule_name=rule_name,
+        formula=formula,
+        inputs=inputs,
+        intermediate_values=intermediate_values or {},
+        steps=steps or [],
+    ).to_dict()
 
 
 class QuanQinJiangEngine(BaseEngine):
@@ -68,6 +91,14 @@ class QuanQinJiangEngine(BaseEngine):
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
         warnings = []
+        input_snapshot = {
+            "工号": employee_id,
+            "姓名": employee_name,
+            "考勤月份": str(employee_data.get("考勤月份", "")),
+            "入职日期": str(employee_data.get("入职日期", "")),
+            "最后工作日": str(employee_data.get("最后工作日", "")),
+            "日考勤记录数": len(daily_attendance or []),
+        }
 
         # 条件1：硬编码排除
         if employee_id in EXCLUDED_EMPLOYEE_IDS:
@@ -75,7 +106,17 @@ class QuanQinJiangEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "硬编码排除"},
+                details={
+                    "reason": "硬编码排除",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "全勤奖特殊排除名单",
+                        "特殊排除名单命中 = 0",
+                        input_snapshot,
+                        {"是否命中特殊排除名单": True},
+                        ["员工在特殊排除名单中", "全勤奖金额为0"],
+                    ),
+                },
                 warnings=[f"员工{employee_id}在特殊排除名单中"]
             )
 
@@ -86,7 +127,17 @@ class QuanQinJiangEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "考勤月份格式异常"},
+                details={
+                    "reason": "考勤月份格式异常",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "全勤奖月份校验",
+                        "考勤月份无效 = 0",
+                        input_snapshot,
+                        {"考勤月份": attendance_month},
+                        ["考勤月份不是YYYYMM格式", "无法判断月初月末", "全勤奖金额为0"],
+                    ),
+                },
                 warnings=[f"考勤月份格式异常: {attendance_month}"]
             )
 
@@ -94,22 +145,51 @@ class QuanQinJiangEngine(BaseEngine):
 
         # 条件2：缺勤/迟到/签卡排除
         absence_conditions = [
-            safe_float(employee_data.get("旷工天数", 0)) > 0,
-            (safe_float(employee_data.get("正班迟到次数", 0)) + safe_float(employee_data.get("早退次数", 0))) > 3,
-            safe_float(employee_data.get("签卡次数", 0)) > 3,
-            safe_float(employee_data.get("工伤假天数", 0)) > 0,
-            safe_float(employee_data.get("事假时数", 0)) > 0,
-            safe_float(employee_data.get("病假时数", 0)) > 0,
-            safe_float(employee_data.get("入离职缺勤时数", 0)) > 0,
-            safe_float(employee_data.get("迟到早退30分钟内扣款", 0)) > 0,
+            safe_float(employee_data.get("旷工天数", 0)),
+            safe_float(employee_data.get("正班迟到次数", 0)) + safe_float(employee_data.get("早退次数", 0)),
+            safe_float(employee_data.get("签卡次数", 0)),
+            safe_float(employee_data.get("工伤假天数", 0)),
+            safe_float(employee_data.get("事假时数", 0)),
+            safe_float(employee_data.get("病假时数", 0)),
+            safe_float(employee_data.get("入离职缺勤时数", 0)),
+            safe_float(employee_data.get("迟到早退30分钟内扣款", 0)),
         ]
+        absence_values = {
+            "旷工天数": absence_conditions[0],
+            "迟到早退次数": absence_conditions[1],
+            "签卡次数": absence_conditions[2],
+            "工伤假天数": absence_conditions[3],
+            "事假时数": absence_conditions[4],
+            "病假时数": absence_conditions[5],
+            "入离职缺勤时数": absence_conditions[6],
+            "迟到早退30分钟内扣款": absence_conditions[7],
+        }
 
-        if any(absence_conditions):
+        if (
+            absence_conditions[0] > 0
+            or absence_conditions[1] > 3
+            or absence_conditions[2] > 3
+            or any(value > 0 for value in absence_conditions[3:])
+        ):
             return CalculationResult(
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "缺勤/迟到/签卡排除"},
+                details={
+                    "reason": "缺勤/迟到/签卡排除",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "全勤奖缺勤与异常考勤判断",
+                        "存在排除项 = 0",
+                        input_snapshot,
+                        absence_values,
+                        [
+                            "检查旷工、迟到早退、签卡、工伤、事假、病假、入离职缺勤和迟到早退扣款",
+                            "命中至少一个全勤奖排除条件",
+                            "全勤奖金额为0",
+                        ],
+                    ),
+                },
                 warnings=[]
             )
 
@@ -129,7 +209,24 @@ class QuanQinJiangEngine(BaseEngine):
                         employee_id=employee_id,
                         employee_name=employee_name,
                         amount=0,
-                        details={"reason": "入职时间排除", "hire_date": str(hire_date)},
+                        details={
+                            "reason": "入职时间排除",
+                            "hire_date": str(hire_date),
+                            "audit_explanation": _audit_explanation(
+                                0,
+                                "全勤奖入职时间判断",
+                                "月初至入职日前存在工作日 = 0",
+                                input_snapshot,
+                                {
+                                    "月初": month_start.isoformat(),
+                                    "入职日期": hire_date.isoformat(),
+                                    "入职前缺口开始": gap_start.isoformat(),
+                                    "入职前缺口结束": gap_end.isoformat(),
+                                    "缺口内是否存在工作日": has_workday,
+                                },
+                                ["员工非月初入职", "月初至入职日前存在工作日", "全勤奖金额为0"],
+                            ),
+                        },
                         warnings=[]
                     )
                 # gap全是休息日/节假日，不排除，继续判断条件4
@@ -151,7 +248,17 @@ class QuanQinJiangEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=self.bonus_amount,
-                details={"reason": "在职员工"},
+                details={
+                    "reason": "在职员工",
+                    "audit_explanation": _audit_explanation(
+                        self.bonus_amount,
+                        "全勤奖发放判断",
+                        "满足全勤条件 = 100",
+                        input_snapshot,
+                        {**absence_values, "最后工作日": ""},
+                        ["未命中排除名单", "未命中缺勤/迟到/签卡排除项", "员工在职", f"全勤奖金额为{self.bonus_amount}"],
+                    ),
+                },
                 warnings=[]
             )
 
@@ -164,7 +271,17 @@ class QuanQinJiangEngine(BaseEngine):
                     employee_id=employee_id,
                     employee_name=employee_name,
                     amount=self.bonus_amount,
-                    details={"reason": "在职至月末"},
+                    details={
+                        "reason": "在职至月末",
+                        "audit_explanation": _audit_explanation(
+                            self.bonus_amount,
+                            "全勤奖离职日期判断",
+                            "最后工作日>=月末且满足全勤条件 = 100",
+                            input_snapshot,
+                            {**absence_values, "最后工作日": last_work_day.isoformat(), "月末": month_end.isoformat()},
+                            ["未命中排除项", "最后工作日不早于月末", f"全勤奖金额为{self.bonus_amount}"],
+                        ),
+                    },
                     warnings=[]
                 )
             else:
@@ -173,7 +290,18 @@ class QuanQinJiangEngine(BaseEngine):
                     employee_id=employee_id,
                     employee_name=employee_name,
                     amount=0,
-                    details={"reason": "当月离职", "last_work_day": str(last_work_day)},
+                    details={
+                        "reason": "当月离职",
+                        "last_work_day": str(last_work_day),
+                        "audit_explanation": _audit_explanation(
+                            0,
+                            "全勤奖离职日期判断",
+                            "最后工作日<月末 = 0",
+                            input_snapshot,
+                            {"最后工作日": last_work_day.isoformat(), "月末": month_end.isoformat()},
+                            ["员工当月离职且最后工作日早于月末", "全勤奖金额为0"],
+                        ),
+                    },
                     warnings=[]
                 )
 
@@ -182,7 +310,17 @@ class QuanQinJiangEngine(BaseEngine):
             employee_id=employee_id,
             employee_name=employee_name,
             amount=0,
-            details={"reason": "未匹配任何条件"},
+            details={
+                "reason": "未匹配任何条件",
+                "audit_explanation": _audit_explanation(
+                    0,
+                    "全勤奖兜底判断",
+                    "未匹配发放条件 = 0",
+                    input_snapshot,
+                    absence_values,
+                    ["未匹配明确发放或排除条件", "全勤奖金额为0", "需要人工复核"],
+                ),
+            },
             warnings=["未匹配任何条件，请人工复核"]
         )
 

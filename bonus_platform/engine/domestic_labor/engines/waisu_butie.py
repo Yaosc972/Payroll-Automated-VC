@@ -3,6 +3,10 @@ import calendar
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from .base import BaseEngine, CalculationResult
+from ..models import AuditExplanation
+
+
+SUBJECT = "waisu_butie"
 
 
 def _to_date(val):
@@ -12,6 +16,25 @@ def _to_date(val):
     if isinstance(val, date):
         return val
     return val
+
+
+def _audit_explanation(
+    amount: float,
+    rule_name: str,
+    formula: str,
+    inputs: Dict[str, Any],
+    intermediate_values: Dict[str, Any] = None,
+    steps: List[str] = None,
+) -> Dict[str, Any]:
+    return AuditExplanation(
+        subject=SUBJECT,
+        amount=amount,
+        rule_name=rule_name,
+        formula=formula,
+        inputs=inputs,
+        intermediate_values=intermediate_values or {},
+        steps=steps or [],
+    ).to_dict()
 
 
 class WaiSuBuTieEngine(BaseEngine):
@@ -36,6 +59,16 @@ class WaiSuBuTieEngine(BaseEngine):
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
         warnings = []
+        input_snapshot = {
+            "工号": employee_id,
+            "姓名": employee_name,
+            "考勤月份": str(employee_data.get("考勤月份", "")),
+            "外宿补贴标准": str(employee_data.get("外宿补贴标准", "")),
+            "入职日期": str(employee_data.get("入职日期", "")),
+            "最后工作日": str(employee_data.get("最后工作日", "")),
+            "日考勤记录数": len(daily_attendance or []),
+            "住宿记录数": len(housing_records or []),
+        }
 
         # 考勤月份
         attendance_month = str(employee_data.get("考勤月份", ""))
@@ -44,7 +77,17 @@ class WaiSuBuTieEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "考勤月份格式异常"},
+                details={
+                    "reason": "考勤月份格式异常",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "外宿补贴月份校验",
+                        "考勤月份无效 = 0",
+                        input_snapshot,
+                        {"考勤月份": attendance_month},
+                        ["考勤月份不是YYYYMM格式", "无法确定月初月末", "外宿补贴金额为0"],
+                    ),
+                },
                 warnings=[f"考勤月份格式异常: {attendance_month}"]
             )
 
@@ -62,7 +105,17 @@ class WaiSuBuTieEngine(BaseEngine):
                     employee_id=employee_id,
                     employee_name=employee_name,
                     amount=0,
-                    details={"reason": "全月未出勤"},
+                    details={
+                        "reason": "全月未出勤",
+                        "audit_explanation": _audit_explanation(
+                            0,
+                            "外宿补贴出勤判断",
+                            "全月无打卡 = 0",
+                            input_snapshot,
+                            {"日考勤记录数": len(daily_attendance), "是否有打卡": False},
+                            ["日考勤未发现上班/下班打卡", "视为全月未出勤", "外宿补贴金额为0"],
+                        ),
+                    },
                     warnings=[f"员工{employee_id}全月未出勤"]
                 )
         else:
@@ -75,7 +128,17 @@ class WaiSuBuTieEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "无补贴资格"},
+                details={
+                    "reason": "无补贴资格",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "外宿补贴资格判断",
+                        "无外宿补贴标准 = 0",
+                        input_snapshot,
+                        {"外宿补贴标准": str(subsidy_standard)},
+                        ["员工外宿补贴标准为空或为/", "外宿补贴金额为0"],
+                    ),
+                },
                 warnings=[]
             )
 
@@ -108,7 +171,21 @@ class WaiSuBuTieEngine(BaseEngine):
                 employee_id=employee_id,
                 employee_name=employee_name,
                 amount=0,
-                details={"reason": "在职日期异常"},
+                details={
+                    "reason": "在职日期异常",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "外宿补贴在职日期校验",
+                        "在职天数<=0 = 0",
+                        input_snapshot,
+                        {
+                            "在职开始": employment_start.isoformat(),
+                            "在职结束": employment_end.isoformat(),
+                            "在职天数": days_employed,
+                        },
+                        ["按入职/离职日期计算当月在职区间", "在职天数小于等于0", "外宿补贴金额为0"],
+                    ),
+                },
                 warnings=[f"员工{employee_id}在职日期异常"]
             )
 
@@ -179,6 +256,29 @@ class WaiSuBuTieEngine(BaseEngine):
                 "缺勤时数": absence_hours,
                 "全月在职": is_full_month,
                 "补贴标准": self.subsidy_standard,
+                "audit_explanation": _audit_explanation(
+                    subsidy_amount,
+                    "外宿补贴资格、住宿与缺勤折算",
+                    "补贴标准/月天数 × 有效补贴天数",
+                    input_snapshot,
+                    {
+                        "月份天数": days_in_month,
+                        "在职天数": days_employed,
+                        "住宿扣除天数": housing_deduction_days,
+                        "外宿补贴天数": subsidy_days,
+                        "缺勤时数": absence_hours,
+                        "全月在职": is_full_month,
+                        "补贴标准": self.subsidy_standard,
+                        "最终金额": subsidy_amount,
+                    },
+                    [
+                        f"当月在职区间为{employment_start.isoformat()}至{employment_end.isoformat()}，在职{days_employed}天",
+                        f"住宿名单扣除{housing_deduction_days}天",
+                        f"外宿补贴天数=max(在职天数-住宿扣除天数, 0)={subsidy_days}",
+                        "全月在职且缺勤达到56小时、且无住宿扣除时，按缺勤折算有效天数",
+                        f"最终外宿补贴为{subsidy_amount}",
+                    ],
+                ),
             },
             warnings=warnings
         )
