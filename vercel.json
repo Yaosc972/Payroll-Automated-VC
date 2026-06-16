@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
+  ],
+  "env": {
+    "SIGMA_WORKBENCH_HOME": "/tmp/sigma-workbench",
+    "SIGMA_WORKBENCH_SEED_DIR": "outputs",
+    "SIGMA_OVERSEAS_LABOR_ACCESS": "uat",
+    "SIGMA_OVERSEAS_LABOR_UAT_ROLES": "Payroll Admin,Compensation UAT"
+  }
+}
