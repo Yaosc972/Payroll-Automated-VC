@@ -456,17 +456,20 @@ def test_gonglingjiang_final_amount_floors_at_zero():
     assert result.details["audit_explanation"]["intermediate_values"]["入离职折算后金额"] < 0
 
 
-def test_gonglingjiang_zero_regular_attendance_days_is_zero():
-    """月报正班出勤天数为0时，视为未出勤，工龄奖直接为0"""
+def test_gonglingjiang_zero_regular_attendance_days_still_prorates():
+    """正班出勤天数为0不再直接归0，继续按缺勤规则折算"""
     employee = {
         **_gongling_collection_employee(),
         "正班出勤天数": 0,
+        "事假时数": 128,
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
     }
     result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
 
-    assert result.amount == 0
-    assert result.details["reason"] == "正班出勤天数为0"
-    assert result.details["audit_explanation"]["rule_name"] == "工龄奖出勤判断"
+    assert result.amount == 90
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖标准与缺勤折算"
+    assert result.details["audit_explanation"]["intermediate_values"]["事病旷排休时数"] == 128
     assert result.warnings == []
 
 

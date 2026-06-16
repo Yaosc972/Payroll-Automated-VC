@@ -329,25 +329,6 @@ class GongLingJiangEngine(BaseEngine):
                 warnings=warnings
             )
 
-        regular_attendance_days = employee_data.get("正班出勤天数")
-        if regular_attendance_days is not None and safe_float(regular_attendance_days) == 0:
-            return CalculationResult(
-                employee_id=employee_id,
-                employee_name=employee_name,
-                amount=0,
-                details=_details(
-                    {"reason": "正班出勤天数为0", "regular_attendance_days": 0},
-                    amount=0,
-                    rule_name="工龄奖出勤判断",
-                    inputs={**input_snapshot, "部门类别": dept_category, "正班出勤天数": safe_float(regular_attendance_days)},
-                    intermediate_values={"正班出勤天数": 0},
-                    steps=["员工本月正班出勤天数为0，视为未出勤", "工龄奖金额为0"],
-                    formula="正班出勤天数=0 → 工龄奖=0",
-                    exceptions=exceptions,
-                ),
-                warnings=[]
-            )
-
         # F2.5: 检查备注异常
         remark = str(employee_data.get("备注", "") or "")
         remark_keywords = ["事假未出勤", "全月事假", "事假全月", "未出勤"]
