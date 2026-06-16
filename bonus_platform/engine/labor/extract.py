@@ -76,10 +76,13 @@ def _http_post_json(
 
     thread = threading.Thread(target=_worker, name="mimo-http-post", daemon=True)
     thread.start()
+    thread.join(timeout=wall_timeout_seconds)
+    if thread.is_alive():
+        raise MiMoTimeoutException(f"MiMo API Gateway took over {wall_timeout_seconds:g}s to respond: {url}")
     try:
-        ok, result = result_queue.get(timeout=wall_timeout_seconds)
+        ok, result = result_queue.get_nowait()
     except queue.Empty as exc:
-        raise MiMoTimeoutException(f"MiMo API Gateway took over {wall_timeout_seconds:g}s to respond: {url}") from exc
+        raise MiMoTimeoutException(f"MiMo API Gateway returned without a response payload: {url}") from exc
 
     if ok:
         data, status_code = result
