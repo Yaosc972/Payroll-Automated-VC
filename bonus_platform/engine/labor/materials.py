@@ -1550,13 +1550,15 @@ def _material_file_record(path: Path, root: Path) -> Dict[str, Any] | None:
     if suffix not in BUSINESS_EXTENSIONS | DOCUMENT_EXTENSIONS | SCRIPT_EXTENSIONS:
         return None
     relative = path.relative_to(root)
+    relative_path = relative.as_posix()
+    relative_directory = relative.parent.as_posix()
     category = _classify_material_file(path)
     supplier = _infer_supplier(" ".join(relative.parts))
     warehouse_ids = _infer_warehouse_ids(path.name)
     return {
         "path": str(path),
-        "relativePath": str(relative),
-        "directory": str(relative.parent) if str(relative.parent) != "." else "",
+        "relativePath": relative_path,
+        "directory": relative_directory if relative_directory != "." else "",
         "filename": path.name,
         "extension": suffix,
         "category": category,
