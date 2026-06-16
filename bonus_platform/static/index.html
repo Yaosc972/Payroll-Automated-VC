@@ -33,23 +33,23 @@
             <b>Overview</b>
           </a>
           <p class="nav-group-label">业务模块</p>
-          <a href="recruitment.html">
+          <a href="recruitment.html" data-module="recruitment">
             <span>全球招聘奖金核算</span>
             <b>Recruitment</b>
           </a>
-          <a href="#" aria-disabled="true">
+          <a href="#" aria-disabled="true" data-module="cn_employee_payroll">
             <span>中国区正式工薪酬核算</span>
             <b>CN Employee Payroll</b>
           </a>
-          <a href="domestic-labor.html">
+          <a href="domestic-labor.html" data-module="domestic_labor">
             <span>中国区外包工薪酬核算</span>
             <b>CN Vendor Payroll</b>
           </a>
-          <a href="fbu-performance.html">
+          <a href="fbu-performance.html" data-module="fbu_performance">
             <span>FBU美洲绩效奖金核算</span>
             <b>FBU Bonus</b>
           </a>
-          <a href="overseas-labor.html">
+          <a href="overseas-labor.html" data-module="overseas_labor">
             <span>海外劳务报账核对</span>
             <b>Invoice Audit</b>
           </a>
@@ -115,7 +115,7 @@
           </div>
 
           <div class="saas-module-grid">
-            <a class="saas-module-card active-module" href="recruitment.html">
+            <a class="saas-module-card active-module" href="recruitment.html" data-module="recruitment">
               <div class="module-card-top">
                 <span class="module-status available">Available · 已上线</span>
                 <span class="module-version">V1.0</span>
@@ -132,7 +132,7 @@
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
-            <a class="saas-module-card formal-module" href="#" aria-disabled="true">
+            <a class="saas-module-card formal-module" href="#" aria-disabled="true" data-module="cn_employee_payroll">
               <div class="module-card-top">
                 <span class="module-status developing">Developing · 开发中</span>
                 <span class="module-version">V0.1</span>
@@ -149,7 +149,7 @@
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
-            <a class="saas-module-card domestic-module" href="domestic-labor.html">
+            <a class="saas-module-card domestic-module" href="domestic-labor.html" data-module="domestic_labor">
               <div class="module-card-top">
                 <span class="module-status developing">Developing · 开发中</span>
                 <span class="module-version">V0.6</span>
@@ -166,7 +166,7 @@
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
-            <a class="saas-module-card fbu-module" href="fbu-performance.html">
+            <a class="saas-module-card fbu-module" href="fbu-performance.html" data-module="fbu_performance">
               <div class="module-card-top">
                 <span class="module-status developing">Developing · 开发中</span>
                 <span class="module-version">V0.7</span>
@@ -183,7 +183,7 @@
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
-            <a class="saas-module-card overseas-module pilot-card" href="overseas-labor.html">
+            <a class="saas-module-card overseas-module pilot-card" href="overseas-labor.html" data-module="overseas_labor">
               <div class="module-card-top">
                 <span class="module-status uat">UAT Trial · 试用版</span>
                 <span class="module-version">V0.4-UAT</span>
@@ -251,17 +251,17 @@
               </div>
             </div>
             <div class="task-list">
-              <a href="fbu-performance.html">
+              <a href="fbu-performance.html" data-module="fbu_performance">
                 <strong>FBU 异常队列</strong>
                 <span>绩效比例、薪资档案、考勤匹配待复核</span>
                 <b>211 提醒</b>
               </a>
-              <a href="domestic-labor.html">
+              <a href="domestic-labor.html" data-module="domestic_labor">
                 <strong>工龄奖审计解释</strong>
                 <span>已生成结构化依据，可继续抽样核对</span>
                 <b>7 人关注</b>
               </a>
-              <a href="#">
+              <a href="#" data-module="cn_employee_payroll">
                 <strong>正式工薪酬规则</strong>
                 <span>基础工资、奖金、扣款与社保个税口径待梳理</span>
                 <b>开发中</b>
@@ -307,22 +307,58 @@
         const search = document.getElementById('dashboardSearch');
         const hint = document.getElementById('searchHint');
         const shortcuts = [
-          { keys: ['fbu', '绩效', '美洲'], href: 'fbu-performance.html', label: 'FBU美洲绩效奖金核算' },
-          { keys: ['招聘', '内推', 'recruit'], href: 'recruitment.html', label: '全球招聘奖金核算' },
-          { keys: ['正式', '正式工', 'employee'], href: '#', label: '中国区正式工薪酬核算' },
-          { keys: ['外包', '国内', '薪酬', '劳务工'], href: 'domestic-labor.html', label: '中国区外包工薪酬核算' },
-          { keys: ['海外', '报账', 'pdf', 'invoice'], href: 'overseas-labor.html', label: '海外劳务报账核对' },
+          { module: 'fbu_performance', keys: ['fbu', '绩效', '美洲'], href: 'fbu-performance.html', label: 'FBU美洲绩效奖金核算' },
+          { module: 'recruitment', keys: ['招聘', '内推', 'recruit'], href: 'recruitment.html', label: '全球招聘奖金核算' },
+          { module: 'cn_employee_payroll', keys: ['正式', '正式工', 'employee'], href: '#', label: '中国区正式工薪酬核算' },
+          { module: 'domestic_labor', keys: ['外包', '国内', '薪酬', '劳务工'], href: 'domestic-labor.html', label: '中国区外包工薪酬核算' },
+          { module: 'overseas_labor', keys: ['海外', '报账', 'pdf', 'invoice'], href: 'overseas-labor.html', label: '海外劳务报账核对' },
         ];
+        const blockedShortcutModules = new Set();
+        const applyWorkbenchAccess = async () => {
+          try {
+            const response = await fetch('/api/workbench/access');
+            const access = await response.json();
+            if (!response.ok || !access.hideDevelopingModules) return;
+            const blocked = new Set((access.blockedModules || []).map(item => item.key));
+            blocked.forEach((key) => blockedShortcutModules.add(key));
+            document.querySelectorAll('[data-module]').forEach((node) => {
+              const key = node.getAttribute('data-module');
+              if (!blocked.has(key)) return;
+              if (node.tagName === 'A') {
+                node.setAttribute('href', '#');
+                node.setAttribute('aria-disabled', 'true');
+                node.addEventListener('click', (event) => event.preventDefault());
+              }
+              const action = node.querySelector('.module-action span');
+              if (action) action.textContent = 'UAT暂未开放';
+            });
+          } catch (error) {
+            // 首页权限信息读取失败时，不阻断页面加载。
+          }
+        };
+        applyWorkbenchAccess();
         search?.addEventListener('input', () => {
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
-          hint.textContent = match ? `按 Enter 进入：${match.label}` : '可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块';
+          if (!match) {
+            hint.textContent = '可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块';
+            return;
+          }
+          hint.textContent = blockedShortcutModules.has(match.module)
+            ? `${match.label}在当前 UAT 环境暂未开放`
+            : `按 Enter 进入：${match.label}`;
         });
         search?.addEventListener('keydown', (event) => {
           if (event.key !== 'Enter') return;
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
-          if (match) window.location.href = match.href;
+          if (!match) return;
+          if (blockedShortcutModules.has(match.module)) {
+            event.preventDefault();
+            hint.textContent = `${match.label}在当前 UAT 环境暂未开放`;
+            return;
+          }
+          window.location.href = match.href;
         });
       })();
     </script>

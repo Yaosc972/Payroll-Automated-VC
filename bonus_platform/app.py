@@ -173,6 +173,43 @@ def _overseas_labor_access_config() -> dict:
     }
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _hide_developing_modules() -> bool:
+    return _env_flag("SIGMA_HIDE_DEVELOPING_MODULES", False)
+
+
+def _workbench_access_config() -> dict:
+    blocked_modules = []
+    if _hide_developing_modules():
+        blocked_modules = [
+            {
+                "key": "cn_employee_payroll",
+                "label": "中国区正式工薪酬核算",
+                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
+            },
+            {
+                "key": "domestic_labor",
+                "label": "中国区外包工薪酬核算",
+                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
+            },
+            {
+                "key": "fbu_performance",
+                "label": "FBU美洲绩效奖金核算",
+                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
+            },
+        ]
+    return {
+        "hideDevelopingModules": _hide_developing_modules(),
+        "blockedModules": blocked_modules,
+    }
+
+
 def _uses_ephemeral_serverless_storage() -> bool:
     workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
     return bool(os.environ.get("VERCEL")) and workbench_home.startswith("/tmp/")
@@ -187,9 +224,54 @@ def _raise_labor_run_missing(exc: FileNotFoundError) -> None:
     raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
 
 
+def _developing_module_block(path: str) -> dict | None:
+    blocked_paths = {
+        "domestic_labor": {
+            "page_paths": {"/domestic-labor.html", "/labor.html"},
+            "api_prefixes": ("/api/domestic-labor/",),
+            "label": "中国区外包工薪酬核算",
+        },
+        "fbu_performance": {
+            "page_paths": {"/fbu-performance.html"},
+            "api_prefixes": ("/api/fbu-performance/",),
+            "label": "FBU美洲绩效奖金核算",
+        },
+    }
+    for key, config in blocked_paths.items():
+        if path in config["page_paths"] or any(path.startswith(prefix) for prefix in config["api_prefixes"]):
+            return {"key": key, **config}
+    return None
+
+
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
+    if _hide_developing_modules():
+        blocked = _developing_module_block(path)
+        if blocked:
+            detail = f"{blocked['label']}在当前 UAT 环境暂未开放。"
+            if path.startswith("/api/"):
+                return JSONResponse(
+                    {
+                        "detail": detail,
+                        "access": _workbench_access_config(),
+                    },
+                    status_code=403,
+                )
+            return HTMLResponse(
+                f"""
+                <!doctype html>
+                <html lang="zh-CN">
+                  <head><meta charset="utf-8"><title>模块未开放</title></head>
+                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                    <h1>{blocked['label']}暂未开放</h1>
+                    <p>当前 UAT 环境仅开放已上线或试用模块，开发中模块已关闭入口。</p>
+                    <p><a href="/">返回西格玛工作台</a></p>
+                  </body>
+                </html>
+                """,
+                status_code=403,
+            )
     is_labor_api = path.startswith("/api/labor/") and path != "/api/labor/access"
     is_labor_page = path.rstrip("/") == "/overseas-labor.html"
     if is_labor_api or is_labor_page:
@@ -223,6 +305,11 @@ def health() -> dict:
 @app.get("/api/labor/access")
 def labor_access() -> dict:
     return _overseas_labor_access_config()
+
+
+@app.get("/api/workbench/access")
+def workbench_access() -> dict:
+    return _workbench_access_config()
 
 
 @app.post("/api/calculate")
