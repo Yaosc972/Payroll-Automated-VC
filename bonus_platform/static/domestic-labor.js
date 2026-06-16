@@ -11,6 +11,9 @@ const state = {
   currentRun: null,
   currentResults: [],
   activeSubject: 'all',
+  resultSearch: '',
+  reviewStatusFilter: 'all',
+  amountFilter: 'all',
   pollTimer: null,
   pollRetryCount: 0,
   pollMaxRetries: 200, // 200 × 3s = 10 min
@@ -110,6 +113,13 @@ const el = {
   engineSummaryGrid: document.querySelector('#engineSummaryGrid'),
   exceptionQueue: document.querySelector('#exceptionQueue'),
   subjectTabs: document.querySelector('#subjectTabs'),
+  payrollShell: document.querySelector('#payrollShell'),
+  btnToggleRail: document.querySelector('#btnToggleRail'),
+  btnToggleAside: document.querySelector('#btnToggleAside'),
+  resultSearchInput: document.querySelector('#resultSearchInput'),
+  reviewStatusFilter: document.querySelector('#reviewStatusFilter'),
+  amountFilter: document.querySelector('#amountFilter'),
+  resultCountText: document.querySelector('#resultCountText'),
   explainDrawer: document.querySelector('#explainDrawer'),
   explainTitle: document.querySelector('#explainTitle'),
   explainBody: document.querySelector('#explainBody'),
@@ -216,6 +226,20 @@ function bindEvents() {
     });
     renderResultsTable(state.currentResults);
   });
+  el.resultSearchInput?.addEventListener('input', () => {
+    state.resultSearch = el.resultSearchInput.value.trim();
+    renderResultsTable(state.currentResults);
+  });
+  el.reviewStatusFilter?.addEventListener('change', () => {
+    state.reviewStatusFilter = el.reviewStatusFilter.value;
+    renderResultsTable(state.currentResults);
+  });
+  el.amountFilter?.addEventListener('change', () => {
+    state.amountFilter = el.amountFilter.value;
+    renderResultsTable(state.currentResults);
+  });
+  el.btnToggleRail?.addEventListener('click', toggleRail);
+  el.btnToggleAside?.addEventListener('click', toggleAside);
   el.btnCloseExplain?.addEventListener('click', closeExplainDrawer);
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeExplainDrawer();
@@ -471,6 +495,7 @@ function renderResults(metadata) {
 
 function renderResultsTable(results) {
   const filtered = filterResults(results);
+  updateResultCount(results.length, filtered.length);
   if (!filtered.length) {
     el.resultsTable.innerHTML = `
       <div class="dl-empty">
@@ -489,8 +514,7 @@ function renderResultsTable(results) {
     return;
   }
 
-  const visible = filtered.slice(0, 100);
-  const tbody = visible.map((row, index) => {
+  const tbody = filtered.map((row) => {
     const warningLevel = getWarningLevel(row);
     const needsReview = hasReviewIssue(row);
     return `
@@ -531,7 +555,6 @@ function renderResultsTable(results) {
       </thead>
       <tbody>${tbody}</tbody>
     </table>
-    ${filtered.length > visible.length ? `<p class="dl-panel-sub" style="padding:10px 12px;">仅展示前 ${visible.length} 条，完整明细请下载报告。</p>` : ''}
   `;
   el.resultsTable.querySelectorAll('[data-result-index], [data-explain-index]').forEach(item => {
     item.addEventListener('click', (event) => {
@@ -563,16 +586,63 @@ function renderEmptyWorkbench() {
   resetReportLink();
 }
 
+function updateResultCount(total, filtered) {
+  if (!el.resultCountText) return;
+  el.resultCountText.textContent = total
+    ? `显示 ${filtered} / ${total} 条`
+    : '暂无结果';
+}
+
+function toggleRail() {
+  if (!el.payrollShell || !el.btnToggleRail) return;
+  const collapsed = el.payrollShell.classList.toggle('rail-collapsed');
+  el.btnToggleRail.setAttribute('aria-expanded', String(!collapsed));
+  el.btnToggleRail.setAttribute('aria-label', collapsed ? '展开批次流程' : '收起批次流程');
+  const icon = el.btnToggleRail.querySelector('.dl-rail-toggle-icon');
+  const text = el.btnToggleRail.querySelector('.dl-rail-toggle-text');
+  if (icon) icon.textContent = collapsed ? '›' : '‹';
+  if (text) text.textContent = collapsed ? '展开流程' : '收起流程';
+}
+
+function toggleAside() {
+  if (!el.payrollShell || !el.btnToggleAside) return;
+  const collapsed = el.payrollShell.classList.toggle('aside-collapsed');
+  el.btnToggleAside.setAttribute('aria-expanded', String(!collapsed));
+  el.btnToggleAside.setAttribute('aria-label', collapsed ? '展开异常队列' : '收起异常队列');
+  const icon = el.btnToggleAside.querySelector('.dl-aside-toggle-icon');
+  const text = el.btnToggleAside.querySelector('.dl-aside-toggle-text');
+  if (icon) icon.textContent = collapsed ? '‹' : '›';
+  if (text) text.textContent = collapsed ? '展开异常' : '收起异常';
+}
+
 function filterResults(results) {
-  if (state.activeSubject === 'warnings') {
-    return results.filter(hasReviewIssue);
-  }
-  if (state.activeSubject === 'all') return results;
-  return results.filter(row => Number(row[state.activeSubject] || 0) !== 0);
+  const keyword = state.resultSearch.trim().toLowerCase();
+  return results.filter(row => {
+    if (state.activeSubject === 'warnings' && !hasReviewIssue(row)) return false;
+    if (state.activeSubject !== 'all' && state.activeSubject !== 'warnings' && Number(row[state.activeSubject] || 0) === 0) return false;
+
+    if (state.reviewStatusFilter === 'review' && !hasReviewIssue(row)) return false;
+    if (state.reviewStatusFilter === 'pass' && hasReviewIssue(row)) return false;
+
+    const total = Number(row.total || 0);
+    if (state.amountFilter === 'positive' && total <= 0) return false;
+    if (state.amountFilter === 'zero' && total !== 0) return false;
+
+    if (!keyword) return true;
+    const haystack = [
+      row.employee_id,
+      row.employee_name,
+      row.department,
+      row.position,
+      row.warning,
+      getEffectiveWarningText(row),
+    ].map(value => String(value || '').toLowerCase()).join(' ');
+    return haystack.includes(keyword);
+  });
 }
 
 function renderExceptionQueue(results) {
-  const rows = results.filter(hasReviewIssue).slice(0, 8);
+  const rows = results.filter(hasReviewIssue);
   if (!rows.length) {
     el.exceptionQueue.innerHTML = `
       <div class="dl-exception">
