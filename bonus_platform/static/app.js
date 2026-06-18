@@ -149,6 +149,7 @@ async function finalizeRun() {
 
   try {
     const data = await requestJson(`/api/runs/${state.currentRun.id}/finalize`, { method: "POST", body: form });
+    if (data.inlineFile) downloadInlineFile(data.inlineFile);
     await loadRuns(data.id);
     await selectRun(data);
     setStatus(elements.finalStatus, `最终结果已生成：${data.files.finalResult.filename}`, false);
@@ -731,6 +732,26 @@ function setLink(link, url) {
   link.download = "";
   link.classList.remove("disabled");
   link.setAttribute("aria-disabled", "false");
+}
+
+function downloadInlineFile(file) {
+  if (!file?.base64) return;
+  const binary = atob(file.base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  const blob = new Blob([bytes], {
+    type: file.contentType || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.filename || "最终结果.xlsx";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function formatMetric(id, value) {

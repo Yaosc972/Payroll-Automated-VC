@@ -1,6 +1,11 @@
 fastapi
 uvicorn
+httpx
 python-multipart
 openpyxl
+msoffcrypto-tool
+xlrd
+Pillow
 pypdf
 pypdfium2
+psycopg[binary]

@@ -6,9 +6,9 @@
     <title>西格玛工作台 · Σ-WORKBENCH</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=20" />
+    <link rel="stylesheet" href="styles.css?v=21" />
   </head>
-  <body class="portal-shell">
+  <body class="portal-shell dashboard-shell">
     <div class="portal-mesh" aria-hidden="true">
       <span class="mesh-orb cyan"></span>
       <span class="mesh-orb violet"></span>
@@ -16,114 +16,454 @@
       <span class="mesh-grid"></span>
     </div>
 
-    <main class="portal-stage" aria-label="西格玛工作台门户">
-      <header class="portal-brand">
-        <a class="portal-logo-mark" href="/" aria-label="西格玛工作台首页">
+    <div class="dashboard-frame" aria-label="西格玛工作台控制台">
+      <aside class="dashboard-sidebar" aria-label="主导航">
+        <a class="dashboard-logo" href="/" aria-label="西格玛工作台首页">
           <img src="assets/bonus-logo-header-blue.png" alt="" />
-          <span>Σ-WORKBENCH</span>
+          <span>
+            <strong>Σ Workbench</strong>
+            <small>Compensation Core</small>
+          </span>
         </a>
-        <div class="portal-badge">Compensation Automation Core</div>
-      </header>
 
-      <section class="portal-intro">
-        <p class="portal-kicker">Enterprise Payroll Intelligence</p>
-        <h1>Welcome to Sigma Workbench</h1>
-        <p class="portal-subtitle">欢迎来到西格玛工作台。全场景自动化核算核心，连接招聘激励、劳务薪酬、绩效管理等核算场景。</p>
-      </section>
+        <nav class="dashboard-nav">
+          <p class="nav-group-label">控制台</p>
+          <a class="active" href="/">
+            <span>工作台</span>
+            <b>Overview</b>
+          </a>
+          <p class="nav-group-label">业务模块</p>
+          <a href="recruitment.html" data-module-id="recruitment">
+            <span>全球招聘奖金核算</span>
+            <b>Recruitment</b>
+          </a>
+          <a href="employee-payroll.html" data-module-id="employee">
+            <span>中国区正式工薪酬核算</span>
+            <b>CN Employee Payroll</b>
+          </a>
+          <a href="domestic-labor.html" data-module-id="domestic">
+            <span>中国区外包工薪酬核算</span>
+            <b>CN Vendor Payroll</b>
+          </a>
+          <a href="fbu-performance.html" data-module-id="fbu">
+            <span>FBU美洲绩效奖金核算</span>
+            <b>FBU Bonus</b>
+          </a>
+          <a href="overseas-labor.html" data-module-id="overseas">
+            <span>海外劳务报账核对</span>
+            <b>Invoice Audit</b>
+          </a>
+        </nav>
 
-      <section class="module-grid" aria-label="业务模块入口">
-        <a class="module-card active-module" href="recruitment.html">
-          <div class="module-card-top">
-            <span class="module-status available">Available · 已上线</span>
-            <span class="module-index">01</span>
+        <p class="nav-group-label admin-label">管理</p>
+        <a class="admin-entry" href="admin.html">
+          <span>后台管理</span>
+          <b>权限配置 · 用户角色</b>
+        </a>
+      </aside>
+
+      <main class="dashboard-main">
+        <p class="sr-only">
+          Welcome to Sigma Workbench · Σ-WORKBENCH · Recruitment Bonus Reconciliation · 招聘奖金核算 ·
+          Domestic Labor Vendor Payroll · 劳务工薪酬核算 · Overseas Labor Invoice Audit · 海外劳务工报账核对
+        </p>
+        <header class="dashboard-topbar">
+          <div>
+            <p>当前空间</p>
+            <strong>薪酬核算自动化工作区</strong>
           </div>
-          <div class="module-copy">
-            <p>Recruitment Bonus Reconciliation</p>
-            <h2>招聘奖金核算</h2>
-            <span>上传月度 HR 数据，完成初算、待确认、差异复核与最终归档。</span>
+          <label class="dashboard-search">
+            <span>搜索/快捷入口</span>
+            <input id="dashboardSearch" type="search" placeholder="搜索模块、批次、员工或异常" />
+            <small id="searchHint">可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块</small>
+          </label>
+          <div class="dashboard-user">
+            <span>
+              <b>当前用户</b>
+              <strong id="dashboardCurrentUser">Payroll Admin</strong>
+            </span>
+            <em id="dashboardCurrentRole">管理员</em>
+            <a id="dashboardLogout" class="dashboard-logout-button" href="/api/auth/logout?next=login.html%3Fnext%3D%252F">退出登录</a>
           </div>
-          <div class="workflow-preview" aria-hidden="true">
-            <div class="preview-flow">
-              <i>1</i><i>2</i><i>3</i><i>4</i><i>5</i><i>6</i>
+        </header>
+
+        <section class="welcome-panel">
+          <div>
+            <p class="portal-kicker">Enterprise Payroll Intelligence</p>
+            <h1>欢迎回来，西格玛工作台已准备就绪</h1>
+            <span>统一管理招聘激励、正式工薪酬、外包工薪酬、FBU绩效奖金与海外劳务报账核对。</span>
+            <div class="workday-focus" aria-label="今日关注">
+              <b>今日关注</b>
+              <span>异常复核</span>
+              <span>批次归档</span>
+              <span>结果导出</span>
             </div>
-            <div class="preview-bars">
-              <span style="--w: 78%"></span>
-              <span style="--w: 56%"></span>
-              <span style="--w: 34%"></span>
+          </div>
+          <div class="today-stack" aria-label="今日任务">
+            <span>今日任务</span>
+            <strong>7</strong>
+            <small>待复核异常 6 项 · 待归档批次 1 项</small>
+          </div>
+        </section>
+
+        <section class="dashboard-section" aria-labelledby="moduleTitle">
+          <div class="section-bar">
+            <div>
+              <p>Modules</p>
+              <h2 id="moduleTitle">模块导航台</h2>
             </div>
           </div>
-          <div class="module-action">
-            <span>Enter Workbench · 进入工作台</span>
-            <b aria-hidden="true">→</b>
-          </div>
-        </a>
 
-        <a class="module-card domestic-module" href="domestic-labor.html">
-          <div class="module-card-top">
-            <span class="module-status available">Available · 已上线</span>
-            <span class="module-index">02</span>
-          </div>
-          <div class="module-copy">
-            <p>Domestic Labor Vendor Payroll</p>
-            <h2>劳务工薪酬核算</h2>
-            <span>上传考勤数据，自动计算全勤奖、餐补、外宿补贴、工龄奖，一键导出 Excel。</span>
-          </div>
-          <div class="payroll-preview" aria-hidden="true">
-            <span class="preview-card"></span>
-            <span class="preview-card"></span>
-            <div class="preview-line"></div>
-            <b>¥4,280</b>
-          </div>
-          <div class="module-action">
-            <span>Enter Workbench · 进入工作台</span>
-            <b aria-hidden="true">→</b>
-          </div>
-        </a>
+          <div class="saas-module-grid">
+            <a class="saas-module-card active-module" href="recruitment.html" data-module-id="recruitment">
+              <div class="module-card-top">
+                <span class="module-status available">Available · 已上线</span>
+                <span class="module-version">V1.0</span>
+              </div>
+              <div class="module-copy">
+                <p>Global Recruitment Bonus</p>
+                <h2>全球招聘奖金核算</h2>
+                <span>月度导入、初算、待确认、差异复核与最终归档。</span>
+              </div>
+              <dl>
+                <div><dt>最近批次</dt><dd>2026-05</dd></div>
+                <div><dt>状态</dt><dd>稳定主模块</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
 
-        <a class="module-card overseas-module" href="overseas-labor.html">
-          <div class="module-card-top">
-            <span class="module-status available">Pilot · 小范围试点</span>
-            <span class="module-index">03</span>
-          </div>
-          <div class="module-copy">
-            <p>Overseas Labor Invoice Audit</p>
-            <h2>海外劳务工报账核对</h2>
-            <span>上传供应商 PDF 发票与线下账单，AI 抽取员工明细，按工时与金额生成差异报告。</span>
-          </div>
-          <div class="audit-ledger-preview" aria-hidden="true">
-            <span class="ledger-sheet one"></span>
-            <span class="ledger-sheet two"></span>
-            <div class="audit-line"></div>
-            <b>±0.01</b>
-          </div>
-          <div class="module-action">
-            <span>Start Audit · 开始核对</span>
-            <b aria-hidden="true">→</b>
-          </div>
-        </a>
+            <a class="saas-module-card formal-module" href="employee-payroll.html" data-module-id="employee">
+              <div class="module-card-top">
+                <span class="module-status developing">Developing · 开发中</span>
+                <span class="module-version">V0.1</span>
+              </div>
+              <div class="module-copy">
+                <p>China Employee Payroll</p>
+                <h2>中国区正式工薪酬核算</h2>
+                <span>正式员工月薪、奖金、扣款、社保个税与发薪结果校验。</span>
+              </div>
+              <dl>
+                <div><dt>阶段</dt><dd>需求搭建</dd></div>
+                <div><dt>状态</dt><dd>开发中</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
 
-        <a class="module-card fbu-module" href="fbu-performance.html">
-          <div class="module-card-top">
-            <span class="module-status available">Available · 已上线</span>
-            <span class="module-index">04</span>
+            <a class="saas-module-card domestic-module" href="domestic-labor.html" data-module-id="domestic">
+              <div class="module-card-top">
+                <span class="module-status developing">Developing · 开发中</span>
+                <span class="module-version">V0.6</span>
+              </div>
+              <div class="module-copy">
+                <p>China Vendor Payroll</p>
+                <h2>中国区外包工薪酬核算</h2>
+                <span>考勤导入、薪酬项目核算、审计解释与 Excel 导出。</span>
+              </div>
+              <dl>
+                <div><dt>最近结果</dt><dd>1191 人</dd></div>
+                <div><dt>状态</dt><dd>开发中</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
+
+            <a class="saas-module-card fbu-module" href="fbu-performance.html" data-module-id="fbu">
+              <div class="module-card-top">
+                <span class="module-status developing">Developing · 开发中</span>
+                <span class="module-version">V0.7</span>
+              </div>
+              <div class="module-copy">
+                <p>FBU Americas Performance</p>
+                <h2>FBU美洲绩效奖金核算</h2>
+                <span>月度活动、数据诊断、异常队列与绩效奖金结果复核。</span>
+              </div>
+              <dl>
+                <div><dt>真实回归</dt><dd>96.86%</dd></div>
+                <div><dt>状态</dt><dd>开发中</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
+
+            <a class="saas-module-card overseas-module pilot-card" href="overseas-labor.html" data-module-id="overseas">
+              <div class="module-card-top">
+                <span class="module-status developing">Developing · 开发中</span>
+                <span class="module-version">V0.3</span>
+              </div>
+              <div class="module-copy">
+                <p>Overseas Invoice Audit</p>
+                <h2>海外劳务报账核对</h2>
+                <span>PDF 发票、Excel 映射、AI 抽取与差异报告。</span>
+              </div>
+              <dl>
+                <div><dt>校验</dt><dd>PDF 前置</dd></div>
+                <div><dt>状态</dt><dd>开发中</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
           </div>
-          <div class="module-copy">
-            <p>FBU Americas Performance Bonus</p>
-            <h2>FBU美洲绩效奖金核算</h2>
-            <span>上传考勤日报表、薪资档案、绩效报表，自动计算绩效基数与奖金，一键导出核算结果。</span>
+        </section>
+
+        <section class="dashboard-lower">
+          <div class="ops-panel">
+            <div class="section-bar compact">
+              <div>
+                <p>Recent Runs</p>
+                <h2>最近批次</h2>
+              </div>
+            </div>
+            <table class="ops-table">
+              <thead>
+                <tr>
+                  <th>模块</th>
+                  <th>批次</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>FBU美洲绩效奖金核算</td>
+                  <td>2026-04</td>
+                  <td><span class="status-pill warning">待复核</span></td>
+                </tr>
+                <tr>
+                  <td>中国区正式工薪酬核算</td>
+                  <td>模块框架</td>
+                  <td><span class="status-pill warning">开发中</span></td>
+                </tr>
+                <tr>
+                  <td>中国区外包工薪酬核算</td>
+                  <td>2026-02 工龄奖</td>
+                  <td><span class="status-pill warning">开发中</span></td>
+                </tr>
+                <tr>
+                  <td>海外劳务报账核对</td>
+                  <td>供应商 PDF 校验</td>
+                  <td><span class="status-pill warning">开发中</span></td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="performance-preview" aria-hidden="true">
-            <span class="preview-card"></span>
-            <span class="preview-card"></span>
-            <div class="preview-line"></div>
-            <b>$104,892</b>
+
+          <div class="ops-panel">
+            <div class="section-bar compact">
+              <div>
+                <p>Pending Tasks</p>
+                <h2>待处理异常</h2>
+              </div>
+            </div>
+            <div class="task-list">
+              <a href="fbu-performance.html" data-module-id="fbu">
+                <strong>FBU 异常队列</strong>
+                <span>绩效比例、薪资档案、考勤匹配待复核</span>
+                <b>211 提醒</b>
+              </a>
+              <a href="domestic-labor.html" data-module-id="domestic">
+                <strong>工龄奖审计解释</strong>
+                <span>已生成结构化依据，可继续抽样核对</span>
+                <b>7 人关注</b>
+              </a>
+              <a href="employee-payroll.html" data-module-id="employee">
+                <strong>正式工薪酬规则</strong>
+                <span>基础工资、奖金、扣款与社保个税口径待梳理</span>
+                <b>开发中</b>
+              </a>
+              <a href="overseas-labor.html" data-module-id="overseas">
+                <strong>供应商账单质量</strong>
+                <span>损坏 PDF 已前置拦截，待补真实样本</span>
+                <b>开发中</b>
+              </a>
+            </div>
           </div>
-          <div class="module-action">
-            <span>Start Calculation · 开始核算</span>
-            <b aria-hidden="true">→</b>
-          </div>
-        </a>
-      </section>
-    </main>
+        </section>
+      </main>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <script>
+      (async () => {
+        if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+        gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card, .ops-panel', {
+          opacity: 0,
+          y: 18,
+        });
+        gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
+
+        const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
+        timeline
+          .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
+          .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
+          .to('.welcome-panel', { opacity: 1, y: 0, duration: 0.62 }, '-=0.32')
+          .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28')
+          .to('.ops-panel', { opacity: 1, y: 0, duration: 0.5, stagger: 0.06 }, '-=0.22');
+
+        document.querySelectorAll('.saas-module-card').forEach((card) => {
+          card.addEventListener('mouseenter', () => {
+            gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
+          });
+          card.addEventListener('mouseleave', () => {
+            gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
+          });
+        });
+
+        const storageKey = 'sigma-admin-console-draft-v3';
+        const permissionDefaults = {
+          selectedUserId: 'payrollAdmin',
+          users: [
+            { id: 'payrollAdmin', name: 'Payroll Admin', roleIds: ['admin'] },
+            { id: 'recruitmentAdminUser', name: 'Recruitment Admin', roleIds: ['recruitmentAdmin'] },
+            { id: 'cnPayrollAdminUser', name: 'CN Payroll Admin', roleIds: ['employeeAdmin', 'domesticAdmin'] },
+            { id: 'fbuAdminUser', name: 'FBU Bonus Admin', roleIds: ['fbuAdmin'] },
+            { id: 'overseasAdminUser', name: 'Overseas Audit Admin', roleIds: ['overseasAdmin'] },
+          ],
+          roles: [
+            { id: 'admin', name: '系统管理员' },
+            { id: 'recruitmentAdmin', name: '招聘奖金核算管理员', moduleId: 'recruitment' },
+            { id: 'employeeAdmin', name: '国内正式工核算管理员', moduleId: 'employee' },
+            { id: 'domesticAdmin', name: '国内外包工核算管理员', moduleId: 'domestic' },
+            { id: 'fbuAdmin', name: 'FBU美洲绩效核算管理员', moduleId: 'fbu' },
+            { id: 'overseasAdmin', name: '海外报账管理员', moduleId: 'overseas' },
+          ],
+          modules: [
+            { id: 'recruitment', name: '全球招聘奖金核算', href: 'recruitment.html', enabled: true },
+            { id: 'employee', name: '中国区正式工薪酬核算', href: 'employee-payroll.html', enabled: false },
+            { id: 'domestic', name: '中国区外包工薪酬核算', href: 'domestic-labor.html', enabled: false },
+            { id: 'fbu', name: 'FBU美洲绩效奖金核算', href: 'fbu-performance.html', enabled: false },
+            { id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: false },
+          ],
+          rolePermissions: {
+            admin: { enter: true },
+            recruitmentAdmin: { enter: true },
+            employeeAdmin: { enter: true },
+            domesticAdmin: { enter: true },
+            fbuAdmin: { enter: true },
+            overseasAdmin: { enter: true },
+          },
+          moduleAccess: {
+            admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true },
+            recruitmentAdmin: { recruitment: true },
+            employeeAdmin: { employee: true },
+            domesticAdmin: { domestic: true },
+            fbuAdmin: { fbu: true },
+            overseasAdmin: { overseas: true },
+          },
+        };
+        const readPermissionState = () => {
+          try {
+            const stored = JSON.parse(localStorage.getItem(storageKey) || '{}');
+            return {
+              ...permissionDefaults,
+              ...stored,
+              rolePermissions: { ...permissionDefaults.rolePermissions, ...(stored.rolePermissions || {}) },
+              moduleAccess: { ...permissionDefaults.moduleAccess, ...(stored.moduleAccess || {}) },
+            };
+          } catch {
+            return permissionDefaults;
+          }
+        };
+        let permissionState = readPermissionState();
+        try {
+          const meResponse = await fetch('/api/me');
+          if (meResponse.status === 401) {
+            window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname || '/')}`;
+            return;
+          }
+          if (meResponse.ok) {
+            const me = await meResponse.json();
+            sessionStorage.setItem('sigma-auth-context-v1', JSON.stringify({ createdAt: Date.now(), me }));
+            permissionState = {
+              ...permissionState,
+              users: [{ ...me.user, roleIds: me.user.roleIds || [] }],
+              roles: me.roles || permissionState.roles,
+              modules: me.modules || permissionState.modules,
+              moduleAccess: me.permissions?.moduleAccess || permissionState.moduleAccess,
+              rolePermissions: me.permissions?.rolePermissions || permissionState.rolePermissions,
+              selectedUserId: me.user?.id || permissionState.selectedUserId,
+            };
+          }
+        } catch {
+          // Static file fallback keeps the local draft mode usable before the API server is running.
+        }
+        const getRole = (roleId) => permissionState.roles.find(role => role.id === roleId);
+        const getModule = (moduleId) => permissionState.modules.find(module => module.id === moduleId);
+        const currentUser = permissionState.users.find(user => user.id === permissionState.selectedUserId) || permissionState.users[0];
+        const roleNames = currentUser.roleIds.map(roleId => getRole(roleId)?.name).filter(Boolean);
+        const canEnterModule = (moduleId) => {
+          const module = getModule(moduleId);
+          if (typeof module?.canEnter === 'boolean') return module.canEnter;
+          if (!module?.enabled) return false;
+          return currentUser.roleIds.some(roleId => permissionState.moduleAccess[roleId]?.[moduleId] && permissionState.rolePermissions[roleId]?.enter);
+        };
+        const currentUserName = document.getElementById('dashboardCurrentUser');
+        const currentUserRole = document.getElementById('dashboardCurrentRole');
+        if (currentUserName) currentUserName.textContent = currentUser.name;
+        if (currentUserRole) currentUserRole.textContent = roleNames.includes('系统管理员') ? '系统管理员' : '模块管理员';
+
+        const logoutButton = document.getElementById('dashboardLogout');
+        logoutButton?.addEventListener('click', async (event) => {
+          event.preventDefault();
+          logoutButton.setAttribute('aria-disabled', 'true');
+          logoutButton.textContent = '退出中';
+          try {
+            sessionStorage.removeItem('sigma-auth-context-v1');
+            await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+          } finally {
+            window.location.href = `login.html?next=${encodeURIComponent('/')}`;
+          }
+        });
+
+        document.querySelectorAll('[data-module-id]').forEach((entry) => {
+          const moduleId = entry.dataset.moduleId;
+          const module = getModule(moduleId);
+          if (!module) return;
+          entry.dataset.originalHref = module.href || entry.getAttribute('href') || '#';
+          const allowed = canEnterModule(moduleId);
+          entry.classList.toggle('permission-locked', !allowed);
+          entry.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+          entry.href = allowed ? entry.dataset.originalHref : '#';
+          const action = entry.querySelector('.module-action span');
+          if (action) action.textContent = allowed ? '进入模块' : (module.enabled ? '无权限进入' : '模块未开放');
+          const status = entry.querySelector('.module-status');
+          if (status && !allowed) status.textContent = module.enabled ? 'Locked · 无权限' : 'Closed · 未开放';
+        });
+
+        document.addEventListener('click', (event) => {
+          const entry = event.target.closest('[data-module-id]');
+          if (!entry || canEnterModule(entry.dataset.moduleId)) return;
+          event.preventDefault();
+          const module = getModule(entry.dataset.moduleId);
+          const reason = module?.enabled ? '当前用户没有该模块管理员角色' : '该模块权限未开放';
+          const hintText = `${reason}：${module?.name || '模块'}`;
+          const hint = document.getElementById('searchHint');
+          if (hint) hint.textContent = hintText;
+        });
+
+        const search = document.getElementById('dashboardSearch');
+        const hint = document.getElementById('searchHint');
+        const shortcuts = [
+          { keys: ['fbu', '绩效', '美洲'], moduleId: 'fbu', href: 'fbu-performance.html', label: 'FBU美洲绩效奖金核算' },
+          { keys: ['招聘', '内推', 'recruit'], moduleId: 'recruitment', href: 'recruitment.html', label: '全球招聘奖金核算' },
+          { keys: ['正式', '正式工', 'employee'], moduleId: 'employee', href: 'employee-payroll.html', label: '中国区正式工薪酬核算' },
+          { keys: ['外包', '国内', '薪酬', '劳务工'], moduleId: 'domestic', href: 'domestic-labor.html', label: '中国区外包工薪酬核算' },
+          { keys: ['海外', '报账', 'pdf', 'invoice'], moduleId: 'overseas', href: 'overseas-labor.html', label: '海外劳务报账核对' },
+          { keys: ['后台', '管理', '权限', 'admin'], href: 'admin.html', label: '后台管理' },
+        ];
+        search?.addEventListener('input', () => {
+          const value = search.value.trim().toLowerCase();
+          const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
+          const blocked = match?.moduleId && !canEnterModule(match.moduleId);
+          hint.textContent = match ? (blocked ? `无权限进入：${match.label}` : `按 Enter 进入：${match.label}`) : '可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块';
+        });
+        search?.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter') return;
+          const value = search.value.trim().toLowerCase();
+          const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
+          if (!match) return;
+          if (match.moduleId && !canEnterModule(match.moduleId)) {
+            hint.textContent = `当前用户无权限或模块未开放：${match.label}`;
+            return;
+          }
+          window.location.href = match.href;
+        });
+      })();
+    </script>
   </body>
 </html>

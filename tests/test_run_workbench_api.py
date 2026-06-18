@@ -132,6 +132,8 @@ def test_run_finalize_uses_saved_initial_result_and_updates_batch():
     data = response.json()
     assert data["status"] == "已最终确认"
     assert data["finalDownloadUrl"].endswith(".xlsx")
+    assert data["inlineFile"]["filename"].endswith(".xlsx")
+    assert data["inlineFile"]["base64"]
     assert Path(data["files"]["finalResult"]["path"]).exists()
     workbook = load_workbook(Path(data["files"]["finalResult"]["path"]), read_only=True)
     assert "待确认_发放判断" not in workbook.sheetnames

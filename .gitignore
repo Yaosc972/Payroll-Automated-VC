@@ -31,3 +31,4 @@ desktop/backend-build/
 desktop/backend-dist/
 desktop/release/
 desktop/dist/
+.vercel

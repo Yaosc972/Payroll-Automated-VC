@@ -32,6 +32,8 @@ def resolve_data_root() -> Path:
     configured = os.environ.get("SIGMA_WORKBENCH_HOME")
     if configured:
         return Path(configured).expanduser()
+    if os.environ.get("VERCEL"):
+        return Path("/tmp/sigma_workbench")
     return PROJECT_ROOT / "outputs"
 
 
@@ -52,6 +54,12 @@ LABOR_RUNS_DIR = OUTPUT_DIR / "labor_runs"
 DOMESTIC_LABOR_RUNS_DIR = OUTPUT_DIR / "domestic_labor_runs"
 FBU_PERFORMANCE_RUNS_DIR = OUTPUT_DIR / "fbu_performance_runs"
 DATABASE_PATH = OUTPUT_DIR / "sigma_workbench.db"
+ADMIN_DATABASE_URL = os.environ.get("ADMIN_DATABASE_URL", "") or os.environ.get("DATABASE_URL", "")
+ADMIN_BOOTSTRAP_IDENTIFIERS = [
+    item.strip()
+    for item in os.environ.get("ADMIN_BOOTSTRAP_IDENTIFIERS", "").split(",")
+    if item.strip()
+]
 
 MAX_PREVIEW_ROWS = 50
 
@@ -105,6 +113,14 @@ AI_CONFIG: dict[str, Any] = {
     "parallel_extraction_enabled": _env_bool("PARALLEL_EXTRACTION_ENABLED", True),
     "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 1),
     "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 1),
+}
+
+AUTH_CONFIG: dict[str, Any] = {
+    "session_cookie_secure": _env_bool("SESSION_COOKIE_SECURE", False),
+    "feishu_app_id": os.environ.get("FEISHU_APP_ID", ""),
+    "feishu_app_secret": os.environ.get("FEISHU_APP_SECRET", ""),
+    "feishu_redirect_uri": os.environ.get("FEISHU_REDIRECT_URI", ""),
+    "feishu_auth_url": os.environ.get("FEISHU_AUTH_URL", "https://open.feishu.cn/open-apis/authen/v1/index"),
 }
 
 # 自动生成的供应商 Profile 存储目录

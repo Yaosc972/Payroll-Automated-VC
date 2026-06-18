@@ -5,12 +5,18 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_HTML = ROOT / "bonus_platform" / "static" / "index.html"
+ADMIN_HTML = ROOT / "bonus_platform" / "static" / "admin.html"
+ADMIN_JS = ROOT / "bonus_platform" / "static" / "admin.js"
+PERMISSION_GUARD_JS = ROOT / "bonus_platform" / "static" / "permission-guard.js"
+LOGIN_HTML = ROOT / "bonus_platform" / "static" / "login.html"
+LOGIN_JS = ROOT / "bonus_platform" / "static" / "login.js"
 RECRUITMENT_HTML = ROOT / "bonus_platform" / "static" / "recruitment.html"
 LABOR_HTML = ROOT / "bonus_platform" / "static" / "labor.html"
 DOMESTIC_LABOR_HTML = ROOT / "bonus_platform" / "static" / "domestic-labor.html"
 DOMESTIC_LABOR_JS = ROOT / "bonus_platform" / "static" / "domestic-labor.js"
 OVERSEAS_LABOR_HTML = ROOT / "bonus_platform" / "static" / "overseas-labor.html"
 OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
+EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
@@ -144,14 +150,89 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert 'href="recruitment.html"' in html
     assert 'href="domestic-labor.html"' in html
     assert 'href="overseas-labor.html"' in html
+    assert 'href="employee-payroll.html"' in html
+    assert 'href="admin.html"' in html
     assert "Available · 已上线" in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
+    assert "sigma-admin-console-draft-v3" in html
+    assert "data-module-id" in html
+    assert "canEnterModule" in html
+    assert "/api/me" in html
+    assert "downloadInlineFile" in APP_JS.read_text(encoding="utf-8")
+    assert "inlineFile" in APP_JS.read_text(encoding="utf-8")
+    assert 'id="dashboardLogout"' in html
+    assert "/api/auth/logout" in html
+    assert "退出中" in html
+    assert "dashboard-logout-button" in html
+    assert ".dashboard-logout-button" in STYLES_CSS.read_text(encoding="utf-8")
+    assert "login.html?next=" in html
+    assert "permission-locked" in html
+
+
+def test_admin_console_is_static_permission_management_shell():
+    html = ADMIN_HTML.read_text(encoding="utf-8")
+    js = ADMIN_JS.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert "后台管理 · 西格玛工作台" in html
+    assert "用户与角色" in html
+    assert "模块权限" in html
+    assert "功能权限" in html
+    assert "模块配置" in html
+    assert "操作日志" in html
+    assert "权限配置中心" in html
+    assert "localStorage 模拟" in html
+    assert 'data-admin-only="true"' in html
+    assert "permission-guard.js" in html
+    assert 'id="activeAdminUser"' in html
+    assert 'src="admin.js?v=1"' in html
+    assert "app.js" not in html
+    assert "tabulator-tables" not in html
+    assert "rolePermissions" in js
+    assert "moduleAccess" in js
+    assert "selectedUserId" in js
+    assert "roleIds" in js
+    assert "admin-user-table" in js
+    assert "admin-role-dropdown" in js
+    assert "save-user-roles" in js
+    assert "默认权限：无模块权限" in js
+    assert "更新用户角色" in js
+    assert "module-access" in js
+    assert "开放角色进入模块" in js
+    assert "系统管理员" in js
+    assert "招聘奖金核算管理员" in js
+    assert "国内正式工核算管理员" in js
+    assert "国内外包工核算管理员" in js
+    assert "FBU美洲绩效核算管理员" in js
+    assert "海外报账管理员" in js
+    assert "进入模块" in js
+    assert "提交核算" in js
+    assert "sigma-admin-console-draft-v3" in js
+    assert ".admin-user-table" in css
+    assert ".admin-role-dropdown" in css
+    assert ".admin-role-menu" in css
+    assert ".admin-feature-table" in css
+    assert ".admin-console-section" in css
+    assert ".admin-module-access-grid" in css
+
+
+def test_employee_payroll_placeholder_is_guarded_construction_page():
+    html = EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert "中国区正式工薪酬核算建设中" in html
+    assert 'data-module-id="employee"' in html
+    assert "permission-guard.js" in html
+    assert "employee-placeholder-shell" in html
+    assert ".employee-placeholder-panel" in css
 
 
 def test_recruitment_page_keeps_command_center_and_home_link():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
 
+    assert 'data-module-id="recruitment"' in html
+    assert "permission-guard.js" in html
     assert 'href="/"' in html
     assert "返回首页" in html
     assert 'class="brand-block brand-home-link"' in html
@@ -175,6 +256,8 @@ def test_domestic_labor_page_is_payroll_workbench():
     css = STYLES_CSS.read_text(encoding="utf-8")
 
     assert "劳务工薪酬核算" in html
+    assert 'data-module-id="domestic"' in html
+    assert "permission-guard.js" in html
     assert "domestic-labor-shell" in html
     assert "kpi-6col" in html
     assert "engine-card-grid" in html
@@ -192,6 +275,8 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     css = STYLES_CSS.read_text(encoding="utf-8")
 
     assert "海外劳务工报账核对" in html
+    assert 'data-module-id="overseas"' in html
+    assert "permission-guard.js" in html
     assert "AI 抽取供应商发票" in html
     assert "overseas-labor.js" in html
     assert "/api/labor/runs" in js
@@ -199,6 +284,47 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert "结论" in html
     assert "仓库核对总览" in html
     assert ".overseas-labor-shell" in css
+
+
+def test_permission_guard_blocks_direct_module_access_with_static_permissions():
+    html = (ROOT / "bonus_platform" / "static" / "fbu-performance.html").read_text(encoding="utf-8")
+    guard_js = PERMISSION_GUARD_JS.read_text(encoding="utf-8")
+
+    assert 'data-module-id="fbu"' in html
+    assert "permission-guard.js" in html
+    assert "sigma-admin-console-draft-v3" in guard_js
+    assert "/api/me" in guard_js
+    assert "moduleAccess" in guard_js
+    assert "rolePermissions" in guard_js
+    assert "selectedUserId" in guard_js
+    assert "无权限访问" in guard_js
+    assert "后台管理仅系统管理员可访问" in guard_js
+    assert "window.stop()" in guard_js
+
+
+def test_login_page_provides_mock_feishu_ready_session_entry():
+    html = LOGIN_HTML.read_text(encoding="utf-8")
+    js = LOGIN_JS.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert "登录西格玛工作台" in html
+    assert "企业飞书账号授权登录" in html
+    assert "开发调试：模拟用户登录" in html
+    assert "使用飞书登录" in html
+    assert "login.js" in html
+    assert "/api/auth/feishu/config" in js
+    assert "/api/auth/feishu/login" in js
+    assert "/api/me" in js
+    assert "redirectIfAlreadyLoggedIn" in js
+    assert "已登录，正在进入工作台" in js
+    assert "/api/auth/mock-users" in js
+    assert "/api/auth/mock-login" in js
+    assert "mockEnabled" in js
+    assert "mockLoginPanel.hidden = false" in js
+    assert "sigma_session" not in js
+    assert ".login-panel" in css
+    assert ".feishu-login-block" in css
+    assert ".mock-login-panel" in css
 
 
 def test_desktop_builder_uses_platform_logo_icons():

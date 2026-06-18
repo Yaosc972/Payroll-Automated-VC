@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 import re
+import secrets
+from typing import Any
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -13,14 +16,17 @@ logging.basicConfig(
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
-from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
+from typing import Optional
+from urllib.parse import urlencode
+from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, HTTPException, Response, UploadFile
+import httpx
 from openpyxl import load_workbook
 
 logger = logging.getLogger("bonus_platform.labor")
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, SUPPLIER_PROFILES_OUTPUT_DIR, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, ensure_data_files
+from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, SUPPLIER_PROFILES_OUTPUT_DIR, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, ensure_data_files
 from .engine.domestic_labor.parser import PayrollDataLoader
 from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
@@ -46,6 +52,20 @@ from .engine.labor.profiles import (
 # --- FBU Performance engine imports ---
 from .engine.fbu_performance.parser import FBUPerformanceParser
 from .engine.fbu_performance.runs import FBURunManager
+from .engine.admin_store import (
+    create_session,
+    delete_session,
+    get_admin_state,
+    get_current_user,
+    get_session_user_id,
+    init_admin_store,
+    list_audit_logs,
+    set_feature_permission,
+    set_module_enabled,
+    set_module_role_access,
+    set_user_roles,
+    upsert_feishu_user,
+)
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -115,18 +135,350 @@ from .engine.workbook_io import build_final_workbook, build_pending_workbook, bu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_data_files()
+    init_admin_store()
     _recover_stuck_labor_runs()
     yield
 
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+SAFE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+SESSION_COOKIE_NAME = "sigma_session"
+FEISHU_STATE_COOKIE_NAME = "sigma_feishu_state"
+FEISHU_API_BASE_URL = "https://open.feishu.cn/open-apis"
+
+
+def _validate_safe_id(value: str, field_name: str = "id") -> str:
+    if not SAFE_ID_RE.fullmatch(value or ""):
+        raise HTTPException(status_code=400, detail=f"无效的 {field_name}。")
+    return value
+
+
+def _current_user_id(sigma_session: Optional[str] = Cookie(default=None)) -> str:
+    if not sigma_session:
+        raise HTTPException(status_code=401, detail="未登录。")
+    try:
+        return get_session_user_id(sigma_session)
+    except KeyError as exc:
+        raise HTTPException(status_code=401, detail="登录已失效。") from exc
+
+
+def _require_admin_user(actor_user_id: str = Depends(_current_user_id)) -> str:
+    try:
+        current = get_current_user(actor_user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=401, detail="未识别的用户身份。") from exc
+    if not any(role["id"] == "admin" for role in current["roles"]):
+        raise HTTPException(status_code=403, detail="需要系统管理员权限。")
+    return actor_user_id
+
+
+def _payload_bool(payload: dict, key: str) -> bool:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise HTTPException(status_code=400, detail=f"{key} 必须是 boolean。")
+    return value
+
+
+def _feishu_api_error(prefix: str, payload: dict[str, Any]) -> HTTPException:
+    code = payload.get("code")
+    message = payload.get("msg") or payload.get("message") or "unknown_error"
+    return HTTPException(status_code=502, detail=f"{prefix}失败：{code} {message}")
+
+
+def _feishu_post_json(path: str, payload: dict[str, Any], token: str | None = None) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        response = httpx.post(f"{FEISHU_API_BASE_URL}{path}", json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="飞书接口请求失败。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="飞书接口返回格式异常。") from exc
+
+
+def _feishu_get_json(path: str, token: str) -> dict[str, Any]:
+    try:
+        response = httpx.get(
+            f"{FEISHU_API_BASE_URL}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="飞书用户信息请求失败。") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="飞书用户信息返回格式异常。") from exc
+
+
+def _get_feishu_app_access_token() -> str:
+    payload = _feishu_post_json(
+        "/auth/v3/app_access_token/internal",
+        {"app_id": AUTH_CONFIG["feishu_app_id"], "app_secret": AUTH_CONFIG["feishu_app_secret"]},
+    )
+    if payload.get("code") != 0:
+        raise _feishu_api_error("获取飞书 app_access_token", payload)
+    token = str(payload.get("app_access_token") or "")
+    if not token:
+        raise HTTPException(status_code=502, detail="飞书 app_access_token 为空。")
+    return token
+
+
+def _get_feishu_user_access_token(code: str, app_access_token: str) -> dict[str, Any]:
+    payload = _feishu_post_json(
+        "/authen/v1/access_token",
+        {"grant_type": "authorization_code", "code": code},
+        token=app_access_token,
+    )
+    if payload.get("code") != 0:
+        raise _feishu_api_error("获取飞书 user_access_token", payload)
+    data = payload.get("data")
+    if not isinstance(data, dict) or not data.get("access_token"):
+        raise HTTPException(status_code=502, detail="飞书 user_access_token 返回为空。")
+    return data
+
+
+def _get_feishu_user_info(user_access_token: str) -> dict[str, Any]:
+    payload = _feishu_get_json("/authen/v1/user_info", user_access_token)
+    if payload.get("code") != 0:
+        raise _feishu_api_error("获取飞书用户信息", payload)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="飞书用户信息为空。")
+    return data
+
+
+def _feishu_identity_from_payloads(token_data: dict[str, Any], user_info: dict[str, Any]) -> dict[str, str | None]:
+    merged = {**token_data, **user_info}
+    open_id = str(merged.get("open_id") or merged.get("openId") or "").strip()
+    if not open_id:
+        raise HTTPException(status_code=502, detail="飞书用户 open_id 为空。")
+    return {
+        "feishu_open_id": open_id,
+        "feishu_union_id": str(merged.get("union_id") or merged.get("unionId") or "").strip() or None,
+        "email": str(merged.get("email") or merged.get("enterprise_email") or "").strip() or None,
+        "name": str(merged.get("name") or merged.get("en_name") or merged.get("nickname") or open_id).strip(),
+    }
 
 
 @app.get("/api/health")
 def health() -> dict:
     ensure_data_files()
     return {"status": "ok", "rule_workbook": str(DEFAULT_RULE_WORKBOOK)}
+
+
+@app.get("/api/auth/mock-users")
+def api_auth_mock_users() -> dict:
+    users = get_admin_state()["users"]
+    return {
+        "users": [
+            {"id": user["id"], "name": user["name"], "email": user.get("email"), "roleIds": user.get("roleIds", [])}
+            for user in users
+        ]
+    }
+
+
+@app.post("/api/auth/mock-login")
+def api_auth_mock_login(response: Response, payload: dict = Body(...)) -> dict:
+    user_id = _validate_safe_id(str(payload.get("userId") or payload.get("user_id") or ""), "user_id")
+    try:
+        token = create_session(user_id)
+        current = get_current_user(user_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="用户不存在。") from exc
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+    return current
+
+
+@app.post("/api/auth/logout")
+def api_auth_logout(response: Response, sigma_session: Optional[str] = Cookie(default=None)) -> dict:
+    if sigma_session:
+        delete_session(sigma_session)
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/logout")
+def api_auth_logout_redirect(next: str = "login.html?next=%2F", sigma_session: Optional[str] = Cookie(default=None)) -> RedirectResponse:
+    if sigma_session:
+        delete_session(sigma_session)
+    redirect_target = next if next.startswith("/") or next.startswith("login.html") else "login.html?next=%2F"
+    response = RedirectResponse(redirect_target, status_code=302)
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return response
+
+
+@app.get("/api/auth/feishu/config")
+def api_auth_feishu_config() -> dict:
+    configured = bool(AUTH_CONFIG["feishu_app_id"] and AUTH_CONFIG["feishu_redirect_uri"])
+    return {
+        "configured": configured,
+        "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else "",
+    }
+
+
+@app.get("/api/auth/feishu/login")
+def api_auth_feishu_login() -> RedirectResponse:
+    if not AUTH_CONFIG["feishu_app_id"] or not AUTH_CONFIG["feishu_redirect_uri"]:
+        raise HTTPException(status_code=503, detail="飞书应用未配置。")
+    state = secrets.token_urlsafe(24)
+    params = urlencode({
+        "app_id": AUTH_CONFIG["feishu_app_id"],
+        "redirect_uri": AUTH_CONFIG["feishu_redirect_uri"],
+        "state": state,
+    })
+    response = RedirectResponse(f"{AUTH_CONFIG['feishu_auth_url']}?{params}", status_code=302)
+    response.set_cookie(
+        FEISHU_STATE_COOKIE_NAME,
+        state,
+        httponly=True,
+        samesite="lax",
+        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        max_age=10 * 60,
+        path="/",
+    )
+    return response
+
+
+@app.get("/api/auth/feishu/callback")
+def api_auth_feishu_callback(
+    response: Response,
+    code: str = "",
+    state: str = "",
+    sigma_feishu_state: Optional[str] = Cookie(default=None),
+) -> RedirectResponse:
+    if not code or not state or not sigma_feishu_state or state != sigma_feishu_state:
+        raise HTTPException(status_code=400, detail="飞书登录 state 校验失败。")
+    if not AUTH_CONFIG["feishu_app_id"] or not AUTH_CONFIG["feishu_app_secret"]:
+        raise HTTPException(status_code=503, detail="飞书应用密钥未配置。")
+
+    app_access_token = _get_feishu_app_access_token()
+    token_data = _get_feishu_user_access_token(code, app_access_token)
+    user_info = _get_feishu_user_info(str(token_data["access_token"]))
+    user = upsert_feishu_user(**_feishu_identity_from_payloads(token_data, user_info))
+    session_token = create_session(user["id"], action="feishu_login")
+
+    redirect = RedirectResponse("/", status_code=302)
+    redirect.delete_cookie(FEISHU_STATE_COOKIE_NAME, path="/")
+    redirect.set_cookie(
+        SESSION_COOKIE_NAME,
+        session_token,
+        httponly=True,
+        samesite="lax",
+        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+    return redirect
+
+
+@app.get("/api/me")
+def api_me(actor_user_id: str = Depends(_current_user_id)) -> dict:
+    return get_current_user(actor_user_id)
+
+
+@app.get("/api/admin/state")
+def api_admin_state(actor_user_id: str = Depends(_require_admin_user)) -> dict:
+    return get_admin_state()
+
+
+@app.get("/api/admin/users")
+def api_admin_users(actor_user_id: str = Depends(_require_admin_user)) -> dict:
+    return {"users": get_admin_state()["users"]}
+
+
+@app.put("/api/admin/users/{user_id}/roles")
+def api_set_user_roles(
+    user_id: str,
+    payload: dict = Body(...),
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    try:
+        user_id = _validate_safe_id(user_id, "user_id")
+        role_ids = payload.get("roleIds") or payload.get("role_ids") or []
+        if not isinstance(role_ids, list) or len(role_ids) > 20:
+            raise HTTPException(status_code=400, detail="无效的角色列表。")
+        role_ids = [_validate_safe_id(str(role_id), "role_id") for role_id in role_ids]
+        return {"user": set_user_roles(user_id, role_ids, actor_user_id=actor_user_id)}
+    except ValueError as exc:
+        if str(exc) == "cannot_remove_own_admin":
+            raise HTTPException(status_code=400, detail="不能移除当前登录账号的系统管理员角色。") from exc
+        if str(exc) == "cannot_remove_last_admin":
+            raise HTTPException(status_code=400, detail="系统至少需要保留一个系统管理员。") from exc
+        raise HTTPException(status_code=400, detail="无效的角色授权。") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.patch("/api/admin/modules/{module_id}")
+def api_set_module_enabled(
+    module_id: str,
+    payload: dict = Body(...),
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    try:
+        module_id = _validate_safe_id(module_id, "module_id")
+        return {"module": set_module_enabled(module_id, _payload_bool(payload, "enabled"), actor_user_id=actor_user_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/admin/modules/{module_id}/roles/{role_id}")
+def api_set_module_role_access(
+    module_id: str,
+    role_id: str,
+    payload: dict = Body(...),
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    try:
+        module_id = _validate_safe_id(module_id, "module_id")
+        role_id = _validate_safe_id(role_id, "role_id")
+        return {
+            "moduleAccess": set_module_role_access(
+                module_id, role_id, _payload_bool(payload, "canEnter"), actor_user_id=actor_user_id
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put("/api/admin/roles/{role_id}/features/{feature_id}")
+def api_set_feature_permission(
+    role_id: str,
+    feature_id: str,
+    payload: dict = Body(...),
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    try:
+        role_id = _validate_safe_id(role_id, "role_id")
+        feature_id = _validate_safe_id(feature_id, "feature_id")
+        return {
+            "rolePermissions": set_feature_permission(
+                role_id, feature_id, _payload_bool(payload, "enabled"), actor_user_id=actor_user_id
+            )
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/admin/audit-logs")
+def api_admin_audit_logs(
+    limit: int = 50,
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    return {"logs": list_audit_logs(limit=max(1, min(limit, 200)))}
 
 
 @app.post("/api/calculate")
@@ -1031,6 +1383,7 @@ async def finalize_run(
             **final_payload,
         },
     )
+    updated["inlineFile"] = _inline_workbook_payload(final_path)
     return updated
 
 
@@ -1139,6 +1492,14 @@ def _output_path(original_name: str, suffix: str = "平台计算结果") -> Path
     stem = Path(original_name).stem.replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return EXPORT_DIR / f"{stem}_{suffix}_{timestamp}.xlsx"
+
+
+def _inline_workbook_payload(path: Path) -> dict[str, str]:
+    return {
+        "filename": path.name,
+        "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+    }
 
 
 async def _save_upload(file: UploadFile) -> Path:
