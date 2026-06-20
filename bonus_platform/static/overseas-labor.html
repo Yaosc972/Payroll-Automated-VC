@@ -1139,11 +1139,6 @@
         font-weight: 900;
       }
 
-      .overseas-labor-shell [data-governance-action][aria-busy="true"] {
-        cursor: wait;
-        opacity: 0.82;
-      }
-
       .overseas-labor-shell .section-header {
         display: flex;
         justify-content: space-between;
@@ -1669,18 +1664,6 @@
       </section>
       </details>
 
-      <!-- Rule governance -->
-      <section class="workspace-section" id="ruleGovernanceSection" hidden>
-        <div class="section-header">
-          <div>
-            <h2 class="section-title">系统建议与人工复核</h2>
-            <p class="section-sub">系统发现疑似误抽、姓名匹配、跨仓归属等问题；确认前只做预览，不会自动改结果</p>
-          </div>
-          <p id="governanceStatus" class="inline-status">等待核对结果。</p>
-        </div>
-        <div id="ruleGovernanceBody" class="governance-panel"></div>
-      </section>
-
       <!-- Pending items -->
       <section class="workspace-section" id="pendingItemsSection" hidden>
         <div class="section-header">
@@ -1743,7 +1726,7 @@
         <div class="section-header">
           <div>
             <h2 class="section-title">员工级核对证据</h2>
-            <p class="section-sub">按总额、仓库、员工逐层下钻；完整明细以下载报告为准</p>
+            <p class="section-sub">按总额、仓库、员工逐层查看；完整明细以下载报告为准</p>
           </div>
           <div class="section-actions">
             <button id="extractCompare" class="btn-extract" type="button">

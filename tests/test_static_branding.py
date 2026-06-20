@@ -201,6 +201,65 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert ".overseas-labor-shell" in css
 
 
+def test_overseas_labor_frontend_blocks_vercel_light_uat_extract():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "isVercelLaborLightUat" in js
+    assert "当前 Vercel UAT 仅支持页面试用和测试材料验证" in js
+    assert "不启动正式在线抽取任务" in js
+
+
+def test_overseas_labor_frontend_maps_technical_request_errors_to_business_next_steps():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "function formatLaborRequestError" in js
+    assert "message?.message" in js
+    assert "message?.nextAction" in js
+    assert "本批次记录未找到" in js
+    assert "请返回「新建核对批次」重新创建并上传材料" in js
+    assert "上传文件未保存成功" in js
+    assert "无法连接当前服务" in js
+    assert "formatLaborRequestError(data.detail || data.message || \"请求失败。\")" in js
+
+
+def test_overseas_labor_download_prefers_business_report_for_business_users():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "function preferredLaborReportDownloadUrl(run)" in js
+    assert "run?.businessReportDownloadUrl || run?.files?.businessReport?.downloadUrl || run?.diffDownloadUrl" in js
+    assert "setDownload(preferredLaborReportDownloadUrl(run))" in js
+
+
+def test_overseas_labor_result_guides_business_report_download_and_keeps_excel_internal():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "renderConclusion(summary, wcSummary, run.extractionQuality, run)" in js
+    assert "业务报告已生成，可下载留档或转发给业务复核。" in js
+    assert "下载业务报告" in js
+    assert "内部差异 Excel" in js
+    assert "buildBusinessReportPrompt(run)" in js
+
+
+def test_overseas_labor_result_copy_is_business_readable_about_review_scope():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "只展示需要复核的员工明细，不代表账单只有这些人" in js
+    assert "整批账单" in js
+    assert "核对信号存在冲突" not in js
+    assert "下钻" not in js
+
+
+def test_overseas_labor_business_page_does_not_include_internal_governance_workbench():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "ruleGovernanceSection" not in html
+    assert "高级复核工具（内部）" not in html
+    assert "ruleGovernanceBody" not in html
+    assert "renderGovernancePanel(run)" not in js
+    assert "handleGovernanceAction" not in js
+
+
 def test_desktop_builder_uses_platform_logo_icons():
     package = DESKTOP_PACKAGE.read_text(encoding="utf-8")
 
