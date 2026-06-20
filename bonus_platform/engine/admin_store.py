@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT,
+  avatar_url TEXT,
   feishu_open_id TEXT,
   feishu_union_id TEXT,
   status TEXT NOT NULL DEFAULT 'active',
@@ -97,6 +98,7 @@ CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT,
+  avatar_url TEXT,
   feishu_open_id TEXT,
   feishu_union_id TEXT,
   status TEXT NOT NULL DEFAULT 'active',
@@ -312,6 +314,7 @@ def init_admin_store(db_path: Path | None = None) -> Path | str:
             connection.execute("SELECT pg_advisory_xact_lock(917137)")
         try:
             connection.executescript(POSTGRES_SCHEMA if backend == "postgres" else SQLITE_SCHEMA)
+            _migrate_schema(connection)
             _seed_defaults(connection)
             connection.commit()
             if db_path is None:
@@ -321,6 +324,27 @@ def init_admin_store(db_path: Path | None = None) -> Path | str:
             connection.rollback()
             raise
     return get_admin_database_url() if backend == "postgres" else _sqlite_db_path(db_path)
+
+
+def _column_exists(connection: _AdminConnection, table: str, column: str) -> bool:
+    if connection.backend == "postgres":
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = %s AND column_name = %s
+            LIMIT 1
+            """,
+            (table, column),
+        ).fetchone()
+        return bool(row)
+    rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
+
+
+def _migrate_schema(connection: _AdminConnection) -> None:
+    if not _column_exists(connection, "admin_users", "avatar_url"):
+        connection.execute("ALTER TABLE admin_users ADD COLUMN avatar_url TEXT")
 
 
 def _insert_seed(connection: _AdminConnection, table: str, columns: list[str], conflict_columns: list[str], values: dict[str, Any]) -> None:
@@ -435,7 +459,7 @@ def list_users(db_path: Path | None = None) -> list[dict[str, Any]]:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
         users = _rows_to_dicts(connection.execute(
-            'SELECT id, name, email, feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId", status FROM admin_users ORDER BY id'
+            'SELECT id, name, email, avatar_url AS "avatarUrl", feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId", status FROM admin_users ORDER BY id'
         ).fetchall())
         role_rows = connection.execute("SELECT user_id, role_id FROM admin_user_roles ORDER BY role_id").fetchall()
     role_map: dict[str, list[str]] = {}
@@ -494,7 +518,7 @@ def ensure_bootstrap_admin_for_user(user_id: str, db_path: Path | None = None) -
     with _connect(db_path) as connection:
         user = connection.execute(
             """
-            SELECT id, name, email, feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId"
+            SELECT id, name, email, avatar_url AS "avatarUrl", feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId"
             FROM admin_users
             WHERE id = ?
             """,
@@ -569,6 +593,7 @@ def upsert_feishu_user(
     feishu_open_id: str,
     feishu_union_id: str | None = None,
     email: str | None = None,
+    avatar_url: str | None = None,
     name: str | None = None,
     db_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -592,22 +617,23 @@ def upsert_feishu_user(
                 UPDATE admin_users
                 SET name = COALESCE(?, name),
                     email = COALESCE(?, email),
+                    avatar_url = COALESCE(?, avatar_url),
                     feishu_open_id = ?,
                     feishu_union_id = COALESCE(?, feishu_union_id),
                     updated_at = ?
                 WHERE id = ?
                 """,
-                (name, email, feishu_open_id, feishu_union_id, now, user_id),
+                (name, email, avatar_url, feishu_open_id, feishu_union_id, now, user_id),
             )
         else:
             connection.execute(
                 """
                 INSERT INTO admin_users (
-                  id, name, email, feishu_open_id, feishu_union_id, status, created_at, updated_at
+                  id, name, email, avatar_url, feishu_open_id, feishu_union_id, status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
-                (user_id, name or email or feishu_open_id, email, feishu_open_id, feishu_union_id, now, now),
+                (user_id, name or email or feishu_open_id, email, avatar_url, feishu_open_id, feishu_union_id, now, now),
             )
         _insert_audit(connection, user_id, "feishu_user_upsert", "user", user_id, email or feishu_open_id)
         connection.commit()

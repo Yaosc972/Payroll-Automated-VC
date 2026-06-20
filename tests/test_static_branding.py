@@ -161,13 +161,22 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "/api/me" in html
     assert "downloadInlineFile" in APP_JS.read_text(encoding="utf-8")
     assert "inlineFile" in APP_JS.read_text(encoding="utf-8")
+    assert 'id="dashboardUserMenu"' in html
+    assert 'id="dashboardAdminLink"' in html
     assert 'id="dashboardLogout"' in html
     assert "/api/auth/logout" in html
     assert "退出中" in html
-    assert "dashboard-logout-button" in html
-    assert ".dashboard-logout-button" in STYLES_CSS.read_text(encoding="utf-8")
+    assert "进入后台管理" in html
+    assert "isSystemAdmin" in html
+    assert "adminOnly" in html
+    assert ".dashboard-user-menu" in STYLES_CSS.read_text(encoding="utf-8")
     assert "login.html?next=" in html
     assert "permission-locked" in html
+    assert 'id="dashboardUserAvatar"' in html
+    assert 'id="dashboardRoleTags"' in html
+    assert "avatarUrl" in html
+    assert ".dashboard-user-avatar" in STYLES_CSS.read_text(encoding="utf-8")
+    assert ".dashboard-role-tags" in STYLES_CSS.read_text(encoding="utf-8")
 
 
 def test_admin_console_is_static_permission_management_shell():
@@ -194,6 +203,8 @@ def test_admin_console_is_static_permission_management_shell():
     assert "selectedUserId" in js
     assert "roleIds" in js
     assert "admin-user-table" in js
+    assert "admin-user-avatar" in js
+    assert "avatarUrl" in js
     assert "admin-role-dropdown" in js
     assert "save-user-roles" in js
     assert "默认权限：无模块权限" in js
@@ -210,6 +221,7 @@ def test_admin_console_is_static_permission_management_shell():
     assert "提交核算" in js
     assert "sigma-admin-console-draft-v3" in js
     assert ".admin-user-table" in css
+    assert ".admin-user-avatar" in css
     assert ".admin-role-dropdown" in css
     assert ".admin-role-menu" in css
     assert ".admin-feature-table" in css
@@ -297,6 +309,8 @@ def test_permission_guard_blocks_direct_module_access_with_static_permissions():
     assert "moduleAccess" in guard_js
     assert "rolePermissions" in guard_js
     assert "selectedUserId" in guard_js
+    assert "adminOnly ? null" not in guard_js
+    assert "cdn.jsdelivr.net/npm/gsap" not in guard_js
     assert "无权限访问" in guard_js
     assert "后台管理仅系统管理员可访问" in guard_js
     assert "window.stop()" in guard_js
@@ -308,10 +322,19 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     css = STYLES_CSS.read_text(encoding="utf-8")
 
     assert "登录西格玛工作台" in html
-    assert "企业飞书账号授权登录" in html
+    assert "账号角色与模块权限" not in html
+    assert "飞书应用已配置" not in html
+    assert 'id="feishuLoginStatus"' not in html
+    assert 'id="loginStatus"' not in html
+    assert 'id="loginSmokeyCanvas"' in html
+    assert "login-provider-icon" in html
+    assert "00D6B9" in html
+    assert "3370FF" in html
     assert "开发调试：模拟用户登录" in html
     assert "使用飞书登录" in html
     assert "login.js" in html
+    assert "fragmentSmokeySource" in js
+    assert "initSmokeyBackground" in js
     assert "/api/auth/feishu/config" in js
     assert "/api/auth/feishu/login" in js
     assert "/api/me" in js
@@ -323,6 +346,11 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "mockLoginPanel.hidden = false" in js
     assert "sigma_session" not in js
     assert ".login-panel" in css
+    assert ".login-smokey-canvas" in css
+    assert ".login-provider-icon" in css
+    assert ".login-panel .dashboard-logo img" in css
+    assert "background: transparent" in css.split(".login-panel .dashboard-logo img", 1)[1].split("}", 1)[0]
+    assert "background: transparent" in css.split(".login-provider-icon", 1)[1].split("}", 1)[0]
     assert ".feishu-login-block" in css
     assert ".mock-login-panel" in css
 

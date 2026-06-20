@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=1280" />
     <title>登录 · 西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=login-1" />
+    <link rel="stylesheet" href="styles.css?v=login-2" />
   </head>
   <body class="portal-shell dashboard-shell login-shell">
+    <canvas id="loginSmokeyCanvas" class="login-smokey-canvas" aria-hidden="true"></canvas>
     <div class="portal-mesh" aria-hidden="true">
       <span class="mesh-orb cyan"></span>
       <span class="mesh-orb violet"></span>
@@ -26,17 +27,26 @@
       <div>
         <p class="portal-kicker">Authentication</p>
         <h1 id="loginTitle">登录西格玛工作台</h1>
-        <span>使用企业飞书账号授权登录，账号角色与模块权限由后台统一管控。</span>
       </div>
       <div class="feishu-login-block">
-        <a id="feishuLoginLink" href="/api/auth/feishu/login" aria-disabled="true">使用飞书登录</a>
-        <span id="feishuLoginStatus">正在检查飞书应用配置...</span>
+        <a id="feishuLoginLink" href="/api/auth/feishu/login" aria-disabled="true">
+          <span class="login-provider-icon" aria-hidden="true">
+            <svg viewBox="0 0 64 64" focusable="false">
+              <path fill="#00D6B9" d="M17.4 8.4c6.2 0 10.8 4.4 14.1 8.1l-9.7 9.7c-4.4-4.6-7.3-8.7-4.4-17.8Z" />
+              <path fill="#3370FF" d="M31.5 16.5c7.1-7.5 15.1-9.2 24-5.1-1.1 8.7-5.9 13-12.3 18.9L31.5 16.5Z" />
+              <path fill="#7B68EE" d="M21.8 26.2 31.5 16.5l11.7 13.8-10.7 10.7c-4.4-4.3-7.9-8.8-10.7-14.8Z" />
+              <path fill="#00D6B9" d="M32.5 41 43.2 30.3c4.7 4.8 6.2 10.4 4.5 16.8-6.6 1.6-11.6-.3-15.2-6.1Z" />
+              <path fill="#3370FF" d="M16.8 55.7c-4.3-8.9-2.4-17 5-29.5 2.8 6 6.3 10.5 10.7 14.8-4.7 6.2-9.3 11.3-15.7 14.7Z" />
+            </svg>
+          </span>
+          <strong>使用飞书登录</strong>
+          <i aria-hidden="true">→</i>
+        </a>
       </div>
       <details class="mock-login-panel" id="mockLoginPanel" hidden>
         <summary>开发调试：模拟用户登录</summary>
         <div class="login-user-list" id="loginUserList" aria-label="模拟登录用户"></div>
       </details>
-      <p class="login-status" id="loginStatus" role="status">正在读取可登录用户...</p>
     </main>
 
     <script src="login.js?v=1"></script>

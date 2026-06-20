@@ -254,6 +254,15 @@
     `;
   };
 
+  const getUserInitials = (user) => String(user.name || user.email || user.id || "U").trim().slice(0, 2).toUpperCase();
+
+  const userAvatarMarkup = (user) => {
+    if (user.avatarUrl) {
+      return `<img class="admin-user-avatar" src="${escapeHtml(user.avatarUrl)}" alt="" />`;
+    }
+    return `<span class="admin-user-avatar fallback" aria-hidden="true">${escapeHtml(getUserInitials(user))}</span>`;
+  };
+
   const renderUsers = () => {
     const list = document.getElementById("userRoleList");
     if (!list) return;
@@ -263,8 +272,11 @@
         <tr>
           <td>
             <div class="admin-user-identity">
-              <strong>${escapeHtml(user.name)}</strong>
-              <span>${escapeHtml(user.email || user.id)}</span>
+              ${userAvatarMarkup(user)}
+              <div>
+                <strong>${escapeHtml(user.name)}</strong>
+                <span>${escapeHtml(user.email || user.id)}</span>
+              </div>
             </div>
           </td>
           <td><span class="admin-role-summary">${escapeHtml(roleNames)}</span></td>

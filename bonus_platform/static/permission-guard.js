@@ -3,7 +3,7 @@
   const adminOnly = document.documentElement.dataset.adminOnly === "true";
   if (!moduleId && !adminOnly) return;
   const authCacheKey = "sigma-auth-context-v1";
-  const authCacheTtlMs = 20000;
+  const authCacheTtlMs = 5 * 60 * 1000;
   let loadingFinished = false;
   document.documentElement.classList.add("permission-checking");
 
@@ -93,14 +93,7 @@
         ease: "sine.inOut",
       });
     };
-    if (window.gsap) {
-      run();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js";
-    script.onload = run;
-    document.head.appendChild(script);
+    run();
   };
 
   const mountLoadingOverlay = () => {
@@ -212,7 +205,7 @@
     }
   };
   try {
-    const cachedMe = adminOnly ? null : readCachedAuthContext();
+    const cachedMe = readCachedAuthContext();
     if (cachedMe) {
       state = mergeAuthContext(cachedMe);
     } else {

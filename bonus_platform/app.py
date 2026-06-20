@@ -17,7 +17,7 @@ from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, HTTPException, Response, UploadFile
 import httpx
 from openpyxl import load_workbook
@@ -228,6 +228,19 @@ def _get_feishu_app_access_token() -> str:
     return token
 
 
+def _get_feishu_tenant_access_token() -> str:
+    payload = _feishu_post_json(
+        "/auth/v3/tenant_access_token/internal",
+        {"app_id": AUTH_CONFIG["feishu_app_id"], "app_secret": AUTH_CONFIG["feishu_app_secret"]},
+    )
+    if payload.get("code") != 0:
+        raise _feishu_api_error("获取飞书 tenant_access_token", payload)
+    token = str(payload.get("tenant_access_token") or "")
+    if not token:
+        raise HTTPException(status_code=502, detail="飞书 tenant_access_token 为空。")
+    return token
+
+
 def _get_feishu_user_access_token(code: str, app_access_token: str) -> dict[str, Any]:
     payload = _feishu_post_json(
         "/authen/v1/access_token",
@@ -242,6 +255,20 @@ def _get_feishu_user_access_token(code: str, app_access_token: str) -> dict[str,
     return data
 
 
+def _get_feishu_contact_user(open_id: str, tenant_access_token: str) -> dict[str, Any]:
+    payload = _feishu_get_json(
+        f"/contact/v3/users/{quote(open_id, safe='')}?user_id_type=open_id",
+        tenant_access_token,
+    )
+    if payload.get("code") != 0:
+        raise _feishu_api_error("获取飞书通讯录用户", payload)
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return {}
+    user = data.get("user")
+    return user if isinstance(user, dict) else data
+
+
 def _get_feishu_user_info(user_access_token: str) -> dict[str, Any]:
     payload = _feishu_get_json("/authen/v1/user_info", user_access_token)
     if payload.get("code") != 0:
@@ -252,15 +279,46 @@ def _get_feishu_user_info(user_access_token: str) -> dict[str, Any]:
     return data
 
 
+def _first_nonempty_string(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_feishu_avatar_url(payload: dict[str, Any]) -> str | None:
+    avatar = payload.get("avatar")
+    avatar_fields: dict[str, Any] = avatar if isinstance(avatar, dict) else {}
+    return _first_nonempty_string(
+        payload.get("avatar_url"),
+        payload.get("avatarUrl"),
+        payload.get("avatar_thumb"),
+        payload.get("avatarThumb"),
+        payload.get("avatar_middle"),
+        payload.get("avatarMiddle"),
+        payload.get("avatar_big"),
+        payload.get("avatarBig"),
+        avatar_fields.get("avatar_origin"),
+        avatar_fields.get("avatar_640"),
+        avatar_fields.get("avatar_240"),
+        avatar_fields.get("avatar_72"),
+    )
+
+
 def _feishu_identity_from_payloads(token_data: dict[str, Any], user_info: dict[str, Any]) -> dict[str, str | None]:
     merged = {**token_data, **user_info}
     open_id = str(merged.get("open_id") or merged.get("openId") or "").strip()
     if not open_id:
         raise HTTPException(status_code=502, detail="飞书用户 open_id 为空。")
+    avatar_url = _extract_feishu_avatar_url(merged)
     return {
         "feishu_open_id": open_id,
         "feishu_union_id": str(merged.get("union_id") or merged.get("unionId") or "").strip() or None,
         "email": str(merged.get("email") or merged.get("enterprise_email") or "").strip() or None,
+        "avatar_url": avatar_url,
         "name": str(merged.get("name") or merged.get("en_name") or merged.get("nickname") or open_id).strip(),
     }
 
@@ -367,7 +425,15 @@ def api_auth_feishu_callback(
     app_access_token = _get_feishu_app_access_token()
     token_data = _get_feishu_user_access_token(code, app_access_token)
     user_info = _get_feishu_user_info(str(token_data["access_token"]))
-    user = upsert_feishu_user(**_feishu_identity_from_payloads(token_data, user_info))
+    identity = _feishu_identity_from_payloads(token_data, user_info)
+    if not identity.get("avatar_url"):
+        try:
+            tenant_access_token = _get_feishu_tenant_access_token()
+            contact_user = _get_feishu_contact_user(str(identity["feishu_open_id"]), tenant_access_token)
+            identity["avatar_url"] = _extract_feishu_avatar_url(contact_user)
+        except HTTPException:
+            identity["avatar_url"] = None
+    user = upsert_feishu_user(**identity)
     session_token = create_session(user["id"], action="feishu_login")
 
     redirect = RedirectResponse("/", status_code=302)

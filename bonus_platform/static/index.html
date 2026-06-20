@@ -55,11 +55,6 @@
           </a>
         </nav>
 
-        <p class="nav-group-label admin-label">管理</p>
-        <a class="admin-entry" href="admin.html">
-          <span>后台管理</span>
-          <b>权限配置 · 用户角色</b>
-        </a>
       </aside>
 
       <main class="dashboard-main">
@@ -77,14 +72,21 @@
             <input id="dashboardSearch" type="search" placeholder="搜索模块、批次、员工或异常" />
             <small id="searchHint">可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块</small>
           </label>
-          <div class="dashboard-user">
-            <span>
-              <b>当前用户</b>
-              <strong id="dashboardCurrentUser">Payroll Admin</strong>
-            </span>
-            <em id="dashboardCurrentRole">管理员</em>
-            <a id="dashboardLogout" class="dashboard-logout-button" href="/api/auth/logout?next=login.html%3Fnext%3D%252F">退出登录</a>
-          </div>
+          <details class="dashboard-user" id="dashboardUserMenu">
+            <summary>
+              <img id="dashboardUserAvatar" class="dashboard-user-avatar" src="" alt="" hidden />
+              <span id="dashboardUserFallback" class="dashboard-user-avatar fallback" aria-hidden="true">PA</span>
+              <span class="dashboard-user-meta">
+                <strong id="dashboardCurrentUser">Payroll Admin</strong>
+                <span id="dashboardRoleTags" class="dashboard-role-tags"><em>管理员</em></span>
+              </span>
+              <i aria-hidden="true"></i>
+            </summary>
+            <div class="dashboard-user-menu" role="menu">
+              <a id="dashboardAdminLink" href="admin.html" role="menuitem" hidden>进入后台管理</a>
+              <a id="dashboardLogout" href="/api/auth/logout?next=%2Flogin.html%3Fnext%3D%252F" role="menuitem">退出登录</a>
+            </div>
+          </details>
         </header>
 
         <section class="welcome-panel">
@@ -393,9 +395,36 @@
           return currentUser.roleIds.some(roleId => permissionState.moduleAccess[roleId]?.[moduleId] && permissionState.rolePermissions[roleId]?.enter);
         };
         const currentUserName = document.getElementById('dashboardCurrentUser');
-        const currentUserRole = document.getElementById('dashboardCurrentRole');
+        const currentUserAvatar = document.getElementById('dashboardUserAvatar');
+        const currentUserFallback = document.getElementById('dashboardUserFallback');
+        const roleTags = document.getElementById('dashboardRoleTags');
+        const adminMenuLink = document.getElementById('dashboardAdminLink');
+        const isSystemAdmin = currentUser.roleIds.includes('admin') || roleNames.includes('系统管理员');
         if (currentUserName) currentUserName.textContent = currentUser.name;
-        if (currentUserRole) currentUserRole.textContent = roleNames.includes('系统管理员') ? '系统管理员' : '模块管理员';
+        const initials = (currentUser.name || currentUser.email || 'U').trim().slice(0, 2).toUpperCase();
+        if (currentUserFallback) currentUserFallback.textContent = initials;
+        if (currentUserAvatar && currentUser.avatarUrl) {
+          currentUserAvatar.src = currentUser.avatarUrl;
+          currentUserAvatar.hidden = false;
+          if (currentUserFallback) currentUserFallback.hidden = true;
+        }
+        if (roleTags) {
+          roleTags.innerHTML = '';
+          const visibleRoles = roleNames.length ? roleNames : ['待授权'];
+          visibleRoles.forEach((roleName) => {
+            const tag = document.createElement('em');
+            tag.textContent = roleName;
+            tag.classList.toggle('is-admin', roleName === '系统管理员');
+            roleTags.appendChild(tag);
+          });
+        }
+        if (adminMenuLink) adminMenuLink.hidden = !isSystemAdmin;
+
+        const userMenu = document.getElementById('dashboardUserMenu');
+        document.addEventListener('click', (event) => {
+          if (!userMenu?.open || userMenu.contains(event.target)) return;
+          userMenu.open = false;
+        });
 
         const logoutButton = document.getElementById('dashboardLogout');
         logoutButton?.addEventListener('click', async (event) => {
@@ -444,12 +473,12 @@
           { keys: ['正式', '正式工', 'employee'], moduleId: 'employee', href: 'employee-payroll.html', label: '中国区正式工薪酬核算' },
           { keys: ['外包', '国内', '薪酬', '劳务工'], moduleId: 'domestic', href: 'domestic-labor.html', label: '中国区外包工薪酬核算' },
           { keys: ['海外', '报账', 'pdf', 'invoice'], moduleId: 'overseas', href: 'overseas-labor.html', label: '海外劳务报账核对' },
-          { keys: ['后台', '管理', '权限', 'admin'], href: 'admin.html', label: '后台管理' },
+          { keys: ['后台', '管理', '权限', 'admin'], href: 'admin.html', label: '后台管理', adminOnly: true },
         ];
         search?.addEventListener('input', () => {
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
-          const blocked = match?.moduleId && !canEnterModule(match.moduleId);
+          const blocked = (match?.moduleId && !canEnterModule(match.moduleId)) || (match?.adminOnly && !isSystemAdmin);
           hint.textContent = match ? (blocked ? `无权限进入：${match.label}` : `按 Enter 进入：${match.label}`) : '可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块';
         });
         search?.addEventListener('keydown', (event) => {
@@ -457,7 +486,7 @@
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
           if (!match) return;
-          if (match.moduleId && !canEnterModule(match.moduleId)) {
+          if ((match.moduleId && !canEnterModule(match.moduleId)) || (match.adminOnly && !isSystemAdmin)) {
             hint.textContent = `当前用户无权限或模块未开放：${match.label}`;
             return;
           }

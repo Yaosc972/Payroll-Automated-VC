@@ -182,11 +182,13 @@ def test_upsert_feishu_user_creates_pending_user_without_roles(tmp_path, monkeyp
         feishu_open_id="ou_test_user",
         feishu_union_id="on_test_user",
         email="feishu.user@example.com",
+        avatar_url="https://example.com/avatar.png",
         name="Feishu User",
     )
 
     assert user["id"] == "feishu_ou_test_user"
     assert user["name"] == "Feishu User"
+    assert user["avatarUrl"] == "https://example.com/avatar.png"
     assert user["status"] == "pending"
     assert user["roleIds"] == []
 
@@ -227,6 +229,7 @@ def test_feishu_callback_creates_session_for_pending_user(tmp_path, monkeypatch)
             "open_id": "ou_callback_user",
             "union_id": "on_callback_user",
             "email": "callback.user@example.com",
+            "avatar_url": "https://example.com/callback.png",
             "name": "Callback User",
         },
     )
@@ -245,8 +248,57 @@ def test_feishu_callback_creates_session_for_pending_user(tmp_path, monkeypatch)
     assert "sigma_session" in callback.headers.get("set-cookie", "")
     assert me.status_code == 200
     assert me.json()["user"]["id"] == "feishu_ou_callback_user"
+    assert me.json()["user"]["avatarUrl"] == "https://example.com/callback.png"
     assert me.json()["user"]["status"] == "pending"
     assert me.json()["roles"] == []
+
+
+def test_feishu_callback_uses_contact_avatar_when_user_info_has_no_avatar(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.setitem(app_module.AUTH_CONFIG, "feishu_app_id", "cli_test")
+    monkeypatch.setitem(app_module.AUTH_CONFIG, "feishu_app_secret", "secret_test")
+    monkeypatch.setitem(app_module.AUTH_CONFIG, "feishu_redirect_uri", "https://example.com/api/auth/feishu/callback")
+    monkeypatch.setattr(app_module, "_get_feishu_app_access_token", lambda: "app-token")
+    monkeypatch.setattr(app_module, "_get_feishu_tenant_access_token", lambda: "tenant-token")
+    monkeypatch.setattr(
+        app_module,
+        "_get_feishu_user_access_token",
+        lambda code, app_access_token: {"access_token": "user-token", "open_id": "ou_contact_avatar_user"},
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_get_feishu_user_info",
+        lambda user_access_token: {
+            "open_id": "ou_contact_avatar_user",
+            "union_id": "on_contact_avatar_user",
+            "email": "contact.avatar@example.com",
+            "name": "Contact Avatar",
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_get_feishu_contact_user",
+        lambda open_id, tenant_access_token: {
+            "avatar": {
+                "avatar_72": "https://example.com/avatar-72.png",
+                "avatar_240": "https://example.com/avatar-240.png",
+            }
+        },
+    )
+
+    with TestClient(app) as client:
+        client.cookies.set("sigma_feishu_state", "state-ok")
+        callback = client.get(
+            "/api/auth/feishu/callback",
+            params={"code": "login-code", "state": "state-ok"},
+            follow_redirects=False,
+        )
+        me = client.get("/api/me")
+
+    assert callback.status_code == 302
+    assert me.status_code == 200
+    assert me.json()["user"]["avatarUrl"] == "https://example.com/avatar-240.png"
 
 
 def test_admin_store_accepts_sqlite_database_url(tmp_path, monkeypatch):
