@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from html import escape
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -53,6 +55,134 @@ def build_labor_report(
     _write_mapping(workbook, mapping)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     workbook.save(output_path)
+
+
+def build_labor_business_html_report(
+    output_path: Path,
+    comparison: Dict[str, Any],
+    *,
+    supplier_name: str,
+    period_start: str,
+    period_end: str,
+    invoice_scope: str = "",
+    warehouse_comparison: Dict[str, Any] | None = None,
+) -> None:
+    summary = comparison.get("summary", {}) or {}
+    warehouse_summary = (warehouse_comparison or {}).get("summary", {}) or {}
+    batch_summary = warehouse_summary or summary
+    rows = comparison.get("rows", []) or []
+    conclusion = _business_conclusion(summary, rows)
+    warehouse_needs_review = bool(
+        warehouse_summary
+        and (
+            warehouse_summary.get("totalPassed") is False
+            or _num(warehouse_summary.get("exceptionCount")) > 0
+            or _num(warehouse_summary.get("allocationIssueCount")) > 0
+        )
+    )
+    if warehouse_needs_review and conclusion == "通过":
+        conclusion = "需要复核"
+    amount_delta = _num(batch_summary.get("amountDeltaTotal"))
+    pdf_total = _num(batch_summary.get("pdfAmountTotal"))
+    excel_total = _num(batch_summary.get("excelAmountTotal"))
+    detail_pdf_total = _num(summary.get("pdfAmountTotal"))
+    detail_excel_total = _num(summary.get("excelAmountTotal"))
+    pdf_employee_count = int(_num(summary.get("pdfEmployeeCount")))
+    excel_employee_count = int(_num(summary.get("excelEmployeeCount")))
+    matched_count = int(_num(summary.get("passedCount")))
+    diff_count = max(
+        int(_num(summary.get("amountDiffCount"))),
+        sum(1 for row in rows if _business_row_status(row) != "一致"),
+    )
+    diff_warehouses = [str(item) for item in (warehouse_summary.get("diffWarehouses") or []) if str(item)]
+    warehouse_label = f"仓库 {'、'.join(diff_warehouses)}" if diff_warehouses else "需要复核的仓库"
+    detail_scope_title = "需复核员工明细" if warehouse_needs_review else "员工对账明细"
+    detail_scope_note = (
+        f"只展示需要复核的仓库员工明细，不代表账单只有这些员工。当前范围：{warehouse_label}，账单金额 {_money(detail_excel_total)}。"
+        if warehouse_needs_review
+        else "员工明细用于确认每位员工的发票金额和账单金额是否一致。"
+    )
+
+    row_html = "\n".join(_business_detail_row(index, row) for index, row in enumerate(rows, start=1))
+    if not row_html:
+        row_html = '<tr><td colspan="11" class="empty">暂无可展示明细。</td></tr>'
+
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{escape(supplier_name)} 账单 vs 发票核对报告</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #f5f6fa; color: #222; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; }}
+    .container {{ max-width: 1280px; margin: 0 auto; padding: 24px 16px; }}
+    h1 {{ margin: 0 0 4px; font-size: 22px; }}
+    .subtitle {{ color: #666; margin-bottom: 20px; }}
+    .cards {{ display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }}
+    .card {{ min-width: 170px; flex: 1; background: #fff; border-radius: 10px; border-left: 4px solid #2563eb; padding: 16px 18px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }}
+    .card.warn {{ border-left-color: #dc2626; }}
+    .card.ok {{ border-left-color: #16a34a; }}
+    .lbl {{ color: #777; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; }}
+    .val {{ font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }}
+    .sub {{ color: #888; font-size: 11px; margin-top: 3px; }}
+    .banner {{ margin: 0 0 16px; border-radius: 8px; padding: 12px 16px; font-weight: 650; background: {_conclusion_bg(conclusion)}; border: 1px solid {_conclusion_border(conclusion)}; color: {_conclusion_color(conclusion)}; }}
+    .section {{ background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.08); overflow: hidden; }}
+    .section-header {{ padding: 14px 18px; border-bottom: 1px solid #f0f0f0; }}
+    .section-header h2 {{ margin: 0; font-size: 15px; }}
+    table {{ width: 100%; border-collapse: collapse; }}
+    th {{ background: #f8f9fb; color: #666; padding: 9px 12px; text-align: left; white-space: nowrap; font-size: 11px; }}
+    td {{ padding: 8px 12px; border-bottom: 1px solid #f5f5f5; vertical-align: top; }}
+    .num {{ font-variant-numeric: tabular-nums; white-space: nowrap; }}
+    .tag {{ display: inline-block; border-radius: 10px; padding: 1px 7px; font-size: 11px; font-weight: 600; }}
+    .tag-ok {{ background: #dcfce7; color: #166534; }}
+    .tag-warn {{ background: #fef3c7; color: #78350f; }}
+    .tag-diff {{ background: #fee2e2; color: #991b1b; }}
+    .empty {{ color: #777; text-align: center; padding: 24px; }}
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>{escape(supplier_name)} — 账单 vs 发票核对报告</h1>
+    <div class="subtitle">供应商：{escape(supplier_name)} &nbsp;|&nbsp; 核算周期：{escape(period_start)} ~ {escape(period_end)} &nbsp;|&nbsp; 发票编号或文件范围：{escape(invoice_scope or "未提供")}</div>
+    <div class="cards">
+      <div class="card {'warn' if conclusion != '通过' else 'ok'}"><div class="lbl">核对结论</div><div class="val">{escape(conclusion)}</div><div class="sub">业务结论优先展示</div></div>
+      <div class="card"><div class="lbl">整批 PDF 发票总金额</div><div class="val">{_money(pdf_total)}</div><div class="sub">来自本次上传的全部发票</div></div>
+      <div class="card"><div class="lbl">整批账单总金额</div><div class="val">{_money(excel_total)}</div><div class="sub">来自本次上传的全部账单</div></div>
+      <div class="card {'warn' if abs(amount_delta) > 0.1 else 'ok'}"><div class="lbl">总差额</div><div class="val">{_signed_money(amount_delta)}</div><div class="sub">PDF - 账单</div></div>
+      <div class="card ok"><div class="lbl">一致员工数</div><div class="val">{matched_count}</div><div class="sub">自动核对一致</div></div>
+      <div class="card {'warn' if diff_count else 'ok'}"><div class="lbl">有差异员工数</div><div class="val">{diff_count}</div><div class="sub">需查看明细说明</div></div>
+    </div>
+    <div class="banner">{escape(_business_conclusion_message(conclusion, amount_delta, matched_count, diff_count, detail_scope_note))}</div>
+    <section class="section">
+      <div class="section-header"><h2>{escape(detail_scope_title)}</h2><div class="sub">{escape(detail_scope_note)}</div></div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>发票编号</th>
+              <th>员工姓名（发票）</th>
+              <th>账单姓名</th>
+              <th>REG 工时</th>
+              <th>OT 工时</th>
+              <th>发票金额</th>
+              <th>账单金额</th>
+              <th>差额</th>
+              <th>状态</th>
+              <th>必要说明</th>
+            </tr>
+          </thead>
+          <tbody>{row_html}</tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
+"""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(html, encoding="utf-8")
 
 
 def build_labor_projection_report(output_path: Path, preview: Dict[str, Any]) -> None:
@@ -827,6 +957,156 @@ def _write_candidate_matches(workbook: Workbook, rows: List[Dict[str, Any]]) -> 
 
 def _filter(rows: List[Dict[str, Any]], status: str) -> List[Dict[str, Any]]:
     return [row for row in rows if row.get("matchStatus") == status]
+
+
+def _business_detail_row(index: int, row: Dict[str, Any]) -> str:
+    pdf_name, excel_name = _split_business_names(row.get("employeeName", ""))
+    status = _business_row_status(row)
+    status_class = "tag-ok" if status == "一致" else "tag-diff" if status == "有差异" else "tag-warn"
+    invoice = _invoice_label(row.get("sourceRefs", ""))
+    return (
+        f"<tr>"
+        f'<td class="num">{index}</td>'
+        f"<td>{escape(invoice)}</td>"
+        f"<td>{escape(pdf_name)}</td>"
+        f"<td>{escape(excel_name)}</td>"
+        f'<td class="num">{_hours(_num(row.get("pdfHoursTotal")))} / {_hours(_num(row.get("excelHoursTotal")))}</td>'
+        f'<td class="num">-</td>'
+        f'<td class="num">{_money(_num(row.get("pdfAmountTotal")))}</td>'
+        f'<td class="num">{_money(_num(row.get("excelAmountTotal")))}</td>'
+        f'<td class="num">{_signed_money(_num(row.get("amountDelta")))}</td>'
+        f'<td><span class="tag {status_class}">{escape(status)}</span></td>'
+        f"<td>{escape(_business_note(row))}</td>"
+        f"</tr>"
+    )
+
+
+def _business_conclusion(summary: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
+    if (
+        summary.get("systemIncomplete")
+        or summary.get("extractionFailed")
+        or summary.get("failed")
+        or summary.get("status") in {"抽取失败", "解析失败", "核对失败"}
+    ):
+        return "系统未能完成核对"
+    if not rows and (
+        _num(summary.get("pdfEmployeeCount"))
+        or _num(summary.get("excelEmployeeCount"))
+        or _num(summary.get("pdfAmountTotal"))
+        or _num(summary.get("excelAmountTotal"))
+    ):
+        return "系统未能完成核对"
+    if any(_business_row_status(row) == "需要业务确认" for row in rows):
+        return "需要业务确认"
+    if abs(_num(summary.get("amountDeltaTotal"))) > 0.1 or _num(summary.get("amountDiffCount")) > 0:
+        return "有差异"
+    return "通过"
+
+
+def _business_conclusion_message(
+    conclusion: str,
+    amount_delta: float,
+    matched_count: int,
+    diff_count: int,
+    scope_note: str = "",
+) -> str:
+    if conclusion == "通过":
+        return f"核对通过：{matched_count} 名员工金额一致，总差额 {_signed_money(amount_delta)}。"
+    if conclusion == "有差异":
+        return f"核对存在差异：{diff_count} 名员工需要查看明细，总差额 {_signed_money(amount_delta)}。"
+    if conclusion == "需要复核":
+        return f"整批金额接近一致，但仍有部分仓库需要确认。{scope_note}"
+    if conclusion == "需要业务确认":
+        return f"需要业务确认：{diff_count} 名员工或账单记录存在无法自动确认的情况。"
+    return "系统未能完成核对：请人工查看原发票和账单后重新生成报告。"
+
+
+def _business_row_status(row: Dict[str, Any]) -> str:
+    status = str(row.get("matchStatus") or "")
+    flags = row.get("riskFlags") if isinstance(row.get("riskFlags"), list) else []
+    if status == "通过" and abs(_num(row.get("amountDelta"))) <= 0.1:
+        return "一致"
+    if status in {"疑似姓名匹配", "低置信度抽取"} or any("合并" in str(flag) or "复核" in str(flag) for flag in flags):
+        return "需要业务确认"
+    return "有差异"
+
+
+def _business_note(row: Dict[str, Any]) -> str:
+    status = str(row.get("matchStatus") or "")
+    flags = row.get("riskFlags") if isinstance(row.get("riskFlags"), list) else []
+    amount_delta = abs(_num(row.get("amountDelta")))
+    hours_delta = abs(_num(row.get("hoursDelta")))
+    notes: List[str] = []
+    if any("合并" in str(flag) for flag in flags):
+        notes.append("同一员工可能存在多行账单，需要确认是否应合并")
+    if status == "疑似姓名匹配":
+        notes.append("需要确认该员工是否为同一人")
+    if notes:
+        return "；".join(notes)
+    if status == "低置信度抽取":
+        return "系统未能识别该 PDF 明细，请人工查看原发票"
+    if status == "PDF有Excel无":
+        return "发票有账单无，需要确认该发票是否属于本期"
+    if status == "Excel有PDF无":
+        return "账单有发票无，需要确认该账单是否属于本期"
+    if hours_delta <= 0.01 and amount_delta > 0.1:
+        return "工时一致但金额不一致，需要确认费率或金额口径"
+    if hours_delta > 0.01 and amount_delta <= 0.1:
+        return "金额一致但工时拆分不同，需要确认 REG/OT 拆分"
+    if amount_delta <= 0.1:
+        return "小额四舍五入差异，可按业务容差复核"
+    return "金额或工时存在差异，需要业务确认"
+
+
+def _split_business_names(value: Any) -> tuple[str, str]:
+    text = str(value or "").strip()
+    if "⇄" in text:
+        left, right = text.split("⇄", 1)
+        return left.strip() or "-", right.strip() or "-"
+    return text or "-", text or "-"
+
+
+def _invoice_label(source_refs: Any) -> str:
+    text = str(source_refs or "")
+    match = re.search(r"Invoice[-_\s]?(\d+)", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"(\d{5,})", text)
+    if match:
+        return match.group(1)
+    return "-"
+
+
+def _num(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def _signed_money(value: float) -> str:
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}${abs(value):,.2f}"
+
+
+def _hours(value: float) -> str:
+    return f"{value:,.2f}h"
+
+
+def _conclusion_bg(conclusion: str) -> str:
+    return "#f0fdf4" if conclusion == "通过" else "#fffbeb" if conclusion == "需要业务确认" else "#fff8f8"
+
+
+def _conclusion_border(conclusion: str) -> str:
+    return "#86efac" if conclusion == "通过" else "#fcd34d" if conclusion == "需要业务确认" else "#fecaca"
+
+
+def _conclusion_color(conclusion: str) -> str:
+    return "#166534" if conclusion == "通过" else "#92400e" if conclusion == "需要业务确认" else "#991b1b"
 
 
 def _format(sheet) -> None:

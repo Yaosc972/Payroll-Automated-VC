@@ -16,6 +16,7 @@ from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as e
 from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
+from bonus_platform.engine.labor import runs as labor_runs
 from bonus_platform.engine.labor.governance import audit_ai_page_cache_candidates, build_ai_cache_reconciliation_preview, build_reocr_candidate_plan, build_rule_change_candidate, confirm_rule_candidate, replay_reocr_candidate_result, rollback_rule_version, summarize_rule_auto_replay, summarize_rule_replay
 from bonus_platform.engine.labor.materials import build_material_dry_run, build_material_index, build_material_replay_plan
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
@@ -32,7 +33,7 @@ from bonus_platform.engine.labor.profiles import (
     DEFAULT_PROFILE,
 )
 from bonus_platform.app import _non_payable_pdf_names
-from bonus_platform.engine.labor.report import build_labor_report
+from bonus_platform.engine.labor.report import build_labor_business_html_report, build_labor_report
 from bonus_platform.engine.labor.workbook import parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 
 
@@ -46,6 +47,31 @@ def _workbook_bytes() -> bytes:
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def test_list_labor_metadata_supports_recent_limit(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "labor_runs"
+    runs_dir.mkdir()
+    for idx in range(3):
+        run_dir = runs_dir / f"labor_{idx}"
+        run_dir.mkdir()
+        metadata_path = run_dir / "metadata.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "id": f"labor_{idx}",
+                    "createdAt": f"2026-06-20T10:0{idx}:00",
+                    "updatedAt": f"2026-06-20T10:0{idx}:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+
+    rows = labor_runs.list_labor_metadata(limit=2)
+
+    assert [row["id"] for row in rows] == ["labor_2", "labor_1"]
 
 
 def _workbook_with_tax_columns_bytes() -> bytes:
@@ -3239,6 +3265,203 @@ def test_build_labor_report_can_include_ai_cache_audit(tmp_path):
     assert any(row[:2] == ("处理决策", "candidate_only") for row in rows)
     assert any(row[:2] == ("需要人工确认", "是") for row in rows)
     assert any(row[0] == "elog1-1_20260520204104.pdf" and row[5] == "candidate_only" for row in rows)
+
+
+def test_build_labor_business_html_report_uses_business_language_without_internal_terms(tmp_path):
+    output = tmp_path / "business-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 2,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 1333.33,
+            "excelAmountTotal": 1333.36,
+            "amountDeltaTotal": -0.03,
+            "passedCount": 1,
+            "amountDiffCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Aguilar, Hortensia ⇄ Hortensia Aguilar",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 41.4,
+                "excelHoursTotal": 41.4,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 950.6,
+                "excelAmountTotal": 950.61,
+                "amountDelta": -0.01,
+                "sourceRefs": "Invoice-5058871.pdf p1; 账单!3",
+            },
+            {
+                "employeeName": "Andrew Torres",
+                "matchStatus": "疑似姓名匹配",
+                "riskFlags": ["账单多行合并"],
+                "pdfHoursTotal": 20.42,
+                "excelHoursTotal": 20.42,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 382.73,
+                "excelAmountTotal": 382.75,
+                "amountDelta": -0.02,
+                "sourceRefs": "Invoice-5058877.pdf p2; 账单!10; 账单!11",
+            },
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="5058871-5058880",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "Workforce Priority" in html
+    assert "核算周期：2026-05-11 ~ 2026-05-17" in html
+    assert "发票编号或文件范围：5058871-5058880" in html
+    assert "核对结论" in html
+    assert "有差异" in html
+    assert "PDF 发票总金额" in html
+    assert "$1,333.33" in html
+    assert "账单总金额" in html
+    assert "$1,333.36" in html
+    assert "一致员工数" in html
+    assert "差异员工数" in html
+    assert "员工姓名（发票）" in html
+    assert "账单姓名" in html
+    assert "REG 工时" in html
+    assert "OT 工时" in html
+    assert "必要说明" in html
+    assert "需要确认该员工是否为同一人" in html
+    assert "同一员工可能存在多行账单，需要确认是否应合并" in html
+    for internal_term in ["AI 候选", "规则治理", "profile", "re-OCR", "回放", "低置信度算法", "Blob", "线程"]:
+        assert internal_term not in html
+
+
+def test_build_labor_business_html_report_does_not_pass_when_extraction_failed(tmp_path):
+    output = tmp_path / "failed-business-report.html"
+    comparison = {
+        "summary": {
+            "extractionFailed": True,
+            "failureReason": "PDF 明细未解析完成",
+            "pdfEmployeeCount": 0,
+            "excelEmployeeCount": 0,
+            "pdfAmountTotal": 0,
+            "excelAmountTotal": 0,
+            "amountDeltaTotal": 0,
+            "passedCount": 0,
+            "amountDiffCount": 0,
+        },
+        "rows": [],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "系统未能完成核对" in html
+    assert "核对通过" not in html
+    assert "请人工查看原发票和账单后重新生成报告" in html
+
+
+def test_build_labor_business_html_report_does_not_pass_when_detail_rows_are_missing(tmp_path):
+    output = tmp_path / "missing-detail-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.83,
+            "amountDeltaTotal": 0,
+            "passedCount": 0,
+            "amountDiffCount": 0,
+        },
+        "rows": [],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "系统未能完成核对" in html
+    assert "核对通过" not in html
+    assert "请人工查看原发票和账单后重新生成报告" in html
+
+
+def test_build_labor_business_html_report_separates_full_batch_from_review_scope(tmp_path):
+    output = tmp_path / "review-scope-business-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 22002.58,
+            "excelAmountTotal": 22002.59,
+            "amountDeltaTotal": -0.01,
+            "passedCount": 18,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Employee A ⇄ Employee A",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "warehouse 25",
+            }
+        ],
+    }
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.93,
+            "amountDeltaTotal": -0.10,
+            "totalPassed": False,
+            "exceptionCount": 2,
+            "diffWarehouses": ["25", "28"],
+            "warehouseCount": 6,
+        }
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="6 张发票",
+        warehouse_comparison=warehouse_comparison,
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "整批 PDF 发票总金额" in html
+    assert "$144,714.83" in html
+    assert "整批账单总金额" in html
+    assert "$144,714.93" in html
+    assert "需要复核" in html
+    assert "只展示需要复核的仓库员工明细，不代表账单只有这些员工" in html
+    assert "仓库 25、28" in html
+    assert "$22,002.59" in html
+    assert "全员对账明细" not in html
+    for internal_term in ["Stage 2", "下钻", "diffWarehouses", "warehouseComparison", "核对信号存在冲突"]:
+        assert internal_term not in html
 
 
 # ---------------------------------------------------------------------------
