@@ -59,8 +59,13 @@ def test_run_calculation_creates_queryable_batch_with_rule_info():
     assert data["id"]
     assert data["month"] == 202510
     assert data["status"] in {"已初算", "待确认"}
+    assert data["displayName"].startswith("2025年10月 · 第")
+    assert data["shortCode"].startswith("202510-第")
     assert data["downloadUrl"].endswith(".xlsx")
     assert data["files"]["initialResult"]["downloadUrl"] == data["downloadUrl"]
+    assert data["files"]["initialResult"]["filename"].startswith("招聘奖金核算_2025年10月_第")
+    assert "_初算结果_" in data["files"]["initialResult"]["filename"]
+    assert "导入模板" not in data["files"]["initialResult"]["filename"]
     assert data["ruleInfo"]["workbook"].endswith("招聘奖金核算_规则库.xlsx")
 
     detail_response = client.get(f"/api/runs/{data['id']}")
@@ -131,7 +136,11 @@ def test_run_finalize_uses_saved_initial_result_and_updates_batch():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "已最终确认"
+    assert data["displayName"].endswith("已最终确认")
     assert data["finalDownloadUrl"].endswith(".xlsx")
+    assert data["files"]["finalResult"]["filename"].startswith("招聘奖金核算_2025年10月_第")
+    assert "_最终结果_" in data["files"]["finalResult"]["filename"]
+    assert "导入模板" not in data["files"]["finalResult"]["filename"]
     assert Path(data["files"]["finalResult"]["path"]).exists()
     workbook = load_workbook(Path(data["files"]["finalResult"]["path"]), read_only=True)
     assert "待确认_发放判断" not in workbook.sheetnames

@@ -74,6 +74,28 @@ def test_command_center_table_replaces_limited_preview_tabs():
     assert "previewTable" not in html
 
 
+def test_recruitment_page_removes_difference_review_workflow():
+    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    app_js = APP_JS.read_text(encoding="utf-8")
+
+    for removed_copy in [
+        "差异复核",
+        "上传线下表做差异检验",
+        "生成差异报告",
+        "选择线下/复核 Excel",
+        "只看差异",
+        "差异概览",
+    ]:
+        assert removed_copy not in html
+        assert removed_copy not in app_js
+
+    assert 'data-step="compare"' not in html
+    assert "offlineInput" not in app_js
+    assert "compareRun" not in app_js
+    assert "diffSummary" not in app_js
+    assert "原始导入、初算结果、待确认表和最终结果" in html
+
+
 def test_command_center_uses_glass_toast_skeleton_and_collapsible_panels():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
@@ -101,9 +123,10 @@ def test_command_center_uses_next_gen_minimal_glass_language():
     assert ".app-header" in css
     assert "rgba(255, 255, 255, 0.64)" in css
     assert "inner-edge-glow" in css
-    assert ".run-status-orb" in css
-    assert "linear-gradient(135deg, var(--neon-cyan), var(--neon-violet))" in css
-    assert "run-status-orb" in app_js
+    assert ".run-status-orb" not in css
+    assert "run-status-orb" not in app_js
+    assert "runsCollapsed: true" in app_js
+    assert "syncRunsPanelState" in app_js
 
 
 def test_command_center_uses_premium_typography_system():
@@ -159,6 +182,33 @@ def test_recruitment_page_keeps_command_center_and_home_link():
     assert "app.js" in html
     assert 'id="commandTable"' in html
     assert "招聘奖金核算" in html
+
+
+def test_recruitment_header_has_user_menu():
+    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert 'class="workbench-user-menu"' in html
+    assert "姚硕灿" in html
+    assert "系统管理员" in html
+    assert "进入后台管理" in html
+    assert "退出登录" in html
+    assert ".workbench-user-menu" in css
+    assert ".user-menu-panel" in css
+    assert ".header-copy::before" in css
+    assert "background-size: 1px 10px" in css
+
+
+def test_recruitment_template_download_lives_in_step_one_card():
+    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    header_actions = html.split('<div class="header-actions">', 1)[1].split("</div>", 1)[0]
+    assert "下载导入模板" not in header_actions
+    assert "Step 1-2" in html
+    assert 'class="template-inline-button"' in html
+    assert 'href="/api/template?v=20260608"' in html
+    assert ".template-inline-button" in css
 
 
 def test_labor_page_redirects_to_domestic_labor():

@@ -404,10 +404,11 @@ async def calculate_run(
         result = calculate(rows, rules)
         run_id = new_run_id(result.month)
         run_dir = create_run_dir(run_id)
-        input_path = run_dir / _safe_output_name(file.filename, "原始导入")
+        run_sequence = _next_recruitment_run_sequence(result.month)
+        input_path = run_dir / _recruitment_output_name(result.month, run_sequence, "原始导入")
         shutil.move(str(temp_upload_path), input_path)
-        output_path = run_dir / _safe_output_name(file.filename, "初算结果")
-        pending_path = run_dir / _safe_output_name(file.filename, "待确认表")
+        output_path = run_dir / _recruitment_output_name(result.month, run_sequence, "初算结果")
+        pending_path = run_dir / _recruitment_output_name(result.month, run_sequence, "待确认表")
         build_result_workbook(result, output_path)
         if result.pending_confirmations:
             build_pending_workbook(result, pending_path)
@@ -433,6 +434,9 @@ async def calculate_run(
         {
             "id": run_id,
             "month": result.month,
+            "runSequence": run_sequence,
+            "displayName": _recruitment_run_display_name(result.month, run_sequence, status),
+            "shortCode": _recruitment_run_short_code(result.month, run_sequence),
             "status": status,
             "sourceFilename": file.filename,
             "files": files,
@@ -5181,8 +5185,10 @@ async def finalize_run(
     if not initial_path.exists():
         raise HTTPException(status_code=404, detail="批次初算结果不存在，无法生成最终结果。")
 
-    confirmation_path = await _save_upload_to(confirmation_file, run_dir / _safe_output_name(confirmation_file.filename, "确认结果"))
-    final_path = run_dir / _safe_output_name(metadata.get("sourceFilename") or "初算结果.xlsx", "最终结果")
+    month = _coerce_month(metadata.get("month")) or 0
+    run_sequence = int(metadata.get("runSequence") or 1)
+    confirmation_path = await _save_upload_to(confirmation_file, run_dir / _recruitment_output_name(month, run_sequence, "确认结果"))
+    final_path = run_dir / _recruitment_output_name(month, run_sequence, "最终结果")
     try:
         build_final_workbook(initial_path, confirmation_path, final_path)
     except ValueError as exc:
@@ -5200,6 +5206,7 @@ async def finalize_run(
         run_id,
         {
             "status": "已最终确认",
+            "displayName": _recruitment_run_display_name(final_payload["month"], run_sequence, "已最终确认"),
             "files": files,
             "finalDownloadUrl": files["finalResult"]["downloadUrl"],
             **final_payload,
@@ -5225,8 +5232,10 @@ async def compare_run(
     if not source_record:
         raise HTTPException(status_code=404, detail="批次结果不存在，无法生成差异报告。")
 
-    offline_path = await _save_upload_to(offline_file, run_dir / _safe_output_name(offline_file.filename, "线下复核表"))
-    diff_path = run_dir / _safe_output_name(metadata.get("sourceFilename") or "核算结果.xlsx", "差异报告")
+    month = _coerce_month(metadata.get("month")) or 0
+    run_sequence = int(metadata.get("runSequence") or 1)
+    offline_path = await _save_upload_to(offline_file, run_dir / _recruitment_output_name(month, run_sequence, "线下复核表"))
+    diff_path = run_dir / _recruitment_output_name(month, run_sequence, "差异报告")
     try:
         metrics = build_difference_report(Path(source_record["path"]), offline_path, diff_path)
         merge_diff_rows(run_dir, metrics)
@@ -5240,6 +5249,7 @@ async def compare_run(
         run_id,
         {
             "status": "已生成差异报告",
+            "displayName": _recruitment_run_display_name(month, run_sequence, "已生成差异报告"),
             "files": files,
             "diffMetrics": metrics,
             "diffDownloadUrl": files["diffReport"]["downloadUrl"],
@@ -5390,6 +5400,49 @@ def _safe_output_name(original_name: str, suffix: str) -> str:
     stem = "".join(char if char.isalnum() or char in "_-" else "_" for char in stem).strip("_") or "workbook"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     return f"{stem}_{suffix}_{timestamp}.xlsx"
+
+
+def _next_recruitment_run_sequence(month: int) -> int:
+    same_month = [row for row in list_run_metadata() if _coerce_month(row.get("month")) == month]
+    explicit_sequences = [
+        int(row.get("runSequence"))
+        for row in same_month
+        if str(row.get("runSequence") or "").isdigit()
+    ]
+    if explicit_sequences:
+        return max(explicit_sequences) + 1
+    return len(same_month) + 1
+
+
+def _recruitment_output_name(month: int, run_sequence: int, suffix: str) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    month_label = _recruitment_month_label(month, compact=False)
+    sequence_label = f"第{max(int(run_sequence or 1), 1)}次"
+    safe_suffix = "".join(char if char.isalnum() or char in "_-" else "_" for char in suffix).strip("_") or "结果"
+    return f"招聘奖金核算_{month_label}_{sequence_label}_{safe_suffix}_{timestamp}.xlsx"
+
+
+def _recruitment_run_display_name(month: int, run_sequence: int, status: str = "") -> str:
+    parts = [
+        _recruitment_month_label(month, compact=False),
+        f"第{max(int(run_sequence or 1), 1)}次核算",
+    ]
+    if status:
+        parts.append(str(status))
+    return " · ".join(parts)
+
+
+def _recruitment_run_short_code(month: int, run_sequence: int) -> str:
+    return f"{_recruitment_month_label(month, compact=True)}-第{max(int(run_sequence or 1), 1)}次"
+
+
+def _recruitment_month_label(month: int, *, compact: bool) -> str:
+    month_int = _coerce_month(month)
+    if not month_int:
+        return "未知月份"
+    year = month_int // 100
+    month_no = month_int % 100
+    return f"{year}{month_no:02d}" if compact else f"{year}年{month_no:02d}月"
 
 
 def _calculation_payload(result) -> dict:
