@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from openpyxl import Workbook, load_workbook
+
 from .materials import build_material_index, build_material_replay_plan
 
 
@@ -37,6 +39,12 @@ EXPECTED_REVIEW_STATUSES = {
     "approved",
     "rejected",
     "unknown",
+}
+EMPLOYEE_DETAIL_INCOMPLETE_CODES = {
+    "employee_detail_incomplete",
+    "incomplete_employee_detail",
+    "pdf_detail_incomplete",
+    "invoice_detail_incomplete",
 }
 
 
@@ -419,9 +427,11 @@ def build_golden_review_handoff(
     )
     guidance = _expected_metric_guidance()
     template_path = destination / "business_review_template.json"
+    workbook_path = destination / "business_review_template.xlsx"
     readme_path = destination / "BUSINESS_REVIEW_README.md"
     summary_path = destination / "handoff_summary.json"
     template_path.write_text(json.dumps(template, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_business_review_workbook(workbook_path, template)
     readme_path.write_text(_business_review_readme(template, guidance), encoding="utf-8")
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -432,6 +442,7 @@ def build_golden_review_handoff(
         "metric_guidance": guidance,
         "files": {
             "review_template": template_path.name,
+            "review_workbook": workbook_path.name,
             "readme": readme_path.name,
             "summary": summary_path.name,
         },
@@ -459,11 +470,11 @@ def scan_golden_handoff_privacy(
     root_text = str(Path(materials_root).expanduser()) if materials_root else ""
     explicit_terms = [str(term) for term in (forbidden_terms or []) if str(term)]
     for path in sorted(item for item in directory.rglob("*") if item.is_file()):
-        if path.suffix.lower() not in {".json", ".md", ".txt"}:
+        if path.suffix.lower() not in {".json", ".md", ".txt", ".xlsx", ".xlsm"}:
             continue
         relative_path = str(path.relative_to(directory))
         scanned_files.append(relative_path)
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = _handoff_file_text(path)
         if root_text and root_text in text:
             issues.append({"code": "materials_root_path_leak", "file": relative_path})
         for term in explicit_terms:
@@ -474,6 +485,18 @@ def scan_golden_handoff_privacy(
     return _privacy_scan_result(directory, scanned_files, issues)
 
 
+def _handoff_file_text(path: Path) -> str:
+    if path.suffix.lower() in {".xlsx", ".xlsm"}:
+        workbook = load_workbook(path, data_only=True)
+        values: list[str] = []
+        for sheet in workbook.worksheets:
+            values.append(sheet.title)
+            for row in sheet.iter_rows(values_only=True):
+                values.extend(str(value) for value in row if value not in (None, ""))
+        return "\n".join(values)
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def validate_golden_review_template(
     review_template: str | Path | dict[str, Any],
     *,
@@ -482,7 +505,7 @@ def validate_golden_review_template(
     supplier_ref: str | None = None,
     review_batch_ref: str | None = None,
 ) -> dict[str, Any]:
-    template = _load_json(Path(review_template).expanduser()) if not isinstance(review_template, dict) else review_template
+    template = _load_review_template(review_template)
     top_level_errors: list[dict[str, Any]] = []
     requested_batch_key = str(batch_key or "").strip()
     requested_supplier_ref = str(supplier_ref or "").strip()
@@ -559,7 +582,7 @@ def apply_golden_review_template(
     source_dir = Path(manifest_dir).expanduser()
     destination = Path(output_dir).expanduser()
     destination.mkdir(parents=True, exist_ok=True)
-    template = _load_json(Path(review_template).expanduser()) if not isinstance(review_template, dict) else review_template
+    template = _load_review_template(review_template)
     requested_batch_key = str(batch_key or "").strip()
     requested_supplier_ref = str(supplier_ref or "").strip()
     requested_review_batch_ref = str(review_batch_ref or "").strip()
@@ -614,6 +637,7 @@ def apply_golden_review_template(
     updated: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
+    changed_batch_count = 0
 
     for manifest_path in sorted(source_dir.glob("*_manifest.json")):
         manifest = _load_json(manifest_path)
@@ -645,6 +669,7 @@ def apply_golden_review_template(
                 continue
             _apply_review_item_to_batch(batch, review)
             changed = True
+            changed_batch_count += 1
         if requested_batch_key and not seen_requested_batch:
             continue
         if requested_supplier_ref and not seen_requested_supplier_ref:
@@ -687,6 +712,8 @@ def apply_golden_review_template(
             "source_manifest_count": len(list(source_dir.glob("*_manifest.json"))),
             "review_item_count": len(review_items),
             "updated_manifest_count": len(updated),
+            "changed_manifest_count": sum(1 for record in updated if record.get("changed")),
+            "changed_batch_count": changed_batch_count,
             "failed_manifest_count": len(failed),
             "skipped_count": len(skipped),
             "template_error_count": template_validation["summary"]["error_count"],
@@ -745,13 +772,21 @@ def run_golden_manifest_replay(
     )
     if preflight_errors:
         validation = _manifest_dir_result(validation_dir, [], preflight_errors, True)
+    business_metrics = _approved_business_metrics(validation_dir)
+    approved_batch_count = _approved_batch_count(validation_dir)
     summary = {
         "manifest_count": validation["summary"]["manifest_count"],
         "batch_count": validation["summary"]["batch_count"],
         "file_count": validation["summary"]["file_count"],
-        "approved_batch_count": _approved_batch_count(validation_dir),
+        "approved_batch_count": approved_batch_count,
         "error_count": validation["summary"]["error_count"],
         "warning_count": validation["summary"]["warning_count"],
+        "business_metrics": business_metrics,
+        "business_checklist": _business_acceptance_checklist(
+            business_metrics,
+            approved_batch_count=approved_batch_count,
+            validation_ok=bool(validation["ok"]),
+        ),
     }
     digest_payload = {
         "schema_version": SCHEMA_VERSION,
@@ -781,6 +816,10 @@ def run_golden_manifest_replay(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    (destination / "BUSINESS_REPLAY_SUMMARY.md").write_text(
+        _business_replay_summary_markdown(payload),
+        encoding="utf-8",
+    )
     return payload
 
 
@@ -805,6 +844,175 @@ def _write_filtered_manifest_dir(source_dir: Path, destination: Path, *, batch_k
             encoding="utf-8",
         )
     return filtered_dir
+
+
+def _approved_business_metrics(directory: Path) -> dict[str, Any]:
+    invoice_total = 0.0
+    excel_total = 0.0
+    warehouse_count = 0
+    employee_count = 0
+    total_hours = 0.0
+    manual_review_count = 0
+    difference_category_counts: dict[str, int] = {}
+    core_error_types: set[str] = set()
+    total_passed_batch_count = 0
+    total_difference_batch_count = 0
+
+    for batch in _iter_manifest_batches(directory):
+        expected = batch.get("expected_result") if isinstance(batch.get("expected_result"), dict) else {}
+        if expected.get("review_status") != "approved":
+            continue
+        metrics = expected.get("metrics") if isinstance(expected.get("metrics"), dict) else {}
+        batch_invoice_total = _metric_number(metrics.get("invoice_total"))
+        batch_excel_total = _metric_number(metrics.get("excel_total"))
+        invoice_total += batch_invoice_total
+        excel_total += batch_excel_total
+        warehouse_count += int(_metric_number(metrics.get("warehouse_count")))
+        employee_count += int(_metric_number(metrics.get("employee_count")))
+        total_hours += _metric_number(metrics.get("total_hours"))
+        manual_review_count += int(_metric_number(metrics.get("manual_review_count")))
+        for key, value in (metrics.get("difference_category_counts") or {}).items():
+            difference_category_counts[str(key)] = difference_category_counts.get(str(key), 0) + int(_metric_number(value))
+        for item in metrics.get("core_error_types") or []:
+            if str(item):
+                core_error_types.add(str(item))
+        if abs(batch_invoice_total - batch_excel_total) <= 0.1:
+            total_passed_batch_count += 1
+        else:
+            total_difference_batch_count += 1
+
+    return {
+        "invoice_total": round(invoice_total, 2),
+        "excel_total": round(excel_total, 2),
+        "amount_delta": round(invoice_total - excel_total, 2),
+        "warehouse_count": warehouse_count,
+        "employee_count": employee_count,
+        "total_hours": round(total_hours, 2),
+        "manual_review_count": manual_review_count,
+        "difference_category_counts": dict(sorted(difference_category_counts.items())),
+        "core_error_types": sorted(core_error_types),
+        "total_passed_batch_count": total_passed_batch_count,
+        "total_difference_batch_count": total_difference_batch_count,
+    }
+
+
+def _business_acceptance_checklist(
+    metrics: dict[str, Any],
+    *,
+    approved_batch_count: int = 1,
+    validation_ok: bool = True,
+) -> dict[str, Any]:
+    if approved_batch_count <= 0 or not validation_ok:
+        return {
+            "amount_tolerance": 0.1,
+            "total_amount_passed": False,
+            "business_conclusion": "尚未完成业务验收基线",
+            "amount_difference_message": "等待业务确认总金额",
+            "employee_detail_status": "等待业务确认",
+            "pending_confirmation_count": 0,
+            "auto_fixed_name_count": 0,
+            "suspected_same_employee_count": 0,
+            "employee_detail_message": "请先由业务确认真实材料的发票总额、账单总额、员工人数和待确认事项，再用于上线验收。",
+        }
+    amount_delta = _metric_number(metrics.get("amount_delta"))
+    manual_review_count = int(_metric_number(metrics.get("manual_review_count")))
+    difference_counts = metrics.get("difference_category_counts") if isinstance(metrics.get("difference_category_counts"), dict) else {}
+    core_error_types = {str(item) for item in metrics.get("core_error_types") or []}
+    total_difference_batch_count = int(_metric_number(metrics.get("total_difference_batch_count")))
+    pending_confirmation_count = manual_review_count
+    auto_fixed_name_count = int(_metric_number(difference_counts.get("auto_fixed_name")))
+    suspected_same_employee_count = int(_metric_number(difference_counts.get("suspected_same_employee")))
+    total_amount_passed = total_difference_batch_count == 0 and abs(amount_delta) <= 0.1
+    employee_detail_incomplete = bool(core_error_types & EMPLOYEE_DETAIL_INCOMPLETE_CODES)
+    needs_detail_confirmation = pending_confirmation_count > 0 or suspected_same_employee_count > 0 or employee_detail_incomplete
+
+    if total_amount_passed and needs_detail_confirmation:
+        business_conclusion = "总账通过，但员工明细待确认"
+    elif total_amount_passed:
+        business_conclusion = "总账通过"
+    else:
+        business_conclusion = "总金额存在差异，暂不能放行"
+
+    checklist = {
+        "amount_tolerance": 0.1,
+        "total_amount_passed": total_amount_passed,
+        "business_conclusion": business_conclusion,
+        "amount_difference_message": _amount_difference_message(amount_delta),
+        "employee_detail_status": "员工明细待确认" if needs_detail_confirmation else "员工明细已确认",
+        "pending_confirmation_count": pending_confirmation_count,
+        "auto_fixed_name_count": auto_fixed_name_count,
+        "suspected_same_employee_count": suspected_same_employee_count,
+    }
+    if employee_detail_incomplete:
+        if total_amount_passed:
+            checklist["employee_detail_message"] = (
+                "系统已确认本批总金额一致，但部分员工明细未完整识别，员工级差异仅供确认，不能直接作为最终员工明细结论。"
+            )
+        else:
+            checklist["employee_detail_message"] = "由于员工明细未完整识别，系统暂时无法定位全部差异来源。"
+    return checklist
+
+
+def _amount_difference_message(amount_delta: float) -> str:
+    rounded_delta = round(amount_delta, 2)
+    if abs(rounded_delta) <= 0.0:
+        return "PDF 与 Excel 总金额一致"
+    if rounded_delta > 0:
+        return f"PDF 比 Excel 多 ${abs(rounded_delta):,.2f}"
+    return f"PDF 比 Excel 少 ${abs(rounded_delta):,.2f}"
+
+
+def _business_replay_summary_markdown(payload: dict[str, Any]) -> str:
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    metrics = summary.get("business_metrics") if isinstance(summary.get("business_metrics"), dict) else {}
+    checklist = summary.get("business_checklist") if isinstance(summary.get("business_checklist"), dict) else {}
+    return "\n".join(
+        [
+            "# 真实材料回归业务摘要",
+            "",
+            f"结论：{checklist.get('business_conclusion') or '未生成结论'}",
+            f"金额差异：{checklist.get('amount_difference_message') or '未生成金额差异说明'}",
+            f"总金额容差：${_metric_number(checklist.get('amount_tolerance')):,.2f}",
+            "",
+            "## 金额口径",
+            "",
+            f"- PDF 发票总额：${_metric_number(metrics.get('invoice_total')):,.2f}",
+            f"- Excel 账单总额：${_metric_number(metrics.get('excel_total')):,.2f}",
+            f"- 总金额差额：${_metric_number(metrics.get('amount_delta')):,.2f}",
+            "",
+            "## 员工明细确认",
+            "",
+            f"- 员工明细状态：{checklist.get('employee_detail_status') or '未生成状态'}",
+            *([f"- 明细说明：{checklist.get('employee_detail_message')}"] if checklist.get("employee_detail_message") else []),
+            f"- 待业务确认：{int(_metric_number(checklist.get('pending_confirmation_count')))} 项",
+            f"- 系统自动修正姓名：{int(_metric_number(checklist.get('auto_fixed_name_count')))} 项",
+            f"- 疑似同一员工：{int(_metric_number(checklist.get('suspected_same_employee_count')))} 项",
+            "",
+            "## 回归覆盖",
+            "",
+            f"- 已审批批次：{int(_metric_number(summary.get('approved_batch_count')))} 批",
+            f"- 总账通过批次：{int(_metric_number(metrics.get('total_passed_batch_count')))} 批",
+            f"- 总账差异批次：{int(_metric_number(metrics.get('total_difference_batch_count')))} 批",
+            "",
+            "这份摘要用于开发回归检查，判断页面结论是否仍符合业务规则；正式对业务展示仍以核对页面和 HTML 报告为准。",
+            "",
+        ]
+    )
+
+
+def _iter_manifest_batches(directory: Path) -> list[dict[str, Any]]:
+    batches: list[dict[str, Any]] = []
+    for manifest_path in sorted(directory.glob("*_manifest.json")):
+        manifest = _load_json(manifest_path)
+        batches.extend(batch for batch in manifest.get("batches") or [] if isinstance(batch, dict))
+    return batches
+
+
+def _metric_number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _review_items_by_batch(template: dict[str, Any], source_dir: Path | None = None) -> dict[str, dict[str, Any]]:
@@ -924,6 +1132,62 @@ def _expected_metric_guidance() -> dict[str, str]:
         "manual_review_count": "仍需人工复核的记录数量。确认无待复核时填 0。",
         "core_error_types": "核心异常类型列表。无异常时填空数组。",
     }
+
+
+def _write_business_review_workbook(path: Path, template: dict[str, Any]) -> None:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "业务确认表"
+    headers = [
+        "批次编号",
+        "账期",
+        "PDF 发票文件数",
+        "Excel 账单文件数",
+        "业务确认状态",
+        "发票总额",
+        "账单总额",
+        "仓库数",
+        "员工人数",
+        "总工时",
+        "待确认数量",
+        "核心异常",
+        "差异分类数量",
+        "复核人",
+        "复核时间",
+        "依据说明",
+        "备注",
+    ]
+    sheet.append(headers)
+    for item in template.get("review_items") or []:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("expected_metrics") if isinstance(item.get("expected_metrics"), dict) else {}
+        file_summary = item.get("file_summary") if isinstance(item.get("file_summary"), dict) else {}
+        sheet.append(
+            [
+                item.get("review_batch_ref") or item.get("batch_key") or "",
+                item.get("period_hint") or "",
+                int(_metric_number(file_summary.get("invoice_pdf"))),
+                int(_metric_number(file_summary.get("workbook"))),
+                item.get("review_status") or "needs_business_review",
+                metrics.get("invoice_total"),
+                metrics.get("excel_total"),
+                metrics.get("warehouse_count"),
+                metrics.get("employee_count"),
+                metrics.get("total_hours"),
+                metrics.get("manual_review_count"),
+                ", ".join(str(value) for value in metrics.get("core_error_types") or []),
+                json.dumps(metrics.get("difference_category_counts") or {}, ensure_ascii=False),
+                item.get("reviewer") or "",
+                item.get("reviewed_at") or "",
+                item.get("evidence_reference") or "",
+                item.get("review_notes") or "",
+            ]
+        )
+    for column_cells in sheet.columns:
+        max_length = max(len(str(cell.value or "")) for cell in column_cells)
+        sheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 12), 36)
+    workbook.save(path)
 
 
 def _business_review_readme(template: dict[str, Any], guidance: dict[str, str]) -> str:
@@ -1195,10 +1459,24 @@ def _validate_approved_metrics(batch_key: str, expected: dict[str, Any], errors:
     for field in sorted(REQUIRED_APPROVED_METRICS):
         if field not in metrics or metrics.get(field) is None:
             errors.append({"code": "approved_expected_metric_missing", "batch_key": batch_key, "field": field})
-    if "difference_category_counts" in metrics and not isinstance(metrics.get("difference_category_counts"), dict):
-        errors.append({"code": "approved_expected_metric_invalid", "batch_key": batch_key, "field": "difference_category_counts"})
-    if "core_error_types" in metrics and not isinstance(metrics.get("core_error_types"), list):
-        errors.append({"code": "approved_expected_metric_invalid", "batch_key": batch_key, "field": "core_error_types"})
+            continue
+        value = metrics.get(field)
+        if field in {"invoice_total", "excel_total", "total_hours"} and not _is_plain_number(value):
+            errors.append({"code": "approved_expected_metric_invalid", "batch_key": batch_key, "field": field})
+        elif field in {"warehouse_count", "employee_count", "manual_review_count"} and not _is_plain_int(value):
+            errors.append({"code": "approved_expected_metric_invalid", "batch_key": batch_key, "field": field})
+        elif field == "difference_category_counts" and not isinstance(value, dict):
+            errors.append({"code": "approved_expected_metric_invalid", "batch_key": batch_key, "field": field})
+        elif field == "core_error_types" and not isinstance(value, list):
+            errors.append({"code": "approved_expected_metric_invalid", "batch_key": batch_key, "field": field})
+
+
+def _is_plain_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_plain_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _is_sha256(value: str) -> bool:
@@ -1287,6 +1565,93 @@ def _first_mapping(plan: dict[str, Any]) -> dict[str, Any]:
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_review_template(review_template: str | Path | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(review_template, dict):
+        return review_template
+    path = Path(review_template).expanduser()
+    if path.suffix.lower() in {".xlsx", ".xlsm"}:
+        return _load_review_template_workbook(path)
+    return _load_json(path)
+
+
+def _load_review_template_workbook(path: Path) -> dict[str, Any]:
+    workbook = load_workbook(path, data_only=True)
+    if "业务确认表" not in workbook.sheetnames:
+        return {"schema_version": SCHEMA_VERSION, "review_items": []}
+    sheet = workbook["业务确认表"]
+    header_row = [str(cell.value or "").strip() for cell in sheet[1]]
+    headers = {value: index for index, value in enumerate(header_row) if value}
+    items: list[dict[str, Any]] = []
+    for row in sheet.iter_rows(min_row=2, values_only=True):
+        if not any(value not in (None, "") for value in row):
+            continue
+        get = lambda key: row[headers[key]] if key in headers and headers[key] < len(row) else None
+        review_batch_ref = str(get("批次编号") or "").strip()
+        if not review_batch_ref:
+            continue
+        metrics = {
+            "invoice_total": _none_if_blank(get("发票总额")),
+            "excel_total": _none_if_blank(get("账单总额")),
+            "warehouse_count": _none_if_blank(get("仓库数")),
+            "employee_count": _none_if_blank(get("员工人数")),
+            "total_hours": _none_if_blank(get("总工时")),
+            "difference_category_counts": _parse_difference_category_counts(get("差异分类数量")),
+            "manual_review_count": _none_if_blank(get("待确认数量")),
+            "core_error_types": _parse_list_cell(get("核心异常")),
+        }
+        items.append(
+            {
+                "review_batch_ref": review_batch_ref,
+                "period_hint": str(get("账期") or "").strip(),
+                "review_status": str(get("业务确认状态") or "needs_business_review").strip(),
+                "expected_metrics": metrics,
+                "reviewer": str(get("复核人") or "").strip(),
+                "reviewed_at": str(get("复核时间") or "").strip(),
+                "evidence_reference": str(get("依据说明") or "").strip(),
+                "review_notes": str(get("备注") or "").strip(),
+            }
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "source": "golden_business_review_workbook",
+        "review_items": items,
+    }
+
+
+def _none_if_blank(value: Any) -> Any:
+    return None if value == "" else value
+
+
+def _parse_difference_category_counts(value: Any) -> dict[str, int]:
+    if value in (None, ""):
+        return {}
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): int(_metric_number(count)) for key, count in parsed.items()}
+
+
+def _parse_list_cell(value: Any) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    raw = str(value).replace("，", ",").strip()
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = []
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _manifest_dir_result(
@@ -1409,6 +1774,14 @@ def main(argv: list[str] | None = None) -> int:
     replay.add_argument("--batch-key", default="")
     replay.add_argument("--supplier-ref", default="")
 
+    business_replay = subparsers.add_parser("business-replay", help="Run the business-readable real-material replay gate")
+    business_replay.add_argument("--manifest-dir", required=True)
+    business_replay.add_argument("--output-dir", default="outputs/labor_golden/business_replay_latest")
+    business_replay.add_argument("--materials-root", default="")
+    business_replay.add_argument("--output", default="")
+    business_replay.add_argument("--batch-key", default="")
+    business_replay.add_argument("--supplier-ref", default="")
+
     args = parser.parse_args(argv)
     if args.command == "discover":
         payload = discover_golden_batches(args.materials_root, batch_key=args.batch_key, supplier=args.supplier)
@@ -1490,6 +1863,16 @@ def main(argv: list[str] | None = None) -> int:
         _write_or_print(payload, args.output)
         return 0 if payload["ok"] else 1
     if args.command == "replay":
+        payload = run_golden_manifest_replay(
+            args.manifest_dir,
+            args.output_dir,
+            materials_root=args.materials_root or None,
+            batch_key=args.batch_key or None,
+            supplier_ref=args.supplier_ref or None,
+        )
+        _write_or_print(payload, args.output)
+        return 0 if payload["ok"] else 1
+    if args.command == "business-replay":
         payload = run_golden_manifest_replay(
             args.manifest_dir,
             args.output_dir,

@@ -2,7 +2,7 @@ import json
 import hashlib
 from pathlib import Path
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from bonus_platform.engine.labor.golden import (
     apply_golden_review_template,
@@ -10,6 +10,7 @@ from bonus_platform.engine.labor.golden import (
     build_golden_review_handoff,
     build_golden_review_template,
     discover_golden_batches,
+    main as golden_main,
     prepare_golden_manifests,
     run_golden_manifest_replay,
     scan_golden_handoff_privacy,
@@ -255,6 +256,49 @@ def test_validate_golden_manifest_approved_complete_metrics_passes_require_appro
     assert result["warnings"] == []
 
 
+def test_validate_golden_manifest_approved_metrics_reject_wrong_types(tmp_path):
+    batch = tmp_path / "fairway"
+    batch.mkdir()
+    pdf = batch / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+    manifest = {
+        "schema_version": 1,
+        "materials_root": str(tmp_path),
+        "batches": [
+            {
+                "batch_key": "fairway",
+                "supplier_ref": "abc123def456",
+                "files": [
+                    {
+                        "relative_path": "fairway/invoice.pdf",
+                        "file_type": "invoice_pdf",
+                        "sha256": sha256_file(pdf),
+                    }
+                ],
+                "expected_result": {
+                    "review_status": "approved",
+                    "metrics": {
+                        "invoice_total": "100.00",
+                        "excel_total": 100.0,
+                        "warehouse_count": 1.5,
+                        "employee_count": 1,
+                        "total_hours": 8.0,
+                        "difference_category_counts": [],
+                        "manual_review_count": 0,
+                        "core_error_types": {},
+                    },
+                },
+            }
+        ],
+    }
+
+    result = validate_golden_manifest(manifest, tmp_path, require_approved=True)
+
+    invalid_fields = {error.get("field") for error in result["errors"] if error["code"] == "approved_expected_metric_invalid"}
+    assert result["ok"] is False
+    assert invalid_fields == {"invoice_total", "warehouse_count", "difference_category_counts", "core_error_types"}
+
+
 def test_golden_regression_doc_includes_redacted_review_return_workflow():
     doc = Path("docs/labor_golden_regression.md").read_text(encoding="utf-8")
 
@@ -492,6 +536,8 @@ def test_apply_golden_review_template_can_filter_to_one_batch(tmp_path):
     assert result["ok"] is True
     assert result["summary"]["review_item_count"] == 1
     assert result["summary"]["updated_manifest_count"] == 1
+    assert result["summary"]["changed_manifest_count"] == 1
+    assert result["summary"]["changed_batch_count"] == 1
     assert reviewed_manifest["batches"][0]["expected_result"]["review_status"] == "approved"
     assert reviewed_manifest["batches"][1]["expected_result"]["review_status"] == "needs_business_review"
 
@@ -907,10 +953,331 @@ def test_run_golden_manifest_replay_passes_for_approved_manifest_and_writes_stab
     assert first["ok"] is True
     assert first["summary"]["manifest_count"] == 1
     assert first["summary"]["approved_batch_count"] == 1
+    assert first["summary"]["business_metrics"] == {
+        "invoice_total": 100.0,
+        "excel_total": 100.0,
+        "amount_delta": 0.0,
+        "warehouse_count": 1,
+        "employee_count": 1,
+        "total_hours": 8.0,
+        "manual_review_count": 0,
+        "difference_category_counts": {},
+        "core_error_types": [],
+        "total_passed_batch_count": 1,
+        "total_difference_batch_count": 0,
+    }
     assert first["deterministic_digest"] == second["deterministic_digest"]
     assert (tmp_path / "replay_1" / "golden_manifest_replay_summary.json").exists()
     assert first["output_dir"].endswith("replay_1")
     assert first["validation"]["ok"] is True
+
+
+def test_run_golden_manifest_replay_exposes_business_acceptance_checklist(tmp_path):
+    materials = tmp_path / "materials"
+    materials.mkdir()
+    batch = materials / "sss"
+    batch.mkdir()
+    pdf = batch / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "sss_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materials_root": str(materials),
+                "batches": [
+                    {
+                        "batch_key": "sss",
+                        "supplier_ref": "abc123def456",
+                        "files": [
+                            {
+                                "relative_path": "sss/invoice.pdf",
+                                "file_type": "invoice_pdf",
+                                "sha256": sha256_file(pdf),
+                            }
+                        ],
+                        "expected_result": {
+                            "review_status": "approved",
+                            "metrics": {
+                                "invoice_total": 100.0,
+                                "excel_total": 100.05,
+                                "warehouse_count": 1,
+                                "employee_count": 12,
+                                "total_hours": 96.0,
+                                "difference_category_counts": {
+                                    "auto_fixed_name": 3,
+                                    "suspected_same_employee": 2,
+                                },
+                                "manual_review_count": 2,
+                                "core_error_types": [],
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_golden_manifest_replay(manifest_dir, tmp_path / "replay", materials_root=materials)
+
+    assert result["summary"]["business_checklist"] == {
+        "amount_tolerance": 0.1,
+        "total_amount_passed": True,
+        "business_conclusion": "总账通过，但员工明细待确认",
+        "amount_difference_message": "PDF 比 Excel 少 $0.05",
+        "employee_detail_status": "员工明细待确认",
+        "pending_confirmation_count": 2,
+        "auto_fixed_name_count": 3,
+        "suspected_same_employee_count": 2,
+    }
+
+
+def test_run_golden_manifest_replay_explains_amount_difference_when_employee_detail_is_incomplete(tmp_path):
+    materials = tmp_path / "materials"
+    materials.mkdir()
+    batch = materials / "sss"
+    batch.mkdir()
+    pdf = batch / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "sss_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materials_root": str(materials),
+                "batches": [
+                    {
+                        "batch_key": "sss",
+                        "supplier_ref": "abc123def456",
+                        "files": [
+                            {
+                                "relative_path": "sss/invoice.pdf",
+                                "file_type": "invoice_pdf",
+                                "sha256": sha256_file(pdf),
+                            }
+                        ],
+                        "expected_result": {
+                            "review_status": "approved",
+                            "metrics": {
+                                "invoice_total": 1250.0,
+                                "excel_total": 1000.0,
+                                "warehouse_count": 1,
+                                "employee_count": 12,
+                                "total_hours": 96.0,
+                                "difference_category_counts": {},
+                                "manual_review_count": 0,
+                                "core_error_types": ["employee_detail_incomplete"],
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_golden_manifest_replay(manifest_dir, tmp_path / "replay", materials_root=materials)
+
+    checklist = result["summary"]["business_checklist"]
+    assert checklist["business_conclusion"] == "总金额存在差异，暂不能放行"
+    assert checklist["amount_difference_message"] == "PDF 比 Excel 多 $250.00"
+    assert checklist["employee_detail_status"] == "员工明细待确认"
+    assert checklist["employee_detail_message"] == "由于员工明细未完整识别，系统暂时无法定位全部差异来源。"
+    summary_markdown = (tmp_path / "replay" / "BUSINESS_REPLAY_SUMMARY.md").read_text(encoding="utf-8")
+    assert summary_markdown.index("金额差异：PDF 比 Excel 多 $250.00") < summary_markdown.index(
+        "由于员工明细未完整识别，系统暂时无法定位全部差异来源。"
+    )
+
+
+def test_run_golden_manifest_replay_explains_total_pass_when_employee_detail_is_incomplete(tmp_path):
+    materials = tmp_path / "materials"
+    materials.mkdir()
+    batch = materials / "sss"
+    batch.mkdir()
+    pdf = batch / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "sss_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materials_root": str(materials),
+                "batches": [
+                    {
+                        "batch_key": "sss",
+                        "supplier_ref": "abc123def456",
+                        "files": [
+                            {
+                                "relative_path": "sss/invoice.pdf",
+                                "file_type": "invoice_pdf",
+                                "sha256": sha256_file(pdf),
+                            }
+                        ],
+                        "expected_result": {
+                            "review_status": "approved",
+                            "metrics": {
+                                "invoice_total": 1000.0,
+                                "excel_total": 1000.05,
+                                "warehouse_count": 1,
+                                "employee_count": 12,
+                                "total_hours": 96.0,
+                                "difference_category_counts": {},
+                                "manual_review_count": 0,
+                                "core_error_types": ["employee_detail_incomplete"],
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_golden_manifest_replay(manifest_dir, tmp_path / "replay", materials_root=materials)
+
+    checklist = result["summary"]["business_checklist"]
+    assert checklist["business_conclusion"] == "总账通过，但员工明细待确认"
+    assert checklist["amount_difference_message"] == "PDF 比 Excel 少 $0.05"
+    assert checklist["employee_detail_status"] == "员工明细待确认"
+    assert checklist["employee_detail_message"] == (
+        "系统已确认本批总金额一致，但部分员工明细未完整识别，员工级差异仅供确认，不能直接作为最终员工明细结论。"
+    )
+
+
+def test_run_golden_manifest_replay_writes_business_readable_summary(tmp_path):
+    materials = tmp_path / "materials"
+    materials.mkdir()
+    batch = materials / "sss"
+    batch.mkdir()
+    pdf = batch / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "sss_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materials_root": str(materials),
+                "batches": [
+                    {
+                        "batch_key": "sss",
+                        "supplier_ref": "abc123def456",
+                        "files": [
+                            {
+                                "relative_path": "sss/invoice.pdf",
+                                "file_type": "invoice_pdf",
+                                "sha256": sha256_file(pdf),
+                            }
+                        ],
+                        "expected_result": {
+                            "review_status": "approved",
+                            "metrics": {
+                                "invoice_total": 100.0,
+                                "excel_total": 100.05,
+                                "warehouse_count": 1,
+                                "employee_count": 12,
+                                "total_hours": 96.0,
+                                "difference_category_counts": {
+                                    "auto_fixed_name": 3,
+                                    "suspected_same_employee": 2,
+                                },
+                                "manual_review_count": 2,
+                                "core_error_types": [],
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "replay"
+
+    run_golden_manifest_replay(manifest_dir, output_dir, materials_root=materials)
+
+    summary = (output_dir / "BUSINESS_REPLAY_SUMMARY.md").read_text(encoding="utf-8")
+    assert "# 真实材料回归业务摘要" in summary
+    assert "总账通过，但员工明细待确认" in summary
+    assert "PDF 比 Excel 少 $0.05" in summary
+    assert "待业务确认：2 项" in summary
+    assert "系统自动修正姓名：3 项" in summary
+    assert "疑似同一员工：2 项" in summary
+
+
+def test_business_replay_cli_uses_default_business_output_dir(tmp_path, monkeypatch):
+    materials = tmp_path / "materials"
+    materials.mkdir()
+    batch = materials / "sss"
+    batch.mkdir()
+    pdf = batch / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "sss_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materials_root": str(materials),
+                "batches": [
+                    {
+                        "batch_key": "sss",
+                        "supplier_ref": "abc123def456",
+                        "files": [
+                            {
+                                "relative_path": "sss/invoice.pdf",
+                                "file_type": "invoice_pdf",
+                                "sha256": sha256_file(pdf),
+                            }
+                        ],
+                        "expected_result": {
+                            "review_status": "approved",
+                            "metrics": {
+                                "invoice_total": 100.0,
+                                "excel_total": 100.0,
+                                "warehouse_count": 1,
+                                "employee_count": 1,
+                                "total_hours": 8.0,
+                                "difference_category_counts": {},
+                                "manual_review_count": 0,
+                                "core_error_types": [],
+                            },
+                        },
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = golden_main(
+        [
+            "business-replay",
+            "--manifest-dir",
+            str(manifest_dir),
+            "--materials-root",
+            str(materials),
+        ]
+    )
+
+    default_output = tmp_path / "outputs" / "labor_golden" / "business_replay_latest"
+    assert exit_code == 0
+    assert (default_output / "golden_manifest_replay_summary.json").exists()
+    assert "总账通过" in (default_output / "BUSINESS_REPLAY_SUMMARY.md").read_text(encoding="utf-8")
 
 
 def test_run_golden_manifest_replay_rejects_unapproved_manifest(tmp_path):
@@ -953,8 +1320,15 @@ def test_run_golden_manifest_replay_rejects_unapproved_manifest(tmp_path):
     assert result["ok"] is False
     assert result["summary"]["approved_batch_count"] == 0
     assert result["summary"]["error_count"] == 1
+    assert result["summary"]["business_checklist"]["total_amount_passed"] is False
+    assert result["summary"]["business_checklist"]["business_conclusion"] == "尚未完成业务验收基线"
+    assert result["summary"]["business_checklist"]["amount_difference_message"] == "等待业务确认总金额"
+    assert result["summary"]["business_checklist"]["employee_detail_status"] == "等待业务确认"
     assert result["validation"]["manifests"][0]["errors"][0]["code"] == "expected_not_approved"
     assert (tmp_path / "replay" / "golden_manifest_replay_summary.json").exists()
+    summary = (tmp_path / "replay" / "BUSINESS_REPLAY_SUMMARY.md").read_text(encoding="utf-8")
+    assert "尚未完成业务验收基线" in summary
+    assert "结论：总账通过" not in summary
 
 
 def test_run_golden_manifest_replay_can_filter_to_one_approved_batch(tmp_path):
@@ -1307,11 +1681,16 @@ def test_build_golden_review_handoff_writes_business_package_without_file_paths_
     assert handoff["summary"]["batch_count"] == 1
     assert handoff["summary"]["needs_business_review_count"] == 1
     assert (output_dir / "business_review_template.json").exists()
+    assert (output_dir / "business_review_template.xlsx").exists()
     assert (output_dir / "BUSINESS_REVIEW_README.md").exists()
     assert (output_dir / "handoff_summary.json").exists()
     assert "invoice_total" in handoff["metric_guidance"]
     assert "程序输出不能作为真值" in (output_dir / "BUSINESS_REVIEW_README.md").read_text(encoding="utf-8")
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in output_dir.iterdir() if path.is_file())
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in output_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".json", ".md", ".txt"}
+    )
     assert "invoice-with-real-name.pdf" not in combined
     assert "employee-detail-real-name.xlsx" not in combined
     assert "oss-real-batch" not in combined
@@ -1323,6 +1702,30 @@ def test_build_golden_review_handoff_writes_business_package_without_file_paths_
     expected_ref = hashlib.sha256("abc123def456:oss-real-batch".encode("utf-8")).hexdigest()[:12]
     assert review_item["review_batch_ref"] == f"batch_{expected_supplier_ref}_{expected_ref}"
     assert "supplier_ref" not in review_item
+    workbook = load_workbook(output_dir / "business_review_template.xlsx")
+    sheet = workbook["业务确认表"]
+    headers = [cell.value for cell in sheet[1]]
+    assert headers[:12] == [
+        "批次编号",
+        "账期",
+        "PDF 发票文件数",
+        "Excel 账单文件数",
+        "业务确认状态",
+        "发票总额",
+        "账单总额",
+        "仓库数",
+        "员工人数",
+        "总工时",
+        "待确认数量",
+        "核心异常",
+    ]
+    values = [cell.value for cell in sheet[2]]
+    assert values[0] == f"batch_{expected_supplier_ref}_{expected_ref}"
+    assert values[2] == 1
+    assert values[3] == 1
+    assert values[4] == "needs_business_review"
+    assert "invoice-with-real-name.pdf" not in str(values)
+    assert "oss-real-batch" not in str(values)
 
 
 def test_scan_golden_handoff_privacy_accepts_redacted_handoff(tmp_path):
@@ -1459,6 +1862,86 @@ def test_apply_review_template_accepts_redacted_handoff_review_batch_ref(tmp_pat
     assert reviewed["batches"][0]["expected_result"]["review_status"] == "approved"
 
 
+def test_apply_review_template_accepts_completed_business_workbook(tmp_path):
+    materials = tmp_path / "materials"
+    materials.mkdir()
+    batch = materials / "oss-real-batch"
+    batch.mkdir()
+    pdf = batch / "invoice-with-real-name.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nsynthetic invoice\n")
+    workbook = batch / "employee-detail-real-name.xlsx"
+    _write_workbook(workbook)
+
+    manifest_dir = tmp_path / "manifests"
+    manifest_dir.mkdir()
+    (manifest_dir / "oss_manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materials_root": str(materials),
+                "batches": [
+                    {
+                        "batch_key": "oss-real-batch",
+                        "supplier_ref": "abc123def456",
+                        "files": [
+                            {
+                                "relative_path": "oss-real-batch/invoice-with-real-name.pdf",
+                                "file_type": "invoice_pdf",
+                                "sha256": sha256_file(pdf),
+                            },
+                            {
+                                "relative_path": "oss-real-batch/employee-detail-real-name.xlsx",
+                                "file_type": "workbook",
+                                "sha256": sha256_file(workbook),
+                            },
+                        ],
+                        "expected_result": {"review_status": "needs_business_review"},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    handoff_dir = tmp_path / "handoff"
+    build_golden_review_handoff(manifest_dir, handoff_dir, materials_root=materials)
+    workbook_path = handoff_dir / "business_review_template.xlsx"
+    review_workbook = load_workbook(workbook_path)
+    sheet = review_workbook["业务确认表"]
+    headers = {cell.value: idx + 1 for idx, cell in enumerate(sheet[1])}
+    review_batch_ref = sheet.cell(row=2, column=headers["批次编号"]).value
+    sheet.cell(row=2, column=headers["业务确认状态"]).value = "approved"
+    sheet.cell(row=2, column=headers["发票总额"]).value = 100.0
+    sheet.cell(row=2, column=headers["账单总额"]).value = 100.0
+    sheet.cell(row=2, column=headers["仓库数"]).value = 1
+    sheet.cell(row=2, column=headers["员工人数"]).value = 1
+    sheet.cell(row=2, column=headers["总工时"]).value = 8.0
+    sheet.cell(row=2, column=headers["待确认数量"]).value = 0
+    sheet.cell(row=2, column=headers["核心异常"]).value = ""
+    sheet.cell(row=2, column=headers["差异分类数量"]).value = "{}"
+    sheet.cell(row=2, column=headers["复核人"]).value = "business-reviewer"
+    sheet.cell(row=2, column=headers["复核时间"]).value = "2026-06-20"
+    sheet.cell(row=2, column=headers["依据说明"]).value = "review-note-001"
+    review_workbook.save(workbook_path)
+
+    validation = validate_golden_review_template(workbook_path, require_approved=True, review_batch_ref=review_batch_ref)
+    result = apply_golden_review_template(
+        manifest_dir,
+        workbook_path,
+        tmp_path / "reviewed",
+        materials_root=materials,
+        require_approved=True,
+        review_batch_ref=review_batch_ref,
+    )
+
+    assert validation["ok"] is True
+    assert result["ok"] is True
+    assert result["summary"]["updated_manifest_count"] == 1
+    reviewed = json.loads((tmp_path / "reviewed" / "oss_manifest.json").read_text(encoding="utf-8"))
+    assert reviewed["batches"][0]["expected_result"]["review_status"] == "approved"
+    assert reviewed["batches"][0]["expected_result"]["metrics"]["invoice_total"] == 100.0
+
+
 def test_scan_golden_handoff_privacy_rejects_paths_file_names_and_employee_ids(tmp_path):
     handoff_dir = tmp_path / "handoff"
     handoff_dir.mkdir()
@@ -1482,6 +1965,29 @@ def test_scan_golden_handoff_privacy_rejects_paths_file_names_and_employee_ids(t
 
     assert result["ok"] is False
     assert result["summary"]["issue_count"] >= 3
+    codes = {issue["code"] for issue in result["issues"]}
+    assert "materials_root_path_leak" in codes
+    assert "forbidden_term_leak" in codes
+    assert "employee_id_like_value" in codes
+
+
+def test_scan_golden_handoff_privacy_rejects_excel_workbook_leaks(tmp_path):
+    handoff_dir = tmp_path / "handoff"
+    handoff_dir.mkdir()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "业务确认表"
+    sheet.append(["备注"])
+    sheet.append(["/Users/zt27532/Documents/报账核对工具/oss/invoice.pdf EUS034858"])
+    workbook.save(handoff_dir / "business_review_template.xlsx")
+
+    result = scan_golden_handoff_privacy(
+        handoff_dir,
+        materials_root="/Users/zt27532/Documents/报账核对工具",
+        forbidden_terms=["invoice.pdf"],
+    )
+
+    assert result["ok"] is False
     codes = {issue["code"] for issue in result["issues"]}
     assert "materials_root_path_leak" in codes
     assert "forbidden_term_leak" in codes

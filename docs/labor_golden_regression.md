@@ -78,6 +78,8 @@ Allowed `expected_result.review_status` values:
 
 Only `approved` can be used as a business-truth regression target. All other statuses are useful for file coverage and replay readiness only.
 
+Approved metrics are typed release evidence, not notes. `invoice_total`, `excel_total`, and `total_hours` must be numbers; `warehouse_count`, `employee_count`, and `manual_review_count` must be integers; `difference_category_counts` must be an object; `core_error_types` must be a list. Text values such as `"100.00"` are rejected so the regression summary cannot silently hide bad review data.
+
 ## Command Interface
 
 Build a supplier coverage plan and business review template before asking business reviewers to approve expected results:
@@ -184,7 +186,7 @@ python3 -m bonus_platform.engine.labor.golden handoff \
   --output /tmp/labor_golden/business_handoff_summary.json
 ```
 
-The handoff package writes `business_review_template.json`, `BUSINESS_REVIEW_README.md`, and `handoff_summary.json`. It removes local manifest paths, avoids raw file names, includes only file type counts and SHA-256 prefixes, and documents how business reviewers must fill each required `expected_metrics` field. It is still a local `/tmp` artifact and should not be committed.
+The handoff package writes `business_review_template.xlsx`, `business_review_template.json`, `BUSINESS_REVIEW_README.md`, and `handoff_summary.json`. Business reviewers should use the Excel workbook first: it gives one row per redacted batch with invoice count, workbook count, period hint, and the fields needed to confirm invoice total, bill total, warehouse count, employee count, hours, pending confirmation count, and core issues. The JSON file remains the machine-readable return artifact for `validate-review` and `apply-review`. The package removes local manifest paths, avoids raw file names, includes only file type counts and SHA-256 prefixes, and documents how reviewers must fill each required `expected_metrics` field. It is still a local `/tmp` artifact and should not be committed.
 
 Before sharing the handoff package, run the privacy scan gate:
 
@@ -204,7 +206,7 @@ When business reviewers return a completed handoff package, keep the returned fi
 Recommended local layout:
 
 ```text
-/tmp/labor_golden/business_handoff_returned/business_review_template.json
+/tmp/labor_golden/business_handoff_returned/business_review_template.xlsx
 ```
 
 Before applying reviewer decisions, run a privacy scan on the returned package as well as the original package:
@@ -220,7 +222,7 @@ Validate one returned redacted batch before updating any reviewed manifest copie
 
 ```bash
 python3 -m bonus_platform.engine.labor.golden validate-review \
-  --review-template /tmp/labor_golden/business_handoff_returned/business_review_template.json \
+  --review-template /tmp/labor_golden/business_handoff_returned/business_review_template.xlsx \
   --require-approved \
   --review-batch-ref batch_0123456789ab_abcdef012345 \
   --output /tmp/labor_golden/business_handoff_returned/validate_review_summary.json
@@ -231,7 +233,7 @@ Apply the approved returned item into a separate reviewed-manifest output direct
 ```bash
 python3 -m bonus_platform.engine.labor.golden apply-review \
   --manifest-dir /tmp/labor_golden/manifests \
-  --review-template /tmp/labor_golden/business_handoff_returned/business_review_template.json \
+  --review-template /tmp/labor_golden/business_handoff_returned/business_review_template.xlsx \
   --output-dir /tmp/labor_golden/reviewed_manifests \
   --materials-root "/Users/zt27532/Documents/报账核对工具" \
   --require-approved \
@@ -251,7 +253,7 @@ python3 -m bonus_platform.engine.labor.golden validate-dir \
 
 Only reviewed manifest copies that pass `validate-dir --require-approved` can be used as a golden regression source. The original discovered or prepared manifests remain local coverage artifacts and should stay `needs_business_review` until a reviewed copy is produced.
 
-After business reviewers return the completed template, validate its structure before applying it:
+If reviewers return the JSON template instead of the Excel workbook, the same commands also accept `.json`. Validate its structure before applying it:
 
 ```bash
 python3 -m bonus_platform.engine.labor.golden validate-review \
@@ -261,7 +263,7 @@ python3 -m bonus_platform.engine.labor.golden validate-review \
   --output /tmp/labor_golden/business_handoff/validate_review_summary.json
 ```
 
-The validate-review command checks reviewed items for `approved` status, reviewer, reviewed time, evidence reference, all required `expected_metrics`, and expected metric types. Add `--batch-key` to validate one returned batch before the rest of the template is complete. If the requested batch is absent from the template, validation fails with `batch_key_not_found` instead of returning an empty successful check. It does not read source materials or run reconciliation. A failed validation means the template must go back to business review before `apply-review`.
+The validate-review command accepts either the returned Excel workbook or the JSON template. It checks reviewed items for `approved` status, reviewer, reviewed time, evidence reference, all required metrics, and expected metric types. Add `--review-batch-ref` to validate one returned row before the rest of the workbook is complete. If the requested row is absent from the workbook, validation fails with `review_batch_ref_not_found` instead of returning an empty successful check. It does not read source materials or run reconciliation. A failed validation means the template must go back to business review before `apply-review`.
 
 Use `--supplier-ref <redacted supplier id>` when the business review is returned by supplier rather than by batch. If the requested supplier is absent from the template, validation fails with `supplier_ref_not_found`.
 
@@ -280,7 +282,15 @@ python3 -m bonus_platform.engine.labor.golden apply-review \
 
 The apply-review command never edits the source manifest directory. In `--require-approved` mode it first runs the same completed-template validation as `validate-review`; if reviewer, reviewed time, evidence reference, required metrics, or metric types are incomplete, it stops before writing reviewed manifests. Add `--batch-key` when business reviewers return one batch at a time, or `--supplier-ref` when review is scoped by redacted supplier. In those scoped modes, only the selected batch or supplier is applied, other batches remain unapproved, and the output manifest is still only a reviewed copy. After that gate passes, it copies manifests to `--output-dir`, applies only explicit business review fields, ignores handoff-only fields such as review `file_hashes`, validates the copied manifests, and returns a non-zero exit code when any selected reviewed manifest fails the release gate.
 
-After reviewed manifests exist, run the manifest replay validation into an isolated output directory:
+After reviewed manifests exist, run the business replay shortcut first. It writes the JSON gate and the readable `BUSINESS_REPLAY_SUMMARY.md` into `outputs/labor_golden/business_replay_latest` by default:
+
+```bash
+python3 -m bonus_platform.engine.labor.golden business-replay \
+  --manifest-dir /tmp/labor_golden/reviewed_manifests \
+  --materials-root "/Users/zt27532/Documents/报账核对工具"
+```
+
+Use the lower-level replay command only when you need a separate output directory, batch filter, or supplier filter:
 
 ```bash
 python3 -m bonus_platform.engine.labor.golden replay \
@@ -292,6 +302,12 @@ python3 -m bonus_platform.engine.labor.golden replay \
 ```
 
 The replay command is a strict manifest-level gate. It validates approved manifests, verifies file hashes, writes `golden_manifest_replay_summary.json`, and emits a deterministic digest so repeated runs can be compared. Add `--batch-key` to validate only the selected reviewed batch after a per-batch business review. Add `--supplier-ref <redacted supplier id>` to replay one supplier from reviewed manifests without exposing the raw supplier name. A missing supplier filter fails with `supplier_ref_not_found` instead of returning an empty successful replay. It does not yet execute the full PDF/Excel reconciliation engine; that remains a later M1/M2 step after business expected results are confirmed.
+
+The replay summary also includes `summary.business_metrics`, aggregated only from business-approved expected metrics. Use this as the business-facing regression readout: approved invoice total, approved Excel total, amount delta, warehouse count, employee count, total hours, manual review count, difference category counts, core error types, and pass/difference batch counts. These values are not program output; they are the approved baseline used to judge future real-material runs.
+
+The replay output directory also includes `BUSINESS_REPLAY_SUMMARY.md`. Open this first during product review. It gives the same acceptance readout in business language: whether the total amount passes the $0.10 tolerance, the business conclusion that the page should show, the amount difference message, whether employee detail still needs confirmation, confirmed auto-fixed name count, suspected same-employee count, and pending confirmation count. Use it before changing PDF parsing, name matching, or report wording so the tool does not drift away from the business rules.
+
+If no batch has been approved by business review, the replay summary must show `尚未完成业务验收基线`. Treat that as a stop sign for release evidence: the material set can still be used for discovery and handoff, but it must not be interpreted as `总账通过` or as上线验收通过.
 
 The `discover`, `validate`, and `replay` commands are read-only against the materials root. They calculate SHA-256 hashes and validate file presence only. They do not call AI, do not write `outputs/labor_runs`, and do not access Blob or UAT.
 
