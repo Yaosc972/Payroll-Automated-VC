@@ -35,7 +35,7 @@ from .engine.domestic_labor.runs import (
 )
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
-from .engine.labor.compare import compare_labor_items, compare_by_warehouse
+from .engine.labor.compare import amount_within_tolerance, compare_labor_items, compare_by_warehouse
 from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
 from .engine.labor.governance import (
     audit_ai_page_cache_candidates,
@@ -469,7 +469,12 @@ def get_run_table_data(run_id: str) -> dict:
 @app.get("/api/labor/runs")
 def list_labor_runs(limit: int = 50) -> dict:
     bounded_limit = max(1, min(int(limit or 50), 200))
-    return {"runs": [_summarize_labor_run_for_list(row) for row in list_labor_metadata(limit=bounded_limit)]}
+    return {
+        "runs": [
+            _summarize_labor_run_for_list(_normalize_labor_total_decision(row))
+            for row in list_labor_metadata(limit=bounded_limit)
+        ]
+    }
 
 
 def _summarize_labor_run_for_list(row: dict) -> dict:
@@ -487,6 +492,28 @@ def _summarize_labor_run_for_list(row: dict) -> dict:
         "comparisonSummary": row.get("comparisonSummary") or {},
         "readinessGate": row.get("readinessGate") or {},
     }
+
+
+def _normalize_labor_total_decision(metadata: dict) -> dict:
+    """Return metadata with the business total decision recalculated from cent-level delta."""
+    warehouse_comparison = metadata.get("warehouseComparison")
+    if not isinstance(warehouse_comparison, dict):
+        return metadata
+    warehouse_summary = warehouse_comparison.get("summary")
+    if not isinstance(warehouse_summary, dict):
+        return metadata
+    if "amountDeltaTotal" not in warehouse_summary:
+        return metadata
+
+    normalized = dict(metadata)
+    normalized_warehouse = dict(warehouse_comparison)
+    normalized_summary = dict(warehouse_summary)
+    amount_delta = round(float(normalized_summary.get("amountDeltaTotal") or 0), 2)
+    normalized_summary["amountDeltaTotal"] = amount_delta
+    normalized_summary["totalPassed"] = amount_within_tolerance(amount_delta, AI_CONFIG["amount_tolerance"])
+    normalized_warehouse["summary"] = normalized_summary
+    normalized["warehouseComparison"] = normalized_warehouse
+    return normalized
 
 
 @app.get("/api/labor/suppliers")
@@ -803,7 +830,7 @@ def get_labor_run(run_id: str) -> dict:
         metadata = load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
         _raise_labor_run_missing(exc)
-    return _with_labor_readiness(_check_stale_extracting(metadata))
+    return _with_labor_readiness(_check_stale_extracting(_normalize_labor_total_decision(metadata)))
 
 
 @app.post("/api/labor/runs/{run_id}/files")
@@ -912,6 +939,25 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
             ),
         )
     metadata = _labor_metadata_or_404(run_id)
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    pdf_paths = [Path(record["path"]) for record in files.get("pdfInvoices", []) if record.get("path")]
+    workbook_paths = [Path(record["path"]) for record in files.get("workbooks", []) if record.get("path")]
+    if not pdf_paths or not workbook_paths:
+        missing_parts = []
+        if not pdf_paths:
+            missing_parts.append("PDF 发票")
+        if not workbook_paths:
+            missing_parts.append("Excel 账单")
+        missing_text = "、".join(missing_parts)
+        raise HTTPException(
+            status_code=400,
+            detail=_labor_request_error(
+                message=f"请先上传本期 {missing_text}。",
+                error_code="LABOR_FILES_REQUIRED",
+                next_action="请返回「上传文件」步骤，上传供应商 PDF 发票和线下账单 Excel 后再生成核对结果。",
+                requires_reupload=True,
+            ),
+        )
     mapping = metadata.get("excelMapping") or {}
     manual_name_mapping = metadata.get("manualNameMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
@@ -922,17 +968,6 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
                 message="请先确认 Excel 工作表和字段映射。",
                 error_code="LABOR_MAPPING_REQUIRED",
                 next_action="请在「字段映射」步骤选择工作表，并确认姓名、工时、金额字段。",
-            ),
-        )
-    pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
-    if not pdf_paths:
-        raise HTTPException(
-            status_code=400,
-            detail=_labor_request_error(
-                message="请先上传 PDF 发票。",
-                error_code="LABOR_PDF_REQUIRED",
-                next_action="请返回「上传文件」步骤，上传本期供应商 PDF 发票后再抽取并核对。",
-                requires_reupload=True,
             ),
         )
     queued = update_labor_metadata(
@@ -4749,6 +4784,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         period_end=str(metadata.get("periodEnd") or ""),
         invoice_scope=_labor_business_invoice_scope(metadata, pdf_rows),
         warehouse_comparison=warehouse_comparison,
+        excel_record_count=len(excel_rows),
     )
     files["businessReport"] = attach_labor_file(run_id, business_report_path, "业务核对报告")
 

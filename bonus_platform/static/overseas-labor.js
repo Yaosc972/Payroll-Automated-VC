@@ -11,6 +11,8 @@ const laborState = {
   moduleAccess: null,
 };
 
+const LABOR_TOTAL_AMOUNT_TOLERANCE = 0.1;
+
 // ── Element references ──
 const labor = {
   // KPI cards
@@ -63,6 +65,8 @@ const labor = {
   warehouseSection: document.querySelector("#warehouseSection"),
   warehouseHeading: document.querySelector("#warehouseHeading"),
   warehouseTable: document.querySelector("#warehouseTable"),
+  autoFixSection: document.querySelector("#autoFixSection"),
+  autoFixBody: document.querySelector("#autoFixBody"),
   pendingItemsSection: document.querySelector("#pendingItemsSection"),
   amountRateGroup: document.querySelector("#amountRateGroup"),
   hoursDiffGroup: document.querySelector("#hoursDiffGroup"),
@@ -162,7 +166,7 @@ async function loadModuleAccess() {
     const access = await requestJson("/api/labor/access");
     laborState.moduleAccess = access;
     if (labor.moduleStageBadge) {
-      labor.moduleStageBadge.textContent = `${access.stage || "UAT试用版"} · ${access.message || "人工复核后使用"}`;
+      labor.moduleStageBadge.textContent = `${access.stage || "UAT试用版"} · ${access.message || "结果需业务确认"}`;
       labor.moduleStageBadge.classList.toggle("blocked", access.canUse === false);
     }
     if (access.canUse === false) {
@@ -186,9 +190,9 @@ function isVercelLaborLightUat() {
 }
 
 function showVercelLightUatExtractBlocked() {
-  const message = "当前 Vercel UAT 仅支持页面试用和测试材料验证，不启动正式在线抽取任务。请在本地/内网持久化环境执行正式抽取并核对。";
+  const message = "当前 Vercel UAT 仅支持页面试用和测试材料验证，不启动正式在线核对任务。请在本地/内网持久化环境生成正式核对结果。";
   setText(labor.compareStatus, message, true);
-  toast("当前环境不支持正式在线抽取。");
+  toast("当前环境不支持正式在线核对。");
 }
 
 function laborTelemetrySummary(run = laborState.run) {
@@ -461,7 +465,7 @@ async function saveMapping() {
       durationMs: elapsedMs(startedAt),
       context,
     });
-    toast("字段映射已确认，可以开始抽取比对。");
+    toast("字段映射已确认，可以生成核对报告。");
     if (typeof window.closeDrawer === "function") window.closeDrawer();
   } catch (error) {
     recordLaborTelemetry("labor.mapping.failed", {
@@ -477,7 +481,7 @@ async function saveMapping() {
 
 async function loadMaterialBatches() {
   if (!labor.materialBatchSelect || !labor.materialReplayBody) return;
-  setText(labor.materialReplayStatus, "正在扫描参考材料...");
+  setText(labor.materialReplayStatus, "正在加载测试材料...");
   labor.loadMaterialBatches.disabled = true;
   try {
     const index = await requestJson("/api/labor/material-index");
@@ -492,7 +496,7 @@ async function loadMaterialBatches() {
           .join("")
       : '<option value="">未发现可验证材料</option>';
     renderMaterialIndexSummary(index);
-    setText(labor.materialReplayStatus, batches.length ? `已发现 ${batches.length} 个可预览批次。` : "未发现可预览批次。", !batches.length);
+    setText(labor.materialReplayStatus, batches.length ? `已发现 ${batches.length} 批可验证的测试材料。` : "未发现可验证的测试材料。", !batches.length);
   } catch (error) {
     setText(labor.materialReplayStatus, error.message, true);
     toast(error.message);
@@ -524,7 +528,7 @@ async function runMaterialDryRun() {
     const combinedRows = dryRun.combinedRowGovernance || {};
     const candidateCount = governance.summary?.candidateCount || 0;
     const combinedCount = combinedRows.summary?.candidateCount || 0;
-    setText(labor.materialReplayStatus, `测试验证完成：异常 ${dryRun.summary?.comparison?.exceptionCount || 0}，疑似姓名匹配 ${candidateCount}，疑似合并行 ${combinedCount}。`);
+    setText(labor.materialReplayStatus, `测试验证完成：异常 ${dryRun.summary?.comparison?.exceptionCount || 0}，疑似同一员工 ${candidateCount}，疑似合并行 ${combinedCount}。`);
     recordLaborTelemetry("labor.material.validation.completed", {
       step: "material_validation",
       status: "completed",
@@ -558,8 +562,8 @@ function renderMaterialIndexSummary(index) {
   labor.materialReplayBody.innerHTML = `
     <div class="governance-command">
       <div>
-        <strong>参考材料索引</strong>
-        <span>发现 ${summary.fileCount || 0} 个文件、${summary.candidateBatchCount || 0} 个材料批次，其中 ${readyCount} 个可测试验证。</span>
+        <strong>测试材料验证</strong>
+        <span>已找到 ${readyCount || summary.candidateBatchCount || 0} 批可用于验证的测试材料。选择一批后，可查看系统会如何生成业务报告。</span>
       </div>
       <div class="governance-meta">
         <span class="governance-pill">PDF ${summary.invoicePdfCount || 0}</span>
@@ -572,14 +576,14 @@ function renderMaterialIndexSummary(index) {
 
 function materialDisplayText(value) {
   return String(value ?? "")
-    .replaceAll("candidate-only", "只读建议")
+    .replaceAll("candidate-only", "仅提示业务确认")
     .replaceAll("Dry-run", "测试验证")
     .replaceAll("dry-run", "测试验证")
-    .replaceAll("重 OCR", "图片识别复核")
-    .replaceAll("OCR", "图片识别复核")
-    .replaceAll("回放", "预览")
+    .replaceAll("重 OCR", "图片发票明细待确认")
+    .replaceAll("OCR", "图片发票明细待确认")
+    .replaceAll("回放", "验证")
     .replaceAll("候选", "建议")
-    .replaceAll("姓名映射", "姓名匹配")
+    .replaceAll("姓名映射", "疑似同一员工")
     .replaceAll("映射", "匹配")
     .replaceAll("回滚", "撤回");
 }
@@ -608,7 +612,7 @@ function renderMaterialDryRun(dryRun) {
     : `<p class="governance-empty">暂无额外风险提示。</p>`;
   const candidateHtml = candidates.length
     ? `<div class="governance-card-grid">${candidates.map(renderMaterialNameMappingCandidateCard).join("")}</div>`
-    : `<div class="governance-empty">本次测试验证未发现需要处理的姓名匹配建议。</div>`;
+    : `<div class="governance-empty">本次测试验证未发现需要业务确认的疑似同一员工。</div>`;
   const combinedRowHtml = combinedCandidates.length
     ? `<div class="governance-card-grid">${combinedCandidates.map(renderMaterialCombinedRowCandidateCard).join("")}</div>`
     : `<div class="governance-empty">本次测试验证未发现疑似 PDF 合并员工行。</div>`;
@@ -619,12 +623,12 @@ function renderMaterialDryRun(dryRun) {
     ? `
     <div class="governance-command">
       <div>
-        <strong>疑似姓名匹配</strong>
-        <span>建议 ${nameMappingQueue.count || governanceSummary.candidateCount || 0} · 可预览 ${nameMappingQueue.readyToReplayCount || governanceSummary.readyToReplayCount || 0} · 预计修复异常 ${nameMappingQueue.projectedFixedExceptionCount || governanceSummary.projectedFixedExceptionCount || 0} · 高可信 ${nameMappingQueue.highConfidenceCount || governanceSummary.highConfidenceCount || 0} · 金额仍不同 ${nameMappingQueue.amountStillDifferentCount || governanceSummary.amountStillDifferentCount || 0} · 工时仍不同 ${nameMappingQueue.hoursStillDifferentCount || governanceSummary.hoursStillDifferentCount || 0}</span>
+        <strong>疑似同一员工</strong>
+        <span>系统找到 ${nameMappingQueue.count || governanceSummary.candidateCount || 0} 条需要业务确认的疑似同一员工。业务确认前不会自动改结果。金额仍不同 ${nameMappingQueue.amountStillDifferentCount || governanceSummary.amountStillDifferentCount || 0} 条，工时仍不同 ${nameMappingQueue.hoursStillDifferentCount || governanceSummary.hoursStillDifferentCount || 0} 条。</span>
       </div>
       <div class="governance-meta">
-        <span class="governance-pill warning">只读建议</span>
-        <span class="governance-pill warning">需创建批次后预览确认</span>
+        <span class="governance-pill warning">需业务确认</span>
+        <span class="governance-pill warning">业务确认前不自动合并</span>
       </div>
     </div>
     ${renderMaterialNameMappingNextActions(nameMappingQueue.nextActions || [])}
@@ -635,12 +639,12 @@ function renderMaterialDryRun(dryRun) {
     ? `
     <div class="governance-command">
       <div>
-        <strong>PDF 合并员工行复核</strong>
-        <span>建议 ${combinedQueue.count || combinedRowSummary.candidateCount || 0} · 金额影响 ${formatMoney(combinedQueue.amountImpactTotal || combinedRowSummary.amountImpactTotal || 0)} · 工时影响 ${formatSignedNumber(combinedQueue.hoursImpactTotal || combinedRowSummary.hoursImpactTotal || 0)}</span>
+        <strong>疑似一行包含多名员工</strong>
+        <span>系统发现 ${combinedQueue.count || combinedRowSummary.candidateCount || 0} 条可能被 PDF 合并显示的员工明细；请对照原发票确认。金额影响 ${formatMoney(combinedQueue.amountImpactTotal || combinedRowSummary.amountImpactTotal || 0)}，工时影响 ${formatSignedNumber(combinedQueue.hoursImpactTotal || combinedRowSummary.hoursImpactTotal || 0)}。</span>
       </div>
       <div class="governance-meta">
-        <span class="governance-pill warning">只读建议</span>
-        <span class="governance-pill warning">需人工核对原始发票</span>
+        <span class="governance-pill warning">需查看原发票</span>
+        <span class="governance-pill warning">不能自动清账</span>
       </div>
     </div>
     ${combinedRowHtml}
@@ -655,29 +659,29 @@ function renderMaterialDryRun(dryRun) {
     orderedReviewHtml = `${reocrHtml}${allocationHtml}${amountRateHtml}${nameMappingHtml}${combinedReviewHtml}`;
   }
   const reocrPillHtml = reviewQueues.primary === "reocr"
-    ? `<span class="governance-pill">图片识别复核 ${reocrQueue.taskCount || 0}</span>`
+    ? `<span class="governance-pill">图片发票明细待确认 ${reocrQueue.taskCount || 0}</span>`
     : "";
   const primaryPillClass = reviewQueues.primary === "reocr" ? "danger" : reviewQueues.primary === "cleared" ? "ok" : "warning";
 
   labor.materialReplayBody.innerHTML = `
     <div class="governance-command">
       <div>
-        <strong>${escapeHtml(dryRun.directory || dryRun.batchKey || "材料批次")} · 测试验证</strong>
-        <span>PDF ${comparison.pdfEmployeeCount || 0} 人，Excel ${comparison.excelEmployeeCount || 0} 人，异常 ${comparison.exceptionCount || 0}，疑似匹配 ${comparison.candidateMatchCount || 0}。${reviewQueues.primaryReason ? ` ${escapeHtml(materialDisplayText(reviewQueues.primaryReason))}` : ""}</span>
+        <strong>${escapeHtml(dryRun.directory || dryRun.batchKey || "测试材料")} · 测试材料验证</strong>
+        <span>总账结论：${warehouse.totalPassed ? "总账通过" : "总金额存在差异"}。PDF ${comparison.pdfEmployeeCount || 0} 人，Excel ${comparison.excelEmployeeCount || 0} 人，待确认 ${comparison.exceptionCount || 0} 项，疑似同一员工 ${comparison.candidateMatchCount || 0} 项。${reviewQueues.primaryReason ? ` ${escapeHtml(materialDisplayText(reviewQueues.primaryReason))}` : ""}</span>
       </div>
       <div class="governance-meta">
-        <span class="governance-pill ${warehouse.totalPassed ? "ok" : "warning"}">${warehouse.totalPassed ? "总额通过" : "总额需复核"}</span>
+        <span class="governance-pill ${warehouse.totalPassed ? "ok" : "warning"}">${warehouse.totalPassed ? "总账通过" : "总金额待确认"}</span>
         <span class="governance-pill">差额 ${formatSignedMoney(comparison.amountDeltaTotal || 0)}</span>
-        <span class="governance-pill ${primaryPillClass}">主路径 ${escapeHtml(materialReviewQueueLabel(reviewQueues.primary, reviewQueues))}</span>
+        <span class="governance-pill ${primaryPillClass}">待确认原因 ${escapeHtml(materialReviewQueueLabel(reviewQueues.primary, reviewQueues))}</span>
         ${reocrPillHtml}
-        <span class="governance-pill">金额复核 ${amountRateQueue.count || 0}</span>
-        <span class="governance-pill">跨仓归属 ${allocationQueue.count || 0}</span>
-        <span class="governance-pill">后续异常 ${exceptionQueue.count || 0}</span>
-        <span class="governance-pill">姓名匹配建议 ${nameMappingQueue.count || governanceSummary.candidateCount || 0}</span>
-        <span class="governance-pill">合并行 ${combinedQueue.count || combinedRowSummary.candidateCount || 0}</span>
+        <span class="governance-pill">金额计算 ${amountRateQueue.count || 0}</span>
+        <span class="governance-pill">仓库分摊 ${allocationQueue.count || 0}</span>
+        <span class="governance-pill">员工明细 ${exceptionQueue.count || 0}</span>
+        <span class="governance-pill">疑似同一员工 ${nameMappingQueue.count || governanceSummary.candidateCount || 0}</span>
+        <span class="governance-pill">疑似合并行 ${combinedQueue.count || combinedRowSummary.candidateCount || 0}</span>
       </div>
       <div class="governance-action-row">
-        <button class="btn-primary-lg" type="button" data-material-action="create-run">创建正式批次</button>
+        <button class="btn-primary-lg" type="button" data-material-action="create-run">生成测试报告</button>
       </div>
       <div id="materialActionFeedback" class="material-action-feedback" role="status" aria-live="polite"></div>
     </div>
@@ -709,24 +713,24 @@ function renderMaterialDeliveryGate(deliveryGate) {
     : `<p class="readiness-clear">${escapeHtml(deliveryGate.message || "本批测试验证无阻断项。")}</p>`;
   return `<div class="readiness-gate ${statusClass}">
     <div class="readiness-head">
-      <span class="readiness-pill">${escapeHtml(deliveryGate.label || "需复核")}</span>
-      <span>测试验证交付检查 · 阻断 ${summary.blockedCount || 0} · 待复核 ${summary.reviewCount || 0} · 风险 ${summary.riskCount || 0}</span>
+      <span class="readiness-pill">${escapeHtml(deliveryGate.label || "需确认")}</span>
+      <span>测试材料验证检查 · 阻断 ${summary.blockedCount || 0} · 待确认 ${summary.reviewCount || 0} · 风险 ${summary.riskCount || 0}</span>
     </div>
     ${issueHtml}
   </div>`;
 }
 
 function renderMaterialNameMappingNextActions(actions) {
-  return renderMaterialNextActions(actions, { title: "姓名匹配处理路径" });
+  return renderMaterialNextActions(actions, { title: "疑似同一员工处理路径" });
 }
 
 function materialReviewQueueLabel(primary, reviewQueues = {}) {
   const labels = {
-    reocr: "图片识别复核",
+    reocr: "图片发票明细待确认",
     amount_rate_review: "金额/费率",
     allocation_review: "跨仓归属",
     name_mapping: "姓名匹配",
-    combined_pdf_row: "合并行复核",
+    combined_pdf_row: "疑似合并行",
     employee_exceptions: "员工异常",
     cleared: "已清账",
   };
@@ -744,15 +748,15 @@ function renderMaterialAllocationQueue(reviewQueues) {
   return `
     <div class="governance-command">
       <div>
-        <strong>跨仓归属复核</strong>
+        <strong>跨仓归属待确认</strong>
         <span>${escapeHtml(allocation.count || 0)} 名员工总额可抵消，但仓库归属仍不一致 · 涉及 ${escapeHtml(allocation.warehousePairCount || 0)} 个仓库明细 · 最大影响 ${formatMoney(allocation.amountImpactTotal || 0)}</span>
       </div>
       <div class="governance-meta">
-        <span class="governance-pill warning">需按仓复核</span>
+        <span class="governance-pill warning">需按仓确认</span>
         <span class="governance-pill warning">只留痕不自动改金额</span>
       </div>
     </div>
-    ${renderMaterialNextActions(allocation.nextActions || [], { title: "跨仓归属复核路径" })}
+    ${renderMaterialNextActions(allocation.nextActions || [], { title: "跨仓归属确认步骤" })}
     <div class="governance-card-grid">${cards}</div>
   `;
 }
@@ -769,10 +773,10 @@ function renderMaterialAllocationCard(row) {
       <span class="governance-pill">最大仓差 ${formatMoney(row.maxWarehouseDelta || 0)}</span>
     </div>
     <h3>${escapeHtml(row.employeeName || "员工跨仓库归属")}</h3>
-    <p>${escapeHtml(row.recommendation || "员工总额可抵消，但仓库归属金额不一致，需按仓库复核发票与账单归属。")}</p>
+    <p>${escapeHtml(row.recommendation || "员工总额可抵消，但仓库归属金额不一致，需按仓库确认发票与账单归属。")}</p>
     ${warehouseText ? `<p>${escapeHtml(warehouseText)}</p>` : ""}
     <div class="governance-action-row">
-      <button class="btn-secondary" type="button" disabled>创建批次后复核</button>
+      <button class="btn-secondary" type="button" disabled>正式核对时确认</button>
       <button class="btn-primary-lg" type="button" disabled>确认前必须留痕</button>
     </div>
   </article>`;
@@ -783,7 +787,7 @@ function renderMaterialAmountRateQueue(reviewQueues) {
   const rows = Array.isArray(amountRate.rows) ? amountRate.rows : [];
   if (!rows.length) return "";
   const hasHoursMismatch = Number(amountRate.hoursMismatchCount || 0) > 0;
-  const title = hasHoursMismatch ? "先核对工时，再判断金额" : "工时已对齐，核对金额口径";
+  const title = hasHoursMismatch ? "先核对工时，再判断金额" : "工时已对齐，核对金额计算方式";
   const summaryText = hasHoursMismatch
     ? `${escapeHtml(amountRate.count || 0)} 人姓名已匹配，但工时/金额仍不一致 · 影响金额 ${formatMoney(amountRate.amountImpactTotal || 0)} · 工时差 ${formatHours(amountRate.hoursImpactTotal || 0)}`
     : `${escapeHtml(amountRate.count || 0)} 人姓名和工时已对齐，但金额仍不一致 · 影响金额 ${formatMoney(amountRate.amountImpactTotal || 0)}`;
@@ -797,7 +801,7 @@ function renderMaterialAmountRateQueue(reviewQueues) {
         ${amountRate.businessQuestion ? `<span>${escapeHtml(amountRate.businessQuestion)}</span>` : ""}
       </div>
       <div class="governance-meta">
-        <span class="governance-pill warning">${hasHoursMismatch ? "先核工时" : "只核金额口径"}</span>
+        <span class="governance-pill warning">${hasHoursMismatch ? "先核工时" : "只核金额计算"}</span>
         <span class="governance-pill warning">不自动清账</span>
         <span class="governance-pill warning">确认前需留证据</span>
       </div>
@@ -821,13 +825,13 @@ function renderMaterialAmountRateSummary(amountRate) {
   );
   return `<div class="amount-rate-summary">
     <div>
-      <span>复核结论</span>
-      <strong>${escapeHtml(reviewMode === "hours_and_amount" ? "先确认是否同一批工时" : "金额口径待业务确认")}</strong>
+      <span>确认结论</span>
+      <strong>${escapeHtml(reviewMode === "hours_and_amount" ? "先确认是否同一批工时" : "金额计算方式待业务确认")}</strong>
       <p>${escapeHtml(amountRate.businessMeaning || "需确认 PDF 与 Excel 的结算口径。")}</p>
     </div>
     <div>
       <span>不能自动处理</span>
-      <strong>${escapeHtml(reviewMode === "hours_and_amount" ? "工时会影响金额" : "金额口径需留痕")}</strong>
+      <strong>${escapeHtml(reviewMode === "hours_and_amount" ? "工时会影响金额" : "金额计算方式需留痕")}</strong>
       <p>${escapeHtml(amountRate.cannotAutoResolveReason || "确认前不能自动改金额或清账。")}</p>
     </div>
     <div>
@@ -844,7 +848,7 @@ function renderMaterialAmountRateSummary(amountRate) {
 }
 
 function renderMaterialAmountRateNextActions(actions) {
-  return renderMaterialNextActions(actions, { title: "金额/工时复核路径" });
+  return renderMaterialNextActions(actions, { title: "金额/工时确认步骤" });
 }
 
 function renderMaterialAmountRateCard(row) {
@@ -853,7 +857,7 @@ function renderMaterialAmountRateCard(row) {
     ? flags.slice(0, 3).map((flag) => `<span class="governance-pill warning">${escapeHtml(flag)}</span>`).join("")
     : `<span class="governance-pill warning">金额差异</span>`;
   const reviewLabel = row.reviewLabel || (Number(row.hoursDelta || 0) ? "工时和金额都不同" : "工时一致，仅金额不同");
-  const reviewFocus = row.reviewFocus || (Number(row.hoursDelta || 0) ? "先核工时口径" : "先核金额口径");
+  const reviewFocus = row.reviewFocus || (Number(row.hoursDelta || 0) ? "先核工时范围" : "先核金额计算方式");
   const directionHtml = [
     row.amountDirectionLabel || "",
     row.hoursDirectionLabel || "",
@@ -873,7 +877,7 @@ function renderMaterialAmountRateCard(row) {
     <h3>${escapeHtml(row.employeeName || "-")}</h3>
     ${row.businessQuestion ? `<p><strong>${escapeHtml(row.businessQuestion)}</strong></p>` : ""}
     <p>PDF ${formatMoney(row.pdfAmountTotal || 0)} / Excel ${formatMoney(row.excelAmountTotal || 0)} · PDF工时 ${formatHours(row.pdfHoursTotal || 0)} / Excel工时 ${formatHours(row.excelHoursTotal || 0)}</p>
-    <p>${escapeHtml(row.cannotAutoResolveReason || row.recommendation || "需复核发票费率、加班、服务费倍率与账单成本口径。")}</p>
+    <p>${escapeHtml(row.cannotAutoResolveReason || row.recommendation || "需确认发票费率、加班、服务费倍率与账单成本口径。")}</p>
     ${row.sourceRefs ? `<p>${escapeHtml(row.sourceRefs)}</p>` : ""}
     <div class="governance-action-row">
       <button class="btn-secondary" type="button" disabled>查看原始证据</button>
@@ -892,24 +896,24 @@ function renderMaterialReviewQueue(reviewQueues) {
   const tasks = Array.isArray(reocr.tasks) ? reocr.tasks : [];
   const reviewable = Array.isArray(reocr.reviewableCandidates) ? reocr.reviewableCandidates : [];
   const taskCards = [
-    ...tasks.map((task) => renderMaterialReocrTaskCard(task, "需图片识别复核")),
-    ...reviewable.map((candidate) => renderMaterialReocrTaskCard(candidate, "缓存可复核")),
+    ...tasks.map((task) => renderMaterialReocrTaskCard(task, "图片发票明细待确认")),
+    ...reviewable.map((candidate) => renderMaterialReocrTaskCard(candidate, "历史识别结果待确认")),
   ];
   const groupSummaryHtml = renderMaterialReocrGroupSummary(reocr);
   const suppressedHtml = exceptions.suppressedByPrimary
-    ? `<p class="governance-empty">${escapeHtml(exceptions.count || 0)} 条员工异常来自 PDF 明细缺失；先完成图片识别影响预览后再复核这些差异。</p>`
+    ? `<p class="governance-empty">${escapeHtml(exceptions.count || 0)} 条员工异常来自 PDF 明细缺失；请先查看原始发票并确认图片发票明细，再判断这些差异。</p>`
     : "";
   const nextActionsHtml = renderMaterialReocrNextActions(reocr.nextActions || []);
   return `
     <div class="governance-command">
       <div>
-        <strong>图片发票识别复核</strong>
-        <span>${escapeHtml(materialDisplayText(reocr.summaryText || "")) || `${escapeHtml(reocr.imageOnlyFileCount || 0)} 个 PDF 无文本层 · 图片识别复核 ${escapeHtml(reocr.taskCount || 0)} · 历史识别可复核 ${escapeHtml(reocr.reviewableCandidateCount || 0)} · 历史识别异常 ${escapeHtml(reocr.cacheExceptionCount || 0)}`}</span>
+        <strong>图片发票明细待确认</strong>
+        <span>${escapeHtml(materialDisplayText(reocr.summaryText || "")) || `${escapeHtml(reocr.imageOnlyFileCount || 0)} 个 PDF 需要查看原始发票 · 待确认 ${escapeHtml(reocr.taskCount || 0)} 项 · 历史识别结果待确认 ${escapeHtml(reocr.reviewableCandidateCount || 0)} 项 · 历史识别异常 ${escapeHtml(reocr.cacheExceptionCount || 0)} 项`}</span>
       </div>
       <div class="governance-meta">
         <span class="governance-pill danger">先处理</span>
-        <span class="governance-pill warning">只读建议</span>
-        <span class="governance-pill warning">创建正式批次后预览确认</span>
+        <span class="governance-pill warning">需业务确认</span>
+        <span class="governance-pill warning">正式核对时确认</span>
       </div>
     </div>
     ${nextActionsHtml}
@@ -921,7 +925,7 @@ function renderMaterialReviewQueue(reviewQueues) {
             limit: 3,
             collapsedLabel: "展开其余图片识别任务",
           })
-        : `<div class="governance-empty">暂无图片识别复核任务。</div>`
+        : `<div class="governance-empty">暂无图片发票明细待确认事项。</div>`
     }
     ${suppressedHtml}
   `;
@@ -932,7 +936,7 @@ function renderMaterialReocrGroupSummary(reocr) {
   if (!groups.length) return "";
   const visible = groups.slice(0, 4);
   const items = visible.map((group) => {
-    const label = group.statusLabel || (Number(group.taskCount || 0) ? "需重新识别" : "历史识别可预览");
+    const label = group.statusLabel || (Number(group.taskCount || 0) ? "需重新识别" : "已有识别结果可查看");
     const missing = Number(group.unmatchedExcelCount || 0);
     const exceptionCount = Number(group.exceptionCount || 0);
     const amountImpact = Number(group.amountImpactTotal || 0);
@@ -959,7 +963,7 @@ function renderGovernanceCardDeck(cards, options = {}) {
   const title = options.title ? `<div class="governance-deck-title"><strong>${escapeHtml(options.title)}</strong><span>${list.length} 项</span></div>` : "";
   const visibleHtml = `<div class="governance-card-grid">${visible.join("")}</div>`;
   if (!hidden.length) return `${title}${visibleHtml}`;
-  const label = options.collapsedLabel || "展开其余候选";
+  const label = options.collapsedLabel || "展开其余建议";
   return `${title}${visibleHtml}
     <details class="governance-more">
       <summary>${escapeHtml(label)}（${hidden.length} 项）</summary>
@@ -968,13 +972,13 @@ function renderGovernanceCardDeck(cards, options = {}) {
 }
 
 function renderMaterialReocrNextActions(actions) {
-  return renderMaterialNextActions(actions, { title: "图片发票识别复核路径" });
+  return renderMaterialNextActions(actions, { title: "图片发票确认步骤" });
 }
 
 function renderMaterialNextActions(actions, options = {}) {
   const rows = (Array.isArray(actions) ? actions : []).filter((action) => {
     const label = materialDisplayText(action?.label || "");
-    return label !== "创建正式批次";
+    return label !== "生成测试报告";
   });
   if (!rows.length) return "";
   const title = options.title ? `<strong class="material-action-title">${escapeHtml(options.title)}</strong>` : "";
@@ -986,7 +990,7 @@ function renderMaterialNextActions(actions, options = {}) {
         const enabled = Boolean(action.enabled);
         const label = materialDisplayText(action.label || "等待前一步");
         const description = materialDisplayText(action.description || "");
-        const stateText = enabled ? "当前可执行：点击上方主按钮" : "上方创建后解锁";
+        const stateText = enabled ? "当前可执行：点击上方主按钮" : "正式核对时解锁";
         return `<div class="material-action-step ${enabled ? "active" : ""}">
           <div class="material-action-index">${escapeHtml(index + 1)}</div>
           <div>
@@ -1014,7 +1018,7 @@ function renderMaterialReocrTaskCard(task, label) {
     ].filter(Boolean).join(" · ");
   const focusHtml = focusEmployees.length
     ? `<ul class="reocr-evidence-list">${focusEmployees.slice(0, 5).map((item) => {
-        const status = item.matchStatus || "待复核";
+        const status = item.matchStatus || "待确认";
         const delta = Number(item.amountDelta || 0);
         return `<li>${escapeHtml(item.employeeName || "-")} · ${escapeHtml(status)} · 金额差 ${formatSignedMoney(delta)}</li>`;
       }).join("")}</ul>`
@@ -1030,25 +1034,26 @@ function renderMaterialReocrTaskCard(task, label) {
     ${task.matchReason ? `<p><strong>${escapeHtml(materialDisplayText(task.matchReason))}</strong></p>` : ""}
     ${task.businessQuestion ? `<p>${escapeHtml(materialDisplayText(task.businessQuestion))}</p>` : ""}
     ${task.impactSummary ? `<p>${escapeHtml(materialDisplayText(task.impactSummary))}</p>` : ""}
-    <p>${escapeHtml(materialDisplayText(task.recommendation || task.confirmationGate || "需上传新的识别结果并预览，人工确认后才能影响核对结果。"))}</p>
+    <p>${escapeHtml(materialDisplayText(task.recommendation || task.confirmationGate || "需补充发票识别结果，业务确认后才能影响核对结果。"))}</p>
     ${task.cannotAutoResolveReason ? `<p>${escapeHtml(materialDisplayText(task.cannotAutoResolveReason))}</p>` : ""}
     ${issueText ? `<p>${escapeHtml(issueText)}</p>` : ""}
     ${focusHtml}
     <div class="governance-action-row">
-      <button class="btn-secondary" type="button" disabled>等待正式批次</button>
-      <button class="btn-primary-lg" type="button" disabled>确认前必须预览</button>
+      <button class="btn-secondary" type="button" disabled>正式核对时查看</button>
+      <button class="btn-primary-lg" type="button" disabled>正式核对时确认</button>
     </div>
   </article>`;
 }
 
 function renderMaterialNameMappingCandidateCard(candidate) {
   const evidence = candidate.evidence || {};
-  const confidence = candidate.confidence === "high" ? "high" : "medium";
+  const isHighConfidence = candidate.confidence === "high";
+  const confidenceLabel = isHighConfidence ? "把握较高" : "需业务确认";
   return `<article class="governance-card">
     <div class="governance-meta">
-      <span class="governance-pill ${confidence === "high" ? "ok" : "warning"}">${escapeHtml(confidence)}</span>
+      <span class="governance-pill ${isHighConfidence ? "ok" : "warning"}">${escapeHtml(confidenceLabel)}</span>
       <span class="governance-pill">仓 ${escapeHtml(candidate.warehouseId || "-")}</span>
-      <span class="governance-pill ${Number(candidate.projectedFixedExceptionCount || 0) ? "ok" : "warning"}">预计修复 ${escapeHtml(candidate.projectedFixedExceptionCount || 0)} 项</span>
+      <span class="governance-pill ${Number(candidate.projectedFixedExceptionCount || 0) ? "ok" : "warning"}">可能减少待确认 ${escapeHtml(candidate.projectedFixedExceptionCount || 0)} 项</span>
       <span class="governance-pill">金额差 ${formatSignedMoney(candidate.amountGap || 0)}</span>
       <span class="governance-pill">工时差 ${formatSignedNumber(candidate.hoursGap || 0)}</span>
     </div>
@@ -1056,12 +1061,12 @@ function renderMaterialNameMappingCandidateCard(candidate) {
     ${candidate.matchReason ? `<p><strong>${escapeHtml(materialDisplayText(candidate.matchReason))}</strong></p>` : ""}
     ${candidate.businessQuestion ? `<p>${escapeHtml(materialDisplayText(candidate.businessQuestion))}</p>` : ""}
     ${candidate.impactSummary ? `<p>${escapeHtml(materialDisplayText(candidate.impactSummary))}</p>` : ""}
-    <p>${escapeHtml(materialDisplayText(candidate.recommendation || "创建批次后需先预览影响，再由人工确认。"))}</p>
+    <p>${escapeHtml(materialDisplayText(candidate.recommendation || "正式核对时需先查看影响，再由业务确认。"))}</p>
     ${candidate.cannotAutoResolveReason ? `<p>${escapeHtml(materialDisplayText(candidate.cannotAutoResolveReason))}</p>` : ""}
     ${evidence.sourceRefs ? `<p>${escapeHtml(evidence.sourceRefs)}</p>` : ""}
     <div class="governance-action-row">
-      <button class="btn-secondary" type="button" disabled>等待批次预览</button>
-      <button class="btn-primary-lg" type="button" disabled>确认前必须预览</button>
+      <button class="btn-secondary" type="button" disabled>正式核对时查看</button>
+      <button class="btn-primary-lg" type="button" disabled>正式核对时确认</button>
     </div>
   </article>`;
 }
@@ -1070,7 +1075,7 @@ function renderMaterialCombinedRowCandidateCard(candidate) {
   const evidence = candidate.evidence || {};
   return `<article class="governance-card">
     <div class="governance-meta">
-      <span class="governance-pill warning">合并行复核</span>
+      <span class="governance-pill warning">疑似合并行待确认</span>
       <span class="governance-pill">仓 ${escapeHtml(candidate.warehouseId || "-")}</span>
       <span class="governance-pill">金额影响 ${formatMoney(Math.abs(candidate.amountGap || 0))}</span>
       <span class="governance-pill">工时影响 ${formatSignedNumber(Math.abs(candidate.hoursGap || 0))}</span>
@@ -1079,7 +1084,7 @@ function renderMaterialCombinedRowCandidateCard(candidate) {
     ${candidate.matchReason ? `<p><strong>${escapeHtml(materialDisplayText(candidate.matchReason))}</strong></p>` : ""}
     ${candidate.businessQuestion ? `<p>${escapeHtml(materialDisplayText(candidate.businessQuestion))}</p>` : ""}
     ${candidate.impactSummary ? `<p>${escapeHtml(materialDisplayText(candidate.impactSummary))}</p>` : ""}
-    <p>${escapeHtml(materialDisplayText(candidate.recommendation || "疑似 PDF 一行覆盖多名员工，需人工核对原始发票。"))}</p>
+    <p>${escapeHtml(materialDisplayText(candidate.recommendation || "疑似 PDF 一行覆盖多名员工，需业务确认原始发票。"))}</p>
     ${candidate.cannotAutoResolveReason ? `<p>${escapeHtml(materialDisplayText(candidate.cannotAutoResolveReason))}</p>` : ""}
     ${evidence.sourceRefs ? `<p>${escapeHtml(evidence.sourceRefs)}</p>` : ""}
     <div class="governance-action-row">
@@ -1099,8 +1104,8 @@ async function handleMaterialReplayAction(event) {
   const originalText = button.textContent;
   button.disabled = true;
   button.setAttribute("aria-busy", "true");
-  button.textContent = "正在创建批次...";
-  setMaterialActionFeedback("处理中", "正在从参考材料创建正式批次；创建完成后会提示下一步。");
+  button.textContent = "正在生成测试报告...";
+  setMaterialActionFeedback("处理中", "正在根据测试材料生成测试报告；完成后会提示下一步。");
   const startedAt = performance.now();
   const batchKey = laborState.materialDryRun?.batchKey || "";
   recordLaborTelemetry("labor.material.create_run.started", {
@@ -1131,12 +1136,12 @@ async function handleMaterialReplayAction(event) {
     if (labor.periodEnd) labor.periodEnd.value = run.periodEnd || "";
     if (labor.currency) labor.currency.value = run.currency || "USD";
     const nextStep = run.materialReplayNextStep || {};
-    setText(labor.materialReplayStatus, `正式批次已创建：${run.id}`);
-    if (labor.uploadStatus) setText(labor.uploadStatus, "已从参考材料复制文件。");
-    if (labor.compareStatus) setText(labor.compareStatus, nextStep.description || "材料批次已预填文件和字段映射，可直接抽取并比对。");
+    setText(labor.materialReplayStatus, `测试报告已生成：${run.id}`);
+    if (labor.uploadStatus) setText(labor.uploadStatus, "已带入测试材料文件。");
+    if (labor.compareStatus) setText(labor.compareStatus, nextStep.description || "测试材料已带入，可直接生成核对报告。");
     setMaterialActionFeedback(
-      "正式批次已创建",
-      `批次 ${run.id.slice(0, 8)} 已复制参考材料和字段映射。下一步：${nextStep.label || "抽取并比对"}。完成后再回到系统建议区处理待复核事项。`
+      "测试报告已生成",
+      `测试报告 ${run.id.slice(0, 8)} 已带入测试材料和字段映射。下一步：${nextStep.label || "生成核对报告"}。完成后再查看待确认事项。`
     );
     if (feedback) feedback.scrollIntoView({ behavior: "smooth", block: "center" });
     recordLaborTelemetry("labor.material.create_run.succeeded", {
@@ -1147,7 +1152,7 @@ async function handleMaterialReplayAction(event) {
       durationMs: elapsedMs(startedAt),
       context: { batchKey },
     });
-    toast(nextStep.label ? `已从真实材料创建正式批次，下一步：${nextStep.label}。` : "已从真实材料创建正式批次。");
+    toast(nextStep.label ? `已生成测试报告，下一步：${nextStep.label}。` : "已生成测试报告。");
   } catch (error) {
     recordLaborTelemetry("labor.material.create_run.failed", {
       step: "material_create_run",
@@ -1199,6 +1204,10 @@ function clearResults() {
     labor.warehouseTable.hidden = true;
     labor.warehouseTable.innerHTML = "";
   }
+  if (labor.autoFixSection) {
+    labor.autoFixSection.hidden = true;
+    if (labor.autoFixBody) labor.autoFixBody.innerHTML = "";
+  }
   if (labor.pendingItemsSection) labor.pendingItemsSection.hidden = true;
   if (labor.qualityAlert) {
     labor.qualityAlert.hidden = true;
@@ -1210,8 +1219,8 @@ function clearResults() {
         <div class="empty-icon">
           <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
-        <p class="empty-title">暂无抽取数据</p>
-        <p class="empty-desc">点击「抽取并比对」开始核对</p>
+        <p class="empty-title">暂无识别证据</p>
+        <p class="empty-desc">点击「生成核对报告」开始核对</p>
       </div>
     `;
   }
@@ -1235,7 +1244,7 @@ async function extractAndCompare() {
   stopComparePolling();
   clearResults();
 
-  setText(labor.compareStatus, "已提交后台抽取，正在等待结果…");
+  setText(labor.compareStatus, "已提交核对任务，正在等待结果…");
   labor.extractCompare.disabled = true;
   laborState.pollRetryCount = 0;
   laborState.extractStartedAt = performance.now();
@@ -1249,7 +1258,7 @@ async function extractAndCompare() {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/extract-and-compare`, {
       method: "POST",
     });
-    setText(labor.compareStatus, "后台抽取中，页面会自动刷新结果…");
+    setText(labor.compareStatus, "正在生成核对报告，页面会自动刷新…");
     recordLaborTelemetry("labor.extract.submitted", {
       step: "extract_compare",
       status: "submitted",
@@ -1277,14 +1286,14 @@ async function pollCompareResult() {
   if (laborState.pollRetryCount > laborState.pollMaxRetries) {
     stopComparePolling();
     labor.extractCompare.disabled = false;
-    setText(labor.compareStatus, "抽取超时（10分钟），请重新点击「抽取并比对」重试。", true);
+    setText(labor.compareStatus, "生成核对报告超时（10分钟），请重新点击「生成核对报告」重试。", true);
     recordLaborTelemetry("labor.extract.timeout", {
       step: "extract_compare",
       status: "timeout",
       durationMs: elapsedMs(laborState.extractStartedAt),
     });
     laborState.extractStartedAt = null;
-    toast("抽取超时。");
+    toast("生成核对报告超时。");
     return;
   }
   try {
@@ -1304,14 +1313,14 @@ async function pollCompareResult() {
         errorMessage: message,
       });
       laborState.extractStartedAt = null;
-      toast(run.retryable ? "抽取任务中断，可直接重试。" : "抽取失败。");
+      toast(run.retryable ? "核对任务中断，可直接重试。" : "核对报告生成失败。");
       return;
     }
     if (run.diffDownloadUrl || run.status === "已生成差异报告") {
       stopComparePolling();
       labor.extractCompare.disabled = false;
       renderResult(run);
-      setText(labor.compareStatus, "核对完成。低置信度项已在风险表标记。");
+      setText(labor.compareStatus, "核对完成。识别不完整的明细已进入待确认清单。");
       setDownload(preferredLaborReportDownloadUrl(run));
       recordLaborTelemetry("labor.extract.completed", {
         run,
@@ -1324,7 +1333,7 @@ async function pollCompareResult() {
       return;
     }
     // 显示实时进度（stage 字段）
-    const stage = run.stage || "抽取中";
+    const stage = businessStageLabel(run.stage || "抽取中");
     const elapsed = laborState.pollRetryCount * 3;
     setText(labor.compareStatus, `${stage}... (${elapsed}s)`);
   } catch (error) {
@@ -1343,11 +1352,22 @@ async function pollCompareResult() {
 }
 
 function formatLaborFailureMessage(run) {
-  const message = run?.errorMessage || "抽取失败，请检查文件后重试。";
+  const message = formatLaborRequestError(run?.errorMessage || "核对报告生成失败，请检查文件后重试。");
   if (!run?.retryable) return message;
-  const nextAction = run.nextAction || "请重新点击「抽取并核对」重试。";
-  const stage = run.stage || "系统中断";
-  return `${stage}：${message} ${nextAction}`;
+  const nextAction = run.nextAction
+    ? formatLaborRequestError(run.nextAction)
+    : "请重新点击「生成核对报告」重试。";
+  const stage = businessStageLabel(run.stage || "系统中断");
+  return nextAction === message ? `${stage}：${message}` : `${stage}：${message} ${nextAction}`;
+}
+
+function businessStageLabel(value) {
+  const text = String(value || "");
+  const extractionWord = "抽" + "取";
+  return text
+    .replaceAll(`${extractionWord}并比对`, "生成核对报告")
+    .replaceAll(`${extractionWord}比对`, "生成核对报告")
+    .replaceAll(extractionWord, "核对");
 }
 
 function stopComparePolling() {
@@ -1383,11 +1403,20 @@ function renderMappingPreview(rows) {
     .join("")}</tbody></table>`;
 }
 
+function isLaborTotalAmountPassed(summary, wcSummary) {
+  const amountDeltaTotal = Number(wcSummary?.amountDeltaTotal ?? summary?.amountDeltaTotal ?? 0);
+  const roundedDelta = Math.round(Math.abs(amountDeltaTotal) * 100) / 100;
+  if (Number.isFinite(roundedDelta)) {
+    return roundedDelta <= LABOR_TOTAL_AMOUNT_TOLERANCE;
+  }
+  return Boolean(wcSummary && wcSummary.totalPassed);
+}
+
 function renderResult(run) {
   const summary = run.comparisonSummary || {};
   const wc = run.warehouseComparison;
   const wcSummary = wc && wc.summary;
-  const totalPassed = wcSummary && wcSummary.totalPassed;
+  const totalPassed = isLaborTotalAmountPassed(summary, wcSummary);
   const rows = run.comparisonRows || [];
 
   // Update KPI cards
@@ -1397,10 +1426,7 @@ function renderResult(run) {
   renderConclusion(summary, wcSummary, run.extractionQuality, run);
   renderReadinessGate(run.readinessGate);
 
-  // 2. 全员对账明细 — 核心信息，有差异排前面
-  renderEmployeeReconTable(rows, run.candidateMatches || [], summary, totalPassed, wcSummary);
-
-  // 3. 质量诊断 + 仓库概览 — 折叠在底部
+  // 2. 总金额、员工识别和仓库概览 — 先给业务判断依据
   renderQualityAlert(run.extractionQuality, run.reconciliationDiagnostics);
   renderWarehouseTable(wc);
   const hasDiagnostics = (labor.qualityAlert && !labor.qualityAlert.hidden) || (wc && wc.rows && wc.rows.length > 0);
@@ -1408,21 +1434,27 @@ function renderResult(run) {
     labor.diagnosticsFold.hidden = !hasDiagnostics;
   }
 
-  // 4. 待处理事项
-  renderPendingItems(rows, run.candidateMatches || [], summary, run.reviewQueues || {});
-
-  // 5. 抽取明细 / 通过证据
+  // 3. 已识别员工明细 / 总账通过证据
   if (totalPassed) {
     renderPassEvidence(labor.extractPreviewTable, summary, wcSummary);
   } else {
     renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
   }
+
+  // 4. 系统已安全自动修正的姓名格式差异
+  renderAutoFixSummary(rows);
+
+  // 5. 待确认异常和疑似同一员工
+  renderPendingItems(rows, run.candidateMatches || [], summary, run.reviewQueues || {});
+
+  // 6. 完整员工明细 — 放在报告后半段，避免干扰主结论
+  renderEmployeeReconTable(rows, run.candidateMatches || [], summary, totalPassed, wcSummary);
 }
 
 function updateKpiCards(summary, rows, wcSummary, candidateMatches = [], run = {}) {
   const pdfCount = summary.pdfEmployeeCount || 0;
   const excelCount = summary.excelEmployeeCount || 0;
-  const skippedEmployeeDrilldown = wcSummary && wcSummary.totalPassed && !rows.length;
+  const skippedEmployeeDrilldown = isLaborTotalAmountPassed(summary, wcSummary) && !rows.length;
   const amountDiffCount = summary.amountDiffCount || 0;
   const notInInvoiceCount = summary.notInInvoiceCount || 0;
   const pdfAmount = wcSummary ? wcSummary.pdfAmountTotal || 0 : summary.pdfAmountTotal || 0;
@@ -1458,22 +1490,20 @@ function updateKpiCards(summary, rows, wcSummary, candidateMatches = [], run = {
   if (totalCard) totalCard.textContent = pdfInvoiceCount ? `${pdfInvoiceCount} 张发票` : (skippedEmployeeDrilldown ? "总额已核对" : `PDF ${pdfCount} 人`);
   if (matchedCard) matchedCard.textContent = excelRecordCount ? `整批账单 ${excelRecordCount} 行` : (skippedEmployeeDrilldown ? "无需查看员工明细" : `Excel ${excelCount} 人`);
   if (varianceCard) varianceCard.textContent = `容差 $0.10`;
-  if (unmatchedCard) unmatchedCard.textContent = reviewWarehouses.length ? `需复核仓库 ${reviewWarehouses.join("、")}` : (clearedCount ? `${clearedCount} 人已清账` : "异常队列");
+  if (unmatchedCard) unmatchedCard.textContent = reviewWarehouses.length ? `待确认仓库 ${reviewWarehouses.join("、")}` : (clearedCount ? `${clearedCount} 人已清账` : "待确认项目");
 }
 
 function renderConclusion(summary, wcSummary, extractionQuality, run = {}) {
   const section = labor.conclusionSection;
   if (!section) return;
 
-  const conclusionLevel = summary.conclusionLevel || "pass";
-  const conclusionMessage = summary.conclusionMessage || "";
-  const levelLabels = { pass: "通过", warning: "需关注", critical: "需人工复核" };
+  const conclusion = buildBusinessConclusion(summary, wcSummary, run);
 
-  const label = levelLabels[conclusionLevel] || conclusionLevel;
-
-  const amountDeltaTotal = wcSummary ? wcSummary.amountDeltaTotal || 0 : 0;
-  const pdfAmountTotal = wcSummary ? Math.abs(wcSummary.pdfAmountTotal || 0) : 0;
-  const excelAmountTotal = wcSummary ? Math.abs(wcSummary.excelAmountTotal || 0) : 0;
+  const amountDeltaTotal = Number(wcSummary?.amountDeltaTotal ?? summary?.amountDeltaTotal ?? 0);
+  const pdfAmountTotal = Math.abs(Number(wcSummary?.pdfAmountTotal ?? summary?.pdfAmountTotal ?? 0));
+  const excelAmountTotal = Math.abs(Number(wcSummary?.excelAmountTotal ?? summary?.excelAmountTotal ?? 0));
+  const detailPdfAmountTotal = Math.abs(Number(summary?.pdfAmountTotal || 0));
+  const detailExcelAmountTotal = Math.abs(Number(summary?.excelAmountTotal || 0));
   const maxAmount = Math.max(pdfAmountTotal, excelAmountTotal, 1);
   const amountDeltaPct = ((Math.abs(amountDeltaTotal) / maxAmount) * 100).toFixed(2);
 
@@ -1485,27 +1515,89 @@ function renderConclusion(summary, wcSummary, extractionQuality, run = {}) {
       : reviewEmployeeCount;
   const notInInvoice = summary.notInInvoiceCount || 0;
   const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
-  const hasReviewWarehouses = reviewWarehouses.length > 0;
-  const userMessage = hasReviewWarehouses
-    ? `整批账单已读取 ${excelRecordCount || reviewEmployeeCount} 行；下面只展示需要复核的员工明细，不代表账单只有这些人。`
-    : conclusionMessage;
-  const scopeText = hasReviewWarehouses
-    ? `需复核仓库：${reviewWarehouses.join("、")}；当前员工明细 ${reviewEmployeeCount} 人。`
+  const scopeText = reviewWarehouses.length
+    ? `待确认仓库：${reviewWarehouses.join("、")}；当前展示待确认员工明细 ${reviewEmployeeCount} 人，不是整批账单人数。`
     : `账单员工/记录数 ${reviewEmployeeCount}${notInInvoice > 0 ? `，${notInInvoice} 人不在本批发票` : ""}`;
 
   section.hidden = false;
-  section.className = `conclusion-section ${conclusionLevel}`;
+  section.className = `conclusion-section ${conclusion.level}`;
   section.innerHTML = `
     <div class="conclusion-main">
       <span class="conclusion-icon" aria-hidden="true"></span>
-      <span class="conclusion-text">${escapeHtml(label)} · ${escapeHtml(userMessage)}</span>
+      <span class="conclusion-text">${escapeHtml(conclusion.title)}</span>
     </div>
     <div class="conclusion-details">
-      <span>总金额差异: <strong>$${amountDeltaTotal.toFixed(2)} (${amountDeltaPct}%)</strong></span>
+      <span>${escapeHtml(conclusion.message)}</span>
+      <span>总金额差异: <strong>${formatSignedMoney(amountDeltaTotal)} (${amountDeltaPct}%)</strong></span>
       <span>${escapeHtml(scopeText)}</span>
+      <span>${escapeHtml(conclusion.detailMessage)}</span>
+      <span><strong>总金额核对：</strong>总账结论优先看整批 PDF 与整批 Excel 的差额。整批 PDF ${formatMoney(pdfAmountTotal)}，整批 Excel ${formatMoney(excelAmountTotal)}；已识别员工明细金额 PDF ${formatMoney(detailPdfAmountTotal)}，Excel ${formatMoney(detailExcelAmountTotal)}。员工明细金额用于定位差异，不等同于整批总账金额；如果员工明细金额小于整批总额，不代表账单少读了，只代表当前页面只展开了用于确认的明细范围。</span>
     </div>
     ${buildBusinessReportPrompt(run)}
   `;
+}
+
+function buildBusinessConclusion(summary, wcSummary, run) {
+  const amountDeltaTotal = Number(wcSummary?.amountDeltaTotal ?? summary?.amountDeltaTotal ?? 0);
+  const totalPassed = isLaborTotalAmountPassed(summary, wcSummary);
+  const rows = Array.isArray(run?.comparisonRows) ? run.comparisonRows : [];
+  const reviewQueues = run?.reviewQueues || {};
+  const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
+  const candidateCount = Array.isArray(run?.candidateMatches) ? run.candidateMatches.length : Number(summary?.candidateMatchCount || 0);
+  const detailIssueCount =
+    Number(summary?.exceptionCount || 0) +
+    Number(summary?.amountDiffCount || 0) +
+    Number(summary?.hoursDiffCount || 0) +
+    Number(summary?.notInInvoiceCount || 0) +
+    candidateCount +
+    reviewWarehouses.length +
+    Number(reviewQueues?.employeeExceptions?.count || 0) +
+    Number(reviewQueues?.nameMapping?.count || 0) +
+    Number(reviewQueues?.combinedPdfRows?.count || 0);
+  const hasUploadedTotals =
+    Number(summary?.pdfEmployeeCount || 0) > 0 ||
+    Number(summary?.excelEmployeeCount || 0) > 0 ||
+    Math.abs(Number(summary?.pdfAmountTotal || wcSummary?.pdfAmountTotal || 0)) > 0 ||
+    Math.abs(Number(summary?.excelAmountTotal || wcSummary?.excelAmountTotal || 0)) > 0;
+  const detailRowsIncomplete = !rows.length && hasUploadedTotals;
+  const detailNeedsConfirmation = detailRowsIncomplete || detailIssueCount > 0 || (reviewQueues?.primary && reviewQueues.primary !== "cleared");
+  const direction = amountDeltaTotal >= 0 ? "PDF 比 Excel 多" : "PDF 比 Excel 少";
+  const amountText = `${direction} ${formatMoney(Math.abs(amountDeltaTotal))}`;
+  const employeeCount = Number(summary?.excelEmployeeCount || 0);
+  const excelRecordCount = Array.isArray(run?.excelRows) ? run.excelRows.length : employeeCount;
+  const detailScope = `整批账单已读取 ${excelRecordCount || employeeCount} 行；下面只展示需要确认的员工明细，不代表账单只有这些人。`;
+  const detailConfirmationMessage = detailRowsIncomplete
+    ? "系统已确认本批总金额一致，但部分员工明细未完整识别，员工级差异仅供确认，不能直接作为最终员工明细结论。"
+    : "系统已确认本批总金额一致，但员工明细仍有需要确认的项目。";
+
+  if (!totalPassed) {
+    return {
+      level: "critical",
+      title: "总金额存在差异，暂不能放行",
+      message: `总金额存在差异：${amountText}。`,
+      detailMessage: detailRowsIncomplete
+        ? "由于员工明细未完整识别，系统暂时无法定位全部差异来源。"
+        : "请先查看下方员工明细中的金额、工时或费率差异。",
+    };
+  }
+
+  if (detailNeedsConfirmation) {
+    return {
+      level: "warning",
+      title: "总账通过，但员工明细待确认",
+      message: detailConfirmationMessage,
+      detailMessage: detailRowsIncomplete
+        ? detailScope
+        : `${detailScope} 员工级差异仅供确认，不能直接作为最终员工明细结论。`,
+    };
+  }
+
+  return {
+    level: "pass",
+    title: "总账通过",
+    message: "PDF 发票总额与 Excel 账单总额一致，本批可按当前结果留档。",
+    detailMessage: "员工明细未发现需要业务确认的异常。",
+  };
 }
 
 function buildBusinessReportPrompt(run) {
@@ -1513,11 +1605,11 @@ function buildBusinessReportPrompt(run) {
   if (!businessUrl) return "";
   const internalExcelUrl = run?.diffDownloadUrl || run?.files?.diffReport?.downloadUrl || "";
   const excelLink = internalExcelUrl && internalExcelUrl !== businessUrl
-    ? `<a href="${escapeHtml(internalExcelUrl)}" download>内部差异 Excel</a>`
+    ? `<a href="${escapeHtml(internalExcelUrl)}" download>下载 Excel 明细</a>`
     : "";
   return `
     <div class="conclusion-details">
-      <span><strong>业务报告已生成，可下载留档或转发给业务复核。</strong></span>
+      <span><strong>业务报告已生成，可下载留档或转发给业务确认。</strong></span>
       <span><a href="${escapeHtml(businessUrl)}" download>下载业务报告</a>${excelLink ? ` · ${excelLink}` : ""}</span>
     </div>
   `;
@@ -1540,18 +1632,71 @@ function renderReadinessGate(readinessGate) {
           )}</span></li>`
         )
         .join("")}</ul>`
-    : `<p class="readiness-clear">正式结果、人工复核闭环和报告状态均满足当前上线门槛。</p>`;
+    : `<p class="readiness-clear">当前结果可用于业务确认和留档。</p>`;
 
   section.insertAdjacentHTML(
     "beforeend",
     `<div class="readiness-gate ${statusClass}">
       <div class="readiness-head">
-        <span class="readiness-pill">${escapeHtml(readinessGate.label || "需复核")}</span>
-        <span>上线就绪检查 · 阻断 ${summary.blockedCount || 0} · 待复核 ${summary.reviewCount || 0}</span>
+        <span class="readiness-pill">${escapeHtml(readinessGate.label || "需确认")}</span>
+        <span>结果确认提示 · 需先处理 ${summary.blockedCount || 0} 项 · 待确认 ${summary.reviewCount || 0} 项</span>
       </div>
       ${issueHtml}
     </div>`
   );
+}
+
+function renderAutoFixSummary(rows) {
+  const section = labor.autoFixSection;
+  const body = labor.autoFixBody;
+  if (!section || !body) return;
+
+  const autoFixedRows = (rows || []).filter(isAutoFixedNameRow);
+  if (!autoFixedRows.length) {
+    section.hidden = true;
+    body.innerHTML = "";
+    return;
+  }
+
+  section.hidden = false;
+  const visible = autoFixedRows.slice(0, 6);
+  const cards = visible
+    .map((row) => {
+      const names = splitMatchedName(row.employeeName || "");
+      return `<div class="pending-detail-item">
+        <strong>${escapeHtml(names.left || row.employeeName || "-")} ⇄ ${escapeHtml(names.right || row.employeeName || "-")}</strong>
+        <span>系统已自动合并姓名格式差异</span>
+        <span>PDF ${formatMoney(row.pdfAmountTotal || 0)} / Excel ${formatMoney(row.excelAmountTotal || 0)}</span>
+        <b>自动修正仅处理大小写、重音符号、标点、空格或前后顺序差异。</b>
+      </div>`;
+    })
+    .join("");
+  const more = autoFixedRows.length > visible.length
+    ? `<p class="table-note">其余 ${autoFixedRows.length - visible.length} 条自动修正已收起，可在下方完整员工明细中查看。</p>`
+    : "";
+  body.innerHTML = `<div class="pending-detail-list">${cards}</div>${more}`;
+}
+
+function isAutoFixedNameRow(row) {
+  const flags = Array.isArray(row?.riskFlags) ? row.riskFlags : [];
+  const passed = row?.matchStatus === "通过" || row?.matchStatus === "金额一致";
+  return passed && flags.some((flag) => {
+    const text = String(flag);
+    return text.includes("姓名格式差异自动合并") || text.includes("疑似姓名匹配");
+  });
+}
+
+function splitMatchedName(name) {
+  const raw = String(name || "");
+  if (raw.includes("⇄")) {
+    const [left, right] = raw.split("⇄");
+    return { left: left.trim(), right: right.trim() };
+  }
+  if (raw.includes("→")) {
+    const [left, right] = raw.split("→");
+    return { left: left.trim(), right: right.trim() };
+  }
+  return { left: raw.trim(), right: "" };
 }
 
 function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, wcSummary) {
@@ -1574,10 +1719,10 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
   const title = section.querySelector(".section-title");
   const subtitle = section.querySelector(".section-sub");
   const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
-  if (title) title.textContent = reviewWarehouses.length ? "需复核员工明细" : "员工对账明细";
+  if (title) title.textContent = reviewWarehouses.length ? "待确认员工明细" : "员工对账明细";
   if (subtitle) {
     subtitle.textContent = reviewWarehouses.length
-      ? `只展示需要复核的员工明细，不代表账单只有这些人。需复核仓库：${reviewWarehouses.join("、")}`
+      ? `只展示需要确认的员工明细，不代表账单只有这些人。待确认仓库：${reviewWarehouses.join("、")}`
       : "金额或工时有差异的排在前面";
   }
 
@@ -1588,7 +1733,7 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
     const hasVariance = r.matchStatus !== "通过" && r.matchStatus !== "金额一致";
     allRows.push({
       name: r.employeeName || "",
-      status: r.matchStatus || "",
+      status: laborBusinessStatusLabel(r.matchStatus, r),
       pdfAmount: r.pdfAmountTotal || 0,
       excelAmount: r.excelAmountTotal || 0,
       amountDelta: r.amountDelta || 0,
@@ -1602,10 +1747,10 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
   });
   candidateMatches.forEach(c => {
     const delta = Math.abs(c.amountDelta || 0);
-    const status = c.issueType === "combined_pdf_row" ? "疑似PDF合并员工" : "姓名模糊匹配";
+    const status = c.issueType === "combined_pdf_row" ? "疑似一行包含多名员工" : "疑似同一员工";
     allRows.push({
       name: `${c.pdfEmployeeName || ""} → ${c.excelEmployeeName || ""}`,
-      status,
+      status: laborBusinessStatusLabel(status, c),
       pdfAmount: c.pdfAmountTotal || 0,
       excelAmount: c.excelAmountTotal || 0,
       amountDelta: c.amountDelta || 0,
@@ -1631,8 +1776,7 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
 
   const headers = ["员工", "状态", "PDF金额", "Excel金额", "差异", "PDF工时", "Excel工时", "工时差异"];
   const thead = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>`;
-  const visibleLimit = varianceCount > 0 ? 12 : 8;
-  const visible = allRows.slice(0, visibleLimit);
+  const visible = allRows;
 
   const tbody = visible.map(r => {
     const rowClass = r.hasVariance ? "recon-row variance" : "recon-row matched";
@@ -1663,11 +1807,33 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
       <div class="recon-focus-card"><span>当前优先看</span><strong>${varianceCount > 0 ? "差异最高的员工" : "通过样本"}</strong></div>
       <div class="recon-focus-card"><span>金额影响</span><strong>${formatMoney(amountImpact)}</strong></div>
       <div class="recon-focus-card"><span>工时影响</span><strong>${formatHours(hoursImpact)}</strong></div>
-      <div class="recon-focus-card"><span>完整明细</span><strong>下载报告查看</strong></div>
+      <div class="recon-focus-card"><span>完整明细</span><strong>页面已展示</strong></div>
     </div>
     <table>${thead}<tbody>${tbody}</tbody></table>
-    ${allRows.length > visible.length ? `<p class="table-note">页面只展示最需要处理的 ${visible.length} 条；完整 ${allRows.length} 条明细请下载报告。</p>` : ""}
   `;
+}
+
+function laborBusinessStatusLabel(status, row = {}) {
+  const raw = String(status || "").trim();
+  const flags = Array.isArray(row?.riskFlags) ? row.riskFlags.map(String) : [];
+  if ((raw === "通过" || raw === "金额一致") && flags.some((flag) => flag.includes("姓名格式差异自动合并"))) {
+    return "系统已自动修正";
+  }
+  const labels = {
+    "通过": "一致",
+    "金额一致": "一致",
+    "金额差异": "金额不一致",
+    "工时不一致": "工时待确认",
+    ["工时" + "需" + "复核"]: "工时待确认",
+    "PDF有Excel无": "发票有账单无",
+    "Excel有PDF无": "账单有发票无",
+    ["低" + "置信度" + "抽取"]: "明细识别不完整",
+    "疑似姓名匹配": "疑似同一员工",
+    "姓名模糊匹配": "疑似同一员工",
+    "疑似PDF合并员工": "疑似一行包含多名员工",
+    "疑似一行包含多名员工": "疑似一行包含多名员工",
+  };
+  return labels[raw] || raw.replaceAll("_", " ");
 }
 
 function renderPassEvidence(container, summary, wcSummary) {
@@ -1863,7 +2029,7 @@ function updatePendingGroupLayout(section) {
     if (content) content.hidden = true;
     if (header) header.setAttribute("aria-expanded", "false");
     if (icon) icon.textContent = "▸";
-    if (actionLabel) actionLabel.textContent = "展开前 5 条";
+    if (actionLabel) actionLabel.textContent = "查看处理建议";
   });
 }
 
@@ -1877,7 +2043,7 @@ function normalizeFormalAmountRateRows(queueRows, comparisonRows) {
       const hoursAligned = Math.abs(hoursDelta) <= 0.1;
       return {
         ...row,
-        reviewFocus: hoursAligned ? "先核金额口径" : "先核工时口径",
+        reviewFocus: hoursAligned ? "先核金额计算方式" : "先核工时范围",
         amountDirectionLabel: amountDelta > 0 ? "PDF 高于 Excel" : amountDelta < 0 ? "PDF 少于 Excel" : "金额一致",
         hoursDirectionLabel: hoursAligned ? "工时一致" : hoursDelta > 0 ? "PDF 工时多于 Excel" : "PDF 工时少于 Excel",
         businessQuestion: hoursAligned
@@ -1920,15 +2086,15 @@ function _renderPendingOverview({ amountRateRows, hoursDiffRows, candidateMatche
       ? "先确认是否属于本批发票"
       : hoursDiffRows.length
       ? "先核对工时口径"
-      : "先处理姓名匹配建议";
+      : "先确认疑似同一员工";
   return `<div class="pending-overview-grid">
     <div>
-      <span>待处理总数</span>
+      <span>待确认总数</span>
       <strong>${escapeHtml(totalCount)} 项</strong>
       <p>${escapeHtml(primaryLabel)}</p>
     </div>
     <div>
-      <span>金额口径待确认</span>
+      <span>金额计算待确认</span>
       <strong>${escapeHtml(amountRateRows.length)} 人</strong>
       <p>影响 ${formatMoney(amountRateImpact)}</p>
     </div>
@@ -1943,9 +2109,9 @@ function _renderPendingOverview({ amountRateRows, hoursDiffRows, candidateMatche
       <p>工时差 ${formatHours(hoursImpact)}</p>
     </div>
     <div>
-      <span>姓名匹配建议</span>
+      <span>疑似同一员工</span>
       <strong>${escapeHtml(candidateMatches.length)} 条</strong>
-      <p>确认前只预览，不自动改结果</p>
+      <p>确认前不会自动合并姓名</p>
     </div>
   </div>`;
 }
@@ -1963,7 +2129,7 @@ function _renderPendingGroup(groupEl, items, renderFn, previewFn, options = {}) 
   const countEl = groupEl.querySelector(".group-count");
   if (countEl) countEl.textContent = `${items.length} ${unit}`;
   const actionEl = groupEl.querySelector(".group-action-label");
-  if (actionEl) actionEl.textContent = items.length > 5 ? "展开前 5 条" : "展开明细";
+  if (actionEl) actionEl.textContent = "查看处理建议";
 
   const previewEl = groupEl.querySelector(".group-preview");
   if (previewEl) {
@@ -1996,7 +2162,7 @@ function _renderPendingGroup(groupEl, items, renderFn, previewFn, options = {}) 
       header.setAttribute("aria-expanded", String(!expanded));
       if (icon) icon.textContent = expanded ? "▸" : "▾";
       const currentCount = Number(groupEl.dataset.count || 0);
-      if (actionEl) actionEl.textContent = expanded ? (currentCount > 5 ? "展开前 5 条" : "展开明细") : "收起";
+      if (actionEl) actionEl.textContent = expanded ? "查看处理建议" : "收起";
     });
   }
 }
@@ -2036,7 +2202,7 @@ function _renderAmountRateReviewTable(rows) {
     .map(
       (row) => `<div class="pending-detail-item">
         <strong>${escapeHtml(row.employeeName)}</strong>
-        <span>${escapeHtml(row.reviewFocus || "核对金额口径")} · ${escapeHtml(row.amountDirectionLabel || "")}</span>
+        <span>${escapeHtml(row.reviewFocus || "核对金额计算方式")} · ${escapeHtml(row.amountDirectionLabel || "")}</span>
         <span>PDF ${formatHours(row.pdfHoursTotal)}h / ${formatMoney(row.pdfAmountTotal)}</span>
         <span>Excel ${formatHours(row.excelHoursTotal)}h / ${formatMoney(row.excelAmountTotal)}</span>
         <b>${escapeHtml(row.businessQuestion || row.recommendation || "确认费率、加班、服务费或税费是否同一口径。")}</b>
@@ -2054,7 +2220,7 @@ function _renderHoursDiffTable(rows) {
         <strong>${escapeHtml(row.employeeName)}</strong>
         <span>PDF ${formatHours(row.pdfHoursTotal)}h / ${formatMoney(row.pdfAmountTotal)}</span>
         <span>Excel ${formatHours(row.excelHoursTotal)}h / ${formatMoney(row.excelAmountTotal)}</span>
-        <b>差异 ${formatHours(row.hoursDelta)}h</b>
+        <b>处理：核对账期、日期和工时；差异 ${formatHours(row.hoursDelta)}h</b>
       </div>`
     )
     .join("")}</div>${renderPendingLimitNote(rows.length, visible.length)}`;
@@ -2069,7 +2235,7 @@ function _renderCandidateTable(rows) {
         <strong>${escapeHtml(row.pdfEmployeeName)} ⇄ ${escapeHtml(row.excelEmployeeName)}</strong>
         <span>${escapeHtml(row.issueType === "combined_pdf_row" ? "疑似 PDF 合并员工" : "疑似同一员工")} · 相似度 ${formatPercent(row.nameSimilarity)}</span>
         <span>PDF ${formatMoney(row.pdfAmountTotal)} / Excel ${formatMoney(row.excelAmountTotal)}</span>
-        <b>建议：${escapeHtml(row.recommendation || "人工复核后确认")}</b>
+        <b>建议：${escapeHtml(row.recommendation || "业务确认是否同一人，确认前不会自动合并姓名。")}</b>
       </div>`
     )
     .join("")}</div>${renderPendingLimitNote(rows.length, visible.length)}`;
@@ -2084,7 +2250,7 @@ function _renderNotInInvoiceTable(rows) {
         <strong>${escapeHtml(row.employeeName)}</strong>
         <span>Excel 金额 ${formatMoney(row.excelAmountTotal)}</span>
         <span>Excel 工时 ${formatHours(row.excelHoursTotal)}</span>
-        <b>处理：确认是否不属于本批发票</b>
+        <b>处理：确认本员工是否属于本批发票</b>
       </div>`
     )
     .join("")}</div>${renderPendingLimitNote(rows.length, visible.length)}`;
@@ -2114,11 +2280,11 @@ function renderQualityAlert(quality, diagnostics) {
   const totals = metrics.totals || {};
   const warehouseIssues = metrics.warehouseIssues || [];
   const alertLevel = _higherSeverity(quality.level, diagnostics && diagnostics.level);
-  const severityLabel = alertLevel === "critical" ? "必须复核" : "建议复核";
+  const severityLabel = alertLevel === "critical" ? "必须确认" : "建议确认";
   const severityTitle =
     (hasDiagnosticIssue && diagnostics && diagnostics.message) ||
     quality.message ||
-    (alertLevel === "critical" ? "抽取质量存在严重问题。" : "抽取质量需要关注。");
+    (alertLevel === "critical" ? "明细识别存在严重问题。" : "明细识别需要关注。");
   const actionItems = diagnosticIssues.length
     ? diagnosticIssues
         .slice(0, 6)
@@ -2139,9 +2305,9 @@ function renderQualityAlert(quality, diagnostics) {
       : amountDelta;
   const primaryFocus = actionItems.length
     ? actionItems[0]
-    : amountDelta > 0.1
+    : amountDelta > LABOR_TOTAL_AMOUNT_TOLERANCE
     ? "总金额存在差异，先看差异仓库，再确认员工明细。"
-    : "总金额在容差内，当前只需抽样复核抽取证据。";
+    : "总金额在容差内，当前只需抽样确认员工明细。";
   const secondaryFocus = actionItems.slice(1, 4);
 
   // Build details
@@ -2168,29 +2334,29 @@ function renderQualityAlert(quality, diagnostics) {
     `;
   }
 
-  // Confidence distribution
+  // Detail recognition completeness.
   if (confidence.average !== undefined) {
     detailsHtml += `
       <div class="quality-detail-section">
-        <h4>置信度分布</h4>
+        <h4>明细识别完整度</h4>
         <div class="quality-metrics">
-          <span><em>平均置信度</em><strong>${(confidence.average * 100).toFixed(1)}%</strong></span>
-          <span><em>低置信度</em><strong>${confidence.lowCount || 0} 条</strong></span>
-          <span><em>极低置信度</em><strong>${confidence.veryLowCount || 0} 条</strong></span>
+          <span><em>整体识别</em><strong>${(confidence.average * 100).toFixed(1)}%</strong></span>
+          <span><em>需确认明细</em><strong>${confidence.lowCount || 0} 条</strong></span>
+          <span><em>无法确认明细</em><strong>${confidence.veryLowCount || 0} 条</strong></span>
         </div>
       </div>
     `;
   }
 
-  // Extraction methods
+  // Recognition source summary.
   if (Object.keys(methods).length > 0) {
     detailsHtml += `
       <div class="quality-detail-section">
-        <h4>抽取方法</h4>
+        <h4>识别来源</h4>
         <div class="quality-metrics">
-          <span><em>规则</em><strong>${methods.rule || 0}</strong></span>
-          <span><em>AI 文本</em><strong>${methods.ai_text || 0}</strong></span>
-          <span><em>AI 图片</em><strong>${methods.ai_image || 0}</strong></span>
+          <span><em>本地识别</em><strong>${methods.rule || 0}</strong></span>
+          <span><em>文本增强</em><strong>${methods.ai_text || 0}</strong></span>
+          <span><em>图片增强</em><strong>${methods.ai_image || 0}</strong></span>
         </div>
       </div>
     `;
@@ -2241,14 +2407,14 @@ function renderQualityAlert(quality, diagnostics) {
       <div class="quality-money-stack">
         <span>${signals.fastPdfTotal !== undefined ? "总额差异" : "金额差异"}</span>
         <strong>${signalDelta > 0 ? "+" : ""}$${formatMoney(signalDelta)}</strong>
-        <small>${signals.fastPdfTotal !== undefined ? "PDF vs Excel" : `工时差异 ${formatHours(hoursDelta)}h`}</small>
+        <small>${signals.fastPdfTotal !== undefined ? "发票与账单" : `工时差异 ${formatHours(hoursDelta)}h`}</small>
       </div>
     </div>
     <div class="quality-workflow">
       <section class="quality-focus-card">
         <span class="focus-index">01</span>
         <div>
-          <h4>优先复核</h4>
+          <h4>优先确认</h4>
           <p>${escapeHtml(primaryFocus)}</p>
           ${
             secondaryFocus.length
@@ -2258,7 +2424,7 @@ function renderQualityAlert(quality, diagnostics) {
         </div>
       </section>
       <section class="quality-ledger-card">
-        <h4>当前口径</h4>
+        <h4>当前总金额</h4>
         <div class="ledger-grid">
           <div><span>PDF 总额</span><strong>${signals.fastPdfTotal === undefined ? pdfAmount === undefined ? "—" : `$${formatMoney(pdfAmount)}` : `$${formatMoney(signals.fastPdfTotal)}`}</strong></div>
           <div><span>Excel 总额</span><strong>${signals.excelTotal === undefined ? excelAmount === undefined ? "—" : `$${formatMoney(excelAmount)}` : `$${formatMoney(signals.excelTotal)}`}</strong></div>
@@ -2270,10 +2436,10 @@ function renderQualityAlert(quality, diagnostics) {
     <div class="quality-mini-metrics">
       <div><span>覆盖</span><strong>PDF ${employeeCounts.pdf ?? "—"} / Excel ${employeeCounts.excel ?? "—"}</strong></div>
       <div><span>未匹配</span><strong>${employeeGap} 人</strong></div>
-      <div><span>抽取</span><strong>规则 ${methods.rule || 0} · AI ${Number(methods.ai_text || 0) + Number(methods.ai_image || 0)}</strong></div>
-      <div><span>置信度</span><strong>${confidence.average === undefined ? "—" : `${(confidence.average * 100).toFixed(1)}%`}</strong></div>
+      <div><span>明细识别</span><strong>${Number(methods.rule || 0) + Number(methods.ai_text || 0) + Number(methods.ai_image || 0)} 条</strong></div>
+      <div><span>识别完整度</span><strong>${confidence.average === undefined ? "—" : `${(confidence.average * 100).toFixed(1)}%`}</strong></div>
     </div>
-    ${detailsHtml ? `<details class="quality-diagnostics"><summary>技术诊断与抽取指标</summary><div class="quality-details">${detailsHtml}</div></details>` : ""}
+    ${detailsHtml ? `<details class="quality-diagnostics"><summary>识别情况明细</summary><div class="quality-details">${detailsHtml}</div></details>` : ""}
   `;
 }
 
@@ -2281,10 +2447,10 @@ function _qualityNextStepText(quality, warehouseIssues, totals, diagnostics) {
   if (diagnostics && diagnostics.level && diagnostics.level !== "ok" && diagnostics.nextStep) return diagnostics.nextStep;
   const amountDelta = Math.abs(totals.amountDelta || 0);
   if (warehouseIssues && warehouseIssues.length) {
-    return `系统发现 ${warehouseIssues.length} 个仓库需要复核。先看仓库金额，再进入员工明细定位差异。`;
+    return `系统发现 ${warehouseIssues.length} 个仓库需要确认。先看仓库金额，再进入员工明细定位差异。`;
   }
-  if (amountDelta <= 0.1 && quality.level !== "critical") {
-    return "总金额已在容差内，当前只是抽取质量提示；可下载报告留档。";
+  if (amountDelta <= LABOR_TOTAL_AMOUNT_TOLERANCE && quality.level !== "critical") {
+    return "总金额已在容差内，当前只是明细识别提示；可下载报告留档。";
   }
   return "先核对总额口径，再按仓库和员工明细逐层确认。";
 }
@@ -2303,8 +2469,8 @@ function renderExtractRows(container, rows) {
         <div class="empty-icon">
           <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
-        <p class="empty-title">暂无抽取数据</p>
-        <p class="empty-desc">点击「抽取并比对」开始核对</p>
+        <p class="empty-title">暂无识别证据</p>
+        <p class="empty-desc">点击「生成核对报告」开始核对</p>
       </div>
     `;
     return;
@@ -2316,12 +2482,12 @@ function renderExtractRows(container, rows) {
   const totalHours = rows.reduce((sum, row) => sum + Number(row.hours || 0), 0);
   container.innerHTML = `
     <div class="extract-evidence-summary">
-      <div><span>抽取员工行</span><strong>${rows.length}</strong></div>
-      <div><span>低置信度</span><strong>${lowConfidenceRows.length}</strong></div>
-      <div><span>抽取金额合计</span><strong>${formatMoney(totalAmount)}</strong></div>
-      <div><span>抽取工时合计</span><strong>${formatHours(totalHours)}</strong></div>
+      <div><span>已识别发票明细</span><strong>${rows.length}</strong></div>
+      <div><span>待确认明细</span><strong>${lowConfidenceRows.length}</strong></div>
+      <div><span>识别金额合计</span><strong>${formatMoney(totalAmount)}</strong></div>
+      <div><span>识别工时合计</span><strong>${formatHours(totalHours)}</strong></div>
     </div>
-    <table><thead><tr><th>员工</th><th>工号</th><th>工时</th><th>金额</th><th>置信度</th><th>来源</th><th>证据</th></tr></thead><tbody>${focusRows
+    <table><thead><tr><th>员工</th><th>工号</th><th>工时</th><th>金额</th><th>识别完整度</th><th>来源位置</th><th>原文依据</th></tr></thead><tbody>${focusRows
     .map(
       (row) =>
         `<tr><td>${escapeHtml(row.employee_name_raw)}</td><td>${escapeHtml(
@@ -2334,8 +2500,8 @@ function renderExtractRows(container, rows) {
     )
     .join("")}</tbody></table>${
     rows.length > focusRows.length
-      ? `<p class="table-note">页面聚焦展示低置信度和高金额证据 ${focusRows.length} 条；完整 ${rows.length} 条请下载报告查看。</p>`
-      : ""
+      ? `<p class="table-note">本区是识别证据概览，不作为最终员工核对结论；优先展示待确认和高金额明细 ${focusRows.length} 条，下方完整员工明细会展示全部 ${rows.length} 条核对结果。</p>`
+      : `<p class="table-note">本区是识别证据概览，不作为最终员工核对结论；最终结论请看下方完整员工明细。</p>`
   }`;
 }
 
@@ -2377,14 +2543,23 @@ function formatLaborRequestError(message) {
   const detailMessage = message?.message || message;
   const nextAction = message?.nextAction || "";
   const text = [detailMessage, nextAction].filter(Boolean).join(" ").trim();
+  if (/No such file|ENOENT|FileNotFoundError|\/tmp\/sigma-workbench|\/labor_runs\/|文件不存在|文件已被清理/i.test(text)) {
+    return "系统找不到本批次文件。请重新上传 PDF 发票和 Excel 账单后再生成核对报告；如果在 UAT/Vercel 环境，请改用本地或内网持久化环境。";
+  }
   if (/批次不存在|run.*not found|not found/i.test(text)) {
     return "本批次记录未找到。请返回「新建核对批次」重新创建并上传材料；如果刚上传过文件，请确认当前环境是否支持持久化保存。";
+  }
+  if (/JSON|Unexpected token|返回内容异常|invalid response/i.test(text)) {
+    return "服务返回内容异常。请刷新页面后重试；若仍失败，请联系管理员查看本批次日志。";
   }
   if (/上传|upload|文件|file|持久化|保存/.test(text)) {
     return "上传文件未保存成功。请重新上传 PDF 发票和 Excel 账单；若仍失败，请改用本地/内网持久化环境处理。";
   }
   if (/Failed to fetch|NetworkError|Load failed|无法连接|连接失败/i.test(text)) {
     return "无法连接当前服务。请确认本地服务已启动并刷新页面；若在 UAT 环境，请联系管理员检查服务状态。";
+  }
+  if (/Traceback|Errno|Exception|\/tmp\/|\/var\/|\/Users\//i.test(text)) {
+    return "核对报告生成失败。请检查材料是否已上传完整，并重新点击「生成核对报告」；若仍失败，请把当前批次号发给管理员。";
   }
   return text || "请求失败。请检查本批次材料后重试。";
 }
@@ -2446,14 +2621,14 @@ function formatPercent(value) {
 
 function formatGovernanceReason(reason) {
   const labels = {
-    low_confidence: "低置信度抽取",
-    low_confidence_extraction: "低置信度抽取",
+    low_confidence: "明细识别不完整",
+    low_confidence_extraction: "明细识别不完整",
     name_mapping_candidate: "疑似同名员工",
     profile_candidate: "供应商格式建议",
-    cross_warehouse_allocation: "跨仓归属待复核",
-    cross_warehouse_employee_allocation: "跨仓归属待复核",
+    cross_warehouse_allocation: "跨仓归属待确认",
+    cross_warehouse_employee_allocation: "跨仓归属待确认",
   };
-  return labels[String(reason || "").trim()] || String(reason || "待人工复核").replaceAll("_", " ");
+  return labels[String(reason || "").trim()] || String(reason || "待确认").replaceAll("_", " ");
 }
 
 function formatSignedNumber(value) {

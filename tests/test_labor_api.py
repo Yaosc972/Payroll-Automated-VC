@@ -439,6 +439,58 @@ def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
     assert mapping.json()["manualNameMapping"]["Gamboa, Arilene"] == "Arlene Gamboa"
 
 
+def test_labor_extract_before_upload_tells_user_to_upload_files_first():
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "Fairway Staffing Service",
+            "period_start": "2026-05-11",
+            "period_end": "2026-05-17",
+            "currency": "USD",
+        },
+    ).json()
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["errorCode"] == "LABOR_FILES_REQUIRED"
+    assert detail["requiresReupload"] is True
+    assert "请先上传本期 PDF 发票、Excel 账单" in detail["message"]
+    assert "上传文件" in detail["nextAction"]
+
+
+def test_labor_extract_after_upload_without_mapping_tells_user_to_confirm_mapping():
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "Fairway Staffing Service",
+            "period_start": "2026-05-11",
+            "period_end": "2026-05-17",
+            "currency": "USD",
+        },
+    ).json()
+    upload = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n% sample", "application/pdf")),
+            ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    assert upload.status_code == 200
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["errorCode"] == "LABOR_MAPPING_REQUIRED"
+    assert detail.get("requiresReupload") is False
+    assert "请先确认 Excel 工作表和字段映射" in detail["message"]
+    assert "字段映射" in detail["nextAction"]
+
+
 def test_labor_material_index_api_lists_replay_ready_batches(tmp_path):
     batch = tmp_path / "oss 2"
     batch.mkdir()
