@@ -27,11 +27,6 @@ def _adaptive_tolerance(amount: float, base_tolerance: float = 0.05) -> float:
     return base_tolerance * multiplier
 
 
-def amount_within_tolerance(delta: float, tolerance: float = 0.10) -> bool:
-    """Compare money at cent precision so $0.10 is treated as within tolerance."""
-    return round(abs(float(delta or 0)), 2) <= round(abs(float(tolerance or 0)), 2)
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -100,7 +95,7 @@ def compare_by_warehouse(
     excel_total = round(sum(float(r.get("amount") or 0) for r in excel_rows_with_warehouse), 2)
     total_delta = round(pdf_total - excel_total, 2)
     effective_total_tolerance = _adaptive_tolerance(max(abs(pdf_total), abs(excel_total)), amount_tolerance)
-    total_passed = amount_within_tolerance(total_delta, effective_total_tolerance)
+    total_passed = abs(total_delta) <= effective_total_tolerance
 
     summary = {
         "pdfAmountTotal": pdf_total,
@@ -176,7 +171,7 @@ def compare_by_warehouse(
         excel_amount = round(sum(float(r.get("amount") or 0) for r in excel_items), 2)
         amount_delta = round(pdf_amount - excel_amount, 2)
         effective_wh_tolerance = _adaptive_tolerance(max(abs(pdf_amount), abs(excel_amount)), amount_tolerance)
-        wh_passed = amount_within_tolerance(amount_delta, effective_wh_tolerance)
+        wh_passed = abs(amount_delta) <= effective_wh_tolerance
 
         row = {
             "warehouseId": wh,
@@ -217,7 +212,9 @@ def compare_by_warehouse(
         warehouse_rows,
         amount_tolerance=amount_tolerance,
     )
-    # 总账结论只看 PDF 与 Excel 总金额；仓库或员工分摊差异保留为待确认事项。
+    # 即使总金额一致，也要保留仓库级核对结果，避免仓库 A 多付、仓库 B 少付后在总额上互相抵消。
+    if total_passed and diff_warehouses:
+        summary["totalPassed"] = False
     summary.update({
         "warehouseCount": len(warehouse_rows),
         "passedCount": passed,
@@ -268,7 +265,6 @@ def _match_employee_groups(
         risk_flags = []
         if low_confidence:
             risk_flags.append("低置信度抽取")
-        name_format_auto_merged = _is_name_format_auto_merged(pdf_group, excel_group)
         if fuzzy_matched:
             risk_flags.append("疑似姓名匹配")
         de_minimis_unmatched = _is_de_minimis_unmatched(
@@ -283,9 +279,6 @@ def _match_employee_groups(
         if de_minimis_unmatched:
             risk_flags.append("微小残差")
         amount_matches = abs(amount_delta) <= amount_tolerance
-        safe_name_format_auto_merged = name_format_auto_merged and amount_matches
-        if not fuzzy_matched and safe_name_format_auto_merged:
-            risk_flags.append("姓名格式差异自动合并")
         if amount_matches and abs(hours_delta) > hours_tolerance:
             risk_flags.append("工时需复核")
 
@@ -302,7 +295,7 @@ def _match_employee_groups(
         )
         rows.append({
             "employeeKey": key,
-            "employeeName": _matched_name(pdf_group, excel_group, fuzzy_matched or safe_name_format_auto_merged) or key,
+            "employeeName": _matched_name(pdf_group, excel_group, fuzzy_matched) or key,
             "pdfHoursTotal": pdf_hours,
             "excelHoursTotal": excel_hours,
             "hoursDelta": hours_delta,
@@ -651,16 +644,6 @@ def _matched_name(pdf_group: Dict[str, Any], excel_group: Dict[str, Any], fuzzy_
     if fuzzy_matched:
         return f"{pdf_group['name']} ⇄ {excel_group['name']}"
     return pdf_group["name"] or excel_group["name"]
-
-
-def _is_name_format_auto_merged(pdf_group: Dict[str, Any], excel_group: Dict[str, Any]) -> bool:
-    if not pdf_group.get("items") or not excel_group.get("items"):
-        return False
-    pdf_name = str(pdf_group.get("name") or "").strip()
-    excel_name = str(excel_group.get("name") or "").strip()
-    if not pdf_name or not excel_name or pdf_name == excel_name:
-        return False
-    return normalize_employee_name(pdf_name) == normalize_employee_name(excel_name)
 
 
 def _suggest_unmatched_candidates(
