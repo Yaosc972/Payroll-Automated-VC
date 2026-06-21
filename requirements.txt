@@ -4,5 +4,7 @@ python-multipart
 openpyxl
 pypdf
 pypdfium2
+pdfplumber
+pymupdf4llm
 httpx
 msoffcrypto-tool
