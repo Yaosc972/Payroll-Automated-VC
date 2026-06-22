@@ -6,22 +6,23 @@
   <title>国内劳务薪酬科目规则梳理</title>
   <style>
     :root {
-      --bg: #f4f6f4;
+      --bg: #f7f8fb;
       --panel: #ffffff;
-      --ink: #1c2421;
-      --muted: #52605b;
-      --faint: #8a9a94;
-      --line: #dfe7e3;
-      --line-strong: #c9d5cf;
-      --accent: #1b4d3e;
-      --accent-soft: #e8f0ec;
-      --warn: #b37d14;
-      --warn-soft: #faf5e8;
-      --danger: #962d2d;
-      --danger-soft: #f9eeee;
-      --blue: #2e5a88;
-      --blue-soft: #ebf2f8;
-      --shadow: 0 10px 28px rgba(27, 77, 62, 0.07);
+      --ink: #111827;
+      --muted: #4b5563;
+      --faint: #6b7280;
+      --line: #e5e7eb;
+      --line-strong: #d1d5db;
+      --accent: #2563eb;
+      --accent-strong: #1d4ed8;
+      --accent-soft: #eff6ff;
+      --warn: #b45309;
+      --warn-soft: #fffbeb;
+      --danger: #b91c1c;
+      --danger-soft: #fef2f2;
+      --blue: #2563eb;
+      --blue-soft: #eff6ff;
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.08), 0 12px 28px rgba(15, 23, 42, 0.04);
     }
 
     * { box-sizing: border-box; }
@@ -30,51 +31,47 @@
       margin: 0;
       background: var(--bg);
       color: var(--ink);
-      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", sans-serif;
       font-variant-numeric: tabular-nums;
-      line-height: 1.65;
+      line-height: 1.72;
     }
 
     header {
-      position: sticky;
-      top: 0;
-      z-index: 10;
       border-bottom: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.92);
-      backdrop-filter: blur(14px);
+      background: #ffffff;
     }
 
     .header-inner {
-      max-width: 1320px;
+      max-width: 1180px;
       margin: 0 auto;
-      padding: 28px 32px;
+      padding: 12px 28px;
       display: grid;
       grid-template-columns: 1fr auto;
-      gap: 24px;
-      align-items: end;
+      gap: 18px;
+      align-items: center;
     }
 
     .eyebrow {
-      margin: 0 0 6px;
+      margin: 0 0 2px;
       color: var(--accent);
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0.14em;
+      letter-spacing: 0.10em;
       text-transform: uppercase;
     }
 
     h1 {
       margin: 0;
-      font-size: 30px;
+      font-size: 20px;
       line-height: 1.2;
       font-weight: 700;
       letter-spacing: 0;
     }
 
     .subtitle {
-      margin: 8px 0 0;
+      margin: 3px 0 0;
       color: var(--muted);
-      font-size: 14px;
+      font-size: 12px;
     }
 
     .meta {
@@ -87,13 +84,13 @@
     .chip {
       display: inline-flex;
       align-items: center;
-      min-height: 28px;
-      padding: 4px 10px;
+      min-height: 22px;
+      padding: 2px 8px;
       border-radius: 999px;
       border: 1px solid var(--line);
       background: var(--panel);
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 600;
       white-space: nowrap;
     }
@@ -105,40 +102,65 @@
     }
 
     main {
-      max-width: 1320px;
+      max-width: 1180px;
       margin: 0 auto;
-      padding: 28px 32px 56px;
+      padding: 20px 28px 48px;
     }
 
-    .toc {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 24px;
-    }
-
-    .toc a {
-      padding: 14px 16px;
+    .page-tabs {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+      padding: 10px;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.94);
+      overflow-x: auto;
+    }
+
+    .page-tab {
+      flex: 0 0 auto;
+      min-height: 34px;
+      padding: 7px 13px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
       background: var(--panel);
-      color: var(--accent);
-      text-decoration: none;
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
       font-weight: 700;
-      box-shadow: 0 1px 2px rgba(27, 77, 62, 0.03);
+      cursor: pointer;
+    }
+
+    .page-tab:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .page-tab.active {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #ffffff;
     }
 
     .section {
       margin-top: 22px;
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 14px;
       background: var(--panel);
       box-shadow: var(--shadow);
       overflow: hidden;
     }
 
+    .section[hidden] {
+      display: none;
+    }
+
     .section-head {
-      padding: 22px 24px;
+      padding: 18px 22px;
       border-bottom: 1px solid var(--line);
       display: grid;
       grid-template-columns: 1fr auto;
@@ -148,14 +170,14 @@
 
     h2 {
       margin: 0;
-      font-size: 22px;
+      font-size: 20px;
       line-height: 1.3;
       font-weight: 700;
     }
 
     h3 {
       margin: 0 0 12px;
-      font-size: 16px;
+      font-size: 15px;
       line-height: 1.35;
       font-weight: 700;
     }
@@ -167,7 +189,7 @@
     }
 
     .section-body {
-      padding: 24px;
+      padding: 22px;
       display: grid;
       gap: 22px;
     }
@@ -186,7 +208,7 @@
 
     .card {
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 10px;
       background: #fff;
       padding: 16px;
     }
@@ -208,7 +230,7 @@
       border-collapse: separate;
       border-spacing: 0;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 10px;
       overflow: hidden;
       background: #fff;
       font-size: 13px;
@@ -222,7 +244,7 @@
     }
 
     th {
-      background: #f8faf8;
+      background: #f9fafb;
       color: var(--muted);
       font-weight: 700;
       white-space: nowrap;
@@ -241,7 +263,7 @@
       padding: 2px 5px;
       border-radius: 5px;
       background: #eef3f0;
-      color: #183d32;
+      color: #1e40af;
       font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
       font-size: 0.92em;
     }
@@ -291,8 +313,7 @@
       .header-inner,
       .section-head,
       .grid-2,
-      .grid-3,
-      .toc {
+      .grid-3 {
         grid-template-columns: 1fr;
       }
       .meta { justify-content: flex-start; }
@@ -319,18 +340,17 @@
   </header>
 
   <main>
-    <nav class="toc" aria-label="目录">
-      <a href="#data-flow">数据入口与通用处理</a>
-      <a href="#quanqinjiang">全勤奖</a>
-      <a href="#canbu">餐补</a>
-      <a href="#waisu-butie">外宿补贴</a>
-      <a href="#gonglingjiang">工龄奖</a>
-      <a href="#comparison">线下比对清单</a>
-      <a href="#open-items">待业务确认点</a>
-      <a href="#appendix">字段索引</a>
+    <nav class="page-tabs" aria-label="规则页面切换">
+      <button class="page-tab active" data-page-tab="overview" type="button">总览</button>
+      <button class="page-tab" data-page-tab="quanqinjiang" type="button">全勤奖</button>
+      <button class="page-tab" data-page-tab="canbu" type="button">餐补</button>
+      <button class="page-tab" data-page-tab="waisu-butie" type="button">外宿补贴</button>
+      <button class="page-tab" data-page-tab="gonglingjiang" type="button">工龄奖</button>
+      <button class="page-tab" data-page-tab="comparison" type="button">比对清单</button>
+      <button class="page-tab" data-page-tab="appendix" type="button">字段索引</button>
     </nav>
 
-    <section class="section" id="data-flow">
+    <section class="section rule-page" id="data-flow" data-page="overview">
       <div class="section-head">
         <div>
           <h2>1. 数据入口与通用处理</h2>
@@ -396,7 +416,7 @@
       </div>
     </section>
 
-    <section class="section" id="quanqinjiang">
+    <section class="section rule-page" id="quanqinjiang" data-page="quanqinjiang" hidden>
       <div class="section-head">
         <div>
           <h2>2. 全勤奖</h2>
@@ -476,7 +496,7 @@
       </div>
     </section>
 
-    <section class="section" id="canbu">
+    <section class="section rule-page" id="canbu" data-page="canbu" hidden>
       <div class="section-head">
         <div>
           <h2>3. 餐补</h2>
@@ -557,7 +577,7 @@
       </div>
     </section>
 
-    <section class="section" id="waisu-butie">
+    <section class="section rule-page" id="waisu-butie" data-page="waisu-butie" hidden>
       <div class="section-head">
         <div>
           <h2>4. 外宿补贴</h2>
@@ -642,7 +662,7 @@
       </div>
     </section>
 
-    <section class="section" id="gonglingjiang">
+    <section class="section rule-page" id="gonglingjiang" data-page="gonglingjiang" hidden>
       <div class="section-head">
         <div>
           <h2>5. 工龄奖</h2>
@@ -788,7 +808,7 @@
       </div>
     </section>
 
-    <section class="section" id="comparison">
+    <section class="section rule-page" id="comparison" data-page="comparison" hidden>
       <div class="section-head">
         <div>
           <h2>6. 与线下规则逐条比对时建议使用的清单</h2>
@@ -865,7 +885,7 @@
       </div>
     </section>
 
-    <section class="section" id="open-items">
+    <section class="section rule-page" id="open-items" data-page="comparison" hidden>
       <div class="section-head">
         <div>
           <h2>7. 当前待业务确认点</h2>
@@ -894,7 +914,7 @@
       </div>
     </section>
 
-    <section class="section" id="appendix">
+    <section class="section rule-page" id="appendix" data-page="appendix" hidden>
       <div class="section-head">
         <div>
           <h2>8. 字段索引</h2>
@@ -936,5 +956,30 @@
       </div>
     </section>
   </main>
+  <script>
+    const tabs = Array.from(document.querySelectorAll('[data-page-tab]'));
+    const pages = Array.from(document.querySelectorAll('[data-page]'));
+
+    function activatePage(pageName, updateHash = true) {
+      const target = pages.some(page => page.dataset.page === pageName) ? pageName : 'overview';
+      pages.forEach(page => {
+        page.hidden = page.dataset.page !== target;
+      });
+      tabs.forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.pageTab === target);
+      });
+      if (updateHash) {
+        history.replaceState(null, '', `#${target}`);
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => activatePage(tab.dataset.pageTab));
+    });
+
+    const initialPage = (location.hash || '#overview').slice(1);
+    activatePage(initialPage, false);
+  </script>
 </body>
 </html>
