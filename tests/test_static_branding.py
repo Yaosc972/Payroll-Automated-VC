@@ -184,19 +184,20 @@ def test_recruitment_page_keeps_command_center_and_home_link():
     assert "招聘奖金核算" in html
 
 
-def test_recruitment_header_has_user_menu():
+def test_recruitment_header_omits_user_menu():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert 'class="workbench-user-menu"' in html
-    assert "姚硕灿" in html
-    assert "系统管理员" in html
-    assert "进入后台管理" in html
-    assert "退出登录" in html
-    assert ".workbench-user-menu" in css
-    assert ".user-menu-panel" in css
+    assert 'class="workbench-user-menu"' not in html
+    assert "姚硕灿" not in html
+    assert "系统管理员" not in html
+    assert "进入后台管理" not in html
+    assert "退出登录" not in html
+    assert ".workbench-user-menu" not in css
+    assert ".user-menu-panel" not in css
     assert ".header-copy::before" in css
-    assert "background-size: 1px 10px" in css
+    assert "background: rgba(30, 58, 138, 0.28)" in css
+    assert "background-size: 1px 10px" not in css
 
 
 def test_recruitment_template_download_lives_in_step_one_card():
