@@ -18,6 +18,7 @@ OVERSEAS_LABOR_HTML = ROOT / "bonus_platform" / "static" / "overseas-labor.html"
 OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
 EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "china-employee-payroll.html"
 EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payroll.js"
+LEGACY_EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
@@ -258,17 +259,20 @@ def test_admin_console_is_static_permission_management_shell():
 
 def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     html = EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
+    legacy_html = LEGACY_EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
     js = EMPLOYEE_PAYROLL_JS.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
     assert "中国区正式工薪酬核算" in html
     assert "技术部餐补核算" in html
     assert 'data-module-id="employee"' in html
-    assert "permission-guard.js" in html
+    assert "permission-guard.js?v=2" in html
     assert "china-employee-payroll.js" in html
     assert "/api/china-employee-payroll/meal-allowance" in js
     assert ".china-employee-payroll-shell" in css
     assert ".employee-payroll-table" in css
+    assert 'url=china-employee-payroll.html' in legacy_html
+    assert 'window.location.replace("china-employee-payroll.html")' in legacy_html
 
 
 def test_recruitment_page_keeps_command_center_and_home_link():
