@@ -16,6 +16,7 @@ from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as e
 from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
+from bonus_platform.engine.labor import runs as labor_runs
 from bonus_platform.engine.labor.governance import audit_ai_page_cache_candidates, build_ai_cache_reconciliation_preview, build_reocr_candidate_plan, build_rule_change_candidate, confirm_rule_candidate, replay_reocr_candidate_result, rollback_rule_version, summarize_rule_auto_replay, summarize_rule_replay
 from bonus_platform.engine.labor.materials import build_material_dry_run, build_material_index, build_material_replay_plan
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
@@ -31,8 +32,8 @@ from bonus_platform.engine.labor.profiles import (
     _profiles_for_resolution,
     DEFAULT_PROFILE,
 )
-from bonus_platform.app import _non_payable_pdf_names
-from bonus_platform.engine.labor.report import build_labor_report
+from bonus_platform.app import _non_payable_pdf_names, _normalize_labor_total_decision
+from bonus_platform.engine.labor.report import build_labor_business_html_report, build_labor_report
 from bonus_platform.engine.labor.workbook import parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 
 
@@ -46,6 +47,31 @@ def _workbook_bytes() -> bytes:
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def test_list_labor_metadata_supports_recent_limit(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "labor_runs"
+    runs_dir.mkdir()
+    for idx in range(3):
+        run_dir = runs_dir / f"labor_{idx}"
+        run_dir.mkdir()
+        metadata_path = run_dir / "metadata.json"
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "id": f"labor_{idx}",
+                    "createdAt": f"2026-06-20T10:0{idx}:00",
+                    "updatedAt": f"2026-06-20T10:0{idx}:00",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+
+    rows = labor_runs.list_labor_metadata(limit=2)
+
+    assert [row["id"] for row in rows] == ["labor_2", "labor_1"]
 
 
 def _workbook_with_tax_columns_bytes() -> bytes:
@@ -354,6 +380,42 @@ def test_warehouse_comparison_reports_pdf_warehouse_conflict_errors():
     )
 
     assert result["errors"] == ["仓库号冲突: CHINA_EXPRESS__3_INVOICE.pdf 文件名=3, 内容=30"]
+
+
+def test_warehouse_total_difference_equal_to_ten_cents_passes():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "fairway-warehouse-10.pdf", "warehouse_id": "10", "total_amount": 144714.83},
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Fairway Staff", "warehouse_id": "10", "amount": 144714.93, "hours": 10},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["summary"]["amountDeltaTotal"] == -0.1
+    assert result["summary"]["totalPassed"] is True
+
+
+def test_saved_labor_run_total_decision_is_normalized_at_ten_cents():
+    metadata = {
+        "id": "labor_saved_old_result",
+        "warehouseComparison": {
+            "summary": {
+                "pdfAmountTotal": 144714.83,
+                "excelAmountTotal": 144714.93,
+                "amountDeltaTotal": -0.1,
+                "totalPassed": False,
+                "exceptionCount": 2,
+            }
+        },
+    }
+
+    normalized = _normalize_labor_total_decision(metadata)
+
+    assert normalized["warehouseComparison"]["summary"]["amountDeltaTotal"] == -0.1
+    assert normalized["warehouseComparison"]["summary"]["totalPassed"] is True
+    assert metadata["warehouseComparison"]["summary"]["totalPassed"] is False
 
 
 def test_warehouse_comparison_infers_missing_pdf_warehouse_from_unique_excel_total():
@@ -693,7 +755,7 @@ def test_warehouse_comparison_still_runs_when_totals_offset_between_warehouses()
     )
 
     assert result["summary"]["amountDeltaTotal"] == 0.0
-    assert result["summary"]["totalPassed"] is False
+    assert result["summary"]["totalPassed"] is True
     assert result["summary"]["diffWarehouses"] == ["3", "5"]
     assert {row["warehouseId"]: row["amountDelta"] for row in result["rows"]} == {"3": 1000.0, "5": -1000.0}
 
@@ -721,6 +783,7 @@ def test_warehouse_comparison_flags_employee_allocation_offsets_across_warehouse
     )
 
     assert result["summary"]["amountDeltaTotal"] == -0.01
+    assert result["summary"]["totalPassed"] is True
     assert result["summary"]["allocationIssueCount"] == 2
     assert result["summary"]["diffWarehouses"] == ["25", "28"]
     issues_by_employee = {issue["employeeName"]: issue for issue in result["allocationIssues"]}
@@ -1182,6 +1245,56 @@ def test_compare_labor_items_uses_amount_as_primary_and_flags_hours_only_as_risk
     assert result["summary"]["hoursRiskCount"] == 1
     assert result["rows"][0]["matchStatus"] == "通过"
     assert "工时需复核" in result["rows"][0]["riskFlags"]
+
+
+def test_compare_labor_items_marks_safe_name_format_difference_as_auto_merged():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Mucu, Pablo", hours=40, amount=1000, currency="USD", confidence=0.96, evidence_text="$1000.00"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Employee-expenses-detail!2", employee_id="", employee_name_raw="Pablo Mucu", hours=40, amount=1000, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["rows"][0]["matchStatus"] == "通过"
+    assert result["rows"][0]["employeeName"] == "Mucu, Pablo ⇄ Pablo Mucu"
+    assert "姓名格式差异自动合并" in result["rows"][0]["riskFlags"]
+
+
+def test_compare_labor_items_marks_accent_difference_as_auto_merged():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alberto Núñez", hours=35.08, amount=739.49, currency="USD", confidence=0.96, evidence_text="$739.49"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Employee-expenses-detail!2", employee_id="", employee_name_raw="Alberto Nunez", hours=35.08, amount=739.49, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["rows"][0]["matchStatus"] == "通过"
+    assert result["rows"][0]["employeeName"] == "Alberto Núñez ⇄ Alberto Nunez"
+    assert "姓名格式差异自动合并" in result["rows"][0]["riskFlags"]
+
+
+def test_compare_labor_items_does_not_auto_merge_amount_close_name_unlike():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Maria Lopez", hours=40, amount=812.80, currency="USD", confidence=0.96, evidence_text="$812.80"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Employee-expenses-detail!2", employee_id="", employee_name_raw="Carlos Serna", hours=40, amount=812.80, currency="USD", confidence=1, evidence_text=""),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 2
+    assert result["summary"]["unmatchedPdfCount"] == 1
+    assert result["summary"]["unmatchedExcelCount"] == 1
+    assert result["summary"]["fuzzyMatchCount"] == 0
+    assert all(row["matchStatus"] != "通过" for row in result["rows"])
+    assert result["candidateMatches"] == []
 
 
 def test_compare_labor_items_matches_workbuddy_jaccard_when_amounts_align():
@@ -2146,7 +2259,8 @@ def test_reocr_candidate_plan_is_confirmation_only():
     assert plan["tasks"][0]["focusEmployees"][0]["employeeName"] == "Alice Worker"
     assert plan["tasks"][0]["focusEmployees"][1]["employeeName"] == "Missing Worker"
     assert plan["tasks"][0]["focusEmployees"][2]["employeeName"] == "Extra Worker"
-    assert "必须人工确认" in plan["tasks"][0]["confirmationGate"]
+    assert "必须业务确认" in plan["tasks"][0]["confirmationGate"]
+    assert "必须人工确认" not in plan["tasks"][0]["confirmationGate"]
     assert plan["reviewableCandidates"][0]["sourceFile"] == "elog25-3_20260520204328.pdf"
 
 
@@ -3121,9 +3235,100 @@ def test_build_labor_report_contains_expected_sheets(tmp_path):
     build_labor_report(output, comparison, [], [], {"name": "姓名", "hours": "时长", "amount": "金额"})
 
     workbook = load_workbook(output, read_only=True)
-    assert workbook.sheetnames == ["核对结论", "核对摘要", "全员对账明细", "金额差异员工", "工时风险项", "不在本批发票", "姓名格式差异", "低置信度抽取", "PDF抽取明细", "Excel账单明细", "字段映射记录"]
+    assert workbook.sheetnames == ["核对结论", "核对摘要", "全员对账明细", "金额差异员工", "工时待确认", "不在本批发票", "姓名格式差异", "明细识别待确认", "PDF发票明细", "Excel账单明细", "上传字段对应关系"]
+    for internal_sheet_name in ["低置信度抽取", "PDF抽取明细", "字段映射记录", "工时风险项"]:
+        assert internal_sheet_name not in workbook.sheetnames
     assert workbook["姓名格式差异"].max_row == 2
     assert workbook["全员对账明细"].max_row == 2
+
+
+def test_build_labor_report_uses_business_language_inside_workbook(tmp_path):
+    output = tmp_path / "business-report.xlsx"
+    comparison = {
+        "summary": {"pdfEmployeeCount": 4, "excelEmployeeCount": 4, "amountDiffCount": 1},
+        "rows": [
+            {
+                "employeeName": "LOW CONFIDENCE",
+                "matchStatus": "低置信度抽取",
+                "riskFlags": ["低置信度抽取"],
+                "pdfHoursTotal": 8,
+                "excelHoursTotal": 0,
+                "hoursDelta": 8,
+                "pdfAmountTotal": 100,
+                "excelAmountTotal": 0,
+                "amountDelta": 100,
+                "sourceRefs": "invoice.pdf p1",
+            },
+            {
+                "employeeName": "Maria Lopez",
+                "matchStatus": "Excel有PDF无",
+                "riskFlags": [],
+                "pdfHoursTotal": 0,
+                "excelHoursTotal": 40,
+                "hoursDelta": -40,
+                "pdfAmountTotal": 0,
+                "excelAmountTotal": 812.8,
+                "amountDelta": -812.8,
+                "sourceRefs": "bill.xlsx!2",
+            },
+            {
+                "employeeName": "Mucu, Pablo ⇄ Pablo Mucu",
+                "matchStatus": "通过",
+                "riskFlags": ["姓名格式差异自动合并"],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "invoice.pdf p2; bill.xlsx!3",
+            },
+            {
+                "employeeName": "Ross Mitrache ⇄ Rosa Alvarez",
+                "matchStatus": "疑似姓名匹配",
+                "riskFlags": ["疑似姓名匹配"],
+                "pdfHoursTotal": 30,
+                "excelHoursTotal": 31,
+                "hoursDelta": -1,
+                "pdfAmountTotal": 700,
+                "excelAmountTotal": 701,
+                "amountDelta": -1,
+                "sourceRefs": "invoice.pdf p3; bill.xlsx!4",
+            },
+        ],
+    }
+    pdf_rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="invoice.pdf",
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw="LOW CONFIDENCE",
+            hours=8,
+            amount=100,
+            currency="USD",
+            confidence=0.5,
+            evidence_text="LOW CONFIDENCE 8 $100.00",
+        )
+    ]
+
+    build_labor_report(output, comparison, pdf_rows, [], {"name": "姓名", "hours": "工时", "amount": "金额"})
+
+    workbook = load_workbook(output, read_only=True)
+    visible_text = "\n".join(
+        str(value)
+        for sheet in workbook.worksheets
+        for row in sheet.iter_rows(values_only=True)
+        for value in row
+        if value is not None
+    )
+    assert "明细识别不完整" in visible_text
+    assert "账单有发票无" in visible_text
+    assert "系统已自动修正" in visible_text
+    assert "疑似同一员工" in visible_text
+    assert "PDF发票" in visible_text
+    for internal_term in ["低置信度抽取", "Excel有PDF无", "疑似姓名匹配", "source_type", "employee_name_raw", "evidence_text", "confidence", "pdf_invoice"]:
+        assert internal_term not in visible_text
 
 
 def test_build_labor_report_can_include_reconciliation_diagnostics(tmp_path):
@@ -3239,6 +3444,826 @@ def test_build_labor_report_can_include_ai_cache_audit(tmp_path):
     assert any(row[:2] == ("处理决策", "candidate_only") for row in rows)
     assert any(row[:2] == ("需要人工确认", "是") for row in rows)
     assert any(row[0] == "elog1-1_20260520204104.pdf" and row[5] == "candidate_only" for row in rows)
+
+
+def test_build_labor_business_html_report_uses_business_language_without_internal_terms(tmp_path):
+    output = tmp_path / "business-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 2,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 1333.33,
+            "excelAmountTotal": 1333.36,
+            "amountDeltaTotal": -0.03,
+            "passedCount": 1,
+            "amountDiffCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Aguilar, Hortensia ⇄ Hortensia Aguilar",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 41.4,
+                "excelHoursTotal": 41.4,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 950.6,
+                "excelAmountTotal": 950.61,
+                "amountDelta": -0.01,
+                "sourceRefs": "Invoice-5058871.pdf p1; 账单!3",
+            },
+            {
+                "employeeName": "Andrew Torres",
+                "matchStatus": "疑似姓名匹配",
+                "riskFlags": ["账单多行合并"],
+                "pdfHoursTotal": 20.42,
+                "excelHoursTotal": 20.42,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 382.73,
+                "excelAmountTotal": 382.75,
+                "amountDelta": -0.02,
+                "sourceRefs": "Invoice-5058877.pdf p2; 账单!10; 账单!11",
+            },
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="5058871-5058880",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "Workforce Priority" in html
+    assert "核算周期：2026-05-11 ~ 2026-05-17" in html
+    assert "发票编号或文件范围：5058871-5058880" in html
+    assert "核对结论" in html
+    assert "待确认" in html
+    assert "这批账能不能放行？" in html
+    assert "总金额核对" in html
+    assert "员工明细状态" in html
+    assert "下一步" in html
+    assert "PDF 发票总金额" in html
+    assert "$1,333.33" in html
+    assert "账单总金额" in html
+    assert "$1,333.36" in html
+    assert "一致员工数" in html
+    assert "待确认员工数" in html
+    assert "员工姓名（发票）" in html
+    assert "账单姓名" in html
+    assert "REG 工时" in html
+    assert "OT 工时" in html
+    assert "业务说明" in html
+    assert "下载 Excel 明细" in html
+    assert "Excel 明细用于留档、筛选和逐行核查" in html
+    assert "页面结论以本 HTML 报告为准" in html
+    assert "需查看明细说明" not in html
+    assert "有差异员工数" not in html
+    assert "必要说明" not in html
+    assert "原始识别明细" not in html
+    assert "字段映射" not in html
+    assert "需要确认该员工是否为同一人" in html
+    assert "同一员工可能存在多行账单，需要确认是否应合并" in html
+    for internal_term in ["AI 候选", "规则治理", "profile", "re-OCR", "回放", "低置信度算法", "Blob", "线程"]:
+        assert internal_term not in html
+
+
+def test_build_labor_business_html_report_groups_auto_fixes_suspected_matches_and_pending_items(tmp_path):
+    output = tmp_path / "business-report-sections.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 3,
+            "excelEmployeeCount": 3,
+            "pdfAmountTotal": 2200.0,
+            "excelAmountTotal": 2200.02,
+            "amountDeltaTotal": -0.02,
+            "passedCount": 1,
+            "amountDiffCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Mucu, Pablo ⇄ Pablo Mucu",
+                "matchStatus": "通过",
+                "riskFlags": ["疑似姓名匹配"],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "Invoice-5058871.pdf p1; 账单!3",
+            },
+            {
+                "employeeName": "Andrew Torres",
+                "matchStatus": "低置信度抽取",
+                "riskFlags": ["低置信度抽取"],
+                "pdfHoursTotal": 20,
+                "excelHoursTotal": 0,
+                "hoursDelta": 20,
+                "pdfAmountTotal": 400,
+                "excelAmountTotal": 0,
+                "amountDelta": 400,
+                "sourceRefs": "Invoice-5058877.pdf p2",
+            },
+            {
+                "employeeName": "Maria Lopez",
+                "matchStatus": "金额差异",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 810,
+                "excelAmountTotal": 812.8,
+                "amountDelta": -2.8,
+                "sourceRefs": "Invoice-5058878.pdf p3; 账单!8",
+            },
+            {
+                "employeeName": "Selvin Rivera",
+                "matchStatus": "Excel有PDF无",
+                "riskFlags": [],
+                "pdfHoursTotal": 0,
+                "excelHoursTotal": 48,
+                "hoursDelta": -48,
+                "pdfAmountTotal": 0,
+                "excelAmountTotal": 1122.72,
+                "amountDelta": -1122.72,
+                "sourceRefs": "账单!12",
+            },
+        ],
+        "candidateMatches": [
+            {
+                "pdfEmployeeName": "Mitrache, Ross",
+                "excelEmployeeName": "Rosa Alvarez Minchaca",
+                "nameSimilarity": 0.75,
+                "pdfHoursTotal": 30.5,
+                "excelHoursTotal": 31.19,
+                "hoursDelta": -0.69,
+                "pdfAmountTotal": 698.99,
+                "excelAmountTotal": 701.9,
+                "amountDelta": -2.91,
+                "recommendation": "姓名接近但金额和工时仍需确认",
+                "sourceRefs": "scan.pdf p1; 账单!2",
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="5058871-5058880",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "系统自动修正" in html
+    assert "系统已自动合并姓名格式差异" in html
+    assert "Mucu, Pablo" in html
+    assert "Pablo Mucu" in html
+    assert "疑似同一员工，需确认" in html
+    assert "Mitrache, Ross" in html
+    assert "Rosa Alvarez Minchaca" in html
+    assert "待确认异常" in html
+    assert "优先处理影响放行或留档的项目" in html
+    assert "处理顺序：先确认金额口径，再确认缺发票项，最后确认疑似同一员工。" in html
+    assert "处理建议：核对费率、加班、服务费或税费是否同一口径" in html
+    assert "处理建议：确认本员工是否属于本批发票" in html
+    assert "确认前不会自动合并姓名" in html
+    assert "员工明细未完整识别，请查看原发票" in html
+    assert "下载 Excel 明细" in html
+    assert "低置信度抽取" not in html
+    assert "人工复核" not in html
+
+
+def test_build_labor_business_html_report_auto_fix_section_handles_accent_differences(tmp_path):
+    output = tmp_path / "accent-name-auto-fix-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 1,
+            "excelEmployeeCount": 1,
+            "pdfAmountTotal": 739.49,
+            "excelAmountTotal": 739.49,
+            "amountDeltaTotal": 0,
+            "passedCount": 1,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Alberto Núñez ⇄ Alberto Nunez",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 35.08,
+                "excelHoursTotal": 35.08,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 739.49,
+                "excelAmountTotal": 739.49,
+                "amountDelta": 0,
+                "sourceRefs": "Invoice-5058871.pdf p1; 账单!3",
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="5058871",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "系统已自动合并姓名格式差异" in html
+    assert "Alberto Núñez" in html
+    assert "Alberto Nunez" in html
+    assert "本次未发现可由系统自动合并的姓名格式差异" not in html
+
+
+def test_build_labor_business_html_report_does_not_pass_when_extraction_failed(tmp_path):
+    output = tmp_path / "failed-business-report.html"
+    comparison = {
+        "summary": {
+            "extractionFailed": True,
+            "failureReason": "PDF 明细未解析完成",
+            "pdfEmployeeCount": 0,
+            "excelEmployeeCount": 0,
+            "pdfAmountTotal": 0,
+            "excelAmountTotal": 0,
+            "amountDeltaTotal": 0,
+            "passedCount": 0,
+            "amountDiffCount": 0,
+        },
+        "rows": [],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "系统未能完成核对" in html
+    assert "核对通过" not in html
+    assert "请查看原发票和账单后重新生成报告" in html
+    assert "人工查看" not in html
+
+
+def test_build_labor_business_html_report_marks_detail_rows_missing_as_total_pass_with_detail_confirmation(tmp_path):
+    output = tmp_path / "missing-detail-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.83,
+            "amountDeltaTotal": 0,
+            "passedCount": 0,
+            "amountDiffCount": 0,
+        },
+        "rows": [],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总账通过，但员工明细待确认" in html
+    assert "这批账能不能放行？" in html
+    assert "需业务确认" in html
+    assert "总金额已通过；员工明细未完整识别，不影响总账结论，但需要业务确认明细后再对外留档。" in html
+    assert "员工明细未完整识别" in html
+    assert "系统已确认本批总金额一致" in html
+    assert "部分员工明细未完整识别" in html
+    assert "本批总金额已完成核对，但当前没有可逐项展示的员工明细" in html
+    assert "暂无可展示明细" not in html
+    assert "金额口径说明" not in html
+    assert "系统未能完成核对" not in html
+
+
+def test_build_labor_business_html_report_treats_ten_cent_total_difference_as_pass(tmp_path):
+    output = tmp_path / "ten-cent-total-pass.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.93,
+            "amountDeltaTotal": -0.1,
+            "passedCount": 0,
+            "amountDiffCount": 0,
+        },
+        "rows": [],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总账通过，但员工明细待确认" in html
+    assert "本批总金额已完成核对" in html
+    assert "总金额存在差异，暂不能放行" not in html
+
+
+def test_build_labor_business_html_report_total_pass_with_review_items_does_not_claim_incomplete_recognition(tmp_path):
+    output = tmp_path / "detail-review-with-rows-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 2,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 2000.00,
+            "excelAmountTotal": 2000.00,
+            "amountDeltaTotal": 0,
+            "passedCount": 1,
+            "amountDiffCount": 0,
+            "candidateMatchCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Pablo Mucu ⇄ Mucu, Pablo",
+                "matchStatus": "疑似同一员工",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "invoice.pdf p1; bill.xlsx!2",
+            }
+        ],
+        "candidateMatches": [
+            {
+                "pdfEmployeeName": "Pablo Mucu",
+                "excelEmployeeName": "Mucu, Pablo",
+                "amountGap": 0,
+                "hoursGap": 0,
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总账通过，但员工明细待确认" in html
+    assert "员工明细仍有需要确认的项目" in html
+    assert "疑似同一员工，需确认" in html
+    assert "部分员工明细未完整识别" not in html
+
+
+def test_build_labor_business_html_report_amount_close_but_name_unlike_stays_manual_confirmation(tmp_path):
+    output = tmp_path / "amount-close-name-unlike-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 2,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 2000.00,
+            "excelAmountTotal": 2000.00,
+            "amountDeltaTotal": 0,
+            "passedCount": 1,
+            "amountDiffCount": 0,
+            "candidateMatchCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Carlos Serna ⇄ Carlos Serna",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "invoice.pdf p1; bill.xlsx!2",
+            }
+        ],
+        "candidateMatches": [
+            {
+                "pdfEmployeeName": "Maria Lopez",
+                "excelEmployeeName": "Carlos Serna",
+                "nameSimilarity": 0.12,
+                "pdfAmountTotal": 812.80,
+                "excelAmountTotal": 812.80,
+                "amountDelta": 0,
+                "hoursDelta": 0,
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "疑似同一员工，需确认" in html
+    assert "Maria Lopez ⇄ Carlos Serna" in html
+    assert "金额接近，但姓名不像，不能自动合并" in html
+    assert "确认前不会自动合并姓名" in html
+
+
+def test_build_labor_business_html_report_prioritizes_amount_difference_when_details_incomplete(tmp_path):
+    output = tmp_path / "amount-difference-incomplete-detail-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.94,
+            "amountDeltaTotal": -0.11,
+            "passedCount": 0,
+            "amountDiffCount": 0,
+        },
+        "rows": [],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Workforce Priority",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总金额存在差异，暂不能放行" in html
+    assert "这批账能不能放行？" in html
+    assert "不建议放行" in html
+    assert "总金额超出 $0.10 容差，先复核发票总额、账单总额和所属账期。" in html
+    assert "总金额存在差异：PDF 比 Excel 少 $0.11" in html
+    assert "由于员工明细未完整识别" in html
+    assert "系统未能完成核对" not in html
+
+
+def test_build_labor_business_html_report_does_not_blame_recognition_when_amount_diff_has_detail_rows(tmp_path):
+    output = tmp_path / "amount-difference-with-detail-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 2,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 1000.00,
+            "excelAmountTotal": 999.50,
+            "amountDeltaTotal": 0.50,
+            "passedCount": 1,
+            "amountDiffCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Pablo Mucu ⇄ Pablo Mucu",
+                "matchStatus": "金额差异",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 999.5,
+                "amountDelta": 0.5,
+                "sourceRefs": "invoice.pdf p1; bill.xlsx!2",
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总金额存在差异，暂不能放行" in html
+    assert "总金额存在差异：PDF 比 Excel 多 $0.50" in html
+    assert "请先查看下方员工明细中的金额、工时或费率差异" in html
+    assert "由于员工明细未完整识别" not in html
+
+
+def test_build_labor_business_html_report_total_pass_takes_priority_over_employee_detail_differences(tmp_path):
+    output = tmp_path / "total-pass-with-employee-detail-difference.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 2,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.88,
+            "amountDeltaTotal": -0.05,
+            "passedCount": 1,
+            "amountDiffCount": 1,
+        },
+        "rows": [
+            {
+                "employeeName": "Maria Lopez ⇄ Maria Lopez",
+                "matchStatus": "金额差异",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 812.80,
+                "excelAmountTotal": 812.70,
+                "amountDelta": 0.10,
+                "sourceRefs": "invoice.pdf p1; bill.xlsx!2",
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总账通过，但员工明细待确认" in html
+    assert "系统已确认本批总金额一致，但员工明细仍有需要确认的项目" in html
+    assert "总金额存在差异，暂不能放行" not in html
+    assert "总金额存在差异：PDF 比 Excel" not in html
+
+
+def test_build_labor_business_html_report_separates_full_batch_from_review_scope(tmp_path):
+    output = tmp_path / "review-scope-business-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 22002.58,
+            "excelAmountTotal": 22002.59,
+            "amountDeltaTotal": -0.01,
+            "passedCount": 18,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Employee A ⇄ Employee A",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "warehouse 25",
+            }
+        ],
+    }
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.93,
+            "amountDeltaTotal": -0.10,
+            "totalPassed": False,
+            "exceptionCount": 2,
+            "diffWarehouses": ["25", "28"],
+            "warehouseCount": 6,
+        }
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="6 张发票",
+        warehouse_comparison=warehouse_comparison,
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "整批 PDF 发票总金额" in html
+    assert "$144,714.83" in html
+    assert "整批账单总金额" in html
+    assert "$144,714.93" in html
+    assert "需要确认" in html
+    assert "需要复核" not in html
+    assert "需复核" not in html
+    assert "只展示需要确认的仓库员工明细，不代表账单只有这些员工" in html
+    assert "仓库 25、28" in html
+    assert "$22,002.59" in html
+    assert "全员对账明细" not in html
+    for internal_term in ["Stage 2", "下钻", "diffWarehouses", "warehouseComparison", "核对信号存在冲突"]:
+        assert internal_term not in html
+
+
+def test_build_labor_business_html_report_explains_full_excel_count_vs_review_detail_scope(tmp_path):
+    output = tmp_path / "excel-record-count-vs-review-scope-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 22002.58,
+            "excelAmountTotal": 22002.59,
+            "amountDeltaTotal": -0.01,
+            "passedCount": 18,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Employee A ⇄ Employee A",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "warehouse 25",
+            }
+        ],
+    }
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.93,
+            "amountDeltaTotal": -0.10,
+            "totalPassed": True,
+            "exceptionCount": 2,
+            "allocationIssueCount": 2,
+            "diffWarehouses": ["25", "28"],
+            "warehouseCount": 6,
+        }
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="6 张发票",
+        warehouse_comparison=warehouse_comparison,
+        excel_record_count=128,
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "整批账单已读取 128 行" in html
+    assert "当前展示的是需要确认的 18 名员工明细" in html
+    assert "不代表账单只有这些员工" in html
+    assert "员工明细识别情况" in html
+    assert "只展开需要确认的员工明细" in html
+    assert "其余无明显差异的员工不在本段重复展示" in html
+    assert "总账通过，但员工明细待确认" in html
+
+
+def test_build_labor_business_html_report_explains_three_amount_layers(tmp_path):
+    output = tmp_path / "three-amount-layers-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 22002.58,
+            "excelAmountTotal": 22002.59,
+            "amountDeltaTotal": -0.01,
+            "passedCount": 18,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Employee A ⇄ Employee A",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "warehouse 25",
+            }
+        ],
+    }
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.93,
+            "amountDeltaTotal": -0.10,
+            "totalPassed": True,
+            "exceptionCount": 2,
+            "allocationIssueCount": 2,
+            "diffWarehouses": ["25", "28"],
+            "warehouseCount": 6,
+        }
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="6 张发票",
+        warehouse_comparison=warehouse_comparison,
+        excel_record_count=128,
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总金额核对" in html
+    assert "金额口径说明" not in html
+    assert "整批 PDF 发票总额" in html
+    assert "$144,714.83" in html
+    assert "整批 Excel 账单总额" in html
+    assert "$144,714.93" in html
+    assert "已识别员工明细金额" in html
+    assert "$22,002.58" in html
+    assert "员工明细金额用于定位差异，不等同于整批总账金额" in html
+    assert "不代表账单少读了" in html
+    assert "当前页面只展开了用于确认的明细范围" in html
+    assert "员工明细识别情况" in html
+    assert "如需查看所有原始员工行，请下载 Excel 明细" in html
+    assert "总账结论优先看整批 PDF 与整批 Excel 的差额" in html
+
+
+def test_build_labor_business_html_report_keeps_total_pass_when_allocation_needs_confirmation(tmp_path):
+    output = tmp_path / "total-pass-allocation-review-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 18,
+            "excelEmployeeCount": 18,
+            "pdfAmountTotal": 22002.58,
+            "excelAmountTotal": 22002.59,
+            "amountDeltaTotal": -0.01,
+            "passedCount": 18,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Employee A ⇄ Employee A",
+                "matchStatus": "通过",
+                "riskFlags": [],
+                "pdfHoursTotal": 40,
+                "excelHoursTotal": 40,
+                "hoursDelta": 0,
+                "pdfAmountTotal": 1000,
+                "excelAmountTotal": 1000,
+                "amountDelta": 0,
+                "sourceRefs": "warehouse 25",
+            }
+        ],
+    }
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 144714.83,
+            "excelAmountTotal": 144714.93,
+            "amountDeltaTotal": -0.10,
+            "totalPassed": True,
+            "exceptionCount": 2,
+            "allocationIssueCount": 2,
+            "diffWarehouses": ["25", "28"],
+            "warehouseCount": 6,
+        }
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="6 张发票",
+        warehouse_comparison=warehouse_comparison,
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总账通过，但员工明细待确认" in html
+    assert "系统已确认本批总金额一致" in html
+    assert "员工级差异仅供确认" in html
+    assert '<div class="val">需要复核</div>' not in html
+    assert "总金额存在差异，暂不能放行" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -3797,7 +4822,7 @@ def test_material_review_queue_preserves_all_reocr_tasks_for_frontend_collapse()
     assert queues["reocr"]["taskCount"] == 12
     assert len(queues["reocr"]["tasks"]) == 12
     assert queues["reocr"]["tasks"][-1]["sourceFile"] == "DEPT#12.pdf"
-    assert queues["reocr"]["summaryText"] == "12 个 PDF 无文本层 · 12 个需图片识别复核 · 12 项员工级异常"
+    assert queues["reocr"]["summaryText"] == "12 个 PDF 无文本层 · 12 个图片发票明细待确认 · 12 项员工级异常"
     assert len(queues["reocr"]["groups"]) == 12
     assert queues["reocr"]["groups"][0]["sourceFile"] == "DEPT#12.pdf"
     assert queues["reocr"]["groups"][0]["statusLabel"] == "需重新识别"
@@ -3896,6 +4921,7 @@ def test_build_material_dry_run_prioritizes_amount_rate_review_for_same_hours_de
     assert dry_run["summary"]["comparison"]["exceptionCount"] == 1
     assert dry_run["reviewQueues"]["primary"] == "amount_rate_review"
     assert "费率" in dry_run["reviewQueues"]["primaryReason"]
+    assert "复核" not in dry_run["reviewQueues"]["primaryReason"]
     queue = dry_run["reviewQueues"]["amountRateReview"]
     assert queue["count"] == 1
     assert queue["reviewMode"] == "amount_basis"
@@ -3935,6 +4961,18 @@ def test_build_material_dry_run_prioritizes_amount_rate_review_for_same_hours_de
     assert "自动清账" in actions[0]["description"]
     assert "保留为待处理异常" in actions[2]["description"]
     assert actions[3]["label"] == "导出给业务确认"
+    amount_visible_text = " ".join(
+        [
+            dry_run["reviewQueues"]["primaryReason"],
+            *[str(action.get("label", "")) for action in actions],
+            *[str(action.get("description", "")) for action in actions],
+            row["businessQuestion"],
+            row["cannotAutoResolveReason"],
+            row["recommendation"],
+        ]
+    )
+    for internal_copy in ["人工复核", "需复核", "复核费率", "复核日期范围", "复核记录"]:
+        assert internal_copy not in amount_visible_text
 
 
 def test_build_material_dry_run_demotes_stale_image_cache_when_deterministic_extract_is_ok(monkeypatch, tmp_path):
@@ -4033,6 +5071,10 @@ def test_build_material_dry_run_demotes_stale_image_cache_when_deterministic_ext
     assert dry_run["reviewQueues"]["reocr"]["taskCount"] == 0
     assert dry_run["reviewQueues"]["primary"] == "amount_rate_review"
     assert dry_run["deliveryGate"]["status"] == "needs_review"
+    assert dry_run["deliveryGate"]["label"] == "需业务确认"
+    assert dry_run["deliveryGate"]["message"] == "无阻断项，但仍有需业务留痕确认的项目。"
+    assert "复核" not in dry_run["deliveryGate"]["label"]
+    assert "复核" not in dry_run["deliveryGate"]["message"]
     assert not any(issue["code"] == "reocr_required" for issue in dry_run["deliveryGate"]["issues"])
     assert any("降级为审计参考" in risk for risk in dry_run["expectedRisks"])
 
@@ -4161,6 +5203,7 @@ def test_build_material_dry_run_surfaces_cross_warehouse_allocation_review(monke
     assert dry_run["summary"]["tierStatus"]["allocationIssueCount"] == 2
     assert dry_run["reviewQueues"]["primary"] == "allocation_review"
     assert "仓库归属" in dry_run["reviewQueues"]["primaryReason"]
+    assert "复核" not in dry_run["reviewQueues"]["primaryReason"]
     queue = dry_run["reviewQueues"]["allocationReview"]
     assert queue["count"] == 2
     assert queue["warehousePairCount"] == 4
@@ -4173,6 +5216,16 @@ def test_build_material_dry_run_surfaces_cross_warehouse_allocation_review(monke
     ]
     assert queue["nextActions"][0]["enabled"] is True
     assert "审计记录" in queue["nextActions"][3]["description"]
+    allocation_visible_text = " ".join(
+        [
+            dry_run["reviewQueues"]["primaryReason"],
+            *dry_run["expectedRisks"],
+            *[str(action.get("label", "")) for action in queue["nextActions"]],
+            *[str(action.get("description", "")) for action in queue["nextActions"]],
+        ]
+    )
+    for internal_copy in ["人工复核", "需复核", "复核仓库", "填写复核"]:
+        assert internal_copy not in allocation_visible_text
     rows_by_employee = {row["employeeName"]: row for row in queue["rows"]}
     assert rows_by_employee["JIMENEZ, ENEAS"]["maxWarehouseDelta"] == 1.2
     assert rows_by_employee["PEREZ, JOSE"]["netAmountDelta"] == 0.0
@@ -4236,18 +5289,21 @@ def test_build_material_dry_run_surfaces_name_mapping_candidates_as_governance_p
     assert "是否确认 PDF 名称 Rozo Panche, Deisy V 对应 Excel 员工 Deisi Pozo" in candidate["businessQuestion"]
     assert "预计减少 2 项异常" in candidate["businessQuestion"]
     assert candidate["impactSummary"] == "金额和工时均一致"
-    assert "必须预览影响" in candidate["cannotAutoResolveReason"]
+    assert "必须先查看影响" in candidate["cannotAutoResolveReason"]
+    assert "业务确认" in candidate["cannotAutoResolveReason"]
+    assert "预览" not in candidate["cannotAutoResolveReason"]
+    assert "人工确认" not in candidate["cannotAutoResolveReason"]
     medium_candidate = governance["candidates"][1]
     assert medium_candidate["confidence"] == "medium"
     assert medium_candidate["cacheEmployeeName"] == "Moran Treminio, Freddy"
     assert medium_candidate["projectedFixedExceptionCount"] == 0
-    assert medium_candidate["matchReason"] == "姓名相似，但金额或工时仍需复核"
-    assert "需先复核差异口径" in medium_candidate["businessQuestion"]
+    assert medium_candidate["matchReason"] == "姓名相似，但金额或工时仍需确认"
+    assert "需先确认差异原因" in medium_candidate["businessQuestion"]
     assert "PDF 高于 Excel" in medium_candidate["impactSummary"]
-    assert "不能直接确认匹配" in medium_candidate["cannotAutoResolveReason"]
+    assert "不能直接合并" in medium_candidate["cannotAutoResolveReason"]
     assert candidate["auditTrail"][0]["reason"] == "material_dry_run_candidate_match_name_pair"
     assert dry_run["reviewQueues"]["primary"] == "name_mapping"
-    assert "先预览确认" in dry_run["reviewQueues"]["primaryReason"]
+    assert "先查看影响并确认" in dry_run["reviewQueues"]["primaryReason"]
     name_queue = dry_run["reviewQueues"]["nameMapping"]
     assert name_queue["count"] == 2
     assert name_queue["readyToReplayCount"] == 1
@@ -4265,9 +5321,24 @@ def test_build_material_dry_run_surfaces_name_mapping_candidates_as_governance_p
     ]
     assert name_actions[0]["enabled"] is True
     assert name_actions[1]["enabled"] is False
-    assert "预览" in name_actions[2]["description"]
+    assert "查看影响" in name_actions[2]["description"]
     assert "撤回" in name_actions[3]["description"]
-    assert any("姓名匹配建议" in risk for risk in dry_run["expectedRisks"])
+    user_visible_name_mapping_text = " ".join(
+        [
+            candidate["businessQuestion"],
+            candidate["cannotAutoResolveReason"],
+            candidate["recommendation"],
+            medium_candidate["matchReason"],
+            medium_candidate["businessQuestion"],
+            medium_candidate["cannotAutoResolveReason"],
+            medium_candidate["recommendation"],
+            *[str(action.get("description", "")) for action in name_actions],
+        ]
+    )
+    for internal_copy in ["预览", "人工确认", "人工复核", "需复核", "复核差异口径"]:
+        assert internal_copy not in user_visible_name_mapping_text
+    assert any("疑似同一员工" in risk for risk in dry_run["expectedRisks"])
+    assert all("姓名匹配建议" not in risk for risk in dry_run["expectedRisks"])
 
 
 def test_build_material_dry_run_surfaces_combined_pdf_rows_as_governance_preview(monkeypatch, tmp_path):
@@ -4391,14 +5462,16 @@ def test_build_material_dry_run_surfaces_ai_cache_as_candidate_only(monkeypatch,
     assert dry_run["pdfTextCoverage"]["files"][0]["needsOcr"] is True
     assert dry_run["summary"]["comparison"]["unmatchedExcelCount"] == 1
     assert dry_run["reviewQueues"]["primary"] == "reocr"
-    assert "图片识别复核" in dry_run["reviewQueues"]["primaryReason"]
+    assert "图片发票明细待确认" in dry_run["reviewQueues"]["primaryReason"]
+    assert "复核" not in dry_run["reviewQueues"]["primaryReason"]
+    assert "预览" not in dry_run["reviewQueues"]["primaryReason"]
     assert dry_run["reviewQueues"]["reocr"]["taskCount"] == 1
     assert dry_run["reviewQueues"]["reocr"]["imageOnlyFileCount"] == 1
     assert dry_run["deliveryGate"]["status"] == "blocked"
     assert dry_run["deliveryGate"]["label"] == "不可交付"
     assert dry_run["deliveryGate"]["summary"]["blockedCount"] == 1
     assert dry_run["deliveryGate"]["issues"][0]["code"] == "reocr_required"
-    assert "图片识别未闭环" in dry_run["deliveryGate"]["issues"][0]["title"]
+    assert "图片发票明细待确认" in dry_run["deliveryGate"]["issues"][0]["title"]
     reocr_actions = dry_run["reviewQueues"]["reocr"]["nextActions"]
     assert [item["action"] for item in reocr_actions] == [
         "create_formal_run",
@@ -4408,7 +5481,7 @@ def test_build_material_dry_run_surfaces_ai_cache_as_candidate_only(monkeypatch,
     ]
     assert reocr_actions[0]["enabled"] is True
     assert reocr_actions[1]["enabled"] is False
-    assert "识别结果" in reocr_actions[2]["description"]
+    assert "查看影响" in reocr_actions[2]["description"]
     assert "撤回" in reocr_actions[3]["description"]
     assert dry_run["reviewQueues"]["employeeExceptions"]["count"] == 1
     assert dry_run["reviewQueues"]["employeeExceptions"]["suppressedByPrimary"] is True
@@ -4438,21 +5511,34 @@ def test_build_material_dry_run_surfaces_ai_cache_as_candidate_only(monkeypatch,
     assert "图片识别" in user_visible_reocr_text or "重新识别" in user_visible_reocr_text
     assert "PDF 无可读取文本层" in dry_run["reocrPlan"]["tasks"][0]["matchReason"]
     assert "员工级异常 1 项" in dry_run["reocrPlan"]["tasks"][0]["matchReason"]
-    assert "必须先预览员工级影响" in dry_run["reocrPlan"]["tasks"][0]["businessQuestion"]
+    assert "必须先查看员工级影响" in dry_run["reocrPlan"]["tasks"][0]["businessQuestion"]
     assert "员工级异常 1 项" in dry_run["reocrPlan"]["tasks"][0]["impactSummary"]
     assert "不能自动写入正式结果" in dry_run["reocrPlan"]["tasks"][0]["cannotAutoResolveReason"]
     assert "Alice Worker" in dry_run["reocrPlan"]["tasks"][0]["focusEmployees"][0]["employeeName"]
     assert "Alice Worker" in dry_run["reviewQueues"]["reocr"]["tasks"][0]["focusEmployees"][0]["employeeName"]
     assert dry_run["reviewQueues"]["reocr"]["tasks"][0]["reviewFocus"] == "需要重新图片识别"
-    assert "必须人工确认" in dry_run["reocrPlan"]["tasks"][0]["confirmationGate"]
+    assert "必须业务确认" in dry_run["reocrPlan"]["tasks"][0]["confirmationGate"]
     assert dry_run["writesRun"] is False
     assert dry_run["aiInvoked"] is False
     assert any("无可读取文本层" in risk for risk in dry_run["expectedRisks"])
     assert any("历史图片识别" in risk for risk in dry_run["expectedRisks"])
     assert any("不能直接作为 PDF 明细" in risk for risk in dry_run["expectedRisks"])
     assert any("历史图片识别结果与账单仍有 1 项差异" in risk for risk in dry_run["expectedRisks"])
-    assert any("历史图片识别文件级评估：1 个 PDF 建议重新图片识别，0 个 PDF 可作为人工复核证据" in risk for risk in dry_run["expectedRisks"])
-    assert any("已生成 1 个图片识别复核任务" in risk for risk in dry_run["expectedRisks"])
+    assert any("历史图片识别结果：1 个 PDF 建议重新识别，0 个 PDF 可作为业务确认依据" in risk for risk in dry_run["expectedRisks"])
+    assert any("已生成 1 个图片发票明细待确认事项" in risk for risk in dry_run["expectedRisks"])
+    user_visible_material_text = " ".join(
+        [
+            dry_run["reviewQueues"]["primaryReason"],
+            dry_run["deliveryGate"]["issues"][0]["title"],
+            dry_run["deliveryGate"]["issues"][0]["message"],
+            dry_run["deliveryGate"]["issues"][0]["action"],
+            *dry_run["expectedRisks"],
+            *[str(action.get("label", "")) for action in reocr_actions],
+            *[str(action.get("description", "")) for action in reocr_actions],
+        ]
+    )
+    for internal_copy in ["图片识别复核", "人工复核", "人工确认", "需预览", "必须预览", "影响预览"]:
+        assert internal_copy not in user_visible_material_text
 
 
 def test_build_material_dry_run_explains_image_only_pdf_without_history_cache(monkeypatch, tmp_path):
@@ -4493,7 +5579,7 @@ def test_build_material_dry_run_explains_image_only_pdf_without_history_cache(mo
     )
     assert "缓存金额" not in user_visible_text
     assert "历史识别" not in user_visible_text
-    assert any("已生成 1 个图片识别复核任务" in risk for risk in dry_run["expectedRisks"])
+    assert any("已生成 1 个图片发票明细待确认事项" in risk for risk in dry_run["expectedRisks"])
 
 
 def test_build_material_dry_run_promotes_reocr_suspected_name_pairs_to_governance(monkeypatch, tmp_path):
@@ -4554,7 +5640,8 @@ def test_build_material_dry_run_promotes_reocr_suspected_name_pairs_to_governanc
     assert candidate["warehouseId"] == "1"
     assert candidate["proposedMapping"] == {"Espinosa Manuel": "Massiel Castillo"}
     assert candidate["auditTrail"][0]["reason"] == "material_dry_run_reocr_suspected_name_pair"
-    assert any("姓名匹配建议" in risk for risk in dry_run["expectedRisks"])
+    assert any("疑似同一员工" in risk for risk in dry_run["expectedRisks"])
+    assert all("姓名匹配建议" not in risk for risk in dry_run["expectedRisks"])
 
 
 def _write_labor_bill_workbook(path):

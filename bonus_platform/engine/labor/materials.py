@@ -184,7 +184,7 @@ def build_material_dry_run(
     risks = list(plan.get("expectedRisks") or [])
     image_only_count = int(pdf_text_coverage.get("summary", {}).get("imageOnlyFileCount") or 0)
     if image_only_count:
-        risks.append(f"{image_only_count} 个 PDF 无可读取文本层，确定性文本规则不可用，需重新做图片识别并人工确认。")
+        risks.append(f"{image_only_count} 个 PDF 无可读取文本层，员工明细需要重新识别并由业务确认。")
     if workbook_errors:
         risks.append("部分账单读取失败，只读验证结果不完整。")
     if not pdf_rows:
@@ -192,7 +192,7 @@ def build_material_dry_run(
         if warehouse_comparison.get("summary", {}).get("totalPassed"):
             risks.append("总额/仓库层可确定性通过，但员工级明细缺失，不能直接确认全员核对。")
     if ai_cache_audit.get("summary", {}).get("candidateFileCount"):
-        risks.append("发现历史识别缓存，只能作为待复核证据，需人工确认后才能影响核对结论。")
+        risks.append("发现历史识别结果，只能作为业务确认依据，确认后才能影响核对结论。")
         if reocr_plan.get("demotedByDeterministicExtract"):
             risks.append("历史图片识别记录与确定性抽取不一致，已降级为审计参考，不进入待处理任务。")
         else:
@@ -204,26 +204,26 @@ def build_material_dry_run(
                 )
             preview_exceptions = int(ai_cache_preview.get("summary", {}).get("exceptionCount") or 0)
             if preview_exceptions:
-                risks.append(f"历史图片识别结果与账单仍有 {preview_exceptions} 项差异，需要人工复核或重新图片识别。")
+                risks.append(f"历史图片识别结果与账单仍有 {preview_exceptions} 项差异，需要业务确认或重新识别。")
             needs_reocr = int(ai_cache_preview.get("summary", {}).get("needsReocrFileCount") or 0)
             reviewable = int(ai_cache_preview.get("summary", {}).get("reviewableFileCount") or 0)
             if needs_reocr or reviewable:
-                risks.append(f"历史图片识别文件级评估：{needs_reocr} 个 PDF 建议重新图片识别，{reviewable} 个 PDF 可作为人工复核证据。")
+                risks.append(f"历史图片识别结果：{needs_reocr} 个 PDF 建议重新识别，{reviewable} 个 PDF 可作为业务确认依据。")
         if reocr_plan.get("summary", {}).get("taskCount"):
-            risks.append(f"已生成 {reocr_plan['summary']['taskCount']} 个图片识别复核任务，需预览并人工确认后才能用于正式结果。")
+            risks.append(f"已生成 {reocr_plan['summary']['taskCount']} 个图片发票明细待确认事项，需先查看影响并业务确认后才能用于正式结果。")
     elif reocr_plan.get("summary", {}).get("taskCount"):
-        risks.append(f"已生成 {reocr_plan['summary']['taskCount']} 个图片识别复核任务，需预览并人工确认后才能用于正式结果。")
+        risks.append(f"已生成 {reocr_plan['summary']['taskCount']} 个图片发票明细待确认事项，需先查看影响并业务确认后才能用于正式结果。")
     if reocr_plan.get("demotedByDeterministicExtract") and not any("降级为审计参考" in risk for risk in risks):
         risks.append("历史图片识别记录与确定性抽取不一致，已降级为审计参考，不进入待处理任务。")
     name_mapping_count = int(name_mapping_governance.get("summary", {}).get("candidateCount") or 0)
     if name_mapping_count:
-        risks.append(f"已生成 {name_mapping_count} 个姓名匹配建议，必须预览并人工确认后才能写入当前批次。")
+        risks.append(f"已发现 {name_mapping_count} 个疑似同一员工，必须先查看影响并由业务确认后才能合并。")
     combined_row_count = int(combined_row_governance.get("summary", {}).get("candidateCount") or 0)
     if combined_row_count:
-        risks.append(f"已生成 {combined_row_count} 个疑似 PDF 合并员工行建议，需人工核对原始发票后处理，不能自动改名或清账。")
+        risks.append(f"已生成 {combined_row_count} 个疑似 PDF 合并员工行建议，需业务核对原始发票后处理，不能自动改名或清账。")
     allocation_issue_count = int(warehouse_comparison.get("summary", {}).get("allocationIssueCount") or 0)
     if allocation_issue_count:
-        risks.append(f"发现 {allocation_issue_count} 个员工跨仓库金额抵消，员工总额可能通过但仓库归属需人工复核。")
+        risks.append(f"发现 {allocation_issue_count} 个员工跨仓库金额抵消，员工总额可能通过但仓库归属需业务确认。")
     tier_status = {
         "totalPassed": bool(warehouse_comparison.get("summary", {}).get("totalPassed")),
         "warehouseExceptionCount": int(warehouse_comparison.get("summary", {}).get("exceptionCount") or 0),
@@ -338,31 +338,31 @@ def _build_material_review_queues(
     reocr_groups = _build_material_reocr_groups(reocr_tasks, reocr_reviewable)
 
     primary = "employee_exceptions"
-    primary_reason = "员工级异常需复核。"
+    primary_reason = "员工级异常需确认。"
     if allocation_rows:
         primary = "allocation_review"
-        primary_reason = "员工总额可抵消，但仓库归属金额不一致，需按仓库复核发票与账单归属。"
+        primary_reason = "员工总额可抵消，但仓库归属金额不一致，需按仓库核对发票与账单归属。"
     elif exception_count <= 0 and warehouse_exception_count <= 0:
         primary = "cleared"
         primary_reason = "员工、仓库和总额均通过；本批无需继续处理。"
     elif image_only_count and (reocr_task_count or reviewable_count):
         primary = "reocr"
-        primary_reason = "PDF 无文本层，必须先完成图片识别复核并预览影响，再复核员工差异。"
+        primary_reason = "图片发票明细待确认，必须先查看影响，再确认员工差异。"
     elif ready_name_mapping_count:
         primary = "name_mapping"
-        primary_reason = "存在金额/工时一致的姓名匹配建议，先预览确认可减少异常。"
+        primary_reason = "存在金额/工时一致的疑似同一员工，先查看影响并确认可减少异常。"
     elif combined_candidate_count:
         primary = "combined_pdf_row"
         primary_reason = "疑似 PDF 合并员工行需先核对原始发票；确认前不能自动清账。"
     elif amount_rate_rows:
         primary = "amount_rate_review"
         if amount_rate_summary["hoursMismatchCount"]:
-            primary_reason = "姓名已匹配，但 PDF 与 Excel 的工时/金额不同，需复核日期范围、加班行和费用口径。"
+            primary_reason = "姓名已匹配，但 PDF 与 Excel 的工时/金额不同，需确认日期范围、加班行和费用口径。"
         else:
-            primary_reason = "姓名和工时基本一致，但 PDF 与 Excel 金额不同，需复核费率/加班/服务费口径。"
+            primary_reason = "姓名和工时基本一致，但 PDF 与 Excel 金额不同，需确认费率/加班/服务费口径。"
     elif int(name_mapping_summary.get("candidateCount") or 0):
         primary = "name_mapping"
-        primary_reason = "姓名匹配建议需先预览确认。"
+        primary_reason = "疑似同一员工需先查看影响并确认。"
 
     return {
         "primary": primary,
@@ -493,7 +493,7 @@ def _build_material_reocr_groups(tasks: List[Dict[str, Any]], reviewable_candida
     groups = list(grouped.values())
     for group in groups:
         group["count"] = int(group.get("taskCount") or 0) + int(group.get("reviewableCandidateCount") or 0)
-        group["statusLabel"] = "需重新识别" if int(group.get("taskCount") or 0) else "历史识别可预览"
+        group["statusLabel"] = "需重新识别" if int(group.get("taskCount") or 0) else "历史识别可确认"
     return sorted(
         groups,
         key=lambda item: (
@@ -509,12 +509,12 @@ def _build_material_reocr_summary_text(*, task_count: int, reviewable_count: int
     if int(image_only_count or 0):
         parts.append(f"{int(image_only_count)} 个 PDF 无文本层")
     if int(task_count or 0):
-        parts.append(f"{int(task_count)} 个需图片识别复核")
+        parts.append(f"{int(task_count)} 个图片发票明细待确认")
     if int(reviewable_count or 0):
-        parts.append(f"{int(reviewable_count)} 个历史识别可预览")
+        parts.append(f"{int(reviewable_count)} 个历史识别可确认")
     if int(exception_count or 0):
         parts.append(f"{int(exception_count)} 项员工级异常")
-    return " · ".join(parts) if parts else "暂无图片识别复核任务"
+    return " · ".join(parts) if parts else "暂无图片发票明细待确认事项"
 
 
 def _build_material_reocr_next_actions(*, task_count: int, reviewable_count: int, image_only_count: int) -> List[Dict[str, Any]]:
@@ -522,9 +522,9 @@ def _build_material_reocr_next_actions(*, task_count: int, reviewable_count: int
     if planned_count <= 0 and int(image_only_count or 0) <= 0:
         return []
     first_step = (
-        "创建正式批次并进入图片识别复核"
+        "创建正式批次并确认图片发票明细"
         if task_count
-        else "创建正式批次并预览历史图片识别结果"
+        else "创建正式批次并确认历史识别结果"
     )
     return [
         {
@@ -538,21 +538,21 @@ def _build_material_reocr_next_actions(*, task_count: int, reviewable_count: int
             "step": 2,
             "action": "extract_compare",
             "label": "抽取并比对",
-            "description": "正式批次完成员工级抽取后，会生成图片识别复核任务、姓名匹配建议和异常队列。",
+            "description": "正式批次完成员工级识别后，会生成图片发票确认项、疑似同一员工和待确认异常。",
             "enabled": False,
         },
         {
             "step": 3,
             "action": "replay_candidate",
-            "label": "上传或预览图片识别结果",
-            "description": "识别结果必须按 PDF/仓库范围预览，通过金额和员工级校验后才允许确认。",
+            "label": "上传或查看识别结果",
+            "description": "识别结果必须按 PDF/仓库范围查看影响，通过金额和员工级校验后才允许确认。",
             "enabled": False,
         },
         {
             "step": 4,
             "action": "confirm_apply",
-            "label": "人工确认后采纳或撤回",
-            "description": "确认只激活识别结果；采纳前仍会生成影响预览，失败或误采纳可撤回。",
+            "label": "业务确认后采纳或撤回",
+            "description": "确认只采纳识别结果；采纳前仍会展示影响，失败或误采纳可撤回。",
             "enabled": False,
         },
     ]
@@ -586,7 +586,7 @@ def _build_material_amount_rate_next_actions(*, row_count: int, hours_mismatch_c
             "step": 3,
             "action": "record_business_conclusion",
             "label": "填写差异原因",
-            "description": "把差异原因写入复核记录；无法解释的差异继续保留为待处理异常。",
+            "description": "把差异原因写入确认记录；无法解释的差异继续保留为待处理异常。",
             "enabled": False,
         },
         {
@@ -620,14 +620,14 @@ def _build_material_allocation_next_actions(*, row_count: int) -> List[Dict[str,
         {
             "step": 3,
             "action": "review_warehouse_allocation",
-            "label": "复核仓库归属",
+            "label": "核对仓库归属",
             "description": "按员工逐仓核对发票与账单归属，确认是否同一员工跨仓金额抵消。",
             "enabled": False,
         },
         {
             "step": 4,
             "action": "confirm_or_rollback",
-            "label": "填写复核意见",
+            "label": "填写确认意见",
             "description": "确认只写入当前批次审计记录；发现归属错误时继续保留异常或撤回结论。",
             "enabled": False,
         },
@@ -655,9 +655,9 @@ def _build_material_delivery_gate(
             {
                 "severity": "blocked",
                 "code": "reocr_required",
-                "title": "图片识别未闭环",
-                "message": f"还有 {int(reocr.get('taskCount') or 0)} 个图片识别复核任务，必须预览并人工确认后才能交付。",
-                "action": "先创建正式批次，上传或预览识别结果，再确认采纳或撤回。",
+                "title": "图片发票明细待确认",
+                "message": f"还有 {int(reocr.get('taskCount') or 0)} 个图片发票明细待确认事项，必须查看影响并业务确认后才能交付。",
+                "action": "先创建正式批次，上传或查看识别结果，再确认采纳或撤回。",
             }
         )
     if int(employee_exceptions.get("count") or 0) and not employee_exceptions.get("suppressedByPrimary"):
@@ -667,7 +667,7 @@ def _build_material_delivery_gate(
                 "code": "employee_exceptions",
                 "title": "员工级异常未清",
                 "message": f"仍有 {int(employee_exceptions.get('count') or 0)} 项员工级异常，不能直接交付。",
-                "action": "先处理员工级差异，或将差异归类到可解释复核队列。",
+                "action": "先处理员工级差异，或将差异归类到可解释待确认项目。",
             }
         )
     if int(amount_rate.get("count") or 0):
@@ -675,7 +675,7 @@ def _build_material_delivery_gate(
             {
                 "severity": "review",
                 "code": "amount_rate_review",
-                "title": "金额/工时口径待复核",
+                "title": "金额/工时口径待确认",
                 "message": f"{int(amount_rate.get('count') or 0)} 人金额或工时口径待确认，影响金额 ${float(amount_rate.get('amountImpactTotal') or 0):,.2f}。",
                 "action": "按卡片逐项确认费率、服务费、税费、账期或加班口径。",
             }
@@ -685,9 +685,9 @@ def _build_material_delivery_gate(
             {
                 "severity": "review",
                 "code": "name_mapping",
-                "title": "姓名匹配建议未确认",
-                "message": f"还有 {int(name_mapping.get('count') or 0)} 个姓名匹配建议，预计可减少 {int(name_mapping.get('projectedFixedExceptionCount') or 0)} 项异常。",
-                "action": "创建正式批次后先预览影响，再由人工确认或撤回。",
+                "title": "疑似同一员工未确认",
+                "message": f"还有 {int(name_mapping.get('count') or 0)} 个疑似同一员工，预计可减少 {int(name_mapping.get('projectedFixedExceptionCount') or 0)} 项异常。",
+                "action": "创建正式批次后先查看影响，再由业务确认或撤回。",
             }
         )
     if int(combined.get("count") or 0):
@@ -705,7 +705,7 @@ def _build_material_delivery_gate(
             {
                 "severity": "review",
                 "code": "allocation_review",
-                "title": "跨仓归属待复核",
+                "title": "跨仓归属待确认",
                 "message": f"发现 {int(allocation.get('count') or 0)} 名员工存在跨仓归属差异。",
                 "action": "按仓库核对发票与账单归属，确认后保留审计记录。",
             }
@@ -715,9 +715,9 @@ def _build_material_delivery_gate(
             {
                 "severity": "review",
                 "code": "quality_review",
-                "title": "抽取质量需复核",
+                "title": "发票明细识别需确认",
                 "message": str(quality.get("message") or "抽取质量未达到直接交付标准。"),
-                "action": "复核证据和低置信度项后再交付。",
+                "action": "确认发票证据和明细识别不完整项目后再交付。",
             }
         )
 
@@ -740,13 +740,13 @@ def _build_material_delivery_gate(
     blocked_count = sum(1 for issue in issues if issue.get("severity") == "blocked")
     review_count = sum(1 for issue in issues if issue.get("severity") == "review")
     status = "blocked" if blocked_count else "needs_review" if review_count else "ready"
-    label = "不可交付" if status == "blocked" else "需复核" if status == "needs_review" else "可交付"
+    label = "不可交付" if status == "blocked" else "需业务确认" if status == "needs_review" else "可交付"
     message = (
         "仍存在阻断项，不能上线或交付。"
         if status == "blocked"
-        else "无阻断项，但仍有需人工留痕确认的复核项。"
+        else "无阻断项，但仍有需业务留痕确认的项目。"
         if status == "needs_review"
-        else "员工、仓库和总额均通过，且没有未闭环复核队列。"
+        else "员工、仓库和总额均通过，且没有未闭环待确认项目。"
     )
     return {
         "status": status,
@@ -766,9 +766,9 @@ def _build_material_name_mapping_next_actions(*, candidate_count: int, ready_to_
     if int(candidate_count or 0) <= 0:
         return []
     first_description = (
-        "复制本批真实材料，正式批次创建后仍不会自动写入姓名匹配。"
+        "复制本批真实材料，正式批次创建后仍不会自动合并疑似同一员工。"
         if ready_to_replay_count
-        else "复制本批真实材料；建议仍需先完成正式抽取比对，再判断能否预览。"
+        else "复制本批真实材料；建议仍需先完成正式抽取比对，再判断能否查看影响。"
     )
     return [
         {
@@ -782,21 +782,21 @@ def _build_material_name_mapping_next_actions(*, candidate_count: int, ready_to_
             "step": 2,
             "action": "extract_compare",
             "label": "抽取并比对",
-            "description": "正式结果会重新生成姓名匹配建议，并保留原始 PDF/Excel 证据。",
+            "description": "正式结果会重新生成疑似同一员工，并保留原始 PDF/Excel 证据。",
             "enabled": False,
         },
         {
             "step": 3,
             "action": "preview_impact",
-            "label": "预览姓名匹配影响",
-            "description": "建议必须先预览，确认修复人数、回归人数和受影响员工。",
+            "label": "查看合并影响",
+            "description": "建议必须先查看影响，确认可减少的异常和受影响员工。",
             "enabled": False,
         },
         {
             "step": 4,
             "action": "confirm_or_rollback",
-            "label": "填写复核意见",
-            "description": "人工确认后才写入当前批次；确认记录可审计，错误匹配可撤回。",
+            "label": "填写确认意见",
+            "description": "业务确认后才写入当前批次；确认记录可留痕，错误匹配可撤回。",
             "enabled": False,
         },
     ]
@@ -935,7 +935,7 @@ def _build_material_allocation_review_rows(allocation_issues: List[Dict[str, Any
                 "maxWarehouseDelta": round(max_delta, 2),
                 "warehouses": warehouses[:4],
                 "recommendation": issue.get("recommendation")
-                or "员工总额可抵消，但仓库归属金额不一致，需按仓库复核发票与账单归属。",
+                or "员工总额可抵消，但仓库归属金额不一致，需按仓库核对发票与账单归属。",
             }
         )
     return sorted(rows, key=lambda item: abs(float(item.get("maxWarehouseDelta") or 0)), reverse=True)
@@ -1038,8 +1038,8 @@ def _build_material_combined_row_candidates(
                     "需先核对原始发票行，确认前不能把差额自动分摊。"
                 ),
                 "impactSummary": impact_summary,
-                "cannotAutoResolveReason": "合并行需要人工确认原始发票中的员工拆分关系，系统不能仅凭差额接近自动清账。",
-                "recommendation": str(match.get("recommendation") or "疑似 PDF 合并员工行，需人工核对原始发票。"),
+                "cannotAutoResolveReason": "合并行需要业务确认原始发票中的员工拆分关系，系统不能仅凭差额接近自动清账。",
+                "recommendation": str(match.get("recommendation") or "疑似 PDF 合并员工行，需业务核对原始发票。"),
                 "evidence": {
                     "sourceRefs": source_refs,
                     "pdfAmount": match.get("pdfAmountTotal", 0),
@@ -1173,14 +1173,14 @@ def _build_material_name_mapping_candidates_from_reocr_plan(
                     "matchReason": "图片识别诊断发现姓名疑似对应",
                     "businessQuestion": (
                         f"是否确认图片识别名称 {cache_name} 对应账单员工 {excel_name}？"
-                        "需先重新识别或预览影响，再决定是否写入姓名匹配。"
+                        "需先重新识别或查看影响，再决定是否合并员工姓名。"
                     ),
                     "impactSummary": _build_candidate_impact_summary(
                         amount_delta=_safe_round_number(pair.get("amountGap")),
                         hours_delta=_safe_round_number(pair.get("hoursGap")),
                     ),
-                    "cannotAutoResolveReason": "该建议来自图片识别诊断，必须先完成识别复核和影响预览，不能直接写入规则。",
-                    "recommendation": str(pair.get("recommendation") or "金额/工时接近，建议创建批次后预览并人工确认姓名匹配。"),
+                    "cannotAutoResolveReason": "该建议来自图片发票明细诊断，必须先完成明细确认并查看影响，不能直接合并员工姓名。",
+                    "recommendation": str(pair.get("recommendation") or "金额/工时接近，建议创建批次后查看影响并业务确认。"),
                     "evidence": {
                         "sourceRefs": pair.get("sourceRefs", ""),
                         "cacheAmount": pair.get("cacheAmount", 0),
@@ -1230,7 +1230,7 @@ def _build_material_name_mapping_candidates(
         hours_delta = _safe_round_number(match.get("hoursDelta"))
         exact_totals = abs(amount_delta) <= amount_tolerance and abs(hours_delta) <= hours_tolerance
         projected_fixed_count = 2 if exact_totals else 0
-        match_reason = "姓名相似且金额/工时一致" if exact_totals else "姓名相似，但金额或工时仍需复核"
+        match_reason = "姓名相似且金额/工时一致" if exact_totals else "姓名相似，但金额或工时仍需确认"
         impact_summary = _build_candidate_impact_summary(amount_delta=amount_delta, hours_delta=hours_delta)
         candidate_id = "material_name_map_" + "_".join(
             _safe_key(part)
@@ -1254,18 +1254,18 @@ def _build_material_name_mapping_candidates(
                 "matchReason": match_reason,
                 "businessQuestion": (
                     f"是否确认 PDF 名称 {pdf_name} 对应 Excel 员工 {excel_name}？"
-                    f"{'确认后预计减少 ' + str(projected_fixed_count) + ' 项异常。' if projected_fixed_count else '金额或工时仍不同，需先复核差异口径。'}"
+                    f"{'确认后预计减少 ' + str(projected_fixed_count) + ' 项异常。' if projected_fixed_count else '金额或工时仍不同，需先确认差异原因。'}"
                 ),
                 "impactSummary": impact_summary,
                 "cannotAutoResolveReason": (
-                    "姓名匹配会改变员工级对账归属，必须预览影响并由人工确认后才可写入。"
+                    "姓名匹配会改变员工级对账归属，必须先查看影响并由业务确认后才可写入。"
                     if exact_totals
-                    else "姓名相似不能解释金额或工时差异，必须先复核差异口径，不能直接确认匹配。"
+                    else "姓名相似不能解释金额或工时差异，必须先确认差异原因，不能直接合并。"
                 ),
                 "recommendation": (
-                    "金额/工时一致，建议创建批次后预览并人工确认姓名匹配。"
+                    "金额/工时一致，建议创建批次后查看影响并业务确认。"
                     if exact_totals
-                    else "姓名相似但金额或工时仍有差异，创建批次后需先复核金额口径再确认映射。"
+                    else "姓名相似但金额或工时仍有差异，创建批次后需先确认金额口径再决定是否合并。"
                 ),
                 "evidence": {
                     "sourceRefs": source_refs,
@@ -1441,7 +1441,7 @@ def _demote_reocr_plan_when_deterministic_extract_is_trusted(
 def _enrich_material_reocr_plan(reocr_plan: Dict[str, Any]) -> None:
     for collection_name, label in (
         ("tasks", "需要重新图片识别"),
-        ("reviewableCandidates", "历史识别缓存可先预览"),
+        ("reviewableCandidates", "历史识别结果可先确认"),
     ):
         for item in reocr_plan.get(collection_name, []) or []:
             if not isinstance(item, dict):
@@ -1477,12 +1477,12 @@ def _enrich_material_reocr_plan(reocr_plan: Dict[str, Any]) -> None:
                 else:
                     root_reasons.append(f"当前可用明细多出 {unmatched_cache} 人、账单有但当前明细缺失 {unmatched_excel} 人")
             item["reviewFocus"] = label
-            item["matchReason"] = "；".join(root_reasons) if root_reasons else "历史识别缓存需人工复核"
+            item["matchReason"] = "；".join(root_reasons) if root_reasons else "历史识别结果需业务确认"
             item["businessQuestion"] = (
                 f"{item.get('sourceFile') or '该 PDF'} 是否需要重新图片识别，并用新识别结果替换当前员工明细候选？"
-                "必须先预览员工级影响，再决定是否采纳。"
+                "必须先查看员工级影响，再决定是否采纳。"
                 if collection_name == "tasks"
-                else f"{item.get('sourceFile') or '该 PDF'} 的历史识别缓存是否可作为复核证据？需先预览员工级差异，再决定是否确认。"
+                else f"{item.get('sourceFile') or '该 PDF'} 的历史识别结果是否可作为业务确认依据？需先查看员工级差异，再决定是否确认。"
             )
             item["impactSummary"] = _build_reocr_impact_summary(
                 amount_delta=amount_delta,
@@ -1492,9 +1492,9 @@ def _enrich_material_reocr_plan(reocr_plan: Dict[str, Any]) -> None:
                 has_history_rows=has_history_rows,
             )
             item["cannotAutoResolveReason"] = (
-                "图片识别会替换员工级 PDF 明细，必须经过范围校验、影响预览和人工确认，不能自动写入正式结果。"
+                "图片识别会替换员工级 PDF 明细，必须经过范围校验、查看影响和业务确认，不能自动写入正式结果。"
                 if collection_name == "tasks"
-                else "历史识别缓存不是本次确定性抽取结果，只能作为待复核证据，确认前不能自动影响核对结论。"
+                else "历史识别结果不是本次确定性识别结果，只能作为业务确认依据，确认前不能自动影响核对结论。"
             )
 
 
@@ -1520,7 +1520,7 @@ def _build_reocr_impact_summary(
             parts.append(f"历史识别多出 {int(unmatched_cache or 0)} 人，账单有但历史识别缺失 {int(unmatched_excel or 0)} 人")
         else:
             parts.append(f"当前可用明细多出 {int(unmatched_cache or 0)} 人，账单有但当前明细缺失 {int(unmatched_excel or 0)} 人")
-    return "；".join(parts) if parts else "金额和员工明细需预览确认"
+    return "；".join(parts) if parts else "金额和员工明细需查看影响后确认"
 
 
 def _iter_material_files(root: Path, *, max_depth: int) -> Iterable[Path]:
@@ -1649,10 +1649,10 @@ def _build_one_replay_plan(root: str, batch: Dict[str, Any]) -> Dict[str, Any]:
     if supplier == "unknown":
         supplier = _supplier_from_mapping_candidates(bill_mapping_candidates) or "unknown"
     if supplier == "unknown":
-        risks.append("未识别供应商，需要人工确认 supplier。")
+        risks.append("未识别供应商，需要业务确认供应商名称。")
     period_hint = batch.get("periodHint", "") or _period_hint_from_mapping_candidates(bill_mapping_candidates)
     if not period_hint:
-        risks.append("未识别到账期，需要人工确认账期开始和结束日期。")
+        risks.append("未识别到账期，需要业务确认账期开始和结束日期。")
     if len(bill_mapping_candidates) > 1 and not _is_multi_warehouse_workbook_set(
         bill_mapping_candidates,
         batch.get("invoiceFiles", []),
@@ -1662,7 +1662,7 @@ def _build_one_replay_plan(root: str, batch: Dict[str, Any]) -> Dict[str, Any]:
         excluded_names = "、".join(item.get("filename") or item.get("relativePath", "") for item in excluded_mapping_candidates[:3])
         risks.append(f"部分 Excel 无有效账单金额映射，已按辅助材料排除: {excluded_names}")
     if not bill_mapping_candidates:
-        risks.append("未找到可用于核对的主账单 workbook，需要人工确认账单文件。")
+        risks.append("未找到可用于核对的主账单，需要业务确认账单文件。")
     return {
         "batchKey": batch["batchKey"],
         "directory": batch["directory"],

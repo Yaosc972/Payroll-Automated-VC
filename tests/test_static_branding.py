@@ -358,7 +358,8 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert "海外劳务工报账核对" in html
     assert 'data-module-id="overseas"' in html
     assert "permission-guard.js" in html
-    assert "AI 抽取供应商发票" in html
+    assert "自动核对总金额与员工明细" in html
+    assert "测试材料验证" in html
     assert "overseas-labor.js" in html
     assert "/api/labor/runs" in js
     assert "字段映射" in html
