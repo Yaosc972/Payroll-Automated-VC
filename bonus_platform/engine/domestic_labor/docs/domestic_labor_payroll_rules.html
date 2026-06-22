@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>国内劳务薪酬科目规则梳理</title>
+  <style>
+    :root {
+      --bg: #f4f6f4;
+      --panel: #ffffff;
+      --ink: #1c2421;
+      --muted: #52605b;
+      --faint: #8a9a94;
+      --line: #dfe7e3;
+      --line-strong: #c9d5cf;
+      --accent: #1b4d3e;
+      --accent-soft: #e8f0ec;
+      --warn: #b37d14;
+      --warn-soft: #faf5e8;
+      --danger: #962d2d;
+      --danger-soft: #f9eeee;
+      --blue: #2e5a88;
+      --blue-soft: #ebf2f8;
+      --shadow: 0 10px 28px rgba(27, 77, 62, 0.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.65;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.92);
+      backdrop-filter: blur(14px);
+    }
+
+    .header-inner {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 28px 32px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 24px;
+      align-items: end;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .chip.strong {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    main {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 28px 32px 56px;
+    }
+
+    .toc {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .toc a {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+      box-shadow: 0 1px 2px rgba(27, 77, 62, 0.03);
+    }
+
+    .section {
+      margin-top: 22px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .section-head {
+      padding: 22px 24px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: start;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.3;
+      font-weight: 700;
+    }
+
+    h3 {
+      margin: 0 0 12px;
+      font-size: 16px;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+
+    .section-sub {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .section-body {
+      padding: 24px;
+      display: grid;
+      gap: 22px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 16px;
+    }
+
+    .formula {
+      display: block;
+      margin-top: 8px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      white-space: normal;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f8faf8;
+      color: var(--muted);
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    ul, ol {
+      margin: 8px 0 0;
+      padding-left: 20px;
+    }
+
+    li { margin: 4px 0; }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #eef3f0;
+      color: #183d32;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .note {
+      border-left: 4px solid var(--warn);
+      background: var(--warn-soft);
+      padding: 12px 14px;
+      border-radius: 10px;
+      color: #65470b;
+      font-size: 13px;
+    }
+
+    .risk {
+      border-left: 4px solid var(--danger);
+      background: var(--danger-soft);
+      padding: 12px 14px;
+      border-radius: 10px;
+      color: #6f2020;
+      font-size: 13px;
+    }
+
+    .info {
+      border-left: 4px solid var(--blue);
+      background: var(--blue-soft);
+      padding: 12px 14px;
+      border-radius: 10px;
+      color: #1f4266;
+      font-size: 13px;
+    }
+
+    .tag {
+      display: inline-flex;
+      margin: 0 6px 6px 0;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .muted { color: var(--muted); }
+    .nowrap { white-space: nowrap; }
+
+    @media (max-width: 980px) {
+      .header-inner,
+      .section-head,
+      .grid-2,
+      .grid-3,
+      .toc {
+        grid-template-columns: 1fr;
+      }
+      .meta { justify-content: flex-start; }
+      main, .header-inner { padding-left: 18px; padding-right: 18px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div>
+        <p class="eyebrow">Domestic Labor Payroll Rule Pack</p>
+        <h1>国内劳务薪酬四个已配置科目规则梳理</h1>
+        <p class="subtitle">基于当前平台代码实际逻辑整理，用于和业务部门、线下核算规则逐条比对。</p>
+      </div>
+      <div class="meta">
+        <span class="chip strong">当前范围：全勤奖 / 餐补 / 外宿补贴 / 工龄奖</span>
+        <span class="chip">分支：codex/domestic-labor-payroll</span>
+        <span class="chip">代码点：1ada9a4</span>
+        <span class="chip">生成日期：2026-06-22</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <nav class="toc" aria-label="目录">
+      <a href="#data-flow">数据入口与通用处理</a>
+      <a href="#quanqinjiang">全勤奖</a>
+      <a href="#canbu">餐补</a>
+      <a href="#waisu-butie">外宿补贴</a>
+      <a href="#gonglingjiang">工龄奖</a>
+      <a href="#comparison">线下比对清单</a>
+      <a href="#open-items">待业务确认点</a>
+      <a href="#appendix">字段索引</a>
+    </nav>
+
+    <section class="section" id="data-flow">
+      <div class="section-head">
+        <div>
+          <h2>1. 数据入口与通用处理</h2>
+          <p class="section-sub">平台按员工逐行读取月报/月考勤，并把同一员工的日考勤、住宿名单记录分组后传给各科目引擎。</p>
+        </div>
+        <span class="chip strong">适用于四个科目</span>
+      </div>
+      <div class="section-body">
+        <div class="grid-3">
+          <div class="card">
+            <h3>月报 / 月考勤</h3>
+            <p>系统优先查找工作表名包含 <code>月报</code> 或 <code>月考勤</code> 的 sheet。若未找到，则取第一个 sheet 作为月度主表。</p>
+            <p class="muted">每一行代表一个员工，是四个科目的主输入。</p>
+          </div>
+          <div class="card">
+            <h3>日考勤</h3>
+            <p>系统查找 sheet 名包含 <code>日</code> 或 <code>日考勤</code> 的表，并按 <code>工号</code> 分组。</p>
+            <p class="muted">主要用于全勤奖入职缺口判断、餐补逐日计算、外宿补贴是否全月未出勤。</p>
+          </div>
+          <div class="card">
+            <h3>住宿名单</h3>
+            <p>系统查找 sheet 名包含 <code>住宿</code> 的表，并按 <code>工号</code> 分组。</p>
+            <p class="muted">仅外宿补贴使用，用于扣除住宿重叠天数。</p>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>通用处理</th>
+              <th>系统当前逻辑</th>
+              <th>对线下规则比对时要关注</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>数值字段标准化</td>
+              <td>月报字段如 <code>排班天数</code>、<code>正班出勤天数</code>、<code>旷工天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>实际在职工作日天数</code> 等会转为数字；空值转为 0。</td>
+              <td>线下表若用公式但没有缓存值，平台可能读到 0；需确认上传文件是否已计算保存。</td>
+            </tr>
+            <tr>
+              <td>日期字段标准化</td>
+              <td><code>入职日期</code>、<code>最后工作日</code>、<code>转正日期</code> 会转为日期；空时间 <code>00:00</code> 视为空。</td>
+              <td>日期格式异常会影响全勤奖、外宿补贴、工龄奖。</td>
+            </tr>
+            <tr>
+              <td>缺勤字段回填</td>
+              <td>若月报缺勤字段为 0/空，系统会尝试从日考勤汇总：<code>正班旷职 → 旷工时数</code>、<code>事假 → 事假时数</code>、<code>病假时数 → 病假时数</code>、<code>排休请假 → 排休请假时数</code>。</td>
+              <td>工龄奖当前使用 <code>旷工天数</code>，不是 <code>旷工时数</code>；如线下用时数，需要单独确认。</td>
+            </tr>
+            <tr>
+              <td>入离职缺勤时数推导</td>
+              <td>若 <code>入离职缺勤时数</code> 为 0/空，解析层会按 <code>(排班天数 - 实际在职工作日天数) × 8</code> 回填；工龄奖引擎内部也按同一公式计算。</td>
+              <td>平台不是直接按 <code>最后工作日</code> 推导当月入离职缺勤，而是依赖排班天数和实际在职工作日天数。</td>
+            </tr>
+            <tr>
+              <td>结果结构</td>
+              <td>每个科目输出金额、明细、结构化异常、审计解释；总额为四个科目相加。</td>
+              <td>平台异常分为阻断、警告、提示；提示类不一定阻止发放。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="quanqinjiang">
+      <div class="section-head">
+        <div>
+          <h2>2. 全勤奖</h2>
+          <p class="section-sub">固定金额科目，当前标准为 100 元/月。只要命中任一排除条件，金额为 0。</p>
+        </div>
+        <span class="chip strong">科目字段：quanqinjiang</span>
+      </div>
+      <div class="section-body">
+        <div class="grid-2">
+          <div class="card">
+            <h3>标准与总公式</h3>
+            <p>默认标准：<strong>100 元/人/月</strong>。</p>
+            <span class="formula">全勤奖 = 满足全部发放条件 ? 100 : 0</span>
+          </div>
+          <div class="card">
+            <h3>涉及表和关键字段</h3>
+            <p><span class="tag">月报/月考勤</span><span class="tag">日考勤</span></p>
+            <p><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>旷工天数</code>、<code>正班迟到次数</code>、<code>早退次数</code>、<code>签卡次数</code>、<code>工伤假天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>入离职缺勤时数</code>、<code>迟到早退30分钟内扣款</code>。</p>
+            <p>日考勤用于判断非月初入职员工在入职前缺口内是否存在工作日，字段包括 <code>出勤日期</code>、<code>工作状态</code>。</p>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>判断顺序</th>
+              <th>条件</th>
+              <th>结果</th>
+              <th>线下比对要点</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>1</td>
+              <td>工号在特殊排除名单：<code>OWHN9535</code>、<code>OWHN9353</code>、<code>OWHX0190</code>。</td>
+              <td>全勤奖 = 0。</td>
+              <td>确认线下是否存在同一特殊名单。</td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td><code>考勤月份</code> 不是 6 位 YYYYMM。</td>
+              <td>全勤奖 = 0，返回月份异常。</td>
+              <td>确认导入表月份格式。</td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td>任一异常考勤命中：<code>旷工天数 &gt; 0</code>；<code>正班迟到次数 + 早退次数 &gt; 3</code>；<code>签卡次数 &gt; 3</code>；<code>工伤假天数 &gt; 0</code>；<code>事假时数 &gt; 0</code>；<code>病假时数 &gt; 0</code>；<code>入离职缺勤时数 &gt; 0</code>；<code>迟到早退30分钟内扣款 &gt; 0</code>。</td>
+              <td>全勤奖 = 0。</td>
+              <td>确认线下是否把工伤假、事假、病假、入离职缺勤都作为全勤奖直接排除。</td>
+            </tr>
+            <tr>
+              <td>4</td>
+              <td>非月初入职，且月初至入职日前存在工作日。优先按日考勤 <code>工作状态</code> 判断；无日考勤记录时按自然周一至周五判断。</td>
+              <td>全勤奖 = 0。</td>
+              <td>确认线下是否按工作日历或排班日历判断入职前缺口。</td>
+            </tr>
+            <tr>
+              <td>5</td>
+              <td>无 <code>最后工作日</code>，或最后工作日为空。</td>
+              <td>全勤奖 = 100。</td>
+              <td>在职员工通过前序排除后发放。</td>
+            </tr>
+            <tr>
+              <td>6</td>
+              <td><code>最后工作日</code> 不早于考勤月月末。</td>
+              <td>全勤奖 = 100。</td>
+              <td>离职日期在月末或之后仍视为当月在职至月末。</td>
+            </tr>
+            <tr>
+              <td>7</td>
+              <td><code>最后工作日</code> 早于考勤月月末。</td>
+              <td>全勤奖 = 0。</td>
+              <td>确认线下当月离职是否直接无全勤。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="canbu">
+      <div class="section-head">
+        <div>
+          <h2>3. 餐补</h2>
+          <p class="section-sub">当前餐补已改为平台内置地区规则，不再依赖月报 <code>餐补标准</code> 作为资格入口。</p>
+        </div>
+        <span class="chip strong">科目字段：canbu</span>
+      </div>
+      <div class="section-body">
+        <div class="grid-2">
+          <div class="card">
+            <h3>涉及表和字段</h3>
+            <p><span class="tag">月报/月考勤</span><span class="tag">日考勤</span></p>
+            <p>资格字段：<code>工作地区</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>三级部门名称</code>、<code>四级部门名称</code>、<code>部门</code>、<code>部门名称</code>、<code>岗位名称</code>、<code>岗位</code>。</p>
+            <p>日计算字段：<code>工作状态</code>、<code>正班时数</code>、<code>刷卡加班</code>、<code>是否异常</code>、<code>异常原因</code>、<code>四级部门名称</code>、<code>计时</code>。</p>
+          </div>
+          <div class="card">
+            <h3>地区识别</h3>
+            <p>优先从日考勤的 <code>工作地区</code> 取出现次数最多的非空值；如果日考勤没有工作地区，再取月报 <code>工作地区</code>。</p>
+            <span class="formula">工作地区 = mode(日考勤.工作地区) || 月报.工作地区</span>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>工作地区</th>
+              <th>资格规则</th>
+              <th>计算规则</th>
+              <th>当前状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>东莞</td>
+              <td>部门字段任一处包含 <code>寮步区</code> 或 <code>莞深操作</code>；岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>。</td>
+              <td>逐日折算，19 元/天，月封顶 500。</td>
+              <td>已配置。</td>
+            </tr>
+            <tr>
+              <td>晋江</td>
+              <td>不享有餐补。</td>
+              <td>餐补 = 0。</td>
+              <td>已配置。</td>
+            </tr>
+            <tr>
+              <td>嘉善</td>
+              <td>规则口径待补充。</td>
+              <td>暂不计算，餐补 = 0，并返回“嘉善餐补规则待补充”。</td>
+              <td>待业务确认。</td>
+            </tr>
+            <tr>
+              <td>其他 / 空</td>
+              <td>未命中已配置工作地区。</td>
+              <td>餐补 = 0。</td>
+              <td>需确认是否扩展地区规则。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>东莞单日公式</h3>
+            <ol>
+              <li>若 <code>四级部门名称 = 理货操作组</code> 且 <code>计时 = 计件</code>，当天餐补 = 0。</li>
+              <li>若 <code>是否异常 = 是</code> 且 <code>异常原因 = 旷工</code>，当天餐补 = 0。</li>
+              <li>若 <code>工作状态</code> 为 <code>星期六休息</code>、<code>星期天休息</code>、<code>法定节假日</code>、<code>休息</code>，有效时数取 <code>刷卡加班</code>。</li>
+              <li>其他工作状态，有效时数取 <code>正班时数</code>。</li>
+            </ol>
+            <span class="formula">单日餐补 = 有效时数 &gt;= 8 ? 19 : max(有效时数, 0) × 19 / 8</span>
+          </div>
+          <div class="card">
+            <h3>东莞月度公式</h3>
+            <p>系统逐日计算后汇总，金额保留两位小数并封顶。</p>
+            <span class="formula">东莞餐补 = min(Σ 单日餐补, 500)</span>
+            <p class="note">当前不再优先使用日考勤里的预计算 <code>餐补</code> 字段；平台按规则自行重算。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="waisu-butie">
+      <div class="section-head">
+        <div>
+          <h2>4. 外宿补贴</h2>
+          <p class="section-sub">按月标准 150 元，根据当月在职区间、住宿名单和缺勤时数折算。</p>
+        </div>
+        <span class="chip strong">科目字段：waisu_butie</span>
+      </div>
+      <div class="section-body">
+        <div class="grid-2">
+          <div class="card">
+            <h3>涉及表和字段</h3>
+            <p><span class="tag">月报/月考勤</span><span class="tag">日考勤</span><span class="tag">住宿名单</span></p>
+            <p>月报字段：<code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>外宿补贴标准</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>事假时数</code>、<code>排休请假时数</code>、<code>病假时数</code>、<code>旷工时数</code>、<code>入离职缺勤时数</code>。</p>
+            <p>日考勤字段：<code>上班一</code>、<code>下班一</code>。</p>
+            <p>住宿名单字段：<code>工号</code>、<code>入住时间</code>、<code>退宿时间</code>。</p>
+          </div>
+          <div class="card">
+            <h3>标准与总公式</h3>
+            <p>默认外宿补贴标准：<strong>150 元/月</strong>。</p>
+            <span class="formula">外宿补贴 = 150 / 当月天数 × 有效补贴天数</span>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>步骤</th>
+              <th>系统当前逻辑</th>
+              <th>结果影响</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>月份校验</td>
+              <td><code>考勤月份</code> 必须为 6 位 YYYYMM。</td>
+              <td>格式异常则外宿补贴 = 0。</td>
+            </tr>
+            <tr>
+              <td>全月未出勤判断</td>
+              <td>如果有日考勤记录，但该员工没有任何 <code>上班一</code> 或 <code>下班一</code> 打卡。</td>
+              <td>视为全月未出勤，外宿补贴 = 0。</td>
+            </tr>
+            <tr>
+              <td>资格判断</td>
+              <td><code>外宿补贴标准</code> 为 <code>/</code>、空或 None。</td>
+              <td>无补贴资格，外宿补贴 = 0。</td>
+            </tr>
+            <tr>
+              <td>当月在职区间</td>
+              <td>在职开始 = max(入职日期, 月初)；在职结束 = min(最后工作日, 月末)，最后工作日为空则为月末。</td>
+              <td>在职天数小于等于 0 时外宿补贴 = 0。</td>
+            </tr>
+            <tr>
+              <td>住宿扣除</td>
+              <td>若住宿名单命中工号，计算住宿区间与当月在职区间重叠天数；退宿日在当月内时，住宿结束日为退宿日前一天。</td>
+              <td>住宿扣除天数从外宿补贴天数中扣除。</td>
+            </tr>
+            <tr>
+              <td>基础补贴天数</td>
+              <td><code>外宿补贴天数 = max(在职天数 - 住宿扣除天数, 0)</code>。</td>
+              <td>用于常规折算。</td>
+            </tr>
+            <tr>
+              <td>缺勤折算</td>
+              <td>仅当员工全月在职，且缺勤时数合计 ≥ 56，并且无住宿扣除时，按 <code>当月天数 - 缺勤时数 / 8</code> 计算有效天数。</td>
+              <td>否则按基础补贴天数计算，避免住宿扣除和缺勤重复扣。</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>缺勤时数口径</h3>
+            <span class="formula">缺勤时数 = 事假时数 + 排休请假时数 + 病假时数 + 旷工时数 + 入离职缺勤时数</span>
+            <p class="muted">仅全月在职员工进入缺勤折算逻辑。</p>
+          </div>
+          <div class="card">
+            <h3>金额保护</h3>
+            <p>如果计算结果小于 0，系统会把金额置为 0，并提示“补贴天数为负，请人工复核”。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="gonglingjiang">
+      <div class="section-head">
+        <div>
+          <h2>5. 工龄奖</h2>
+          <p class="section-sub">按部门类别、工作地区、岗位、HRBP 名单和司龄确定应发，再按请假、入离职缺勤、工伤折算。</p>
+        </div>
+        <span class="chip strong">科目字段：gonglingjiang</span>
+      </div>
+      <div class="section-body">
+        <div class="grid-2">
+          <div class="card">
+            <h3>涉及表和字段</h3>
+            <p><span class="tag">月报/月考勤</span><span class="tag">参数：HRBP名单</span></p>
+            <p><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工天数</code>、<code>排休请假天数</code>、<code>工伤假天数</code>、<code>备注</code>。</p>
+          </div>
+          <div class="card">
+            <h3>总公式</h3>
+            <span class="formula">应发 = min(年度标准 × 工龄年数, 上限)</span>
+            <span class="formula">最终 = 应发 → 事病旷排休折算 → 入离职缺勤折算 → 工伤折算 → 0 到上限兜底</span>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>归属 / 地区</th>
+              <th>资格规则</th>
+              <th>标准</th>
+              <th>上限</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>操作归属部门</td>
+              <td><code>二级部门名称</code> 在 <code>东南枢纽</code>、<code>华东B2B枢纽</code>、<code>华东枢纽</code>、<code>中国操作部</code>，或 <code>一级部门名称=东南区</code> 且 <code>二级部门名称=HRBP部</code>。</td>
+              <td>进入工作地区规则。</td>
+              <td>进入工作地区规则。</td>
+            </tr>
+            <tr>
+              <td>东莞 / 操作</td>
+              <td>岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>查验员</code>、<code>监察员</code>，且不在不享有岗位清单。</td>
+              <td>150 元/年</td>
+              <td>600 元</td>
+            </tr>
+            <tr>
+              <td>嘉善 / 操作</td>
+              <td>嘉善区域无工龄奖。</td>
+              <td>0</td>
+              <td>0</td>
+            </tr>
+            <tr>
+              <td>晋江 / 操作</td>
+              <td>仅 <code>岗位名称=操作员</code>。</td>
+              <td>50 元/年</td>
+              <td>150 元</td>
+            </tr>
+            <tr>
+              <td>默认莞深广珠 / 操作</td>
+              <td><code>二级部门名称=中国操作部</code> 且岗位在操作岗位名单。</td>
+              <td>150 元/年</td>
+              <td>600 元</td>
+            </tr>
+            <tr>
+              <td>默认莞深广珠 / 揽收</td>
+              <td><code>二级部门名称=第四纵队</code>，工号在 HRBP 发放名单内，且岗位不含“组长”。</td>
+              <td>150 元/年</td>
+              <td>600 元</td>
+            </tr>
+            <tr>
+              <td>默认莞深广珠 / FBU</td>
+              <td><code>二级部门名称=头程运营部</code>。</td>
+              <td>100 元/年</td>
+              <td>500 元</td>
+            </tr>
+            <tr>
+              <td>WES 区域</td>
+              <td>系统只在批次首行 <code>二级部门名称</code> 包含华东/华西关键字时自动识别为 WES；按 WES 部门映射和岗位名单计算。</td>
+              <td>50 元/年</td>
+              <td>150 元</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>司龄计算</h3>
+            <p>参考日期为 <code>考勤月份</code> 的当月 1 日。按入职日期到参考日期计算完整年数，不足 1 年为 0。</p>
+            <span class="formula">工龄年数 = floor(考勤月1日 - 入职日期 的完整年)</span>
+            <p>若入职日期不是有效日期，工龄奖 = 0，异常等级为阻断。</p>
+          </div>
+          <div class="card">
+            <h3>正班出勤为 0 的处理</h3>
+            <p>当前不会直接置 0。系统会继续按缺勤折算规则计算金额，同时生成提示异常。</p>
+            <p class="info">异常码：<code>ZERO_REGULAR_ATTENDANCE_DAYS</code>，等级：提示。</p>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>折算项目</th>
+              <th>系统公式</th>
+              <th>触发条件 / 说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>事病旷排休时数</td>
+              <td><code>事假时数 + 病假时数 + 旷工天数 × 8 + 排休请假天数 × 8</code></td>
+              <td>若合计 ≥ 56 小时，按出勤天数比例折算；否则应发金额全额保留。</td>
+            </tr>
+            <tr>
+              <td>日折算金额</td>
+              <td><code>应发 / 排班天数</code></td>
+              <td>排班天数为 0 时无法计算，工龄奖 = 0，异常等级为阻断。</td>
+            </tr>
+            <tr>
+              <td>请假折算后金额</td>
+              <td><code>日折算金额 × (排班天数 - 事病旷排休时数 / 8)</code></td>
+              <td>仅当事病旷排休时数 ≥ 56 小时时执行。</td>
+            </tr>
+            <tr>
+              <td>入离职缺勤时数</td>
+              <td><code>(排班天数 - 实际在职工作日天数) × 8</code></td>
+              <td>不直接按最后工作日计算，依赖月报排班与实际在职工作日字段。</td>
+            </tr>
+            <tr>
+              <td>入离职折算后金额</td>
+              <td><code>请假折算后金额 - 日折算金额 × 入离职缺勤时数 / 8</code></td>
+              <td>入离职缺勤时数大于 0 时扣减。</td>
+            </tr>
+            <tr>
+              <td>工伤折算</td>
+              <td><code>工伤假天数 × 8</code></td>
+              <td>仅操作类别计入工伤折算；按日折算金额扣减。</td>
+            </tr>
+            <tr>
+              <td>最终兜底</td>
+              <td><code>round(max(min(折算后金额, 上限), 0), 2)</code></td>
+              <td>最终金额不低于 0，不超过上限。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="comparison">
+      <div class="section-head">
+        <div>
+          <h2>6. 与线下规则逐条比对时建议使用的清单</h2>
+          <p class="section-sub">下面这些点最容易产生平台与线下差异。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <table>
+          <thead>
+            <tr>
+              <th>科目</th>
+              <th>优先核对点</th>
+              <th>为什么重要</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>全勤奖</td>
+              <td>旷工、迟到早退、签卡、工伤、事假、病假、入离职缺勤、迟到早退扣款是否均直接排除。</td>
+              <td>任一命中即为 0，差异影响直接。</td>
+            </tr>
+            <tr>
+              <td>全勤奖</td>
+              <td>非月初入职员工，入职前缺口是否按工作状态/日历工作日判断。</td>
+              <td>线下若按排班日历，可能与系统周一至周五兜底不同。</td>
+            </tr>
+            <tr>
+              <td>餐补</td>
+              <td>东莞适用部门、岗位名单是否完整；日考勤 <code>工作状态</code> 是否准确。</td>
+              <td>系统已不看 <code>餐补标准</code>，资格完全由地区、部门、岗位判断。</td>
+            </tr>
+            <tr>
+              <td>餐补</td>
+              <td>休息日/节假日餐补是否按 <code>刷卡加班</code>；工作日是否按 <code>正班时数</code>。</td>
+              <td>线下如果用其他加班字段，会产生差异。</td>
+            </tr>
+            <tr>
+              <td>餐补</td>
+              <td>嘉善餐补口径。</td>
+              <td>当前平台暂不计算嘉善，需业务补充确认后配置。</td>
+            </tr>
+            <tr>
+              <td>外宿补贴</td>
+              <td>住宿名单退宿日是否扣到退宿日前一天。</td>
+              <td>系统退宿日在当月内时，退宿当天不计住宿扣除。</td>
+            </tr>
+            <tr>
+              <td>外宿补贴</td>
+              <td>缺勤 ≥ 56 小时折算是否只适用于全月在职且无住宿扣除人员。</td>
+              <td>系统避免住宿扣除和缺勤扣减重复计算。</td>
+            </tr>
+            <tr>
+              <td>工龄奖</td>
+              <td>操作、揽收、FBU、WES 部门映射与岗位名单。</td>
+              <td>资格不满足直接为 0。</td>
+            </tr>
+            <tr>
+              <td>工龄奖</td>
+              <td>司龄是否按考勤月 1 日计算。</td>
+              <td>如果线下按月底或发薪日计算，满年边界会不同。</td>
+            </tr>
+            <tr>
+              <td>工龄奖</td>
+              <td>正班出勤天数为 0 是否仍允许按折算结果发放。</td>
+              <td>系统当前只提示复核，不自动归 0。</td>
+            </tr>
+            <tr>
+              <td>工龄奖</td>
+              <td>入离职缺勤是否按 <code>排班天数 - 实际在职工作日天数</code>。</td>
+              <td>系统不直接按最后工作日推导入离职缺勤。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="open-items">
+      <div class="section-head">
+        <div>
+          <h2>7. 当前待业务确认点</h2>
+          <p class="section-sub">这些不是代码缺陷，而是当前平台规则仍需业务最终定稿的口径。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <div class="grid-2">
+          <div class="risk">
+            <strong>嘉善餐补暂未配置。</strong><br>
+            目前平台对工作地区为嘉善的餐补返回 0，并提示“嘉善餐补规则待补充”。需要业务确认封顶 300 元的折算分母、事假/旷工/病假扣减方式、字段口径后再配置。
+          </div>
+          <div class="note">
+            <strong>工龄奖正班出勤天数为 0 的处理。</strong><br>
+            当前平台不会直接归 0，只生成提示异常并继续按缺勤折算。若业务要求正班出勤 0 必须不发，需要另行调整。
+          </div>
+          <div class="note">
+            <strong>全勤奖工伤假处理。</strong><br>
+            当前系统工伤假天数 &gt; 0 会排除全勤奖。若线下有豁免或特殊处理，需要比对。
+          </div>
+          <div class="note">
+            <strong>外宿补贴缺勤字段。</strong><br>
+            当前使用 <code>旷工时数</code>，而工龄奖使用 <code>旷工天数</code>。两个科目的字段口径不同，线下比对时需分别确认。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="appendix">
+      <div class="section-head">
+        <div>
+          <h2>8. 字段索引</h2>
+          <p class="section-sub">按科目列出主要输入字段，便于检查线下表字段是否齐全。</p>
+        </div>
+      </div>
+      <div class="section-body">
+        <table>
+          <thead>
+            <tr>
+              <th>科目</th>
+              <th>主表字段</th>
+              <th>辅助表字段</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>全勤奖</td>
+              <td><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>旷工天数</code>、<code>正班迟到次数</code>、<code>早退次数</code>、<code>签卡次数</code>、<code>工伤假天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>入离职缺勤时数</code>、<code>迟到早退30分钟内扣款</code></td>
+              <td>日考勤：<code>工号</code>、<code>出勤日期</code>、<code>工作状态</code></td>
+            </tr>
+            <tr>
+              <td>餐补</td>
+              <td><code>工号</code>、<code>姓名</code>、<code>工作地区</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>三级部门名称</code>、<code>四级部门名称</code>、<code>岗位名称</code></td>
+              <td>日考勤：<code>工作地区</code>、<code>工作状态</code>、<code>正班时数</code>、<code>刷卡加班</code>、<code>四级部门名称</code>、<code>计时</code>、<code>是否异常</code>、<code>异常原因</code></td>
+            </tr>
+            <tr>
+              <td>外宿补贴</td>
+              <td><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>外宿补贴标准</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>事假时数</code>、<code>排休请假时数</code>、<code>病假时数</code>、<code>旷工时数</code>、<code>入离职缺勤时数</code></td>
+              <td>日考勤：<code>上班一</code>、<code>下班一</code>；住宿名单：<code>工号</code>、<code>入住时间</code>、<code>退宿时间</code></td>
+            </tr>
+            <tr>
+              <td>工龄奖</td>
+              <td><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工天数</code>、<code>排休请假天数</code>、<code>工伤假天数</code>、<code>备注</code></td>
+              <td>参数：HRBP 发放工号名单。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
