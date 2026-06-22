@@ -19,6 +19,7 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert {role["id"] for role in data["roles"]} >= {"admin", "employeeAdmin", "domesticAdmin"}
     assert {user["id"] for user in data["users"]} >= {"payrollAdmin", "cnPayrollAdminUser"}
     assert any(module["id"] == "employee" and module["enabled"] is True for module in data["modules"])
+    assert any(module["id"] == "overseas" and module["enabled"] is True for module in data["modules"])
     assert any(module["id"] == "domestic" and module["enabled"] is False for module in data["modules"])
     assert any(module["id"] == "fbu" and module["enabled"] is False for module in data["modules"])
     assert data["moduleAccess"]["employeeAdmin"]["employee"] is True

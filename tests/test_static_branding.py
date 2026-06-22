@@ -181,6 +181,9 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert 'href="china-employee-payroll.html"' in html
     assert 'href="admin.html"' in html
     assert "Available · 已上线" in html
+    assert "UAT · 试点" in html
+    assert "UAT试点" in html
+    assert "{ id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true }" in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
     assert "sigma-admin-console-draft-v3" in html

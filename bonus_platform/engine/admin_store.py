@@ -196,10 +196,10 @@ DEFAULT_MODULES = [
     {"id": "employee", "name": "中国区正式工薪酬核算", "href": "china-employee-payroll.html", "owner_role_id": "employeeAdmin", "enabled": 1, "development_status": "available"},
     {"id": "domestic", "name": "中国区外包工薪酬核算", "href": "domestic-labor.html", "owner_role_id": "domesticAdmin", "enabled": 0, "development_status": "developing"},
     {"id": "fbu", "name": "FBU美洲绩效奖金核算", "href": "fbu-performance.html", "owner_role_id": "fbuAdmin", "enabled": 0, "development_status": "developing"},
-    {"id": "overseas", "name": "海外劳务报账核对", "href": "overseas-labor.html", "owner_role_id": "overseasAdmin", "enabled": 0, "development_status": "developing"},
+    {"id": "overseas", "name": "海外劳务报账核对", "href": "overseas-labor.html", "owner_role_id": "overseasAdmin", "enabled": 1, "development_status": "uat"},
 ]
 
-OPEN_FOR_RELEASE_MODULE_IDS = {"recruitment", "employee"}
+OPEN_FOR_RELEASE_MODULE_IDS = {"recruitment", "employee", "overseas"}
 CLOSED_UNTIL_RELEASE_MODULE_IDS = {"domestic", "fbu"}
 
 DEFAULT_FEATURES = ["enter", "import", "calculate", "review", "export", "archive", "audit"]
