@@ -20,8 +20,8 @@
     modules: [
       { id: "recruitment", name: "全球招聘奖金核算", owner: "招聘奖金核算管理员", enabled: true },
       { id: "employee", name: "中国区正式工薪酬核算", owner: "国内正式工核算管理员", enabled: false },
-      { id: "domestic", name: "中国区外包工薪酬核算", owner: "国内外包工核算管理员", enabled: true },
-      { id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true },
+      { id: "domestic", name: "中国区外包工薪酬核算", owner: "国内外包工核算管理员", enabled: false },
+      { id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: false },
       { id: "overseas", name: "海外劳务报账核对", owner: "海外报账管理员", enabled: true },
     ],
     features: [

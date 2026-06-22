@@ -346,9 +346,9 @@
   const currentRoleIds = Array.isArray(currentUser?.roleIds) ? currentUser.roleIds : [];
   const isSystemAdmin = currentRoleIds.includes("admin");
   const canAccessAdmin = !adminOnly || currentRoleIds.includes("admin");
-  const canEnter = isSystemAdmin || (typeof module?.canEnter === "boolean" ? module.canEnter : Boolean(module?.enabled) && currentRoleIds.some(roleId => {
+  const canEnter = Boolean(module?.enabled) && (isSystemAdmin || (typeof module?.canEnter === "boolean" ? module.canEnter : currentRoleIds.some(roleId => {
     return state.moduleAccess[roleId]?.[moduleId] && state.rolePermissions[roleId]?.enter;
-  }));
+  })));
 
   if ((adminOnly && canAccessAdmin) || (!adminOnly && canEnter)) {
     finishLoading();

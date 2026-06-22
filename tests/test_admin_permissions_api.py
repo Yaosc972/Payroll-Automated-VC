@@ -19,6 +19,8 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert {role["id"] for role in data["roles"]} >= {"admin", "employeeAdmin", "domesticAdmin"}
     assert {user["id"] for user in data["users"]} >= {"payrollAdmin", "cnPayrollAdminUser"}
     assert any(module["id"] == "employee" and module["enabled"] is False for module in data["modules"])
+    assert any(module["id"] == "domestic" and module["enabled"] is False for module in data["modules"])
+    assert any(module["id"] == "fbu" and module["enabled"] is False for module in data["modules"])
     assert data["moduleAccess"]["employeeAdmin"]["employee"] is True
     assert data["moduleAccess"]["employeeAdmin"]["domestic"] is False
     assert data["rolePermissions"]["admin"]["archive"] is True
@@ -57,7 +59,7 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     assert module_response.status_code == 200
     assert module_response.json()["module"]["enabled"] is True
     assert domestic_module_response.status_code == 200
-    assert domestic_module_response.json()["module"]["enabled"] is True
+    assert domestic_module_response.json()["module"]["enabled"] is False
     assert access_response.status_code == 200
     assert access_response.json()["moduleAccess"]["domestic"] is True
     assert user_response.status_code == 200
@@ -73,7 +75,8 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     assert me_response.status_code == 200
     me = me_response.json()
     domestic = next(module for module in me["modules"] if module["id"] == "domestic")
-    assert domestic["canEnter"] is True
+    assert domestic["enabled"] is False
+    assert domestic["canEnter"] is False
 
     assert logs_response.status_code == 200
     actions = [log["action"] for log in logs_response.json()["logs"]]

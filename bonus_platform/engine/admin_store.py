@@ -199,6 +199,8 @@ DEFAULT_MODULES = [
     {"id": "overseas", "name": "海外劳务报账核对", "href": "overseas-labor.html", "owner_role_id": "overseasAdmin", "enabled": 0, "development_status": "developing"},
 ]
 
+CLOSED_UNTIL_RELEASE_MODULE_IDS = {"domestic", "fbu"}
+
 DEFAULT_FEATURES = ["enter", "import", "calculate", "review", "export", "archive", "audit"]
 SESSION_TTL_DAYS = 7
 _STORE_INITIALIZED = False
@@ -391,6 +393,11 @@ def _seed_defaults(connection: _AdminConnection) -> None:
                 """,
                 (module["name"], module["href"], module["owner_role_id"], module["development_status"], now, module["id"]),
             )
+            if module["id"] in CLOSED_UNTIL_RELEASE_MODULE_IDS:
+                connection.execute(
+                    "UPDATE admin_modules SET enabled = %s, updated_at = %s WHERE id = %s",
+                    (0, now, module["id"]),
+                )
         else:
             connection.execute(
                 """
@@ -400,6 +407,11 @@ def _seed_defaults(connection: _AdminConnection) -> None:
                 """,
                 (module["name"], module["href"], module["owner_role_id"], module["development_status"], now, module["id"]),
             )
+            if module["id"] in CLOSED_UNTIL_RELEASE_MODULE_IDS:
+                connection.execute(
+                    "UPDATE admin_modules SET enabled = ?, updated_at = ? WHERE id = ?",
+                    (0, now, module["id"]),
+                )
     for user in DEFAULT_USERS:
         _insert_seed(
             connection,
@@ -468,7 +480,7 @@ def list_modules(db_path: Path | None = None) -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [
-        {**dict(row), "enabled": bool(row["enabled"])}
+        {**dict(row), "enabled": bool(row["enabled"]) and row["id"] not in CLOSED_UNTIL_RELEASE_MODULE_IDS}
         for row in rows
     ]
 
@@ -719,14 +731,15 @@ def set_user_roles(user_id: str, role_ids: list[str], actor_user_id: str = "payr
 def set_module_enabled(module_id: str, enabled: bool, actor_user_id: str = "payrollAdmin", db_path: Path | None = None) -> dict[str, Any]:
     init_admin_store(db_path)
     now = _now()
+    effective_enabled = bool(enabled) and module_id not in CLOSED_UNTIL_RELEASE_MODULE_IDS
     with _connect(db_path) as connection:
         cursor = connection.execute(
             "UPDATE admin_modules SET enabled = ?, updated_at = ? WHERE id = ?",
-            (1 if enabled else 0, now, module_id),
+            (1 if effective_enabled else 0, now, module_id),
         )
         if cursor.rowcount == 0:
             raise KeyError("module_not_found")
-        _insert_audit(connection, actor_user_id, "set_module_enabled", "module", module_id, str(enabled))
+        _insert_audit(connection, actor_user_id, "set_module_enabled", "module", module_id, str(effective_enabled))
         connection.commit()
     return next(module for module in list_modules(db_path) if module["id"] == module_id)
 

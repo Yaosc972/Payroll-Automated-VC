@@ -185,6 +185,7 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "sigma-admin-console-draft-v3" in html
     assert "data-module-id" in html
     assert "canEnterModule" in html
+    assert "if (!module?.enabled) return false" in html
     assert "currentUser.roleIds.includes('admin')) return true" in html
     assert "sigma-auth-context-v2" in html
     assert "/api/me" in html
@@ -267,7 +268,7 @@ def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     assert "中国区正式工薪酬核算" in html
     assert "技术部餐补核算" in html
     assert 'data-module-id="employee"' in html
-    assert "permission-guard.js?v=4" in html
+    assert "permission-guard.js?v=5" in html
     assert "china-employee-payroll.js" in html
     assert "/api/china-employee-payroll/meal-allowance" in js
     assert ".china-employee-payroll-shell" in css
@@ -377,7 +378,7 @@ def test_permission_guard_blocks_direct_module_access_with_static_permissions():
     assert 'credentials: "same-origin"' in guard_js
     assert 'cache: "no-store"' in guard_js
     assert 'const isSystemAdmin = currentRoleIds.includes("admin")' in guard_js
-    assert "const canEnter = isSystemAdmin || (typeof module?.canEnter" in guard_js
+    assert "const canEnter = Boolean(module?.enabled) && (isSystemAdmin ||" in guard_js
     assert "selectedUserId" in guard_js
     assert "adminOnly ? null" not in guard_js
     assert "cdn.jsdelivr.net/npm/gsap" not in guard_js
