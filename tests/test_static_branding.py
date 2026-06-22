@@ -268,7 +268,7 @@ def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     assert "中国区正式工薪酬核算" in html
     assert "技术部餐补核算" in html
     assert 'data-module-id="employee"' in html
-    assert "permission-guard.js?v=6" in html
+    assert "permission-guard.js?v=7" in html
     assert "china-employee-payroll.js" in html
     assert "/api/china-employee-payroll/meal-allowance" in js
     assert ".china-employee-payroll-shell" in css
@@ -376,6 +376,7 @@ def test_permission_guard_blocks_direct_module_access_with_static_permissions():
     assert "sigma-auth-context-v2" in guard_js
     assert "authFetchTimeoutMs" in guard_js
     assert "ensureLoadingOverlay" in guard_js
+    assert "html.permission-checking body > :not(.permission-loading-overlay)" not in guard_js
     assert 'credentials: "same-origin"' in guard_js
     assert 'cache: "no-store"' in guard_js
     assert 'const isSystemAdmin = currentRoleIds.includes("admin")' in guard_js

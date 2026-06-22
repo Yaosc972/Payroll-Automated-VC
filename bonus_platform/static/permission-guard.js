@@ -14,7 +14,6 @@
     const style = document.createElement("style");
     style.id = "permissionLoadingStyles";
     style.textContent = `
-      html.permission-checking body > :not(.permission-loading-overlay) { visibility: hidden; }
       .permission-loading-overlay {
         position: fixed;
         inset: 0;
