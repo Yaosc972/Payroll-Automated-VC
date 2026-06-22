@@ -16,7 +16,8 @@ DOMESTIC_LABOR_HTML = ROOT / "bonus_platform" / "static" / "domestic-labor.html"
 DOMESTIC_LABOR_JS = ROOT / "bonus_platform" / "static" / "domestic-labor.js"
 OVERSEAS_LABOR_HTML = ROOT / "bonus_platform" / "static" / "overseas-labor.html"
 OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
-EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
+EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "china-employee-payroll.html"
+EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payroll.js"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
@@ -82,6 +83,28 @@ def test_command_center_table_replaces_limited_preview_tabs():
     assert "previewTable" not in html
 
 
+def test_recruitment_page_removes_difference_review_workflow():
+    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    app_js = APP_JS.read_text(encoding="utf-8")
+
+    for removed_copy in [
+        "差异复核",
+        "上传线下表做差异检验",
+        "生成差异报告",
+        "选择线下/复核 Excel",
+        "只看差异",
+        "差异概览",
+    ]:
+        assert removed_copy not in html
+        assert removed_copy not in app_js
+
+    assert 'data-step="compare"' not in html
+    assert "offlineInput" not in app_js
+    assert "compareRun" not in app_js
+    assert "diffSummary" not in app_js
+    assert "原始导入、初算结果、待确认表和最终结果" in html
+
+
 def test_command_center_uses_glass_toast_skeleton_and_collapsible_panels():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
@@ -109,9 +132,10 @@ def test_command_center_uses_next_gen_minimal_glass_language():
     assert ".app-header" in css
     assert "rgba(255, 255, 255, 0.64)" in css
     assert "inner-edge-glow" in css
-    assert ".run-status-orb" in css
-    assert "linear-gradient(135deg, var(--neon-cyan), var(--neon-violet))" in css
-    assert "run-status-orb" in app_js
+    assert ".run-status-orb" not in css
+    assert "run-status-orb" not in app_js
+    assert "runsCollapsed: true" in app_js
+    assert "syncRunsPanelState" in app_js
 
 
 def test_command_center_uses_premium_typography_system():
@@ -152,7 +176,7 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert 'href="recruitment.html"' in html
     assert 'href="domestic-labor.html"' in html
     assert 'href="overseas-labor.html"' in html
-    assert 'href="employee-payroll.html"' in html
+    assert 'href="china-employee-payroll.html"' in html
     assert 'href="admin.html"' in html
     assert "Available · 已上线" in html
     assert "app.js" not in html
@@ -231,15 +255,19 @@ def test_admin_console_is_static_permission_management_shell():
     assert ".admin-module-access-grid" in css
 
 
-def test_employee_payroll_placeholder_is_guarded_construction_page():
+def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     html = EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
+    js = EMPLOYEE_PAYROLL_JS.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert "中国区正式工薪酬核算建设中" in html
+    assert "中国区正式工薪酬核算" in html
+    assert "技术部餐补核算" in html
     assert 'data-module-id="employee"' in html
     assert "permission-guard.js" in html
-    assert "employee-placeholder-shell" in html
-    assert ".employee-placeholder-panel" in css
+    assert "china-employee-payroll.js" in html
+    assert "/api/china-employee-payroll/meal-allowance" in js
+    assert ".china-employee-payroll-shell" in css
+    assert ".employee-payroll-table" in css
 
 
 def test_recruitment_page_keeps_command_center_and_home_link():
@@ -254,6 +282,34 @@ def test_recruitment_page_keeps_command_center_and_home_link():
     assert "app.js" in html
     assert 'id="commandTable"' in html
     assert "招聘奖金核算" in html
+
+
+def test_recruitment_header_omits_user_menu():
+    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert 'class="workbench-user-menu"' not in html
+    assert "姚硕灿" not in html
+    assert "系统管理员" not in html
+    assert "进入后台管理" not in html
+    assert "退出登录" not in html
+    assert ".workbench-user-menu" not in css
+    assert ".user-menu-panel" not in css
+    assert ".header-copy::before" in css
+    assert "background: rgba(30, 58, 138, 0.28)" in css
+    assert "background-size: 1px 10px" not in css
+
+
+def test_recruitment_template_download_lives_in_step_one_card():
+    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    header_actions = html.split('<div class="header-actions">', 1)[1].split("</div>", 1)[0]
+    assert "下载导入模板" not in header_actions
+    assert "Step 1-2" in html
+    assert 'class="template-inline-button"' in html
+    assert 'href="/api/template?v=20260608"' in html
+    assert ".template-inline-button" in css
 
 
 def test_labor_page_redirects_to_domestic_labor():

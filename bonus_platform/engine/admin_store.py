@@ -193,7 +193,7 @@ DEFAULT_USERS = [
 
 DEFAULT_MODULES = [
     {"id": "recruitment", "name": "全球招聘奖金核算", "href": "recruitment.html", "owner_role_id": "recruitmentAdmin", "enabled": 1, "development_status": "available"},
-    {"id": "employee", "name": "中国区正式工薪酬核算", "href": "employee-payroll.html", "owner_role_id": "employeeAdmin", "enabled": 0, "development_status": "developing"},
+    {"id": "employee", "name": "中国区正式工薪酬核算", "href": "china-employee-payroll.html", "owner_role_id": "employeeAdmin", "enabled": 0, "development_status": "developing"},
     {"id": "domestic", "name": "中国区外包工薪酬核算", "href": "domestic-labor.html", "owner_role_id": "domesticAdmin", "enabled": 0, "development_status": "developing"},
     {"id": "fbu", "name": "FBU美洲绩效奖金核算", "href": "fbu-performance.html", "owner_role_id": "fbuAdmin", "enabled": 0, "development_status": "developing"},
     {"id": "overseas", "name": "海外劳务报账核对", "href": "overseas-labor.html", "owner_role_id": "overseasAdmin", "enabled": 0, "development_status": "developing"},
@@ -382,6 +382,24 @@ def _seed_defaults(connection: _AdminConnection) -> None:
             ["id"],
             {**module, "created_at": now, "updated_at": now},
         )
+        if connection.backend == "postgres":
+            connection.execute(
+                """
+                UPDATE admin_modules
+                SET name = %s, href = %s, owner_role_id = %s, development_status = %s, updated_at = %s
+                WHERE id = %s
+                """,
+                (module["name"], module["href"], module["owner_role_id"], module["development_status"], now, module["id"]),
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE admin_modules
+                SET name = ?, href = ?, owner_role_id = ?, development_status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (module["name"], module["href"], module["owner_role_id"], module["development_status"], now, module["id"]),
+            )
     for user in DEFAULT_USERS:
         _insert_seed(
             connection,

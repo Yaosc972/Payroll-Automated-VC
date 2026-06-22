@@ -32,3 +32,4 @@ desktop/backend-dist/
 desktop/release/
 desktop/dist/
 .vercel
+.env*

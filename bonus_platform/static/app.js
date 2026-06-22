@@ -6,7 +6,7 @@ const state = {
   filteredRows: [],
   filters: {},
   optionalColumnsHidden: false,
-  runsCollapsed: false,
+  runsCollapsed: true,
   filtersCollapsed: false,
   sortField: "",
   sortDir: "asc",
@@ -23,10 +23,6 @@ const elements = {
   confirmationName: document.querySelector("#confirmationName"),
   finalizeButton: document.querySelector("#finalizeButton"),
   finalStatus: document.querySelector("#finalStatus"),
-  offlineInput: document.querySelector("#offlineInput"),
-  offlineName: document.querySelector("#offlineName"),
-  compareButton: document.querySelector("#compareButton"),
-  compareStatus: document.querySelector("#compareStatus"),
   runList: document.querySelector("#runList"),
   refreshRunsButton: document.querySelector("#refreshRunsButton"),
   toggleRunsButton: document.querySelector("#toggleRunsButton"),
@@ -36,7 +32,6 @@ const elements = {
   currentRunTitle: document.querySelector("#currentRunTitle"),
   currentRunSubTitle: document.querySelector("#currentRunSubTitle"),
   ruleVersion: document.querySelector("#ruleVersion"),
-  diffSummary: document.querySelector("#diffSummary"),
   tableSummary: document.querySelector("#tableSummary"),
   visibleRows: document.querySelector("#visibleRows"),
   totalRows: document.querySelector("#totalRows"),
@@ -64,6 +59,7 @@ init();
 
 function init() {
   bindEvents();
+  syncRunsPanelState();
   renderIcons();
   loadRuns();
 }
@@ -77,13 +73,8 @@ function bindEvents() {
     elements.confirmationName.textContent = elements.confirmationInput.files[0]?.name || "上传已确认表";
   });
 
-  elements.offlineInput.addEventListener("change", () => {
-    elements.offlineName.textContent = elements.offlineInput.files[0]?.name || "选择线下/复核 Excel";
-  });
-
   elements.calculateButton.addEventListener("click", calculateRun);
   elements.finalizeButton.addEventListener("click", finalizeRun);
-  elements.compareButton.addEventListener("click", compareRun);
   elements.refreshRunsButton.addEventListener("click", loadRuns);
   elements.toggleRunsButton.addEventListener("click", toggleRunsPanel);
   elements.toggleFiltersButton.addEventListener("click", toggleFiltersPanel);
@@ -120,7 +111,7 @@ async function calculateRun() {
     const data = await requestJson("/api/runs/calculate", { method: "POST", body: form });
     await loadRuns(data.id);
     await selectRun(data);
-    setStatus(elements.status, `初算完成：${data.id}`, false);
+    setStatus(elements.status, `初算完成：${runDisplayName(data)}`, false);
     showToast("初算完成，已生成新的核算批次。");
   } catch (error) {
     setStatus(elements.status, error.message, true);
@@ -152,44 +143,13 @@ async function finalizeRun() {
     if (data.inlineFile) downloadInlineFile(data.inlineFile);
     await loadRuns(data.id);
     await selectRun(data);
-    setStatus(elements.finalStatus, `最终结果已生成：${data.files.finalResult.filename}`, false);
+    setStatus(elements.finalStatus, `最终结果已生成：${fileDisplayName(data.files.finalResult, data, "最终结果")}`, false);
     showToast("最终结果已生成。");
   } catch (error) {
     setStatus(elements.finalStatus, error.message, true);
     showToast(error.message, "error");
   } finally {
     elements.finalizeButton.disabled = false;
-  }
-}
-
-async function compareRun() {
-  if (!state.currentRun) {
-    setStatus(elements.compareStatus, "请先选择或创建一个核算批次。", true);
-    return;
-  }
-  const offlineFile = elements.offlineInput.files[0];
-  if (!offlineFile) {
-    setStatus(elements.compareStatus, "请上传线下核算表或复核表。", true);
-    return;
-  }
-
-  const form = new FormData();
-  form.append("offline_file", offlineFile);
-  setStatus(elements.compareStatus, "正在生成差异报告...", false);
-  showTableSkeleton("正在生成差异报告");
-  elements.compareButton.disabled = true;
-
-  try {
-    const data = await requestJson(`/api/runs/${state.currentRun.id}/compare`, { method: "POST", body: form });
-    await loadRuns(data.id);
-    await selectRun(data);
-    setStatus(elements.compareStatus, `差异报告已生成：${data.files.diffReport.filename}`, false);
-    showToast("差异报告已生成。");
-  } catch (error) {
-    setStatus(elements.compareStatus, error.message, true);
-    showToast(error.message, "error");
-  } finally {
-    elements.compareButton.disabled = false;
   }
 }
 
@@ -220,10 +180,11 @@ function renderRun(run) {
   for (const id of metricIds) {
     document.querySelector(`#${id}`).textContent = formatMetric(id, run[id]);
   }
-  elements.currentRunTitle.textContent = `${run.month || "-"} · ${run.status || "已创建"}`;
-  elements.currentRunSubTitle.textContent = run.id ? `批次 ${run.id}` : "上传月度导入表后，平台会生成一个可追溯的核算批次。";
+  elements.currentRunTitle.textContent = runDisplayName(run);
+  elements.currentRunSubTitle.textContent = run.id
+    ? `批次标识 ${runShortCode(run)} · ${formatDateTime(run.updatedAt || run.createdAt)}`
+    : "上传月度导入表后，平台会生成一个可追溯的核算批次。";
   elements.ruleVersion.textContent = formatRuleInfo(run.ruleInfo);
-  renderDiffSummary(run.diffMetrics);
   renderDownloads(run);
   updateStepState(run);
   updatePrimaryDownloads(run);
@@ -474,7 +435,6 @@ function applyQuickFilter(action) {
   }
   if (action === "pending") elements.statusFilter.value = "待确认";
   if (action === "exception") elements.statusFilter.value = "异常";
-  if (action === "diff") elements.statusFilter.value = "差异";
   if (action === "amount") {
     elements.statusFilter.value = "";
     elements.minAmountFilter.value = "0.01";
@@ -506,7 +466,7 @@ function fillSelect(select, values) {
 function updateTableSummary(stats) {
   elements.visibleRows.textContent = stats.totalRows || 0;
   elements.totalRows.textContent = stats.totalRows || 0;
-  elements.tableSummary.textContent = `共 ${stats.totalRows || 0} 行，待确认 ${stats.pendingRows || 0}，异常 ${stats.exceptionRows || 0}，差异 ${stats.diffRows || 0}。`;
+  elements.tableSummary.textContent = `共 ${stats.totalRows || 0} 行，待确认 ${stats.pendingRows || 0}，异常 ${stats.exceptionRows || 0}。`;
 }
 
 function openDrawer(row) {
@@ -582,10 +542,9 @@ function renderRunList() {
     button.type = "button";
     button.className = `run-item${state.currentRun?.id === run.id ? " active" : ""}`;
     button.innerHTML = `
-      <span class="run-status-orb" aria-hidden="true"></span>
-      <span class="run-month">${escapeHtml(run.month || "-")}</span>
+      <span class="run-month">${escapeHtml(runShortCode(run))}</span>
       <strong>${escapeHtml(run.status || "已创建")}</strong>
-      <em>${escapeHtml(shortRunId(run.id))}</em>
+      <em>${escapeHtml(formatDateTime(run.updatedAt || run.createdAt))}</em>
     `;
     button.addEventListener("click", () => selectRun(run));
     elements.runList.appendChild(button);
@@ -600,12 +559,10 @@ function renderDownloads(run) {
     ["pending", "待确认表"],
     ["confirmation", "确认结果"],
     ["finalResult", "最终结果"],
-    ["offlineReview", "线下复核表"],
-    ["diffReport", "差异报告"],
   ];
   const available = ordered.map(([key, label]) => ({ key, label, file: files[key] })).filter((item) => item.file?.downloadUrl);
   if (!available.length) {
-    elements.downloadGrid.innerHTML = '<div class="empty-card">创建批次后显示原始导入、初算结果、待确认表、最终结果和差异报告。</div>';
+    elements.downloadGrid.innerHTML = '<div class="empty-card">创建批次后显示原始导入、初算结果、待确认表和最终结果。</div>';
     return;
   }
   elements.downloadGrid.innerHTML = "";
@@ -614,7 +571,7 @@ function renderDownloads(run) {
     link.href = item.file.downloadUrl;
     link.download = item.file.filename || "";
     link.className = "file-link";
-    link.innerHTML = `<i data-lucide="file-down"></i><span>${item.label}</span><strong>${escapeHtml(item.file.filename)}</strong>`;
+    link.innerHTML = `<i data-lucide="file-down"></i><span>${item.label}</span><strong>${escapeHtml(fileDisplayName(item.file, run, item.label))}</strong>`;
     elements.downloadGrid.appendChild(link);
   }
   renderIcons();
@@ -630,25 +587,10 @@ function updateStepState(run) {
   const activeSteps = new Set(["upload", "calculate"]);
   if ((run.pendingCount || 0) > 0 || run.status === "待确认") activeSteps.add("pending");
   if (run.files?.finalResult) activeSteps.add("final");
-  if (run.files?.diffReport) activeSteps.add("compare");
-  if (run.files?.finalResult || run.files?.diffReport) activeSteps.add("archive");
+  if (run.files?.finalResult) activeSteps.add("archive");
   document.querySelectorAll(".flow-step").forEach((step) => {
     step.classList.toggle("active", activeSteps.has(step.dataset.step));
   });
-}
-
-function renderDiffSummary(metrics) {
-  if (!metrics) {
-    elements.diffSummary.innerHTML = '<div class="empty-card">上传线下表后展示招聘/内推汇总差异行数和金额差异。</div>';
-    return;
-  }
-  const rows = [
-    ["招聘汇总差异", metrics.recruitmentSummaryDiffCount, metrics.recruitmentSummaryDelta],
-    ["内推汇总差异", metrics.referralSummaryDiffCount, metrics.referralSummaryDelta],
-    ["招聘明细差异", metrics.recruitmentDetailDiffCount, ""],
-    ["内推明细差异", metrics.referralDetailDiffCount, ""],
-  ];
-  elements.diffSummary.innerHTML = rows.map(([label, count, amount]) => `<div><span>${label}</span><strong>${count ?? 0}</strong><em>${amount === "" ? "明细行数" : formatMoney(amount)}</em></div>`).join("");
 }
 
 function toggleOptionalColumns() {
@@ -664,6 +606,10 @@ function toggleOptionalColumns() {
 
 function toggleRunsPanel() {
   state.runsCollapsed = !state.runsCollapsed;
+  syncRunsPanelState();
+}
+
+function syncRunsPanelState() {
   document.body.classList.toggle("runs-collapsed", state.runsCollapsed);
   elements.toggleRunsButton.title = state.runsCollapsed ? "展开批次" : "收起批次";
   elements.toggleRunsButton.innerHTML = `<i data-lucide="${state.runsCollapsed ? "panel-left-open" : "panel-left-close"}"></i>`;
@@ -768,6 +714,57 @@ function formatMoney(value) {
 function formatRuleInfo(ruleInfo) {
   if (!ruleInfo?.updatedAt) return "等待读取";
   return new Date(ruleInfo.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function runDisplayName(run) {
+  if (run?.displayName) return run.displayName;
+  const status = run?.status || "已创建";
+  return `${monthDisplayName(run?.month)} · ${runSequenceLabel(run)} · ${status}`;
+}
+
+function runShortCode(run) {
+  if (run?.shortCode) return run.shortCode;
+  return `${monthShortName(run?.month)}-${runSequenceLabel(run).replace("核算", "")}`;
+}
+
+function runSequenceLabel(run) {
+  const sequence = Number(run?.runSequence || 0);
+  if (Number.isFinite(sequence) && sequence > 0) return `第${sequence}次核算`;
+  return "核算批次";
+}
+
+function fileDisplayName(file, run = null, label = "") {
+  const filename = file?.filename || "";
+  if (!filename) return "-";
+  if (/导入模板|月度导入模板|平台计算结果/.test(filename)) {
+    return `招聘奖金核算_${monthDisplayName(run?.month)}_${runSequenceLabel(run).replace("核算", "")}_${label || file?.label || "文件"}.xlsx`;
+  }
+  return filename.replace(/_\d{8}_\d{6}(?:_\d+)?(?=\.xlsx$)/, "");
+}
+
+function monthDisplayName(value) {
+  const month = parseMonth(value);
+  if (!month) return "未知月份";
+  return `${Math.floor(month / 100)}年${String(month % 100).padStart(2, "0")}月`;
+}
+
+function monthShortName(value) {
+  const month = parseMonth(value);
+  return month ? String(month) : "未知月份";
+}
+
+function parseMonth(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (digits.length < 6) return 0;
+  const month = Number(digits.slice(0, 6));
+  return Number.isFinite(month) ? month : 0;
+}
+
+function formatDateTime(value) {
+  if (!value) return "暂无时间";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "暂无时间";
+  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function shortRunId(id) {

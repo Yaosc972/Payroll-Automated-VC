@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN" data-module-id="employee">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>中国区正式工薪酬核算 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=35" />
+    <script src="permission-guard.js?v=1"></script>
+    <style>html { color-scheme: light; }</style>
+  </head>
+  <body class="china-employee-payroll-shell">
+    <header class="app-chrome">
+      <div class="chrome-left">
+        <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
+          <span class="brand-mark-frame">
+            <img src="assets/bonus-logo-header-blue.png" alt="" />
+          </span>
+          <span class="brand-copy">
+            <span class="brand-name">Σ-WORKBENCH</span>
+            <span class="brand-note">西格玛工作台</span>
+          </span>
+        </a>
+        <div class="chrome-divider"></div>
+        <div class="chrome-context">
+          <span class="chrome-label">China Employee Payroll</span>
+          <span class="chrome-title">中国区正式工薪酬核算</span>
+          <span class="chrome-desc">补贴核算、奖金核算、扣款核算、社保个税与发薪结果校验</span>
+        </div>
+      </div>
+      <div class="chrome-right">
+        <div class="chrome-run-badge workbench-action">
+          <span class="run-dot"></span>
+          <span id="calcPeriodLabel">待上传考勤记录</span>
+        </div>
+        <button id="btnExport" class="btn-download workbench-action" type="button" disabled>
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          导出结果
+        </button>
+      </div>
+    </header>
+
+    <main class="employee-module-hub" id="moduleHub">
+      <section class="hub-head">
+        <div>
+          <p>China Employee Payroll</p>
+          <h1>中国区正式工薪酬核算</h1>
+          <span>从子功能卡片进入对应核算工作台。第一期先开放技术部餐补核算，后续继续扩展补贴、奖金、扣款、社保个税与发薪校验。</span>
+        </div>
+      </section>
+
+      <figure class="payroll-hero-spot" aria-hidden="true">
+        <img src="assets/china-payroll-hero-spot.png" alt="" />
+      </figure>
+
+      <section class="module-card-stage" aria-label="正式工薪酬子功能卡片">
+        <button class="payroll-feature-card active" id="openMealAllowance" type="button" data-dock-card aria-label="进入技术部餐补核算">
+          <span class="feature-card-tooltip" aria-hidden="true">进入技术部餐补核算</span>
+          <span class="feature-card-title">技术部餐补核算</span>
+          <span class="feature-card-meta">Tech Meal Allowance · Prototype</span>
+          <span class="feature-card-preview" aria-hidden="true">
+            <span class="preview-window">
+              <span class="preview-topbar"></span>
+              <span class="preview-heading"></span>
+              <span class="preview-grid">
+                <i></i><i></i><i></i>
+              </span>
+              <span class="preview-table">
+                <i></i><i></i><i></i><i></i>
+              </span>
+            </span>
+          </span>
+          <span class="feature-card-footer">
+            <span>进入核算</span>
+            <b aria-hidden="true">→</b>
+          </span>
+        </button>
+      </section>
+    </main>
+
+    <main class="employee-workspace employee-workbench-view nav-collapsed" id="mealAllowanceWorkbench" hidden>
+      <aside class="employee-subnav" aria-label="正式工薪酬子功能导航">
+        <button class="subnav-toggle" id="toggleSubnav" type="button" aria-label="展开子功能导航" aria-expanded="false">
+          <span></span>
+          <span></span>
+          <span></span>
+        </button>
+        <div class="subnav-title">
+          <span>Payroll Modules</span>
+          <strong>子功能导航</strong>
+        </div>
+        <button class="subnav-item back-item" id="backToModuleHub" type="button">
+          <span>返回子功能卡片</span>
+          <small>Module Gallery</small>
+        </button>
+        <button class="subnav-item active" type="button">
+          <span>技术部餐补核算</span>
+          <small>Tech Meal Allowance</small>
+        </button>
+        <div class="subnav-batches" aria-labelledby="batchTitle">
+          <div class="subnav-batches-head">
+            <div>
+              <span>Payroll Runs</span>
+              <strong id="batchTitle">历史核算批次</strong>
+            </div>
+            <button class="btn-ghost-small" id="btnRefreshRuns" type="button">刷新</button>
+          </div>
+          <p>点击批次可回看结果并导出。</p>
+          <div class="batch-list" id="batchList"></div>
+        </div>
+      </aside>
+
+      <section class="employee-main">
+        <div class="employee-hero">
+          <div>
+            <p>正式工薪酬 · 第一期原型</p>
+            <h1>技术部餐补核算工作台</h1>
+            <span>上传人事系统导出的考勤记录，按已确认的技术部餐补口径生成核算结果与异常提示。</span>
+          </div>
+          <div class="hero-summary" aria-label="技术部餐补核算摘要">
+            <div><span>核算人数</span><strong id="summaryEmployees">0</strong></div>
+            <div><span>应发餐补</span><strong id="summaryAmount">¥0</strong></div>
+            <div><span>异常提醒</span><strong id="summaryIssues">0</strong></div>
+          </div>
+        </div>
+
+        <div class="employee-grid">
+          <section class="workspace-panel import-panel" aria-labelledby="importTitle">
+            <div class="section-header">
+              <div>
+                <h2 class="section-title" id="importTitle">数据导入区</h2>
+                <p class="section-sub">请选择一种考勤来源上传，同一批次不混合核算</p>
+              </div>
+            </div>
+            <div class="upload-stack">
+              <label class="upload-card" data-source-card="hr">
+                <input id="attendanceFiles" type="file" accept=".xlsx,.xlsm" multiple />
+                <span class="upload-card-head">
+                  <span>集团技术部考勤记录</span>
+                  <em>说明</em>
+                </span>
+                <strong id="attendanceFileName">选择文件</strong>
+                <small>
+                  <b>集团技术部考勤记录</b>
+                  上传集团技术部日考勤记录，可多选分片文件；本来源单独核算、单独导出。
+                </small>
+              </label>
+              <label class="upload-card" data-source-card="wx">
+                <input id="wxAttendanceFiles" type="file" accept=".xlsx,.xlsm" multiple />
+                <span class="upload-card-head">
+                  <span>WX技术部考勤记录</span>
+                  <em>说明</em>
+                </span>
+                <strong id="wxAttendanceFileName">选择文件</strong>
+                <small>
+                  <b>WX技术部考勤记录</b>
+                  上传体系外 WX-PBU技术部日报表，只核算并导出 WX 技术部结果。
+                </small>
+              </label>
+            </div>
+            <div class="import-actions">
+              <button class="btn-run-calc" id="btnRunCalc" type="button" disabled>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M4 2.75h5.4L12 5.35v7.9H4V2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                  <path d="M9.2 2.9v2.6h2.6M6 8h4M6 10.3h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                点击开始核算
+              </button>
+              <button class="btn-reset-source" id="btnResetSource" type="button" disabled>重新选择来源</button>
+              <span id="runHint">选择左侧来源后开始核算</span>
+            </div>
+          </section>
+
+          <section class="workspace-panel rule-panel" aria-labelledby="ruleTitle">
+            <div class="section-header">
+              <div>
+                <h2 class="section-title" id="ruleTitle">核算规则配置区</h2>
+                <p class="section-sub">按已确认规则执行，页面不临时改规则</p>
+              </div>
+            </div>
+            <div class="rule-summary-list">
+              <span>集团技术部：HQU技术部整体纳入；ABU/FBU/FES/LBU/PBU 按技术部三级组织纳入；HRAS 指定技术组纳入</span>
+              <span>WX技术部：组织架构为 WX-PBU技术部 及下级组织，班次不是休息即工作日</span>
+              <span>补贴标准：命中来源规则且末打卡达到 21:00 的考勤日按 20 元/天计算；两种来源分开核算和导出</span>
+            </div>
+          </section>
+        </div>
+
+        <section class="workspace-panel result-panel" aria-labelledby="resultTitle">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title" id="resultTitle">结果预览区</h2>
+              <p class="section-sub">技术部餐补核算明细 · 支持筛选、分页与批次回看</p>
+            </div>
+            <div class="section-actions">
+              <span class="result-status" id="resultStatus">等待上传并核算</span>
+            </div>
+          </div>
+          <div class="result-toolbar" aria-label="结果筛选">
+            <label>
+              <span>关键词</span>
+              <input id="resultSearch" type="search" placeholder="搜索工号、姓名、组织" />
+            </label>
+            <label>
+              <span>状态</span>
+              <select id="resultStatusFilter">
+                <option value="all">全部</option>
+                <option value="payable">已计算餐补</option>
+                <option value="unmatched">未命中</option>
+              </select>
+            </label>
+          </div>
+          <div class="employee-table-wrap">
+            <table class="employee-payroll-table">
+              <thead>
+                <tr>
+                  <th>工号</th>
+                  <th>姓名</th>
+                  <th>二级组织</th>
+                  <th>三级组织</th>
+                  <th>补贴天数</th>
+                  <th>餐补金额</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody id="resultRows"></tbody>
+            </table>
+          </div>
+          <div class="table-pagination" aria-label="结果分页">
+            <span id="resultTotal">共0条数据</span>
+            <nav class="pagination-nav" aria-label="结果分页导航">
+              <ul class="pagination-controls" id="paginationList">
+                <li>
+                  <button class="pagination-link pagination-prev" id="prevPage" type="button" aria-label="上一页">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 15 7.5 10l5-5" /></svg>
+                    <span>Previous</span>
+                  </button>
+                </li>
+                <li>
+                  <span class="pagination-link active-page" id="resultPageInfo" aria-current="page">1</span>
+                </li>
+                <li>
+                  <button class="pagination-link pagination-next" id="nextPage" type="button" aria-label="下一页">
+                    <span>Next</span>
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7.5 5 5 5-5 5" /></svg>
+                  </button>
+                </li>
+              </ul>
+              <select id="pageSize" aria-label="每页条数">
+                <option value="20" selected>20 条/页</option>
+                <option value="50">50 条/页</option>
+                <option value="100">100 条/页</option>
+                <option value="200">200 条/页</option>
+              </select>
+            </nav>
+          </div>
+        </section>
+
+        <section class="workspace-panel issue-panel" aria-labelledby="issueTitle">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title" id="issueTitle">异常/缺失数据提示区</h2>
+              <p class="section-sub">仅提示缺必要字段、重复工号+考勤日期等需要复核的数据问题</p>
+            </div>
+          </div>
+          <div class="issue-list" id="issueList"></div>
+        </section>
+      </section>
+    </main>
+
+    <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
+    <script src="china-employee-payroll.js?v=1"></script>
+  </body>
+</html>

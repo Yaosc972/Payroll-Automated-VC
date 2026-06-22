@@ -25,11 +25,10 @@
         </a>
         <div class="header-copy">
           <h2 class="hero-title workbench-title">招聘奖金核算</h2>
-          <span>把每月奖金初算、确认、差异复核和导出归档集中到一个批次流程。</span>
+          <span>把每月奖金初算、确认和导出归档集中到一个批次流程。</span>
         </div>
         <div class="header-actions">
           <a class="ghost-button" href="/"><i data-lucide="layout-dashboard"></i>返回首页</a>
-          <a class="ghost-button" href="/api/template?v=20260608"><i data-lucide="download"></i>下载导入模板</a>
           <a id="downloadLink" class="solid-button disabled" href="#" aria-disabled="true"><i data-lucide="file-down"></i>下载当前结果</a>
         </div>
       </div>
@@ -85,12 +84,8 @@
             <span>4</span>
             <div><strong>最终汇总</strong><em>确认后生成</em></div>
           </div>
-          <div class="flow-step" data-step="compare">
-            <span>5</span>
-            <div><strong>差异复核</strong><em>对比线下</em></div>
-          </div>
           <div class="flow-step" data-step="archive">
-            <span>6</span>
+            <span>5</span>
             <div><strong>导出归档</strong><em>保留文件</em></div>
           </div>
         </section>
@@ -99,10 +94,13 @@
           <section class="panel action-card primary-card">
             <div class="panel-heading">
               <div>
-                <p>Step 1</p>
+                <p>Step 1-2</p>
                 <h2>上传月度导入表</h2>
               </div>
-              <i data-lucide="upload-cloud"></i>
+              <a class="template-inline-button" href="/api/template?v=20260608">
+                <i data-lucide="download"></i>
+                下载导入模板
+              </a>
             </div>
             <label class="file-picker">
               <input id="fileInput" type="file" accept=".xlsx,.xlsm" />
@@ -132,23 +130,6 @@
             <button id="finalizeButton" class="dark-button" type="button">生成最终结果</button>
             <div id="finalStatus" class="status">选择一个批次后可操作</div>
           </section>
-
-          <section class="panel action-card">
-            <div class="panel-heading">
-              <div>
-                <p>Step 5</p>
-                <h2>上传线下表做差异检验</h2>
-              </div>
-              <i data-lucide="git-compare-arrows"></i>
-            </div>
-            <label class="file-picker compact-picker">
-              <input id="offlineInput" type="file" accept=".xlsx,.xlsm" />
-              <span><i data-lucide="table-2"></i></span>
-              <strong id="offlineName">选择线下/复核 Excel</strong>
-            </label>
-            <button id="compareButton" class="secondary-action" type="button">生成差异报告</button>
-            <div id="compareStatus" class="status">最终结果或初算结果均可对比</div>
-          </section>
         </section>
 
         <section class="metrics" aria-label="核算结果概览">
@@ -168,7 +149,7 @@
             </div>
           </div>
           <div id="downloadGrid" class="download-grid">
-            <div class="empty-card">创建批次后显示原始导入、初算结果、待确认表、最终结果和差异报告。</div>
+            <div class="empty-card">创建批次后显示原始导入、初算结果、待确认表和最终结果。</div>
           </div>
         </section>
 
@@ -211,7 +192,6 @@
                   <button type="button" data-quick="pending">只看待确认</button>
                   <button type="button" data-quick="exception">只看异常</button>
                   <button type="button" data-quick="amount">只看有金额</button>
-                  <button type="button" data-quick="diff">只看差异</button>
                   <button type="button" data-quick="reset">重置筛选</button>
                 </div>
               </div>
@@ -223,7 +203,7 @@
                   <p>Command Center</p>
                   <h2>统一核算明细</h2>
                 </div>
-                <span id="tableSummary">选择批次后显示招聘奖金、内推奖金、待确认、异常和差异。</span>
+                <span id="tableSummary">选择批次后显示招聘奖金、内推奖金、待确认和异常。</span>
               </div>
               <div class="table-toolbar">
                 <div class="toolbar-stats">
@@ -243,15 +223,6 @@
               </div>
             </section>
           </div>
-
-          <section class="legacy-panels" aria-label="批次辅助信息">
-            <details>
-              <summary>差异概览</summary>
-              <div id="diffSummary" class="diff-summary">
-                <div class="empty-card">上传线下表后展示招聘/内推汇总差异行数和金额差异。</div>
-              </div>
-            </details>
-          </section>
         </section>
       </section>
     </main>
