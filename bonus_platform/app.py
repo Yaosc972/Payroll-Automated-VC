@@ -15,16 +15,17 @@ logging.basicConfig(
 )
 from pathlib import Path
 import shutil
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, gettempdir
 from typing import Optional
 from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from openpyxl import load_workbook
 
 logger = logging.getLogger("bonus_platform.labor")
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, ensure_data_files
+from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, PROJECT_ROOT, ensure_data_files
 from .engine.domestic_labor.parser import PayrollDataLoader
 from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
@@ -33,6 +34,7 @@ from .engine.domestic_labor.runs import (
     create_payroll_run, update_payroll_metadata, load_payroll_metadata,
     list_payroll_metadata, get_payroll_run_dir, attach_payroll_file, safe_payroll_filename,
 )
+from .engine.china_employee_payroll import calculate_meal_allowance, parse_attendance_workbooks, parse_wx_attendance_workbooks
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import compare_labor_items, compare_by_warehouse
@@ -150,6 +152,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "null",
+        "http://127.0.0.1:8006",
+        "http://localhost:8006",
+    ],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
+)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
@@ -5472,6 +5485,262 @@ def _labor_workbook_paths(metadata: dict) -> list[Path]:
             raise HTTPException(status_code=404, detail=f"线下账单文件不存在：{p.name}")
         paths.append(p)
     return paths
+
+
+# ============================================================
+# CHINA EMPLOYEE PAYROLL API  /api/china-employee-payroll/*
+# ============================================================
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_china_employee_payroll_runs_dir() -> Path:
+    candidate = OUTPUT_DIR / "china_employee_payroll_runs"
+    if _path_is_relative_to(candidate, PROJECT_ROOT):
+        return Path(gettempdir()) / "sigma_workbench_china_employee_payroll_runs"
+    return candidate
+
+
+CHINA_EMPLOYEE_PAYROLL_RUNS_DIR = _resolve_china_employee_payroll_runs_dir()
+CHINA_EMPLOYEE_PAYROLL_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _compact_china_employee_payroll_result(result: dict) -> list[dict]:
+    return [
+        {key: value for key, value in row.items() if key != "daily"}
+        for row in result.get("results", [])
+    ]
+
+
+@app.post("/api/china-employee-payroll/meal-allowance")
+async def calculate_china_employee_meal_allowance(
+    attendance_files: list[UploadFile] = File(...),
+    source_type: str = Form("hr"),
+) -> dict:
+    source_type = (source_type or "hr").strip().lower()
+    if source_type not in {"hr", "wx"}:
+        raise HTTPException(400, "考勤来源类型不支持，请选择人事系统考勤或WX技术部考勤。")
+    if not attendance_files:
+        raise HTTPException(400, "请上传考勤记录 Excel。")
+    for file in attendance_files:
+        if not file.filename.lower().endswith((".xlsx", ".xlsm")):
+            raise HTTPException(400, "请上传 Excel 文件（.xlsx / .xlsm）。")
+
+    run_id = f"china_employee_payroll_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=False)
+    paths = []
+    for file in attendance_files:
+        saved_name = safe_payroll_filename(file.filename)
+        path = run_dir / saved_name
+        path.write_bytes(await file.read())
+        paths.append(path)
+
+    try:
+        parsed = parse_wx_attendance_workbooks(paths) if source_type == "wx" else parse_attendance_workbooks(paths)
+        result = calculate_meal_allowance(parsed)
+    except Exception as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(400, f"考勤记录解析或核算失败：{exc}") from exc
+
+    metadata = {
+        "runId": run_id,
+        "createdAt": datetime.now().isoformat(timespec="seconds"),
+        "sourceFiles": [path.name for path in paths],
+        "sourceType": source_type,
+        "sourceLabel": result["summary"].get("sourceLabel", ""),
+        "summary": result["summary"],
+        "warnings": result["warnings"],
+    }
+    (run_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "runId": run_id,
+        "summary": result["summary"],
+        "results": _compact_china_employee_payroll_result(result),
+        "files": result["files"],
+        "warnings": result["warnings"],
+    }
+
+
+def _china_employee_payroll_month_label(summary: dict) -> str:
+    raw_date = summary.get("dateStart") or ""
+    try:
+        parsed = datetime.fromisoformat(raw_date)
+    except ValueError:
+        return ""
+    return f"{parsed.year}年{parsed.month}月"
+
+
+def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> Path:
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    metadata_path = run_dir / "metadata.json"
+    result_path = run_dir / "result.json"
+    if not metadata_path.exists() or not result_path.exists():
+        raise HTTPException(status_code=404, detail="核算结果不存在，请重新上传并核算。")
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    summary = result.get("summary", {})
+    source_type = metadata.get("sourceType") or summary.get("sourceType") or "hr"
+    month_label = _china_employee_payroll_month_label(summary)
+    payable_rows = [row for row in result.get("results", []) if row.get("amount", 0) > 0]
+
+    workbook = Workbook()
+    result_sheet = workbook.active
+    result_sheet.title = "餐补核算结果"
+    source_sheet_name = "WX技术部考勤源" if source_type == "wx" else "人事系统考勤源"
+    source_sheet = workbook.create_sheet(source_sheet_name)
+
+    green_fill = PatternFill("solid", fgColor="EAF8F0")
+    total_fill = PatternFill("solid", fgColor="FFF4D6")
+    header_fill = PatternFill("solid", fgColor="D8E8FF")
+    border = Border(bottom=Side(style="thin", color="D7E3F4"))
+    header_font = Font(color="17324D", bold=True)
+    body_font = Font(color="24364B")
+
+    headers = ["核算月份", "工号", "姓名", "人员状态", "二级组织", "三级组织", "四级组织", "补贴天数", "餐补金额"]
+    header_row = 1
+    for column, header in enumerate(headers, start=1):
+        cell = result_sheet.cell(header_row, column, header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border
+
+    for row_index, row in enumerate(payable_rows, start=header_row + 1):
+        values = [
+            month_label,
+            row.get("employeeId", ""),
+            row.get("employeeName", ""),
+            row.get("status", ""),
+            row.get("secondOrg", ""),
+            row.get("thirdOrg", ""),
+            row.get("fourthOrg", ""),
+            row.get("payableDays", 0),
+            row.get("amount", 0),
+        ]
+        for column, value in enumerate(values, start=1):
+            cell = result_sheet.cell(row_index, column, value)
+            cell.font = body_font
+            cell.fill = green_fill if row_index % 2 else PatternFill("solid", fgColor="FFFFFF")
+            cell.border = border
+            if column in (8, 9):
+                cell.alignment = Alignment(horizontal="right")
+
+    total_row = header_row + len(payable_rows) + 1
+    total_values = ["合计", "", "", "", "", "", "", summary.get("payableDayCount", 0), summary.get("totalAmount", 0)]
+    for column, value in enumerate(total_values, start=1):
+        cell = result_sheet.cell(total_row, column, value)
+        cell.fill = total_fill
+        cell.font = header_font
+        cell.border = border
+        if column in (8, 9):
+            cell.alignment = Alignment(horizontal="right")
+
+    result_sheet.freeze_panes = "A2"
+    result_sheet.auto_filter.ref = f"A1:I{max(header_row + len(payable_rows), header_row)}"
+    widths = [14, 14, 14, 12, 22, 22, 22, 12, 12]
+    for index, width in enumerate(widths, start=1):
+        result_sheet.column_dimensions[get_column_letter(index)].width = width
+
+    next_source_row = 1
+    source_files = metadata.get("sourceFiles", [])
+    for file_index, filename in enumerate(source_files):
+        path = run_dir / Path(filename).name
+        if not path.exists():
+            continue
+        source_workbook = load_workbook(path, read_only=False, data_only=False)
+        source_ws = source_workbook[source_workbook.sheetnames[0]]
+        start_row = 1 if file_index == 0 else 3
+        for row in source_ws.iter_rows(min_row=start_row, values_only=True):
+            for column, value in enumerate(row, start=1):
+                source_sheet.cell(next_source_row, column, value)
+            next_source_row += 1
+        source_workbook.close()
+
+    source_sheet.freeze_panes = "A3"
+    if source_sheet.max_row >= 2 and source_sheet.max_column >= 1:
+        source_sheet.auto_filter.ref = f"A2:{get_column_letter(source_sheet.max_column)}{source_sheet.max_row}"
+    for column in range(1, min(source_sheet.max_column, 24) + 1):
+        source_sheet.column_dimensions[get_column_letter(column)].width = 16
+
+    filename_month = month_label or datetime.now().strftime("%Y%m")
+    export_prefix = "WX技术部餐补核算结果" if source_type == "wx" else "技术部餐补核算结果"
+    output_path = run_dir / f"{export_prefix}_{filename_month}_{run_id}.xlsx"
+    workbook.save(output_path)
+    return output_path
+
+
+@app.get("/api/china-employee-payroll/meal-allowance/runs")
+def list_china_employee_meal_allowance_runs() -> dict:
+    runs = []
+    for run_dir in sorted(CHINA_EMPLOYEE_PAYROLL_RUNS_DIR.glob("china_employee_payroll_*"), reverse=True):
+        metadata_path = run_dir / "metadata.json"
+        if not run_dir.is_dir() or not metadata_path.exists():
+            continue
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        summary = metadata.get("summary", {})
+        runs.append(
+            {
+                "runId": metadata.get("runId") or run_dir.name,
+                "createdAt": metadata.get("createdAt", ""),
+                "sourceFiles": metadata.get("sourceFiles", []),
+                "sourceType": metadata.get("sourceType", summary.get("sourceType", "hr")),
+                "sourceLabel": metadata.get("sourceLabel", summary.get("sourceLabel", "")),
+                "period": f"{summary.get('dateStart', '')} 至 {summary.get('dateEnd', '')}",
+                "monthLabel": _china_employee_payroll_month_label(summary),
+                "rowCount": summary.get("rowCount", 0),
+                "payableEmployeeCount": summary.get("payableEmployeeCount", 0),
+                "payableDayCount": summary.get("payableDayCount", 0),
+                "totalAmount": summary.get("totalAmount", 0),
+            }
+        )
+    return {"runs": runs[:50]}
+
+
+@app.get("/api/china-employee-payroll/meal-allowance/runs/{run_id}")
+def get_china_employee_meal_allowance_run(run_id: str) -> dict:
+    safe_run_id = Path(run_id).name
+    run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / safe_run_id
+    result_path = run_dir / "result.json"
+    if not result_path.exists():
+        raise HTTPException(status_code=404, detail="核算批次不存在，请重新上传并核算。")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    return {
+        "runId": safe_run_id,
+        "summary": result["summary"],
+        "results": _compact_china_employee_payroll_result(result),
+        "files": result.get("files", []),
+        "warnings": result.get("warnings", {}),
+        "sourceType": result.get("summary", {}).get("sourceType", "hr"),
+        "sourceLabel": result.get("summary", {}).get("sourceLabel", ""),
+    }
+
+
+@app.get("/api/china-employee-payroll/meal-allowance/{run_id}/export")
+def export_china_employee_meal_allowance(run_id: str) -> FileResponse:
+    safe_run_id = Path(run_id).name
+    run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / safe_run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="核算批次不存在，请重新上传并核算。")
+    output_path = _build_china_employee_meal_allowance_export(run_dir, safe_run_id)
+    return FileResponse(
+        output_path,
+        filename=output_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 # ============================================================

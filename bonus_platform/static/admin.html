@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN" data-admin-only="true">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1280" />
+    <title>后台管理 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=admin-1" />
+  </head>
+  <body class="portal-shell dashboard-shell admin-console-shell">
+    <div class="portal-mesh" aria-hidden="true">
+      <span class="mesh-orb cyan"></span>
+      <span class="mesh-orb violet"></span>
+      <span class="mesh-orb blue"></span>
+      <span class="mesh-grid"></span>
+    </div>
+
+    <div class="dashboard-frame admin-console-frame" aria-label="西格玛工作台后台管理">
+      <aside class="dashboard-sidebar" aria-label="后台导航">
+        <a class="dashboard-logo" href="/" aria-label="返回西格玛工作台首页">
+          <img src="assets/bonus-logo-header-blue.png" alt="" />
+          <span>
+            <strong>Σ Admin</strong>
+            <small>Access Console</small>
+          </span>
+        </a>
+
+        <nav class="dashboard-nav">
+          <p class="nav-group-label">后台管理</p>
+          <a class="active" href="admin.html">
+            <span>权限配置总览</span>
+            <b>Access Matrix</b>
+          </a>
+          <a href="#usersRoles">
+            <span>用户与角色</span>
+            <b>Users & Roles</b>
+          </a>
+          <a href="#modulePermissions">
+            <span>模块权限</span>
+            <b>Module Grants</b>
+          </a>
+          <a href="#featurePermissions">
+            <span>功能权限</span>
+            <b>Feature Controls</b>
+          </a>
+          <a href="#moduleConfig">
+            <span>模块配置</span>
+            <b>Module Settings</b>
+          </a>
+          <a href="#auditLog">
+            <span>操作日志</span>
+            <b>Audit Trail</b>
+          </a>
+        </nav>
+
+        <p class="nav-group-label admin-label">工作台</p>
+        <a class="admin-entry" href="/">
+          <span>返回首页</span>
+          <b>Dashboard Overview</b>
+        </a>
+      </aside>
+
+      <main class="dashboard-main admin-console-main">
+        <header class="dashboard-topbar admin-console-topbar">
+          <div>
+            <p>当前空间</p>
+            <strong>后台管理 · 权限配置雏形</strong>
+          </div>
+          <div class="admin-save-state" role="status" aria-live="polite">
+            <span id="adminSaveState">使用本地草稿配置</span>
+            <small>localStorage 模拟 · 未接入真实登录</small>
+          </div>
+          <label class="admin-user-switch">
+            <span>模拟当前用户</span>
+            <select id="activeAdminUser"></select>
+          </label>
+          <div class="admin-reset-action">
+            <button id="resetAdminConfig" type="button">重置草稿</button>
+          </div>
+        </header>
+
+        <section class="admin-hero-panel" aria-labelledby="adminHeroTitle">
+          <div>
+            <p class="portal-kicker">Governance Layer</p>
+            <h1 id="adminHeroTitle">权限配置中心</h1>
+            <span>管理模块开放状态、用户角色与角色可进入模块。当前为本地草稿模式，不影响真实业务核算逻辑。</span>
+          </div>
+          <div class="admin-hero-metrics" aria-label="后台配置摘要">
+            <span><b id="enabledModuleCount">4</b><small>开放模块</small></span>
+            <span><b id="enabledFeatureCount">8</b><small>启用功能</small></span>
+            <span><b id="adminLogCount">5</b><small>模拟日志</small></span>
+          </div>
+        </section>
+
+        <section id="usersRoles" class="admin-console-section" aria-labelledby="usersRolesTitle">
+          <div class="section-bar">
+            <div>
+              <p>Users & Roles</p>
+              <h2 id="usersRolesTitle">用户与角色</h2>
+            </div>
+            <button class="admin-secondary-action" type="button" data-log-action="新增用户草稿">新增用户</button>
+          </div>
+
+          <div class="admin-user-table-wrap" id="userRoleList"></div>
+        </section>
+
+        <section id="modulePermissions" class="admin-console-section" aria-labelledby="modulePermissionsTitle">
+          <div class="section-bar">
+            <div>
+              <p>Module Grants</p>
+              <h2 id="modulePermissionsTitle">模块权限</h2>
+            </div>
+          </div>
+
+          <div class="admin-permission-grid" id="modulePermissionList"></div>
+        </section>
+
+        <section id="featurePermissions" class="admin-console-section" aria-labelledby="featurePermissionsTitle">
+          <div class="section-bar">
+            <div>
+              <p>Feature Controls</p>
+              <h2 id="featurePermissionsTitle">功能权限</h2>
+            </div>
+          </div>
+
+          <div class="admin-feature-matrix" id="featurePermissionList"></div>
+        </section>
+
+        <section id="moduleConfig" class="admin-console-section" aria-labelledby="moduleConfigTitle">
+          <div class="section-bar">
+            <div>
+              <p>Module Settings</p>
+              <h2 id="moduleConfigTitle">模块配置</h2>
+            </div>
+            <button class="admin-secondary-action" type="button" data-log-action="保存模块配置">保存配置</button>
+          </div>
+
+          <div class="admin-config-grid">
+            <label class="admin-config-card">
+              <span>默认核算月份</span>
+              <select id="defaultPeriod">
+                <option value="2026-04">2026-04</option>
+                <option value="2026-05">2026-05</option>
+                <option value="2026-06">2026-06</option>
+              </select>
+            </label>
+            <label class="admin-config-card">
+              <span>异常复核阈值</span>
+              <input id="reviewThreshold" type="number" min="0" max="100" step="1" value="80" />
+            </label>
+            <label class="admin-config-card">
+              <span>导出审批策略</span>
+              <select id="exportPolicy">
+                <option value="admin-only">仅管理员</option>
+                <option value="owner-and-admin">模块负责人 + 管理员</option>
+                <option value="role-based">按角色授权</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section id="auditLog" class="admin-console-section" aria-labelledby="auditLogTitle">
+          <div class="section-bar">
+            <div>
+              <p>Audit Trail</p>
+              <h2 id="auditLogTitle">操作日志</h2>
+            </div>
+          </div>
+
+          <table class="admin-audit-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>操作者</th>
+                <th>动作</th>
+                <th>对象</th>
+              </tr>
+            </thead>
+            <tbody id="auditLogRows"></tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+
+    <script src="admin.js?v=1"></script>
+  </body>
+</html>
