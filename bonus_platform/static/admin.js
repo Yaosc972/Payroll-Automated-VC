@@ -548,6 +548,7 @@
             body: JSON.stringify({ roleIds: nextRoleIds }),
           });
           sessionStorage.removeItem("sigma-auth-context-v1");
+          sessionStorage.removeItem("sigma-auth-context-v2");
           await refreshApiState("用户角色已写入数据库");
         } catch (error) {
           saveState(error.message || "用户角色保存失败");

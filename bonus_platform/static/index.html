@@ -434,6 +434,7 @@
           logoutButton.textContent = '退出中';
           try {
             sessionStorage.removeItem('sigma-auth-context-v2');
+            sessionStorage.removeItem('sigma-auth-context-v1');
             await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
           } finally {
             window.location.href = `login.html?next=${encodeURIComponent('/')}`;

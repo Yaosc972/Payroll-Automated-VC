@@ -166,7 +166,8 @@
     try {
       const response = await fetch("/api/me", { credentials: "same-origin" });
       if (!response.ok) return false;
-      sessionStorage.setItem("sigma-auth-context-v1", JSON.stringify({
+      sessionStorage.removeItem("sigma-auth-context-v1");
+      sessionStorage.setItem("sigma-auth-context-v2", JSON.stringify({
         createdAt: Date.now(),
         me: await response.json(),
       }));
@@ -245,9 +246,11 @@
       });
       if (!response.ok) throw new Error(`API ${response.status}`);
       sessionStorage.removeItem("sigma-auth-context-v1");
+      sessionStorage.removeItem("sigma-auth-context-v2");
       window.location.href = nextUrl;
     } catch {
       sessionStorage.removeItem("sigma-auth-context-v1");
+      sessionStorage.removeItem("sigma-auth-context-v2");
       localStorage.setItem("sigma-admin-console-draft-v3", JSON.stringify({
         selectedUserId: button.dataset.userId,
       }));

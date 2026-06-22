@@ -4,6 +4,8 @@
   if (!moduleId && !adminOnly) return;
   const authCacheKey = "sigma-auth-context-v2";
   const authCacheTtlMs = 5 * 60 * 1000;
+  const authFetchTimeoutMs = 10 * 1000;
+  const isLocalPreview = window.location.protocol === "file:" || ["localhost", "127.0.0.1", ""].includes(window.location.hostname);
   let loadingFinished = false;
   document.documentElement.classList.add("permission-checking");
 
@@ -204,12 +206,119 @@
       // Ignore storage limits; the network request path remains authoritative.
     }
   };
+  const fetchAuthContext = async () => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), authFetchTimeoutMs);
+    try {
+      return await fetch("/api/me", {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  };
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[char]);
+  const renderGuardError = (title, detail) => {
+    const safeTitle = escapeHtml(title);
+    const safeDetail = escapeHtml(detail);
+    document.open();
+    document.write(`<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeTitle} · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background: #eef3f7;
+        color: #0f172a;
+        font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(560px, calc(100vw - 32px));
+        border: 1px solid rgba(255, 255, 255, 0.78);
+        border-radius: 28px;
+        padding: 28px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: 0 28px 76px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.86);
+      }
+      p {
+        margin: 0 0 8px;
+        color: #2563eb;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      h1 {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.12;
+      }
+      span {
+        display: block;
+        margin-top: 12px;
+        color: #475569;
+        font-size: 14px;
+        line-height: 1.7;
+      }
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 22px;
+      }
+      a {
+        border-radius: 999px;
+        padding: 11px 15px;
+        color: #fff;
+        background: linear-gradient(135deg, #0f172a, #1e3a8a);
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 800;
+      }
+      a.secondary {
+        color: #0f172a;
+        background: rgba(255, 255, 255, 0.78);
+        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.28);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p>ACCESS GUARD</p>
+      <h1>${safeTitle}</h1>
+      <span>${safeDetail}</span>
+      <nav>
+        <a href="index.html">返回工作台首页</a>
+        <a class="secondary" href="login.html?force=1&next=${encodeURIComponent(window.location.pathname || "/")}">重新登录</a>
+      </nav>
+    </main>
+  </body>
+</html>`);
+    document.close();
+    window.stop();
+  };
   try {
     const cachedMe = readCachedAuthContext();
     if (cachedMe) {
       state = mergeAuthContext(cachedMe);
     } else {
-      const response = await fetch("/api/me");
+      const response = await fetchAuthContext();
       if (response.status === 401) {
         sessionStorage.removeItem(authCacheKey);
         window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname || "/")}`;
@@ -221,7 +330,15 @@
         state = mergeAuthContext(me);
       }
     }
-  } catch {
+  } catch (error) {
+    sessionStorage.removeItem(authCacheKey);
+    if (!isLocalPreview) {
+      const detail = error?.name === "AbortError"
+        ? "读取账号角色与模块开放状态超时。请刷新页面，或重新登录后再进入模块。"
+        : "读取账号角色与模块开放状态失败。请刷新页面，或重新登录后再进入模块。";
+      renderGuardError("权限校验失败", detail);
+      return;
+    }
     // Static file fallback keeps direct local previews usable before the API server is running.
   }
   const module = state.modules.find(item => item.id === moduleId);
@@ -238,13 +355,6 @@
     return;
   }
 
-  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, char => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;",
-  })[char]);
   const reason = adminOnly ? "后台管理仅系统管理员可访问" : (module?.enabled ? "当前用户没有该模块管理员角色" : "该模块权限未开放");
   const moduleName = escapeHtml(adminOnly ? "后台管理" : (module?.name || "当前模块"));
   const safeReason = escapeHtml(reason);
