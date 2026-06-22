@@ -322,7 +322,7 @@
           <div>
             <strong>${module.name}</strong>
             <span>默认模块管理员：${module.owner}</span>
-            <small>模块未开放时，即使用户拥有对应角色也不能进入。</small>
+            <small>模块未开放时，模块管理员不能进入；系统管理员仍可进入验证。</small>
           </div>
           ${toggleMarkup(module.enabled, module.enabled ? "模块开放" : "模块关闭", { type: "module", id: module.id })}
         </div>

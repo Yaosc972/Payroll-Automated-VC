@@ -390,6 +390,7 @@
         const roleNames = currentUser.roleIds.map(roleId => getRole(roleId)?.name).filter(Boolean);
         const canEnterModule = (moduleId) => {
           const module = getModule(moduleId);
+          if (currentUser.roleIds.includes('admin')) return true;
           if (typeof module?.canEnter === 'boolean') return module.canEnter;
           if (!module?.enabled) return false;
           return currentUser.roleIds.some(roleId => permissionState.moduleAccess[roleId]?.[moduleId] && permissionState.rolePermissions[roleId]?.enter);
