@@ -258,7 +258,7 @@ def _postgres_connection(database_url: str):
         from psycopg.rows import dict_row
     except ImportError as exc:
         raise RuntimeError("Postgres admin store requires installing psycopg[binary]") from exc
-    return psycopg.connect(database_url, row_factory=dict_row, prepare_threshold=None)
+    return psycopg.connect(database_url, row_factory=dict_row, prepare_threshold=None, connect_timeout=5)
 
 
 class _AdminConnection:

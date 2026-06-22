@@ -20,6 +20,7 @@ EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "china-employee-pay
 EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payroll.js"
 LEGACY_EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
+APP_PY = ROOT / "bonus_platform" / "app.py"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
 HEADER_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-blue.png"
@@ -388,6 +389,15 @@ def test_permission_guard_blocks_direct_module_access_with_static_permissions():
     assert "无权限访问" in guard_js
     assert "后台管理仅系统管理员可访问" in guard_js
     assert "window.stop()" in guard_js
+
+
+def test_production_auth_does_not_block_static_startup_on_admin_db():
+    app_py = APP_PY.read_text(encoding="utf-8")
+    admin_store_py = (ROOT / "bonus_platform" / "engine" / "admin_store.py").read_text(encoding="utf-8")
+
+    assert 'if not os.environ.get("VERCEL"):' in app_py
+    assert "init_admin_store()" in app_py
+    assert "connect_timeout=5" in admin_store_py
 
 
 def test_login_page_provides_mock_feishu_ready_session_entry():

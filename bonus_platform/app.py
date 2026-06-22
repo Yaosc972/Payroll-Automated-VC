@@ -164,7 +164,8 @@ from .engine.workbook_io import build_final_workbook, build_pending_workbook, bu
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_data_files()
-    init_admin_store()
+    if not os.environ.get("VERCEL"):
+        init_admin_store()
     _recover_stuck_labor_runs()
     yield
 
