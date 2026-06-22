@@ -121,11 +121,19 @@
 
   const finishLoading = () => {
     loadingFinished = true;
+    window.clearInterval(ensureLoadingOverlay);
     document.documentElement.classList.remove("permission-checking");
     document.querySelector(".permission-loading-overlay")?.remove();
   };
 
   injectLoadingStyles();
+  const ensureLoadingOverlay = window.setInterval(() => {
+    if (loadingFinished || document.querySelector(".permission-loading-overlay")) {
+      window.clearInterval(ensureLoadingOverlay);
+      return;
+    }
+    mountLoadingOverlay();
+  }, 120);
   if (document.body) {
     mountLoadingOverlay();
   } else {

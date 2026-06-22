@@ -193,12 +193,13 @@ DEFAULT_USERS = [
 
 DEFAULT_MODULES = [
     {"id": "recruitment", "name": "全球招聘奖金核算", "href": "recruitment.html", "owner_role_id": "recruitmentAdmin", "enabled": 1, "development_status": "available"},
-    {"id": "employee", "name": "中国区正式工薪酬核算", "href": "china-employee-payroll.html", "owner_role_id": "employeeAdmin", "enabled": 0, "development_status": "developing"},
+    {"id": "employee", "name": "中国区正式工薪酬核算", "href": "china-employee-payroll.html", "owner_role_id": "employeeAdmin", "enabled": 1, "development_status": "available"},
     {"id": "domestic", "name": "中国区外包工薪酬核算", "href": "domestic-labor.html", "owner_role_id": "domesticAdmin", "enabled": 0, "development_status": "developing"},
     {"id": "fbu", "name": "FBU美洲绩效奖金核算", "href": "fbu-performance.html", "owner_role_id": "fbuAdmin", "enabled": 0, "development_status": "developing"},
     {"id": "overseas", "name": "海外劳务报账核对", "href": "overseas-labor.html", "owner_role_id": "overseasAdmin", "enabled": 0, "development_status": "developing"},
 ]
 
+OPEN_FOR_RELEASE_MODULE_IDS = {"recruitment", "employee"}
 CLOSED_UNTIL_RELEASE_MODULE_IDS = {"domestic", "fbu"}
 
 DEFAULT_FEATURES = ["enter", "import", "calculate", "review", "export", "archive", "audit"]
@@ -398,6 +399,11 @@ def _seed_defaults(connection: _AdminConnection) -> None:
                     "UPDATE admin_modules SET enabled = %s, updated_at = %s WHERE id = %s",
                     (0, now, module["id"]),
                 )
+            elif module["id"] in OPEN_FOR_RELEASE_MODULE_IDS:
+                connection.execute(
+                    "UPDATE admin_modules SET enabled = %s, updated_at = %s WHERE id = %s",
+                    (1, now, module["id"]),
+                )
         else:
             connection.execute(
                 """
@@ -411,6 +417,11 @@ def _seed_defaults(connection: _AdminConnection) -> None:
                 connection.execute(
                     "UPDATE admin_modules SET enabled = ?, updated_at = ? WHERE id = ?",
                     (0, now, module["id"]),
+                )
+            elif module["id"] in OPEN_FOR_RELEASE_MODULE_IDS:
+                connection.execute(
+                    "UPDATE admin_modules SET enabled = ?, updated_at = ? WHERE id = ?",
+                    (1, now, module["id"]),
                 )
     for user in DEFAULT_USERS:
         _insert_seed(
@@ -480,7 +491,13 @@ def list_modules(db_path: Path | None = None) -> list[dict[str, Any]]:
             """
         ).fetchall()
     return [
-        {**dict(row), "enabled": bool(row["enabled"]) and row["id"] not in CLOSED_UNTIL_RELEASE_MODULE_IDS}
+        {
+            **dict(row),
+            "enabled": (
+                row["id"] in OPEN_FOR_RELEASE_MODULE_IDS
+                or (bool(row["enabled"]) and row["id"] not in CLOSED_UNTIL_RELEASE_MODULE_IDS)
+            ),
+        }
         for row in rows
     ]
 
@@ -731,7 +748,7 @@ def set_user_roles(user_id: str, role_ids: list[str], actor_user_id: str = "payr
 def set_module_enabled(module_id: str, enabled: bool, actor_user_id: str = "payrollAdmin", db_path: Path | None = None) -> dict[str, Any]:
     init_admin_store(db_path)
     now = _now()
-    effective_enabled = bool(enabled) and module_id not in CLOSED_UNTIL_RELEASE_MODULE_IDS
+    effective_enabled = module_id in OPEN_FOR_RELEASE_MODULE_IDS or (bool(enabled) and module_id not in CLOSED_UNTIL_RELEASE_MODULE_IDS)
     with _connect(db_path) as connection:
         cursor = connection.execute(
             "UPDATE admin_modules SET enabled = ?, updated_at = ? WHERE id = ?",

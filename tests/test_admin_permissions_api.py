@@ -18,7 +18,7 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     data = response.json()
     assert {role["id"] for role in data["roles"]} >= {"admin", "employeeAdmin", "domesticAdmin"}
     assert {user["id"] for user in data["users"]} >= {"payrollAdmin", "cnPayrollAdminUser"}
-    assert any(module["id"] == "employee" and module["enabled"] is False for module in data["modules"])
+    assert any(module["id"] == "employee" and module["enabled"] is True for module in data["modules"])
     assert any(module["id"] == "domestic" and module["enabled"] is False for module in data["modules"])
     assert any(module["id"] == "fbu" and module["enabled"] is False for module in data["modules"])
     assert data["moduleAccess"]["employeeAdmin"]["employee"] is True
@@ -74,6 +74,8 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
 
     assert me_response.status_code == 200
     me = me_response.json()
+    employee = next(module for module in me["modules"] if module["id"] == "employee")
+    assert employee["enabled"] is True
     domestic = next(module for module in me["modules"] if module["id"] == "domestic")
     assert domestic["enabled"] is False
     assert domestic["canEnter"] is False
