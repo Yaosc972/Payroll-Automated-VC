@@ -7674,15 +7674,17 @@ body.filters-collapsed .filter-body {
 
 .login-provider-icon {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   background: transparent;
 }
 
-.login-provider-icon svg {
-  width: 24px;
-  height: 24px;
+.login-provider-icon img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
 }
 
 .feishu-login-block a i {

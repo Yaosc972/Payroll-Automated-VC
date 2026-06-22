@@ -21,6 +21,8 @@ STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
 HEADER_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-blue.png"
+LOGIN_SIGMA_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-transparent.png"
+FEISHU_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "feishu-logo.png"
 DESKTOP_PACKAGE = ROOT / "desktop" / "package.json"
 DESKTOP_ICON_PNG = ROOT / "desktop" / "assets" / "icon.png"
 DESKTOP_ICON_ICO = ROOT / "desktop" / "assets" / "icon.ico"
@@ -328,8 +330,8 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert 'id="loginStatus"' not in html
     assert 'id="loginSmokeyCanvas"' in html
     assert "login-provider-icon" in html
-    assert "00D6B9" in html
-    assert "3370FF" in html
+    assert 'src="assets/bonus-logo-header-transparent.png"' in html
+    assert 'src="assets/feishu-logo.png"' in html
     assert "开发调试：模拟用户登录" in html
     assert "使用飞书登录" in html
     assert "login.js" in html
@@ -348,11 +350,18 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert ".login-panel" in css
     assert ".login-smokey-canvas" in css
     assert ".login-provider-icon" in css
+    assert ".login-provider-icon img" in css
     assert ".login-panel .dashboard-logo img" in css
     assert "background: transparent" in css.split(".login-panel .dashboard-logo img", 1)[1].split("}", 1)[0]
     assert "background: transparent" in css.split(".login-provider-icon", 1)[1].split("}", 1)[0]
     assert ".feishu-login-block" in css
     assert ".mock-login-panel" in css
+    with Image.open(LOGIN_SIGMA_LOGO) as logo:
+        assert logo.mode == "RGBA"
+        assert logo.getpixel((0, 0))[3] == 0
+    with Image.open(FEISHU_LOGO) as logo:
+        assert logo.mode == "RGBA"
+        assert logo.getpixel((0, 0))[3] == 0
 
 
 def test_desktop_builder_uses_platform_logo_icons():
