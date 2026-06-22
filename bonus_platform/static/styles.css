@@ -6302,6 +6302,8 @@ body.filters-collapsed .filter-body {
 }
 
 .dashboard-topbar {
+  position: relative;
+  z-index: 240;
   display: grid;
   grid-template-columns: minmax(220px, 0.9fr) minmax(320px, 1.3fr) auto;
   gap: 18px;
@@ -10165,11 +10167,16 @@ html:has(.china-employee-payroll-shell),
 /* Admin console, Feishu login, and authenticated dashboard overrides. */
 .dashboard-user {
   position: relative;
+  z-index: 260;
   display: inline-block;
   width: max-content;
   max-width: 220px;
   justify-self: end;
   white-space: nowrap;
+}
+
+.dashboard-user[open] {
+  z-index: 360;
 }
 
 .dashboard-user summary {
@@ -10277,7 +10284,7 @@ html:has(.china-employee-payroll-shell),
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  z-index: 140;
+  z-index: 380;
   display: grid;
   width: 176px;
   gap: 2px;
