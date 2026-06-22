@@ -2,7 +2,7 @@
   const moduleId = document.documentElement.dataset.moduleId;
   const adminOnly = document.documentElement.dataset.adminOnly === "true";
   if (!moduleId && !adminOnly) return;
-  const authCacheKey = "sigma-auth-context-v1";
+  const authCacheKey = "sigma-auth-context-v2";
   const authCacheTtlMs = 5 * 60 * 1000;
   let loadingFinished = false;
   document.documentElement.classList.add("permission-checking");
@@ -229,7 +229,7 @@
   const currentRoleIds = Array.isArray(currentUser?.roleIds) ? currentUser.roleIds : [];
   const isSystemAdmin = currentRoleIds.includes("admin");
   const canAccessAdmin = !adminOnly || currentRoleIds.includes("admin");
-  const canEnter = typeof module?.canEnter === "boolean" ? module.canEnter : isSystemAdmin || (Boolean(module?.enabled) && currentRoleIds.some(roleId => {
+  const canEnter = isSystemAdmin || (typeof module?.canEnter === "boolean" ? module.canEnter : Boolean(module?.enabled) && currentRoleIds.some(roleId => {
     return state.moduleAccess[roleId]?.[moduleId] && state.rolePermissions[roleId]?.enter;
   }));
 

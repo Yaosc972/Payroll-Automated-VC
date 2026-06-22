@@ -370,7 +370,7 @@
           }
           if (meResponse.ok) {
             const me = await meResponse.json();
-            sessionStorage.setItem('sigma-auth-context-v1', JSON.stringify({ createdAt: Date.now(), me }));
+            sessionStorage.setItem('sigma-auth-context-v2', JSON.stringify({ createdAt: Date.now(), me }));
             permissionState = {
               ...permissionState,
               users: [{ ...me.user, roleIds: me.user.roleIds || [] }],
@@ -433,7 +433,7 @@
           logoutButton.setAttribute('aria-disabled', 'true');
           logoutButton.textContent = '退出中';
           try {
-            sessionStorage.removeItem('sigma-auth-context-v1');
+            sessionStorage.removeItem('sigma-auth-context-v2');
             await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
           } finally {
             window.location.href = `login.html?next=${encodeURIComponent('/')}`;
