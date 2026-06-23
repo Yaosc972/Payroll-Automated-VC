@@ -382,7 +382,7 @@ def test_permission_guard_blocks_direct_module_access_with_static_permissions():
     assert "rolePermissions" in guard_js
     assert "sigma-auth-context-v2" in guard_js
     assert "authFetchTimeoutMs" in guard_js
-    assert "const authFetchTimeoutMs = 30 * 1000" in guard_js
+    assert "const authFetchTimeoutMs = 8 * 1000" in guard_js
     assert "ensureLoadingOverlay" in guard_js
     assert "html.permission-checking body > :not(.permission-loading-overlay)" not in guard_js
     assert 'credentials: "same-origin"' in guard_js

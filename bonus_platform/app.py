@@ -17,6 +17,7 @@ logging.basicConfig(
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile, gettempdir
+from time import monotonic
 from typing import Any, Optional
 from urllib.parse import quote, urlencode
 from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -99,6 +100,22 @@ LABOR_TELEMETRY_DIR = OUTPUT_DIR / "labor_telemetry"
 LABOR_TELEMETRY_FILE = LABOR_TELEMETRY_DIR / "events.jsonl"
 LABOR_TELEMETRY_SCHEMA_VERSION = 1
 OVERSEAS_LABOR_MODULE_VERSION = "0.4-uat"
+CURRENT_USER_CACHE_TTL_SECONDS = 60
+_CURRENT_USER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _clear_current_user_cache() -> None:
+    _CURRENT_USER_CACHE.clear()
+
+
+def _get_cached_current_user(user_id: str) -> dict[str, Any]:
+    cached = _CURRENT_USER_CACHE.get(user_id)
+    now = monotonic()
+    if cached and now - cached[0] < CURRENT_USER_CACHE_TTL_SECONDS:
+        return cached[1]
+    current = get_current_user(user_id)
+    _CURRENT_USER_CACHE[user_id] = (now, current)
+    return current
 
 
 def _non_payable_pdf_names(pdf_totals: list[dict]) -> set[str]:
@@ -569,6 +586,7 @@ def api_auth_mock_login(response: Response, payload: dict = Body(...)) -> dict:
     try:
         token = create_session(user_id)
         current = get_current_user(user_id)
+        _clear_current_user_cache()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="用户不存在。") from exc
     response.set_cookie(
@@ -587,6 +605,7 @@ def api_auth_mock_login(response: Response, payload: dict = Body(...)) -> dict:
 def api_auth_logout(response: Response, sigma_session: Optional[str] = Cookie(default=None)) -> dict:
     if sigma_session:
         delete_session(sigma_session)
+        _clear_current_user_cache()
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return {"status": "ok"}
 
@@ -595,6 +614,7 @@ def api_auth_logout(response: Response, sigma_session: Optional[str] = Cookie(de
 def api_auth_logout_redirect(next: str = "login.html?next=%2F", sigma_session: Optional[str] = Cookie(default=None)) -> RedirectResponse:
     if sigma_session:
         delete_session(sigma_session)
+        _clear_current_user_cache()
     redirect_target = next if next.startswith("/") or next.startswith("login.html") else "login.html?next=%2F"
     response = RedirectResponse(redirect_target, status_code=302)
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
@@ -658,6 +678,7 @@ def api_auth_feishu_callback(
             identity["avatar_url"] = None
     user = upsert_feishu_user(**identity)
     session_token = create_session(user["id"], action="feishu_login")
+    _clear_current_user_cache()
 
     redirect = RedirectResponse("/", status_code=302)
     redirect.delete_cookie(FEISHU_STATE_COOKIE_NAME, path="/")
@@ -675,7 +696,7 @@ def api_auth_feishu_callback(
 
 @app.get("/api/me")
 def api_me(actor_user_id: str = Depends(_current_user_id)) -> dict:
-    return get_current_user(actor_user_id)
+    return _get_cached_current_user(actor_user_id)
 
 
 @app.get("/api/admin/state")
@@ -700,7 +721,9 @@ def api_set_user_roles(
         if not isinstance(role_ids, list) or len(role_ids) > 20:
             raise HTTPException(status_code=400, detail="无效的角色列表。")
         role_ids = [_validate_safe_id(str(role_id), "role_id") for role_id in role_ids]
-        return {"user": set_user_roles(user_id, role_ids, actor_user_id=actor_user_id)}
+        result = {"user": set_user_roles(user_id, role_ids, actor_user_id=actor_user_id)}
+        _clear_current_user_cache()
+        return result
     except ValueError as exc:
         if str(exc) == "cannot_remove_own_admin":
             raise HTTPException(status_code=400, detail="不能移除当前登录账号的系统管理员角色。") from exc
@@ -719,7 +742,9 @@ def api_set_module_enabled(
 ) -> dict:
     try:
         module_id = _validate_safe_id(module_id, "module_id")
-        return {"module": set_module_enabled(module_id, _payload_bool(payload, "enabled"), actor_user_id=actor_user_id)}
+        result = {"module": set_module_enabled(module_id, _payload_bool(payload, "enabled"), actor_user_id=actor_user_id)}
+        _clear_current_user_cache()
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -734,11 +759,13 @@ def api_set_module_role_access(
     try:
         module_id = _validate_safe_id(module_id, "module_id")
         role_id = _validate_safe_id(role_id, "role_id")
-        return {
+        result = {
             "moduleAccess": set_module_role_access(
                 module_id, role_id, _payload_bool(payload, "canEnter"), actor_user_id=actor_user_id
             )
         }
+        _clear_current_user_cache()
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -753,11 +780,13 @@ def api_set_feature_permission(
     try:
         role_id = _validate_safe_id(role_id, "role_id")
         feature_id = _validate_safe_id(feature_id, "feature_id")
-        return {
+        result = {
             "rolePermissions": set_feature_permission(
                 role_id, feature_id, _payload_bool(payload, "enabled"), actor_user_id=actor_user_id
             )
         }
+        _clear_current_user_cache()
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

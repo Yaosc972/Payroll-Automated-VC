@@ -4,7 +4,7 @@
   if (!moduleId && !adminOnly) return;
   const authCacheKey = "sigma-auth-context-v2";
   const authCacheTtlMs = 5 * 60 * 1000;
-  const authFetchTimeoutMs = 30 * 1000;
+  const authFetchTimeoutMs = 8 * 1000;
   const isLocalPreview = window.location.protocol === "file:" || ["localhost", "127.0.0.1", ""].includes(window.location.hostname);
   let loadingFinished = false;
   document.documentElement.classList.add("permission-checking");
