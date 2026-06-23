@@ -384,6 +384,18 @@ def test_china_employee_payroll_run_storage_does_not_trigger_dev_reload():
     assert not _is_relative_to(app_module.CHINA_EMPLOYEE_PAYROLL_RUNS_DIR, app_module.PROJECT_ROOT)
 
 
+def test_workbench_access_keeps_china_employee_payroll_open_when_developing_modules_hidden(monkeypatch):
+    monkeypatch.setenv("SIGMA_HIDE_DEVELOPING_MODULES", "1")
+
+    response = TestClient(app).get("/api/workbench/access")
+
+    assert response.status_code == 200
+    blocked_keys = {item["key"] for item in response.json()["blockedModules"]}
+    assert "cn_employee_payroll" not in blocked_keys
+    assert "domestic_labor" in blocked_keys
+    assert "fbu_performance" in blocked_keys
+
+
 def test_meal_allowance_api_accepts_multiple_attendance_exports(tmp_path):
     first = tmp_path / "first.xlsx"
     second = tmp_path / "second.xlsx"

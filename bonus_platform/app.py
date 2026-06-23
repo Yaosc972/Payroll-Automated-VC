@@ -202,11 +202,6 @@ def _workbench_access_config() -> dict:
     if _hide_developing_modules():
         blocked_modules = [
             {
-                "key": "cn_employee_payroll",
-                "label": "中国区正式工薪酬核算",
-                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
-            },
-            {
                 "key": "domestic_labor",
                 "label": "中国区外包工薪酬核算",
                 "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",

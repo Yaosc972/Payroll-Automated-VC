@@ -151,6 +151,16 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "tabulator-tables" not in html
 
 
+def test_portal_home_opens_china_employee_payroll_entry():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'href="china-employee-payroll.html" data-module="cn_employee_payroll"' in html
+    assert "UAT Trial · 试用开放" in html
+    assert "<td>技术部餐补</td>" in html
+    assert "正式工技术部餐补" in html
+    assert "支持集团技术部与 WX 技术部考勤导入、核算和导出" in html
+
+
 def test_recruitment_page_keeps_command_center_and_home_link():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
 
