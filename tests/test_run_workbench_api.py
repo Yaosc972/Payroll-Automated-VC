@@ -8,6 +8,18 @@ from bonus_platform.app import app
 from bonus_platform.engine.workbook_io import PENDING_CONFIRMATION_HEADERS
 
 
+def test_workbench_access_keeps_china_employee_payroll_available_when_hiding_developing(monkeypatch):
+    monkeypatch.setenv("SIGMA_HIDE_DEVELOPING_MODULES", "1")
+    client = TestClient(app)
+
+    response = client.get("/api/workbench/access")
+
+    assert response.status_code == 200
+    blocked = {item["key"] for item in response.json()["blockedModules"]}
+    assert "cn_employee_payroll" not in blocked
+    assert {"domestic_labor", "fbu_performance"}.issubset(blocked)
+
+
 def _monthly_workbook_bytes(employee_no: str = "zt-run-001") -> bytes:
     workbook = Workbook()
     sheet = workbook.active
