@@ -3,6 +3,7 @@ let currentPage = 1;
 let filteredRows = [];
 let activeSourceType = "";
 const API_ORIGIN = window.location.protocol === "file:" ? "http://127.0.0.1:8006" : "";
+const VERCEL_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
 
 const elements = {
   periodLabel: document.querySelector("#calcPeriodLabel"),
@@ -71,6 +72,59 @@ function downloadBlob(filename, blob) {
 
 function apiUrl(path) {
   return `${API_ORIGIN}${path}`;
+}
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes)) return "";
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  return `${Math.ceil(bytes / 1024)}KB`;
+}
+
+function selectedFilesSize(files) {
+  return files.reduce((total, file) => total + (file.size || 0), 0);
+}
+
+function isProductionVercel() {
+  return window.location.hostname.endsWith(".vercel.app");
+}
+
+function productionUploadLimitMessage(files) {
+  if (!isProductionVercel()) return "";
+  const totalSize = selectedFilesSize(files);
+  if (totalSize <= VERCEL_UPLOAD_LIMIT_BYTES) return "";
+  return `生产环境单次上传上限约 ${formatFileSize(VERCEL_UPLOAD_LIMIT_BYTES)}，当前已选 ${formatFileSize(totalSize)}。请先只上传必要的考勤导出，或拆分文件后再核算；本地开发环境不受此限制。`;
+}
+
+function normalizeApiError(text, fallback) {
+  const raw = String(text || "").trim();
+  if (!raw) return fallback;
+  if (/Request Entity Too Large/i.test(raw)) {
+    return "上传文件过大，生产环境已被 Vercel 拦截。请减少文件体积或拆分后再核算。";
+  }
+  if (/FUNCTION_INVOCATION_TIMEOUT|timed out|timeout/i.test(raw)) {
+    return "生产环境核算超时。请减少单次上传数据量后重试，或在本地环境处理大文件。";
+  }
+  if (/Request En/i.test(raw)) {
+    return "生产环境拒绝了本次上传请求，通常是文件过大。请减少文件体积或拆分后再核算。";
+  }
+  return raw.length > 180 ? `${raw.slice(0, 180)}...` : raw;
+}
+
+async function readJsonResponse(response, fallback) {
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(normalizeApiError(text, fallback));
+    }
+  }
+  if (!response.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : data.detail?.message;
+    throw new Error(detail || normalizeApiError(text, fallback));
+  }
+  return data;
 }
 
 function friendlyFetchError(error, fallback) {
@@ -337,8 +391,7 @@ async function loadRuns() {
   elements.batchList.innerHTML = '<article class="batch-item muted">正在加载历史批次...</article>';
   try {
     const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance/runs"));
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "批次加载失败");
+    const data = await readJsonResponse(response, "批次加载失败");
     const runs = Array.isArray(data.runs) ? data.runs : [];
     elements.batchList.innerHTML = runs.length ? runs.slice(0, 8).map((run) => `
       <button class="batch-item ${latestResult?.runId === run.runId ? "active" : ""}" data-run-id="${escapeHtml(run.runId)}" type="button">
@@ -357,8 +410,7 @@ async function loadRun(runId) {
   elements.status.textContent = "正在加载历史批次...";
   try {
     const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/runs/${encodeURIComponent(runId)}`));
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "批次加载失败");
+    const data = await readJsonResponse(response, "批次加载失败");
     renderResult(data);
     markActiveRun();
     await loadRuns();
@@ -491,6 +543,13 @@ elements.run.addEventListener("click", async () => {
     toast("请先上传考勤记录 Excel。");
     return;
   }
+  const uploadLimitMessage = productionUploadLimitMessage(files);
+  if (uploadLimitMessage) {
+    elements.status.textContent = uploadLimitMessage;
+    elements.issues.innerHTML = `<article class="issue-item"><strong>上传文件过大</strong><span>${escapeHtml(uploadLimitMessage)}</span></article>`;
+    toast("上传文件过大，请拆分后再核算。");
+    return;
+  }
   const form = new FormData();
   files.forEach((file) => form.append("attendance_files", file));
   form.append("source_type", activeSourceType);
@@ -502,8 +561,7 @@ elements.run.addEventListener("click", async () => {
       method: "POST",
       body: form,
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "餐补核算失败");
+    const data = await readJsonResponse(response, "餐补核算失败");
     renderResult(data);
     await loadRuns();
     toast("餐补核算完成。");

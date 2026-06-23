@@ -149,21 +149,25 @@ def _parse_time(value: Any) -> time | None:
 
 
 def _workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
-    workbook = load_workbook(path, read_only=False, data_only=True)
-    sheet = workbook[workbook.sheetnames[0]]
-    headers = [_clean(sheet.cell(2, column).value) for column in range(1, sheet.max_column + 1)]
-    rows: list[dict[str, Any]] = []
-    for source_row, values in enumerate(sheet.iter_rows(min_row=3, values_only=True), start=3):
-        if not any(_clean(value) for value in values):
-            continue
-        row = {header: values[index] if index < len(values) else None for index, header in enumerate(headers) if header}
-        row["_sourceFile"] = path.name
-        row["_sourceRow"] = source_row
-        parsed_date = _parse_date(row.get("考勤日期"))
-        if parsed_date:
-            row["考勤日期"] = parsed_date
-        rows.append(row)
-    return headers, rows, {"filename": path.name, "rowCount": len(rows), "sheetName": sheet.title}
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook[workbook.sheetnames[0]]
+        header_row = next(sheet.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        headers = [_clean(value) for value in header_row]
+        rows: list[dict[str, Any]] = []
+        for source_row, values in enumerate(sheet.iter_rows(min_row=3, values_only=True), start=3):
+            if not any(_clean(value) for value in values):
+                continue
+            row = {header: values[index] if index < len(values) else None for index, header in enumerate(headers) if header}
+            row["_sourceFile"] = path.name
+            row["_sourceRow"] = source_row
+            parsed_date = _parse_date(row.get("考勤日期"))
+            if parsed_date:
+                row["考勤日期"] = parsed_date
+            rows.append(row)
+        return headers, rows, {"filename": path.name, "rowCount": len(rows), "sheetName": sheet.title}
+    finally:
+        workbook.close()
 
 
 def parse_attendance_workbooks(paths: Iterable[str | Path]) -> ParsedAttendance:
@@ -211,43 +215,50 @@ def parse_attendance_workbooks(paths: Iterable[str | Path]) -> ParsedAttendance:
 
 
 def _wx_workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
-    workbook = load_workbook(path, read_only=False, data_only=True)
-    sheet = workbook[workbook.sheetnames[0]]
-    first_header = [_clean(sheet.cell(1, column).value) for column in range(1, sheet.max_column + 1)]
-    second_header = [_clean(sheet.cell(2, column).value) for column in range(1, sheet.max_column + 1)]
-    headers = [
-        second_header[index] or first_header[index] or f"列{index + 1}"
-        for index in range(sheet.max_column)
-    ]
-    rows: list[dict[str, Any]] = []
-    for source_row, values in enumerate(sheet.iter_rows(min_row=3, values_only=True), start=3):
-        if not any(_clean(value) for value in values):
-            continue
-        raw = {header: values[index] if index < len(values) else None for index, header in enumerate(headers) if header}
-        attendance_date = _parse_date(raw.get("日期"))
-        org_path = _clean(raw.get("组织架构"))
-        department = _clean(raw.get("部门"))
-        row = {
-            **raw,
-            "员工": _clean(raw.get("姓名")),
-            "人员状态": _clean(raw.get("员工状态")),
-            "二级组织": "WX技术部",
-            "三级组织": "WX-PBU技术部",
-            "四级组织": department if org_path == "WX-PBU技术部" else org_path.replace("WX-PBU技术部-", "", 1),
-            "五级组织": "",
-            "考勤日期": attendance_date,
-            "首打卡(含补签)": raw.get("上班 1 打卡时间"),
-            "末打卡(含补签)": raw.get("下班 1 打卡时间"),
-            "当前班次": raw.get("班次"),
-            "日期类型": "工作日" if _clean(raw.get("班次")) and "休息" not in _clean(raw.get("班次")) else "休息",
-            "备注": "",
-            "_sourceFile": path.name,
-            "_sourceRow": source_row,
-            "_sourceOrgPath": org_path,
-        }
-        rows.append(row)
-    workbook.close()
-    return headers, rows, {"filename": path.name, "rowCount": len(rows), "sheetName": sheet.title}
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook[workbook.sheetnames[0]]
+        first_header_row = next(sheet.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        second_header_row = next(sheet.iter_rows(min_row=2, max_row=2, values_only=True), ())
+        max_columns = max(len(first_header_row), len(second_header_row))
+        first_header = [_clean(value) for value in first_header_row]
+        second_header = [_clean(value) for value in second_header_row]
+        headers = [
+            (second_header[index] if index < len(second_header) else "")
+            or (first_header[index] if index < len(first_header) else "")
+            or f"列{index + 1}"
+            for index in range(max_columns)
+        ]
+        rows: list[dict[str, Any]] = []
+        for source_row, values in enumerate(sheet.iter_rows(min_row=3, values_only=True), start=3):
+            if not any(_clean(value) for value in values):
+                continue
+            raw = {header: values[index] if index < len(values) else None for index, header in enumerate(headers) if header}
+            attendance_date = _parse_date(raw.get("日期"))
+            org_path = _clean(raw.get("组织架构"))
+            department = _clean(raw.get("部门"))
+            row = {
+                **raw,
+                "员工": _clean(raw.get("姓名")),
+                "人员状态": _clean(raw.get("员工状态")),
+                "二级组织": "WX技术部",
+                "三级组织": "WX-PBU技术部",
+                "四级组织": department if org_path == "WX-PBU技术部" else org_path.replace("WX-PBU技术部-", "", 1),
+                "五级组织": "",
+                "考勤日期": attendance_date,
+                "首打卡(含补签)": raw.get("上班 1 打卡时间"),
+                "末打卡(含补签)": raw.get("下班 1 打卡时间"),
+                "当前班次": raw.get("班次"),
+                "日期类型": "工作日" if _clean(raw.get("班次")) and "休息" not in _clean(raw.get("班次")) else "休息",
+                "备注": "",
+                "_sourceFile": path.name,
+                "_sourceRow": source_row,
+                "_sourceOrgPath": org_path,
+            }
+            rows.append(row)
+        return headers, rows, {"filename": path.name, "rowCount": len(rows), "sheetName": sheet.title}
+    finally:
+        workbook.close()
 
 
 def parse_wx_attendance_workbooks(paths: Iterable[str | Path]) -> ParsedAttendance:
