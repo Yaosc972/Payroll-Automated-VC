@@ -148,8 +148,8 @@ def _parse_time(value: Any) -> time | None:
     return None
 
 
-def _workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+def _hr_workbook_rows(path: Path, *, read_only: bool) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+    workbook = load_workbook(path, read_only=read_only, data_only=True)
     try:
         sheet = workbook[workbook.sheetnames[0]]
         headers = [_clean(value) for value in next(sheet.iter_rows(min_row=2, max_row=2, values_only=True), ())]
@@ -167,6 +167,13 @@ def _workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[st
         return headers, rows, {"filename": path.name, "rowCount": len(rows), "sheetName": sheet.title}
     finally:
         workbook.close()
+
+
+def _workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+    headers, rows, file_info = _hr_workbook_rows(path, read_only=True)
+    if any(column not in headers for column in REQUIRED_COLUMNS):
+        return _hr_workbook_rows(path, read_only=False)
+    return headers, rows, file_info
 
 
 def parse_attendance_workbooks(paths: Iterable[str | Path]) -> ParsedAttendance:
@@ -213,8 +220,8 @@ def parse_attendance_workbooks(paths: Iterable[str | Path]) -> ParsedAttendance:
     )
 
 
-def _wx_workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
-    workbook = load_workbook(path, read_only=True, data_only=True)
+def _wx_workbook_rows_from(path: Path, *, read_only: bool) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+    workbook = load_workbook(path, read_only=read_only, data_only=True)
     try:
         sheet = workbook[workbook.sheetnames[0]]
         max_column = sheet.max_column
@@ -256,6 +263,13 @@ def _wx_workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict
         return headers, rows, {"filename": path.name, "rowCount": len(rows), "sheetName": sheet.title}
     finally:
         workbook.close()
+
+
+def _wx_workbook_rows(path: Path) -> tuple[list[str], list[dict[str, Any]], dict[str, Any]]:
+    headers, rows, file_info = _wx_workbook_rows_from(path, read_only=True)
+    if any(column not in headers for column in WX_REQUIRED_COLUMNS):
+        return _wx_workbook_rows_from(path, read_only=False)
+    return headers, rows, file_info
 
 
 def parse_wx_attendance_workbooks(paths: Iterable[str | Path]) -> ParsedAttendance:

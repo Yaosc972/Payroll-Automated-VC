@@ -11,6 +11,8 @@ DOMESTIC_LABOR_HTML = ROOT / "bonus_platform" / "static" / "domestic-labor.html"
 DOMESTIC_LABOR_JS = ROOT / "bonus_platform" / "static" / "domestic-labor.js"
 OVERSEAS_LABOR_HTML = ROOT / "bonus_platform" / "static" / "overseas-labor.html"
 OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
+CHINA_EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "china-employee-payroll.html"
+CHINA_EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payroll.js"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
@@ -199,6 +201,17 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert "结论" in html
     assert "仓库核对总览" in html
     assert ".overseas-labor-shell" in css
+
+
+def test_china_employee_payroll_can_calculate_large_files_without_server_upload():
+    html = CHINA_EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
+    js = CHINA_EMPLOYEE_PAYROLL_JS.read_text(encoding="utf-8")
+
+    assert "xlsx.full.min.js" in html
+    assert "calculateClientSideMealAllowance" in js
+    assert "exportClientSideResult" in js
+    assert "totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES" in js
+    assert "生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。" in js
 
 
 def test_desktop_builder_uses_platform_logo_icons():

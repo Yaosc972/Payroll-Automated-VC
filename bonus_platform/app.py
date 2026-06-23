@@ -5605,7 +5605,7 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
         path = run_dir / Path(filename).name
         if not path.exists():
             continue
-        source_workbook = load_workbook(path, read_only=True, data_only=False)
+        source_workbook = load_workbook(path, read_only=False, data_only=False)
         try:
             source_ws = source_workbook[source_workbook.sheetnames[0]]
             start_row = 1 if file_index == 0 else 3
