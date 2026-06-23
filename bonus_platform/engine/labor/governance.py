@@ -291,7 +291,7 @@ def build_reocr_candidate_plan(file_quality: List[Dict[str, Any]], *, amount_tol
                     "diagnostics": row.get("diagnostics", {}),
                     "focusEmployees": _reocr_focus_employee_rows(row.get("diagnostics", {})),
                     "amountTolerance": amount_tolerance,
-                    "confirmationGate": "新图片识别结果金额需与同仓库 Excel 金额在容差内，员工级异常需可解释，且必须人工确认。",
+                    "confirmationGate": "新图片识别结果金额需与同仓库 Excel 金额在容差内，员工级异常需可解释，且必须业务确认。",
                 }
             )
         elif decision == "reviewable_candidate":

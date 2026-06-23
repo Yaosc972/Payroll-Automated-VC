@@ -37,8 +37,8 @@ from .engine.domestic_labor.runs import (
 from .engine.china_employee_payroll import calculate_meal_allowance, parse_attendance_workbooks, parse_wx_attendance_workbooks
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
-from .engine.labor.compare import compare_labor_items, compare_by_warehouse
-from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
+from .engine.labor.compare import amount_within_tolerance, compare_labor_items, compare_by_warehouse
+from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _ai_ready, _warehouse_id_from_filename, _warehouse_id_from_text
 from .engine.labor.governance import (
     audit_ai_page_cache_candidates,
     build_ai_cache_reconciliation_preview,
@@ -52,7 +52,7 @@ from .engine.labor.governance import (
     summarize_rule_replay,
 )
 from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score, build_reconciliation_diagnostics
-from .engine.labor.report import build_labor_governance_report, build_labor_projection_report, build_labor_report
+from .engine.labor.report import build_labor_business_html_report, build_labor_governance_report, build_labor_projection_report, build_labor_report
 from .engine.labor.materials import (
     _attach_text_coverage_to_reocr_plan,
     _build_material_combined_row_governance,
@@ -126,6 +126,7 @@ from .engine.labor.runs import (
     safe_labor_filename,
     update_labor_metadata,
 )
+from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
 from .engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 from .engine.rules import load_rulebook
 from .engine.runs import (
@@ -223,18 +224,66 @@ def _workbench_access_config() -> dict:
     }
 
 
+def _is_vercel_runtime() -> bool:
+    return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
+
+
+def _uses_request_scoped_labor_runtime() -> bool:
+    workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
+    return _is_vercel_runtime() or (
+        workbench_home.startswith("/tmp/") and os.environ.get("SIGMA_LABOR_STORAGE_BACKEND", "").strip().lower() == "blob"
+    )
+
+
 def _uses_ephemeral_serverless_storage() -> bool:
     workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
-    return bool(os.environ.get("VERCEL")) and workbench_home.startswith("/tmp/")
+    return _is_vercel_runtime() and workbench_home.startswith("/tmp/") and not labor_blob_storage_enabled()
+
+
+def _uses_vercel_labor_light_uat() -> bool:
+    access = os.environ.get("SIGMA_OVERSEAS_LABOR_ACCESS", "uat").strip().lower() or "uat"
+    return _uses_request_scoped_labor_runtime() and access in {"uat", "uat_trial", "trial"}
+
+
+def _labor_request_error(
+    *,
+    message: str,
+    error_code: str,
+    retryable: bool = False,
+    next_action: str = "",
+    requires_reupload: bool = False,
+    requires_human_review: bool = False,
+) -> dict:
+    return {
+        "message": message,
+        "errorCode": error_code,
+        "retryable": retryable,
+        "requiresReupload": requires_reupload,
+        "requiresHumanReview": requires_human_review,
+        "nextAction": next_action,
+    }
 
 
 def _raise_labor_run_missing(exc: FileNotFoundError) -> None:
     if _uses_ephemeral_serverless_storage():
         raise HTTPException(
             status_code=409,
-            detail="当前 Vercel UAT 环境不保存上传批次。上传后跨请求会丢失文件，暂不支持在线抽取并比对。请改用本地/内网持久化环境，或使用“测试材料验证”。",
+            detail=_labor_request_error(
+                message="当前 Vercel UAT 环境不保存上传批次。上传后跨请求会丢失文件，暂不支持在线抽取并比对。",
+                error_code="LABOR_UAT_UPLOAD_NOT_PERSISTED",
+                next_action="请改用本地/内网持久化环境，或使用“测试材料验证”。",
+                requires_reupload=True,
+            ),
         ) from exc
-    raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
+    raise HTTPException(
+        status_code=404,
+        detail=_labor_request_error(
+            message="劳务核对批次记录未找到。",
+            error_code="LABOR_RUN_NOT_FOUND",
+            next_action="请返回「新建核对批次」重新创建并上传材料。",
+            requires_reupload=True,
+        ),
+    ) from exc
 
 
 def _developing_module_block(path: str) -> dict | None:
@@ -446,8 +495,52 @@ def get_run_table_data(run_id: str) -> dict:
 
 
 @app.get("/api/labor/runs")
-def list_labor_runs() -> dict:
-    return {"runs": list_labor_metadata()}
+def list_labor_runs(limit: int = 50) -> dict:
+    bounded_limit = max(1, min(int(limit or 50), 200))
+    return {
+        "runs": [
+            _summarize_labor_run_for_list(_normalize_labor_total_decision(row))
+            for row in list_labor_metadata(limit=bounded_limit)
+        ]
+    }
+
+
+def _summarize_labor_run_for_list(row: dict) -> dict:
+    return {
+        "id": row.get("id") or "",
+        "status": row.get("status") or "",
+        "supplierName": row.get("supplierName") or "",
+        "periodStart": row.get("periodStart") or "",
+        "periodEnd": row.get("periodEnd") or "",
+        "currency": row.get("currency") or "",
+        "createdAt": row.get("createdAt") or "",
+        "updatedAt": row.get("updatedAt") or "",
+        "stage": row.get("stage") or "",
+        "diffDownloadUrl": row.get("diffDownloadUrl") or "",
+        "comparisonSummary": row.get("comparisonSummary") or {},
+        "readinessGate": row.get("readinessGate") or {},
+    }
+
+
+def _normalize_labor_total_decision(metadata: dict) -> dict:
+    warehouse_comparison = metadata.get("warehouseComparison")
+    if not isinstance(warehouse_comparison, dict):
+        return metadata
+    warehouse_summary = warehouse_comparison.get("summary")
+    if not isinstance(warehouse_summary, dict):
+        return metadata
+    if "amountDeltaTotal" not in warehouse_summary:
+        return metadata
+
+    normalized = dict(metadata)
+    normalized_warehouse = dict(warehouse_comparison)
+    normalized_summary = dict(warehouse_summary)
+    amount_delta = round(float(normalized_summary.get("amountDeltaTotal") or 0), 2)
+    normalized_summary["amountDeltaTotal"] = amount_delta
+    normalized_summary["totalPassed"] = amount_within_tolerance(amount_delta, AI_CONFIG["amount_tolerance"])
+    normalized_warehouse["summary"] = normalized_summary
+    normalized["warehouseComparison"] = normalized_warehouse
+    return normalized
 
 
 @app.get("/api/labor/suppliers")
@@ -764,7 +857,7 @@ def get_labor_run(run_id: str) -> dict:
         metadata = load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
         _raise_labor_run_missing(exc)
-    return _with_labor_readiness(_check_stale_extracting(metadata))
+    return _with_labor_readiness(_check_stale_extracting(_normalize_labor_total_decision(metadata)))
 
 
 @app.post("/api/labor/runs/{run_id}/files")
@@ -788,13 +881,17 @@ async def upload_labor_files(
         if not upload.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
         path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
-        pdf_records.append(attach_labor_file(run_id, path, "PDF发票"))
+        record = attach_labor_file(run_id, path, "PDF发票")
+        record["originalFilename"] = upload.filename
+        pdf_records.append(record)
     workbook_records = []
     for upload in workbook_files:
         if not upload.filename.lower().endswith(_EXCEL_EXTS):
             raise HTTPException(status_code=400, detail=f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{upload.filename}")
         path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
-        workbook_records.append(attach_labor_file(run_id, path, "线下账单"))
+        record = attach_labor_file(run_id, path, "线下账单")
+        record["originalFilename"] = upload.filename
+        workbook_records.append(record)
     files = dict(metadata.get("files", {}))
     files["pdfInvoices"] = pdf_records
     files["workbooks"] = workbook_records
@@ -861,24 +958,68 @@ def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
 
 @app.post("/api/labor/runs/{run_id}/extract-and-compare")
 async def extract_and_compare_labor_run(run_id: str) -> dict:
+    if _uses_vercel_labor_light_uat():
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="当前 Vercel UAT 仅支持页面试用和测试材料验证，不启动正式在线抽取任务。",
+                error_code="LABOR_UAT_EXTRACT_DISABLED",
+                next_action="请使用“测试材料验证”查看样例流程；正式抽取请在本地/内网持久化环境执行。",
+            ),
+        )
     metadata = _labor_metadata_or_404(run_id)
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    pdf_paths = [Path(record["path"]) for record in files.get("pdfInvoices", []) if record.get("path")]
+    workbook_paths = [Path(record["path"]) for record in files.get("workbooks", []) if record.get("path")]
+    if not pdf_paths or not workbook_paths:
+        missing_parts = []
+        if not pdf_paths:
+            missing_parts.append("PDF 发票")
+        if not workbook_paths:
+            missing_parts.append("Excel 账单")
+        missing_text = "、".join(missing_parts)
+        raise HTTPException(
+            status_code=400,
+            detail=_labor_request_error(
+                message=f"请先上传本期 {missing_text}。",
+                error_code="LABOR_FILES_REQUIRED",
+                next_action="请返回「上传文件」步骤，上传供应商 PDF 发票和线下账单 Excel 后再生成核对结果。",
+                requires_reupload=True,
+            ),
+        )
     mapping = metadata.get("excelMapping") or {}
-    manual_name_mapping = metadata.get("manualNameMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
     if not sheet_name or not mapping:
-        raise HTTPException(status_code=400, detail="请先确认 Excel 工作表和字段映射。")
-    pdf_paths = [Path(record["path"]) for record in metadata.get("files", {}).get("pdfInvoices", []) if record.get("path")]
-    if not pdf_paths:
-        raise HTTPException(status_code=400, detail="请先上传 PDF 发票。")
+        raise HTTPException(
+            status_code=400,
+            detail=_labor_request_error(
+                message="请先确认 Excel 工作表和字段映射。",
+                error_code="LABOR_MAPPING_REQUIRED",
+                next_action="请在「字段映射」步骤选择工作表，并确认姓名、工时、金额字段。",
+            ),
+        )
     queued = update_labor_metadata(
         run_id,
         {
             "status": "抽取中",
             "stage": "初始化",
             "errorMessage": "",
+            "errorCode": "",
+            "failureType": "",
+            "retryable": False,
+            "requiresReupload": False,
+            "requiresHumanReview": False,
+            "nextAction": "",
             "diffDownloadUrl": "",
         },
     )
+    if _uses_request_scoped_labor_runtime():
+        _run_labor_extract_compare(run_id)
+        try:
+            completed = load_labor_metadata(get_labor_run_dir(run_id))
+        except FileNotFoundError as exc:
+            _raise_labor_run_missing(exc)
+        return _with_labor_readiness(_check_stale_extracting(_normalize_labor_total_decision(completed)))
     # 在独立线程中运行，不阻塞事件循环
     asyncio.get_event_loop().run_in_executor(None, _run_labor_extract_compare, run_id)
     return queued
@@ -3878,6 +4019,16 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
                 "action": "重新生成或重新挂载正式差异报告后再交付。",
             }
         )
+    if has_result and diff_download_url and diff_report and not _labor_diff_report_file_exists(metadata, diff_report):
+        issues.append(
+            {
+                "code": "report_file_missing",
+                "level": "blocked",
+                "title": "正式报告文件缺失",
+                "message": "页面有报告链接，但服务端找不到对应报告文件。",
+                "action": "重新生成正式报告，确认下载文件可用后再交付业务。",
+            }
+        )
 
     blocked_count = sum(1 for issue in issues if issue["level"] == "blocked")
     review_count = sum(1 for issue in issues if issue["level"] == "needs_review")
@@ -3905,6 +4056,18 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
         "issues": issues,
         "reocrCoverage": reocr_coverage,
     }
+
+
+def _labor_diff_report_file_exists(metadata: dict, diff_report: dict) -> bool:
+    filename = str(diff_report.get("filename") or "")
+    if not filename:
+        return False
+    run_id = str(metadata.get("runId") or metadata.get("id") or "")
+    if not run_id:
+        return False
+    run_dir = get_labor_run_dir(run_id)
+    path = _resolve_labor_download_path(run_dir, filename)
+    return path.exists() and path.is_file()
 
 
 def _count_labor_pending_governance(metadata: dict) -> int:
@@ -4387,6 +4550,8 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 logger.info(f"[{run_id}] [C/D] 开始抽取员工明细: {len(filtered_pdf_paths)} 个 PDF, {len(filtered_excel_rows)} 行 Excel")
                 update_labor_metadata(run_id, {"stage": f"Stage 2: AI 抽取 {len(filtered_pdf_paths)} 个 PDF"})
                 extraction_error = ""
+                if all_pdfs_need_ocr and not _ai_ready(AI_CONFIG):
+                    stage2_quality_issues.append("当前未连接图片识别服务，图片发票无法自动读取。请启用 MiMo 或兼容的图片识别模型后重试。")
                 try:
                     pdf_rows = extract_invoice_items(
                         filtered_pdf_paths, AI_CONFIG,
@@ -4396,7 +4561,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     )
                 except Exception as exc:  # noqa: BLE001 - material replay must preserve governance evidence when online AI is unavailable.
                     extraction_error = str(exc)
-                    if not metadata.get("materialReplaySource"):
+                    if not (metadata.get("materialReplaySource") or all_pdfs_need_ocr):
                         raise
                     pdf_rows = []
                     logger.warning(f"[{run_id}] 材料回放批次员工明细抽取失败，降级为待图片识别复核: {extraction_error}")
@@ -4412,8 +4577,10 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                         else:
                             reset_profile_failure(_profile_file)
 
-                if not pdf_rows and metadata.get("materialReplaySource"):
+                if not pdf_rows and (metadata.get("materialReplaySource") or all_pdfs_need_ocr):
                     final_status = "待图片识别复核"
+                    if all_pdfs_need_ocr and not any("未连接图片识别服务" in text for text in stage2_quality_issues):
+                        stage2_quality_issues.append("图片发票未能完成自动读取，可能未连接图片识别服务或模型未返回可用明细。")
                     issue = (
                         "PDF 员工明细抽取失败，已保留历史图片识别审计、图片重新识别计划和姓名匹配建议；"
                         "请先预览并确认图片识别结果后再采纳为正式结果。"
@@ -4468,6 +4635,9 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     logger.info(f"[{run_id}] [G] 比对完成: 质量={extraction_quality['level']}, 问题={len(extraction_quality.get('issues',[]))}条")
 
                 should_retry_quality = bool(pdf_rows) and extraction_quality["level"] in ("warning", "critical")
+                if should_retry_quality and all_pdfs_need_ocr:
+                    should_retry_quality = False
+                    logger.info(f"[{run_id}] PDF 已识别为图片型或无文本层，跳过质量重试以避免重复大图 AI 请求")
                 if should_retry_quality and any("快速总金额为 0" in issue for issue in stage2_quality_issues):
                     should_retry_quality = False
                     logger.info(f"[{run_id}] 已包含扫描/未知版式 PDF 补充抽取，跳过质量重试以避免重复大图 AI 请求")
@@ -4617,7 +4787,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             comparison_summary=comparison["summary"],
             warehouse_summary=warehouse_comparison.get("summary", {}),
             exception_rows=comparison.get("rows", []),
-            pdf_text_coverage={},
+            pdf_text_coverage=pdf_text_coverage if final_status == "待图片识别复核" or not pdf_rows else {},
             reocr_plan=reocr_plan,
             ai_cache_preview=ai_cache_reconciliation_preview,
             name_mapping_governance=name_mapping_governance,
@@ -4626,9 +4796,10 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             hours_tolerance=AI_CONFIG["hours_tolerance"],
         )
 
-        logger.info(f"[{run_id}] 生成差异报告...")
+        report_label = "待图片识别复核报告" if final_status == "待图片识别复核" else "差异报告"
+        logger.info(f"[{run_id}] 生成{report_label}...")
         update_labor_metadata(run_id, {"stage": "生成报告"})
-        report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
+        report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", report_label)
         build_labor_report(
             report_path,
             comparison,
@@ -4644,7 +4815,20 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     except ValueError:
         raise
     files = dict(metadata.get("files", {}))
-    files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
+    report_label = "待图片识别复核报告" if final_status == "待图片识别复核" else "差异报告"
+    files["diffReport"] = attach_labor_file(run_id, report_path, report_label)
+    business_report_path = run_dir / safe_labor_filename("海外劳务工报账核对业务报告.html", "业务报告")
+    build_labor_business_html_report(
+        business_report_path,
+        comparison,
+        supplier_name=str(metadata.get("supplierName") or metadata.get("supplier") or ""),
+        period_start=str(metadata.get("periodStart") or ""),
+        period_end=str(metadata.get("periodEnd") or ""),
+        invoice_scope=_labor_business_invoice_scope(metadata, pdf_rows),
+        warehouse_comparison=warehouse_comparison,
+        excel_record_count=len(excel_rows),
+    )
+    files["businessReport"] = attach_labor_file(run_id, business_report_path, "业务核对报告")
 
     # 计算结论级别
     conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality, amount_tolerance=AI_CONFIG["amount_tolerance"])
@@ -4653,6 +4837,10 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         run_id,
         {
             "status": final_status,
+            "stage": "待图片识别复核" if final_status == "待图片识别复核" else "生成报告",
+            "errorMessage": "",
+            "errorCode": "",
+            "nextAction": "",
             "files": files,
             "comparisonSummary": {**comparison["summary"], **conclusion},
             "comparisonRows": comparison["rows"],
@@ -4673,9 +4861,32 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
             "excelRows": [row.to_dict() for row in excel_rows],
             "diffDownloadUrl": files["diffReport"]["downloadUrl"],
+            "businessReportDownloadUrl": files["businessReport"]["downloadUrl"],
         },
     )
     return updated
+
+
+def _labor_business_invoice_scope(metadata: dict, pdf_rows: list) -> str:
+    invoice_names: list[str] = []
+    for record in (metadata.get("files", {}) or {}).get("pdfInvoices", []) or []:
+        original_filename = str(record.get("originalFilename") or "").strip()
+        if original_filename and original_filename not in invoice_names:
+            invoice_names.append(original_filename)
+    for row in pdf_rows:
+        source = str(getattr(row, "source_file", "") or "").strip()
+        if source and source not in invoice_names:
+            invoice_names.append(source)
+    if not invoice_names:
+        for record in (metadata.get("files", {}) or {}).get("pdfInvoices", []) or []:
+            filename = str(record.get("filename") or "").strip()
+            if filename and filename not in invoice_names:
+                invoice_names.append(filename)
+    if not invoice_names:
+        return ""
+    if len(invoice_names) <= 3:
+        return "、".join(invoice_names)
+    return "、".join(invoice_names[:3]) + f" 等 {len(invoice_names)} 个文件"
 
 
 def _append_quality_issues(extraction_quality: dict, issues: list[str]) -> None:
@@ -4774,6 +4985,14 @@ def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, compar
         extraction_quality["retryAttempted"] = True
         extraction_quality["retryApplied"] = False
         return pdf_rows, comparison, extraction_quality
+    min_retry_rows = (len(pdf_rows) * 8 + 9) // 10
+    if len(retry_pdf_rows) < min_retry_rows:
+        logger.warning(
+            f"重试抽取结果不完整: 原始 {len(pdf_rows)} 条，重试 {len(retry_pdf_rows)} 条，保留原始结果"
+        )
+        extraction_quality["retryAttempted"] = True
+        extraction_quality["retryApplied"] = False
+        return pdf_rows, comparison, extraction_quality
     if retry_pdf_rows:
         retry_comparison = compare_labor_items(
             retry_pdf_rows, excel_rows,
@@ -4830,13 +5049,31 @@ def _check_stale_extracting(metadata: dict) -> dict:
         run_id = metadata.get("id")
         if run_id:
             try:
-                metadata = update_labor_metadata(run_id, {
-                    "status": "抽取失败",
-                    "errorMessage": "抽取超时（超过 30 分钟未完成）。请重新点击「抽取并核对」重试。",
-                })
+                metadata = update_labor_metadata(
+                    run_id,
+                    _labor_retryable_system_failure(
+                        message="抽取超时（超过 30 分钟未完成）。请重新点击「抽取并核对」重试。",
+                        stage="抽取超时",
+                        error_code="LABOR_EXTRACT_TIMEOUT",
+                    ),
+                )
             except Exception:
                 pass
     return metadata
+
+
+def _labor_retryable_system_failure(*, message: str, stage: str, error_code: str) -> dict:
+    return {
+        "status": "抽取失败",
+        "stage": stage,
+        "failureType": "system_interrupted",
+        "errorCode": error_code,
+        "errorMessage": message,
+        "retryable": True,
+        "requiresReupload": False,
+        "requiresHumanReview": False,
+        "nextAction": "无需重新上传材料。请重新点击「抽取并核对」重试；若连续失败，请联系管理员检查服务状态。",
+    }
 
 
 def _recover_stuck_labor_runs() -> None:
@@ -4847,10 +5084,14 @@ def _recover_stuck_labor_runs() -> None:
         run_id = metadata.get("id")
         if run_id:
             try:
-                update_labor_metadata(run_id, {
-                    "status": "抽取失败",
-                    "errorMessage": "服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
-                })
+                update_labor_metadata(
+                    run_id,
+                    _labor_retryable_system_failure(
+                        message="服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
+                        stage="系统中断",
+                        error_code="LABOR_EXTRACT_INTERRUPTED",
+                    ),
+                )
             except Exception:
                 pass
 
@@ -4912,10 +5153,70 @@ def download_labor_file(run_id: str, filename: str) -> FileResponse:
         run_dir = get_labor_run_dir(run_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="劳务核对批次不存在。") from exc
-    path = run_dir / Path(filename).name
+    path = _resolve_labor_download_path(run_dir, filename)
     if not path.exists():
-        raise HTTPException(status_code=404, detail="文件不存在或已被清理。")
+        restore_attempted = False
+        restore_succeeded = False
+        if labor_blob_storage_enabled():
+            restore_attempted = True
+            try:
+                restore_succeeded = sync_labor_run_from_blob(run_id, run_dir)
+            except Exception as exc:  # noqa: BLE001 - download path must return business-safe errors.
+                logger.warning("Failed to restore labor report for download: run_id=%s file=%s error=%s", run_id, Path(filename).name, exc)
+        path = _resolve_labor_download_path(run_dir, filename)
+        if not path.exists():
+            if restore_attempted and not restore_succeeded:
+                raise HTTPException(
+                    status_code=503,
+                    detail=_labor_request_error(
+                        message="报告文件暂时无法恢复。",
+                        error_code="LABOR_REPORT_RESTORE_FAILED",
+                        retryable=True,
+                        next_action="请稍后重试下载；若连续失败，请联系管理员检查 UAT 文件持久化状态。",
+                    ),
+                )
+            raise HTTPException(
+                status_code=404,
+                detail=_labor_request_error(
+                    message="报告文件不存在或已被清理。",
+                    error_code="LABOR_REPORT_FILE_MISSING",
+                    requires_human_review=True,
+                    next_action="请重新生成报告；如果批次已完成但仍无法下载，请联系管理员恢复该批次报告文件。",
+                ),
+            )
     return FileResponse(path, filename=path.name)
+
+
+def _resolve_labor_download_path(run_dir: Path, filename: str) -> Path:
+    requested = Path(filename).name
+    direct = run_dir / requested
+    if direct.exists():
+        return direct
+    try:
+        metadata = load_labor_metadata(run_dir)
+    except FileNotFoundError:
+        return direct
+    for record in _iter_labor_file_records(metadata.get("files") or {}):
+        record_filename = Path(str(record.get("filename") or record.get("path") or "")).name
+        if record_filename != requested:
+            continue
+        candidate = Path(str(record.get("path") or ""))
+        if candidate.exists():
+            return candidate
+        return run_dir / record_filename
+    return direct
+
+
+def _iter_labor_file_records(files: dict) -> list[dict]:
+    records: list[dict] = []
+    if not isinstance(files, dict):
+        return records
+    for value in files.values():
+        if isinstance(value, dict):
+            records.append(value)
+        elif isinstance(value, list):
+            records.extend(record for record in value if isinstance(record, dict))
+    return records
 
 
 @app.post("/api/runs/{run_id}/finalize")

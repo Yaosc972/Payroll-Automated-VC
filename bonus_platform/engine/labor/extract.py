@@ -510,9 +510,10 @@ def quick_extract_totals(
     """轻量级提取：每个 PDF 只提取总金额和仓库号。
 
     提取策略（按优先级）：
-    1. 规则抽取 — 从文本行解析员工明细并求和（最快、最准）
-    2. 缓存 — 读取 .ai_extract_cache/ 中的历史结果
-    3. AI 抽取 — 调用 AI 模型提取总金额（最慢）
+    1. 明确的发票总计/Totals 行 — 用于仓库与总账结论
+    2. 规则抽取 — 从文本行解析员工明细并求和（总计缺失时兜底）
+    3. 缓存 — 读取 .ai_extract_cache/ 中的历史结果
+    4. AI 抽取 — 调用 AI 模型提取总金额（最慢）
 
     返回 [{source_file, total_amount, warehouse_id}, ...] 列表。
     线程池并行处理，支持文本 PDF 和图片 PDF。
@@ -581,8 +582,14 @@ def quick_extract_totals(
                 payload["warehouse_conflict"] = conflict
             return payload
 
-        # 1. 尝试规则抽取：从所有页面解析员工明细并求和
+        # 1. 优先取发票明确写出的总计。部分供应商的员工行逐行四舍五入后
+        # 会与底部发票总计相差几分钱，仓库/总账结论应以发票总计为准。
         if any(p.get("text", "").strip() for p in file_pages):
+            text_total = _extract_invoice_total_from_text(file_text)
+            if text_total > 0:
+                return _result(text_total)
+
+            # 2. 发票没有可识别总计时，再从所有页面解析员工明细并求和。
             rule_rows: List[LaborLineItem] = []
             for p in file_pages:
                 rule_rows.extend(_extract_wage_code_invoice_rows(p, supplier=supplier, period_start="", period_end="", currency=""))
@@ -594,18 +601,15 @@ def quick_extract_totals(
             if rule_rows:
                 total = round(sum(r.amount for r in rule_rows), 2)
                 return _result(total)
-            text_total = _extract_invoice_total_from_text("\n".join(p.get("text", "") for p in file_pages))
-            if text_total > 0:
-                return _result(text_total)
 
-        # 2. 检查缓存
+        # 3. 检查缓存
         source_path = fname_to_path.get(source_file)
         if source_path:
             cached = _load_totals_cache(source_path, ai_config)
             if cached is not None:
                 return _result(cached["total_amount"], cached.get("warehouse_id", wh))
 
-        # 3. AI 抽取（文本或图片）
+        # 4. AI 抽取（文本或图片）
         if not ai_ready:
             return _result(0.0)
         if not page_text.strip():
@@ -2132,12 +2136,22 @@ def _is_vertical_invoice_chunk(chunk: List[str]) -> bool:
         bool(DATE_RE.match(chunk[0]))
         and _looks_like_vertical_name(chunk[1])
         and bool(HOUR_RE.match(chunk[2]))
-        and bool(PAY_CODE_RE.match(chunk[3]))
+        and _looks_like_pay_code(chunk[3])
         and bool(TYPE_RE.match(chunk[4]))
         and bool(MONEY_RE.match(chunk[5]))
         and bool(MONEY_RE.match(chunk[6]))
         and bool(MONEY_RE.match(chunk[7]))
     )
+
+
+def _looks_like_pay_code(value: str) -> bool:
+    value = " ".join(value.split())
+    if not value or DATE_RE.match(value) or MONEY_RE.match(value) or HOUR_RE.match(value):
+        return False
+    letters = re.findall(r"[A-Za-z]", value)
+    if len(letters) < 2:
+        return False
+    return len(value) <= 40
 
 
 def _looks_like_vertical_name(value: str) -> bool:
