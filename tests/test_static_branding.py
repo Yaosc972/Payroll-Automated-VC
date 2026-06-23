@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from PIL import Image
 
@@ -19,6 +20,7 @@ OVERSEAS_LABOR_JS = ROOT / "bonus_platform" / "static" / "overseas-labor.js"
 EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "china-employee-payroll.html"
 EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payroll.js"
 LEGACY_EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
+RELEASE_INFO_JSON = ROOT / "bonus_platform" / "static" / "release-info.json"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_PY = ROOT / "bonus_platform" / "app.py"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
@@ -458,6 +460,22 @@ def test_china_employee_payroll_can_calculate_large_files_without_server_upload(
     assert "exportClientSideResult" in js
     assert "totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES" in js
     assert "生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。" in js
+
+
+def test_release_info_marks_integration_branch_as_only_production_source():
+    release_info = json.loads(RELEASE_INFO_JSON.read_text(encoding="utf-8"))
+
+    assert release_info["releaseBranch"] == "codex/admin-module-release-consolidation"
+    assert release_info["deployOwner"] == "integration-window-only"
+    assert "Only deploy production from the integration branch" in release_info["policy"]
+    assert "admin.html" in release_info["requiredStaticFiles"]
+    assert "permission-guard.js" in release_info["requiredStaticFiles"]
+    assert {module["id"] for module in release_info["modules"]} >= {
+        "recruitment",
+        "china-employee-payroll",
+        "overseas",
+        "admin",
+    }
 
 
 def test_desktop_builder_uses_platform_logo_icons():

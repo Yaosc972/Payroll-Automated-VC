@@ -1,0 +1,48 @@
+{
+  "releaseChannel": "production-integration",
+  "releaseBranch": "codex/admin-module-release-consolidation",
+  "deployOwner": "integration-window-only",
+  "policy": "Only deploy production from the integration branch. Module windows should deliver commits for integration, not deploy production directly.",
+  "modules": [
+    {
+      "id": "home",
+      "name": "西格玛工作台首页",
+      "status": "released",
+      "source": "integration branch"
+    },
+    {
+      "id": "recruitment",
+      "name": "全球招聘奖金核算",
+      "status": "released",
+      "source": "recruitment workbench integrated"
+    },
+    {
+      "id": "china-employee-payroll",
+      "name": "中国区正式工薪酬核算",
+      "status": "uat",
+      "source": "china payroll browser meal allowance integrated"
+    },
+    {
+      "id": "overseas",
+      "name": "海外劳务报账核对",
+      "status": "uat",
+      "source": "overseas labor UAT integrated"
+    },
+    {
+      "id": "admin",
+      "name": "后台管理与权限配置",
+      "status": "released",
+      "source": "admin management console integrated"
+    }
+  ],
+  "requiredStaticFiles": [
+    "admin.html",
+    "admin.js",
+    "permission-guard.js",
+    "china-employee-payroll.html",
+    "china-employee-payroll.js",
+    "overseas-labor.html",
+    "overseas-labor.js",
+    "recruitment.html"
+  ]
+}
