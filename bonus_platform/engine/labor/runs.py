@@ -11,11 +11,14 @@ from uuid import uuid4
 from ...config import LABOR_RUNS_DIR
 from .blob_storage import (
     canonicalize_labor_metadata_for_blob,
-    labor_blob_storage_enabled,
-    list_labor_metadata_from_blob,
     materialize_labor_metadata_for_local,
-    sync_labor_run_from_blob,
-    sync_labor_run_to_blob,
+)
+from .persistent_storage import (
+    labor_persistent_storage_enabled,
+    labor_persistent_storage_info,
+    list_labor_metadata_from_persistent,
+    sync_labor_run_from_persistent,
+    sync_labor_run_to_persistent,
 )
 
 
@@ -45,15 +48,17 @@ def save_labor_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, An
     payload = dict(metadata)
     payload.setdefault("createdAt", now)
     payload["updatedAt"] = now
+    if labor_persistent_storage_enabled():
+        payload["storage"] = labor_persistent_storage_info()
     payload = materialize_labor_metadata_for_local(run_dir, payload)
     metadata_path = run_dir / METADATA_FILE
     tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_path, metadata_path)
-    if labor_blob_storage_enabled():
+    if labor_persistent_storage_enabled():
         canonical_payload = canonicalize_labor_metadata_for_blob(run_dir, payload)
         metadata_path.write_text(json.dumps(canonical_payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        sync_labor_run_to_blob(run_dir.name, run_dir)
+        sync_labor_run_to_persistent(run_dir.name, run_dir)
         payload = materialize_labor_metadata_for_local(run_dir, canonical_payload)
         metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
@@ -62,7 +67,7 @@ def save_labor_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, An
 def update_labor_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
     run_dir = get_labor_run_dir(run_id)
     metadata_path = run_dir / METADATA_FILE
-    if labor_blob_storage_enabled() and metadata_path.exists():
+    if labor_persistent_storage_enabled() and metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         metadata = materialize_labor_metadata_for_local(run_dir, metadata)
     else:
@@ -72,9 +77,9 @@ def update_labor_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any
 
 
 def load_labor_metadata(run_dir: Path) -> Dict[str, Any]:
-    if labor_blob_storage_enabled():
-        sync_labor_run_from_blob(run_dir.name, run_dir)
     path = run_dir / METADATA_FILE
+    if labor_persistent_storage_enabled() and not path.exists():
+        sync_labor_run_from_persistent(run_dir.name, run_dir)
     if not path.exists():
         raise FileNotFoundError("劳务核对批次不存在。")
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -84,8 +89,8 @@ def load_labor_metadata(run_dir: Path) -> Dict[str, Any]:
 
 
 def list_labor_metadata(*, limit: int | None = None) -> List[Dict[str, Any]]:
-    if labor_blob_storage_enabled():
-        rows = list_labor_metadata_from_blob()
+    if labor_persistent_storage_enabled():
+        rows = list_labor_metadata_from_persistent()
         return rows[:limit] if limit else rows
     if not LABOR_RUNS_DIR.exists():
         return []
