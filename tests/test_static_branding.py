@@ -449,6 +449,16 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
 
+def test_china_employee_payroll_can_calculate_large_files_without_server_upload():
+    html = EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
+    js = EMPLOYEE_PAYROLL_JS.read_text(encoding="utf-8")
+
+    assert "xlsx.full.min.js" in html
+    assert "calculateClientSideMealAllowance" in js
+    assert "exportClientSideResult" in js
+    assert "totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES" in js
+    assert "生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。" in js
+
 
 def test_desktop_builder_uses_platform_logo_icons():
     package = DESKTOP_PACKAGE.read_text(encoding="utf-8")

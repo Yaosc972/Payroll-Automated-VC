@@ -6313,13 +6313,15 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
         if not path.exists():
             continue
         source_workbook = load_workbook(path, read_only=False, data_only=False)
-        source_ws = source_workbook[source_workbook.sheetnames[0]]
-        start_row = 1 if file_index == 0 else 3
-        for row in source_ws.iter_rows(min_row=start_row, values_only=True):
-            for column, value in enumerate(row, start=1):
-                source_sheet.cell(next_source_row, column, value)
-            next_source_row += 1
-        source_workbook.close()
+        try:
+            source_ws = source_workbook[source_workbook.sheetnames[0]]
+            start_row = 1 if file_index == 0 else 3
+            for row in source_ws.iter_rows(min_row=start_row, values_only=True):
+                for column, value in enumerate(row, start=1):
+                    source_sheet.cell(next_source_row, column, value)
+                next_source_row += 1
+        finally:
+            source_workbook.close()
 
     source_sheet.freeze_panes = "A3"
     if source_sheet.max_row >= 2 and source_sheet.max_column >= 1:

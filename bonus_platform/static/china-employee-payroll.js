@@ -3,7 +3,7 @@ let currentPage = 1;
 let filteredRows = [];
 let activeSourceType = "";
 const API_ORIGIN = window.location.protocol === "file:" ? "http://127.0.0.1:8006" : "";
-const VERCEL_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+const VERCEL_DIRECT_UPLOAD_WARNING_BYTES = 4 * 1024 * 1024;
 
 const elements = {
   periodLabel: document.querySelector("#calcPeriodLabel"),
@@ -74,38 +74,21 @@ function apiUrl(path) {
   return `${API_ORIGIN}${path}`;
 }
 
-function formatFileSize(bytes) {
-  if (!Number.isFinite(bytes)) return "";
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
-  return `${Math.ceil(bytes / 1024)}KB`;
-}
-
-function selectedFilesSize(files) {
-  return files.reduce((total, file) => total + (file.size || 0), 0);
-}
-
-function isProductionVercel() {
+function isProductionHost() {
   return window.location.hostname.endsWith(".vercel.app");
-}
-
-function productionUploadLimitMessage(files) {
-  if (!isProductionVercel()) return "";
-  const totalSize = selectedFilesSize(files);
-  if (totalSize <= VERCEL_UPLOAD_LIMIT_BYTES) return "";
-  return `生产环境单次上传上限约 ${formatFileSize(VERCEL_UPLOAD_LIMIT_BYTES)}，当前已选 ${formatFileSize(totalSize)}。请先只上传必要的考勤导出，或拆分文件后再核算；本地开发环境不受此限制。`;
 }
 
 function normalizeApiError(text, fallback) {
   const raw = String(text || "").trim();
   if (!raw) return fallback;
   if (/Request Entity Too Large/i.test(raw)) {
-    return "上传文件过大，生产环境已被 Vercel 拦截。请减少文件体积或拆分后再核算。";
+    return "上传文件过大，生产环境已被 Vercel 拦截。请减少文件体积或使用浏览器本地核算。";
   }
   if (/FUNCTION_INVOCATION_TIMEOUT|timed out|timeout/i.test(raw)) {
-    return "生产环境核算超时。请减少单次上传数据量后重试，或在本地环境处理大文件。";
+    return "生产环境核算超时。请减少单次上传数据量后重试，或使用浏览器本地核算。";
   }
   if (/Request En/i.test(raw)) {
-    return "生产环境拒绝了本次上传请求，通常是文件过大。请减少文件体积或拆分后再核算。";
+    return "生产环境拒绝了本次上传请求，通常是文件过大。请使用浏览器本地核算或拆分文件后再试。";
   }
   return raw.length > 180 ? `${raw.slice(0, 180)}...` : raw;
 }
@@ -132,6 +115,475 @@ function friendlyFetchError(error, fallback) {
     return "无法连接核算服务，请通过 http://127.0.0.1:8006/china-employee-payroll.html 打开页面，并确认 8006 服务已启动。";
   }
   return error.message || fallback;
+}
+
+const HR_REQUIRED_COLUMNS = [
+  "员工",
+  "工号",
+  "人员状态",
+  "二级组织",
+  "三级组织",
+  "四级组织",
+  "五级组织",
+  "考勤日期",
+  "首打卡(含补签)",
+  "末打卡(含补签)",
+  "当前班次",
+  "日期类型",
+  "备注",
+];
+
+const WX_REQUIRED_COLUMNS = [
+  "姓名",
+  "工号",
+  "部门",
+  "组织架构",
+  "人员类型",
+  "员工状态",
+  "日期",
+  "班次",
+  "上班 1 打卡时间",
+  "下班 1 打卡时间",
+];
+
+const MEAL_RULE = {
+  eligibleSecondOrgs: new Set(["ABU航空事业部", "FBU仓储事业部", "FES财经条线", "HRAS人力综合条线", "LBU速运事业部", "PBU口岸事业部"]),
+  eligibleWholeSecondOrgs: new Set(["HQU技术部"]),
+  eligibleThirdOrgs: new Set(["ABU技术部", "FBU技术部", "FES技术部", "技术部", "B技术部", "PBU技术部"]),
+  specialThirdOrgs: new Set(["HSSC人力共享中心", "战略运营部"]),
+  specialFourthOrgs: new Set(["HRAS技术组", "BI组"]),
+  eligibleShifts: ["9:30-18:30", "集团深圳10:00-19:00", "深圳灵活打卡8:30-9:10", "深圳南山灵活打卡8:30-9:30"],
+  excludedEmployeeNames: new Set(["潘江浩", "李显荣"]),
+  dailyAmount: 20,
+};
+
+function cleanCell(value) {
+  return String(value ?? "").trim();
+}
+
+function excelDateFromSerial(serial) {
+  if (!window.XLSX?.SSF?.parse_date_code) return null;
+  const parsed = window.XLSX.SSF.parse_date_code(serial);
+  if (!parsed) return null;
+  return new Date(parsed.y, parsed.m - 1, parsed.d, parsed.H || 0, parsed.M || 0, Math.floor(parsed.S || 0));
+}
+
+function parseLocalDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value === "number") return excelDateFromSerial(value);
+  const text = cleanCell(value);
+  if (!text || text === "-") return null;
+  const normalized = text.replace(/\//g, "-");
+  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (match) {
+    return new Date(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]),
+      Number(match[4] || 0),
+      Number(match[5] || 0),
+      Number(match[6] || 0),
+    );
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseLocalTime(value) {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return roundedTime(value);
+  }
+  if (typeof value === "number") {
+    const parsed = excelDateFromSerial(value);
+    if (parsed) return roundedTime(parsed);
+  }
+  const text = cleanCell(value);
+  if (!text || text === "-") return null;
+  const dateValue = parseLocalDate(text);
+  if (dateValue) return roundedTime(dateValue);
+  const match = text.match(/(\d{1,2}):(\d{2})/);
+  return match ? { hour: Number(match[1]), minute: Number(match[2]) } : null;
+}
+
+function roundedTime(date) {
+  const roundedMinutes = date.getHours() * 60 + date.getMinutes() + (date.getSeconds() > 0 ? 1 : 0);
+  const normalized = roundedMinutes % (24 * 60);
+  return {
+    hour: Math.floor(normalized / 60),
+    minute: normalized % 60,
+  };
+}
+
+function toIsoDate(value) {
+  const date = parseLocalDate(value);
+  if (!date) return "";
+  if (date.getHours() >= 23 && date.getMinutes() >= 30) {
+    date.setDate(date.getDate() + 1);
+  }
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function monthLabelFromIso(isoDate) {
+  if (!isoDate) return "";
+  const [year, month] = isoDate.split("-");
+  return year && month ? `${year}年${Number(month)}月` : "";
+}
+
+function readWorkbook(file) {
+  return file.arrayBuffer().then((buffer) => window.XLSX.read(buffer, { type: "array", cellDates: true, raw: true }));
+}
+
+function sheetRows(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  return window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
+}
+
+async function parseLocalHrWorkbooks(files) {
+  const allRows = [];
+  const fileInfos = [];
+  const missingColumns = new Set();
+  const duplicateKeys = [];
+  const seen = new Map();
+  let headers = [];
+  const sourceAoA = [];
+
+  for (const [fileIndex, file] of files.entries()) {
+    const workbook = await readWorkbook(file);
+    const aoa = sheetRows(workbook);
+    if (fileIndex === 0) sourceAoA.push(...aoa);
+    else sourceAoA.push(...aoa.slice(2));
+    const fileHeaders = (aoa[1] || []).map(cleanCell);
+    if (!headers.length) headers = fileHeaders;
+    HR_REQUIRED_COLUMNS.forEach((column) => {
+      if (!fileHeaders.includes(column)) missingColumns.add(column);
+    });
+
+    let rowCount = 0;
+    aoa.slice(2).forEach((values, rowOffset) => {
+      if (!values.some((value) => cleanCell(value))) return;
+      const row = {};
+      fileHeaders.forEach((header, index) => {
+        if (header) row[header] = values[index] ?? "";
+      });
+      row._sourceFile = file.name;
+      row._sourceRow = rowOffset + 3;
+      row["考勤日期"] = toIsoDate(row["考勤日期"]);
+      rowCount += 1;
+      const key = `${cleanCell(row["工号"])}|${row["考勤日期"]}`;
+      if (cleanCell(row["工号"]) && row["考勤日期"]) {
+        if (seen.has(key)) {
+          duplicateKeys.push({
+            employeeId: cleanCell(row["工号"]),
+            attendanceDate: row["考勤日期"],
+            firstFile: seen.get(key)._sourceFile,
+            duplicateFile: file.name,
+          });
+        } else {
+          seen.set(key, row);
+        }
+      }
+      allRows.push(row);
+    });
+    fileInfos.push({ filename: file.name, rowCount, sheetName: workbook.SheetNames[0] });
+  }
+
+  return {
+    rows: allRows,
+    files: fileInfos,
+    headers,
+    missingColumns: [...missingColumns].sort(),
+    duplicateKeys,
+    sourceType: "hr",
+    sourceLabel: "人事系统考勤",
+    sourceAoA,
+  };
+}
+
+async function parseLocalWxWorkbooks(files) {
+  const allRows = [];
+  const fileInfos = [];
+  const missingColumns = new Set();
+  const duplicateKeys = [];
+  const seen = new Map();
+  let headers = [];
+  const sourceAoA = [];
+
+  for (const [fileIndex, file] of files.entries()) {
+    const workbook = await readWorkbook(file);
+    const aoa = sheetRows(workbook);
+    if (fileIndex === 0) sourceAoA.push(...aoa);
+    else sourceAoA.push(...aoa.slice(2));
+    const maxColumn = Math.max(aoa[0]?.length || 0, aoa[1]?.length || 0);
+    const firstHeader = Array.from({ length: maxColumn }, (_, index) => cleanCell(aoa[0]?.[index]));
+    const secondHeader = Array.from({ length: maxColumn }, (_, index) => cleanCell(aoa[1]?.[index]));
+    const fileHeaders = Array.from({ length: maxColumn }, (_, index) => secondHeader[index] || firstHeader[index] || `列${index + 1}`);
+    if (!headers.length) headers = fileHeaders;
+    WX_REQUIRED_COLUMNS.forEach((column) => {
+      if (!fileHeaders.includes(column)) missingColumns.add(column);
+    });
+
+    let rowCount = 0;
+    aoa.slice(2).forEach((values, rowOffset) => {
+      if (!values.some((value) => cleanCell(value))) return;
+      const raw = {};
+      fileHeaders.forEach((header, index) => {
+        if (header) raw[header] = values[index] ?? "";
+      });
+      const orgPath = cleanCell(raw["组织架构"]);
+      const department = cleanCell(raw["部门"]);
+      const shift = cleanCell(raw["班次"]);
+      const row = {
+        ...raw,
+        "员工": cleanCell(raw["姓名"]),
+        "人员状态": cleanCell(raw["员工状态"]),
+        "二级组织": "WX技术部",
+        "三级组织": "WX-PBU技术部",
+        "四级组织": orgPath === "WX-PBU技术部" ? department : orgPath.replace("WX-PBU技术部-", ""),
+        "五级组织": "",
+        "考勤日期": toIsoDate(raw["日期"]),
+        "首打卡(含补签)": raw["上班 1 打卡时间"],
+        "末打卡(含补签)": raw["下班 1 打卡时间"],
+        "当前班次": raw["班次"],
+        "日期类型": shift && !shift.includes("休息") ? "工作日" : "休息",
+        "备注": "",
+        "_sourceFile": file.name,
+        "_sourceRow": rowOffset + 3,
+        "_sourceOrgPath": orgPath,
+      };
+      rowCount += 1;
+      const key = `${cleanCell(row["工号"])}|${row["考勤日期"]}`;
+      if (cleanCell(row["工号"]) && row["考勤日期"]) {
+        if (seen.has(key)) {
+          duplicateKeys.push({
+            employeeId: cleanCell(row["工号"]),
+            attendanceDate: row["考勤日期"],
+            firstFile: seen.get(key)._sourceFile,
+            duplicateFile: file.name,
+          });
+        } else {
+          seen.set(key, row);
+        }
+      }
+      allRows.push(row);
+    });
+    fileInfos.push({ filename: file.name, rowCount, sheetName: workbook.SheetNames[0] });
+  }
+
+  return {
+    rows: allRows,
+    files: fileInfos,
+    headers,
+    missingColumns: [...missingColumns].sort(),
+    duplicateKeys,
+    sourceType: "wx",
+    sourceLabel: "WX技术部考勤",
+    sourceAoA,
+  };
+}
+
+function localSummary(parsed) {
+  const employees = new Set(parsed.rows.map((row) => cleanCell(row["工号"])).filter(Boolean));
+  const dates = parsed.rows.map((row) => row["考勤日期"]).filter(Boolean).sort();
+  return {
+    fileCount: parsed.files.length,
+    rowCount: parsed.rows.length,
+    employeeCount: employees.size,
+    dateStart: dates[0] || "",
+    dateEnd: dates[dates.length - 1] || "",
+    distinctDateCount: new Set(dates).size,
+    missingColumns: parsed.missingColumns,
+    duplicateCount: parsed.duplicateKeys.length,
+    sourceType: parsed.sourceType,
+    sourceLabel: parsed.sourceLabel,
+  };
+}
+
+function localIsEligibleOrg(row) {
+  if (cleanCell(row._sourceType) === "wx") {
+    const orgPath = cleanCell(row._sourceOrgPath) || cleanCell(row["组织架构"]);
+    return orgPath === "WX-PBU技术部" || orgPath.startsWith("WX-PBU技术部-");
+  }
+  const second = cleanCell(row["二级组织"]);
+  const third = cleanCell(row["三级组织"]);
+  const fourth = cleanCell(row["四级组织"]);
+  if (MEAL_RULE.eligibleWholeSecondOrgs.has(second)) return true;
+  return (
+    MEAL_RULE.eligibleSecondOrgs.has(second) && MEAL_RULE.eligibleThirdOrgs.has(third)
+  ) || (
+    second === "HRAS人力综合条线" && MEAL_RULE.specialThirdOrgs.has(third) && MEAL_RULE.specialFourthOrgs.has(fourth)
+  );
+}
+
+function localIsWorkday(row) {
+  if (cleanCell(row._sourceType) === "wx") {
+    const shift = cleanCell(row["当前班次"]);
+    return Boolean(shift) && !shift.includes("休息");
+  }
+  return cleanCell(row["日期类型"]) === "工作日";
+}
+
+function localIsEligibleShift(row) {
+  const shift = cleanCell(row["当前班次"]);
+  return MEAL_RULE.eligibleShifts.some((allowed) => shift.includes(allowed));
+}
+
+function localLastPunchQualifies(row) {
+  const punchTime = parseLocalTime(row["末打卡(含补签)"]);
+  if (!punchTime) return false;
+  return punchTime.hour >= 21 || punchTime.hour < 8 || (punchTime.hour === 8 && punchTime.minute === 0);
+}
+
+function localRemarkHasApprovedTrip(row) {
+  const remark = cleanCell(row["备注"]);
+  if (!remark.includes("公出") && !remark.includes("出差")) return false;
+  const matches = [...remark.matchAll(/(\d{1,2}):(\d{2})/g)];
+  return matches.some((match) => Number(match[1]) >= 21);
+}
+
+function localIneligibleReason(row) {
+  if (cleanCell(row._sourceType) !== "wx" && !cleanCell(row["工号"]).toLowerCase().startsWith("zt")) return "工号不是zt开头";
+  if (MEAL_RULE.excludedEmployeeNames.has(cleanCell(row["员工"]))) return "员工在不计算补贴名单";
+  if (!localIsEligibleOrg(row)) return "组织不在核算对象范围";
+  return "";
+}
+
+function localNonPayableReason(row) {
+  if (!localIsWorkday(row)) return cleanCell(row._sourceType) === "wx" ? "班次为休息或非工作日" : "日期类型不是工作日";
+  if (cleanCell(row._sourceType) !== "wx" && !localIsEligibleShift(row)) return "当前班次不在餐补班次范围";
+  if (localLastPunchQualifies(row) || localRemarkHasApprovedTrip(row)) return "";
+  return "末打卡(含补签)不在21:00-次日08:00范围";
+}
+
+function calculateLocalMealAllowance(parsed) {
+  const employeeResults = new Map();
+  const dailyRows = [];
+  parsed.rows.forEach((row) => {
+    row._sourceType = parsed.sourceType;
+    const empId = cleanCell(row["工号"]);
+    if (!empId) return;
+    if (!employeeResults.has(empId)) {
+      employeeResults.set(empId, {
+        employeeId: empId,
+        employeeName: cleanCell(row["员工"]),
+        status: cleanCell(row["人员状态"]),
+        secondOrg: cleanCell(row["二级组织"]),
+        thirdOrg: cleanCell(row["三级组织"]),
+        fourthOrg: cleanCell(row["四级组织"]),
+        fifthOrg: cleanCell(row["五级组织"]),
+        payableDays: 0,
+        amount: 0,
+        daily: [],
+        warnings: new Set(),
+        sourceType: parsed.sourceType,
+        sourceLabel: parsed.sourceLabel,
+      });
+    }
+    const result = employeeResults.get(empId);
+    const ineligible = localIneligibleReason(row);
+    const nonPayable = ineligible ? "" : localNonPayableReason(row);
+    const payable = !ineligible && !nonPayable;
+    const amount = payable ? MEAL_RULE.dailyAmount : 0;
+    if (payable) {
+      result.payableDays += 1;
+      result.amount += amount;
+    } else {
+      result.warnings.add(ineligible || nonPayable);
+    }
+    const daily = {
+      employeeId: empId,
+      employeeName: cleanCell(row["员工"]),
+      attendanceDate: row["考勤日期"] || "",
+      dateType: cleanCell(row["日期类型"]),
+      shift: cleanCell(row["当前班次"]),
+      firstPunch: cleanCell(row["首打卡(含补签)"]),
+      lastPunch: cleanCell(row["末打卡(含补签)"]),
+      remark: cleanCell(row["备注"]),
+      payable,
+      amount,
+      reason: payable ? "符合餐补规则" : (ineligible || nonPayable),
+      sourceType: parsed.sourceType,
+      sourceLabel: parsed.sourceLabel,
+    };
+    result.daily.push(daily);
+    dailyRows.push(daily);
+  });
+
+  const results = [...employeeResults.values()].map((row) => ({
+    ...row,
+    warnings: [...row.warnings].sort(),
+  })).sort((a, b) => b.amount - a.amount || a.employeeId.localeCompare(b.employeeId));
+  const payableResults = results.filter((row) => row.amount > 0);
+  const summary = {
+    ...localSummary(parsed),
+    eligibleEmployeeCount: results.filter((row) => row.payableDays || !row.warnings.includes("组织不在核算对象范围")).length,
+    payableEmployeeCount: payableResults.length,
+    payableDayCount: results.reduce((sum, row) => sum + row.payableDays, 0),
+    totalAmount: results.reduce((sum, row) => sum + row.amount, 0),
+    dailyAmount: MEAL_RULE.dailyAmount,
+    sourceType: parsed.sourceType,
+    sourceLabel: parsed.sourceLabel,
+  };
+  return {
+    runId: `client_china_employee_payroll_${Date.now()}`,
+    clientGenerated: true,
+    summary,
+    results: results.map(({ daily, ...row }) => row),
+    dailyRows,
+    files: parsed.files,
+    warnings: {
+      missingColumns: parsed.missingColumns,
+      duplicateKeys: parsed.duplicateKeys.slice(0, 50),
+    },
+    sourceAoA: parsed.sourceAoA,
+  };
+}
+
+async function calculateClientSideMealAllowance(files, sourceType) {
+  if (!window.XLSX?.read) {
+    throw new Error("浏览器 Excel 解析组件未加载，请刷新页面后重试。");
+  }
+  const parsed = sourceType === "wx" ? await parseLocalWxWorkbooks(files) : await parseLocalHrWorkbooks(files);
+  return calculateLocalMealAllowance(parsed);
+}
+
+function exportClientSideResult(result) {
+  if (!window.XLSX?.utils) {
+    throw new Error("浏览器 Excel 导出组件未加载，请刷新页面后重试。");
+  }
+  const summary = result.summary || {};
+  const monthLabel = monthLabelFromIso(summary.dateStart) || "餐补核算";
+  const rows = (result.results || []).filter((row) => row.amount > 0);
+  const resultAoA = [
+    ["核算月份", "工号", "姓名", "人员状态", "二级组织", "三级组织", "四级组织", "补贴天数", "餐补金额"],
+    ...rows.map((row) => [
+      monthLabel,
+      row.employeeId,
+      row.employeeName,
+      row.status,
+      row.secondOrg,
+      row.thirdOrg,
+      row.fourthOrg,
+      row.payableDays,
+      row.amount,
+    ]),
+    ["合计", "", "", "", "", "", "", summary.payableDayCount || 0, summary.totalAmount || 0],
+  ];
+  const workbook = window.XLSX.utils.book_new();
+  const resultSheet = window.XLSX.utils.aoa_to_sheet(resultAoA);
+  resultSheet["!cols"] = [14, 14, 14, 12, 22, 22, 22, 12, 12].map((wch) => ({ wch }));
+  resultSheet["!autofilter"] = { ref: `A1:I${Math.max(1, resultAoA.length - 1)}` };
+  window.XLSX.utils.book_append_sheet(workbook, resultSheet, "餐补核算结果");
+
+  const sourceSheetName = summary.sourceType === "wx" ? "WX技术部考勤源" : "人事系统考勤源";
+  const sourceSheet = window.XLSX.utils.aoa_to_sheet(result.sourceAoA || []);
+  sourceSheet["!cols"] = Array.from({ length: Math.min((result.sourceAoA?.[0] || []).length || 16, 24) }, () => ({ wch: 16 }));
+  window.XLSX.utils.book_append_sheet(workbook, sourceSheet, sourceSheetName);
+
+  const prefix = summary.sourceType === "wx" ? "WX技术部餐补核算结果" : "技术部餐补核算结果";
+  window.XLSX.writeFile(workbook, `${prefix}_${monthLabel}_${result.runId}.xlsx`);
 }
 
 function formatDateTime(value) {
@@ -325,10 +777,15 @@ async function exportCurrentResult() {
   }
 
   setButtonBusy(elements.export, "正在生成Excel...");
-  toast("正在生成导出文件，源数据较多时需要等待几十秒。");
+  toast(latestResult.clientGenerated ? "正在本地生成导出文件。" : "正在生成导出文件，源数据较多时需要等待几十秒。");
   const previousStatus = elements.status.textContent;
   elements.status.textContent = "正在生成导出文件，请稍候...";
   try {
+    if (latestResult.clientGenerated) {
+      exportClientSideResult(latestResult);
+      toast("导出结果已生成。");
+      return;
+    }
     const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/${encodeURIComponent(latestResult.runId)}/export`));
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
@@ -543,20 +1000,23 @@ elements.run.addEventListener("click", async () => {
     toast("请先上传考勤记录 Excel。");
     return;
   }
-  const uploadLimitMessage = productionUploadLimitMessage(files);
-  if (uploadLimitMessage) {
-    elements.status.textContent = uploadLimitMessage;
-    elements.issues.innerHTML = `<article class="issue-item"><strong>上传文件过大</strong><span>${escapeHtml(uploadLimitMessage)}</span></article>`;
-    toast("上传文件过大，请拆分后再核算。");
-    return;
-  }
   const form = new FormData();
   files.forEach((file) => form.append("attendance_files", file));
   form.append("source_type", activeSourceType);
+  const totalUploadSize = files.reduce((sum, file) => sum + file.size, 0);
+  if (isProductionHost() && totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES) {
+    toast("生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。");
+  }
   setButtonBusy(elements.run, "正在核算...");
   elements.runHint.textContent = `正在解析${sourceLabel(activeSourceType)}并生成核算结果`;
   elements.status.textContent = "正在解析考勤记录并核算...";
   try {
+    if (isProductionHost() && totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES) {
+      const data = await calculateClientSideMealAllowance(files, activeSourceType);
+      renderResult(data);
+      toast("餐补核算完成。");
+      return;
+    }
     const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance"), {
       method: "POST",
       body: form,
