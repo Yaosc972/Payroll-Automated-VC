@@ -364,6 +364,9 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert "测试材料验证" in html
     assert "overseas-labor.js" in html
     assert "/api/labor/runs" in js
+    assert "applyVercelLightUatState" in js
+    assert "正式核对未启用" in js
+    assert "UAT 页面试用" in js
     assert "字段映射" in html
     assert "结论" in html
     assert "仓库核对总览" in html

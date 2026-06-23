@@ -175,6 +175,7 @@ async function loadModuleAccess() {
       });
       toast(access.message || "当前账号无权使用海外劳务报账核对。");
     }
+    applyVercelLightUatState();
   } catch (error) {
     if (labor.moduleStageBadge) {
       labor.moduleStageBadge.textContent = "UAT试用版 · 权限状态读取失败";
@@ -193,6 +194,36 @@ function showVercelLightUatExtractBlocked() {
   const message = "当前 Vercel UAT 仅支持页面试用和测试材料验证，不启动正式在线核对任务。请在本地/内网持久化环境生成正式核对结果。";
   setText(labor.compareStatus, message, true);
   toast("当前环境不支持正式在线核对。");
+}
+
+function applyVercelLightUatState() {
+  if (!isVercelLaborLightUat()) return;
+  if (labor.extractCompare) {
+    labor.extractCompare.disabled = true;
+    labor.extractCompare.setAttribute("aria-disabled", "true");
+    labor.extractCompare.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7h8M7 3v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      正式核对未启用
+    `;
+  }
+  if (labor.compareStatus) {
+    setText(labor.compareStatus, "当前生产环境为 UAT 页面试用，只验证流程与测试材料，不生成正式核对报告。", false);
+  }
+  if (labor.extractPreviewTable && !laborState.run) {
+    labor.extractPreviewTable.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">
+          <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <p class="empty-title">UAT 页面试用</p>
+        <p class="empty-desc">正式核对报告未在 Vercel 生产环境启用；请使用测试材料验证页面流程。</p>
+      </div>
+    `;
+  }
+  if (labor.kpiTotal) labor.kpiTotal.textContent = "UAT";
+  if (labor.kpiMatched) labor.kpiMatched.textContent = "试用";
+  if (labor.kpiVariance) labor.kpiVariance.textContent = "未启用";
+  if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = "人工复核";
 }
 
 function laborTelemetrySummary(run = laborState.run) {
