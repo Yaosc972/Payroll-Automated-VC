@@ -3,6 +3,7 @@ let currentPage = 1;
 let filteredRows = [];
 let activeSourceType = "";
 const API_ORIGIN = window.location.protocol === "file:" ? "http://127.0.0.1:8006" : "";
+const VERCEL_DIRECT_UPLOAD_WARNING_BYTES = 4 * 1024 * 1024;
 
 const elements = {
   periodLabel: document.querySelector("#calcPeriodLabel"),
@@ -78,6 +79,29 @@ function friendlyFetchError(error, fallback) {
     return "无法连接核算服务，请通过 http://127.0.0.1:8006/china-employee-payroll.html 打开页面，并确认 8006 服务已启动。";
   }
   return error.message || fallback;
+}
+
+function isProductionHost() {
+  return window.location.hostname.endsWith(".vercel.app");
+}
+
+async function parseJsonResponse(response, fallback) {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || data.message || fallback);
+    return data;
+  }
+
+  const rawText = await response.text().catch(() => "");
+  const snippet = rawText.replace(/\s+/g, " ").trim().slice(0, 120);
+  if (response.status === 413) {
+    throw new Error("上传文件超过生产环境请求大小限制，请拆分考勤文件后重试。");
+  }
+  if ([500, 502, 503, 504].includes(response.status)) {
+    throw new Error("生产环境核算服务超时或返回异常，请拆分考勤文件后重试；如仍失败，请联系管理员查看 Vercel 函数日志。");
+  }
+  throw new Error(snippet ? `${fallback}：${snippet}` : fallback);
 }
 
 function formatDateTime(value) {
@@ -277,8 +301,7 @@ async function exportCurrentResult() {
   try {
     const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/${encodeURIComponent(latestResult.runId)}/export`));
     if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.detail || "导出结果失败");
+      await parseJsonResponse(response, "导出结果失败");
     }
     const disposition = response.headers.get("content-disposition") || "";
     const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
@@ -337,8 +360,7 @@ async function loadRuns() {
   elements.batchList.innerHTML = '<article class="batch-item muted">正在加载历史批次...</article>';
   try {
     const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance/runs"));
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "批次加载失败");
+    const data = await parseJsonResponse(response, "批次加载失败");
     const runs = Array.isArray(data.runs) ? data.runs : [];
     elements.batchList.innerHTML = runs.length ? runs.slice(0, 8).map((run) => `
       <button class="batch-item ${latestResult?.runId === run.runId ? "active" : ""}" data-run-id="${escapeHtml(run.runId)}" type="button">
@@ -357,8 +379,7 @@ async function loadRun(runId) {
   elements.status.textContent = "正在加载历史批次...";
   try {
     const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/runs/${encodeURIComponent(runId)}`));
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "批次加载失败");
+    const data = await parseJsonResponse(response, "批次加载失败");
     renderResult(data);
     markActiveRun();
     await loadRuns();
@@ -494,6 +515,10 @@ elements.run.addEventListener("click", async () => {
   const form = new FormData();
   files.forEach((file) => form.append("attendance_files", file));
   form.append("source_type", activeSourceType);
+  const totalUploadSize = files.reduce((sum, file) => sum + file.size, 0);
+  if (isProductionHost() && totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES) {
+    toast("生产环境文件较大，若核算超时请拆分考勤文件后重试。");
+  }
   setButtonBusy(elements.run, "正在核算...");
   elements.runHint.textContent = `正在解析${sourceLabel(activeSourceType)}并生成核算结果`;
   elements.status.textContent = "正在解析考勤记录并核算...";
@@ -502,8 +527,7 @@ elements.run.addEventListener("click", async () => {
       method: "POST",
       body: form,
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "餐补核算失败");
+    const data = await parseJsonResponse(response, "餐补核算失败");
     renderResult(data);
     await loadRuns();
     toast("餐补核算完成。");
