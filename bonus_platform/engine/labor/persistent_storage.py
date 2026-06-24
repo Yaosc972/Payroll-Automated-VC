@@ -131,6 +131,23 @@ def sync_labor_run_to_persistent(run_id: str, run_dir: Path) -> None:
         sync_labor_run_to_blob(run_id, run_dir)
 
 
+def sync_labor_metadata_to_persistent(run_id: str, run_dir: Path, metadata: dict[str, Any]) -> None:
+    if labor_supabase_storage_enabled():
+        content = json.dumps(
+            canonicalize_labor_metadata_for_blob(run_dir, metadata),
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        _supabase_upload_bytes(
+            _supabase_object_path(run_id, "metadata.json"),
+            content,
+            content_type="application/json",
+        )
+        return
+    if labor_blob_storage_enabled():
+        sync_labor_run_to_blob(run_id, run_dir)
+
+
 def sync_labor_run_from_persistent(run_id: str, run_dir: Path) -> bool:
     if labor_supabase_storage_enabled():
         return sync_labor_run_from_supabase(run_id, run_dir)

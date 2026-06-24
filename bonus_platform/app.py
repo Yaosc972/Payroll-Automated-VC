@@ -159,6 +159,7 @@ from .engine.labor.runs import (
     load_labor_metadata,
     safe_labor_filename,
     update_labor_metadata,
+    update_labor_metadata_record_only,
 )
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
 from .engine.labor.persistent_storage import (
@@ -1484,7 +1485,7 @@ def complete_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict
     files["pdfInvoices"] = pdf_records
     files["workbooks"] = workbook_records
     files["workbook"] = workbook_records[0]
-    return update_labor_metadata(run_id, {"status": "已上传文件", "files": files})
+    return update_labor_metadata_record_only(run_id, {"status": "已上传文件", "files": files})
 
 
 @app.get("/api/labor/runs/{run_id}/workbook-sheets")

@@ -17,6 +17,7 @@ from .persistent_storage import (
     labor_persistent_storage_enabled,
     labor_persistent_storage_info,
     list_labor_metadata_from_persistent,
+    sync_labor_metadata_to_persistent,
     sync_labor_run_from_persistent,
     sync_labor_run_to_persistent,
 )
@@ -72,6 +73,36 @@ def update_labor_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any
         metadata = load_labor_metadata(run_dir)
     metadata.update(updates)
     return save_labor_metadata(run_dir, metadata)
+
+
+def update_labor_metadata_record_only(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+    run_dir = get_labor_run_dir(run_id)
+    metadata_path = run_dir / METADATA_FILE
+    if labor_persistent_storage_enabled() and metadata_path.exists():
+        metadata = _read_labor_metadata_file(metadata_path)
+        metadata = materialize_labor_metadata_for_local(run_dir, metadata)
+    else:
+        metadata = load_labor_metadata(run_dir)
+    metadata.update(updates)
+    return save_labor_metadata_record_only(run_dir, metadata)
+
+
+def save_labor_metadata_record_only(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = dict(metadata)
+    payload.setdefault("createdAt", now)
+    payload["updatedAt"] = now
+    if labor_persistent_storage_enabled():
+        payload["storage"] = labor_persistent_storage_info()
+    payload = materialize_labor_metadata_for_local(run_dir, payload)
+    metadata_path = run_dir / METADATA_FILE
+    _write_labor_metadata_file(metadata_path, payload)
+    if labor_persistent_storage_enabled():
+        canonical_payload = canonicalize_labor_metadata_for_blob(run_dir, payload)
+        sync_labor_metadata_to_persistent(run_dir.name, run_dir, canonical_payload)
+        payload = materialize_labor_metadata_for_local(run_dir, canonical_payload)
+        _write_labor_metadata_file(metadata_path, payload)
+    return payload
 
 
 def load_labor_metadata(run_dir: Path) -> Dict[str, Any]:

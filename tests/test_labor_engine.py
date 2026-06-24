@@ -97,6 +97,54 @@ def test_save_labor_metadata_uses_atomic_writes_for_persistent_backend(monkeypat
     assert json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))["id"] == "labor_atomic"
 
 
+def test_update_labor_metadata_record_only_does_not_resync_uploaded_files(monkeypatch, tmp_path):
+    run_root = tmp_path / "labor_runs"
+    run_dir = run_root / "labor_direct"
+    run_dir.mkdir(parents=True)
+    (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    (run_dir / "bill.xlsx").write_bytes(_workbook_bytes())
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "labor_direct",
+                "status": "已创建",
+                "files": {
+                    "pdfInvoices": [{"filename": "invoice.pdf", "path": str(run_dir / "invoice.pdf")}],
+                    "workbook": {"filename": "bill.xlsx", "path": str(run_dir / "bill.xlsx")},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    uploaded_metadata = {}
+
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", run_root)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
+    monkeypatch.setattr(
+        labor_runs,
+        "sync_labor_run_to_persistent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("large files should not be resynced")),
+    )
+
+    def fake_sync_metadata(run_id, run_dir_arg, metadata):
+        uploaded_metadata["runId"] = run_id
+        uploaded_metadata["runDir"] = run_dir_arg
+        uploaded_metadata["metadata"] = metadata
+
+    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
+
+    metadata = labor_runs.update_labor_metadata_record_only("labor_direct", {"status": "已上传文件"})
+
+    assert metadata["status"] == "已上传文件"
+    assert uploaded_metadata["runId"] == "labor_direct"
+    assert uploaded_metadata["metadata"]["files"]["pdfInvoices"][0]["path"] == "invoice.pdf"
+    assert uploaded_metadata["metadata"]["files"]["workbook"]["path"] == "bill.xlsx"
+    local_metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert local_metadata["files"]["workbook"]["path"] == str(run_dir / "bill.xlsx")
+
+
 def _workbook_with_tax_columns_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
