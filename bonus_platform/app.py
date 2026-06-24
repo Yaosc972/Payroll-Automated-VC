@@ -387,7 +387,16 @@ def _feishu_identity_from_payloads(token_data: dict[str, Any], user_info: dict[s
 def _overseas_labor_access_config() -> dict:
     access = os.environ.get("SIGMA_OVERSEAS_LABOR_ACCESS", "uat").strip().lower() or "uat"
     disabled_values = {"disabled", "off", "false", "0", "deny", "closed"}
+    uat_values = {"uat", "uat_trial", "trial"}
+    enabled_values = {"enabled", "on", "true", "1", "production", "prod", "full", "online"}
     can_use = access not in disabled_values
+    access_mode = "disabled" if not can_use else ("uat_trial" if access in uat_values else ("production" if access in enabled_values else access))
+    stage = "UAT试用版" if access_mode == "uat_trial" else "生产试运行"
+    message = (
+        "仅限薪酬/报账核对 UAT 试用，结果需人工复核后再对外结论。"
+        if access_mode == "uat_trial"
+        else "已启用持久化上传与后台异步核对，结果仍需人工复核后再对外结论。"
+    )
     allowed_roles = [
         role.strip()
         for role in os.environ.get("SIGMA_OVERSEAS_LABOR_UAT_ROLES", "Payroll Admin,Compensation UAT").split(",")
@@ -395,12 +404,12 @@ def _overseas_labor_access_config() -> dict:
     ]
     return {
         "module": "overseas_labor_invoice_audit",
-        "stage": "UAT试用版",
+        "stage": stage,
         "version": OVERSEAS_LABOR_MODULE_VERSION,
-        "access": "uat_trial" if can_use else "disabled",
+        "access": access_mode,
         "canUse": can_use,
         "allowedRoles": allowed_roles,
-        "message": "仅限薪酬/报账核对 UAT 试用，结果需人工复核后再对外结论。" if can_use else "海外劳务报账核对模块暂未开放。",
+        "message": message if can_use else "海外劳务报账核对模块暂未开放。",
     }
 
 

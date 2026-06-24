@@ -124,6 +124,20 @@ def test_labor_access_endpoint_marks_uat_trial(monkeypatch):
     assert "Payroll Admin" in body["allowedRoles"]
 
 
+def test_labor_access_endpoint_can_enable_production_async_mode(monkeypatch):
+    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "production")
+    client = TestClient(app)
+
+    response = client.get("/api/labor/access")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage"] == "生产试运行"
+    assert body["access"] == "production"
+    assert body["canUse"] is True
+    assert "持久化上传" in body["message"]
+
+
 def test_labor_access_gate_can_disable_uat_module(monkeypatch):
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "disabled")
     client = TestClient(app)
