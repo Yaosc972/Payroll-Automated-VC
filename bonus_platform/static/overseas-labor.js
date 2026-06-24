@@ -393,6 +393,7 @@ async function uploadFiles() {
     pdfCount: labor.pdfFiles.files.length,
     workbookCount: labor.workbookFile.files.length,
     fileCount: labor.pdfFiles.files.length + labor.workbookFile.files.length,
+    totalBytes: selectedLaborUploadFiles().reduce((sum, file) => sum + Number(file.size || 0), 0),
   };
   recordLaborTelemetry("labor.upload.started", {
     step: "upload",
@@ -400,10 +401,7 @@ async function uploadFiles() {
     context: uploadContext,
   });
   try {
-    laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/files`, {
-      method: "POST",
-      body: form,
-    });
+    laborState.run = await uploadFilesWithDirectStorageFallback(form, uploadContext);
     setText(labor.uploadStatus, "文件已上传，可以读取工作表。");
     recordLaborTelemetry("labor.upload.succeeded", {
       step: "upload",
@@ -425,6 +423,89 @@ async function uploadFiles() {
     toast(error.message);
   } finally {
     labor.uploadLaborFiles.disabled = false;
+  }
+}
+
+function selectedLaborUploadFiles() {
+  return [...Array.from(labor.pdfFiles.files || []), ...Array.from(labor.workbookFile.files || [])];
+}
+
+async function uploadFilesWithDirectStorageFallback(form, uploadContext) {
+  try {
+    return await uploadFilesDirectToSupabase(uploadContext);
+  } catch (error) {
+    if (!/LABOR_DIRECT_UPLOAD_UNAVAILABLE|未启用 Supabase 直传|当前环境未启用/i.test(error.message || "")) {
+      throw error;
+    }
+    return requestJson(`/api/labor/runs/${laborState.run.id}/files`, {
+      method: "POST",
+      body: form,
+    });
+  }
+}
+
+async function uploadFilesDirectToSupabase(uploadContext) {
+  const pdfFiles = Array.from(labor.pdfFiles.files || []);
+  const workbookFiles = Array.from(labor.workbookFile.files || []);
+  setText(labor.uploadStatus, "正在生成直传地址...");
+  const plan = await requestJson(`/api/labor/runs/${laborState.run.id}/direct-upload-plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pdfFiles: pdfFiles.map(fileToUploadDescriptor),
+      workbookFiles: workbookFiles.map(fileToUploadDescriptor),
+    }),
+  });
+  const filesByKey = new Map();
+  pdfFiles.forEach((file) => filesByKey.set(`pdfInvoices:${file.name}:${file.size}`, file));
+  workbookFiles.forEach((file) => filesByKey.set(`workbooks:${file.name}:${file.size}`, file));
+  const completedUploads = [];
+  for (const [index, upload] of (plan.uploads || []).entries()) {
+    const file = filesByKey.get(`${upload.group}:${upload.originalFilename}:${upload.size}`);
+    if (!file) throw new Error(`找不到待上传文件：${upload.originalFilename || upload.filename}`);
+    setText(labor.uploadStatus, `正在直传文件 ${index + 1}/${plan.uploads.length}：${upload.originalFilename || file.name}`);
+    await uploadOneFileToSignedUrl(upload, file);
+    completedUploads.push({
+      group: upload.group,
+      filename: upload.filename,
+      originalFilename: upload.originalFilename,
+      relativePath: upload.relativePath,
+      size: upload.size,
+    });
+  }
+  setText(labor.uploadStatus, "文件已直传，正在登记批次...");
+  recordLaborTelemetry("labor.upload.direct_completed", {
+    step: "upload",
+    status: "completed",
+    context: { ...uploadContext, directUpload: true },
+  });
+  return requestJson(`/api/labor/runs/${laborState.run.id}/direct-upload-complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uploads: completedUploads }),
+  });
+}
+
+function fileToUploadDescriptor(file) {
+  return {
+    name: file.name,
+    size: file.size,
+    type: file.type || "application/octet-stream",
+  };
+}
+
+async function uploadOneFileToSignedUrl(upload, file) {
+  const body = new FormData();
+  body.append("cacheControl", "3600");
+  body.append("", file);
+  const response = await fetch(upload.signedUrl, {
+    method: "PUT",
+    headers: { "x-upsert": "true" },
+    body,
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`直传文件失败：${upload.originalFilename || file.name}（HTTP ${response.status}）${text ? ` ${text.slice(0, 160)}` : ""}`);
   }
 }
 

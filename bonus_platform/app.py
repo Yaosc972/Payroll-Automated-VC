@@ -162,8 +162,10 @@ from .engine.labor.runs import (
 )
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
 from .engine.labor.persistent_storage import (
+    create_labor_supabase_signed_upload,
     labor_persistent_storage_enabled,
     labor_persistent_storage_health,
+    labor_supabase_storage_enabled,
     sync_labor_run_from_persistent,
 )
 from .engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
@@ -1372,6 +1374,116 @@ async def upload_labor_files(
     # 兼容旧字段：第一个文件也写入 workbook
     if workbook_records:
         files["workbook"] = workbook_records[0]
+    return update_labor_metadata(run_id, {"status": "已上传文件", "files": files})
+
+
+@app.post("/api/labor/runs/{run_id}/direct-upload-plan")
+def create_labor_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> dict:
+    if not labor_supabase_storage_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="当前环境未启用 Supabase 直传。",
+                error_code="LABOR_DIRECT_UPLOAD_UNAVAILABLE",
+                next_action="请使用普通上传，或联系管理员检查 Supabase Storage 配置。",
+                retryable=False,
+            ),
+        )
+    try:
+        run_dir = get_labor_run_dir(run_id)
+        load_labor_metadata(run_dir)
+    except FileNotFoundError as exc:
+        _raise_labor_run_missing(exc)
+    pdf_files = payload.get("pdfFiles") or []
+    workbook_files = payload.get("workbookFiles") or []
+    if not isinstance(pdf_files, list) or not isinstance(workbook_files, list):
+        raise HTTPException(status_code=400, detail="上传文件清单格式不正确。")
+    if not pdf_files:
+        raise HTTPException(status_code=400, detail="请至少上传一张 PDF 发票。")
+    if not workbook_files:
+        raise HTTPException(status_code=400, detail="请上传线下账单 Excel 文件。")
+
+    uploads = []
+    try:
+        for item in pdf_files:
+            uploads.append(_build_labor_direct_upload_item(run_id, item, group="pdfInvoices"))
+        for item in workbook_files:
+            uploads.append(_build_labor_direct_upload_item(run_id, item, group="workbooks"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("labor direct upload plan failed")
+        raise HTTPException(
+            status_code=503,
+            detail=_labor_request_error(
+                message="生成 Supabase 直传地址失败。",
+                error_code="LABOR_DIRECT_UPLOAD_PLAN_FAILED",
+                retryable=True,
+                next_action="请稍后重试；若连续失败，请联系管理员检查 Supabase Storage 配置。",
+            ),
+        ) from exc
+    return {"runId": run_id, "uploads": uploads}
+
+
+@app.post("/api/labor/runs/{run_id}/direct-upload-complete")
+def complete_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
+    if not labor_supabase_storage_enabled():
+        raise HTTPException(status_code=409, detail="当前环境未启用 Supabase 直传。")
+    try:
+        run_dir = get_labor_run_dir(run_id)
+        metadata = load_labor_metadata(run_dir)
+    except FileNotFoundError as exc:
+        _raise_labor_run_missing(exc)
+    uploads = payload.get("uploads") or []
+    if not isinstance(uploads, list) or not uploads:
+        raise HTTPException(status_code=400, detail="缺少已上传文件清单。")
+    try:
+        sync_labor_run_from_persistent(run_id, run_dir)
+    except Exception as exc:
+        logger.exception("labor direct upload sync failed")
+        raise HTTPException(
+            status_code=503,
+            detail=_labor_request_error(
+                message="文件已直传，但服务器同步文件失败。",
+                error_code="LABOR_DIRECT_UPLOAD_SYNC_FAILED",
+                retryable=True,
+                next_action="请稍后重试“上传文件”；若连续失败，请联系管理员检查 Supabase Storage。",
+            ),
+        ) from exc
+
+    pdf_records = []
+    workbook_records = []
+    try:
+        for item in uploads:
+            group = str(item.get("group") or "").strip()
+            relative_path = _validate_labor_direct_upload_relative_path(item.get("relativePath"))
+            path = run_dir / relative_path
+            if not path.exists():
+                raise FileNotFoundError(path.name)
+            if group == "pdfInvoices":
+                record = attach_labor_file(run_id, path, "PDF发票")
+                record["originalFilename"] = str(item.get("originalFilename") or item.get("filename") or path.name)
+                pdf_records.append(record)
+            elif group == "workbooks":
+                workbook_records.append(attach_labor_file(run_id, path, "线下账单"))
+            else:
+                raise ValueError("直传文件分组不正确。")
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_labor_request_error(
+                message="直传文件校验失败。",
+                error_code="LABOR_DIRECT_UPLOAD_FILE_MISSING",
+                next_action="请重新选择 PDF 发票和 Excel 账单并上传。",
+                requires_reupload=True,
+            ),
+        ) from exc
+    if not pdf_records or not workbook_records:
+        raise HTTPException(status_code=400, detail="请上传 PDF 发票和 Excel 账单。")
+    files = dict(metadata.get("files", {}))
+    files["pdfInvoices"] = pdf_records
+    files["workbooks"] = workbook_records
+    files["workbook"] = workbook_records[0]
     return update_labor_metadata(run_id, {"status": "已上传文件", "files": files})
 
 
@@ -5883,6 +5995,46 @@ async def _save_upload(file: UploadFile) -> Path:
 async def _save_upload_to(file: UploadFile, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(await file.read())
+    return path
+
+
+def _build_labor_direct_upload_item(run_id: str, item: Any, *, group: str) -> dict:
+    if not isinstance(item, dict):
+        raise ValueError("上传文件清单格式不正确。")
+    original_name = Path(str(item.get("name") or "")).name
+    if not original_name:
+        raise ValueError("上传文件缺少文件名。")
+    lower_name = original_name.lower()
+    if group == "pdfInvoices" and not lower_name.endswith(".pdf"):
+        raise ValueError("供应商发票请上传 PDF 文件。")
+    if group == "workbooks" and not lower_name.endswith((".xlsx", ".xlsm", ".xls")):
+        raise ValueError(f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{original_name}")
+    filename = safe_labor_filename(original_name, "direct")
+    relative_path = filename
+    signed_upload = create_labor_supabase_signed_upload(run_id, relative_path)
+    return {
+        "group": group,
+        "filename": filename,
+        "originalFilename": original_name,
+        "relativePath": relative_path,
+        "objectPath": signed_upload["objectPath"],
+        "signedUrl": signed_upload["signedUrl"],
+        "size": int(item.get("size") or 0),
+        "contentType": str(item.get("type") or "application/octet-stream"),
+    }
+
+
+def _validate_labor_direct_upload_relative_path(value: Any) -> Path:
+    relative = str(value or "").replace("\\", "/").strip().lstrip("/")
+    path = Path(relative)
+    if (
+        not relative
+        or path.is_absolute()
+        or ".." in path.parts
+        or "/" in relative
+        or "\\" in relative
+    ):
+        raise ValueError("直传文件路径不正确。")
     return path
 
 

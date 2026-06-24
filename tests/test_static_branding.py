@@ -223,6 +223,15 @@ def test_vercel_config_does_not_override_runtime_labor_access_mode():
     assert "SIGMA_OVERSEAS_LABOR_ACCESS" not in config["env"]
 
 
+def test_overseas_labor_uses_direct_storage_upload_for_large_files():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "direct-upload-plan" in js
+    assert "direct-upload-complete" in js
+    assert "uploadOneFileToSignedUrl" in js
+    assert "LABOR_DIRECT_UPLOAD_UNAVAILABLE" in js
+
+
 def test_admin_console_is_static_permission_management_shell():
     html = ADMIN_HTML.read_text(encoding="utf-8")
     js = ADMIN_JS.read_text(encoding="utf-8")

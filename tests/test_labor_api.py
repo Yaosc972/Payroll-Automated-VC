@@ -181,6 +181,88 @@ def test_labor_create_returns_structured_storage_error(monkeypatch):
     assert "service_role key" in detail["nextAction"]
 
 
+def test_labor_direct_upload_plan_returns_signed_urls(monkeypatch):
+    monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_labor_supabase_signed_upload",
+        lambda run_id, relative_path: {
+            "signedUrl": f"https://storage.example/upload/{relative_path}?token=signed-upload-token",
+            "token": "signed-upload-token",
+            "objectPath": f"labor-runs/test/{run_id}/{relative_path}",
+            "relativePath": relative_path,
+        },
+    )
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "OSI", "period_start": "2026-06-08", "period_end": "2026-06-14"},
+    ).json()
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/direct-upload-plan",
+        json={
+            "pdfFiles": [{"name": "invoice.pdf", "size": 6_000_000, "type": "application/pdf"}],
+            "workbookFiles": [{"name": "bill.xlsx", "size": 10_000, "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}],
+        },
+    )
+
+    assert response.status_code == 200
+    uploads = response.json()["uploads"]
+    assert [item["group"] for item in uploads] == ["pdfInvoices", "workbooks"]
+    assert uploads[0]["signedUrl"].startswith("https://storage.example/upload/invoice_direct_")
+    assert uploads[0]["originalFilename"] == "invoice.pdf"
+    assert "service_role" not in json.dumps(response.json())
+
+
+def test_labor_direct_upload_complete_registers_synced_files(monkeypatch):
+    monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "OSI", "period_start": "2026-06-08", "period_end": "2026-06-14"},
+    ).json()
+
+    def fake_sync(run_id, run_dir):
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        workbook = Workbook()
+        workbook.active.append(["员工", "金额"])
+        workbook.save(run_dir / "bill.xlsx")
+        return True
+
+    monkeypatch.setattr(app_module, "sync_labor_run_from_persistent", fake_sync)
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/direct-upload-complete",
+        json={
+            "uploads": [
+                {
+                    "group": "pdfInvoices",
+                    "filename": "invoice.pdf",
+                    "originalFilename": "invoice.pdf",
+                    "relativePath": "invoice.pdf",
+                    "size": 6_000_000,
+                },
+                {
+                    "group": "workbooks",
+                    "filename": "bill.xlsx",
+                    "originalFilename": "bill.xlsx",
+                    "relativePath": "bill.xlsx",
+                    "size": 10_000,
+                },
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "已上传文件"
+    assert body["files"]["pdfInvoices"][0]["originalFilename"] == "invoice.pdf"
+    assert body["files"]["workbooks"][0]["filename"] == "bill.xlsx"
+    assert body["files"]["workbook"]["filename"] == "bill.xlsx"
+
+
 def test_labor_access_gate_can_disable_uat_module(monkeypatch):
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "disabled")
     client = TestClient(app)

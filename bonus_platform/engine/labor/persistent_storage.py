@@ -168,6 +168,27 @@ def labor_supabase_bucket() -> str:
     ).strip()
 
 
+def create_labor_supabase_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:
+    object_path = _supabase_object_path(run_id, relative_path)
+    url = _supabase_storage_url(f"object/upload/sign/{labor_supabase_bucket()}/{_quote_supabase_object_path(object_path)}")
+    body = _supabase_request(
+        "POST",
+        url,
+        headers=_supabase_headers({"content-type": "application/json", "x-upsert": "true"}),
+        content=b"{}",
+    )
+    try:
+        data = json.loads(body.decode("utf-8")) if body else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Supabase Storage 签名上传地址返回内容异常。") from exc
+    signed_path = str(data.get("url") or data.get("signedURL") or data.get("signedUrl") or "").strip()
+    token = str(data.get("token") or "").strip()
+    if not signed_path:
+        raise RuntimeError("Supabase Storage 未返回签名上传地址。")
+    signed_url = signed_path if signed_path.startswith(("http://", "https://")) else f"{_supabase_storage_url()}{signed_path}"
+    return {"signedUrl": signed_url, "token": token, "objectPath": object_path, "relativePath": relative_path}
+
+
 def _supabase_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     token = _supabase_token()
     if not token:
