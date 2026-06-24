@@ -1,4 +1,5 @@
 from io import BytesIO
+import asyncio
 import json
 from pathlib import Path
 
@@ -3924,6 +3925,142 @@ def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatc
 
     assert response["status"] == "抽取中"
     assert queued.get("completed") == run["id"]
+
+
+def test_labor_upload_syncs_files_to_supabase_storage(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import runs as labor_runs
+
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", tmp_path / "labor_runs")
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    monkeypatch.setenv("SIGMA_LABOR_SUPABASE_BUCKET", "labor-uat")
+    synced = []
+
+    def fake_sync(run_id, run_dir):
+        synced.append((run_id, sorted(path.name for path in run_dir.iterdir() if path.is_file())))
+
+    monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync)
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["storage"]["backend"] == "supabase"
+    assert any("metadata.json" in names and any(name.endswith(".pdf") for name in names) for _, names in synced)
+
+
+def test_labor_extract_task_restores_persistent_files_before_processing(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import runs as labor_runs
+
+    labor_root = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", labor_root)
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    monkeypatch.setenv("SIGMA_LABOR_SUPABASE_BUCKET", "labor-uat")
+
+    snapshots = {}
+
+    def fake_sync_to(run_id, run_dir):
+        snapshots[run_id] = {
+            path.relative_to(run_dir).as_posix(): path.read_bytes()
+            for path in run_dir.rglob("*")
+            if path.is_file()
+        }
+
+    def fake_sync_from(run_id, run_dir):
+        for relative, content in snapshots.get(run_id, {}).items():
+            target = run_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        return bool(snapshots.get(run_id))
+
+    monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync_to)
+    monkeypatch.setattr(app_module, "sync_labor_run_from_persistent", fake_sync_from)
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    run_dir = labor_runs.get_labor_run_dir(run["id"])
+    for path in run_dir.glob("*"):
+        if path.is_file() and path.name != "metadata.json":
+            path.unlink()
+
+    def fake_perform(run_id):
+        metadata = labor_runs.load_labor_metadata(labor_runs.get_labor_run_dir(run_id))
+        files = metadata["files"]
+        assert Path(files["pdfInvoices"][0]["path"]).exists()
+        assert Path(files["workbooks"][0]["path"]).exists()
+        app_module.update_labor_metadata(
+            run_id,
+            {
+                "status": "已生成差异报告",
+                "stage": "生成报告",
+                "diffDownloadUrl": "/api/labor/runs/fake/download/report.xlsx",
+            },
+        )
+
+    monkeypatch.setattr(app_module, "_perform_labor_extract_compare", fake_perform)
+
+    app_module._run_labor_extract_compare(run["id"])
+
+    refreshed = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert refreshed["asyncTask"]["status"] == "completed"
+    assert refreshed["asyncTask"]["statusLabel"] == "完成"
+
+
+def test_labor_extract_endpoint_returns_queued_task_status(monkeypatch):
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda run_id: None)
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["asyncTask"]["status"] == "queued"
+    assert body["asyncTask"]["statusLabel"] == "待处理"
 
 
 def test_adaptive_tolerance_for_large_amounts():

@@ -161,6 +161,7 @@ from .engine.labor.runs import (
     update_labor_metadata,
 )
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
+from .engine.labor.persistent_storage import labor_persistent_storage_enabled, sync_labor_run_from_persistent
 from .engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 from .engine.rules import load_rulebook
 from .engine.runs import (
@@ -440,9 +441,21 @@ def _workbench_access_config() -> dict:
     }
 
 
+def _is_vercel_runtime() -> bool:
+    return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
+
+
+def _uses_request_scoped_labor_runtime() -> bool:
+    workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
+    storage_backend = os.environ.get("SIGMA_LABOR_STORAGE_BACKEND", "").strip().lower()
+    return (_is_vercel_runtime() and storage_backend != "supabase") or (
+        workbench_home.startswith("/tmp/") and storage_backend == "blob"
+    )
+
+
 def _uses_ephemeral_serverless_storage() -> bool:
     workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
-    return bool(os.environ.get("VERCEL")) and workbench_home.startswith("/tmp/") and not labor_blob_storage_enabled()
+    return _is_vercel_runtime() and workbench_home.startswith("/tmp/") and not labor_persistent_storage_enabled()
 
 
 def _uses_vercel_labor_light_uat() -> bool:
@@ -1434,7 +1447,13 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
         run_id,
         {
             "status": "抽取中",
-            "stage": "初始化",
+            "stage": "等待后台处理",
+            "asyncTask": {
+                "status": "queued",
+                "statusLabel": "待处理",
+                "message": "核对任务已提交，等待后台处理。",
+                "queuedAt": datetime.utcnow().isoformat(),
+            },
             "errorMessage": "",
             "errorCode": "",
             "failureType": "",
@@ -4647,14 +4666,68 @@ def _normalize_supplier_for_profile(value: str) -> str:
 def _run_labor_extract_compare(run_id: str) -> None:
     try:
         logger.info(f"[{run_id}] === 抽取任务启动 ===")
+        run_dir = get_labor_run_dir(run_id)
+        if labor_persistent_storage_enabled():
+            sync_labor_run_from_persistent(run_id, run_dir)
+        update_labor_metadata(
+            run_id,
+            {
+                "status": "抽取中",
+                "stage": "后台处理中",
+                "asyncTask": {
+                    "status": "running",
+                    "statusLabel": "处理中",
+                    "message": "后台正在读取已上传文件并生成核对结果。",
+                    "startedAt": datetime.utcnow().isoformat(),
+                },
+            },
+        )
         _perform_labor_extract_compare(run_id)
+        update_labor_metadata(
+            run_id,
+            {
+                "asyncTask": {
+                    "status": "completed",
+                    "statusLabel": "完成",
+                    "message": "核对结果已生成。",
+                    "completedAt": datetime.utcnow().isoformat(),
+                },
+            },
+        )
         logger.info(f"[{run_id}] === 抽取任务完成 ===")
     except ValueError as exc:
         logger.error(f"[{run_id}] 抽取失败(ValueError): {exc}")
-        update_labor_metadata(run_id, {"status": "抽取失败", "stage": "错误", "errorMessage": str(exc)})
+        update_labor_metadata(
+            run_id,
+            {
+                "status": "抽取失败",
+                "stage": "错误",
+                "errorMessage": str(exc),
+                "asyncTask": {
+                    "status": "failed",
+                    "statusLabel": "失败",
+                    "message": str(exc),
+                    "failedAt": datetime.utcnow().isoformat(),
+                },
+            },
+        )
     except Exception as exc:
         logger.error(f"[{run_id}] 抽取失败(Exception): {exc}", exc_info=True)
-        update_labor_metadata(run_id, {"status": "抽取失败", "stage": "错误", "errorMessage": f"生成劳务核对结果失败：{exc}"})
+        message = f"生成劳务核对结果失败：{exc}"
+        update_labor_metadata(
+            run_id,
+            {
+                "status": "抽取失败",
+                "stage": "错误",
+                "errorMessage": message,
+                "asyncTask": {
+                    "status": "failed",
+                    "statusLabel": "失败",
+                    "message": message,
+                    "failedAt": datetime.utcnow().isoformat(),
+                },
+            },
+        )
 
 
 def _aggregate_excel_rows(excel_rows: list) -> list:
@@ -5553,11 +5626,17 @@ def download_labor_file(run_id: str, filename: str) -> FileResponse:
     if not path.exists():
         restore_attempted = False
         restore_succeeded = False
-        if labor_blob_storage_enabled():
+        if labor_persistent_storage_enabled():
+            restore_attempted = True
+            try:
+                restore_succeeded = sync_labor_run_from_persistent(run_id, run_dir)
+            except Exception as exc:  # noqa: BLE001 - download path must return business-safe errors.
+                logger.warning("Failed to restore labor report for download: run_id=%s file=%s error=%s", run_id, Path(filename).name, exc)
+        elif labor_blob_storage_enabled():
             restore_attempted = True
             try:
                 restore_succeeded = sync_labor_run_from_blob(run_id, run_dir)
-            except Exception as exc:  # noqa: BLE001 - download path must return business-safe errors.
+            except Exception as exc:  # noqa: BLE001 - keep legacy blob restore monkeypatchable in tests.
                 logger.warning("Failed to restore labor report for download: run_id=%s file=%s error=%s", run_id, Path(filename).name, exc)
         path = _resolve_labor_download_path(run_dir, filename)
         if not path.exists():

@@ -1289,7 +1289,7 @@ async function extractAndCompare() {
     laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/extract-and-compare`, {
       method: "POST",
     });
-    setText(labor.compareStatus, "正在生成核对报告，页面会自动刷新…");
+    setText(labor.compareStatus, formatLaborTaskStatus(laborState.run, "待处理：核对任务已提交，等待后台开始处理。"));
     recordLaborTelemetry("labor.extract.submitted", {
       step: "extract_compare",
       status: "submitted",
@@ -1351,7 +1351,7 @@ async function pollCompareResult() {
       stopComparePolling();
       labor.extractCompare.disabled = false;
       renderResult(run);
-      setText(labor.compareStatus, "核对完成。识别不完整的明细已进入待确认清单。");
+      setText(labor.compareStatus, "完成：核对报告已生成。识别不完整的明细已进入待确认清单。");
       setDownload(preferredLaborReportDownloadUrl(run));
       recordLaborTelemetry("labor.extract.completed", {
         run,
@@ -1364,9 +1364,8 @@ async function pollCompareResult() {
       return;
     }
     // 显示实时进度（stage 字段）
-    const stage = businessStageLabel(run.stage || "抽取中");
     const elapsed = laborState.pollRetryCount * 3;
-    setText(labor.compareStatus, `${stage}... (${elapsed}s)`);
+    setText(labor.compareStatus, formatLaborTaskStatus(run, `处理中：${businessStageLabel(run.stage || "生成核对报告")}... (${elapsed}s)`));
   } catch (error) {
     stopComparePolling();
     labor.extractCompare.disabled = false;
@@ -1399,6 +1398,22 @@ function businessStageLabel(value) {
     .replaceAll(`${extractionWord}并比对`, "生成核对报告")
     .replaceAll(`${extractionWord}比对`, "生成核对报告")
     .replaceAll(extractionWord, "核对");
+}
+
+function formatLaborTaskStatus(run, fallback) {
+  const task = run?.asyncTask || {};
+  const label = task.statusLabel || "";
+  const message = task.message || "";
+  if (!label) return fallback;
+  if (label === "待处理") return message ? `待处理：${message}` : "待处理：核对任务已提交，等待后台开始处理。";
+  if (label === "处理中") {
+    const stage = businessStageLabel(run?.stage || "");
+    const detail = message || stage || "后台正在生成核对结果。";
+    return `处理中：${detail}`;
+  }
+  if (label === "完成") return message ? `完成：${message}` : "完成：核对报告已生成。";
+  if (label === "失败") return message ? `失败：${message}` : "失败：核对报告生成失败。";
+  return `${label}：${message || fallback}`;
 }
 
 function stopComparePolling() {
