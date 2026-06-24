@@ -161,7 +161,11 @@ from .engine.labor.runs import (
     update_labor_metadata,
 )
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
-from .engine.labor.persistent_storage import labor_persistent_storage_enabled, sync_labor_run_from_persistent
+from .engine.labor.persistent_storage import (
+    labor_persistent_storage_enabled,
+    labor_persistent_storage_health,
+    sync_labor_run_from_persistent,
+)
 from .engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 from .engine.rules import load_rulebook
 from .engine.runs import (
@@ -825,6 +829,11 @@ def labor_access() -> dict:
     return _overseas_labor_access_config()
 
 
+@app.get("/api/labor/storage-health")
+def labor_storage_health(probe: bool = False) -> dict:
+    return labor_persistent_storage_health(probe=probe)
+
+
 @app.get("/api/workbench/access")
 def workbench_access() -> dict:
     return _workbench_access_config()
@@ -1296,15 +1305,26 @@ def create_labor_run_endpoint(payload: dict = Body(...)) -> dict:
         raise HTTPException(status_code=400, detail="请填写供应商名称。")
     if not period_start or not period_end:
         raise HTTPException(status_code=400, detail="请填写账期开始和结束日期。")
-    return create_labor_run(
-        {
-            "supplierName": supplier,
-            "periodStart": period_start,
-            "periodEnd": period_end,
-            "currency": str(payload.get("currency") or "USD").strip() or "USD",
-            "notes": str(payload.get("notes") or ""),
-        }
-    )
+    try:
+        return create_labor_run(
+            {
+                "supplierName": supplier,
+                "periodStart": period_start,
+                "periodEnd": period_end,
+                "currency": str(payload.get("currency") or "USD").strip() or "USD",
+                "notes": str(payload.get("notes") or ""),
+            }
+        )
+    except Exception as exc:
+        logger.exception("labor run creation failed")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "海外劳务批次创建失败，持久化存储暂不可用。",
+                "nextAction": "请管理员检查 Supabase Storage 的 service_role key、bucket 名称和写入权限后重试。",
+                "errorType": type(exc).__name__,
+            },
+        ) from exc
 
 
 @app.get("/api/labor/runs/{run_id}")

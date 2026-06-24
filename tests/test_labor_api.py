@@ -138,6 +138,49 @@ def test_labor_access_endpoint_can_enable_production_async_mode(monkeypatch):
     assert "持久化上传" in body["message"]
 
 
+def test_labor_storage_health_reports_missing_supabase_secret_without_exposing_values(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "supabase")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_STORAGE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+    client = TestClient(app)
+
+    response = client.get("/api/labor/storage-health?probe=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["backend"] == "supabase"
+    assert body["supabaseUrlConfigured"] is True
+    assert body["serviceRoleConfigured"] is False
+    assert body["ok"] is False
+    assert "example.supabase.co" not in json.dumps(body)
+
+
+def test_labor_create_returns_structured_storage_error(monkeypatch):
+    def fail_create_labor_run(metadata):
+        raise RuntimeError("storage write failed")
+
+    monkeypatch.setattr(app_module, "create_labor_run", fail_create_labor_run)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "OSI",
+            "period_start": "2026-06-08",
+            "period_end": "2026-06-14",
+            "currency": "USD",
+        },
+    )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["message"] == "海外劳务批次创建失败，持久化存储暂不可用。"
+    assert detail["errorType"] == "RuntimeError"
+    assert "service_role key" in detail["nextAction"]
+
+
 def test_labor_access_gate_can_disable_uat_module(monkeypatch):
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "disabled")
     client = TestClient(app)

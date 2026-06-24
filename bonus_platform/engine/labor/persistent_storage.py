@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,58 @@ def labor_persistent_storage_info() -> dict[str, Any]:
             "environment": labor_blob_environment(),
         }
     return {"enabled": False, "backend": ""}
+
+
+def labor_persistent_storage_health(*, probe: bool = False) -> dict[str, Any]:
+    backend = labor_storage_backend()
+    health: dict[str, Any] = {
+        "backend": backend,
+        "environment": labor_persistent_environment(),
+        "enabled": labor_persistent_storage_enabled(),
+        "probe": bool(probe),
+    }
+    if backend == "supabase":
+        health.update(
+            {
+                "bucket": labor_supabase_bucket(),
+                "supabaseUrlConfigured": bool(_supabase_url()),
+                "serviceRoleConfigured": bool(_supabase_token()),
+            }
+        )
+        if not probe:
+            return health
+        if not _supabase_url() or not _supabase_token() or not labor_supabase_bucket():
+            health.update({"ok": False, "errorType": "missing_configuration"})
+            return health
+        try:
+            object_path = _supabase_object_path(
+                "_health",
+                f"storage-health-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}.json",
+            )
+            _supabase_upload_bytes(
+                object_path,
+                json.dumps({"ok": True, "checkedAt": datetime.utcnow().isoformat() + "Z"}).encode("utf-8"),
+                content_type="application/json",
+            )
+            health.update({"ok": True})
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            health.update(
+                {
+                    "ok": False,
+                    "errorType": "http_status",
+                    "statusCode": response.status_code,
+                    "errorMessage": response.text[:240],
+                }
+            )
+        except Exception as exc:
+            health.update({"ok": False, "errorType": type(exc).__name__, "errorMessage": str(exc)[:240]})
+        return health
+    if backend == "blob":
+        health.update({"ok": labor_blob_storage_enabled()})
+        return health
+    health.update({"ok": not backend, "errorType": "" if not backend else "unsupported_backend"})
+    return health
 
 
 def labor_persistent_environment() -> str:
