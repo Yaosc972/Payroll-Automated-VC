@@ -158,6 +158,7 @@ from .engine.labor.runs import (
     list_labor_metadata,
     load_labor_metadata,
     safe_labor_filename,
+    safe_labor_storage_filename,
     update_labor_metadata,
     update_labor_metadata_record_only,
 )
@@ -6010,7 +6011,7 @@ def _build_labor_direct_upload_item(run_id: str, item: Any, *, group: str) -> di
         raise ValueError("供应商发票请上传 PDF 文件。")
     if group == "workbooks" and not lower_name.endswith((".xlsx", ".xlsm", ".xls")):
         raise ValueError(f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{original_name}")
-    filename = safe_labor_filename(original_name, "direct")
+    filename = safe_labor_storage_filename(original_name, "direct")
     relative_path = filename
     signed_upload = create_labor_supabase_signed_upload(run_id, relative_path)
     return {

@@ -173,3 +173,17 @@ def safe_labor_filename(original_name: str, suffix: str = "") -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     suffix_part = f"_{suffix}" if suffix else ""
     return f"{stem}{suffix_part}_{timestamp}{original.suffix.lower()}"
+
+
+def safe_labor_storage_filename(original_name: str, suffix: str = "") -> str:
+    original = Path(original_name)
+    raw_stem = original.stem.replace(" ", "_")
+    stem = "".join(
+        char if char.isascii() and (char.isalnum() or char in "_-") else "_"
+        for char in raw_stem
+    ).strip("_-")
+    stem = re.sub(r"_+", "_", stem) or "file"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    suffix_part = f"_{suffix}" if suffix else ""
+    ext = "".join(char for char in original.suffix.lower() if char.isascii() and (char.isalnum() or char == ".")) or ".bin"
+    return f"{stem}{suffix_part}_{timestamp}{ext}"

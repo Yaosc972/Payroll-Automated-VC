@@ -215,6 +215,44 @@ def test_labor_direct_upload_plan_returns_signed_urls(monkeypatch):
     assert "service_role" not in json.dumps(response.json())
 
 
+def test_labor_direct_upload_plan_uses_ascii_storage_keys_for_chinese_filenames(monkeypatch):
+    captured_paths = []
+    monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
+
+    def fake_signed_upload(run_id, relative_path):
+        captured_paths.append(relative_path)
+        return {
+            "signedUrl": f"https://storage.example/upload/{relative_path}?token=signed-upload-token",
+            "token": "signed-upload-token",
+            "objectPath": f"labor-runs/test/{run_id}/{relative_path}",
+            "relativePath": relative_path,
+        }
+
+    monkeypatch.setattr(app_module, "create_labor_supabase_signed_upload", fake_signed_upload)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "OSI", "period_start": "2026-06-08", "period_end": "2026-06-14"},
+    ).json()
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/direct-upload-plan",
+        json={
+            "pdfFiles": [{"name": "供应商发票 01.pdf", "size": 6_000_000, "type": "application/pdf"}],
+            "workbookFiles": [{"name": "员工账单明细 - 2026-06-23T105500.333.xlsx", "size": 10_000, "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}],
+        },
+    )
+
+    assert response.status_code == 200
+    uploads = response.json()["uploads"]
+    assert uploads[0]["originalFilename"] == "供应商发票 01.pdf"
+    assert uploads[1]["originalFilename"] == "员工账单明细 - 2026-06-23T105500.333.xlsx"
+    assert all(path.isascii() for path in captured_paths)
+    assert captured_paths[0].startswith("01_direct_")
+    assert captured_paths[1].startswith("2026-06-23T105500_333_direct_")
+    assert not any("供应商" in path or "员工账单" in path for path in captured_paths)
+
+
 def test_labor_direct_upload_complete_registers_synced_files(monkeypatch):
     monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
     client = TestClient(app)
