@@ -1120,6 +1120,22 @@ def test_labor_recover_stuck_run_marks_retryable_system_interruption(monkeypatch
     assert "服务器已重启" in updates["errorMessage"]
 
 
+def test_labor_recover_stuck_run_does_not_block_startup_when_storage_fails(monkeypatch):
+    import bonus_platform.app as app_module
+
+    def fail_listing():
+        raise RuntimeError("supabase storage unavailable")
+
+    monkeypatch.setattr(app_module, "list_labor_metadata", fail_listing)
+    monkeypatch.setattr(
+        app_module,
+        "update_labor_metadata",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no rows should be updated")),
+    )
+
+    app_module._recover_stuck_labor_runs()
+
+
 def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(monkeypatch):
     import bonus_platform.app as app_module
 

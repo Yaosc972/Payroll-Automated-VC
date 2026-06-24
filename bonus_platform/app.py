@@ -5556,7 +5556,12 @@ def _check_stale_extracting(metadata: dict) -> dict:
 
 def _recover_stuck_labor_runs() -> None:
     """Mark stale '抽取中' runs as failed on server startup."""
-    for metadata in list_labor_metadata():
+    try:
+        rows = list_labor_metadata()
+    except Exception as exc:
+        logger.warning("跳过劳务核对启动恢复：%s", exc)
+        return
+    for metadata in rows:
         if metadata.get("status") != "抽取中":
             continue
         run_id = metadata.get("id")
