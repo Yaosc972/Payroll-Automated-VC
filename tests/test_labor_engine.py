@@ -5,7 +5,7 @@ import time
 
 import pytest
 from openpyxl import Workbook, load_workbook
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from bonus_platform.engine.labor.compare import compare_labor_items, compare_by_warehouse
 from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _extract_invoice_total_from_text, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
@@ -18,6 +18,7 @@ from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor import runs as labor_runs
+from bonus_platform.engine.labor import persistent_storage as labor_storage
 from bonus_platform.engine.labor.governance import audit_ai_page_cache_candidates, build_ai_cache_reconciliation_preview, build_reocr_candidate_plan, build_rule_change_candidate, confirm_rule_candidate, replay_reocr_candidate_result, rollback_rule_version, summarize_rule_auto_replay, summarize_rule_replay
 from bonus_platform.engine.labor.materials import build_material_dry_run, build_material_index, build_material_replay_plan
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
@@ -3279,6 +3280,57 @@ def test_safe_error_message_includes_mimo_error_body():
     message = _safe_error_message(error)
 
     assert "Invalid API Key" in message
+
+
+def test_supabase_request_retries_transient_urlopen_errors(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        if len(calls) < 3:
+            raise URLError("EOF occurred in violation of protocol")
+        return Response()
+
+    monkeypatch.setattr(labor_storage, "urlopen", fake_urlopen)
+    monkeypatch.setattr(labor_storage.time, "sleep", lambda *_args: None)
+
+    body = labor_storage._supabase_request("POST", "https://example.supabase.co/storage/v1/object/bucket/key", content=b"x")
+
+    assert body == b'{"ok": true}'
+    assert len(calls) == 3
+
+
+def test_supabase_request_does_not_retry_http_status_errors(monkeypatch):
+    calls = []
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        raise HTTPError(
+            url=request.full_url,
+            code=400,
+            msg="Bad Request",
+            hdrs={},
+            fp=BytesIO(b'{"error":"InvalidKey"}'),
+        )
+
+    monkeypatch.setattr(labor_storage, "urlopen", fake_urlopen)
+    monkeypatch.setattr(labor_storage.time, "sleep", lambda *_args: None)
+
+    with pytest.raises(labor_storage.SupabaseStorageStatusError) as exc_info:
+        labor_storage._supabase_request("POST", "https://example.supabase.co/storage/v1/object/bucket/key", content=b"x")
+
+    assert exc_info.value.status_code == 400
+    assert len(calls) == 1
 
 
 def test_http_post_json_enforces_wall_clock_timeout(monkeypatch):

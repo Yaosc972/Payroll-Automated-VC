@@ -4,10 +4,12 @@ import json
 import mimetypes
 import os
 import re
+import time
 from datetime import datetime
+from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -253,12 +255,18 @@ def _supabase_request(
     headers: dict[str, str] | None = None,
     content: bytes | None = None,
 ) -> bytes:
-    request = Request(url, data=content, headers=headers or {}, method=method)
-    try:
-        with urlopen(request, timeout=120.0) as response:
-            return response.read()
-    except HTTPError as exc:
-        raise SupabaseStorageStatusError(exc.code, exc.read().decode("utf-8", errors="replace")) from exc
+    for attempt in range(3):
+        request = Request(url, data=content, headers=headers or {}, method=method)
+        try:
+            with urlopen(request, timeout=120.0) as response:
+                return response.read()
+        except HTTPError as exc:
+            raise SupabaseStorageStatusError(exc.code, exc.read().decode("utf-8", errors="replace")) from exc
+        except (URLError, TimeoutError, RemoteDisconnected, ConnectionError, OSError):
+            if attempt == 2:
+                raise
+            time.sleep(0.5 * (2**attempt))
+    return b""
 
 
 def _supabase_upload_bytes(object_path: str, content: bytes, *, content_type: str) -> dict[str, Any]:
