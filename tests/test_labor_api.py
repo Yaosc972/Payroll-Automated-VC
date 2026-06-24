@@ -4318,6 +4318,74 @@ def test_labor_extract_endpoint_reuses_running_task(monkeypatch):
     assert body["asyncTask"]["status"] == "running"
 
 
+def test_labor_extract_endpoint_enqueues_worker_job_in_worker_mode(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "production")
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda run_id: (_ for _ in ()).throw(AssertionError("inline worker must not run")))
+
+    def fail_executor(*args, **kwargs):
+        raise AssertionError("Vercel executor must not run in worker mode")
+
+    monkeypatch.setattr(asyncio.get_event_loop(), "run_in_executor", fail_executor)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["status"] == "抽取中"
+    assert body["asyncTask"]["status"] == "queued"
+    assert body["asyncTask"]["jobId"].startswith("labor_job_")
+
+
+def test_labor_extract_endpoint_requires_durable_worker_queue_on_vercel(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "production")
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("SIGMA_LABOR_JOB_DATABASE_URL", raising=False)
+    monkeypatch.delenv("LABOR_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ADMIN_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["errorCode"] == "LABOR_WORKER_QUEUE_UNAVAILABLE"
+    assert "ADMIN_DATABASE_URL" in detail["nextAction"]
+
+
 def test_adaptive_tolerance_for_large_amounts():
     """测试大金额的自适应容忍度"""
     from bonus_platform.engine.labor.compare import _adaptive_tolerance

@@ -231,6 +231,58 @@ def test_update_labor_metadata_files_update_syncs_only_new_files(monkeypatch, tm
     assert uploaded_metadata["metadata"]["files"]["diffReport"]["path"] == "report.xlsx"
 
 
+def test_enqueue_labor_reconciliation_job_creates_queued_job(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import jobs as labor_jobs
+
+    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
+
+    job = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {"supplierName": "OSI"})
+
+    assert job["runId"] == "labor_demo"
+    assert job["status"] == "queued"
+    assert job["jobType"] == "reconcile"
+    assert job["attempt"] == 0
+
+
+def test_claim_next_labor_job_marks_running(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import jobs as labor_jobs
+
+    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
+    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
+
+    claimed = labor_jobs.claim_next_labor_job("worker-1")
+
+    assert claimed["id"] == created["id"]
+    assert claimed["status"] == "running"
+    assert claimed["workerId"] == "worker-1"
+    assert claimed["attempt"] == 1
+
+
+def test_worker_processes_claimed_labor_job(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import jobs as labor_jobs
+    from bonus_platform.worker import labor as labor_worker
+
+    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
+    labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
+    processed = {}
+    monkeypatch.setattr(labor_worker, "_run_labor_extract_compare", lambda run_id: processed.setdefault("runId", run_id))
+
+    result = labor_worker.process_one_labor_job(worker_id="worker-test")
+
+    assert result["status"] == "succeeded"
+    assert processed["runId"] == "labor_demo"
+
+
+def test_labor_worker_schema_declares_required_tables():
+    sql = Path("supabase/migrations/20260624_labor_worker_schema.sql").read_text(encoding="utf-8")
+
+    for table in ("labor_runs", "labor_files", "labor_jobs", "labor_job_attempts"):
+        assert f"create table if not exists {table}" in sql
+    assert "create table if not exists labor_runs (\n    id text primary key" in sql
+    assert "create table if not exists labor_jobs (\n    id text primary key" in sql
+    assert "run_id text not null" in sql
+
+
 def _workbook_with_tax_columns_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active

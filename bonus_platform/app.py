@@ -162,6 +162,7 @@ from .engine.labor.runs import (
     update_labor_metadata,
     update_labor_metadata_record_only,
 )
+from .engine.labor.jobs import enqueue_labor_reconciliation_job, labor_worker_jobs_enabled
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
 from .engine.labor.persistent_storage import (
     create_labor_supabase_signed_upload,
@@ -1589,6 +1590,42 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
                 next_action="请在「字段映射」步骤选择工作表，并确认姓名、工时、金额字段。",
             ),
         )
+    if labor_worker_jobs_enabled():
+        try:
+            job = enqueue_labor_reconciliation_job(run_id, metadata)
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=_labor_request_error(
+                    message="后台 Worker 队列未配置，无法提交海外劳务核对任务。",
+                    error_code="LABOR_WORKER_QUEUE_UNAVAILABLE",
+                    next_action="请在 Vercel/Worker 环境配置 ADMIN_DATABASE_URL 或 SIGMA_LABOR_JOB_DATABASE_URL，并确认 Supabase 迁移已执行。",
+                    retryable=True,
+                ),
+            ) from exc
+        queued = update_labor_metadata(
+            run_id,
+            {
+                "status": "抽取中",
+                "stage": "等待后台 Worker 处理",
+                "asyncTask": {
+                    "status": "queued",
+                    "statusLabel": "待处理",
+                    "message": "核对任务已提交到后台 Worker，等待处理。",
+                    "jobId": job["id"],
+                    "queuedAt": datetime.utcnow().isoformat(),
+                },
+                "errorMessage": "",
+                "errorCode": "",
+                "failureType": "",
+                "retryable": False,
+                "requiresReupload": False,
+                "requiresHumanReview": False,
+                "nextAction": "",
+                "diffDownloadUrl": "",
+            },
+        )
+        return JSONResponse(status_code=202, content=_with_labor_readiness(_normalize_labor_total_decision(queued)))
     queued = update_labor_metadata(
         run_id,
         {
