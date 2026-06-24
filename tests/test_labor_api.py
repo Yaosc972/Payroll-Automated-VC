@@ -4180,7 +4180,11 @@ def test_labor_extract_task_restores_persistent_files_before_processing(monkeypa
             target.write_bytes(content)
         return bool(snapshots.get(run_id))
 
+    def fake_sync_metadata(run_id, run_dir, metadata):
+        snapshots.setdefault(run_id, {})["metadata.json"] = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
+
     monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync_to)
+    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
     monkeypatch.setattr(app_module, "sync_labor_run_from_persistent", fake_sync_from)
 
     client = TestClient(app)

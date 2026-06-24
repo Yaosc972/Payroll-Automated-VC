@@ -145,6 +145,48 @@ def test_update_labor_metadata_record_only_does_not_resync_uploaded_files(monkey
     assert local_metadata["files"]["workbook"]["path"] == str(run_dir / "bill.xlsx")
 
 
+def test_update_labor_metadata_stage_only_does_not_resync_uploaded_files(monkeypatch, tmp_path):
+    run_root = tmp_path / "labor_runs"
+    run_dir = run_root / "labor_stage"
+    run_dir.mkdir(parents=True)
+    (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "labor_stage",
+                "status": "已上传文件",
+                "files": {
+                    "pdfInvoices": [{"filename": "invoice.pdf", "path": str(run_dir / "invoice.pdf")}],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    uploaded_metadata = {}
+
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", run_root)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
+    monkeypatch.setattr(
+        labor_runs,
+        "sync_labor_run_to_persistent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stage updates should not resync files")),
+    )
+
+    def fake_sync_metadata(run_id, run_dir_arg, metadata):
+        uploaded_metadata["runId"] = run_id
+        uploaded_metadata["metadata"] = metadata
+
+    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
+
+    metadata = labor_runs.update_labor_metadata("labor_stage", {"stage": "Stage 1: 快速抽取总金额"})
+
+    assert metadata["stage"] == "Stage 1: 快速抽取总金额"
+    assert uploaded_metadata["runId"] == "labor_stage"
+    assert uploaded_metadata["metadata"]["files"]["pdfInvoices"][0]["path"] == "invoice.pdf"
+
+
 def _workbook_with_tax_columns_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active

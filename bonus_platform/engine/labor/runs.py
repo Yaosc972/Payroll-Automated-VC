@@ -72,6 +72,8 @@ def update_labor_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any
     else:
         metadata = load_labor_metadata(run_dir)
     metadata.update(updates)
+    if labor_persistent_storage_enabled() and "files" not in updates:
+        return save_labor_metadata_record_only(run_dir, metadata)
     return save_labor_metadata(run_dir, metadata)
 
 
