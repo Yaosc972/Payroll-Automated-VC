@@ -52,15 +52,13 @@ def save_labor_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, An
         payload["storage"] = labor_persistent_storage_info()
     payload = materialize_labor_metadata_for_local(run_dir, payload)
     metadata_path = run_dir / METADATA_FILE
-    tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp_path, metadata_path)
+    _write_labor_metadata_file(metadata_path, payload)
     if labor_persistent_storage_enabled():
         canonical_payload = canonicalize_labor_metadata_for_blob(run_dir, payload)
-        metadata_path.write_text(json.dumps(canonical_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_labor_metadata_file(metadata_path, canonical_payload)
         sync_labor_run_to_persistent(run_dir.name, run_dir)
         payload = materialize_labor_metadata_for_local(run_dir, canonical_payload)
-        metadata_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _write_labor_metadata_file(metadata_path, payload)
     return payload
 
 
@@ -68,7 +66,7 @@ def update_labor_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any
     run_dir = get_labor_run_dir(run_id)
     metadata_path = run_dir / METADATA_FILE
     if labor_persistent_storage_enabled() and metadata_path.exists():
-        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata = _read_labor_metadata_file(metadata_path)
         metadata = materialize_labor_metadata_for_local(run_dir, metadata)
     else:
         metadata = load_labor_metadata(run_dir)
@@ -82,10 +80,21 @@ def load_labor_metadata(run_dir: Path) -> Dict[str, Any]:
         sync_labor_run_from_persistent(run_dir.name, run_dir)
     if not path.exists():
         raise FileNotFoundError("劳务核对批次不存在。")
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = _read_labor_metadata_file(path)
     payload = materialize_labor_metadata_for_local(run_dir, payload)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_labor_metadata_file(path, payload)
     return payload
+
+
+def _write_labor_metadata_file(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def _read_labor_metadata_file(path: Path) -> Dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def list_labor_metadata(*, limit: int | None = None) -> List[Dict[str, Any]]:

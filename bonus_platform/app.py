@@ -1412,7 +1412,10 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
                 next_action="请使用“测试材料验证”查看样例流程；正式抽取请在本地/内网持久化环境执行。",
             ),
         )
-    metadata = _labor_metadata_or_404(run_id)
+    metadata = _check_stale_extracting(_labor_metadata_or_404(run_id))
+    async_task = metadata.get("asyncTask") if isinstance(metadata.get("asyncTask"), dict) else {}
+    if metadata.get("status") == "抽取中" and async_task.get("status") in {"queued", "running"}:
+        return _with_labor_readiness(_normalize_labor_total_decision(metadata))
     files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
     pdf_paths = [Path(record["path"]) for record in files.get("pdfInvoices", []) if record.get("path")]
     workbook_paths = [Path(record["path"]) for record in files.get("workbooks", []) if record.get("path")]

@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+from pathlib import Path
 import time
 
 import pytest
@@ -72,6 +73,28 @@ def test_list_labor_metadata_supports_recent_limit(monkeypatch, tmp_path):
     rows = labor_runs.list_labor_metadata(limit=2)
 
     assert [row["id"] for row in rows] == ["labor_2", "labor_1"]
+
+
+def test_save_labor_metadata_uses_atomic_writes_for_persistent_backend(monkeypatch, tmp_path):
+    run_dir = tmp_path / "labor_runs" / "labor_atomic"
+    run_dir.mkdir(parents=True)
+    original_write_text = Path.write_text
+
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
+    monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", lambda run_id, path: None)
+
+    def guarded_write_text(self, *args, **kwargs):
+        if self.name == "metadata.json":
+            raise AssertionError("metadata.json must be replaced atomically")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", guarded_write_text)
+
+    metadata = labor_runs.save_labor_metadata(run_dir, {"id": "labor_atomic", "status": "已创建"})
+
+    assert metadata["id"] == "labor_atomic"
+    assert json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))["id"] == "labor_atomic"
 
 
 def _workbook_with_tax_columns_bytes() -> bytes:

@@ -4063,6 +4063,48 @@ def test_labor_extract_endpoint_returns_queued_task_status(monkeypatch):
     assert body["asyncTask"]["statusLabel"] == "待处理"
 
 
+def test_labor_extract_endpoint_reuses_running_task(monkeypatch):
+    def fail_if_started(run_id):
+        raise AssertionError("running task should not be started twice")
+
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", fail_if_started)
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+    app_module.update_labor_metadata(
+        run["id"],
+        {
+            "status": "抽取中",
+            "asyncTask": {
+                "status": "running",
+                "statusLabel": "处理中",
+                "message": "后台正在生成核对结果。",
+            },
+        },
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "抽取中"
+    assert body["asyncTask"]["status"] == "running"
+
+
 def test_adaptive_tolerance_for_large_amounts():
     """测试大金额的自适应容忍度"""
     from bonus_platform.engine.labor.compare import _adaptive_tolerance
