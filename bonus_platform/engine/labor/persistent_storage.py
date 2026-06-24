@@ -7,8 +7,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-import httpx
+from urllib.error import HTTPError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from .blob_storage import (
     RUN_PREFIX,
@@ -20,6 +21,13 @@ from .blob_storage import (
     sync_labor_run_to_blob,
     list_labor_metadata_from_blob,
 )
+
+
+class SupabaseStorageStatusError(RuntimeError):
+    def __init__(self, status_code: int, text: str):
+        super().__init__(f"Supabase Storage returned HTTP {status_code}")
+        self.status_code = status_code
+        self.text = text
 
 
 def labor_storage_backend() -> str:
@@ -85,14 +93,13 @@ def labor_persistent_storage_health(*, probe: bool = False) -> dict[str, Any]:
                 content_type="application/json",
             )
             health.update({"ok": True})
-        except httpx.HTTPStatusError as exc:
-            response = exc.response
+        except SupabaseStorageStatusError as exc:
             health.update(
                 {
                     "ok": False,
                     "errorType": "http_status",
-                    "statusCode": response.status_code,
-                    "errorMessage": response.text[:240],
+                    "statusCode": exc.status_code,
+                    "errorMessage": exc.text[:240],
                 }
             )
         except Exception as exc:
@@ -189,28 +196,45 @@ def _supabase_storage_url(path: str = "") -> str:
     return f"{base}/storage/v1/{suffix}" if suffix else f"{base}/storage/v1"
 
 
+def _quote_supabase_object_path(object_path: str) -> str:
+    return quote(object_path.replace("\\", "/").lstrip("/"), safe="/")
+
+
+def _supabase_request(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    content: bytes | None = None,
+) -> bytes:
+    request = Request(url, data=content, headers=headers or {}, method=method)
+    try:
+        with urlopen(request, timeout=120.0) as response:
+            return response.read()
+    except HTTPError as exc:
+        raise SupabaseStorageStatusError(exc.code, exc.read().decode("utf-8", errors="replace")) from exc
+
+
 def _supabase_upload_bytes(object_path: str, content: bytes, *, content_type: str) -> dict[str, Any]:
-    url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{object_path}")
+    url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{_quote_supabase_object_path(object_path)}")
     headers = _supabase_headers({"content-type": content_type, "x-upsert": "true"})
-    with httpx.Client(timeout=120.0) as client:
-        response = client.post(url, headers=headers, content=content)
-    response.raise_for_status()
-    if not response.content:
+    body = _supabase_request("POST", url, headers=headers, content=content)
+    if not body:
         return {}
     try:
-        return response.json()
+        return json.loads(body.decode("utf-8"))
     except json.JSONDecodeError:
         return {}
 
 
 def _supabase_download_bytes(object_path: str) -> bytes | None:
-    url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{object_path}")
-    with httpx.Client(timeout=120.0) as client:
-        response = client.get(url, headers=_supabase_headers())
-    if response.status_code == 404:
-        return None
-    response.raise_for_status()
-    return response.content
+    url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{_quote_supabase_object_path(object_path)}")
+    try:
+        return _supabase_request("GET", url, headers=_supabase_headers())
+    except SupabaseStorageStatusError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
 
 
 def _supabase_list_objects(prefix: str) -> list[dict[str, Any]]:
@@ -225,10 +249,13 @@ def _supabase_list_objects(prefix: str) -> list[dict[str, Any]]:
             "offset": offset,
             "sortBy": {"column": "updated_at", "order": "desc"},
         }
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(url, headers=_supabase_headers({"content-type": "application/json"}), json=payload)
-        response.raise_for_status()
-        batch = response.json() if response.content else []
+        body = _supabase_request(
+            "POST",
+            url,
+            headers=_supabase_headers({"content-type": "application/json"}),
+            content=json.dumps(payload).encode("utf-8"),
+        )
+        batch = json.loads(body.decode("utf-8")) if body else []
         if not isinstance(batch, list) or not batch:
             break
         rows.extend(batch)
