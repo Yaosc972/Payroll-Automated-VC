@@ -21,6 +21,7 @@ EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "china-employee-pay
 EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payroll.js"
 LEGACY_EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
 RELEASE_INFO_JSON = ROOT / "bonus_platform" / "static" / "release-info.json"
+VERCEL_JSON = ROOT / "vercel.json"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_PY = ROOT / "bonus_platform" / "app.py"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
@@ -213,6 +214,13 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "avatarUrl" in html
     assert ".dashboard-user-avatar" in STYLES_CSS.read_text(encoding="utf-8")
     assert ".dashboard-role-tags" in STYLES_CSS.read_text(encoding="utf-8")
+
+
+def test_vercel_config_does_not_override_runtime_labor_access_mode():
+    config = json.loads(VERCEL_JSON.read_text(encoding="utf-8"))
+
+    assert config["env"]["SIGMA_WORKBENCH_HOME"] == "/tmp/sigma-workbench"
+    assert "SIGMA_OVERSEAS_LABOR_ACCESS" not in config["env"]
 
 
 def test_admin_console_is_static_permission_management_shell():
