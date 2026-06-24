@@ -6,7 +6,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -143,6 +143,14 @@ def sync_labor_metadata_to_persistent(run_id: str, run_dir: Path, metadata: dict
             content,
             content_type="application/json",
         )
+        return
+    if labor_blob_storage_enabled():
+        sync_labor_run_to_blob(run_id, run_dir)
+
+
+def sync_labor_files_to_persistent(run_id: str, run_dir: Path, relative_paths: Iterable[str]) -> None:
+    if labor_supabase_storage_enabled():
+        sync_labor_files_to_supabase(run_id, run_dir, relative_paths)
         return
     if labor_blob_storage_enabled():
         sync_labor_run_to_blob(run_id, run_dir)
@@ -317,6 +325,28 @@ def sync_labor_run_to_supabase(run_id: str, run_dir: Path) -> None:
         if not path.is_file() or path.name.endswith(".tmp"):
             continue
         relative = path.relative_to(run_dir).as_posix()
+        content = path.read_bytes()
+        if relative == "metadata.json":
+            content = json.dumps(
+                canonicalize_labor_metadata_for_blob(run_dir, json.loads(content.decode("utf-8"))),
+                ensure_ascii=False,
+                indent=2,
+            ).encode("utf-8")
+        content_type, _ = mimetypes.guess_type(path.name)
+        _supabase_upload_bytes(
+            _supabase_object_path(run_id, relative),
+            content,
+            content_type=content_type or "application/octet-stream",
+        )
+
+
+def sync_labor_files_to_supabase(run_id: str, run_dir: Path, relative_paths: Iterable[str]) -> None:
+    if not labor_supabase_storage_enabled() or not run_dir.exists():
+        return
+    for relative in sorted({str(item).replace("\\", "/").lstrip("/") for item in relative_paths if str(item).strip()}):
+        path = run_dir / relative
+        if not path.is_file() or path.name.endswith(".tmp"):
+            continue
         content = path.read_bytes()
         if relative == "metadata.json":
             content = json.dumps(

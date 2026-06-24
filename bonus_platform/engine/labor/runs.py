@@ -17,6 +17,7 @@ from .persistent_storage import (
     labor_persistent_storage_enabled,
     labor_persistent_storage_info,
     list_labor_metadata_from_persistent,
+    sync_labor_files_to_persistent,
     sync_labor_metadata_to_persistent,
     sync_labor_run_from_persistent,
     sync_labor_run_to_persistent,
@@ -71,9 +72,12 @@ def update_labor_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, Any
         metadata = materialize_labor_metadata_for_local(run_dir, metadata)
     else:
         metadata = load_labor_metadata(run_dir)
+    previous_files = json.loads(json.dumps(metadata.get("files") or {}, ensure_ascii=False))
     metadata.update(updates)
     if labor_persistent_storage_enabled() and "files" not in updates:
         return save_labor_metadata_record_only(run_dir, metadata)
+    if labor_persistent_storage_enabled() and "files" in updates:
+        return save_labor_metadata_with_file_delta(run_dir, metadata, previous_files)
     return save_labor_metadata(run_dir, metadata)
 
 
@@ -105,6 +109,47 @@ def save_labor_metadata_record_only(run_dir: Path, metadata: Dict[str, Any]) -> 
         payload = materialize_labor_metadata_for_local(run_dir, canonical_payload)
         _write_labor_metadata_file(metadata_path, payload)
     return payload
+
+
+def save_labor_metadata_with_file_delta(run_dir: Path, metadata: Dict[str, Any], previous_files: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.now().isoformat(timespec="seconds")
+    payload = dict(metadata)
+    payload.setdefault("createdAt", now)
+    payload["updatedAt"] = now
+    if labor_persistent_storage_enabled():
+        payload["storage"] = labor_persistent_storage_info()
+    payload = materialize_labor_metadata_for_local(run_dir, payload)
+    metadata_path = run_dir / METADATA_FILE
+    _write_labor_metadata_file(metadata_path, payload)
+    if labor_persistent_storage_enabled():
+        canonical_payload = canonicalize_labor_metadata_for_blob(run_dir, payload)
+        previous_canonical = canonicalize_labor_metadata_for_blob(run_dir, {"files": previous_files})
+        new_paths = _labor_metadata_file_paths(canonical_payload.get("files") or {})
+        previous_paths = _labor_metadata_file_paths(previous_canonical.get("files") or {})
+        sync_labor_files_to_persistent(run_dir.name, run_dir, sorted(new_paths - previous_paths))
+        sync_labor_metadata_to_persistent(run_dir.name, run_dir, canonical_payload)
+        payload = materialize_labor_metadata_for_local(run_dir, canonical_payload)
+        _write_labor_metadata_file(metadata_path, payload)
+    return payload
+
+
+def _labor_metadata_file_paths(files: Any) -> set[str]:
+    paths: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            raw_path = str(value.get("path") or "").replace("\\", "/").strip().lstrip("/")
+            if raw_path:
+                paths.add(raw_path)
+            for nested in value.values():
+                if isinstance(nested, (list, dict)):
+                    collect(nested)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(files)
+    return paths
 
 
 def load_labor_metadata(run_dir: Path) -> Dict[str, Any]:

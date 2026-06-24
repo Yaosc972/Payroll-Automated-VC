@@ -4133,7 +4133,15 @@ def test_labor_upload_syncs_files_to_supabase_storage(monkeypatch, tmp_path):
     def fake_sync(run_id, run_dir):
         synced.append((run_id, sorted(path.name for path in run_dir.iterdir() if path.is_file())))
 
+    def fake_sync_files(run_id, run_dir, relative_paths):
+        synced.append((run_id, sorted(Path(path).name for path in relative_paths)))
+
+    def fake_sync_metadata(run_id, run_dir, metadata):
+        synced.append((run_id, ["metadata.json"]))
+
     monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync)
+    monkeypatch.setattr(labor_runs, "sync_labor_files_to_persistent", fake_sync_files)
+    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
 
     client = TestClient(app)
     run = client.post(
@@ -4151,7 +4159,7 @@ def test_labor_upload_syncs_files_to_supabase_storage(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["storage"]["backend"] == "supabase"
-    assert any("metadata.json" in names and any(name.endswith(".pdf") for name in names) for _, names in synced)
+    assert any(any(name.endswith(".pdf") for name in names) and any(name.endswith(".xlsx") for name in names) for _, names in synced)
 
 
 def test_labor_extract_task_restores_persistent_files_before_processing(monkeypatch, tmp_path):
@@ -4180,10 +4188,18 @@ def test_labor_extract_task_restores_persistent_files_before_processing(monkeypa
             target.write_bytes(content)
         return bool(snapshots.get(run_id))
 
+    def fake_sync_files(run_id, run_dir, relative_paths):
+        snapshot = snapshots.setdefault(run_id, {})
+        for relative in relative_paths:
+            path = run_dir / relative
+            if path.is_file():
+                snapshot[Path(relative).as_posix()] = path.read_bytes()
+
     def fake_sync_metadata(run_id, run_dir, metadata):
         snapshots.setdefault(run_id, {})["metadata.json"] = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
 
     monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync_to)
+    monkeypatch.setattr(labor_runs, "sync_labor_files_to_persistent", fake_sync_files)
     monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
     monkeypatch.setattr(app_module, "sync_labor_run_from_persistent", fake_sync_from)
 

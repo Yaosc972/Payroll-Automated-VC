@@ -187,6 +187,49 @@ def test_update_labor_metadata_stage_only_does_not_resync_uploaded_files(monkeyp
     assert uploaded_metadata["metadata"]["files"]["pdfInvoices"][0]["path"] == "invoice.pdf"
 
 
+def test_update_labor_metadata_files_update_syncs_only_new_files(monkeypatch, tmp_path):
+    run_root = tmp_path / "labor_runs"
+    run_dir = run_root / "labor_report"
+    run_dir.mkdir(parents=True)
+    (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+    (run_dir / "bill.xlsx").write_bytes(_workbook_bytes())
+    (run_dir / "report.xlsx").write_bytes(_workbook_bytes())
+    initial_files = {
+        "pdfInvoices": [{"filename": "invoice.pdf", "path": str(run_dir / "invoice.pdf")}],
+        "workbooks": [{"filename": "bill.xlsx", "path": str(run_dir / "bill.xlsx")}],
+        "workbook": {"filename": "bill.xlsx", "path": str(run_dir / "bill.xlsx")},
+    }
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"id": "labor_report", "status": "已上传文件", "files": initial_files}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    synced_files = []
+    uploaded_metadata = {}
+
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", run_root)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
+    monkeypatch.setattr(
+        labor_runs,
+        "sync_labor_run_to_persistent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("files update should use delta sync")),
+    )
+    monkeypatch.setattr(labor_runs, "sync_labor_files_to_persistent", lambda run_id, run_dir_arg, paths: synced_files.extend(paths))
+
+    def fake_sync_metadata(run_id, run_dir_arg, metadata):
+        uploaded_metadata["metadata"] = metadata
+
+    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
+    next_files = dict(initial_files)
+    next_files["diffReport"] = {"filename": "report.xlsx", "path": str(run_dir / "report.xlsx")}
+
+    metadata = labor_runs.update_labor_metadata("labor_report", {"status": "已生成差异报告", "files": next_files})
+
+    assert metadata["status"] == "已生成差异报告"
+    assert synced_files == ["report.xlsx"]
+    assert uploaded_metadata["metadata"]["files"]["diffReport"]["path"] == "report.xlsx"
+
+
 def _workbook_with_tax_columns_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
