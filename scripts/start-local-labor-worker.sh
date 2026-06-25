@@ -24,6 +24,13 @@ set -a
 source "$ENV_FILE"
 set +a
 
+export SIGMA_OVERSEAS_LABOR_ACCESS="${SIGMA_OVERSEAS_LABOR_ACCESS:-production}"
+export SIGMA_LABOR_STORAGE_BACKEND="${SIGMA_LABOR_STORAGE_BACKEND:-supabase}"
+export SIGMA_LABOR_STORAGE_ENV="${SIGMA_LABOR_STORAGE_ENV:-production}"
+export SIGMA_LABOR_SUPABASE_BUCKET="${SIGMA_LABOR_SUPABASE_BUCKET:-sigma-labor-runs}"
+export SIGMA_LABOR_EXECUTION_MODE="${SIGMA_LABOR_EXECUTION_MODE:-worker}"
+export SIGMA_LABOR_JOB_BACKEND="${SIGMA_LABOR_JOB_BACKEND:-postgres}"
+
 cd "$ROOT_DIR"
 python3 -m bonus_platform.worker.main \
   --require-ready \

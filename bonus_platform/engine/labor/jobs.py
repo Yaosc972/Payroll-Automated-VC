@@ -131,12 +131,14 @@ def get_labor_job(job_id: str) -> dict[str, Any]:
 def ensure_labor_worker_job_store_ready() -> None:
     if _serverless_requires_durable_job_store():
         raise RuntimeError(SERVERLESS_QUEUE_ERROR)
+    if _postgres_backend_requested() and not _job_database_url():
+        raise RuntimeError(SERVERLESS_QUEUE_ERROR)
 
 
 def labor_worker_job_store_health(*, probe: bool = False) -> dict[str, Any]:
     enabled = labor_worker_jobs_enabled()
     database_url_configured = bool(_job_database_url())
-    backend = "postgres" if _use_postgres_jobs() else "local-json"
+    backend = "postgres" if _postgres_backend_requested() or _use_postgres_jobs() else "local-json"
     serverless = bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
     health: dict[str, Any] = {
         "enabled": enabled,
@@ -147,6 +149,15 @@ def labor_worker_job_store_health(*, probe: bool = False) -> dict[str, Any]:
         "ok": True,
     }
     if enabled and serverless and not database_url_configured:
+        health.update(
+            {
+                "ok": False,
+                "errorCode": "LABOR_WORKER_QUEUE_UNAVAILABLE",
+                "message": SERVERLESS_QUEUE_ERROR,
+            }
+        )
+        return health
+    if enabled and _postgres_backend_requested() and not database_url_configured:
         health.update(
             {
                 "ok": False,
@@ -257,9 +268,13 @@ def _use_postgres_jobs() -> bool:
     backend = os.environ.get("SIGMA_LABOR_JOB_BACKEND", "").strip().lower()
     if backend in {"local", "json", "file", "files"}:
         return False
-    if backend in {"postgres", "postgresql", "supabase"}:
+    if _postgres_backend_requested():
         return bool(_job_database_url())
     return labor_worker_jobs_enabled() and bool(_job_database_url())
+
+
+def _postgres_backend_requested() -> bool:
+    return os.environ.get("SIGMA_LABOR_JOB_BACKEND", "").strip().lower() in {"postgres", "postgresql", "supabase"}
 
 
 def _serverless_requires_durable_job_store() -> bool:

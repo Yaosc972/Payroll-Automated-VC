@@ -196,6 +196,27 @@ def test_labor_worker_health_reports_configured_database_without_exposing_url(mo
     assert "example.supabase.co" not in serialized
 
 
+def test_labor_worker_health_rejects_explicit_postgres_backend_without_database_url(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+    monkeypatch.setenv("SIGMA_LABOR_JOB_BACKEND", "postgres")
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("SIGMA_LABOR_JOB_DATABASE_URL", raising=False)
+    monkeypatch.delenv("LABOR_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ADMIN_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    client = TestClient(app)
+
+    response = client.get("/api/labor/worker-health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["backend"] == "postgres"
+    assert body["databaseUrlConfigured"] is False
+    assert body["ok"] is False
+    assert body["errorCode"] == "LABOR_WORKER_QUEUE_UNAVAILABLE"
+
+
 def test_labor_create_returns_structured_storage_error(monkeypatch):
     def fail_create_labor_run(metadata):
         raise RuntimeError("storage write failed")
