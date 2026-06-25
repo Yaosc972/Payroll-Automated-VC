@@ -328,6 +328,74 @@ def test_worker_marks_job_failed_when_processor_reports_failure(monkeypatch, tmp
     assert "ssl connection interrupted" in result["errorDetail"]
 
 
+def test_worker_preflight_reports_missing_storage_without_secret_values(monkeypatch):
+    from bonus_platform.worker import main as worker_main
+
+    monkeypatch.setattr(
+        worker_main,
+        "labor_persistent_storage_health",
+        lambda probe=False: {
+            "backend": "supabase",
+            "enabled": False,
+            "probe": probe,
+            "supabaseUrlConfigured": True,
+            "serviceRoleConfigured": False,
+        },
+    )
+    monkeypatch.setattr(
+        worker_main,
+        "labor_worker_job_store_health",
+        lambda probe=False: {
+            "enabled": True,
+            "backend": "postgres",
+            "databaseUrlConfigured": True,
+            "probe": probe,
+            "ok": True,
+        },
+    )
+    monkeypatch.setitem(worker_main.AI_CONFIG, "enabled", False)
+
+    health = worker_main.worker_preflight(probe=True)
+
+    assert health["ok"] is False
+    assert health["probe"] is True
+    assert health["problems"][0]["code"] == "LABOR_STORAGE_DISABLED"
+    serialized = json.dumps(health, ensure_ascii=False)
+    assert "SUPABASE_SERVICE_ROLE_KEY" not in serialized
+    assert "postgresql://" not in serialized
+
+
+def test_worker_cli_check_exits_nonzero_when_preflight_fails(monkeypatch, capsys):
+    from bonus_platform.worker import main as worker_main
+
+    monkeypatch.setattr(
+        worker_main,
+        "worker_preflight",
+        lambda probe=False: {"ok": False, "probe": probe, "problems": [{"code": "BROKEN"}]},
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        worker_main.main(["--check", "--probe"])
+
+    assert exc_info.value.code == 1
+    output = capsys.readouterr().out
+    assert '"ok": false' in output
+    assert '"probe": true' in output
+
+
+def test_worker_require_ready_runs_preflight_before_processing(monkeypatch, capsys):
+    from bonus_platform.worker import main as worker_main
+
+    monkeypatch.setattr(worker_main, "worker_preflight", lambda probe=False: {"ok": True, "probe": probe})
+    called = {}
+    monkeypatch.setattr(worker_main, "_process_one_labor_job", lambda worker_id=None: called.setdefault("workerId", worker_id))
+
+    worker_main.main(["--require-ready", "--once", "--worker-id", "worker-a"])
+
+    assert called["workerId"] == "worker-a"
+    assert '"ok": true' in capsys.readouterr().out
+
+
 def test_labor_worker_schema_declares_required_tables():
     sql = Path("supabase/migrations/20260624_labor_worker_schema.sql").read_text(encoding="utf-8")
 

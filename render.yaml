@@ -1,0 +1,46 @@
+services:
+  - type: worker
+    name: sigma-overseas-labor-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    branch: codex/admin-module-release-consolidation
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: python3 -m bonus_platform.worker.main --check --probe
+    startCommand: python3 -m bonus_platform.worker.main --require-ready --interval 5 --worker-id render-overseas-labor-1
+    autoDeployTrigger: "off"
+    envVars:
+      - key: SIGMA_WORKBENCH_HOME
+        value: /tmp/sigma-workbench
+      - key: SIGMA_OVERSEAS_LABOR_ACCESS
+        value: production
+      - key: SIGMA_LABOR_STORAGE_BACKEND
+        value: supabase
+      - key: SIGMA_LABOR_STORAGE_ENV
+        value: production
+      - key: SIGMA_LABOR_SUPABASE_BUCKET
+        value: sigma-labor-runs
+      - key: SIGMA_LABOR_EXECUTION_MODE
+        value: worker
+      - key: SIGMA_LABOR_JOB_BACKEND
+        value: postgres
+      - key: AI_ENABLED
+        value: "true"
+      - key: AI_PROVIDER
+        value: mimo
+      - key: AI_TIMEOUT_SECONDS
+        value: "180"
+      - key: AI_DOCUMENT_TOOLCHAIN
+        value: pypdfium2,mimo
+      - key: PARALLEL_MAX_WORKERS
+        value: "1"
+      - key: PARALLEL_IMAGE_RENDER_WORKERS
+        value: "1"
+      - key: ADMIN_DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: MIMO_API_KEY
+        sync: false

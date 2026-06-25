@@ -85,7 +85,13 @@ ADMIN_DATABASE_URL=postgresql://...
 Worker 服务使用同一份代码和同一组 Supabase/AI 环境变量，启动命令：
 
 ```bash
-python3 -m bonus_platform.worker.main --interval 5 --worker-id overseas-labor-1
+python3 -m bonus_platform.worker.main --require-ready --interval 5 --worker-id overseas-labor-1
+```
+
+启动前可以单独执行自检：
+
+```bash
+python3 -m bonus_platform.worker.main --check --probe
 ```
 
 上线前检查：
@@ -103,6 +109,8 @@ curl "https://sigma-workbench.vercel.app/api/labor/worker-health?probe=1"
 ```
 
 如果 `/api/labor/worker-health` 返回 `LABOR_WORKER_QUEUE_UNAVAILABLE`，说明 Vercel 已进入 Worker 模式但没有可持久化的 Postgres 队列配置，海外劳务任务会停留在“待处理”。
+
+Render Background Worker 模板见仓库根目录 `render.yaml`，详细步骤见 `docs/overseas-labor-worker-runbook.md`。
 
 ## 部署命令
 
