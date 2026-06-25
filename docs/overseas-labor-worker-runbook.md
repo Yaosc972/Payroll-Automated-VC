@@ -39,7 +39,54 @@ curl "https://sigma-workbench.vercel.app/api/labor/worker-health?probe=1"
 
 两个接口都应返回 `ok: true`。
 
-## Render Background Worker
+## 本地电脑 Worker（当前 0 元方案）
+
+本地电脑 Worker 的作用是：连接生产 Supabase，读取 `labor_jobs` 队列，下载生产上传的文件，执行核对，再把报告写回生产 Supabase。
+
+准备本地环境变量：
+
+```bash
+cp docs/env.worker.local.example .env.worker.local
+```
+
+然后编辑 `.env.worker.local`，填入：
+
+```text
+ADMIN_DATABASE_URL
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+MIMO_API_KEY
+```
+
+`.env.worker.local` 会被 `.env*` 忽略，不会提交到 git。
+
+启动前自检：
+
+```bash
+scripts/check-local-labor-worker.sh
+```
+
+自检通过后启动常驻 Worker：
+
+```bash
+scripts/start-local-labor-worker.sh
+```
+
+终端保持打开时，Worker 会每 5 秒读取一次生产队列。关闭终端或电脑休眠后，海外劳务任务会继续留在队列里，但不会被处理；下次重新启动 Worker 后会继续消费。
+
+只想处理一个排队任务时可以直接运行：
+
+```bash
+scripts/start-local-labor-worker.sh --once
+```
+
+如果需要自定义 Worker 名称：
+
+```bash
+SIGMA_WORKER_ID=local-overseas-labor-mac scripts/start-local-labor-worker.sh
+```
+
+## Render Background Worker（付费备选）
 
 仓库里已提供 `render.yaml`。在 Render 中创建 Blueprint 或 Background Worker 后，使用同一份代码，启动命令为：
 
@@ -84,7 +131,7 @@ PARALLEL_IMAGE_RENDER_WORKERS=1
 
 `ADMIN_DATABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、`MIMO_API_KEY` 必须只填在 Render 环境变量里，不要提交到代码。
 
-## 本地验证 Worker
+## 手动验证 Worker
 
 如果本地有完整生产同等环境变量，可以先跑一次自检：
 

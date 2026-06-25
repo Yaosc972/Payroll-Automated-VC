@@ -82,16 +82,28 @@ SIGMA_LABOR_SUPABASE_BUCKET=sigma-labor-runs
 ADMIN_DATABASE_URL=postgresql://...
 ```
 
-Worker 服务使用同一份代码和同一组 Supabase/AI 环境变量，启动命令：
+当前 0 元过渡方案是用本地电脑运行 Worker。先复制模板并填入生产 Supabase/AI 密钥：
+
+```bash
+cp docs/env.worker.local.example .env.worker.local
+```
+
+启动前自检：
+
+```bash
+scripts/check-local-labor-worker.sh
+```
+
+自检通过后启动本地 Worker：
+
+```bash
+scripts/start-local-labor-worker.sh
+```
+
+如果后续改用付费或云端 Worker，启动命令仍是：
 
 ```bash
 python3 -m bonus_platform.worker.main --require-ready --interval 5 --worker-id overseas-labor-1
-```
-
-启动前可以单独执行自检：
-
-```bash
-python3 -m bonus_platform.worker.main --check --probe
 ```
 
 上线前检查：
@@ -110,7 +122,7 @@ curl "https://sigma-workbench.vercel.app/api/labor/worker-health?probe=1"
 
 如果 `/api/labor/worker-health` 返回 `LABOR_WORKER_QUEUE_UNAVAILABLE`，说明 Vercel 已进入 Worker 模式但没有可持久化的 Postgres 队列配置，海外劳务任务会停留在“待处理”。
 
-Render Background Worker 模板见仓库根目录 `render.yaml`，详细步骤见 `docs/overseas-labor-worker-runbook.md`。
+本地 Worker 和 Render Background Worker 的详细步骤见 `docs/overseas-labor-worker-runbook.md`。Render Background Worker 模板在仓库根目录 `render.yaml`，但它是付费备选，不是当前默认方案。
 
 ## 部署命令
 
