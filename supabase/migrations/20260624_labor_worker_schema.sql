@@ -70,6 +70,10 @@ where status in ('queued', 'running', 'retry_wait');
 create index if not exists labor_jobs_claim_idx
 on labor_jobs(status, available_at, priority desc, created_at);
 
+create index if not exists labor_jobs_running_lease_idx
+on labor_jobs(status, lease_expires_at)
+where status = 'running';
+
 create table if not exists labor_job_attempts (
     id uuid primary key default gen_random_uuid(),
     job_id text not null references labor_jobs(id) on delete cascade,

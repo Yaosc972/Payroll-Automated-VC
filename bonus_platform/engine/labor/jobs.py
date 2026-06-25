@@ -13,6 +13,7 @@ from ...config import OUTPUT_DIR
 LABOR_JOBS_DIR = OUTPUT_DIR / "labor_jobs"
 JOB_FILE = "job.json"
 ACTIVE_JOB_STATUSES = {"queued", "running", "retry_wait"}
+JOB_LEASE_SECONDS = 120
 _POSTGRES_SCHEMA_READY = False
 SERVERLESS_QUEUE_ERROR = "海外劳务 Worker 队列需要配置 Postgres 数据库连接。"
 
@@ -63,9 +64,13 @@ def claim_next_labor_job(worker_id: str) -> dict[str, Any] | None:
         return _claim_next_postgres_job(worker_id)
     now_dt = datetime.utcnow()
     for job in _list_jobs():
-        if job.get("status") not in {"queued", "retry_wait"}:
-            continue
-        if _parse_time(job.get("availableAt")) and _parse_time(job.get("availableAt")) > now_dt:
+        is_available = job.get("status") in {"queued", "retry_wait"} and (
+            not _parse_time(job.get("availableAt")) or _parse_time(job.get("availableAt")) <= now_dt
+        )
+        is_expired_running = job.get("status") == "running" and (
+            not _parse_time(job.get("leaseExpiresAt")) or _parse_time(job.get("leaseExpiresAt")) <= now_dt
+        )
+        if not is_available and not is_expired_running:
             continue
         claimed = dict(job)
         claimed["status"] = "running"
@@ -73,7 +78,7 @@ def claim_next_labor_job(worker_id: str) -> dict[str, Any] | None:
         claimed["attempt"] = int(claimed.get("attempt") or 0) + 1
         claimed["startedAt"] = claimed.get("startedAt") or _now()
         claimed["heartbeatAt"] = _now()
-        claimed["leaseExpiresAt"] = (datetime.utcnow() + timedelta(minutes=2)).isoformat(timespec="seconds")
+        claimed["leaseExpiresAt"] = _lease_expires_at()
         claimed["updatedAt"] = _now()
         _write_job(claimed)
         return claimed
@@ -106,6 +111,19 @@ def fail_labor_job(job_id: str, message: str, *, retryable: bool = False, error_
     return job
 
 
+def heartbeat_labor_job(job_id: str, worker_id: str) -> dict[str, Any]:
+    if _use_postgres_jobs():
+        return _heartbeat_postgres_job(job_id, worker_id)
+    job = _load_job(job_id)
+    if job.get("status") != "running" or job.get("workerId") != worker_id:
+        return job
+    job["heartbeatAt"] = _now()
+    job["leaseExpiresAt"] = _lease_expires_at()
+    job["updatedAt"] = _now()
+    _write_job(job)
+    return job
+
+
 def get_labor_job(job_id: str) -> dict[str, Any]:
     return _load_job(job_id)
 
@@ -113,6 +131,43 @@ def get_labor_job(job_id: str) -> dict[str, Any]:
 def ensure_labor_worker_job_store_ready() -> None:
     if _serverless_requires_durable_job_store():
         raise RuntimeError(SERVERLESS_QUEUE_ERROR)
+
+
+def labor_worker_job_store_health(*, probe: bool = False) -> dict[str, Any]:
+    enabled = labor_worker_jobs_enabled()
+    database_url_configured = bool(_job_database_url())
+    backend = "postgres" if _use_postgres_jobs() else "local-json"
+    serverless = bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
+    health: dict[str, Any] = {
+        "enabled": enabled,
+        "backend": backend,
+        "serverless": serverless,
+        "databaseUrlConfigured": database_url_configured,
+        "probe": bool(probe),
+        "ok": True,
+    }
+    if enabled and serverless and not database_url_configured:
+        health.update(
+            {
+                "ok": False,
+                "errorCode": "LABOR_WORKER_QUEUE_UNAVAILABLE",
+                "message": SERVERLESS_QUEUE_ERROR,
+            }
+        )
+        return health
+    if probe and backend == "postgres":
+        try:
+            _ensure_postgres_schema()
+        except Exception as exc:
+            health.update(
+                {
+                    "ok": False,
+                    "errorCode": "LABOR_WORKER_QUEUE_PROBE_FAILED",
+                    "errorType": type(exc).__name__,
+                    "message": str(exc)[:240],
+                }
+            )
+    return health
 
 
 def _active_job_for_run(run_id: str) -> dict[str, Any] | None:
@@ -169,6 +224,10 @@ def _new_job_id() -> str:
 
 def _now() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
+
+
+def _lease_expires_at() -> str:
+    return (datetime.utcnow() + timedelta(seconds=JOB_LEASE_SECONDS)).isoformat(timespec="seconds")
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -263,6 +322,11 @@ def _ensure_postgres_schema() -> None:
         create index if not exists labor_jobs_claim_idx
         on labor_jobs(status, available_at, priority desc, created_at)
         """,
+        """
+        create index if not exists labor_jobs_running_lease_idx
+        on labor_jobs(status, lease_expires_at)
+        where status = 'running'
+        """,
     ]
     with _connect_postgres() as conn:
         for statement in statements:
@@ -279,8 +343,14 @@ def _claim_next_postgres_job(worker_id: str) -> dict[str, Any] | None:
             with next_job as (
                 select id
                 from labor_jobs
-                where status in ('queued', 'retry_wait')
-                  and available_at <= now()
+                where (
+                    status in ('queued', 'retry_wait')
+                    and available_at <= now()
+                )
+                or (
+                    status = 'running'
+                    and (lease_expires_at is null or lease_expires_at <= now())
+                )
                 order by priority desc, created_at
                 for update skip locked
                 limit 1
@@ -291,18 +361,40 @@ def _claim_next_postgres_job(worker_id: str) -> dict[str, Any] | None:
                 attempt = job.attempt + 1,
                 started_at = coalesce(job.started_at, now()),
                 heartbeat_at = now(),
-                lease_expires_at = now() + interval '2 minutes',
+                lease_expires_at = now() + (%s * interval '1 second'),
                 updated_at = now()
             from next_job
             where job.id = next_job.id
             returning job.*
             """,
-            (worker_id,),
+            (worker_id, JOB_LEASE_SECONDS),
         ).fetchone()
         conn.commit()
     if not row:
         return None
     return _row_to_job(dict(row))
+
+
+def _heartbeat_postgres_job(job_id: str, worker_id: str) -> dict[str, Any]:
+    _ensure_postgres_schema()
+    with _connect_postgres() as conn:
+        row = conn.execute(
+            """
+            update labor_jobs
+            set heartbeat_at = now(),
+                lease_expires_at = now() + (%s * interval '1 second'),
+                updated_at = now()
+            where id = %s
+              and status = 'running'
+              and worker_id = %s
+            returning *
+            """,
+            (JOB_LEASE_SECONDS, job_id, worker_id),
+        ).fetchone()
+        conn.commit()
+    if row:
+        return _row_to_job(dict(row))
+    return _load_postgres_job(job_id)
 
 
 def _list_postgres_jobs() -> list[dict[str, Any]]:

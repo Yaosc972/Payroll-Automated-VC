@@ -157,6 +157,45 @@ def test_labor_storage_health_reports_missing_supabase_secret_without_exposing_v
     assert "example.supabase.co" not in json.dumps(body)
 
 
+def test_labor_worker_health_reports_missing_durable_queue_on_vercel(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("SIGMA_LABOR_JOB_DATABASE_URL", raising=False)
+    monkeypatch.delenv("LABOR_DATABASE_URL", raising=False)
+    monkeypatch.delenv("ADMIN_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    client = TestClient(app)
+
+    response = client.get("/api/labor/worker-health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["serverless"] is True
+    assert body["databaseUrlConfigured"] is False
+    assert body["ok"] is False
+    assert body["errorCode"] == "LABOR_WORKER_QUEUE_UNAVAILABLE"
+
+
+def test_labor_worker_health_reports_configured_database_without_exposing_url(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("ADMIN_DATABASE_URL", "postgresql://secret-user:secret-pass@example.supabase.co/postgres")
+    client = TestClient(app)
+
+    response = client.get("/api/labor/worker-health")
+
+    assert response.status_code == 200
+    body = response.json()
+    serialized = json.dumps(body)
+    assert body["enabled"] is True
+    assert body["databaseUrlConfigured"] is True
+    assert body["backend"] == "postgres"
+    assert body["ok"] is True
+    assert "secret-pass" not in serialized
+    assert "example.supabase.co" not in serialized
+
+
 def test_labor_create_returns_structured_storage_error(monkeypatch):
     def fail_create_labor_run(metadata):
         raise RuntimeError("storage write failed")

@@ -1,4 +1,5 @@
 from io import BytesIO
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import time
@@ -258,6 +259,43 @@ def test_claim_next_labor_job_marks_running(monkeypatch, tmp_path):
     assert claimed["attempt"] == 1
 
 
+def test_claim_next_labor_job_reclaims_expired_running_job(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import jobs as labor_jobs
+
+    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
+    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
+    first_claim = labor_jobs.claim_next_labor_job("worker-1")
+    first_claim["leaseExpiresAt"] = (datetime.utcnow() - timedelta(seconds=1)).isoformat(timespec="seconds")
+    labor_jobs.fail_labor_job(created["id"], "temporary marker", retryable=True)
+    expired_retry = labor_jobs.get_labor_job(created["id"])
+    expired_retry["status"] = "running"
+    expired_retry["workerId"] = "worker-1"
+    expired_retry["leaseExpiresAt"] = first_claim["leaseExpiresAt"]
+    labor_jobs._write_job(expired_retry)
+
+    reclaimed = labor_jobs.claim_next_labor_job("worker-2")
+
+    assert reclaimed["id"] == created["id"]
+    assert reclaimed["status"] == "running"
+    assert reclaimed["workerId"] == "worker-2"
+    assert reclaimed["attempt"] == 2
+
+
+def test_heartbeat_labor_job_extends_running_lease(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import jobs as labor_jobs
+
+    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
+    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
+    claimed = labor_jobs.claim_next_labor_job("worker-1")
+
+    heartbeat = labor_jobs.heartbeat_labor_job(created["id"], "worker-1")
+
+    assert heartbeat["status"] == "running"
+    assert heartbeat["workerId"] == "worker-1"
+    assert heartbeat["heartbeatAt"] >= claimed["heartbeatAt"]
+    assert heartbeat["leaseExpiresAt"] >= claimed["leaseExpiresAt"]
+
+
 def test_worker_processes_claimed_labor_job(monkeypatch, tmp_path):
     from bonus_platform.engine.labor import jobs as labor_jobs
     from bonus_platform.worker import labor as labor_worker
@@ -271,6 +309,23 @@ def test_worker_processes_claimed_labor_job(monkeypatch, tmp_path):
 
     assert result["status"] == "succeeded"
     assert processed["runId"] == "labor_demo"
+
+
+def test_worker_marks_job_failed_when_processor_reports_failure(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor import jobs as labor_jobs
+    from bonus_platform.worker import labor as labor_worker
+
+    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
+    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
+    monkeypatch.setattr(labor_worker, "_run_labor_extract_compare", lambda run_id: False)
+    monkeypatch.setattr(labor_worker, "_labor_run_failure_message", lambda run_id: "ssl connection interrupted")
+
+    result = labor_worker.process_one_labor_job(worker_id="worker-test")
+
+    assert result["id"] == created["id"]
+    assert result["status"] == "retry_wait"
+    assert result["retryable"] is True
+    assert "ssl connection interrupted" in result["errorDetail"]
 
 
 def test_labor_worker_schema_declares_required_tables():

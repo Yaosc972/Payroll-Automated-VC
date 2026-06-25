@@ -3,7 +3,7 @@ const laborState = {
   headers: [],
   comparePollTimer: null,
   pollRetryCount: 0,
-  pollMaxRetries: 200,  // 200 × 3s = 10 分钟
+  pollMaxRetries: 1200,  // 1200 × 3s = 60 分钟，后台 Worker 长任务可持续轮询
   extractStartedAt: null,
   currentStep: 1,
   materialIndex: null,
@@ -434,6 +434,9 @@ async function uploadFilesWithDirectStorageFallback(form, uploadContext) {
   try {
     return await uploadFilesDirectToSupabase(uploadContext);
   } catch (error) {
+    if (window.location.hostname && window.location.hostname.endsWith("vercel.app")) {
+      throw error;
+    }
     if (!/LABOR_DIRECT_UPLOAD_UNAVAILABLE|未启用 Supabase 直传|当前环境未启用/i.test(error.message || "")) {
       throw error;
     }
@@ -1398,14 +1401,14 @@ async function pollCompareResult() {
   if (laborState.pollRetryCount > laborState.pollMaxRetries) {
     stopComparePolling();
     labor.extractCompare.disabled = false;
-    setText(labor.compareStatus, "生成核对报告超时（10分钟），请重新点击「生成核对报告」重试。", true);
+    setText(labor.compareStatus, "后台核对等待超时（60分钟）。任务可能仍在后台，请稍后刷新批次状态；若持续无结果，请联系管理员查看 Worker 日志。", true);
     recordLaborTelemetry("labor.extract.timeout", {
       step: "extract_compare",
       status: "timeout",
       durationMs: elapsedMs(laborState.extractStartedAt),
     });
     laborState.extractStartedAt = null;
-    toast("生成核对报告超时。");
+    toast("后台核对等待超时。");
     return;
   }
   try {
@@ -2678,6 +2681,9 @@ function formatLaborRequestError(message) {
   }
   if (/JSON|Unexpected token|返回内容异常|invalid response/i.test(text)) {
     return "服务返回内容异常。请刷新页面后重试；若仍失败，请联系管理员查看本批次日志。";
+  }
+  if (/InvalidKey|Invalid key|直传文件失败|signed/i.test(text)) {
+    return "Supabase Storage 直传失败。请重新选择文件上传；若仍失败，请联系管理员检查 Storage bucket、签名上传权限和对象路径配置。";
   }
   if (/上传|upload|文件|file|持久化|保存/.test(text)) {
     return "上传文件未保存成功。请重新上传 PDF 发票和 Excel 账单；若仍失败，请改用本地/内网持久化环境处理。";

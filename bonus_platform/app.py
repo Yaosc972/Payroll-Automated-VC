@@ -162,7 +162,7 @@ from .engine.labor.runs import (
     update_labor_metadata,
     update_labor_metadata_record_only,
 )
-from .engine.labor.jobs import enqueue_labor_reconciliation_job, labor_worker_jobs_enabled
+from .engine.labor.jobs import enqueue_labor_reconciliation_job, labor_worker_job_store_health, labor_worker_jobs_enabled
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
 from .engine.labor.persistent_storage import (
     create_labor_supabase_signed_upload,
@@ -194,7 +194,8 @@ async def lifespan(app: FastAPI):
     ensure_data_files()
     if not os.environ.get("VERCEL"):
         init_admin_store()
-    _recover_stuck_labor_runs()
+    if not _is_vercel_runtime():
+        _recover_stuck_labor_runs()
     yield
 
 
@@ -837,6 +838,11 @@ def labor_access() -> dict:
 @app.get("/api/labor/storage-health")
 def labor_storage_health(probe: bool = False) -> dict:
     return labor_persistent_storage_health(probe=probe)
+
+
+@app.get("/api/labor/worker-health")
+def labor_worker_health(probe: bool = False) -> dict:
+    return labor_worker_job_store_health(probe=probe)
 
 
 @app.get("/api/workbench/access")
@@ -4846,7 +4852,7 @@ def _normalize_supplier_for_profile(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _run_labor_extract_compare(run_id: str) -> None:
+def _run_labor_extract_compare(run_id: str) -> bool:
     try:
         logger.info(f"[{run_id}] === 抽取任务启动 ===")
         run_dir = get_labor_run_dir(run_id)
@@ -4878,6 +4884,7 @@ def _run_labor_extract_compare(run_id: str) -> None:
             },
         )
         logger.info(f"[{run_id}] === 抽取任务完成 ===")
+        return True
     except ValueError as exc:
         logger.error(f"[{run_id}] 抽取失败(ValueError): {exc}")
         update_labor_metadata(
@@ -4894,6 +4901,7 @@ def _run_labor_extract_compare(run_id: str) -> None:
                 },
             },
         )
+        return False
     except Exception as exc:
         logger.error(f"[{run_id}] 抽取失败(Exception): {exc}", exc_info=True)
         message = f"生成劳务核对结果失败：{exc}"
@@ -4911,6 +4919,7 @@ def _run_labor_extract_compare(run_id: str) -> None:
                 },
             },
         )
+        return False
 
 
 def _aggregate_excel_rows(excel_rows: list) -> list:
