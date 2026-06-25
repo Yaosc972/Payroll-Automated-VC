@@ -77,6 +77,36 @@ def test_list_labor_metadata_supports_recent_limit(monkeypatch, tmp_path):
     assert [row["id"] for row in rows] == ["labor_2", "labor_1"]
 
 
+def test_list_labor_metadata_from_supabase_reads_metadata_under_run_directories(monkeypatch):
+    metadata_by_path = {
+        "labor-runs/production/labor_old/metadata.json": {
+            "id": "labor_old",
+            "updatedAt": "2026-06-20T10:00:00",
+        },
+        "labor-runs/production/labor_new/metadata.json": {
+            "id": "labor_new",
+            "updatedAt": "2026-06-20T11:00:00",
+        },
+    }
+
+    monkeypatch.setattr(labor_storage, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(labor_storage, "labor_persistent_environment", lambda: "production")
+    monkeypatch.setattr(
+        labor_storage,
+        "_supabase_list_objects",
+        lambda prefix: [{"name": "labor_old"}, {"name": "labor_new"}] if prefix == "labor-runs/production" else [],
+    )
+    monkeypatch.setattr(
+        labor_storage,
+        "_supabase_download_bytes",
+        lambda object_path: json.dumps(metadata_by_path[object_path]).encode("utf-8"),
+    )
+
+    rows = labor_storage.list_labor_metadata_from_supabase()
+
+    assert [row["id"] for row in rows] == ["labor_new", "labor_old"]
+
+
 def test_save_labor_metadata_uses_atomic_writes_for_persistent_backend(monkeypatch, tmp_path):
     run_dir = tmp_path / "labor_runs" / "labor_atomic"
     run_dir.mkdir(parents=True)

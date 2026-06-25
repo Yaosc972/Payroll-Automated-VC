@@ -414,15 +414,32 @@ def list_labor_metadata_from_supabase() -> list[dict[str, Any]]:
         return []
     prefix = f"{RUN_PREFIX}/{labor_persistent_environment()}"
     rows: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
     for entry in _supabase_list_objects(prefix):
-        object_path = _supabase_entry_path(prefix, entry)
-        if not object_path.endswith("/metadata.json"):
-            continue
-        content = _supabase_download_bytes(object_path)
-        if not content:
-            continue
-        try:
-            rows.append(json.loads(content.decode("utf-8")))
-        except json.JSONDecodeError:
-            continue
+        for object_path in _supabase_metadata_candidates(prefix, entry):
+            if object_path in seen_paths:
+                continue
+            seen_paths.add(object_path)
+            try:
+                content = _supabase_download_bytes(object_path)
+            except SupabaseStorageStatusError:
+                continue
+            if not content:
+                continue
+            try:
+                rows.append(json.loads(content.decode("utf-8")))
+            except json.JSONDecodeError:
+                continue
     return sorted(rows, key=lambda row: row.get("updatedAt") or row.get("createdAt") or "", reverse=True)
+
+
+def _supabase_metadata_candidates(prefix: str, entry: dict[str, Any]) -> list[str]:
+    object_path = _supabase_entry_path(prefix, entry)
+    if not object_path:
+        return []
+    if object_path.endswith("/metadata.json"):
+        return [object_path]
+    name = str(entry.get("name") or "").strip().strip("/")
+    if not name or name.startswith("_") or "/" in name:
+        return []
+    return [f"{prefix.rstrip('/')}/{name}/metadata.json"]
