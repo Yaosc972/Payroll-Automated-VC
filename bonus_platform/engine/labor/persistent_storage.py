@@ -166,6 +166,14 @@ def sync_labor_run_from_persistent(run_id: str, run_dir: Path) -> bool:
     return False
 
 
+def sync_labor_metadata_from_persistent(run_id: str, run_dir: Path) -> bool:
+    if labor_supabase_storage_enabled():
+        return sync_labor_metadata_from_supabase(run_id, run_dir)
+    if labor_blob_storage_enabled():
+        return sync_labor_run_from_blob(run_id, run_dir)
+    return False
+
+
 def list_labor_metadata_from_persistent() -> list[dict[str, Any]]:
     if labor_supabase_storage_enabled():
         return list_labor_metadata_from_supabase()
@@ -392,6 +400,25 @@ def sync_labor_run_from_supabase(run_id: str, run_dir: Path) -> bool:
         tmp_path.write_bytes(content)
         os.replace(tmp_path, local_path)
     _materialize_synced_metadata_file(run_dir)
+    return True
+
+
+def sync_labor_metadata_from_supabase(run_id: str, run_dir: Path) -> bool:
+    if not labor_supabase_storage_enabled():
+        return False
+    content = _supabase_download_bytes(_supabase_object_path(run_id, "metadata.json"))
+    if not content:
+        return False
+    try:
+        metadata = json.loads(content.decode("utf-8"))
+    except json.JSONDecodeError:
+        return False
+    run_dir.mkdir(parents=True, exist_ok=True)
+    materialized = materialize_labor_metadata_for_local(run_dir, metadata)
+    metadata_path = run_dir / "metadata.json"
+    tmp_path = metadata_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(materialized, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, metadata_path)
     return True
 
 

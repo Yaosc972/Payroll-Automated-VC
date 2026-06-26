@@ -2118,7 +2118,7 @@ def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...)) -> dic
     response = dict(active)
     if payload.get("generateReport", payload.get("generate_report", True)):
         preview = _build_reocr_projected_preview(metadata, active)
-        report_path = get_labor_run_dir(run_id) / safe_labor_filename("海外劳务工报账核对报告.xlsx", "图片识别结果预览报告")
+        report_path = get_labor_run_dir(run_id) / safe_labor_storage_filename("labor_reocr_preview_report.xlsx", "image_result_preview")
         build_labor_projection_report(report_path, preview)
         files["reocrPreviewReport"] = attach_labor_file(run_id, report_path, "图片识别结果预览报告")
         response["preview"] = preview
@@ -2200,7 +2200,7 @@ def confirm_labor_reocr_candidate_batch(run_id: str, payload: dict = Body(defaul
     }
     if confirmed and payload.get("generateReport", payload.get("generate_report", True)):
         preview = _build_reocr_batch_apply_preview(metadata, confirmed)
-        report_path = get_labor_run_dir(run_id) / safe_labor_filename("海外劳务工报账核对报告.xlsx", "图片识别批量结果预览报告")
+        report_path = get_labor_run_dir(run_id) / safe_labor_storage_filename("labor_reocr_batch_preview_report.xlsx", "image_batch_preview")
         build_labor_projection_report(report_path, preview)
         files["reocrPreviewReport"] = attach_labor_file(run_id, report_path, "图片识别批量结果预览报告")
         response["preview"] = preview
@@ -4330,7 +4330,7 @@ def _generate_reocr_adopted_diff_report(
         "rows": comparison_rows,
         "candidateMatches": candidate_matches,
     }
-    report_path = get_labor_run_dir(run_id) / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告_图片识别已采纳")
+    report_path = get_labor_run_dir(run_id) / safe_labor_storage_filename("labor_reconciliation_report.xlsx", "diff_report_reocr_adopted")
     build_labor_report(
         report_path,
         comparison,
@@ -5107,7 +5107,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 allocation_issues=warehouse_comparison.get("allocationIssues", []),
                 hours_tolerance=AI_CONFIG["hours_tolerance"],
             )
-            report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "待图片识别复核报告")
+            report_path = run_dir / safe_labor_storage_filename("labor_reconciliation_report.xlsx", "pending_reocr_review")
             build_labor_report(
                 report_path,
                 comparison,
@@ -5483,7 +5483,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
 
         logger.info(f"[{run_id}] 生成差异报告...")
         update_labor_metadata(run_id, {"stage": "生成报告"})
-        report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告")
+        report_path = run_dir / safe_labor_storage_filename("labor_reconciliation_report.xlsx", "diff_report")
         build_labor_report(
             report_path,
             comparison,
@@ -5500,7 +5500,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         raise
     files = dict(metadata.get("files", {}))
     files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
-    business_report_path = run_dir / safe_labor_filename("海外劳务工报账核对业务报告.html", "业务报告")
+    business_report_path = run_dir / safe_labor_storage_filename("labor_reconciliation_business_report.html", "business_report")
     build_labor_business_html_report(
         business_report_path,
         comparison,

@@ -18,6 +18,7 @@ from .persistent_storage import (
     labor_persistent_storage_info,
     list_labor_metadata_from_persistent,
     sync_labor_files_to_persistent,
+    sync_labor_metadata_from_persistent,
     sync_labor_metadata_to_persistent,
     sync_labor_run_from_persistent,
     sync_labor_run_to_persistent,
@@ -154,8 +155,15 @@ def _labor_metadata_file_paths(files: Any) -> set[str]:
 
 def load_labor_metadata(run_dir: Path) -> Dict[str, Any]:
     path = run_dir / METADATA_FILE
-    if labor_persistent_storage_enabled() and not path.exists():
-        sync_labor_run_from_persistent(run_dir.name, run_dir)
+    if labor_persistent_storage_enabled():
+        refreshed = False
+        try:
+            refreshed = sync_labor_metadata_from_persistent(run_dir.name, run_dir)
+        except Exception:
+            if not path.exists():
+                refreshed = sync_labor_run_from_persistent(run_dir.name, run_dir)
+        if not refreshed and not path.exists():
+            sync_labor_run_from_persistent(run_dir.name, run_dir)
     if not path.exists():
         raise FileNotFoundError("劳务核对批次不存在。")
     payload = _read_labor_metadata_file(path)
@@ -230,7 +238,12 @@ def safe_labor_storage_filename(original_name: str, suffix: str = "") -> str:
         for char in raw_stem
     ).strip("_-")
     stem = re.sub(r"_+", "_", stem) or "file"
+    suffix_stem = "".join(
+        char if char.isascii() and (char.isalnum() or char in "_-") else "_"
+        for char in suffix.replace(" ", "_")
+    ).strip("_-")
+    suffix_stem = re.sub(r"_+", "_", suffix_stem)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    suffix_part = f"_{suffix}" if suffix else ""
+    suffix_part = f"_{suffix_stem}" if suffix_stem else ""
     ext = "".join(char for char in original.suffix.lower() if char.isascii() and (char.isalnum() or char == ".")) or ".bin"
     return f"{stem}{suffix_part}_{timestamp}{ext}"

@@ -107,6 +107,69 @@ def test_list_labor_metadata_from_supabase_reads_metadata_under_run_directories(
     assert [row["id"] for row in rows] == ["labor_new", "labor_old"]
 
 
+def test_safe_labor_storage_filename_removes_non_ascii_suffix():
+    filename = labor_runs.safe_labor_storage_filename("海外劳务工报账核对报告.xlsx", "差异报告")
+
+    assert filename.isascii()
+    assert filename.endswith(".xlsx")
+    assert "差异报告" not in filename
+
+
+def test_load_labor_metadata_refreshes_stale_persistent_metadata(monkeypatch, tmp_path):
+    run_dir = tmp_path / "labor_runs" / "labor_refresh"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"id": "labor_refresh", "status": "抽取中", "updatedAt": "2026-06-20T10:00:00"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
+
+    def fake_sync_metadata(run_id, run_dir_arg):
+        assert run_id == "labor_refresh"
+        (run_dir_arg / "metadata.json").write_text(
+            json.dumps({"id": "labor_refresh", "status": "已生成差异报告", "updatedAt": "2026-06-20T11:00:00"}),
+            encoding="utf-8",
+        )
+        return True
+
+    monkeypatch.setattr(labor_runs, "sync_labor_metadata_from_persistent", fake_sync_metadata)
+    monkeypatch.setattr(
+        labor_runs,
+        "sync_labor_run_from_persistent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("metadata refresh should avoid full file sync")),
+    )
+
+    metadata = labor_runs.load_labor_metadata(run_dir)
+
+    assert metadata["status"] == "已生成差异报告"
+
+
+def test_load_labor_metadata_keeps_local_copy_when_metadata_refresh_fails(monkeypatch, tmp_path):
+    run_dir = tmp_path / "labor_runs" / "labor_local"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(
+        json.dumps({"id": "labor_local", "status": "已生成差异报告", "updatedAt": "2026-06-20T11:00:00"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        labor_runs,
+        "sync_labor_metadata_from_persistent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("temporary storage outage")),
+    )
+    monkeypatch.setattr(
+        labor_runs,
+        "sync_labor_run_from_persistent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local metadata should be enough")),
+    )
+
+    metadata = labor_runs.load_labor_metadata(run_dir)
+
+    assert metadata["status"] == "已生成差异报告"
+
+
 def test_save_labor_metadata_uses_atomic_writes_for_persistent_backend(monkeypatch, tmp_path):
     run_dir = tmp_path / "labor_runs" / "labor_atomic"
     run_dir.mkdir(parents=True)
