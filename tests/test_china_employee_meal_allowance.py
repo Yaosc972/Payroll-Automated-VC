@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 import bonus_platform.app as app_module
 from bonus_platform.app import app
+import bonus_platform.engine.china_employee_payroll.meal_allowance as meal_allowance_module
 from bonus_platform.engine.china_employee_payroll import (
     calculate_meal_allowance,
     parse_attendance_workbooks,
@@ -340,11 +341,59 @@ def test_parse_multiple_attendance_exports_without_duplicate_employee_dates(tmp_
     assert parsed.duplicate_keys == []
 
 
+def test_hr_parser_opens_workbook_in_read_only_mode(tmp_path, monkeypatch):
+    file_path = tmp_path / "attendance.xlsx"
+    _write_attendance(file_path, [_row(工号="zt41001", 考勤日期=datetime(2026, 5, 1))])
+    calls = []
+
+    def recording_load_workbook(*args, **kwargs):
+        calls.append(kwargs.get("read_only"))
+        return load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(meal_allowance_module, "load_workbook", recording_load_workbook)
+
+    parsed = parse_attendance_workbooks([file_path])
+
+    assert calls == [True]
+    assert parsed.summary()["rowCount"] == 1
+    assert parsed.rows[0]["工号"] == "zt41001"
+
+
+def test_wx_parser_opens_workbook_in_read_only_mode(tmp_path, monkeypatch):
+    file_path = tmp_path / "wx.xlsx"
+    _write_wx_attendance(file_path, [_wx_row(工号="WX41001", 日期=datetime(2026, 5, 1))])
+    calls = []
+
+    def recording_load_workbook(*args, **kwargs):
+        calls.append(kwargs.get("read_only"))
+        return load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(meal_allowance_module, "load_workbook", recording_load_workbook)
+
+    parsed = parse_wx_attendance_workbooks([file_path])
+
+    assert calls == [True]
+    assert parsed.summary()["rowCount"] == 1
+    assert parsed.rows[0]["工号"] == "WX41001"
+
+
 def test_china_employee_payroll_run_storage_does_not_trigger_dev_reload():
     if not _is_relative_to(app_module.OUTPUT_DIR, app_module.PROJECT_ROOT):
         return
 
     assert not _is_relative_to(app_module.CHINA_EMPLOYEE_PAYROLL_RUNS_DIR, app_module.PROJECT_ROOT)
+
+
+def test_workbench_access_keeps_china_employee_payroll_open_when_developing_modules_hidden(monkeypatch):
+    monkeypatch.setenv("SIGMA_HIDE_DEVELOPING_MODULES", "1")
+
+    response = TestClient(app).get("/api/workbench/access")
+
+    assert response.status_code == 200
+    blocked_keys = {item["key"] for item in response.json()["blockedModules"]}
+    assert "cn_employee_payroll" not in blocked_keys
+    assert "domestic_labor" in blocked_keys
+    assert "fbu_performance" in blocked_keys
 
 
 def test_meal_allowance_api_accepts_multiple_attendance_exports(tmp_path):

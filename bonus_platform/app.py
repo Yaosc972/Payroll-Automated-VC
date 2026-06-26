@@ -244,6 +244,17 @@ def _require_admin_user(actor_user_id: str = Depends(_current_user_id)) -> str:
     return actor_user_id
 
 
+def _user_can_enter_module(user_id: str, module_id: str) -> bool:
+    try:
+        current = _get_cached_current_user(user_id)
+    except KeyError:
+        return False
+    return any(
+        module.get("id") == module_id and module.get("enabled") and module.get("canEnter")
+        for module in current.get("modules", [])
+    )
+
+
 def _payload_bool(payload: dict, key: str) -> bool:
     value = payload.get(key)
     if not isinstance(value, bool):
@@ -439,11 +450,6 @@ def _workbench_access_config() -> dict:
     if _hide_developing_modules():
         blocked_modules = [
             {
-                "key": "cn_employee_payroll",
-                "label": "中国区正式工薪酬核算",
-                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
-            },
-            {
                 "key": "domestic_labor",
                 "label": "中国区外包工薪酬核算",
                 "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
@@ -586,6 +592,47 @@ async def overseas_labor_access_gate(request: Request, call_next):
                   <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
                     <h1>海外劳务报账核对暂未开放</h1>
                     <p>当前生产权限未开放此 UAT 模块。请联系薪酬自动化管理员调整权限后再访问。</p>
+                    <p><a href="/">返回西格玛工作台</a></p>
+                  </body>
+                </html>
+                """,
+                status_code=403,
+            )
+        session_token = request.cookies.get(SESSION_COOKIE_NAME)
+        user_id = None
+        if session_token:
+            try:
+                user_id = get_session_user_id(session_token)
+            except KeyError:
+                user_id = None
+        if not user_id:
+            if is_labor_api:
+                return JSONResponse({"detail": "未登录。", "access": access}, status_code=401)
+            return HTMLResponse(
+                """
+                <!doctype html>
+                <html lang="zh-CN">
+                  <head><meta charset="utf-8"><title>需要登录</title></head>
+                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                    <h1>请先登录西格玛工作台</h1>
+                    <p>海外劳务报账核对仅对已授权用户开放。</p>
+                    <p><a href="/login.html?next=/overseas-labor.html">前往登录</a></p>
+                  </body>
+                </html>
+                """,
+                status_code=401,
+            )
+        if not _user_can_enter_module(user_id, "overseas"):
+            if is_labor_api:
+                return JSONResponse({"detail": "当前用户没有海外劳务报账核对权限。", "access": access}, status_code=403)
+            return HTMLResponse(
+                """
+                <!doctype html>
+                <html lang="zh-CN">
+                  <head><meta charset="utf-8"><title>无权限访问</title></head>
+                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                    <h1>无权限访问：海外劳务报账核对</h1>
+                    <p>该模块保持 UAT 试点，仅海外报账管理员或系统管理员可进入。</p>
                     <p><a href="/">返回西格玛工作台</a></p>
                   </body>
                 </html>

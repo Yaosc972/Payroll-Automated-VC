@@ -87,6 +87,26 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     assert "set_module_enabled" in actions
 
 
+def test_overseas_labor_requires_module_role_on_page_and_api(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/mock-login", json={"userId": "recruitmentAdminUser"})
+        page_without_role = client.get("/overseas-labor.html")
+        api_without_role = client.get("/api/labor/runs")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "overseasAdminUser"})
+        page_with_role = client.get("/overseas-labor.html")
+        api_with_role = client.get("/api/labor/runs")
+
+    assert page_without_role.status_code == 403
+    assert api_without_role.status_code == 403
+    assert page_with_role.status_code == 200
+    assert api_with_role.status_code == 200
+
+
 def test_admin_api_rejects_invalid_ids_and_non_admin_actor(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
