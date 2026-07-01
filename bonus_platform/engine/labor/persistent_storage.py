@@ -23,6 +23,19 @@ from .blob_storage import (
     sync_labor_run_to_blob,
     list_labor_metadata_from_blob,
 )
+from .obs_storage import (
+    labor_obs_storage_enabled,
+    obs_bucket_name,
+    obs_environment,
+    obs_health,
+    obs_object_key,
+    obs_put_bytes,
+    sync_labor_run_to_obs,
+    sync_labor_run_from_obs,
+    sync_labor_files_to_obs,
+    list_labor_metadata_from_obs,
+    create_obs_presigned_upload,
+)
 
 
 class SupabaseStorageStatusError(RuntimeError):
@@ -43,10 +56,17 @@ def labor_supabase_storage_enabled() -> bool:
 
 
 def labor_persistent_storage_enabled() -> bool:
-    return labor_blob_storage_enabled() or labor_supabase_storage_enabled()
+    return labor_blob_storage_enabled() or labor_supabase_storage_enabled() or labor_obs_storage_enabled()
 
 
 def labor_persistent_storage_info() -> dict[str, Any]:
+    if labor_obs_storage_enabled():
+        return {
+            "enabled": True,
+            "backend": "obs",
+            "bucket": obs_bucket_name(),
+            "environment": obs_environment(),
+        }
     if labor_supabase_storage_enabled():
         return {
             "enabled": True,
@@ -71,6 +91,9 @@ def labor_persistent_storage_health(*, probe: bool = False) -> dict[str, Any]:
         "enabled": labor_persistent_storage_enabled(),
         "probe": bool(probe),
     }
+    if backend == "obs":
+        health.update(obs_health(probe=probe))
+        return health
     if backend == "supabase":
         health.update(
             {
@@ -126,6 +149,9 @@ def labor_persistent_environment() -> str:
 
 
 def sync_labor_run_to_persistent(run_id: str, run_dir: Path) -> None:
+    if labor_obs_storage_enabled():
+        sync_labor_run_to_obs(run_id, run_dir)
+        return
     if labor_supabase_storage_enabled():
         sync_labor_run_to_supabase(run_id, run_dir)
         return
@@ -134,6 +160,18 @@ def sync_labor_run_to_persistent(run_id: str, run_dir: Path) -> None:
 
 
 def sync_labor_metadata_to_persistent(run_id: str, run_dir: Path, metadata: dict[str, Any]) -> None:
+    if labor_obs_storage_enabled():
+        content = json.dumps(
+            canonicalize_labor_metadata_for_blob(run_dir, metadata),
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        obs_put_bytes(
+            obs_object_key(run_id, "metadata.json"),
+            content,
+            content_type="application/json",
+        )
+        return
     if labor_supabase_storage_enabled():
         content = json.dumps(
             canonicalize_labor_metadata_for_blob(run_dir, metadata),
@@ -151,6 +189,9 @@ def sync_labor_metadata_to_persistent(run_id: str, run_dir: Path, metadata: dict
 
 
 def sync_labor_files_to_persistent(run_id: str, run_dir: Path, relative_paths: Iterable[str]) -> None:
+    if labor_obs_storage_enabled():
+        sync_labor_files_to_obs(run_id, run_dir, relative_paths)
+        return
     if labor_supabase_storage_enabled():
         sync_labor_files_to_supabase(run_id, run_dir, relative_paths)
         return
@@ -159,6 +200,8 @@ def sync_labor_files_to_persistent(run_id: str, run_dir: Path, relative_paths: I
 
 
 def sync_labor_run_from_persistent(run_id: str, run_dir: Path) -> bool:
+    if labor_obs_storage_enabled():
+        return sync_labor_run_from_obs(run_id, run_dir)
     if labor_supabase_storage_enabled():
         return sync_labor_run_from_supabase(run_id, run_dir)
     if labor_blob_storage_enabled():
@@ -167,6 +210,8 @@ def sync_labor_run_from_persistent(run_id: str, run_dir: Path) -> bool:
 
 
 def list_labor_metadata_from_persistent() -> list[dict[str, Any]]:
+    if labor_obs_storage_enabled():
+        return list_labor_metadata_from_obs()
     if labor_supabase_storage_enabled():
         return list_labor_metadata_from_supabase()
     if labor_blob_storage_enabled():
@@ -193,6 +238,15 @@ def labor_supabase_bucket() -> str:
         or os.environ.get("SUPABASE_STORAGE_BUCKET")
         or "sigma-labor-runs"
     ).strip()
+
+
+def create_labor_direct_upload(run_id: str, relative_path: str) -> dict[str, Any]:
+    """Return a signed URL for direct file upload, dispatching to the active backend."""
+    if labor_obs_storage_enabled():
+        return create_obs_presigned_upload(run_id, relative_path)
+    if labor_supabase_storage_enabled():
+        return create_labor_supabase_signed_upload(run_id, relative_path)
+    raise RuntimeError("没有可用的持久化存储后端（OBS / Supabase / Blob）。")
 
 
 def create_labor_supabase_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:

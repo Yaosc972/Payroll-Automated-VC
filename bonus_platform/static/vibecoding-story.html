@@ -846,6 +846,10 @@
           position: static;
         }
       }
+
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded { padding-top: 0; }
+      body.embedded .story-section { padding-top: clamp(24px, 4vw, 48px); }
     </style>
   </head>
   <body>
@@ -1422,5 +1426,6 @@ http://127.0.0.1:8000/vibecoding-story.html</div>
         </section>
       </div>
     </div>
+    <script src="hras-sdk.js"></script>
   </body>
 </html>

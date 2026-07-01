@@ -7,7 +7,13 @@
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=30" />
     <script src="permission-guard.js?v=8"></script>
-    <style>html { color-scheme: light; }</style>
+    <style>
+      html { color-scheme: light; }
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .app-chrome { min-height: 52px; padding: 8px clamp(16px, 2.5vw, 32px); }
+      body.embedded .kpi-banner { padding: 8px clamp(16px, 2.5vw, 32px); }
+      body.embedded .workspace { padding-top: 12px; }
+    </style>
   </head>
   <body class="domestic-labor-shell">
 
@@ -315,5 +321,6 @@
         if (name) document.getElementById('fileUploadZone').classList.add('has-file');
       });
     </script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

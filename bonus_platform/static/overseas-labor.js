@@ -498,13 +498,13 @@ function fileToUploadDescriptor(file) {
 }
 
 async function uploadOneFileToSignedUrl(upload, file) {
-  const body = new FormData();
-  body.append("cacheControl", "3600");
-  body.append("", file);
+  // OBS presigned URL requires raw bytes + Content-Type.
+  // Supabase Storage also accepts this format, so it works for both backends.
+  const contentType = upload.contentType || file.type || "application/octet-stream";
   const response = await fetch(upload.signedUrl, {
     method: "PUT",
-    headers: { "x-upsert": "true" },
-    body,
+    headers: { "Content-Type": contentType },
+    body: file,
   });
   if (!response.ok) {
     const text = await response.text().catch(() => "");

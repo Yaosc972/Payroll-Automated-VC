@@ -8,6 +8,11 @@
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=admin-1" />
     <script src="permission-guard.js?v=8"></script>
+    <style>
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .dashboard-frame { margin-top: 10px; }
+      body.embedded .dashboard-topbar { padding: 10px 18px; }
+    </style>
   </head>
   <body class="portal-shell dashboard-shell admin-console-shell">
     <div class="portal-mesh" aria-hidden="true">
@@ -185,5 +190,6 @@
     </div>
 
     <script src="admin.js?v=1"></script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

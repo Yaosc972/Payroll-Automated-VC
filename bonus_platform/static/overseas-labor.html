@@ -1557,6 +1557,18 @@
           grid-template-columns: 1fr;
         }
       }
+
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .overseas-labor-shell .app-chrome {
+        min-height: 56px;
+        padding: 8px clamp(16px, 2.5vw, 32px);
+      }
+      body.embedded .overseas-labor-shell .kpi-banner {
+        padding: 10px clamp(16px, 2.5vw, 32px);
+      }
+      body.embedded .overseas-labor-shell .preflight-stage {
+        padding-top: 14px;
+      }
     </style>
   </head>
   <body class="overseas-labor-shell brushed-metal overseas-workbench-shell">
@@ -2001,5 +2013,6 @@
         if (count > 0) document.getElementById('xlsxUploadZone').classList.add('has-file');
       });
     </script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

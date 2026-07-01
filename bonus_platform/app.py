@@ -17,19 +17,20 @@ logging.basicConfig(
 from pathlib import Path
 import shutil
 from tempfile import NamedTemporaryFile, gettempdir
-from time import monotonic
+from time import monotonic, time
 from typing import Any, Optional
 from urllib.parse import quote, urlencode
 from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
+from jose import JWTError, jwt
 from openpyxl import load_workbook
 
 logger = logging.getLogger("bonus_platform.labor")
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, PROJECT_ROOT, ensure_data_files
+from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, HRAS_CONFIG, HRAS_JWT_ALGORITHM, HRAS_JWT_SECRET, PROJECT_ROOT, ensure_data_files
 from .engine.domestic_labor.parser import PayrollDataLoader
 from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
@@ -91,6 +92,7 @@ from .engine.admin_store import (
     set_module_role_access,
     set_user_roles,
     upsert_feishu_user,
+    upsert_shell_user,
 )
 
 
@@ -165,7 +167,9 @@ from .engine.labor.runs import (
 from .engine.labor.jobs import enqueue_labor_reconciliation_job, labor_worker_job_store_health, labor_worker_jobs_enabled
 from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
 from .engine.labor.persistent_storage import (
+    create_labor_direct_upload,
     create_labor_supabase_signed_upload,
+    labor_obs_storage_enabled,
     labor_persistent_storage_enabled,
     labor_persistent_storage_health,
     labor_supabase_storage_enabled,
@@ -196,7 +200,49 @@ async def lifespan(app: FastAPI):
         init_admin_store()
     if not _is_vercel_runtime():
         _recover_stuck_labor_runs()
+    await _register_to_hras_shell()
     yield
+
+
+async def _register_to_hras_shell():
+    """启动时向 HRAS 壳子平台自动注册子应用模块。注册失败不影响正常使用。"""
+    hras = HRAS_CONFIG
+    if not hras["register_enabled"]:
+        print("[HRAS注册] 已跳过（HRAS_SHELL_REGISTER_ENABLED=false），模块独立运行。")
+        return
+    payload = {
+        "module_key": hras["module_key"],
+        "name": hras["module_name"],
+        "frontend_url": hras["frontend_url"],
+        "backend_url": hras["backend_url"],
+        "health_path": "/api/health",
+        "metrics_path": "/api/metrics",
+        "menu": {
+            "icon": "appstore",
+            "children": [
+                {"path": "/", "name": "首页"},
+                {"path": "/overseas-labor.html", "name": "海外劳务报账"},
+                {"path": "/admin.html", "name": "管理后台"},
+            ],
+        },
+    }
+    shell_url = hras["shell_url"].rstrip("/")
+    api_key = hras["api_key"]
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(f"{shell_url}/api/modules/register", json=payload, headers=headers)
+            resp.raise_for_status()
+            print(f"[HRAS注册] ✅ 注册成功 | module_key={hras['module_key']} | shell={shell_url} | status={resp.status_code}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            print(f"[HRAS注册] ⚠️ 注册失败（apiKey 认证被拒），请检查 HRAS_MODULE_API_KEY 环境变量。HTTP 401")
+        else:
+            print(f"[HRAS注册] ⚠️ 注册失败，壳子返回 HTTP {exc.response.status_code}。模块仍可独立运行。")
+    except Exception as exc:
+        print(f"[HRAS注册] ⚠️ 注册失败（壳子可能未启动），模块仍可独立运行。错误：{exc}")
 
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
@@ -211,6 +257,16 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+
+
+@app.middleware("http")
+async def _allow_iframe_middleware(request: Request, call_next):
+    """移除 X-Frame-Options，允许被 HRAS 壳子 iframe 嵌入。"""
+    response = await call_next(request)
+    # Starlette/FastAPI 默认不设 X-Frame-Options；若后续添加则显式移除
+    if "X-Frame-Options" in response.headers:
+        del response.headers["X-Frame-Options"]
+    return response
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -598,7 +654,53 @@ async def overseas_labor_access_gate(request: Request, call_next):
 @app.get("/api/health")
 def health() -> dict:
     ensure_data_files()
-    return {"status": "ok", "rule_workbook": str(DEFAULT_RULE_WORKBOOK)}
+    return {"status": "UP"}
+
+
+# ── 请求统计（/metrics 端点用） ──────────────────────────────────
+_metrics_started_at = time()
+_metrics_request_count = 0
+_metrics_error_count = 0
+_metrics_total_response_ms = 0.0
+
+
+@app.middleware("http")
+async def _metrics_middleware(request: Request, call_next):
+    global _metrics_request_count, _metrics_error_count, _metrics_total_response_ms
+    _metrics_request_count += 1
+    start = time()
+    response = await call_next(request)
+    elapsed_ms = (time() - start) * 1000
+    _metrics_total_response_ms += elapsed_ms
+    if response.status_code >= 400:
+        _metrics_error_count += 1
+    return response
+
+
+@app.get("/api/metrics")
+def metrics() -> dict:
+    global _metrics_request_count, _metrics_error_count, _metrics_total_response_ms
+    avg_ms = round(_metrics_total_response_ms / _metrics_request_count, 2) if _metrics_request_count > 0 else 0
+    error_rate = round(_metrics_error_count / _metrics_request_count, 3) if _metrics_request_count > 0 else 0.0
+    try:
+        import psutil
+        proc = psutil.Process()
+        cpu = round(proc.cpu_percent(interval=0.1), 1)
+        mem = round(proc.memory_info().rss / (1024 * 1024), 1)
+    except Exception:
+        cpu, mem = -1.0, -1.0
+    return {
+        "status": "UP",
+        "timestamp": int(time()),
+        "base": {
+            "request_count": _metrics_request_count,
+            "error_rate": error_rate,
+            "avg_response_ms": avg_ms,
+            "cpu_percent": cpu,
+            "memory_mb": mem,
+        },
+        "custom": {},
+    }
 
 
 @app.get("/api/auth/mock-users")
@@ -724,6 +826,92 @@ def api_auth_feishu_callback(
         path="/",
     )
     return redirect
+
+
+# ── 壳子内自动登录（JWT 验证 + 用户匹配） ──────────────────
+
+def _verify_shell_jwt(token: str) -> dict[str, Any]:
+    """验证壳子签发的 JWT Token，返回 payload。"""
+    try:
+        payload: dict[str, Any] = jwt.decode(token, HRAS_JWT_SECRET, algorithms=[HRAS_JWT_ALGORITHM])
+        return payload
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail=f"壳子 JWT 验证失败：{exc}") from exc
+
+
+@app.get("/api/auth/shell/config")
+def api_auth_shell_config() -> dict:
+    """返回壳子自动登录是否可用（JWT 密钥已配置即为可用）。"""
+    return {"enabled": bool(HRAS_JWT_SECRET)}
+
+
+@app.post("/api/auth/shell/login")
+def api_auth_shell_login(
+    response: Response,
+    request: Request,
+    payload: dict = Body({}),
+) -> dict:
+    """壳子内自动登录：验证壳子 JWT Token，匹配或创建用户，返回登录态。
+
+    请求头需携带 Authorization: Bearer <壳子JWT>。
+    请求体可选（无上下文时从 JWT payload 提取 username）。
+    """
+    # 1. 提取并验证 JWT
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="缺少 Authorization: Bearer <token>")
+    jwt_token = auth_header[7:]
+    jwt_payload = _verify_shell_jwt(jwt_token)
+
+    # 2. 从请求体或 JWT payload 提取用户上下文
+    #    优先请求体（postMessage 下发的完整上下文），无请求体时从 JWT 中提取
+    feishu_open_id = payload.get("feishuOpenId") or None
+    feishu_union_id = payload.get("feishuUnionId") or None
+    feishu_user_id = payload.get("feishuUserId") or None
+    username = str(payload.get("username") or jwt_payload.get("username", ""))
+    real_name = str(payload.get("realName") or "")
+    email = payload.get("email") or None
+    bu_id = payload.get("buId") or jwt_payload.get("buId")
+    bu_code = str(payload.get("buCode") or jwt_payload.get("buCode", ""))
+    org_code = str(payload.get("orgCode") or jwt_payload.get("orgCode", ""))
+    org_bs_code = str(payload.get("orgBsCode") or jwt_payload.get("orgBsCode", ""))
+
+    if not username:
+        raise HTTPException(status_code=400, detail="缺少 username")
+
+    # 3. 匹配或创建用户
+    try:
+        user = upsert_shell_user(
+            feishu_open_id=feishu_open_id,
+            feishu_union_id=feishu_union_id,
+            feishu_user_id=feishu_user_id,
+            username=username,
+            real_name=real_name,
+            email=email,
+            bu_id=bu_id,
+            bu_code=bu_code,
+            org_code=org_code,
+            org_bs_code=org_bs_code,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"用户匹配/创建失败：{exc}") from exc
+
+    user_id = user["id"]
+
+    # 4. 创建 session
+    session_token = create_session(user_id, action="shell_login")
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_token,
+        httponly=True,
+        samesite="lax",
+        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        max_age=7 * 24 * 60 * 60,
+        path="/",
+    )
+
+    _clear_current_user_cache()
+    return _get_cached_current_user(user_id)
 
 
 @app.get("/api/me")
@@ -1388,13 +1576,13 @@ async def upload_labor_files(
 
 @app.post("/api/labor/runs/{run_id}/direct-upload-plan")
 def create_labor_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> dict:
-    if not labor_supabase_storage_enabled():
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
         raise HTTPException(
             status_code=409,
             detail=_labor_request_error(
-                message="当前环境未启用 Supabase 直传。",
+                message="当前环境未启用持久化存储直传（OBS / Supabase）。",
                 error_code="LABOR_DIRECT_UPLOAD_UNAVAILABLE",
-                next_action="请使用普通上传，或联系管理员检查 Supabase Storage 配置。",
+                next_action="请使用普通上传，或联系管理员检查存储配置。",
                 retryable=False,
             ),
         )
@@ -1436,8 +1624,8 @@ def create_labor_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> d
 
 @app.post("/api/labor/runs/{run_id}/direct-upload-complete")
 def complete_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
-    if not labor_supabase_storage_enabled():
-        raise HTTPException(status_code=409, detail="当前环境未启用 Supabase 直传。")
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
+        raise HTTPException(status_code=409, detail="当前环境未启用持久化存储直传（OBS / Supabase）。")
     try:
         run_dir = get_labor_run_dir(run_id)
         metadata = load_labor_metadata(run_dir)
@@ -6059,13 +6247,13 @@ def _build_labor_direct_upload_item(run_id: str, item: Any, *, group: str) -> di
         raise ValueError(f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{original_name}")
     filename = safe_labor_storage_filename(original_name, "direct")
     relative_path = filename
-    signed_upload = create_labor_supabase_signed_upload(run_id, relative_path)
+    signed_upload = create_labor_direct_upload(run_id, relative_path)
     return {
         "group": group,
         "filename": filename,
         "originalFilename": original_name,
         "relativePath": relative_path,
-        "objectPath": signed_upload["objectPath"],
+        "objectPath": signed_upload.get("objectPath") or signed_upload.get("objectKey") or "",
         "signedUrl": signed_upload["signedUrl"],
         "size": int(item.get("size") or 0),
         "contentType": str(item.get("type") or "application/octet-stream"),

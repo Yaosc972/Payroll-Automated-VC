@@ -3779,6 +3779,10 @@
           justify-content: flex-start;
         }
       }
+
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .top-bar { min-height: 48px; padding: 8px 16px; }
+      body.embedded .page-content { padding-top: 10px; }
     </style>
   </head>
   <body>
@@ -4286,5 +4290,6 @@
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
 
     <script src="fbu-performance.js?v=custom-month-dialog-20260610"></script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

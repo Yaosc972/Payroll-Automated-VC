@@ -7,7 +7,13 @@
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=35" />
     <script src="permission-guard.js?v=8"></script>
-    <style>html { color-scheme: light; }</style>
+    <style>
+      html { color-scheme: light; }
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .app-chrome { min-height: 52px; padding: 8px clamp(16px, 2.5vw, 32px); }
+      body.embedded .employee-module-hub { padding-top: 10px; }
+      body.embedded .employee-workspace { padding-top: 10px; }
+    </style>
   </head>
   <body class="china-employee-payroll-shell">
     <header class="app-chrome">
@@ -271,5 +277,6 @@
     <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
     <script src="assets/xlsx.full.min.js"></script>
     <script src="china-employee-payroll.js?v=2"></script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

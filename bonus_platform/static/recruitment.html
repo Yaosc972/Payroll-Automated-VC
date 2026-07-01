@@ -11,6 +11,12 @@
     <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_semanticui.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css?v=21" />
     <script src="permission-guard.js?v=8"></script>
+    <style>
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .app-header { min-height: 52px; }
+      body.embedded .header-inner { padding-top: 8px; padding-bottom: 8px; }
+      body.embedded .workbench { padding-top: 14px; }
+    </style>
   </head>
   <body class="brushed-metal">
     <div class="ambient-brand" aria-hidden="true">SIGMA</div>
@@ -247,5 +253,6 @@
 
     <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
     <script src="app.js?v=16"></script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

@@ -13,6 +13,87 @@ from urllib.parse import urlparse
 from .. import config
 
 
+MYSQL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS admin_users (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255),
+  avatar_url TEXT,
+  feishu_open_id VARCHAR(255),
+  feishu_union_id VARCHAR(255),
+  status VARCHAR(50) NOT NULL DEFAULT 'active',
+  created_at VARCHAR(50) NOT NULL,
+  updated_at VARCHAR(50) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_roles (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  module_id VARCHAR(255),
+  is_system TINYINT NOT NULL DEFAULT 0,
+  created_at VARCHAR(50) NOT NULL,
+  updated_at VARCHAR(50) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_user_roles (
+  user_id VARCHAR(255) NOT NULL,
+  role_id VARCHAR(255) NOT NULL,
+  created_at VARCHAR(50) NOT NULL,
+  PRIMARY KEY (user_id, role_id),
+  FOREIGN KEY (user_id) REFERENCES admin_users(id),
+  FOREIGN KEY (role_id) REFERENCES admin_roles(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_modules (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  href VARCHAR(500) NOT NULL,
+  owner_role_id VARCHAR(255),
+  enabled TINYINT NOT NULL DEFAULT 0,
+  development_status VARCHAR(50) NOT NULL DEFAULT 'developing',
+  created_at VARCHAR(50) NOT NULL,
+  updated_at VARCHAR(50) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_role_module_permissions (
+  role_id VARCHAR(255) NOT NULL,
+  module_id VARCHAR(255) NOT NULL,
+  can_enter TINYINT NOT NULL DEFAULT 0,
+  updated_at VARCHAR(50) NOT NULL,
+  PRIMARY KEY (role_id, module_id),
+  FOREIGN KEY (role_id) REFERENCES admin_roles(id),
+  FOREIGN KEY (module_id) REFERENCES admin_modules(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_role_feature_permissions (
+  role_id VARCHAR(255) NOT NULL,
+  feature_id VARCHAR(255) NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 0,
+  updated_at VARCHAR(50) NOT NULL,
+  PRIMARY KEY (role_id, feature_id),
+  FOREIGN KEY (role_id) REFERENCES admin_roles(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  actor_user_id VARCHAR(255) NOT NULL,
+  action VARCHAR(255) NOT NULL,
+  target_type VARCHAR(255) NOT NULL,
+  target_id VARCHAR(255) NOT NULL,
+  detail TEXT,
+  created_at VARCHAR(50) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash VARCHAR(64) PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  created_at VARCHAR(50) NOT NULL,
+  expires_at VARCHAR(50) NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES admin_users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+"""
+
+
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
@@ -225,6 +306,8 @@ def _database_backend(db_path: Path | None = None) -> str:
         return "sqlite"
     if database_url.startswith(("postgres://", "postgresql://")):
         return "postgres"
+    if database_url.startswith("mysql://"):
+        return "mysql"
     if database_url.startswith("sqlite://"):
         return "sqlite"
     scheme = database_url.split(":", 1)[0]
@@ -261,31 +344,72 @@ def _postgres_connection(database_url: str):
     return psycopg.connect(database_url, row_factory=dict_row, prepare_threshold=None, connect_timeout=5)
 
 
+def _mysql_connection(database_url: str):
+    try:
+        import pymysql
+        from urllib.parse import unquote
+    except ImportError as exc:
+        raise RuntimeError("MySQL admin store requires installing PyMySQL") from exc
+    parsed = urlparse(database_url)
+    return pymysql.connect(
+        host=parsed.hostname or "127.0.0.1",
+        port=parsed.port or 3306,
+        user=parsed.username or "root",
+        password=unquote(parsed.password) if parsed.password else "",
+        database=(parsed.path or "/sigma").lstrip("/") or "sigma",
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
+        connect_timeout=5,
+        read_timeout=30,
+    )
+
+
 class _AdminConnection:
     def __init__(self, raw_connection: Any, backend: str):
         self.raw_connection = raw_connection
         self.backend = backend
+        self._cursor: Any = None
 
     def __enter__(self) -> "_AdminConnection":
+        if self.backend == "mysql":
+            self._cursor = self.raw_connection.cursor()
+            return self
         self.raw_connection.__enter__()
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> Any:
+        if self.backend == "mysql":
+            try:
+                if exc_type is not None:
+                    self.raw_connection.rollback()
+                else:
+                    self.raw_connection.commit()
+            finally:
+                if self._cursor:
+                    self._cursor.close()
+                self.raw_connection.close()
+            return False
         return self.raw_connection.__exit__(exc_type, exc, traceback)
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> Any:
-        if self.backend == "postgres":
+        if self.backend in ("postgres", "mysql"):
             sql = sql.replace("?", "%s")
+        if self.backend == "mysql":
+            self._cursor.execute(sql, params)
+            return self._cursor
         return self.raw_connection.execute(sql, params)
 
     def executescript(self, script: str) -> None:
+        if self.backend in ("postgres", "mysql"):
+            for statement in script.split(";"):
+                statement = statement.strip()
+                if statement:
+                    self.execute(statement)
+            return
         if self.backend == "sqlite":
             self.raw_connection.executescript(script)
             return
-        for statement in script.split(";"):
-            statement = statement.strip()
-            if statement:
-                self.execute(statement)
 
     def commit(self) -> None:
         self.raw_connection.commit()
@@ -296,6 +420,8 @@ class _AdminConnection:
 
 def _connect(db_path: Path | None = None) -> _AdminConnection:
     backend = _database_backend(db_path)
+    if backend == "mysql":
+        return _AdminConnection(_mysql_connection(get_admin_database_url()), "mysql")
     if backend == "postgres":
         return _AdminConnection(_postgres_connection(get_admin_database_url()), "postgres")
     path = _sqlite_db_path(db_path)
@@ -309,14 +435,21 @@ def _connect(db_path: Path | None = None) -> _AdminConnection:
 def init_admin_store(db_path: Path | None = None) -> Path | str:
     global _STORE_INITIALIZED, _STORE_INITIALIZED_TARGET
     backend = _database_backend(db_path)
-    target = get_admin_database_url() if backend == "postgres" else str(_sqlite_db_path(db_path))
+    target = get_admin_database_url() if backend in ("postgres", "mysql") else str(_sqlite_db_path(db_path))
     if db_path is None and _STORE_INITIALIZED and _STORE_INITIALIZED_TARGET == target:
         return target
     with _connect(db_path) as connection:
         if backend == "postgres":
             connection.execute("SELECT pg_advisory_xact_lock(917137)")
+        elif backend == "mysql":
+            connection.execute("SELECT GET_LOCK('sigma_admin_schema_init', 5)")
         try:
-            connection.executescript(POSTGRES_SCHEMA if backend == "postgres" else SQLITE_SCHEMA)
+            if backend == "mysql":
+                connection.executescript(MYSQL_SCHEMA)
+            elif backend == "postgres":
+                connection.executescript(POSTGRES_SCHEMA)
+            else:
+                connection.executescript(SQLITE_SCHEMA)
             _migrate_schema(connection)
             _seed_defaults(connection)
             connection.commit()
@@ -326,7 +459,7 @@ def init_admin_store(db_path: Path | None = None) -> Path | str:
         except Exception:
             connection.rollback()
             raise
-    return get_admin_database_url() if backend == "postgres" else _sqlite_db_path(db_path)
+    return get_admin_database_url() if backend in ("postgres", "mysql") else _sqlite_db_path(db_path)
 
 
 def _column_exists(connection: _AdminConnection, table: str, column: str) -> bool:
@@ -336,6 +469,18 @@ def _column_exists(connection: _AdminConnection, table: str, column: str) -> boo
             SELECT 1
             FROM information_schema.columns
             WHERE table_name = %s AND column_name = %s
+            LIMIT 1
+            """,
+            (table, column),
+        ).fetchone()
+        return bool(row)
+    if connection.backend == "mysql":
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+              AND table_name = %s AND column_name = %s
             LIMIT 1
             """,
             (table, column),
@@ -357,6 +502,13 @@ def _insert_seed(connection: _AdminConnection, table: str, columns: list[str], c
         conflict_sql = ", ".join(conflict_columns)
         connection.execute(
             f"INSERT INTO {table} ({column_sql}) VALUES ({placeholder_sql}) ON CONFLICT ({conflict_sql}) DO NOTHING",
+            tuple(values[column] for column in columns),
+        )
+        return
+    if connection.backend == "mysql":
+        placeholder_sql = ", ".join("%s" for _ in columns)
+        connection.execute(
+            f"INSERT IGNORE INTO {table} ({column_sql}) VALUES ({placeholder_sql})",
             tuple(values[column] for column in columns),
         )
         return
@@ -385,7 +537,7 @@ def _seed_defaults(connection: _AdminConnection) -> None:
             ["id"],
             {**module, "created_at": now, "updated_at": now},
         )
-        if connection.backend == "postgres":
+        if connection.backend in ("postgres", "mysql"):
             connection.execute(
                 """
                 UPDATE admin_modules
@@ -688,6 +840,79 @@ def upsert_feishu_user(
     return next(user for user in list_users(db_path) if user["id"] == user_id)
 
 
+def upsert_shell_user(
+    *,
+    feishu_open_id: str | None = None,
+    feishu_union_id: str | None = None,
+    feishu_user_id: str | None = None,
+    username: str,
+    real_name: str,
+    email: str | None = None,
+    bu_id: int | None = None,
+    bu_code: str = "",
+    org_code: str = "",
+    org_bs_code: str = "",
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    """按壳子传入的用户信息匹配或创建用户。
+
+    匹配优先级：
+    1. feishu_open_id 非空 → 精确匹配 feishu_open_id
+    2. feishu_open_id 为空 → email 或 name 匹配
+    3. 都不匹配 → 创建新用户
+    """
+    init_admin_store(db_path)
+    now = _now()
+    with _connect(db_path) as connection:
+        if feishu_open_id:
+            existing = connection.execute(
+                "SELECT id FROM admin_users WHERE feishu_open_id = ? LIMIT 1",
+                (feishu_open_id,),
+            ).fetchone()
+        else:
+            existing = connection.execute(
+                """SELECT id FROM admin_users
+                   WHERE (email IS NOT NULL AND email = ?)
+                      OR (name = ?)
+                   LIMIT 1""",
+                (email, real_name),
+            ).fetchone()
+
+        display_name = real_name or username
+        if feishu_open_id:
+            user_id = str(existing["id"]) if existing else f"shell_{feishu_open_id}"
+        else:
+            user_id = str(existing["id"]) if existing else f"shell_{username}"
+
+        if existing:
+            connection.execute(
+                """
+                UPDATE admin_users
+                SET name = COALESCE(?, name),
+                    email = COALESCE(?, email),
+                    feishu_open_id = COALESCE(?, feishu_open_id),
+                    feishu_union_id = COALESCE(?, feishu_union_id),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (display_name, email, feishu_open_id, feishu_union_id, now, user_id),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO admin_users (
+                  id, name, email, avatar_url, feishu_open_id, feishu_union_id, status, created_at, updated_at
+                )
+                VALUES (?, ?, ?, NULL, ?, ?, 'pending', ?, ?)
+                """,
+                (user_id, display_name, email, feishu_open_id, feishu_union_id, now, now),
+            )
+        _insert_audit(connection, user_id, "shell_user_upsert", "user", user_id, email or real_name)
+        connection.commit()
+    ensure_bootstrap_admin_for_user(user_id, db_path)
+    return next(user for user in list_users(db_path) if user["id"] == user_id)
+
+
 def get_session_user_id(token: str, db_path: Path | None = None) -> str:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
@@ -775,16 +1000,28 @@ def set_module_role_access(
             raise KeyError("module_not_found")
         if not connection.execute("SELECT 1 FROM admin_roles WHERE id = ?", (role_id,)).fetchone():
             raise KeyError("role_not_found")
-        connection.execute(
-            """
-            INSERT INTO admin_role_module_permissions (role_id, module_id, can_enter, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(role_id, module_id) DO UPDATE SET
-              can_enter = excluded.can_enter,
-              updated_at = excluded.updated_at
-            """,
-            (role_id, module_id, 1 if can_enter else 0, now),
-        )
+        if connection.backend == "mysql":
+            connection.execute(
+                """
+                INSERT INTO admin_role_module_permissions (role_id, module_id, can_enter, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  can_enter = VALUES(can_enter),
+                  updated_at = VALUES(updated_at)
+                """,
+                (role_id, module_id, 1 if can_enter else 0, now),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO admin_role_module_permissions (role_id, module_id, can_enter, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(role_id, module_id) DO UPDATE SET
+                  can_enter = excluded.can_enter,
+                  updated_at = excluded.updated_at
+                """,
+                (role_id, module_id, 1 if can_enter else 0, now),
+            )
         _insert_audit(connection, actor_user_id, "set_module_role_access", "module_role", f"{module_id}:{role_id}", str(can_enter))
         connection.commit()
     return get_permissions(db_path)["moduleAccess"].get(role_id, {})
@@ -802,16 +1039,28 @@ def set_feature_permission(
     with _connect(db_path) as connection:
         if not connection.execute("SELECT 1 FROM admin_roles WHERE id = ?", (role_id,)).fetchone():
             raise KeyError("role_not_found")
-        connection.execute(
-            """
-            INSERT INTO admin_role_feature_permissions (role_id, feature_id, enabled, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(role_id, feature_id) DO UPDATE SET
-              enabled = excluded.enabled,
-              updated_at = excluded.updated_at
-            """,
-            (role_id, feature_id, 1 if enabled else 0, now),
-        )
+        if connection.backend == "mysql":
+            connection.execute(
+                """
+                INSERT INTO admin_role_feature_permissions (role_id, feature_id, enabled, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                  enabled = VALUES(enabled),
+                  updated_at = VALUES(updated_at)
+                """,
+                (role_id, feature_id, 1 if enabled else 0, now),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO admin_role_feature_permissions (role_id, feature_id, enabled, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(role_id, feature_id) DO UPDATE SET
+                  enabled = excluded.enabled,
+                  updated_at = excluded.updated_at
+                """,
+                (role_id, feature_id, 1 if enabled else 0, now),
+            )
         _insert_audit(connection, actor_user_id, "set_feature_permission", "role_feature", f"{role_id}:{feature_id}", str(enabled))
         connection.commit()
     return get_permissions(db_path)["rolePermissions"].get(role_id, {})

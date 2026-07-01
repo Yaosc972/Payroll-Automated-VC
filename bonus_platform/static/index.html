@@ -7,6 +7,11 @@
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=21" />
+    <style>
+      /* ── 壳子 iframe 嵌入适配：压缩间距，不隐藏元素 ── */
+      body.embedded .dashboard-frame { margin-top: 10px; }
+      body.embedded .dashboard-topbar { padding: 10px 18px; }
+    </style>
   </head>
   <body class="portal-shell dashboard-shell">
     <div class="portal-mesh" aria-hidden="true">
@@ -363,6 +368,14 @@
         };
         let permissionState = readPermissionState();
         try {
+          // ── 壳子嵌入模式：等待 SDK 就绪并尝试自动登录 ──
+          if (document.body.classList.contains('embedded') && window.__HRAS__) {
+            try {
+              await window.__HRAS__.ready();
+              await window.__HRAS__.login();
+            } catch (_) { /* 壳子登录失败，降级到独立登录 */ }
+          }
+
           const meResponse = await fetch('/api/me');
           if (meResponse.status === 401) {
             window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname || '/')}`;
@@ -496,5 +509,6 @@
         });
       })();
     </script>
-  </body>
+    <script src="hras-sdk.js"></script>
+</body>
 </html>

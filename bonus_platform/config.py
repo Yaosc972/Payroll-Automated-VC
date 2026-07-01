@@ -55,6 +55,7 @@ DOMESTIC_LABOR_RUNS_DIR = OUTPUT_DIR / "domestic_labor_runs"
 FBU_PERFORMANCE_RUNS_DIR = OUTPUT_DIR / "fbu_performance_runs"
 DATABASE_PATH = OUTPUT_DIR / "sigma_workbench.db"
 ADMIN_DATABASE_URL = os.environ.get("ADMIN_DATABASE_URL", "") or os.environ.get("DATABASE_URL", "")
+MYSQL_DATABASE_URL = os.environ.get("MYSQL_DATABASE_URL", "")
 ADMIN_BOOTSTRAP_IDENTIFIERS = [
     item.strip()
     for item in os.environ.get("ADMIN_BOOTSTRAP_IDENTIFIERS", "").split(",")
@@ -122,6 +123,24 @@ AUTH_CONFIG: dict[str, Any] = {
     "feishu_redirect_uri": os.environ.get("FEISHU_REDIRECT_URI", ""),
     "feishu_auth_url": os.environ.get("FEISHU_AUTH_URL", "https://open.feishu.cn/open-apis/authen/v1/index"),
 }
+
+# HRAS 壳子平台子应用注册配置
+HRAS_CONFIG: dict[str, Any] = {
+    "shell_url": os.environ.get("HRAS_SHELL_URL", "http://localhost:8066"),
+    "register_enabled": os.environ.get("HRAS_SHELL_REGISTER_ENABLED", "true").lower() == "true",
+    "module_key": os.environ.get("HRAS_MODULE_KEY", "hras-payroll"),
+    "module_name": os.environ.get("HRAS_MODULE_NAME", "薪酬核算平台"),
+    "frontend_url": os.environ.get("HRAS_MODULE_FRONTEND_URL", "http://localhost:8000"),
+    "backend_url": os.environ.get("HRAS_MODULE_BACKEND_URL", "http://localhost:8000"),
+    "api_key": os.environ.get("HRAS_MODULE_API_KEY", ""),
+}
+
+# HRAS 壳子 JWT 验证配置（用于壳子内自动登录）
+HRAS_JWT_SECRET = os.environ.get(
+    "HRAS_JWT_SECRET",
+    "hras-shell-jwt-secret-key-must-be-at-least-256-bits-long-for-hs256",
+)
+HRAS_JWT_ALGORITHM = os.environ.get("HRAS_JWT_ALGORITHM", "HS512")
 
 # 自动生成的供应商 Profile 存储目录
 SUPPLIER_PROFILES_OUTPUT_DIR: str = os.environ.get(

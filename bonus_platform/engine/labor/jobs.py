@@ -15,7 +15,9 @@ JOB_FILE = "job.json"
 ACTIVE_JOB_STATUSES = {"queued", "running", "retry_wait"}
 JOB_LEASE_SECONDS = 120
 _POSTGRES_SCHEMA_READY = False
-SERVERLESS_QUEUE_ERROR = "海外劳务 Worker 队列需要配置 Postgres 数据库连接。"
+_MYSQL_SCHEMA_READY = False
+_SQL_STORE_BACKEND = ""
+SERVERLESS_QUEUE_ERROR = "海外劳务 Worker 队列需要配置 Postgres/MySQL 数据库连接。"
 
 
 def labor_worker_jobs_enabled() -> bool:
@@ -136,7 +138,7 @@ def ensure_labor_worker_job_store_ready() -> None:
 def labor_worker_job_store_health(*, probe: bool = False) -> dict[str, Any]:
     enabled = labor_worker_jobs_enabled()
     database_url_configured = bool(_job_database_url())
-    backend = "postgres" if _use_postgres_jobs() else "local-json"
+    backend = _job_backend() or ("postgres" if _use_postgres_jobs() else "local-json")
     serverless = bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
     health: dict[str, Any] = {
         "enabled": enabled,
@@ -155,7 +157,7 @@ def labor_worker_job_store_health(*, probe: bool = False) -> dict[str, Any]:
             }
         )
         return health
-    if probe and backend == "postgres":
+    if probe and backend in ("postgres", "mysql"):
         try:
             _ensure_postgres_schema()
         except Exception as exc:
@@ -253,11 +255,26 @@ def _job_metadata_snapshot(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _job_backend() -> str:
+    """Return the specific durable DB backend: 'postgres' or 'mysql'."""
+    backend = os.environ.get("SIGMA_LABOR_JOB_BACKEND", "").strip().lower()
+    if backend in {"postgres", "postgresql", "supabase"}:
+        return "postgres"
+    if backend in {"mysql"}:
+        return "mysql"
+    database_url = _job_database_url()
+    if database_url.startswith("mysql://"):
+        return "mysql"
+    if database_url.startswith(("postgres://", "postgresql://")) or database_url:
+        return "postgres"
+    return ""
+
+
 def _use_postgres_jobs() -> bool:
     backend = os.environ.get("SIGMA_LABOR_JOB_BACKEND", "").strip().lower()
     if backend in {"local", "json", "file", "files"}:
         return False
-    if backend in {"postgres", "postgresql", "supabase"}:
+    if backend in {"postgres", "postgresql", "supabase", "mysql"}:
         return bool(_job_database_url())
     return labor_worker_jobs_enabled() and bool(_job_database_url())
 
@@ -285,11 +302,90 @@ def _connect_postgres():
     return psycopg.connect(_job_database_url(), row_factory=dict_row)
 
 
+class _MySQLJobConnection:
+    """将 PyMySQL connection 包装为 psycopg/sqlite3 风格的 conn.execute() 接口。"""
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self._cursor: Any = None
+
+    def __enter__(self) -> "_MySQLJobConnection":
+        self._cursor = self._conn.cursor()
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        if self._cursor:
+            self._cursor.close()
+        self._conn.close()
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        self._cursor.execute(sql, params)
+        return self._cursor
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+
+def _connect_mysql():
+    try:
+        import pymysql
+        from urllib.parse import unquote
+    except Exception as exc:  # pragma: no cover - dependency is declared in requirements
+        raise RuntimeError("MySQL labor job store requires PyMySQL") from exc
+    from urllib.parse import urlparse
+    parsed = urlparse(_job_database_url())
+    conn = pymysql.connect(
+        host=parsed.hostname or "127.0.0.1",
+        port=parsed.port or 3306,
+        user=parsed.username or "root",
+        password=unquote(parsed.password) if parsed.password else "",
+        database=(parsed.path or "/sigma").lstrip("/") or "sigma",
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=False,
+        connect_timeout=5,
+        read_timeout=30,
+    )
+    return _MySQLJobConnection(conn)
+
+
+def _connect_durable_db():
+    if _job_backend() == "mysql":
+        return _connect_mysql()
+    return _connect_postgres()
+
+
 def _ensure_postgres_schema() -> None:
-    global _POSTGRES_SCHEMA_READY
-    if _POSTGRES_SCHEMA_READY:
+    global _POSTGRES_SCHEMA_READY, _MYSQL_SCHEMA_READY, _SQL_STORE_BACKEND
+    backend = _job_backend()
+    if backend == "postgres" and _POSTGRES_SCHEMA_READY:
         return
-    statements = [
+    if backend == "mysql" and _MYSQL_SCHEMA_READY:
+        return
+    if backend == "mysql":
+        statements = _mysql_schema_statements()
+    else:
+        statements = _postgres_schema_statements()
+    conn = _connect_durable_db()
+    with conn:
+        for statement in statements:
+            conn.execute(statement)
+        if backend == "mysql":
+            _ensure_mysql_indexes(conn)
+        conn.commit()
+    if backend == "mysql":
+        _MYSQL_SCHEMA_READY = True
+        _SQL_STORE_BACKEND = "mysql"
+    else:
+        _POSTGRES_SCHEMA_READY = True
+        _SQL_STORE_BACKEND = "postgres"
+
+
+def _postgres_schema_statements() -> list[str]:
+    return [
         """
         create table if not exists labor_jobs (
             id text primary key,
@@ -328,15 +424,55 @@ def _ensure_postgres_schema() -> None:
         where status = 'running'
         """,
     ]
-    with _connect_postgres() as conn:
-        for statement in statements:
-            conn.execute(statement)
-        conn.commit()
-    _POSTGRES_SCHEMA_READY = True
+
+
+def _mysql_schema_statements() -> list[str]:
+    return [
+        """
+        create table if not exists labor_jobs (
+            id varchar(255) primary key,
+            run_id varchar(255) not null,
+            job_type varchar(50) not null default 'reconcile',
+            status varchar(50) not null default 'queued',
+            priority integer not null default 100,
+            attempt integer not null default 0,
+            max_attempts integer not null default 5,
+            available_at timestamp not null default current_timestamp,
+            worker_id varchar(255),
+            lease_expires_at timestamp null,
+            heartbeat_at timestamp null,
+            error_code varchar(100),
+            error_detail text,
+            retryable tinyint(1) not null default 0,
+            metadata_snapshot json not null,
+            created_at timestamp not null default current_timestamp,
+            started_at timestamp null,
+            finished_at timestamp null,
+            updated_at timestamp not null default current_timestamp
+        ) engine=InnoDB default charset=utf8mb4 collate=utf8mb4_unicode_ci
+        """,
+        # MySQL 不支持 CREATE INDEX IF NOT EXISTS，改为靠 Python 层处理错误
+    ]
+
+
+def _ensure_mysql_indexes(conn: Any) -> None:
+    """MySQL 不支持 CREATE INDEX IF NOT EXISTS，尝试创建并忽略重复错误。"""
+    indexes = [
+        "create index labor_jobs_claim_idx on labor_jobs(status, available_at, priority, created_at)",
+        "create index labor_jobs_running_lease_idx on labor_jobs(status, lease_expires_at)",
+    ]
+    for sql in indexes:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass  # index already exists
 
 
 def _claim_next_postgres_job(worker_id: str) -> dict[str, Any] | None:
     _ensure_postgres_schema()
+    backend = _job_backend()
+    if backend == "mysql":
+        return _claim_next_mysql_job(worker_id)
     with _connect_postgres() as conn:
         row = conn.execute(
             """
@@ -375,8 +511,76 @@ def _claim_next_postgres_job(worker_id: str) -> dict[str, Any] | None:
     return _row_to_job(dict(row))
 
 
+def _claim_next_mysql_job(worker_id: str) -> dict[str, Any] | None:
+    """MySQL-compatible job claim: SELECT FOR UPDATE → UPDATE → SELECT (no RETURNING)."""
+    with _connect_mysql() as conn:
+        # Step 1: find a claimable job
+        row = conn.execute(
+            """
+            select id
+            from labor_jobs
+            where (
+                status in ('queued', 'retry_wait')
+                and available_at <= now()
+            )
+            or (
+                status = 'running'
+                and (lease_expires_at is null or lease_expires_at <= now())
+            )
+            order by priority desc, created_at
+            limit 1
+            for update skip locked
+            """,
+        ).fetchone()
+        if not row:
+            conn.commit()
+            return None
+        job_id = row["id"]
+        # Step 2: update it
+        conn.execute(
+            """
+            update labor_jobs
+            set status = 'running',
+                worker_id = %s,
+                attempt = attempt + 1,
+                started_at = coalesce(started_at, now()),
+                heartbeat_at = now(),
+                lease_expires_at = now() + interval 1 second * %s,
+                updated_at = now()
+            where id = %s
+            """,
+            (worker_id, JOB_LEASE_SECONDS, job_id),
+        )
+        # Step 3: read back the updated row
+        updated = conn.execute("select * from labor_jobs where id = %s", (job_id,)).fetchone()
+        conn.commit()
+    if not updated:
+        return None
+    return _row_to_job(dict(updated))
+
+
 def _heartbeat_postgres_job(job_id: str, worker_id: str) -> dict[str, Any]:
     _ensure_postgres_schema()
+    backend = _job_backend()
+    if backend == "mysql":
+        with _connect_mysql() as conn:
+            conn.execute(
+                """
+                update labor_jobs
+                set heartbeat_at = now(),
+                    lease_expires_at = now() + interval 1 second * %s,
+                    updated_at = now()
+                where id = %s
+                  and status = 'running'
+                  and worker_id = %s
+                """,
+                (JOB_LEASE_SECONDS, job_id, worker_id),
+            )
+            conn.commit()
+            row = conn.execute("select * from labor_jobs where id = %s", (job_id,)).fetchone()
+        if row:
+            return _row_to_job(dict(row))
+        return _load_postgres_job(job_id)
     with _connect_postgres() as conn:
         row = conn.execute(
             """
@@ -399,7 +603,8 @@ def _heartbeat_postgres_job(job_id: str, worker_id: str) -> dict[str, Any]:
 
 def _list_postgres_jobs() -> list[dict[str, Any]]:
     _ensure_postgres_schema()
-    with _connect_postgres() as conn:
+    conn = _connect_durable_db()
+    with conn:
         rows = conn.execute(
             """
             select *
@@ -412,7 +617,8 @@ def _list_postgres_jobs() -> list[dict[str, Any]]:
 
 def _load_postgres_job(job_id: str) -> dict[str, Any]:
     _ensure_postgres_schema()
-    with _connect_postgres() as conn:
+    conn = _connect_durable_db()
+    with conn:
         row = conn.execute("select * from labor_jobs where id = %s", (job_id,)).fetchone()
     if not row:
         raise FileNotFoundError("劳务核对任务不存在。")
@@ -422,6 +628,44 @@ def _load_postgres_job(job_id: str) -> dict[str, Any]:
 def _write_postgres_job(job: dict[str, Any]) -> None:
     _ensure_postgres_schema()
     row = _job_to_row(job)
+    backend = _job_backend()
+    if backend == "mysql":
+        with _connect_mysql() as conn:
+            conn.execute(
+                """
+                insert into labor_jobs (
+                    id, run_id, job_type, status, priority, attempt, max_attempts,
+                    available_at, worker_id, lease_expires_at, heartbeat_at,
+                    error_code, error_detail, retryable, metadata_snapshot,
+                    created_at, started_at, finished_at, updated_at
+                )
+                values (
+                    %(id)s, %(run_id)s, %(job_type)s, %(status)s, %(priority)s, %(attempt)s, %(max_attempts)s,
+                    %(available_at)s, %(worker_id)s, %(lease_expires_at)s, %(heartbeat_at)s,
+                    %(error_code)s, %(error_detail)s, %(retryable)s, %(metadata_snapshot)s,
+                    %(created_at)s, %(started_at)s, %(finished_at)s, %(updated_at)s
+                )
+                on duplicate key update
+                    status = values(status),
+                    priority = values(priority),
+                    attempt = values(attempt),
+                    max_attempts = values(max_attempts),
+                    available_at = values(available_at),
+                    worker_id = values(worker_id),
+                    lease_expires_at = values(lease_expires_at),
+                    heartbeat_at = values(heartbeat_at),
+                    error_code = values(error_code),
+                    error_detail = values(error_detail),
+                    retryable = values(retryable),
+                    metadata_snapshot = values(metadata_snapshot),
+                    started_at = values(started_at),
+                    finished_at = values(finished_at),
+                    updated_at = values(updated_at)
+                """,
+                row,
+            )
+            conn.commit()
+        return
     with _connect_postgres() as conn:
         conn.execute(
             """
@@ -521,6 +765,9 @@ def _format_db_time(value: Any) -> str:
 
 
 def _jsonb_param(value: dict[str, Any]) -> Any:
+    if _job_backend() == "mysql":
+        # PyMySQL accepts dicts directly — it serialises to JSON internally
+        return json.dumps(value, ensure_ascii=False)
     try:
         from psycopg.types.json import Jsonb
     except Exception:  # pragma: no cover - exercised only when Postgres dependency is absent

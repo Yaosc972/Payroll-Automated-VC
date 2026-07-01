@@ -321,6 +321,14 @@
     window.stop();
   };
   try {
+    // ── 壳子嵌入模式：等待 SDK 就绪并尝试自动登录 ──
+    if (document.body.classList.contains('embedded') && window.__HRAS__) {
+      try {
+        await window.__HRAS__.ready();
+        await window.__HRAS__.login();
+      } catch (_) { /* 壳子登录失败，降级到独立登录 */ }
+    }
+
     const cachedMe = readCachedAuthContext();
     if (cachedMe) {
       state = mergeAuthContext(cachedMe);
