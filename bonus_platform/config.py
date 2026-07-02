@@ -117,6 +117,7 @@ AI_CONFIG: dict[str, Any] = {
 }
 
 AUTH_CONFIG: dict[str, Any] = {
+    "mock_login_enabled": _env_bool("MOCK_LOGIN_ENABLED", False),
     "session_cookie_secure": _env_bool("SESSION_COOKIE_SECURE", False),
     "feishu_app_id": os.environ.get("FEISHU_APP_ID", ""),
     "feishu_app_secret": os.environ.get("FEISHU_APP_SECRET", ""),

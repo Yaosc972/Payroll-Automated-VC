@@ -145,7 +145,6 @@
   const searchParams = new URLSearchParams(window.location.search);
   const nextUrl = searchParams.get("next") || "/";
   const isLocalDev = ["localhost", "127.0.0.1", ""].includes(window.location.hostname);
-  const mockEnabled = isLocalDev || searchParams.get("mock") === "1";
 
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, char => ({
     "&": "&amp;",
@@ -158,7 +157,7 @@
   const showMockLogin = () => {
     if (!mockLoginPanel) return;
     mockLoginPanel.hidden = false;
-    mockLoginPanel.open = mockEnabled;
+    mockLoginPanel.open = true;
   };
 
   const redirectIfAlreadyLoggedIn = async () => {
@@ -210,21 +209,23 @@
         feishuLoginLink.setAttribute("aria-disabled", "false");
         feishuLoginLink.href = `/api/auth/feishu/login?next=${encodeURIComponent(nextUrl)}`;
         if (feishuLoginStatus) feishuLoginStatus.textContent = "飞书应用已配置，可进入授权登录流程。";
-        if (mockEnabled) {
+        if (data.mockLoginEnabled) {
           showMockLogin();
           await loadUsers();
         } else {
           if (status) status.textContent = "请使用飞书登录。角色授权由系统管理员在后台管理中配置。";
         }
       } else {
-        if (feishuLoginStatus) feishuLoginStatus.textContent = "飞书应用尚未配置，当前仅开放开发调试模拟登录。";
-        showMockLogin();
-        await loadUsers();
+        if (data.mockLoginEnabled) {
+          if (feishuLoginStatus) feishuLoginStatus.textContent = "飞书应用尚未配置，当前仅开放开发调试模拟登录。";
+          showMockLogin();
+          await loadUsers();
+        } else {
+          if (feishuLoginStatus) feishuLoginStatus.textContent = "飞书应用尚未配置，请联系管理员。";
+        }
       }
     } catch {
-      if (feishuLoginStatus) feishuLoginStatus.textContent = "后端未连接，当前仅开放开发调试模拟登录。";
-      showMockLogin();
-      await loadUsers();
+      if (feishuLoginStatus) feishuLoginStatus.textContent = "后端未连接，请检查服务状态。";
     }
   };
 

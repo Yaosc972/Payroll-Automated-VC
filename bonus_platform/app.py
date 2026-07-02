@@ -705,6 +705,8 @@ def metrics() -> dict:
 
 @app.get("/api/auth/mock-users")
 def api_auth_mock_users() -> dict:
+    if not AUTH_CONFIG["mock_login_enabled"]:
+        raise HTTPException(status_code=404, detail="Not found")
     users = get_admin_state()["users"]
     return {
         "users": [
@@ -716,6 +718,8 @@ def api_auth_mock_users() -> dict:
 
 @app.post("/api/auth/mock-login")
 def api_auth_mock_login(response: Response, payload: dict = Body(...)) -> dict:
+    if not AUTH_CONFIG["mock_login_enabled"]:
+        raise HTTPException(status_code=404, detail="Not found")
     user_id = _validate_safe_id(str(payload.get("userId") or payload.get("user_id") or ""), "user_id")
     try:
         token = create_session(user_id)
@@ -761,6 +765,7 @@ def api_auth_feishu_config() -> dict:
     return {
         "configured": configured,
         "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else "",
+        "mockLoginEnabled": bool(AUTH_CONFIG["mock_login_enabled"]),
     }
 
 
