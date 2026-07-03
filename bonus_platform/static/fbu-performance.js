@@ -210,7 +210,7 @@ function renderNameWithTags(row, activity = getWorkbenchActivity()) {
 
   return `
     <span class="name-with-tags">
-      <span>${escapeHtml(row?.name || '-')}</span>
+      <span class="name-with-tags-text">${escapeHtml(row?.name || '-')}</span>
       ${visible.map(tag => `<span class="person-tag">${escapeHtml(tag)}</span>`).join('')}
       ${extra > 0 ? `<span class="person-tag">+${extra}</span>` : ''}
     </span>
