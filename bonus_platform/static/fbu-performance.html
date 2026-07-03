@@ -1545,31 +1545,9 @@
       }
 
       .bonus-table thead .sticky-id,
-      .bonus-table thead .sticky-name,
-      .bonus-table thead .sticky-bonus,
-      .bonus-table thead .sticky-action {
+      .bonus-table thead .sticky-name {
         z-index: 6;
         background: #EEF3FA;
-      }
-
-      .bonus-table .sticky-action {
-        position: sticky;
-        right: 0;
-        z-index: 3;
-        width: 112px;
-        min-width: 112px;
-        text-align: center;
-        box-shadow: -1px 0 0 var(--border);
-      }
-
-      .bonus-table .sticky-bonus {
-        position: sticky;
-        right: 112px;
-        z-index: 3;
-        width: 156px;
-        min-width: 156px;
-        text-align: right;
-        box-shadow: -1px 0 0 var(--border-strong);
       }
 
       .employee-id,
@@ -2740,9 +2718,7 @@
       .data-table th,
       .bonus-table thead th,
       .bonus-table thead .sticky-id,
-      .bonus-table thead .sticky-name,
-      .bonus-table thead .sticky-bonus,
-      .bonus-table thead .sticky-action {
+      .bonus-table thead .sticky-name {
         background: #F1ECE3;
         color: #5F574D;
         border-bottom: 1px solid var(--border-strong);
@@ -3013,9 +2989,7 @@
       }
 
       .bonus-table .sticky-id,
-      .bonus-table .sticky-name,
-      .bonus-table .sticky-bonus,
-      .bonus-table .sticky-action {
+      .bonus-table .sticky-name {
         background: #FFFDF7;
       }
 
@@ -3805,9 +3779,7 @@
       .data-table th,
       .bonus-table thead th,
       .bonus-table thead .sticky-id,
-      .bonus-table thead .sticky-name,
-      .bonus-table thead .sticky-bonus,
-      .bonus-table thead .sticky-action {
+      .bonus-table thead .sticky-name {
         background: #EEF4FB;
         color: #526173;
         border-bottom: 1px solid rgba(203, 213, 225, 0.84);
@@ -4930,9 +4902,7 @@
       .data-table th,
       .bonus-table thead th,
       .bonus-table thead .sticky-id,
-      .bonus-table thead .sticky-name,
-      .bonus-table thead .sticky-bonus,
-      .bonus-table thead .sticky-action {
+      .bonus-table thead .sticky-name {
         height: 40px;
         padding: 10px 12px;
         background: #EEF2F7;
@@ -5378,9 +5348,7 @@
       .data-table th,
       .bonus-table thead th,
       .bonus-table thead .sticky-id,
-      .bonus-table thead .sticky-name,
-      .bonus-table thead .sticky-bonus,
-      .bonus-table thead .sticky-action {
+      .bonus-table thead .sticky-name {
         height: 36px;
         padding: 8px 10px;
       }
@@ -6034,23 +6002,47 @@
 	      .sticky-employee-id,
 	      .sticky-employee-name {
 	        position: sticky;
-	        background: inherit;
-	        z-index: 1;
+	        background: #fff;
+	        z-index: 2;
 	      }
 
 	      .sticky-employee-id {
 	        left: 0;
 	        min-width: 120px;
+	        box-shadow: 1px 0 0 #e2e8f0;
 	      }
 
 	      .sticky-employee-name {
 	        left: 120px;
-	        min-width: 120px;
+	        min-width: 168px;
+	        box-shadow: 1px 0 0 #e2e8f0;
 	      }
 
 	      .compact-list-table thead .sticky-employee-id,
 	      .compact-list-table thead .sticky-employee-name {
 	        z-index: 3;
+	      }
+
+	      .name-with-tags {
+	        display: inline-flex;
+	        flex-wrap: wrap;
+	        align-items: center;
+	        gap: 6px;
+	      }
+
+	      .person-tag {
+	        display: inline-flex;
+	        align-items: center;
+	        min-height: 20px;
+	        padding: 0 6px;
+	        border: 1px solid rgba(99, 102, 241, 0.18);
+	        border-radius: 999px;
+	        background: rgba(238, 242, 255, 0.95);
+	        color: #4338ca;
+	        font-size: 11px;
+	        font-weight: 700;
+	        line-height: 1;
+	        white-space: nowrap;
 	      }
 
 	      .maintained-editor-placeholder {
@@ -6113,6 +6105,72 @@
 	      .workbench-detail-row td {
 	        padding: 0;
 	        background: #f8fafc;
+	      }
+
+	      .table-section .data-table-container,
+	      .final-results .data-table-container {
+	        border: 1px solid #e2e8f0;
+	        border-radius: 7px;
+	        background: #fff;
+	      }
+
+	      .activity-table,
+	      .final-result-table {
+	        min-width: 980px;
+	      }
+
+	      .activity-table thead th,
+	      .final-result-table thead th {
+	        position: sticky;
+	        top: 0;
+	        z-index: 3;
+	        background: #eef2ff;
+	      }
+
+	      .activity-table tbody td,
+	      .final-result-table tbody td {
+	        white-space: nowrap;
+	        vertical-align: middle;
+	      }
+
+	      .final-result-table .sticky-employee-id,
+	      .final-result-table .sticky-employee-name,
+	      .activity-table .sticky-employee-id,
+	      .activity-table .sticky-employee-name {
+	        background: #fff;
+	      }
+
+	      .final-result-table thead .sticky-employee-id,
+	      .final-result-table thead .sticky-employee-name,
+	      .activity-table thead .sticky-employee-id,
+	      .activity-table thead .sticky-employee-name {
+	        background: #eef2ff;
+	        z-index: 4;
+	      }
+
+	      .detail-row td {
+	        padding: 0;
+	        background: #f8fafc;
+	      }
+
+	      .calculation-lines {
+	        display: grid;
+	        gap: 8px;
+	        padding: 12px 14px;
+	      }
+
+	      .calculation-line {
+	        display: flex;
+	        justify-content: space-between;
+	        gap: 12px;
+	        color: #475569;
+	        font-size: 12px;
+	        flex-wrap: wrap;
+	      }
+
+	      .calculation-line strong {
+	        color: #0f172a;
+	        font-family: var(--mono);
 	      }
 
 	      .workbench-calc-detail {

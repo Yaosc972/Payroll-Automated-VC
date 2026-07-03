@@ -183,6 +183,40 @@ function formatJsArg(value) {
     .replaceAll('"', '&quot;');
 }
 
+function sourceEmployeeId(row) {
+  return String(row?.source_employee_id || row?.employee_id || '').replace(/-1$/, '');
+}
+
+function getSpecialPersonTags(row, activity = getWorkbenchActivity()) {
+  const tags = [];
+  const sourceId = sourceEmployeeId(row);
+  const baseRows = activity?.base_override_data?.employees || [];
+  const adjustmentRows = activity?.adjustment_data?.employees || [];
+  const adjustmentEvents = activity?.adjustment_data?.events || [];
+
+  if (row?.job_type === 'district_manager') tags.push('区长');
+  if (baseRows.some(item => sourceEmployeeId(item) === sourceId && item.rule_type === '96工时制')) tags.push('96工时制');
+  if (baseRows.some(item => sourceEmployeeId(item) === sourceId && item.rule_type === '线下固定基数覆盖')) tags.push('固定基数');
+  if (adjustmentRows.some(item => sourceEmployeeId(item) === sourceId) || adjustmentEvents.some(item => sourceEmployeeId(item) === sourceId)) tags.push('存在调薪');
+  if (row?.personnel_status === '离职' || row?.resignation_date) tags.push('离职发放');
+
+  return [...new Set(tags)].slice(0, 4);
+}
+
+function renderNameWithTags(row, activity = getWorkbenchActivity()) {
+  const tags = getSpecialPersonTags(row, activity);
+  const visible = tags.slice(0, 3);
+  const extra = tags.length - visible.length;
+
+  return `
+    <span class="name-with-tags">
+      <span>${escapeHtml(row?.name || '-')}</span>
+      ${visible.map(tag => `<span class="person-tag">${escapeHtml(tag)}</span>`).join('')}
+      ${extra > 0 ? `<span class="person-tag">+${extra}</span>` : ''}
+    </span>
+  `;
+}
+
 function needsPreviousAttendance(activity) {
   const context = activity?.attendance_data?.summary?.attendance_context || {};
   return Boolean(context.required || activity?.previous_attendance_file || state.workbenchPreviousAttendanceFile);
@@ -4390,8 +4424,8 @@ function renderBonusResultTable(results, pageInfo) {
               <th class="metric-cell">绩效比例</th>
               <th class="metric-cell">绩效系数</th>
               <th>异常</th>
-              <th class="sticky-bonus">最终奖金</th>
-              <th class="sticky-action">操作</th>
+              <th class="amount-cell">最终奖金</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -4427,8 +4461,8 @@ function renderBonusResultRow(result) {
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
       <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
       <td>${exceptions.length ? `<span class="exception-chip" tabindex="0" title="${exceptionTitle}" aria-label="异常：${exceptionTitle}">${exceptions.length}项</span>` : '<span class="muted-cell">-</span>'}</td>
-      <td class="sticky-bonus"><span class="bonus-value">${formatCurrency(result.performance_bonus)}</span></td>
-      <td class="sticky-action">
+      <td class="amount-cell"><span class="bonus-value">${formatCurrency(result.performance_bonus)}</span></td>
+      <td>
         <button class="btn btn-secondary btn-sm detail-btn" onclick="showCalcChain(${formatJsArg(employeeId)})" title="查看计算过程">查看</button>
       </td>
     </tr>
@@ -4954,48 +4988,37 @@ function renderInlineEmptyState(title, message, actionLabel = '', action = '') {
   `;
 }
 
-function renderPeopleTable(activity) {
-  const summary = getAttendanceStepData(activity)?.summary || {};
-  const rosterFile = activity?.roster_file || state.baseRoster?.filename || '';
+function renderCompactEmployeeTable(title, rows, headers, cellsForRow, activity) {
   return `
-    <section class="step-section">
-      <div class="section-head compact">
-        <div>
-          <h3>人员范围</h3>
-          <p>当前活动使用的花名册和本月匹配结果。</p>
-        </div>
-      </div>
-      ${renderImportSummary([
-        { label: '花名册', value: rosterFile ? '已上传' : '未上传', tone: rosterFile ? 'success' : 'warning' },
-        { label: '已匹配', value: toNumber(summary.roster_matched), mono: true },
-        { label: '未匹配', value: toNumber(summary.roster_missing), mono: true, tone: toNumber(summary.roster_missing) ? 'warning' : '' },
-        { label: '本月员工', value: toNumber(summary.total_employees), mono: true },
-      ])}
-      <div class="compact-list-table">
-        <table class="data-table">
+    <section class="step-section table-section">
+      <div class="section-head compact"><h3>${escapeHtml(title)}</h3></div>
+      <div class="data-table-container">
+        <table class="data-table activity-table">
           <thead>
-            <tr>
-              <th>项目</th>
-              <th>当前情况</th>
-              <th>说明</th>
-            </tr>
+            <tr><th class="sticky-employee-id">工号</th><th class="sticky-employee-name">姓名</th>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join('')}</tr>
           </thead>
           <tbody>
-            <tr>
-              <td>花名册文件</td>
-              <td>${escapeHtml(rosterFile || '-')}</td>
-              <td>${rosterFile ? '当前活动已关联花名册。' : '请先上传花名册。'}</td>
-            </tr>
-            <tr>
-              <td>匹配结果</td>
-              <td>${escapeHtml(`${toNumber(summary.roster_matched)} / ${toNumber(summary.total_employees)}`)}</td>
-              <td>后续步骤按这里的员工范围继续。</td>
-            </tr>
+            ${rows.length ? rows.slice(0, 80).map(row => `
+              <tr>
+                <td class="sticky-employee-id">${escapeHtml(row.employee_id || '-')}</td>
+                <td class="sticky-employee-name">${renderNameWithTags(row, activity)}</td>
+                ${cellsForRow(row).map(value => `<td>${value}</td>`).join('')}
+              </tr>
+            `).join('') : renderEmptyTableRow(headers.length + 2, '暂无数据')}
           </tbody>
         </table>
       </div>
     </section>
   `;
+}
+
+function renderPeopleTable(activity) {
+  const rows = activity?.attendance_data?.employees || activity?.salary_data?.employees || [];
+  return renderCompactEmployeeTable('人员表', rows, ['部门', '岗位', '状态'], row => [
+    escapeHtml(row.department || row.area || '-'),
+    formatResultJobType(row.job_type),
+    escapeHtml(row.personnel_status || '参与'),
+  ], activity);
 }
 
 function renderSupplementalLeaveSection(activity) {
@@ -5096,152 +5119,24 @@ function renderSupplementalLeaveSection(activity) {
 }
 
 function renderAttendanceSummaryTable(activity) {
-  const data = getAttendanceStepData(activity);
-  if (!data || !data.employees) {
-    return `${renderInlineEmptyState('考勤预览', '上传考勤日报后，这里会显示员工工时和补充假勤明细。', '上传考勤日报', "openWorkbenchUpload('attendance')")}${renderSupplementalLeaveSection(activity)}`;
-  }
-  const employees = data.employees || [];
-  const filteredEmployees = getFilteredRows('attendance', employees);
-  const pageInfo = getPaginatedRows('attendance', filteredEmployees);
-  const summary = data.summary || {};
-  const formatShiftType = (emp) => emp.shift_type || (emp.has_night_shift ? '夜班' : '白班');
-
+  const rows = activity?.attendance_data?.employees || [];
   return `
-    <section class="step-section">
-      ${renderImportSummary([
-        { label: '员工总数', value: summary.total_employees, mono: true },
-        { label: '考勤行数', value: summary.attendance_rows || employees.length, mono: true },
-        { label: '花名册匹配', value: `${summary.roster_matched || 0}/${summary.total_employees || 0}`, mono: true, tone: (summary.roster_matched || 0) === (summary.total_employees || 0) ? 'success' : 'warning' },
-        { label: '总工时', value: formatHours(summary.total_base_hours), mono: true },
-        { label: '总OT1.5', value: formatHours(summary.total_ot15), mono: true },
-      ])}
-      ${renderImportToolbar({
-        title: '筛选考勤数据',
-        subtitle: '按员工信息快速定位本次解析结果。',
-        filters: employeeFilters.attendance,
-        filterFn: 'filterAttendanceData',
-        resetFn: 'resetAttendanceFilter',
-        filterValues: getTableFilter('attendance'),
-      })}
-      ${renderImportTable(`
-        <table class="data-table" id="attendanceTable">
-          <thead>
-            <tr>
-              <th>工号</th>
-              <th>姓名</th>
-              <th>划分区域</th>
-              <th>部门全称</th>
-              <th>岗位类型</th>
-              <th>班次</th>
-              <th>计薪出勤</th>
-              <th>OT1.5</th>
-              <th>OT2.0</th>
-              <th>病假</th>
-              <th>年假</th>
-              <th>节假日</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pageInfo.items.length ? pageInfo.items.map(emp => `
-              <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}"
-                  data-id="${escapeHtml(emp.employee_id)}"
-                  data-name="${escapeHtml(emp.name || '')}"
-                  data-area="${escapeHtml(emp.area || '')}"
-                  data-dept="${escapeHtml(emp.department || '')}">
-                <td>${escapeHtml(emp.employee_id)}</td>
-                <td>${escapeHtml(emp.name || '-')}</td>
-                <td>${escapeHtml(emp.area || '-')}</td>
-                <td>${escapeHtml(emp.department || '-')}</td>
-                <td>${formatJobType(emp.job_type)}</td>
-                <td>${formatShiftType(emp)}</td>
-                <td>${formatHours(emp.total_base_hours)}</td>
-                <td>${formatHours(emp.total_ot15)}</td>
-                <td>${formatHours(emp.total_ot20)}</td>
-                <td>${formatHours(getShiftHours(emp, '病假'))}</td>
-                <td>${formatHours(getShiftHours(emp, '年假'))}</td>
-                <td>${formatHours(getShiftHours(emp, '节假日'))}</td>
-              </tr>
-            `).join('') : renderEmptyTableRow(12, '没有匹配的考勤记录')}
-          </tbody>
-        </table>
-      `, renderTablePagination('attendance', pageInfo))}
-    </section>
+    ${renderCompactEmployeeTable('工时表', rows, ['普通工时', '计入病假/年假', '96工时制'], row => [
+      escapeHtml(formatHours(toNumber(row.base_hours || row.total_base_hours))),
+      escapeHtml(formatHours(toNumber(row.sick_hours) + toNumber(row.annual_hours) + toNumber(row.sick_settlement_hours))),
+      escapeHtml(getSpecialPersonTags(row, activity).includes('96工时制') ? '是' : '-'),
+    ], activity)}
     ${renderSupplementalLeaveSection(activity)}
   `;
 }
 
 function renderSalarySummaryTable(activity) {
-  const data = getSalaryStepData(activity);
-  if (!data || !data.employees) {
-    return renderInlineEmptyState('薪资预览', '上传薪资档案后，这里会显示时薪、绩效比例和固定基数。', '上传薪资档案', "openWorkbenchUpload('salary')");
-  }
-  const employees = data.employees || [];
-  const filteredEmployees = getFilteredRows('salary', employees);
-  const pageInfo = getPaginatedRows('salary', filteredEmployees);
-  const summary = data.summary || {};
-  const salaryQualityCounts = employees.reduce((counts, emp) => {
-    const flags = getSalaryQualityFlags(emp);
-    if (flags.complete) counts.complete += 1;
-    if (flags.zeroHourly) counts.zeroHourly += 1;
-    if (flags.emptyRatio) counts.emptyRatio += 1;
-    if (flags.fixedBase) counts.fixedBase += 1;
-    return counts;
-  }, { complete: 0, zeroHourly: 0, emptyRatio: 0, fixedBase: 0 });
-
-  return `
-    <section class="step-section">
-      ${renderImportSummary([
-        { label: '薪资档案人数', value: summary.total_employees, mono: true },
-        { label: '有效时薪', value: summary.valid_hourly_count ?? summary.total_employees, mono: true, tone: 'success' },
-        { label: '0时薪', value: summary.zero_hourly_count ?? 0, mono: true, tone: (summary.zero_hourly_count ?? 0) ? 'danger' : '' },
-        { label: '有效平均时薪', value: formatCurrency(summary.avg_hourly_rate), mono: true },
-        { label: '绩效比例空', value: salaryQualityCounts.emptyRatio, mono: true, tone: salaryQualityCounts.emptyRatio ? 'warning' : '' },
-        { label: '固定基数', value: salaryQualityCounts.fixedBase, mono: true },
-      ])}
-      ${renderImportToolbar({
-        title: '筛选薪资档案',
-        subtitle: '这里展示本次导入后的薪资结果。',
-        filters: employeeFilters.salary,
-        filterFn: 'filterSalaryData',
-        resetFn: 'resetSalaryFilter',
-        filterValues: getTableFilter('salary'),
-      })}
-      ${renderImportTable(`
-        <table class="data-table" id="salaryTable">
-          <thead>
-            <tr>
-              <th>工号</th>
-              <th>姓名</th>
-              <th>划分区域</th>
-              <th>部门全称</th>
-              <th>时薪</th>
-              <th>绩效比例</th>
-              <th>固定绩效基数</th>
-              <th>导入状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pageInfo.items.length ? pageInfo.items.map(emp => `
-              <tr class="${getSalaryQualityFlags(emp).zeroHourly || getSalaryQualityFlags(emp).emptyRatio ? 'row-danger' : ''}"
-                  data-id="${escapeHtml(emp.employee_id)}"
-                  data-name="${escapeHtml(emp.name || '')}"
-                  data-area="${escapeHtml(emp.area || '')}"
-                  data-dept="${escapeHtml(emp.department || '')}">
-                <td>${escapeHtml(emp.employee_id)}</td>
-                <td>${escapeHtml(emp.name || '-')}</td>
-                <td>${escapeHtml(emp.area || '-')}</td>
-                <td>${escapeHtml(emp.department || '-')}</td>
-                <td>${formatCurrency(emp.hourly_rate)}</td>
-                <td>${formatPercent(emp.ratio)}</td>
-                <td>${toNumber(emp.fixed_performance_base) > 0 ? formatCurrency(emp.fixed_performance_base) : '-'}</td>
-                <td>${renderSalaryQualityStatus(emp)}</td>
-              </tr>
-            `).join('') : renderEmptyTableRow(8, '没有匹配的薪资记录')}
-          </tbody>
-        </table>
-      `, renderTablePagination('salary', pageInfo))}
-    </section>
-  `;
+  const rows = activity?.salary_data?.employees || [];
+  return renderCompactEmployeeTable('薪资表', rows, ['时薪', '绩效比例', '固定基数'], row => [
+    escapeHtml(formatCurrency(row.hourly_rate)),
+    escapeHtml(formatPercent(row.ratio)),
+    escapeHtml(toNumber(row.fixed_performance_base) ? formatCurrency(row.fixed_performance_base) : '-'),
+  ], activity);
 }
 
 function renderPerformanceInlineSupplement() {
@@ -5259,93 +5154,12 @@ function renderPerformanceInlineSupplement() {
 }
 
 function renderPerformanceSummaryTable(activity) {
-  const data = getPerformanceStepData(activity);
-  if (!data || !data.employees) {
-    return renderInlineEmptyState('绩效预览', '上传绩效报表后，这里会显示绩效得分、等级和系数。', '上传绩效报表', "openWorkbenchUpload('performance')");
-  }
-  const employees = getPerformanceReviewRows(data.employees);
-  const filteredEmployees = getFilteredRows('performance', employees);
-  const pageInfo = getPaginatedRows('performance', filteredEmployees);
-  const summary = data.summary || {};
-  const adjustmentSummary = getAdjustmentStepData(activity)?.summary;
-  const adjustmentIds = getAdjustmentEmployeeIds();
-  const performanceQualityCounts = employees.reduce((counts, emp) => {
-    const flags = getPerformanceQualityFlags(emp, adjustmentIds);
-    if (flags.complete) counts.complete += 1;
-    if (flags.missingScore) counts.missingScore += 1;
-    if (flags.missingCoefficient) counts.missingCoefficient += 1;
-    if (flags.hasAdjustment) counts.hasAdjustment += 1;
-    return counts;
-  }, { complete: 0, missingScore: 0, missingCoefficient: 0, hasAdjustment: 0 });
-  const adjustmentSummaryItems = adjustmentSummary
-    ? (toNumber(adjustmentSummary.total_events) > 0
-      ? [
-        { label: '调薪事件', value: adjustmentSummary.total_events, mono: true, tone: 'warning' },
-        { label: '自动拆分', value: adjustmentSummary.auto_split_ready, mono: true, tone: 'success' },
-        { label: '需补拆分', value: adjustmentSummary.manual_split_required, mono: true, tone: adjustmentSummary.manual_split_required ? 'warning' : '' },
-      ]
-      : [
-        { label: '拆分员工', value: adjustmentSummary.total_employees, mono: true, tone: 'warning' },
-        { label: '有效拆分基数', value: formatCurrency(adjustmentSummary.active_performance_base || 0), mono: true },
-      ])
-    : [];
-
-  return `
-    <section class="step-section">
-      ${renderImportSummary([
-        { label: '绩效报表人数', value: summary.total_employees, mono: true },
-        { label: '审查行数', value: employees.length, mono: true },
-        { label: '平均得分', value: toNumber(summary.avg_score).toFixed(2), mono: true },
-        { label: '缺绩效得分', value: performanceQualityCounts.missingScore, mono: true, tone: performanceQualityCounts.missingScore ? 'warning' : '' },
-        { label: '缺绩效系数', value: performanceQualityCounts.missingCoefficient, mono: true, tone: performanceQualityCounts.missingCoefficient ? 'warning' : '' },
-        ...adjustmentSummaryItems,
-      ])}
-      ${renderImportToolbar({
-        title: '筛选绩效明细',
-        subtitle: '这里展示本次导入后的绩效结果和补充行。',
-        filters: employeeFilters.performance,
-        filterFn: 'filterPerformanceData',
-        resetFn: 'resetPerformanceFilter',
-        filterValues: getTableFilter('performance'),
-      })}
-      ${renderImportTable(`
-        <table class="data-table" id="performanceTable">
-          <thead>
-            <tr>
-              <th>工号</th>
-              <th>姓名</th>
-              <th>划分区域</th>
-              <th>部门全称</th>
-              <th>岗位类型</th>
-              <th>绩效得分</th>
-              <th>绩效等级</th>
-              <th>绩效系数</th>
-              <th>导入状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${pageInfo.items.length ? pageInfo.items.map(emp => `
-              <tr class="${getPerformanceQualityFlags(emp, adjustmentIds).missingScore || getPerformanceQualityFlags(emp, adjustmentIds).missingCoefficient ? 'row-danger' : ''}"
-                  data-id="${escapeHtml(emp.employee_id)}"
-                  data-name="${escapeHtml(emp.name || '')}"
-                  data-area="${escapeHtml(emp.area || '')}"
-                  data-dept="${escapeHtml(emp.department || '')}">
-                <td>${escapeHtml(emp.employee_id)}</td>
-                <td>${escapeHtml(emp.name || '-')}</td>
-                <td>${escapeHtml(emp.area || '-')}</td>
-                <td>${escapeHtml(emp.department || '-')}</td>
-                <td>${formatJobType(emp.job_type)}</td>
-                <td>${!isBlankImportValue(emp.score) ? toNumber(emp.score).toFixed(2) : '-'}</td>
-                <td>${escapeHtml(emp.level || '-')}</td>
-                <td>${!isBlankImportValue(emp.coefficient) ? formatCoefficient(emp.coefficient) : '-'}</td>
-                <td>${renderPerformanceQualityStatus(emp, adjustmentIds)}</td>
-              </tr>
-            `).join('') : renderEmptyTableRow(9, '没有匹配的绩效记录')}
-          </tbody>
-        </table>
-      `, renderTablePagination('performance', pageInfo))}
-    </section>
-  `;
+  const rows = getPerformanceReviewRows(activity?.performance_data?.employees || []);
+  return renderCompactEmployeeTable('绩效表', rows, ['得分', '等级', '系数'], row => [
+    escapeHtml(formatScore(row.score)),
+    escapeHtml(row.level || '-'),
+    escapeHtml(formatCoefficient(row.coefficient)),
+  ], activity);
 }
 
 function renderCheckPreview(activity) {
@@ -5400,38 +5214,82 @@ function renderCheckPreview(activity) {
 
 function renderFinalResults(activity) {
   const results = getWorkbenchResults(activity);
-  if (!results.length) {
-    return renderInlineEmptyState('暂无核算结果', '完成前面的步骤后，在这里查看最终结果。', '开始核算', 'executeCalculate()');
-  }
-  const filteredResults = getFilteredRows('results', results);
-  const pageInfo = getPaginatedRows('results', filteredResults);
-  const totalBonus = results.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
-  const avgBonus = results.length ? totalBonus / results.length : 0;
-  const issueCount = results.filter(row => (row.exceptions || []).length > 0).length;
-
   return `
-    <section class="step-section">
-      ${renderResultsToolbar()}
-      ${renderBonusResultTable(pageInfo.items, pageInfo)}
-      <div class="result-summary-bar">
-        <div class="result-summary-item">
-          <span>参与核算</span>
-          <span>${results.length}</span>
-        </div>
-        <div class="result-summary-item">
-          <span>奖金总额</span>
-          <span>${formatCurrency(totalBonus)}</span>
-        </div>
-        <div class="result-summary-item">
-          <span>平均奖金</span>
-          <span>${formatCurrency(avgBonus)}</span>
-        </div>
-        <div class="result-summary-item">
-          <span>需关注</span>
-          <span>${issueCount}</span>
-        </div>
+    <section class="step-section final-results">
+      <div class="section-head compact">
+        <h3>最终结果</h3>
+        <button class="btn btn-primary btn-sm" type="button" onclick="exportData('results')" ${results.length ? '' : 'disabled'}>导出结果</button>
+      </div>
+      <div class="data-table-container">
+        <table class="data-table final-result-table">
+          <thead>
+            <tr>
+              <th class="sticky-employee-id">工号</th>
+              <th class="sticky-employee-name">姓名</th>
+              <th>部门</th>
+              <th>岗位</th>
+              <th class="metric-cell">绩效得分</th>
+              <th class="amount-cell">绩效基数</th>
+              <th class="metric-cell">绩效比例</th>
+              <th class="metric-cell">绩效系数</th>
+              <th class="amount-cell">最终奖金</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${results.length ? results.map(result => renderFinalResultRow(result, activity)).join('') : renderEmptyTableRow(10, '暂无结果')}
+          </tbody>
+        </table>
       </div>
     </section>
+  `;
+}
+
+function renderFinalResultRow(result, activity) {
+  const employeeId = String(result.employee_id || '');
+  const expanded = state.workbenchSelectedResult === employeeId;
+
+  return `
+    <tr>
+      <td class="sticky-employee-id">${escapeHtml(employeeId)}</td>
+      <td class="sticky-employee-name">${renderNameWithTags(result, activity)}</td>
+      <td>${escapeHtml(result.department || result.area || '-')}</td>
+      <td>${formatResultJobType(result.job_type)}</td>
+      <td class="metric-cell">${formatScore(result.performance_score)}</td>
+      <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
+      <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
+      <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
+      <td class="amount-cell">${formatCurrency(result.performance_bonus)}</td>
+      <td><button class="btn btn-secondary btn-sm" type="button" onclick="toggleWorkbenchResultDetail(${formatJsArg(employeeId)})">${expanded ? '收起' : '查看说明'}</button></td>
+    </tr>
+    ${expanded ? renderFinalCalculationDetail(result) : ''}
+  `;
+}
+
+function renderFinalCalculationDetail(result) {
+  const rows = result.calculation_segments || [];
+  const detailRows = rows.length ? rows : [{
+    period: result.calc_month || '-',
+    reason: result.calculation_path || '标准计算',
+    performance_base: result.performance_base,
+    performance_ratio: result.performance_ratio,
+    performance_coefficient: result.performance_coefficient,
+    performance_bonus: result.performance_bonus,
+  }];
+
+  return `
+    <tr class="detail-row">
+      <td colspan="10">
+        <div class="calculation-lines">
+          ${detailRows.map(row => `
+            <div class="calculation-line">
+              <span>${escapeHtml(row.period || '-')} · ${escapeHtml(row.reason || '-')}</span>
+              <strong>${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </td>
+    </tr>
   `;
 }
 
