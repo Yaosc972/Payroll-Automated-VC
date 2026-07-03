@@ -1682,7 +1682,47 @@ def _fbu_run_diagnostics(run: FBURun) -> dict:
     }
 
 
-def _build_base_override_data_from_rule_lists(calc_month: str, payload: dict) -> dict:
+def _rule_list_roster_info(roster_lookup: dict[str, dict] | None, employee_id: str) -> dict:
+    if not roster_lookup:
+        return {}
+    return roster_lookup.get(employee_id, {})
+
+
+def _build_rule_list_override_row(
+    row: dict,
+    *,
+    calc_month: str,
+    rule_type: str,
+    fixed_performance_base,
+    calculation_path: str,
+    roster_lookup: dict[str, dict] | None = None,
+) -> dict:
+    employee_id = str(row.get("employee_id") or "").strip()
+    roster_info = _rule_list_roster_info(roster_lookup, employee_id)
+    name = str(roster_info.get("name") or row.get("name") or "").strip()
+    area = str(roster_info.get("area") or "").strip()
+    department = str(roster_info.get("department") or "").strip()
+    return {
+        "employee_id": employee_id,
+        "source_employee_id": employee_id,
+        "name": name,
+        "area": area,
+        "department": department,
+        "rule_type": rule_type,
+        "fixed_performance_base": fixed_performance_base,
+        "allocation_month": calc_month,
+        "status": "启用",
+        "include_in_calculation": True,
+        "note": "页面维护",
+        "calculation_path": calculation_path,
+    }
+
+
+def _build_base_override_data_from_rule_lists(
+    calc_month: str,
+    payload: dict,
+    roster_lookup: dict[str, dict] | None = None,
+) -> dict:
     employees = []
     for row in payload.get("work_hour_employees", []):
         if not row.get("active", True):
@@ -1690,34 +1730,28 @@ def _build_base_override_data_from_rule_lists(calc_month: str, payload: dict) ->
         employee_id = str(row.get("employee_id") or "").strip()
         if not employee_id:
             continue
-        employees.append({
-            "employee_id": employee_id,
-            "name": str(row.get("name") or "").strip(),
-            "rule_type": "96工时制",
-            "fixed_performance_base": None,
-            "allocation_month": calc_month,
-            "status": "启用",
-            "include_in_calculation": True,
-            "note": "页面维护",
-            "calculation_path": "96工时制自动基数路径",
-        })
+        employees.append(_build_rule_list_override_row(
+            row,
+            calc_month=calc_month,
+            rule_type="96工时制",
+            fixed_performance_base=None,
+            calculation_path="96工时制自动基数路径",
+            roster_lookup=roster_lookup,
+        ))
     for row in payload.get("fixed_base_employees", []):
         if not row.get("active", True):
             continue
         employee_id = str(row.get("employee_id") or "").strip()
         if not employee_id:
             continue
-        employees.append({
-            "employee_id": employee_id,
-            "name": str(row.get("name") or "").strip(),
-            "rule_type": "线下固定基数覆盖",
-            "fixed_performance_base": float(row.get("fixed_performance_base") or 0),
-            "allocation_month": calc_month,
-            "status": "启用",
-            "include_in_calculation": True,
-            "note": "页面维护",
-            "calculation_path": "线下固定基数覆盖路径",
-        })
+        employees.append(_build_rule_list_override_row(
+            row,
+            calc_month=calc_month,
+            rule_type="线下固定基数覆盖",
+            fixed_performance_base=float(row.get("fixed_performance_base") or 0),
+            calculation_path="线下固定基数覆盖路径",
+            roster_lookup=roster_lookup,
+        ))
     fixed_base_total = sum(float(row.get("fixed_performance_base") or 0) for row in employees)
     work_hour_rule_count = sum(1 for row in employees if row["rule_type"] == "96工时制")
     fixed_base_count = sum(1 for row in employees if row["rule_type"] == "线下固定基数覆盖")
@@ -1795,7 +1829,10 @@ def get_fbu_rule_lists() -> dict:
 
 @app.post("/api/fbu-performance/rule-lists")
 def save_fbu_rule_lists(body: dict = Body(...)) -> dict:
-    return fbu_rule_list_store.save(body)
+    try:
+        return fbu_rule_list_store.save(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/fbu-performance/runs/{run_id}/rule-lists/confirm")
@@ -1803,8 +1840,17 @@ def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
     run = fbu_run_manager.get_run(run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
-    saved = fbu_rule_list_store.save(body)
-    preview = _build_base_override_data_from_rule_lists(run.calc_month, saved)
+    try:
+        saved = fbu_rule_list_store.save(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    parser = FBUPerformanceParser()
+    _load_fbu_roster_for_run(parser, run_id)
+    preview = _build_base_override_data_from_rule_lists(
+        run.calc_month,
+        saved,
+        roster_lookup=parser.employee_roster,
+    )
     fbu_run_manager.update_run(
         run_id,
         base_override_file="页面维护",

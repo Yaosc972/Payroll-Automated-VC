@@ -377,10 +377,18 @@ class FBURuleListStore:
             employee_id = str(row.get("employee_id") or "").strip()
             if not employee_id:
                 continue
+            fixed_performance_base = row.get("fixed_performance_base")
+            if fixed_performance_base in (None, ""):
+                normalized_fixed_base = 0.0
+            else:
+                try:
+                    normalized_fixed_base = float(fixed_performance_base)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{employee_id} 的固定绩效基数必须是数字") from exc
             result.append({
                 "employee_id": employee_id,
                 "name": str(row.get("name") or "").strip(),
-                "fixed_performance_base": float(row.get("fixed_performance_base") or 0),
+                "fixed_performance_base": normalized_fixed_base,
                 "active": bool(row.get("active", True)),
             })
         return result
