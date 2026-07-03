@@ -304,3 +304,83 @@ class FBURosterStore:
         target = run_dir / f"roster{metadata.get('extension', '.xlsx')}"
         shutil.copyfile(active_roster, target)
         return target
+
+
+DEFAULT_WORK_HOUR_EMPLOYEES = [
+    {"employee_id": "zt12979", "name": "赵婉妍", "active": True},
+    {"employee_id": "zt12988", "name": "陈海冰", "active": True},
+    {"employee_id": "zt14260", "name": "陈炜", "active": True},
+    {"employee_id": "zt17850", "name": "韩勇", "active": True},
+]
+
+DEFAULT_FIXED_BASE_EMPLOYEES = [
+    {
+        "employee_id": "zt15638",
+        "name": "万其鑫",
+        "fixed_performance_base": 3000,
+        "active": True,
+    },
+]
+
+
+class FBURuleListStore:
+    """Stores stable FBU 96-hour and fixed-base lists outside monthly uploads."""
+
+    def __init__(self, data_dir: str):
+        self.data_dir = Path(data_dir)
+        self.settings_dir = self.data_dir / "_settings"
+        self.settings_dir.mkdir(parents=True, exist_ok=True)
+        self.rule_lists_file = self.settings_dir / "rule_lists.json"
+
+    def _default_payload(self) -> dict:
+        return {
+            "work_hour_employees": list(DEFAULT_WORK_HOUR_EMPLOYEES),
+            "fixed_base_employees": list(DEFAULT_FIXED_BASE_EMPLOYEES),
+        }
+
+    def get(self) -> dict:
+        if not self.rule_lists_file.exists():
+            return self._default_payload()
+        with open(self.rule_lists_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        defaults = self._default_payload()
+        return {
+            "work_hour_employees": payload.get("work_hour_employees", defaults["work_hour_employees"]),
+            "fixed_base_employees": payload.get("fixed_base_employees", defaults["fixed_base_employees"]),
+        }
+
+    def save(self, payload: dict) -> dict:
+        normalized = {
+            "work_hour_employees": self._normalize_work_hour_rows(payload.get("work_hour_employees", [])),
+            "fixed_base_employees": self._normalize_fixed_base_rows(payload.get("fixed_base_employees", [])),
+        }
+        with open(self.rule_lists_file, "w", encoding="utf-8") as f:
+            json.dump(normalized, f, ensure_ascii=False, indent=2)
+        return normalized
+
+    def _normalize_work_hour_rows(self, rows: list[dict]) -> list[dict]:
+        result = []
+        for row in rows:
+            employee_id = str(row.get("employee_id") or "").strip()
+            if not employee_id:
+                continue
+            result.append({
+                "employee_id": employee_id,
+                "name": str(row.get("name") or "").strip(),
+                "active": bool(row.get("active", True)),
+            })
+        return result
+
+    def _normalize_fixed_base_rows(self, rows: list[dict]) -> list[dict]:
+        result = []
+        for row in rows:
+            employee_id = str(row.get("employee_id") or "").strip()
+            if not employee_id:
+                continue
+            result.append({
+                "employee_id": employee_id,
+                "name": str(row.get("name") or "").strip(),
+                "fixed_performance_base": float(row.get("fixed_performance_base") or 0),
+                "active": bool(row.get("active", True)),
+            })
+        return result

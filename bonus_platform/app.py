@@ -47,6 +47,7 @@ from .engine.labor.profiles import (
 # --- FBU Performance engine imports ---
 from .engine.fbu_performance.parser import FBUPerformanceParser
 from .engine.fbu_performance.runs import FBURosterStore, FBURun, FBURunManager
+from .engine.fbu_performance.runs import FBURuleListStore
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -1570,6 +1571,7 @@ def download_domestic_labor_template(engine_key: str) -> FileResponse:
 
 fbu_run_manager = FBURunManager(str(FBU_PERFORMANCE_RUNS_DIR))
 fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
+fbu_rule_list_store = FBURuleListStore(str(FBU_PERFORMANCE_RUNS_DIR))
 
 
 def _fbu_result_file_payload(run_id: str, result_type: str) -> dict:
@@ -1680,6 +1682,58 @@ def _fbu_run_diagnostics(run: FBURun) -> dict:
     }
 
 
+def _build_base_override_data_from_rule_lists(calc_month: str, payload: dict) -> dict:
+    employees = []
+    for row in payload.get("work_hour_employees", []):
+        if not row.get("active", True):
+            continue
+        employee_id = str(row.get("employee_id") or "").strip()
+        if not employee_id:
+            continue
+        employees.append({
+            "employee_id": employee_id,
+            "name": str(row.get("name") or "").strip(),
+            "rule_type": "96工时制",
+            "fixed_performance_base": None,
+            "allocation_month": calc_month,
+            "status": "启用",
+            "include_in_calculation": True,
+            "note": "页面维护",
+            "calculation_path": "96工时制自动基数路径",
+        })
+    for row in payload.get("fixed_base_employees", []):
+        if not row.get("active", True):
+            continue
+        employee_id = str(row.get("employee_id") or "").strip()
+        if not employee_id:
+            continue
+        employees.append({
+            "employee_id": employee_id,
+            "name": str(row.get("name") or "").strip(),
+            "rule_type": "线下固定基数覆盖",
+            "fixed_performance_base": float(row.get("fixed_performance_base") or 0),
+            "allocation_month": calc_month,
+            "status": "启用",
+            "include_in_calculation": True,
+            "note": "页面维护",
+            "calculation_path": "线下固定基数覆盖路径",
+        })
+    fixed_base_total = sum(float(row.get("fixed_performance_base") or 0) for row in employees)
+    work_hour_rule_count = sum(1 for row in employees if row["rule_type"] == "96工时制")
+    fixed_base_count = sum(1 for row in employees if row["rule_type"] == "线下固定基数覆盖")
+    return {
+        "employees": employees,
+        "summary": {
+            "total_rows": len(employees),
+            "active_count": len(employees),
+            "excluded_count": 0,
+            "work_hour_rule_count": work_hour_rule_count,
+            "fixed_base_count": fixed_base_count,
+            "active_fixed_base": fixed_base_total,
+        },
+    }
+
+
 def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
     """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
@@ -1732,6 +1786,31 @@ async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
         raise
     except Exception as e:
         raise HTTPException(500, f"花名册解析失败: {str(e)}")
+
+
+@app.get("/api/fbu-performance/rule-lists")
+def get_fbu_rule_lists() -> dict:
+    return fbu_rule_list_store.get()
+
+
+@app.post("/api/fbu-performance/rule-lists")
+def save_fbu_rule_lists(body: dict = Body(...)) -> dict:
+    return fbu_rule_list_store.save(body)
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/rule-lists/confirm")
+def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    saved = fbu_rule_list_store.save(body)
+    preview = _build_base_override_data_from_rule_lists(run.calc_month, saved)
+    fbu_run_manager.update_run(
+        run_id,
+        base_override_file="页面维护",
+        base_override_data=preview,
+    )
+    return {"success": True, "run_id": run_id, "preview": preview, "rule_lists": saved}
 
 
 @app.post("/api/fbu-performance/import-attendance")
