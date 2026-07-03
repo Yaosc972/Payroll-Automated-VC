@@ -972,40 +972,42 @@
         margin-bottom: 20px;
       }
 
-      .activity-step-button {
+      .activity-step {
         min-width: 0;
-        padding: 10px 12px;
+        padding: 12px;
         border: 1px solid var(--border);
         border-radius: 8px;
         background: #FFFFFF;
-        color: var(--text-secondary);
+        color: var(--text-primary);
         text-align: left;
         cursor: pointer;
+        display: grid;
+        gap: 4px;
       }
 
-      .activity-step-button.active {
-        border-color: var(--primary-deep);
-        background: rgba(99, 91, 255, 0.08);
+      .activity-step.active {
+        border-color: var(--primary);
+        background: rgba(37, 99, 235, 0.08);
+        box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);
+      }
+
+      .activity-step-index {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        background: #EEF2FF;
         color: var(--primary-ink);
-      }
-
-      .activity-step-button.completed {
-        border-color: rgba(16, 185, 129, 0.3);
-        color: var(--text-primary);
-      }
-
-      .activity-step-order {
-        display: block;
-        margin-bottom: 4px;
         font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
+        font-weight: 800;
       }
 
       .activity-step-label {
         display: block;
         font-size: 13px;
-        font-weight: 600;
+        font-weight: 700;
         line-height: 1.4;
       }
 
@@ -1014,6 +1016,29 @@
         color: var(--text-secondary);
         font-size: 11px;
         line-height: 1.45;
+      }
+
+      .activity-step-status {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        min-height: 22px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #F8FAFC;
+        color: var(--text-secondary);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .activity-step-status.warning {
+        background: #FFF8E8;
+        color: #7A4F00;
+      }
+
+      .activity-step-status.success {
+        background: #F3FBF5;
+        color: #286145;
       }
 
       /* ═══ Summary Stats ═══ */
@@ -5881,6 +5906,9 @@
 
 	      .step-section {
 	        padding: 10px;
+	        border: 1px solid #e2e8f0;
+	        border-radius: 8px;
+	        background: #fff;
 	      }
 
 	      .material-list,
@@ -6153,6 +6181,139 @@
 	        font-size: 18px;
 	      }
 
+	      .activity-titlebar {
+	        display: flex;
+	        align-items: flex-start;
+	        justify-content: space-between;
+	        gap: 16px;
+	        margin-bottom: 16px;
+	      }
+
+	      .activity-titlebar h2 {
+	        margin-top: 6px;
+	        font-size: 22px;
+	        font-weight: 800;
+	      }
+
+	      .activity-id {
+	        display: inline-flex;
+	        margin-top: 6px;
+	        color: #64748b;
+	        font-size: 12px;
+	        font-weight: 700;
+	      }
+
+	      .activity-title-actions {
+	        display: flex;
+	        gap: 8px;
+	        flex-wrap: wrap;
+	        justify-content: flex-end;
+	      }
+
+	      .link-button {
+	        padding: 0;
+	        border: none;
+	        background: transparent;
+	        color: var(--primary);
+	        font-size: 13px;
+	        font-weight: 700;
+	        cursor: pointer;
+	      }
+
+	      .activity-step-body {
+	        display: grid;
+	        gap: 12px;
+	      }
+
+	      .step-topline {
+	        display: flex;
+	        align-items: flex-start;
+	        justify-content: space-between;
+	        gap: 16px;
+	      }
+
+	      .step-topline h3 {
+	        font-size: 18px;
+	        font-weight: 800;
+	      }
+
+	      .step-topline-summary {
+	        margin-top: 4px;
+	        color: #64748b;
+	        font-size: 12px;
+	      }
+
+	      .step-help {
+	        min-width: 220px;
+	        padding: 10px 12px;
+	        border: 1px solid #e2e8f0;
+	        border-radius: 8px;
+	        background: #fff;
+	      }
+
+	      .step-help summary {
+	        cursor: pointer;
+	        color: #334155;
+	        font-size: 12px;
+	        font-weight: 700;
+	      }
+
+	      .step-help ul {
+	        margin-top: 8px;
+	        padding-left: 18px;
+	        color: #64748b;
+	        font-size: 12px;
+	        line-height: 1.5;
+	      }
+
+	      .needs-panel.complete {
+	        color: #286145;
+	        font-size: 13px;
+	        font-weight: 700;
+	      }
+
+	      .needs-list {
+	        display: grid;
+	        gap: 8px;
+	        margin-top: 10px;
+	      }
+
+	      .need-row {
+	        display: flex;
+	        align-items: center;
+	        justify-content: space-between;
+	        gap: 12px;
+	        padding: 10px 12px;
+	        border: 1px solid #e2e8f0;
+	        border-radius: 8px;
+	        background: #f8fafc;
+	        font-size: 13px;
+	      }
+
+	      .need-actions {
+	        display: inline-flex;
+	        flex-wrap: wrap;
+	        gap: 8px;
+	      }
+
+	      .empty-inline-state {
+	        display: flex;
+	        align-items: center;
+	        justify-content: space-between;
+	        gap: 16px;
+	      }
+
+	      .empty-inline-state h3 {
+	        font-size: 15px;
+	        font-weight: 700;
+	      }
+
+	      .empty-inline-state p {
+	        margin-top: 4px;
+	        color: #64748b;
+	        font-size: 12px;
+	      }
+
 	      .workbench-file-inputs {
 	        position: absolute;
 	        width: 1px;
@@ -6172,6 +6333,16 @@
 	        }
 	        .workbench-inline-form {
 	          grid-template-columns: repeat(2, minmax(0, 1fr));
+	        }
+	        .activity-stepper {
+	          grid-template-columns: repeat(3, minmax(0, 1fr));
+	        }
+	        .activity-titlebar,
+	        .step-topline,
+	        .empty-inline-state,
+	        .need-row {
+	          flex-direction: column;
+	          align-items: stretch;
 	        }
 	        .material-row {
 	          grid-template-columns: 8px minmax(0, 1fr);

@@ -1569,13 +1569,31 @@ function renderWorkbench() {
     el.workbenchContent.innerHTML = `
       <div class="workbench-empty">
         <h2>暂无月度活动</h2>
-        <p>创建活动后，工作台会自动汇总数据源、任务、结果和审计明细。</p>
-        <button class="btn btn-primary" type="button" onclick="document.getElementById('btnNewActivity')?.click()">新建月度活动</button>
+        <p>先创建月度活动。</p>
+        <button class="btn btn-primary" type="button" onclick="document.getElementById('btnNewActivity')?.click()">新建活动</button>
       </div>
     `;
     return;
   }
-  el.workbenchContent.innerHTML = renderActivityDetail(activity);
+  const activeStep = ACTIVITY_STEPS.find(step => step.key === state.activityStep) || ACTIVITY_STEPS[0];
+  el.workbenchContent.innerHTML = `
+    <section class="activity-titlebar">
+      <div>
+        <button class="link-button" type="button" onclick="navigateTo('activities')">返回活动列表</button>
+        <h2>${escapeHtml(activity.calc_month || '-')} FBU美洲绩效核算</h2>
+        <span class="activity-id">活动 ${escapeHtml(activity.run_id || '-')}</span>
+      </div>
+      <div class="activity-title-actions">
+        ${state.activityStep === 'check' ? '<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">开始核算</button>' : ''}
+        ${state.activityStep === 'export' ? '<button class="btn btn-primary btn-sm" type="button" onclick="exportData(\'results\')">导出结果</button>' : ''}
+      </div>
+    </section>
+    ${renderActivityStepper(activity)}
+    <section class="activity-step-body">
+      ${renderStepHeader(activeStep, activity)}
+      ${renderStepContent(activity)}
+    </section>
+  `;
 }
 
 function renderActivities() {
@@ -4643,6 +4661,11 @@ function readTableFilters(type) {
 }
 
 function renderTableByType(type, focusSnapshot = null) {
+  if (state.currentPage === 'workbench') {
+    renderWorkbench();
+    restoreInputFocus(focusSnapshot);
+    return;
+  }
   if (type === 'attendance') renderAttendanceData();
   if (type === 'salary') renderSalaryData();
   if (type === 'performance') renderPerformanceData();
@@ -4780,181 +4803,681 @@ function locateExceptionIssue(sourceKey, employeeId = '', name = '', issueType =
   navigateTo('workbench');
 }
 
-function renderActivityDetail(activity) {
-  const results = getWorkbenchResults(activity);
-  const totalBonus = results.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
-  const tasks = buildWorkbenchTasks(activity);
-  const openTaskCount = tasks.filter(task => task.tone !== 'success').length;
-  const diagnostics = getWorkbenchDiagnostics(activity);
-  const sourceRows = buildImportBatchRows(activity);
-  const readySources = sourceRows.filter(row => String(row.status || '').includes('已解析')).length;
-  const finalEmployees = results.length || activity.total_employees || activity.attendance_data?.summary?.total_employees || 0;
-  const stepIndex = Math.max(getStepIndex(state.activityStep), 0);
-  const activeStep = ACTIVITY_STEPS[stepIndex] || ACTIVITY_STEPS[0];
-  const stepSummaries = {
-    people: '确认活动范围、基础花名册和本月人员名单。',
-    attendance: '补齐考勤、上月衔接和补充假勤数据。',
-    salary: '确认薪资档案和转正调薪拆分是否齐备。',
-    performance: '核对绩效得分、等级和补录内容。',
-    check: '集中处理待办项后再进入导出。',
-    export: '查看结果、确认人数和导出文件。',
-  };
+const STEP_HELP = {
+  people: ['花名册用于匹配姓名、部门和岗位。'],
+  attendance: ['普通病假、年假按申请时间计入本月。', '离职年假默认不计入。', '96工时制员工按本月和必要的上月考勤计算。'],
+  salary: ['当月转正或调薪按生效日期拆分。', '未发生转正或调薪的员工按薪资档案计算。'],
+  performance: ['有绩效报表的员工按报表得分计算。', '离职员工可在本页补充绩效得分。'],
+  check: ['只展示必须处理后才能继续的问题。'],
+  export: ['最终结果按员工合并展示，拆分明细在行内展开。'],
+};
 
+function getAttendanceStepData(activity) {
+  return activity?.attendance_data || state.attendanceData || null;
+}
+
+function getSalaryStepData(activity) {
+  return activity?.salary_data || state.salaryData || null;
+}
+
+function getPerformanceStepData(activity) {
+  return activity?.performance_data || state.performanceData || null;
+}
+
+function getSupplementalLeaveStepData(activity) {
+  return activity?.supplemental_leave_data || state.supplementalLeaveData || null;
+}
+
+function getAdjustmentStepData(activity) {
+  return activity?.adjustment_data || state.adjustmentData || null;
+}
+
+function getStepStatus(stepKey, activity) {
+  const needs = buildNeedsForStep(stepKey, activity);
+  if (needs.length) return '需要处理';
+  if (stepKey === 'people') return activity?.roster_file ? '已完成' : '未完成';
+  if (stepKey === 'attendance') return activity?.attendance_file && activity?.supplemental_leave_file ? '已完成' : '未完成';
+  if (stepKey === 'salary') return activity?.salary_file ? '已完成' : '未完成';
+  if (stepKey === 'performance') return activity?.performance_file || activity?.performance_data?.employees?.length ? '已完成' : '未完成';
+  if (stepKey === 'check') return activity?.results?.length ? '已完成' : '未开始';
+  if (stepKey === 'export') return activity?.results?.length ? '已完成' : '未开始';
+  return '未开始';
+}
+
+function getStepSummary(stepKey, activity) {
+  if (stepKey === 'people') return `${toNumber(activity?.attendance_data?.summary?.roster_matched)}已匹配`;
+  if (stepKey === 'attendance') return `${formatHours(activity?.attendance_data?.summary?.total_base_hours)}工时`;
+  if (stepKey === 'salary') return `${toNumber(activity?.salary_data?.summary?.valid_hourly_count)}有效时薪`;
+  if (stepKey === 'performance') return `${toNumber(activity?.performance_data?.summary?.total_employees)}人`;
+  if (stepKey === 'check') return `${buildNeedsForStep(stepKey, activity).length}项`;
+  if (stepKey === 'export') return `${getWorkbenchResults(activity).length}人`;
+  return '-';
+}
+
+function renderActivityStepper(activity) {
   return `
-    <div class="workbench-hero">
-      <div>
-        <div class="workbench-hero-title">
-          <div class="workbench-month">${escapeHtml(activity.calc_month || '-')}</div>
-          <span class="status-badge ${openTaskCount ? 'warning' : 'success'}">${openTaskCount ? `${openTaskCount}待处理` : '可继续'}</span>
-        </div>
-        <div class="workbench-run">活动 ${escapeHtml(activity.run_id || '-')}</div>
-      </div>
-      <div class="workbench-hero-actions">
-        <button class="btn btn-secondary btn-sm" type="button" onclick="navigateTo('activities')">活动列表</button>
-        <button class="btn btn-secondary btn-sm" type="button" onclick="exportData('diagnostics')" ${diagnostics?.issues?.length ? '' : 'disabled'}>导出诊断</button>
-        <button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">执行核算</button>
-      </div>
+    <div class="activity-stepper" role="tablist" aria-label="核算步骤">
+      ${ACTIVITY_STEPS.map((step, index) => {
+        const active = state.activityStep === step.key;
+        const status = getStepStatus(step.key, activity);
+        return `
+          <button class="activity-step ${active ? 'active' : ''}" type="button" role="tab" aria-selected="${active}" onclick="setActivityStep(${formatJsArg(step.key)})">
+            <span class="activity-step-index">${index + 1}</span>
+            <span class="activity-step-label">${escapeHtml(step.label)}</span>
+            <span class="activity-step-summary">${escapeHtml(getStepSummary(step.key, activity))}</span>
+            <span class="activity-step-status ${status === '需要处理' ? 'warning' : status === '已完成' ? 'success' : ''}">${escapeHtml(status)}</span>
+          </button>
+        `;
+      }).join('')}
     </div>
+  `;
+}
 
-    <div class="workbench-metrics">
-      <div class="workbench-metric"><span>当前步骤</span><strong>${escapeHtml(`${stepIndex + 1}. ${activeStep.label}`)}</strong></div>
-      <div class="workbench-metric"><span>最终员工</span><strong>${escapeHtml(finalEmployees)}</strong></div>
-      <div class="workbench-metric success"><span>奖金总额</span><strong>${escapeHtml(formatCurrency(totalBonus))}</strong></div>
-      <div class="workbench-metric warning"><span>待处理</span><strong>${escapeHtml(openTaskCount)}</strong></div>
-      <div class="workbench-metric"><span>数据源</span><strong>${escapeHtml(`${readySources}/${sourceRows.length}`)}</strong></div>
-    </div>
+function buildNeedsForStep(stepKey, activity) {
+  const needs = [];
+  const push = (id, text, action = '') => needs.push({ id, text, action });
+  if (!activity) return needs;
 
-    ${window['renderActivity' + 'Stepper']()}
+  if (stepKey === 'people' && !activity.roster_file) {
+    push('roster', '请上传花名册', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'roster\')">上传</button>');
+  }
+  if (stepKey === 'attendance') {
+    if (!activity.attendance_file) push('attendance', '请上传考勤日报', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'attendance\')">上传</button>');
+    if (!activity.supplemental_leave_file) push('supplementalLeave', '请上传补充假勤', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'supplementalLeave\')">上传</button>');
+    if (!activity.base_override_data?.employees?.some(row => row.rule_type === '96工时制')) {
+      push('workHourList', '请确认96工时制员工名单', '<button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(\'workHour\')">确认名单</button>');
+    }
+    getSupplementalSuggestionRows(getWorkbenchSupplementalRows(activity)).slice(0, 5).forEach(row => {
+      push(
+        `leave-${row.row_id}`,
+        `${row.employee_id} ${row.name || ''} 补充假勤请确认`,
+        `<button class="btn btn-primary btn-sm" type="button" onclick="applyWorkbenchSupplementalSuggestion(${formatJsArg(row.row_id)}, ${getSupplementalSuggestedHours(row)})">计入建议小时</button>`,
+      );
+    });
+  }
+  if (stepKey === 'salary') {
+    if (!activity.salary_file) push('salary', '请上传薪资档案', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'salary\')">上传</button>');
+    if (!activity.base_override_data?.employees?.some(row => row.rule_type === '线下固定基数覆盖')) {
+      push('fixedBaseList', '请确认固定基数人员名单', '<button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(\'fixedBase\')">确认名单</button>');
+    }
+  }
+  if (stepKey === 'performance' && !activity.performance_file && !activity.performance_data?.employees?.length) {
+    push('performance', '请上传绩效报表或补充离职人员绩效', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'performance\')">上传</button>');
+  }
+  if (stepKey === 'check') {
+    ['people', 'attendance', 'salary', 'performance'].forEach(key => {
+      buildNeedsForStep(key, activity).forEach(item => needs.push(item));
+    });
+  }
+  return needs;
+}
 
-    <section class="workbench-panel">
-      <div class="workbench-panel-head">
-        <div>
-          <div class="workbench-panel-title">${escapeHtml(activeStep.label)}</div>
-          <div class="activity-step-summary">${escapeHtml(stepSummaries[activeStep.key] || '')}</div>
-        </div>
-      </div>
-      <div class="panel-body">
-        ${renderActivityStepBody(activity, activeStep.key)}
+function renderNeedsPanel(stepKey, activity) {
+  const needs = buildNeedsForStep(stepKey, activity);
+  if (!needs.length) {
+    return '<section class="step-section needs-panel complete">本步骤已完成</section>';
+  }
+  return `
+    <section class="step-section needs-panel">
+      <div class="section-head compact"><h3>需要处理</h3></div>
+      <div class="needs-list">
+        ${needs.map(item => `
+          <div class="need-row">
+            <span>${escapeHtml(item.text)}</span>
+            <span class="need-actions">${item.action}</span>
+          </div>
+        `).join('')}
       </div>
     </section>
   `;
 }
 
-function renderActivityStepBody(activity, stepKey) {
-  if (stepKey === 'people') {
-    return `
-      <div class="workbench-grid">
-        <section class="workbench-panel">
-          <div class="workbench-panel-head">
-            <div>
-              <div class="workbench-panel-title">人员与底座</div>
-              <div class="workbench-panel-sub">先确认基础花名册和本月人员范围，再进入后续数据准备。</div>
-            </div>
-          </div>
-          ${renderStepMaterials('people', activity)}
-        </section>
-      </div>
-    `;
-  }
-
-  if (stepKey === 'attendance') {
-    return `
-      <div class="workbench-grid">
-        <section class="workbench-panel">
-          <div class="workbench-panel-head">
-            <div>
-              <div class="workbench-panel-title">考勤材料</div>
-              <div class="workbench-panel-sub">每份材料只在当前步骤上传；补充假勤必须在这里补齐。</div>
-            </div>
-          </div>
-          ${renderStepMaterials('attendance', activity)}
-        </section>
-        <section class="workbench-panel">
-          <div class="workbench-panel-head">
-            <div>
-              <div class="workbench-panel-title">维护名单</div>
-              <div class="workbench-panel-sub">96工时制员工在页面内维护并确认，不再上传单独规则表。</div>
-            </div>
-          </div>
-          ${renderMaintainedRuleList('workHour', activity)}
-        </section>
-      </div>
-    `;
-  }
-
-  if (stepKey === 'salary') {
-    return `
-      <div class="workbench-grid">
-        <section class="workbench-panel">
-          <div class="workbench-panel-head">
-            <div>
-              <div class="workbench-panel-title">薪资材料</div>
-              <div class="workbench-panel-sub">确认薪资档案齐备，再按需补充当月转正调薪表。</div>
-            </div>
-          </div>
-          ${renderStepMaterials('salary', activity)}
-        </section>
-        <section class="workbench-panel">
-          <div class="workbench-panel-head">
-            <div>
-              <div class="workbench-panel-title">固定基数名单</div>
-              <div class="workbench-panel-sub">固定基数人员在页面内维护并确认，不再走上传入口。</div>
-            </div>
-          </div>
-          ${renderMaintainedRuleList('fixedBase', activity)}
-        </section>
-      </div>
-    `;
-  }
-
-  if (stepKey === 'performance') {
-    return `
-      <div class="workbench-grid">
-        <section class="workbench-panel">
-          <div class="workbench-panel-head">
-            <div>
-              <div class="workbench-panel-title">绩效导入</div>
-              <div class="workbench-panel-sub">补录入口保留在当前步骤内，不再跳出到单独页面。</div>
-            </div>
-          </div>
-          ${renderStepMaterials('performance', activity)}
-        </section>
-        ${renderWorkbenchTasks(activity)}
-      </div>
-    `;
-  }
-
-  if (stepKey === 'check') {
-    return `
-      <div class="workbench-grid">
-        ${renderWorkbenchTasks(activity)}
-        ${renderWorkbenchAudit(activity)}
-      </div>
-    `;
-  }
-
+function renderStepHelp(stepKey) {
+  const rows = STEP_HELP[stepKey] || [];
   return `
-    <div class="workbench-grid">
-      ${renderWorkbenchResults(activity)}
-    </div>
+    <details class="step-help">
+      <summary>查看说明</summary>
+      <ul>${rows.map(row => `<li>${escapeHtml(row)}</li>`).join('')}</ul>
+    </details>
   `;
 }
 
-function renderActivityStepper() {
+function renderInlineEmptyState(title, message, actionLabel = '', action = '') {
   return `
-    <div class="activity-stepper" aria-label="活动步骤">
-      ${ACTIVITY_STEPS.map((step, index) => {
-        const currentIndex = Math.max(getStepIndex(state.activityStep), 0);
-        const stateClass = index < currentIndex ? 'completed' : index === currentIndex ? 'active' : '';
-        const summary = index < currentIndex ? '已完成' : index === currentIndex ? '当前步骤' : '待进入';
-        return `
-          <button class="activity-step-button ${stateClass}" type="button" onclick="setActivityStep(${formatJsArg(step.key)})">
-            <span class="activity-step-order">STEP ${index + 1}</span>
-            <span class="activity-step-label">${escapeHtml(step.label)}</span>
-            <span class="activity-step-summary">${escapeHtml(summary)}</span>
-          </button>
-        `;
-      }).join('')}
+    <section class="step-section empty-inline-state">
+      <div>
+        <h3>${escapeHtml(title)}</h3>
+        <p>${escapeHtml(message)}</p>
+      </div>
+      ${actionLabel && action ? `<button class="btn btn-primary btn-sm" type="button" onclick="${action}">${escapeHtml(actionLabel)}</button>` : ''}
+    </section>
+  `;
+}
+
+function renderPeopleTable(activity) {
+  const summary = getAttendanceStepData(activity)?.summary || {};
+  const rosterFile = activity?.roster_file || state.baseRoster?.filename || '';
+  return `
+    <section class="step-section">
+      <div class="section-head compact">
+        <div>
+          <h3>人员范围</h3>
+          <p>当前活动使用的花名册和本月匹配结果。</p>
+        </div>
+      </div>
+      ${renderImportSummary([
+        { label: '花名册', value: rosterFile ? '已上传' : '未上传', tone: rosterFile ? 'success' : 'warning' },
+        { label: '已匹配', value: toNumber(summary.roster_matched), mono: true },
+        { label: '未匹配', value: toNumber(summary.roster_missing), mono: true, tone: toNumber(summary.roster_missing) ? 'warning' : '' },
+        { label: '本月员工', value: toNumber(summary.total_employees), mono: true },
+      ])}
+      <div class="compact-list-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>项目</th>
+              <th>当前情况</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>花名册文件</td>
+              <td>${escapeHtml(rosterFile || '-')}</td>
+              <td>${rosterFile ? '当前活动已关联花名册。' : '请先上传花名册。'}</td>
+            </tr>
+            <tr>
+              <td>匹配结果</td>
+              <td>${escapeHtml(`${toNumber(summary.roster_matched)} / ${toNumber(summary.total_employees)}`)}</td>
+              <td>后续步骤按这里的员工范围继续。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderSupplementalLeaveSection(activity) {
+  const data = getSupplementalLeaveStepData(activity);
+  if (!data || !data.rows) {
+    return renderInlineEmptyState('补充假勤确认', '上传补充假勤后，这里会列出需要继续处理的行。');
+  }
+  const rows = data.rows || [];
+  const summary = data.summary || {};
+  const filteredRows = getFilteredRows('supplementalLeave', rows);
+  const pageInfo = getPaginatedRows('supplementalLeave', filteredRows);
+  const periodOptions = getSupplementalLeavePeriodOptions(rows);
+  const calcMonth = activity?.calc_month || state.currentActivity?.calc_month || '';
+  const suggestionRows = getSupplementalSuggestionRows(rows);
+
+  return `
+    <section class="step-section">
+      <div class="section-head compact">
+        <div>
+          <h3>补充假勤确认</h3>
+          <p>普通病假、年假默认确认；离职病假结算需要在这里继续处理。</p>
+        </div>
+        <div class="section-actions">
+          <button class="btn btn-primary btn-sm" type="button" onclick="applyAllSupplementalLeaveSuggestions()" ${suggestionRows.length ? '' : 'disabled'}>应用全部建议计入${suggestionRows.length ? `(${suggestionRows.length})` : ''}</button>
+        </div>
+      </div>
+      <div class="leave-summary-compact">
+        ${renderSupplementalSummaryItem(summary, 'total_rows', '解析')}
+        ${renderSupplementalSummaryItem(summary, 'pending_count', '待确认')}
+        ${renderSupplementalSummaryItem(summary, 'include_count', '确认计入', 'success')}
+        ${renderSupplementalSummaryItem(summary, 'excluded_count', '已排除')}
+        ${renderSupplementalSummaryItem(summary, 'attendance_unmatched_count', '未匹配考勤')}
+        ${renderSupplementalSummaryItem(summary, 'include_hours', '计入小时')}
+      </div>
+      ${renderImportToolbar({
+        title: '筛选补充假勤',
+        subtitle: '按处理状态、员工快速定位。',
+        filters: employeeFilters.supplementalLeave,
+        filterFn: 'filterSupplementalLeaveData',
+        resetFn: 'resetSupplementalLeaveFilter',
+        filterValues: getTableFilter('supplementalLeave'),
+      })}
+      <div class="bulk-action-bar">
+        <label class="bulk-check">
+          <input type="checkbox" id="supplementalLeaveCheckAll" onchange="toggleSupplementalLeavePageSelection(this.checked)">
+          当前页全选
+        </label>
+        <select id="bulkLeaveStatus" aria-label="批量状态">
+          <option value="" selected>状态不修改</option>
+          <option value="confirmed">确认计入</option>
+          <option value="excluded">排除</option>
+          <option value="pending">退回待确认</option>
+        </select>
+        <select id="bulkLeaveInclude" aria-label="是否计入">
+          <option value="" selected>计入不修改</option>
+          <option value="true">计入基数</option>
+          <option value="false">不计入</option>
+        </select>
+        <input id="bulkLeaveMonth" type="text" value="" placeholder="${escapeHtml(calcMonth || 'YYYY-MM')}" aria-label="归属月份">
+        <select id="bulkLeavePeriod" aria-label="归属周期">
+          <option value="" selected>周期不修改</option>
+          ${periodOptions.map(period => `<option value="${escapeHtml(period)}">${escapeHtml(period)}</option>`).join('')}
+        </select>
+        <input id="bulkLeaveHours" type="number" min="0" step="0.01" placeholder="计入小时" aria-label="批量计入小时">
+        <input id="bulkLeaveNote" type="text" placeholder="备注，例如：已在3月计入" aria-label="备注">
+        <button class="btn btn-primary btn-sm" type="button" onclick="applySupplementalLeaveBatchFromToolbar()">批量填充</button>
+      </div>
+      ${renderImportTable(`
+        <table class="data-table" id="supplementalLeaveTable">
+          <thead>
+            <tr>
+              <th style="width: 48px;">选择</th>
+              <th>状态</th>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>离职日期</th>
+              <th>假期类型</th>
+              <th>原始小时</th>
+              <th>计入小时</th>
+              <th>申请时间</th>
+              <th>发放时间</th>
+              <th>建议归属</th>
+              <th>当前归属</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.length ? pageInfo.items.map(row => `
+              <tr class="${row.confirmation_status === 'pending' ? 'row-warning' : row.confirmation_status === 'excluded' ? 'row-muted' : ''}" data-row-id="${escapeHtml(row.row_id)}">
+                ${renderSupplementalLeaveRow(row)}
+              </tr>
+            `).join('') : renderEmptyTableRow(13, '没有匹配的补充假勤记录')}
+          </tbody>
+        </table>
+      `, renderTablePagination('supplementalLeave', pageInfo))}
+    </section>
+  `;
+}
+
+function renderAttendanceSummaryTable(activity) {
+  const data = getAttendanceStepData(activity);
+  if (!data || !data.employees) {
+    return `${renderInlineEmptyState('考勤预览', '上传考勤日报后，这里会显示员工工时和补充假勤明细。', '上传考勤日报', "openWorkbenchUpload('attendance')")}${renderSupplementalLeaveSection(activity)}`;
+  }
+  const employees = data.employees || [];
+  const filteredEmployees = getFilteredRows('attendance', employees);
+  const pageInfo = getPaginatedRows('attendance', filteredEmployees);
+  const summary = data.summary || {};
+  const formatShiftType = (emp) => emp.shift_type || (emp.has_night_shift ? '夜班' : '白班');
+
+  return `
+    <section class="step-section">
+      ${renderImportSummary([
+        { label: '员工总数', value: summary.total_employees, mono: true },
+        { label: '考勤行数', value: summary.attendance_rows || employees.length, mono: true },
+        { label: '花名册匹配', value: `${summary.roster_matched || 0}/${summary.total_employees || 0}`, mono: true, tone: (summary.roster_matched || 0) === (summary.total_employees || 0) ? 'success' : 'warning' },
+        { label: '总工时', value: formatHours(summary.total_base_hours), mono: true },
+        { label: '总OT1.5', value: formatHours(summary.total_ot15), mono: true },
+      ])}
+      ${renderImportToolbar({
+        title: '筛选考勤数据',
+        subtitle: '按员工信息快速定位本次解析结果。',
+        filters: employeeFilters.attendance,
+        filterFn: 'filterAttendanceData',
+        resetFn: 'resetAttendanceFilter',
+        filterValues: getTableFilter('attendance'),
+      })}
+      ${renderImportTable(`
+        <table class="data-table" id="attendanceTable">
+          <thead>
+            <tr>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>划分区域</th>
+              <th>部门全称</th>
+              <th>岗位类型</th>
+              <th>班次</th>
+              <th>计薪出勤</th>
+              <th>OT1.5</th>
+              <th>OT2.0</th>
+              <th>病假</th>
+              <th>年假</th>
+              <th>节假日</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.length ? pageInfo.items.map(emp => `
+              <tr class="${emp.total_base_hours === 0 ? 'row-danger' : ''}"
+                  data-id="${escapeHtml(emp.employee_id)}"
+                  data-name="${escapeHtml(emp.name || '')}"
+                  data-area="${escapeHtml(emp.area || '')}"
+                  data-dept="${escapeHtml(emp.department || '')}">
+                <td>${escapeHtml(emp.employee_id)}</td>
+                <td>${escapeHtml(emp.name || '-')}</td>
+                <td>${escapeHtml(emp.area || '-')}</td>
+                <td>${escapeHtml(emp.department || '-')}</td>
+                <td>${formatJobType(emp.job_type)}</td>
+                <td>${formatShiftType(emp)}</td>
+                <td>${formatHours(emp.total_base_hours)}</td>
+                <td>${formatHours(emp.total_ot15)}</td>
+                <td>${formatHours(emp.total_ot20)}</td>
+                <td>${formatHours(getShiftHours(emp, '病假'))}</td>
+                <td>${formatHours(getShiftHours(emp, '年假'))}</td>
+                <td>${formatHours(getShiftHours(emp, '节假日'))}</td>
+              </tr>
+            `).join('') : renderEmptyTableRow(12, '没有匹配的考勤记录')}
+          </tbody>
+        </table>
+      `, renderTablePagination('attendance', pageInfo))}
+    </section>
+    ${renderSupplementalLeaveSection(activity)}
+  `;
+}
+
+function renderSalarySummaryTable(activity) {
+  const data = getSalaryStepData(activity);
+  if (!data || !data.employees) {
+    return renderInlineEmptyState('薪资预览', '上传薪资档案后，这里会显示时薪、绩效比例和固定基数。', '上传薪资档案', "openWorkbenchUpload('salary')");
+  }
+  const employees = data.employees || [];
+  const filteredEmployees = getFilteredRows('salary', employees);
+  const pageInfo = getPaginatedRows('salary', filteredEmployees);
+  const summary = data.summary || {};
+  const salaryQualityCounts = employees.reduce((counts, emp) => {
+    const flags = getSalaryQualityFlags(emp);
+    if (flags.complete) counts.complete += 1;
+    if (flags.zeroHourly) counts.zeroHourly += 1;
+    if (flags.emptyRatio) counts.emptyRatio += 1;
+    if (flags.fixedBase) counts.fixedBase += 1;
+    return counts;
+  }, { complete: 0, zeroHourly: 0, emptyRatio: 0, fixedBase: 0 });
+
+  return `
+    <section class="step-section">
+      ${renderImportSummary([
+        { label: '薪资档案人数', value: summary.total_employees, mono: true },
+        { label: '有效时薪', value: summary.valid_hourly_count ?? summary.total_employees, mono: true, tone: 'success' },
+        { label: '0时薪', value: summary.zero_hourly_count ?? 0, mono: true, tone: (summary.zero_hourly_count ?? 0) ? 'danger' : '' },
+        { label: '有效平均时薪', value: formatCurrency(summary.avg_hourly_rate), mono: true },
+        { label: '绩效比例空', value: salaryQualityCounts.emptyRatio, mono: true, tone: salaryQualityCounts.emptyRatio ? 'warning' : '' },
+        { label: '固定基数', value: salaryQualityCounts.fixedBase, mono: true },
+      ])}
+      ${renderImportToolbar({
+        title: '筛选薪资档案',
+        subtitle: '这里展示本次导入后的薪资结果。',
+        filters: employeeFilters.salary,
+        filterFn: 'filterSalaryData',
+        resetFn: 'resetSalaryFilter',
+        filterValues: getTableFilter('salary'),
+      })}
+      ${renderImportTable(`
+        <table class="data-table" id="salaryTable">
+          <thead>
+            <tr>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>划分区域</th>
+              <th>部门全称</th>
+              <th>时薪</th>
+              <th>绩效比例</th>
+              <th>固定绩效基数</th>
+              <th>导入状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.length ? pageInfo.items.map(emp => `
+              <tr class="${getSalaryQualityFlags(emp).zeroHourly || getSalaryQualityFlags(emp).emptyRatio ? 'row-danger' : ''}"
+                  data-id="${escapeHtml(emp.employee_id)}"
+                  data-name="${escapeHtml(emp.name || '')}"
+                  data-area="${escapeHtml(emp.area || '')}"
+                  data-dept="${escapeHtml(emp.department || '')}">
+                <td>${escapeHtml(emp.employee_id)}</td>
+                <td>${escapeHtml(emp.name || '-')}</td>
+                <td>${escapeHtml(emp.area || '-')}</td>
+                <td>${escapeHtml(emp.department || '-')}</td>
+                <td>${formatCurrency(emp.hourly_rate)}</td>
+                <td>${formatPercent(emp.ratio)}</td>
+                <td>${toNumber(emp.fixed_performance_base) > 0 ? formatCurrency(emp.fixed_performance_base) : '-'}</td>
+                <td>${renderSalaryQualityStatus(emp)}</td>
+              </tr>
+            `).join('') : renderEmptyTableRow(8, '没有匹配的薪资记录')}
+          </tbody>
+        </table>
+      `, renderTablePagination('salary', pageInfo))}
+    </section>
+  `;
+}
+
+function renderPerformanceInlineSupplement() {
+  return `
+    <section class="step-section">
+      <div class="section-head compact">
+        <div>
+          <h3>离职人员补充</h3>
+          <p>缺少绩效报表的离职员工可在这里补充得分。</p>
+        </div>
+      </div>
+      ${renderWorkbenchPerformanceSupplement()}
+    </section>
+  `;
+}
+
+function renderPerformanceSummaryTable(activity) {
+  const data = getPerformanceStepData(activity);
+  if (!data || !data.employees) {
+    return renderInlineEmptyState('绩效预览', '上传绩效报表后，这里会显示绩效得分、等级和系数。', '上传绩效报表', "openWorkbenchUpload('performance')");
+  }
+  const employees = getPerformanceReviewRows(data.employees);
+  const filteredEmployees = getFilteredRows('performance', employees);
+  const pageInfo = getPaginatedRows('performance', filteredEmployees);
+  const summary = data.summary || {};
+  const adjustmentSummary = getAdjustmentStepData(activity)?.summary;
+  const adjustmentIds = getAdjustmentEmployeeIds();
+  const performanceQualityCounts = employees.reduce((counts, emp) => {
+    const flags = getPerformanceQualityFlags(emp, adjustmentIds);
+    if (flags.complete) counts.complete += 1;
+    if (flags.missingScore) counts.missingScore += 1;
+    if (flags.missingCoefficient) counts.missingCoefficient += 1;
+    if (flags.hasAdjustment) counts.hasAdjustment += 1;
+    return counts;
+  }, { complete: 0, missingScore: 0, missingCoefficient: 0, hasAdjustment: 0 });
+  const adjustmentSummaryItems = adjustmentSummary
+    ? (toNumber(adjustmentSummary.total_events) > 0
+      ? [
+        { label: '调薪事件', value: adjustmentSummary.total_events, mono: true, tone: 'warning' },
+        { label: '自动拆分', value: adjustmentSummary.auto_split_ready, mono: true, tone: 'success' },
+        { label: '需补拆分', value: adjustmentSummary.manual_split_required, mono: true, tone: adjustmentSummary.manual_split_required ? 'warning' : '' },
+      ]
+      : [
+        { label: '拆分员工', value: adjustmentSummary.total_employees, mono: true, tone: 'warning' },
+        { label: '有效拆分基数', value: formatCurrency(adjustmentSummary.active_performance_base || 0), mono: true },
+      ])
+    : [];
+
+  return `
+    <section class="step-section">
+      ${renderImportSummary([
+        { label: '绩效报表人数', value: summary.total_employees, mono: true },
+        { label: '审查行数', value: employees.length, mono: true },
+        { label: '平均得分', value: toNumber(summary.avg_score).toFixed(2), mono: true },
+        { label: '缺绩效得分', value: performanceQualityCounts.missingScore, mono: true, tone: performanceQualityCounts.missingScore ? 'warning' : '' },
+        { label: '缺绩效系数', value: performanceQualityCounts.missingCoefficient, mono: true, tone: performanceQualityCounts.missingCoefficient ? 'warning' : '' },
+        ...adjustmentSummaryItems,
+      ])}
+      ${renderImportToolbar({
+        title: '筛选绩效明细',
+        subtitle: '这里展示本次导入后的绩效结果和补充行。',
+        filters: employeeFilters.performance,
+        filterFn: 'filterPerformanceData',
+        resetFn: 'resetPerformanceFilter',
+        filterValues: getTableFilter('performance'),
+      })}
+      ${renderImportTable(`
+        <table class="data-table" id="performanceTable">
+          <thead>
+            <tr>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>划分区域</th>
+              <th>部门全称</th>
+              <th>岗位类型</th>
+              <th>绩效得分</th>
+              <th>绩效等级</th>
+              <th>绩效系数</th>
+              <th>导入状态</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.length ? pageInfo.items.map(emp => `
+              <tr class="${getPerformanceQualityFlags(emp, adjustmentIds).missingScore || getPerformanceQualityFlags(emp, adjustmentIds).missingCoefficient ? 'row-danger' : ''}"
+                  data-id="${escapeHtml(emp.employee_id)}"
+                  data-name="${escapeHtml(emp.name || '')}"
+                  data-area="${escapeHtml(emp.area || '')}"
+                  data-dept="${escapeHtml(emp.department || '')}">
+                <td>${escapeHtml(emp.employee_id)}</td>
+                <td>${escapeHtml(emp.name || '-')}</td>
+                <td>${escapeHtml(emp.area || '-')}</td>
+                <td>${escapeHtml(emp.department || '-')}</td>
+                <td>${formatJobType(emp.job_type)}</td>
+                <td>${!isBlankImportValue(emp.score) ? toNumber(emp.score).toFixed(2) : '-'}</td>
+                <td>${escapeHtml(emp.level || '-')}</td>
+                <td>${!isBlankImportValue(emp.coefficient) ? formatCoefficient(emp.coefficient) : '-'}</td>
+                <td>${renderPerformanceQualityStatus(emp, adjustmentIds)}</td>
+              </tr>
+            `).join('') : renderEmptyTableRow(9, '没有匹配的绩效记录')}
+          </tbody>
+        </table>
+      `, renderTablePagination('performance', pageInfo))}
+    </section>
+  `;
+}
+
+function renderCheckPreview(activity) {
+  const diagnostics = getWorkbenchDiagnostics(activity);
+  const summary = diagnostics?.summary || {};
+  const issues = (diagnostics?.issues || []).filter(Boolean);
+  const readyCount = toNumber(summary.can_calculate_count);
+  const totalCount = toNumber(summary.attendance_count);
+  const severityLabel = { error: '严重', warning: '提醒', info: '信息' };
+
+  return `
+    <section class="step-section">
+      ${renderImportSummary([
+        { label: '严重', value: toNumber(summary.error_count), mono: true, tone: toNumber(summary.error_count) ? 'danger' : 'success' },
+        { label: '提醒', value: toNumber(summary.warning_count), mono: true, tone: toNumber(summary.warning_count) ? 'warning' : 'success' },
+        { label: '可继续计算', value: `${readyCount}/${totalCount}`, mono: true },
+        { label: '结果人数', value: getWorkbenchResults(activity).length, mono: true },
+      ])}
+      <div class="compact-list-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>级别</th>
+              <th>问题</th>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>说明</th>
+              <th>处理</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${issues.length ? issues.slice(0, 20).map(issue => {
+              const source = getExceptionSource(issue);
+              const severity = safeExceptionSeverity(issue.severity);
+              return `
+                <tr class="${severity === 'error' ? 'row-danger' : ''}">
+                  <td>${escapeHtml(severityLabel[severity] || '信息')}</td>
+                  <td>${escapeHtml(issue.type || '-')}</td>
+                  <td>${escapeHtml(issue.employee_id || '-')}</td>
+                  <td>${escapeHtml(issue.name || '-')}</td>
+                  <td>${escapeHtml(issue.detail || '-')}</td>
+                  <td>${renderExceptionAction(issue, source)}</td>
+                </tr>
+              `;
+            }).join('') : renderEmptyTableRow(6, '当前没有需要继续处理的问题')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderFinalResults(activity) {
+  const results = getWorkbenchResults(activity);
+  if (!results.length) {
+    return renderInlineEmptyState('暂无核算结果', '完成前面的步骤后，在这里查看最终结果。', '开始核算', 'executeCalculate()');
+  }
+  const filteredResults = getFilteredRows('results', results);
+  const pageInfo = getPaginatedRows('results', filteredResults);
+  const totalBonus = results.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
+  const avgBonus = results.length ? totalBonus / results.length : 0;
+  const issueCount = results.filter(row => (row.exceptions || []).length > 0).length;
+
+  return `
+    <section class="step-section">
+      ${renderResultsToolbar()}
+      ${renderBonusResultTable(pageInfo.items, pageInfo)}
+      <div class="result-summary-bar">
+        <div class="result-summary-item">
+          <span>参与核算</span>
+          <span>${results.length}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>奖金总额</span>
+          <span>${formatCurrency(totalBonus)}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>平均奖金</span>
+          <span>${formatCurrency(avgBonus)}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>需关注</span>
+          <span>${issueCount}</span>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderStepContent(activity) {
+  const stepKey = state.activityStep;
+  if (stepKey === 'people') return renderPeopleStep(activity);
+  if (stepKey === 'attendance') return renderAttendanceStep(activity);
+  if (stepKey === 'salary') return renderSalaryStep(activity);
+  if (stepKey === 'performance') return renderPerformanceStep(activity);
+  if (stepKey === 'check') return renderCheckStep(activity);
+  if (stepKey === 'export') return renderExportStep(activity);
+  return '';
+}
+
+function renderPeopleStep(activity) {
+  return `${renderStepMaterials('people', activity)}${renderNeedsPanel('people', activity)}${renderPeopleTable(activity)}`;
+}
+
+function renderAttendanceStep(activity) {
+  return `${renderStepMaterials('attendance', activity)}${renderMaintainedRuleList('workHour', activity)}${renderNeedsPanel('attendance', activity)}${renderAttendanceSummaryTable(activity)}`;
+}
+
+function renderSalaryStep(activity) {
+  return `${renderStepMaterials('salary', activity)}${renderMaintainedRuleList('fixedBase', activity)}${renderNeedsPanel('salary', activity)}${renderSalarySummaryTable(activity)}`;
+}
+
+function renderPerformanceStep(activity) {
+  return `${renderStepMaterials('performance', activity)}${renderPerformanceInlineSupplement(activity)}${renderNeedsPanel('performance', activity)}${renderPerformanceSummaryTable(activity)}`;
+}
+
+function renderCheckStep(activity) {
+  return `${renderNeedsPanel('check', activity)}${renderCheckPreview(activity)}`;
+}
+
+function renderExportStep(activity) {
+  return `${renderFinalResults(activity)}`;
+}
+
+function renderStepHeader(step, activity) {
+  return `
+    <div class="step-topline">
+      <div>
+        <h3>${escapeHtml(step?.label || '')}</h3>
+        <p class="step-topline-summary">${escapeHtml(getStepSummary(step?.key || '', activity))}</p>
+      </div>
+      ${renderStepHelp(step?.key || '')}
     </div>
   `;
 }
