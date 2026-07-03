@@ -5873,6 +5873,8 @@
 	      }
 
 	      .step-section {
+	        min-width: 0;
+	        max-width: 100%;
 	        padding: 10px;
 	        border: 1px solid #e2e8f0;
 	        border-radius: 8px;
@@ -5968,6 +5970,7 @@
 	        justify-content: space-between;
 	        align-items: flex-start;
 	        gap: 10px;
+	        min-width: 0;
 	      }
 
 	      .section-head.compact h3 {
@@ -6119,6 +6122,9 @@
 
 	      .table-section .data-table-container,
 	      .final-results .data-table-container {
+	        width: 100%;
+	        min-width: 0;
+	        overflow-x: auto;
 	        border: 1px solid #e2e8f0;
 	        border-radius: 7px;
 	        background: #fff;
@@ -6291,6 +6297,7 @@
 	      .activity-step-body {
 	        display: grid;
 	        gap: 12px;
+	        min-width: 0;
 	      }
 
 	      .step-topline {
@@ -6298,6 +6305,8 @@
 	        align-items: flex-start;
 	        justify-content: space-between;
 	        gap: 16px;
+	        min-width: 0;
+	        max-width: 100%;
 	      }
 
 	      .step-topline h3 {
@@ -6312,7 +6321,9 @@
 	      }
 
 	      .step-help {
-	        min-width: 220px;
+	        width: 220px;
+	        max-width: 100%;
+	        min-width: 0;
 	        padding: 10px 12px;
 	        border: 1px solid #e2e8f0;
 	        border-radius: 8px;
@@ -6411,6 +6422,9 @@
 	        .need-row {
 	          flex-direction: column;
 	          align-items: stretch;
+	        }
+	        .step-help {
+	          width: 100%;
 	        }
 	        .material-row {
 	          grid-template-columns: 8px minmax(0, 1fr);
@@ -6597,6 +6611,11 @@
 	          min-height: 100vh;
 	        }
 
+	        .main-content {
+	          width: auto;
+	          transition: margin-left 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+	        }
+
 	        .sidebar {
 	          position: fixed;
 	          left: 12px;
@@ -6712,6 +6731,11 @@
 	          z-index: 30;
 	          border-color: #c9d7ec;
 	          box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+	        }
+
+	        .sidebar:hover ~ .main-content,
+	        .sidebar:focus-within ~ .main-content {
+	          margin-left: 132px;
 	        }
 
 	        .sidebar:hover .nav-section-title,

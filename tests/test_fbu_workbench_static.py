@@ -19,6 +19,15 @@ def test_fbu_sidebar_expands_on_desktop_hover_and_focus():
     assert ".sidebar:hover," in desktop_sidebar
     assert ".sidebar:focus-within" in desktop_sidebar
     assert "width: 196px;" in desktop_sidebar
+    assert ".sidebar:hover ~ .main-content" in desktop_sidebar
+    assert ".sidebar:focus-within ~ .main-content" in desktop_sidebar
+    assert "margin-left: 132px;" in desktop_sidebar
+    assert "width: auto;" in desktop_sidebar
     assert ".sidebar:hover .nav-item-text" in desktop_sidebar
+    assert "min-width: 0;" in html.split(".step-section {", 1)[1].split("}", 1)[0]
+    assert "overflow-x: auto;" in html.split(".final-results .data-table-container {", 1)[1].split("}", 1)[0]
+    step_help = html.split(".step-help {", 1)[1].split("}", 1)[0]
+    assert "width: 220px;" in step_help
+    assert "flex:" not in step_help
     assert "position: relative;" in top_bar
     assert "z-index: 40;" in top_bar
