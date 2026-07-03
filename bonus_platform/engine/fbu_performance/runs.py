@@ -51,12 +51,34 @@ class FBURunManager:
     def _load_runs(self):
         """加载历史运行记录"""
         runs_file = self.data_dir / "runs.json"
-        if runs_file.exists():
+        if not runs_file.exists():
+            return
+
+        try:
             with open(runs_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                for run_data in data:
-                    run = FBURun(**run_data)
-                    self.runs[run.run_id] = run
+        except (OSError, json.JSONDecodeError):
+            self._quarantine_corrupt_runs_file(runs_file)
+            return
+
+        if not isinstance(data, list):
+            self._quarantine_corrupt_runs_file(runs_file)
+            return
+
+        for run_data in data:
+            try:
+                run = FBURun(**run_data)
+            except TypeError:
+                continue
+            self.runs[run.run_id] = run
+
+    def _quarantine_corrupt_runs_file(self, runs_file: Path):
+        suffix = datetime.now().strftime("%Y%m%d%H%M%S")
+        quarantine_path = runs_file.with_name(f"runs.corrupt-{suffix}.json")
+        try:
+            runs_file.replace(quarantine_path)
+        except OSError:
+            pass
 
     def _save_runs(self):
         """保存运行记录"""

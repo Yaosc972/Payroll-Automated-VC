@@ -49,6 +49,21 @@ def test_rule_lists_return_seeded_96_hour_and_fixed_base_lists(monkeypatch, tmp_
     assert payload["fixed_base_employees"][0]["fixed_performance_base"] == 3000
 
 
+def test_run_manager_quarantines_corrupt_runs_json(tmp_path):
+    runs_file = tmp_path / "runs.json"
+    runs_file.write_text("{not valid json", encoding="utf-8")
+
+    manager = FBURunManager(str(tmp_path))
+
+    assert manager.list_runs() == []
+    assert not runs_file.exists()
+    assert len(list(tmp_path.glob("runs.corrupt-*.json"))) == 1
+
+    run = manager.create_run("2026-04")
+    assert run.calc_month == "2026-04"
+    assert runs_file.exists()
+
+
 def test_rule_lists_can_be_saved_without_uploading_workbook(monkeypatch, tmp_path):
     client = _client_with_tmp_store(monkeypatch, tmp_path)
 
