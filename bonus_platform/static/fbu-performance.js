@@ -1077,7 +1077,6 @@ function getWorkbenchSourceKey(label) {
     '绩效报表': 'performance',
     '调薪拆分': 'adjustments',
     '补充假勤': 'supplementalLeave',
-    '工时规则 / 固定基数例外': 'baseOverrides',
   };
   return map[label] || '';
 }
@@ -1294,7 +1293,7 @@ function renderWorkbenchResultRow(result) {
       <td>${escapeHtml(result.area || '-')}</td>
       <td>${escapeHtml(result.department || '-')}</td>
       <td>${formatResultJobType(result.job_type)}</td>
-      <td class="metric-cell">${formatScore(result.performance_score)}</td>
+      <td class="amount-cell">${formatCurrency(result.hourly_rate)}</td>
       <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
       <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
@@ -1358,7 +1357,7 @@ function renderWorkbenchResults(activity) {
       <div class="workbench-panel-head">
         <div>
           <div class="workbench-panel-title">核算结果</div>
-          <div class="workbench-panel-sub">最终合并口径；白/夜班拆行在行内展开，不显示时薪。</div>
+          <div class="workbench-panel-sub">沿用现有结果明细口径，白/夜班拆行在行内展开。</div>
         </div>
         <div class="workbench-source-actions">
           ${filters.map(([key, label]) => `
@@ -1377,7 +1376,7 @@ function renderWorkbenchResults(activity) {
               <th>划分区域</th>
               <th>部门全称</th>
               <th>岗位类型</th>
-              <th class="metric-cell">绩效得分</th>
+              <th class="amount-cell">时薪</th>
               <th class="amount-cell">绩效基数</th>
               <th class="metric-cell">绩效比例</th>
               <th class="metric-cell">绩效系数</th>
@@ -4239,8 +4238,8 @@ function renderBonusResultTable(results, pageInfo) {
             <col style="width: 160px;">
             <col style="width: 260px;">
             <col style="width: 110px;">
-            <col style="width: 140px;">
             <col style="width: 110px;">
+            <col style="width: 140px;">
             <col style="width: 110px;">
             <col style="width: 110px;">
             <col style="width: 120px;">
@@ -4254,9 +4253,9 @@ function renderBonusResultTable(results, pageInfo) {
               <th>划分区域</th>
               <th>部门全称</th>
               <th>岗位类型</th>
+              <th class="amount-cell">时薪</th>
               <th class="amount-cell">绩效基数</th>
               <th class="metric-cell">绩效比例</th>
-              <th class="metric-cell">绩效得分</th>
               <th class="metric-cell">绩效系数</th>
               <th>异常</th>
               <th class="sticky-bonus">最终奖金</th>
@@ -4291,9 +4290,9 @@ function renderBonusResultRow(result) {
       <td class="muted-cell" title="${escapeHtml(result.area || '-')}">${escapeHtml(result.area || '-')}</td>
       <td class="muted-cell" title="${escapeHtml(result.department || '-')}">${escapeHtml(result.department || '-')}</td>
       <td>${formatResultJobType(result.job_type)}</td>
+      <td class="amount-cell">${formatCurrency(result.hourly_rate)}</td>
       <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
-      <td class="metric-cell">${formatScore(result.performance_score)}</td>
       <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
       <td>${exceptions.length ? `<span class="exception-chip" tabindex="0" title="${exceptionTitle}" aria-label="异常：${exceptionTitle}">${exceptions.length}项</span>` : '<span class="muted-cell">-</span>'}</td>
       <td class="sticky-bonus"><span class="bonus-value">${formatCurrency(result.performance_bonus)}</span></td>
