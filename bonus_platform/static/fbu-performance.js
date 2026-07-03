@@ -2371,26 +2371,20 @@ async function enterActivity(activityId, options = {}) {
     // Load data if available
     if (activity.attendance_data) {
       state.attendanceData = activity.attendance_data;
-      renderAttendanceData();
     }
     if (activity.salary_data) {
       state.salaryData = activity.salary_data;
-      renderSalaryData();
     }
     if (activity.performance_data) {
       state.performanceData = activity.performance_data;
-      renderPerformanceData();
     }
     if (activity.adjustment_data) {
       state.adjustmentData = activity.adjustment_data;
-      renderPerformanceData();
     }
     state.supplementalLeaveData = activity.supplemental_leave_data || null;
     state.baseOverrideData = activity.base_override_data || null;
-    renderSupplementalLeaveData();
     if (activity.results) {
       state.resultsData = activity.results;
-      renderResultsData();
     }
     renderWorkbench();
   } catch (error) {
@@ -2642,19 +2636,14 @@ async function uploadWorkbenchFile(type, file) {
     if (type === 'attendance') {
       state.attendanceData = data.preview;
       state.workbenchPreviousAttendanceFile = null;
-      renderAttendanceData();
     } else if (type === 'salary') {
       state.salaryData = data.preview;
-      renderSalaryData();
     } else if (type === 'performance') {
       state.performanceData = data.preview;
-      renderPerformanceData();
     } else if (type === 'adjustments') {
       state.adjustmentData = data.preview;
-      renderPerformanceData();
     } else if (type === 'supplementalLeave') {
       state.supplementalLeaveData = data.preview;
-      renderSupplementalLeaveData();
     }
 
     showNotification(`${uploadTypeLabels[type]}已上传并刷新工作台`, 'success');
@@ -2760,7 +2749,6 @@ async function saveWorkbenchPerformanceSupplement() {
     }
     state.workbenchSupplementLevel = '';
     state.workbenchSupplementDraft = { employeeId: '', name: '', score: '' };
-    renderPerformanceData();
     renderWorkbench();
     showNotification('绩效补录已保存', 'success');
   } catch (error) {

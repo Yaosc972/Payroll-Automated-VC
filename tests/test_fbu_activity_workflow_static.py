@@ -158,6 +158,21 @@ def test_activity_workflow_has_no_modal_first_upload_or_supplement_paths():
     assert "showCalcChain(" not in js
 
 
+def test_workbench_success_paths_do_not_call_removed_page_renderers():
+    js = _js()
+
+    workflow_refresh_area = js.split("// ═══ Enter Activity ═══", 1)[1].split("// ═══ Upload Buttons ═══", 1)[0]
+
+    for forbidden in [
+        "renderAttendanceData();",
+        "renderSalaryData();",
+        "renderPerformanceData();",
+        "renderSupplementalLeaveData();",
+        "renderResultsData();",
+    ]:
+        assert forbidden not in workflow_refresh_area
+
+
 def test_export_button_only_appears_in_final_step_renderer():
     js = _js()
 
