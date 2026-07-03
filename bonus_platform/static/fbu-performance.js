@@ -1277,19 +1277,6 @@ function buildWorkbenchTasks(activity = getWorkbenchActivity()) {
   const tasks = [];
   const diagnostics = getWorkbenchDiagnostics(activity);
   const issues = (diagnostics?.issues || []).filter(Boolean);
-  const sourceRows = buildImportBatchRows(activity);
-
-  sourceRows.forEach(row => {
-    const sourceKey = getWorkbenchSourceKey(row.type);
-    if (!sourceKey || !String(row.status || '').includes('待上传')) return;
-    tasks.push({
-      id: `source-${sourceKey}`,
-      tone: 'warning',
-      title: `${row.type}待上传`,
-      meta: row.meta || row.file,
-      actions: `<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(${formatJsArg(sourceKey)})">上传</button>`,
-    });
-  });
 
   getSupplementalSuggestionRows(getWorkbenchSupplementalRows(activity)).slice(0, 6).forEach(row => {
     const hours = getSupplementalSuggestedHours(row);
@@ -2026,8 +2013,8 @@ function renderFoundationData() {
         <div class="module-action-list">
           <div class="module-action-card">
             <strong>更新基础花名册</strong>
-            <span>上传员工基础资料，供月度活动匹配姓名、部门和岗位类型。</span>
-            <button class="btn btn-primary btn-sm" type="button" onclick="chooseRosterFile()">上传花名册</button>
+            <span>基础花名册仅在月度活动的“人员核对”步骤上传，避免脱离活动上下文单独更新。</span>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="navigateTo('activities')">查看月度活动</button>
           </div>
           <div class="module-action-card">
             <strong>调薪/转正拆分模板</strong>
@@ -2035,12 +2022,9 @@ function renderFoundationData() {
             <button class="btn btn-secondary btn-sm" type="button" onclick="downloadAdjustmentsTemplate()">下载模板</button>
           </div>
           <div class="module-action-card">
-            <strong>工时规则 / 固定基数例外模板</strong>
-            <span>96工时制只标记规则，特殊合计时长由平台按考勤日报计算；固定基数只用于人工例外。</span>
-            <div class="module-action-row">
-              <button class="btn btn-secondary btn-sm" type="button" onclick="downloadBaseOverridesTemplate()">下载模板</button>
-              <button class="btn btn-secondary btn-sm" type="button" onclick="openUploadModal('baseOverrides')">上传规则表</button>
-            </div>
+            <strong>96工时制 / 固定基数名单</strong>
+            <span>这两类名单改为在月度活动页面内维护并确认，不再提供规则表上传入口。</span>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="navigateTo('activities')">进入活动维护</button>
           </div>
           <div class="module-action-card">
             <strong>月度活动</strong>
@@ -2508,8 +2492,10 @@ function chooseRosterFile() {
     if (!file) return;
     const formData = new FormData();
     formData.append('file', file);
-    el.btnUploadRoster.disabled = true;
-    el.btnUploadRoster.textContent = '花名册上传中...';
+    if (el.btnUploadRoster) {
+      el.btnUploadRoster.disabled = true;
+      el.btnUploadRoster.textContent = '花名册上传中...';
+    }
     try {
       const data = await apiJson(`${API_BASE}/roster`, {
         method: 'POST',
@@ -2523,7 +2509,9 @@ function chooseRosterFile() {
       showNotification('花名册上传失败: ' + error.message, 'error');
       updateRosterButton();
     } finally {
-      el.btnUploadRoster.disabled = false;
+      if (el.btnUploadRoster) {
+        el.btnUploadRoster.disabled = false;
+      }
     }
   });
   input.click();
@@ -3237,7 +3225,6 @@ el.btnUploadPerformanceEmpty?.addEventListener('click', () => openUploadModal('p
 el.btnAddPerformanceSupplement?.addEventListener('click', openPerformanceSupplementModal);
 el.btnAddPerformanceSupplementEmpty?.addEventListener('click', openPerformanceSupplementModal);
 el.btnUploadAdjustments?.addEventListener('click', () => openUploadModal('adjustments'));
-document.getElementById('btnUploadSupplementalLeave')?.addEventListener('click', () => openUploadModal('supplementalLeave'));
 el.workbenchUploadRoster?.addEventListener('change', event => handleWorkbenchUploadChange('roster', event));
 el.workbenchUploadAttendance?.addEventListener('change', event => handleWorkbenchUploadChange('attendance', event));
 el.workbenchUploadPreviousAttendance?.addEventListener('change', event => handleWorkbenchUploadChange('previousAttendance', event));
@@ -3942,9 +3929,8 @@ function renderSupplementalLeaveData() {
         <div class="subsection-head">
           <div>
             <h3>补充假勤确认</h3>
-            <p>导入薪酬 sickpay&年假表后，系统会生成待确认清单。</p>
+            <p>请在“考勤工时”步骤的材料行上传补充假勤，系统会在这里生成待确认清单。</p>
           </div>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="openUploadModal('supplementalLeave')">上传补充假勤</button>
         </div>
       </div>
     `;
@@ -3973,7 +3959,6 @@ function renderSupplementalLeaveData() {
             onclick="applyAllSupplementalLeaveSuggestions()"
             ${suggestionRows.length ? '' : 'disabled'}
           >应用全部建议计入${suggestionRows.length ? `(${suggestionRows.length})` : ''}</button>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="openUploadModal('supplementalLeave')">重新上传</button>
         </div>
       </div>
       <div class="leave-summary-compact">
@@ -4826,7 +4811,6 @@ function renderActivityDetail(activity) {
       </div>
       <div class="workbench-hero-actions">
         <button class="btn btn-secondary btn-sm" type="button" onclick="navigateTo('activities')">活动列表</button>
-        <button class="btn btn-secondary btn-sm" type="button" onclick="openWorkbenchUpload('roster')">基础花名册</button>
         <button class="btn btn-secondary btn-sm" type="button" onclick="exportData('diagnostics')" ${diagnostics?.issues?.length ? '' : 'disabled'}>导出诊断</button>
         <button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">执行核算</button>
       </div>
