@@ -144,3 +144,23 @@ def test_final_table_freezes_only_employee_id_and_name():
     assert ".sticky-employee-name" in html
     assert ".sticky-bonus" not in html
     assert "sticky-bonus" not in js
+
+
+def test_activity_workflow_has_no_modal_first_upload_or_supplement_paths():
+    html = _html()
+    js = _js()
+
+    assert 'id="uploadModal"' not in html
+    assert 'id="performanceSupplementModal"' not in html
+    assert 'id="calcChainModal"' not in html
+    assert "openUploadModal(" not in js
+    assert "openPerformanceSupplementModal(" not in js
+    assert "showCalcChain(" not in js
+
+
+def test_export_button_only_appears_in_final_step_renderer():
+    js = _js()
+
+    before_export_step = js.split("function renderExportStep", 1)[0]
+    assert "exportData('results')" not in before_export_step
+    assert "导出结果" in js.split("function renderExportStep", 1)[1]

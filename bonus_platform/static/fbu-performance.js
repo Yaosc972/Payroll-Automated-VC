@@ -615,27 +615,6 @@ const el = {
   supplementalLeaveContent: document.getElementById('supplementalLeaveContent'),
   resultsContent: document.getElementById('resultsContent'),
 
-  // Upload Modal
-  uploadModal: document.getElementById('uploadModal'),
-  uploadModalTitle: document.getElementById('uploadModalTitle'),
-  uploadZone: document.getElementById('uploadZone'),
-  uploadZoneTitle: document.getElementById('uploadZoneTitle'),
-  uploadZoneSub: document.getElementById('uploadZoneSub'),
-  uploadFileInput: document.getElementById('uploadFileInput'),
-  previousAttendanceField: document.getElementById('previousAttendanceField'),
-  previousAttendanceInput: document.getElementById('previousAttendanceInput'),
-  previousAttendanceSub: document.getElementById('previousAttendanceSub'),
-  btnChoosePreviousAttendance: document.getElementById('btnChoosePreviousAttendance'),
-  btnClearPreviousAttendance: document.getElementById('btnClearPreviousAttendance'),
-  uploadResultPanel: document.getElementById('uploadResultPanel'),
-  uploadResultTitle: document.getElementById('uploadResultTitle'),
-  uploadResultSub: document.getElementById('uploadResultSub'),
-  uploadResultStats: document.getElementById('uploadResultStats'),
-  uploadResultFile: document.getElementById('uploadResultFile'),
-  btnCloseUploadModal: document.getElementById('btnCloseUploadModal'),
-  btnCancelUpload: document.getElementById('btnCancelUpload'),
-  btnConfirmUpload: document.getElementById('btnConfirmUpload'),
-
   // App Dialog
   appDialog: document.getElementById('appDialog'),
   appDialogCard: document.getElementById('appDialogCard'),
@@ -654,24 +633,6 @@ const el = {
   btnCloseAppDialog: document.getElementById('btnCloseAppDialog'),
   btnCancelAppDialog: document.getElementById('btnCancelAppDialog'),
   btnConfirmAppDialog: document.getElementById('btnConfirmAppDialog'),
-
-  // Calc Chain Modal
-  calcChainModal: document.getElementById('calcChainModal'),
-  calcChainContent: document.getElementById('calcChainContent'),
-  btnCloseCalcChainModal: document.getElementById('btnCloseCalcChainModal'),
-  btnCloseCalcChain: document.getElementById('btnCloseCalcChain'),
-
-  // Performance supplement modal
-  performanceSupplementModal: document.getElementById('performanceSupplementModal'),
-  supplementEmployeeId: document.getElementById('supplementEmployeeId'),
-  supplementEmployeeName: document.getElementById('supplementEmployeeName'),
-  supplementScore: document.getElementById('supplementScore'),
-  supplementLevel: document.getElementById('supplementLevel'),
-  supplementCoefficient: document.getElementById('supplementCoefficient'),
-  supplementNote: document.getElementById('supplementNote'),
-  btnClosePerformanceSupplementModal: document.getElementById('btnClosePerformanceSupplementModal'),
-  btnCancelPerformanceSupplement: document.getElementById('btnCancelPerformanceSupplement'),
-  btnSavePerformanceSupplement: document.getElementById('btnSavePerformanceSupplement'),
 
   // Toasts
   toastRegion: document.getElementById('toastRegion'),
@@ -1024,12 +985,6 @@ document.addEventListener('keydown', (event) => {
   if (activeModal === el.appDialog) {
     event.preventDefault();
     closeAppDialog({ confirmed: false });
-  } else if (activeModal === el.uploadModal) {
-    event.preventDefault();
-    closeUploadModal();
-  } else if (activeModal === el.calcChainModal) {
-    event.preventDefault();
-    closeCalcChainModal();
   }
 });
 
@@ -1238,7 +1193,7 @@ function renderWorkbenchPreviousAttendanceCard(activity) {
   const needsPrevious = context?.required || state.workbenchPreviousAttendanceFile;
   const tone = hasPrevious ? 'ready' : needsPrevious ? 'pending' : 'optional';
   const fileLabel = state.workbenchPreviousAttendanceFile?.name
-    || (hasPrevious ? '已随考勤纳入跨月上下文' : '未选择');
+    || (hasPrevious ? '已随考勤纳入跨月关联' : '未选择');
   return `
     <article class="workbench-source-card ${tone}">
       <div>
@@ -1248,7 +1203,7 @@ function renderWorkbenchPreviousAttendanceCard(activity) {
         </div>
         <div class="workbench-source-file" title="${escapeHtml(fileLabel)}">${escapeHtml(fileLabel)}</div>
         <div class="workbench-source-meta">
-          <span class="workbench-chip ${hasPrevious ? 'success' : needsPrevious ? 'warning' : ''}">96工时制上下文</span>
+          <span class="workbench-chip ${hasPrevious ? 'success' : needsPrevious ? 'warning' : ''}">96工时制关联</span>
           <span class="workbench-chip">${escapeHtml(context?.status || '自动判断')}</span>
         </div>
       </div>
@@ -1342,8 +1297,8 @@ function buildWorkbenchTasks(activity = getWorkbenchActivity()) {
     tasks.push({
       id: 'ready',
       tone: 'success',
-      title: '暂无阻断任务',
-      meta: '当前导入状态可继续核算或导出结果。',
+      title: '暂无待处理事项',
+      meta: '当前导入状态可继续核算。',
       actions: `<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">执行核算</button>`,
     });
   }
@@ -1525,13 +1480,12 @@ function renderWorkbenchResults(activity) {
       <div class="workbench-panel-head">
         <div>
           <div class="workbench-panel-title">核算结果</div>
-          <div class="workbench-panel-sub">沿用现有结果明细口径，白/夜班拆行在行内展开。</div>
+          <div class="workbench-panel-sub">最终合并结果按员工展示，白/夜班拆行在行内展开。</div>
         </div>
         <div class="workbench-source-actions">
           ${filters.map(([key, label]) => `
             <button class="workbench-segment ${state.workbenchResultFilter === key ? 'active' : ''}" type="button" onclick="setWorkbenchResultFilter(${formatJsArg(key)})">${escapeHtml(label)}</button>
           `).join('')}
-          <button class="btn btn-secondary btn-sm" type="button" onclick="exportData('results')" ${results.length ? '' : 'disabled'}>导出</button>
           <button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">执行核算</button>
         </div>
       </div>
@@ -1569,7 +1523,7 @@ function renderWorkbenchAudit(activity) {
   const adjustmentSummary = activity?.adjustment_data?.summary || {};
   const baseSummary = activity?.base_override_data?.summary || {};
   const cards = [
-    ['严重异常', toNumber(summary.error_count), `${toNumber(summary.issue_count)} 项诊断`, toNumber(summary.error_count) ? 'danger' : 'success'],
+    ['严重异常', toNumber(summary.error_count), `${toNumber(summary.issue_count)} 项检查`, toNumber(summary.error_count) ? 'danger' : 'success'],
     ['补充假勤', `${toNumber(supplementalSummary.pending_count)} 待确认`, `计入 ${formatHours(supplementalSummary.include_hours)}`, toNumber(supplementalSummary.pending_count) ? 'warning' : 'success'],
     ['调薪拆分', toNumber(adjustmentSummary.total_events || adjustmentSummary.total_segments), `人工 ${toNumber(adjustmentSummary.manual_split_required)} · 自动 ${toNumber(adjustmentSummary.auto_split_ready)}`, toNumber(adjustmentSummary.manual_split_required) ? 'warning' : 'success'],
     ['96工时规则', toNumber(baseSummary.active_count), `固定基数 ${formatCurrency(baseSummary.active_fixed_base)}`, ''],
@@ -1578,8 +1532,8 @@ function renderWorkbenchAudit(activity) {
     <section class="workbench-panel workbench-audit-ledger">
       <div class="workbench-panel-head">
         <div>
-          <div class="workbench-panel-title">审计明细</div>
-          <div class="workbench-panel-sub">只展示会影响结果或需要复核的口径。</div>
+          <div class="workbench-panel-title">查看说明</div>
+          <div class="workbench-panel-sub">只展示会影响结果或需要复核的说明。</div>
         </div>
         <button class="btn btn-secondary btn-sm" type="button" onclick="setActivityStep('check')">查看核算检查</button>
       </div>
@@ -1619,7 +1573,6 @@ function renderWorkbench() {
       </div>
       <div class="activity-title-actions">
         ${state.activityStep === 'check' ? '<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">开始核算</button>' : ''}
-        ${state.activityStep === 'export' ? '<button class="btn btn-primary btn-sm" type="button" onclick="exportData(\'results\')">导出结果</button>' : ''}
       </div>
     </section>
     ${renderActivityStepper(activity)}
@@ -1741,8 +1694,8 @@ function renderActivityDiagnostics(activity) {
   if (!summary) {
     return `
       <div class="activity-diagnostics">
-        <span class="activity-diagnostics-muted">${isLoading ? '诊断加载中' : '未生成诊断'}</span>
-        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">异常队列</button>
+        <span class="activity-diagnostics-muted">${isLoading ? '检查加载中' : '未生成检查'}</span>
+        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">需要处理</button>
       </div>
     `;
   }
@@ -1757,7 +1710,7 @@ function renderActivityDiagnostics(activity) {
     <div class="activity-diagnostics">
       <div class="activity-diagnostics-line">
         <span class="status-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
-        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">异常队列</button>
+        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">需要处理</button>
       </div>
       <div class="activity-diagnostics-meta">
         ${escapeHtml(`${issueCount}项 · 可算 ${toNumber(summary.can_calculate_count)}/${toNumber(summary.attendance_count)}`)}
@@ -1783,7 +1736,7 @@ function getActivityCompletedSteps(activity) {
 
 function getActivityStageCaption(activity, completedSteps) {
   if (activity.status === 'completed') return '核算完成';
-  if (activity.status === 'failed') return '需要处理异常';
+  if (activity.status === 'failed') return '需要处理';
   const nextStep = activityStepLabels[Math.min(completedSteps, activityStepLabels.length - 1)];
   return `下一步：${nextStep}`;
 }
@@ -2065,7 +2018,7 @@ function renderFoundationData() {
         <div class="module-action-list">
           <div class="module-action-card">
             <strong>更新基础花名册</strong>
-            <span>基础花名册仅在月度活动的“人员核对”步骤上传，避免脱离活动上下文单独更新。</span>
+            <span>基础花名册仅在月度活动的“人员核对”步骤上传，避免脱离活动流程单独更新。</span>
             <button class="btn btn-secondary btn-sm" type="button" onclick="navigateTo('activities')">查看月度活动</button>
           </div>
           <div class="module-action-card">
@@ -2368,7 +2321,7 @@ function renderExceptionQueue() {
       ` : `
         <div class="empty-state compact">
           <h3 class="empty-state-title">暂无匹配异常</h3>
-          <p class="empty-state-sub">${escapeHtml(state.currentActivity.calc_month || '')} 当前没有需要处理的诊断问题。</p>
+          <p class="empty-state-sub">${escapeHtml(state.currentActivity.calc_month || '')} 当前没有需要处理的问题。</p>
         </div>
       `}
     </div>
@@ -2570,13 +2523,6 @@ function chooseRosterFile() {
 }
 
 el.btnUploadRoster?.addEventListener('click', chooseRosterFile);
-
-// ═══ Upload Modal ═══
-
-let uploadType = '';
-let uploadFile = null;
-let previousAttendanceFile = null;
-let uploadStage = 'select';
 
 const uploadTypeLabels = {
   attendance: '考勤日报表',
@@ -2836,447 +2782,7 @@ function locateWorkbenchSupplementalRow(rowId) {
   renderWorkbench();
 }
 
-function getUploadTitle(type) {
-  const label = uploadTypeLabels[type] || '文件';
-  return `上传${label}`;
-}
-
-function getUploadHint(type) {
-  if (type === 'attendance' && state.baseRoster?.has_roster) {
-    return `点击选择或拖拽文件到此处 · 将自动引用基础花名册 ${state.baseRoster.filename || ''}`;
-  }
-  if (type === 'adjustments') {
-    return '点击选择或拖拽文件到此处 · 支持平台模板或线下调薪拆分表';
-  }
-  if (type === 'supplementalLeave') {
-    return '点击选择或拖拽文件到此处 · 支持薪酬 sickpay&年假原始表';
-  }
-  return '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
-}
-
-function resetUploadSelection() {
-  uploadStage = 'select';
-  uploadFile = null;
-  previousAttendanceFile = null;
-  el.uploadFileInput.value = '';
-  if (el.previousAttendanceInput) el.previousAttendanceInput.value = '';
-  el.uploadZone.hidden = false;
-  if (el.previousAttendanceField) {
-    el.previousAttendanceField.hidden = uploadType !== 'attendance';
-  }
-  el.uploadResultPanel.hidden = true;
-  el.uploadZone.classList.remove('has-file', 'is-dragover');
-  el.uploadZoneTitle.textContent = '选择文件';
-  el.uploadZoneSub.textContent = getUploadHint(uploadType);
-  if (el.previousAttendanceSub) el.previousAttendanceSub.textContent = '用于96工时制跨月首段';
-  if (el.btnClearPreviousAttendance) el.btnClearPreviousAttendance.hidden = true;
-  el.btnCancelUpload.disabled = false;
-  el.btnCloseUploadModal.disabled = false;
-  el.btnCancelUpload.textContent = '取消';
-  el.btnConfirmUpload.textContent = '确认上传';
-  el.btnConfirmUpload.disabled = true;
-}
-
-function setUploadFile(file) {
-  if (!file) return;
-  if (!/\.(xlsx|xls)$/i.test(file.name)) {
-    showNotification('仅支持 .xlsx / .xls 格式，请重新选择文件', 'error', { title: '文件格式不支持' });
-    return;
-  }
-  uploadFile = file;
-  uploadStage = 'select';
-  el.uploadZone.classList.add('has-file');
-  el.uploadZoneTitle.textContent = file.name;
-  el.uploadZoneSub.textContent = `${formatFileSize(file.size)} · 已选择，点击确认上传`;
-  el.btnConfirmUpload.disabled = false;
-}
-
-function setPreviousAttendanceFile(file) {
-  if (!file) return;
-  if (!/\.(xlsx|xls)$/i.test(file.name)) {
-    showNotification('仅支持 .xlsx / .xls 格式，请重新选择文件', 'error', { title: '文件格式不支持' });
-    return;
-  }
-  previousAttendanceFile = file;
-  if (el.previousAttendanceSub) {
-    el.previousAttendanceSub.textContent = `${file.name} · ${formatFileSize(file.size)}`;
-  }
-  if (el.btnClearPreviousAttendance) el.btnClearPreviousAttendance.hidden = false;
-}
-
-function clearPreviousAttendanceFile() {
-  previousAttendanceFile = null;
-  if (el.previousAttendanceInput) el.previousAttendanceInput.value = '';
-  if (el.previousAttendanceSub) el.previousAttendanceSub.textContent = '用于96工时制跨月首段';
-  if (el.btnClearPreviousAttendance) el.btnClearPreviousAttendance.hidden = true;
-}
-
-function setUploadBusy() {
-  uploadStage = 'uploading';
-  el.btnConfirmUpload.disabled = true;
-  el.btnConfirmUpload.textContent = '上传中...';
-  el.btnCancelUpload.disabled = true;
-  el.btnCloseUploadModal.disabled = true;
-}
-
-function buildUploadReceiptStats(type, summary = {}) {
-  if (type === 'attendance') {
-    const total = toNumber(summary.total_employees);
-    const matched = toNumber(summary.roster_matched);
-    const missing = toNumber(summary.roster_missing);
-    const stats = [
-      { label: '解析员工', value: total },
-      { label: '花名册匹配', value: `${matched}/${total}`, tone: total && matched < total ? 'warning' : '' },
-      { label: '花名册缺失', value: missing, tone: missing ? 'warning' : '' },
-      { label: '计薪工时', value: formatHours(summary.total_base_hours) },
-    ];
-    const context = summary.attendance_context;
-    if (context?.required) {
-      stats.push({
-        label: '96跨月上下文',
-        value: context.status === 'complete' ? '已覆盖' : '缺少上月',
-        tone: context.status === 'complete' ? 'success' : 'warning',
-      });
-    }
-    return stats;
-  }
-
-  if (type === 'salary') {
-    const zeroHourly = toNumber(summary.zero_hourly_count);
-    return [
-      { label: '薪资档案人数', value: toNumber(summary.total_employees) },
-      { label: '有效时薪', value: toNumber(summary.valid_hourly_count) },
-      { label: '0时薪', value: zeroHourly, tone: zeroHourly ? 'danger' : '' },
-      { label: '平均时薪', value: formatCurrency(summary.avg_hourly_rate) },
-    ];
-  }
-
-  if (type === 'performance') {
-    const distribution = summary.level_distribution || {};
-    return [
-      { label: '绩效员工', value: toNumber(summary.total_employees) },
-      { label: '有分数', value: toNumber(summary.scored_employees) },
-      { label: '平均得分', value: toNumber(summary.avg_score).toFixed(2) },
-      { label: '等级种类', value: Object.keys(distribution).length },
-    ];
-  }
-
-  if (type === 'adjustments') {
-    if (toNumber(summary.total_events) > 0) {
-      return [
-        { label: '调薪事件', value: toNumber(summary.total_events) },
-        { label: '自动拆分', value: toNumber(summary.auto_split_ready), tone: 'success' },
-        { label: '需人工拆分', value: toNumber(summary.manual_split_required), tone: summary.manual_split_required ? 'warning' : 'success' },
-        { label: '状态', value: summary.manual_split_required ? '部分需补拆分表' : '自动并入核算', tone: summary.manual_split_required ? 'warning' : 'success' },
-      ];
-    }
-    return [
-      { label: '拆分员工', value: toNumber(summary.total_employees) },
-      { label: '分段数量', value: toNumber(summary.total_segments) },
-      { label: '有效拆分基数', value: formatCurrency(summary.active_performance_base) },
-      { label: '状态', value: '已并入核算', tone: 'warning' },
-    ];
-  }
-
-  if (type === 'supplementalLeave') {
-    return [
-      { label: '解析行数', value: toNumber(summary.total_rows) },
-      { label: '待确认', value: toNumber(summary.pending_count), tone: summary.pending_count ? 'warning' : '' },
-      { label: '确认计入', value: toNumber(summary.include_count), tone: 'success' },
-      { label: '计入小时', value: formatHours(summary.include_hours) },
-    ];
-  }
-
-  return [];
-}
-
-function renderUploadReceipt(type, data, file) {
-  const label = uploadTypeLabels[type] || '报表';
-  const summary = data.preview?.summary || {};
-  const resultFile = data.result_file;
-  const stats = buildUploadReceiptStats(type, summary);
-  const attendanceContext = type === 'attendance' ? summary.attendance_context : null;
-
-  uploadStage = 'result';
-  el.uploadZone.hidden = true;
-  if (el.previousAttendanceField) el.previousAttendanceField.hidden = true;
-  el.uploadResultPanel.hidden = false;
-  el.uploadResultTitle.textContent = `${label}上传完成`;
-  el.uploadResultSub.textContent = attendanceContext?.message || '本次文件已完成解析，当前页面的数据预览已刷新。';
-  el.uploadResultStats.innerHTML = stats.map(item => `
-    <div class="upload-result-stat ${escapeHtml(item.tone || '')}">
-      <span class="upload-result-label">${escapeHtml(item.label)}</span>
-      <span class="upload-result-value">${escapeHtml(item.value)}</span>
-    </div>
-  `).join('');
-  el.uploadResultFile.innerHTML = `
-    <span><strong>源文件</strong><br>${escapeHtml(file?.name || '-')} · ${escapeHtml(formatFileSize(file?.size))}</span>
-    <span><strong>结果文件</strong><br>${resultFile ? '已生成，可通过本页导出按钮下载' : '未生成'}</span>
-  `;
-  el.btnCancelUpload.disabled = false;
-  el.btnCloseUploadModal.disabled = false;
-  el.btnCancelUpload.textContent = '关闭';
-  el.btnConfirmUpload.disabled = false;
-  el.btnConfirmUpload.textContent = '继续上传';
-}
-
-function openUploadModal(type) {
-  if (['attendance', 'salary', 'performance', 'adjustments', 'supplementalLeave'].includes(type) && !state.currentActivity) {
-    showNotification('请先进入一个月度活动，再上传该活动的数据文件', 'warning', { title: '缺少月度活动' });
-    return;
-  }
-  uploadType = type;
-  el.uploadModalTitle.textContent = getUploadTitle(type);
-  resetUploadSelection();
-  openModal(el.uploadModal, el.uploadZone);
-}
-
-function closeUploadModal() {
-  if (uploadStage === 'uploading') return;
-  closeModal(el.uploadModal);
-  uploadType = '';
-  uploadFile = null;
-  previousAttendanceFile = null;
-  uploadStage = 'select';
-}
-
-el.btnCloseUploadModal.addEventListener('click', closeUploadModal);
-el.btnCancelUpload.addEventListener('click', closeUploadModal);
-
-function resetPerformanceSupplementForm() {
-  if (!el.performanceSupplementModal) return;
-  el.supplementEmployeeId.value = '';
-  el.supplementEmployeeName.value = '';
-  el.supplementScore.value = '';
-  el.supplementLevel.value = '';
-  el.supplementCoefficient.value = '';
-  el.supplementNote.value = '';
-  el.btnSavePerformanceSupplement.disabled = false;
-  el.btnSavePerformanceSupplement.textContent = '保存补录';
-}
-
-function openPerformanceSupplementModal() {
-  if (!state.currentActivity) {
-    showNotification('请先进入一个月度活动，再补录绩效', 'warning', { title: '缺少月度活动' });
-    return;
-  }
-  resetPerformanceSupplementForm();
-  openModal(el.performanceSupplementModal, el.supplementEmployeeId);
-}
-
-function closePerformanceSupplementModal() {
-  if (el.btnSavePerformanceSupplement?.disabled) return;
-  closeModal(el.performanceSupplementModal);
-}
-
-async function savePerformanceSupplement() {
-  if (!state.currentActivity) return;
-  const employeeId = el.supplementEmployeeId.value.trim();
-  const name = el.supplementEmployeeName.value.trim();
-  const score = el.supplementScore.value.trim();
-  const level = el.supplementLevel.value.trim();
-  const coefficient = el.supplementCoefficient.value.trim();
-  const note = el.supplementNote.value.trim();
-
-  if (!employeeId) {
-    showNotification('请填写工号', 'warning', { title: '无法保存' });
-    el.supplementEmployeeId.focus();
-    return;
-  }
-  if (!score && !level && !coefficient) {
-    showNotification('请至少填写绩效得分、绩效等级或绩效系数', 'warning', { title: '无法保存' });
-    el.supplementScore.focus();
-    return;
-  }
-
-  el.btnSavePerformanceSupplement.disabled = true;
-  el.btnSavePerformanceSupplement.textContent = '保存中';
-  try {
-    const data = await apiJson(`${API_BASE}/runs/${encodeURIComponent(state.currentActivity.run_id)}/performance-supplement`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        employee_id: employeeId,
-        name,
-        score,
-        level,
-        coefficient,
-        note,
-      }),
-    });
-
-    state.performanceData = data.preview;
-    state.currentActivity.performance_data = data.preview;
-    if (!state.currentActivity.performance_file) {
-      state.currentActivity.performance_file = '页面绩效补录';
-    }
-    renderPerformanceData();
-    closeModal(el.performanceSupplementModal);
-
-    const summary = data.preview?.summary || {};
-    if (toNumber(summary.supplement_added) > 0 || summary.source_type === 'performance_supplement') {
-      showNotification('绩效补录已保存', 'success');
-    } else if (toNumber(summary.supplement_skipped_existing) > 0) {
-      showNotification('该员工已有绩效记录，本次未覆盖', 'warning', { title: '未覆盖已有绩效' });
-    } else {
-      showNotification('绩效补录已处理', 'success');
-    }
-  } catch (error) {
-    showNotification(error.message, 'error', { title: '保存失败' });
-    el.btnSavePerformanceSupplement.disabled = false;
-    el.btnSavePerformanceSupplement.textContent = '保存补录';
-  }
-}
-
-el.btnClosePerformanceSupplementModal?.addEventListener('click', closePerformanceSupplementModal);
-el.btnCancelPerformanceSupplement?.addEventListener('click', closePerformanceSupplementModal);
-el.btnSavePerformanceSupplement?.addEventListener('click', savePerformanceSupplement);
-
-el.uploadZone.addEventListener('click', () => {
-  el.uploadFileInput.click();
-});
-
-el.uploadZone.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter' && event.key !== ' ') return;
-  event.preventDefault();
-  el.uploadFileInput.click();
-});
-
-el.uploadFileInput.addEventListener('change', (e) => {
-  setUploadFile(e.target.files[0]);
-});
-
-el.btnChoosePreviousAttendance?.addEventListener('click', () => {
-  el.previousAttendanceInput?.click();
-});
-
-el.previousAttendanceInput?.addEventListener('change', (e) => {
-  setPreviousAttendanceFile(e.target.files[0]);
-});
-
-el.btnClearPreviousAttendance?.addEventListener('click', clearPreviousAttendanceFile);
-
-['dragenter', 'dragover'].forEach(eventName => {
-  el.uploadZone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    el.uploadZone.classList.add('is-dragover');
-  });
-});
-
-['dragleave', 'drop'].forEach(eventName => {
-  el.uploadZone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    el.uploadZone.classList.remove('is-dragover');
-  });
-});
-
-el.uploadZone.addEventListener('drop', (event) => {
-  setUploadFile(event.dataTransfer?.files?.[0]);
-});
-
-el.btnConfirmUpload.addEventListener('click', async () => {
-  if (uploadStage === 'result') {
-    resetUploadSelection();
-    return;
-  }
-  if (!uploadFile || !state.currentActivity) return;
-
-  setUploadBusy();
-
-  try {
-    const formData = new FormData();
-    formData.append('file', uploadFile);
-    const selectedFile = uploadFile;
-
-    let endpoint = '';
-    if (uploadType === 'attendance') {
-      formData.append('calc_month', state.currentActivity.calc_month);
-      formData.append('run_id', state.currentActivity.run_id);
-      if (previousAttendanceFile) formData.append('previous_attendance', previousAttendanceFile);
-      endpoint = `${API_BASE}/import-attendance`;
-    } else if (uploadType === 'salary') {
-      formData.append('run_id', state.currentActivity.run_id);
-      endpoint = `${API_BASE}/import-salary`;
-    } else if (uploadType === 'performance') {
-      formData.append('run_id', state.currentActivity.run_id);
-      endpoint = `${API_BASE}/import-performance`;
-    } else if (uploadType === 'adjustments') {
-      formData.append('run_id', state.currentActivity.run_id);
-      endpoint = `${API_BASE}/import-adjustments`;
-    } else if (uploadType === 'supplementalLeave') {
-      formData.append('run_id', state.currentActivity.run_id);
-      endpoint = `${API_BASE}/import-supplemental-leave`;
-    } else if (uploadType === 'baseOverrides') {
-      formData.append('run_id', state.currentActivity.run_id);
-      endpoint = `${API_BASE}/import-base-overrides`;
-    }
-
-    const data = await apiJson(endpoint, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (data.success) {
-      const completedUploadType = uploadType;
-      state.lastImportResult = {
-        type: completedUploadType,
-        hasResultFile: Boolean(data.result_file),
-        filename: selectedFile.name,
-        summary: data.preview?.summary || {},
-        context: data.preview?.summary?.attendance_context || null,
-        at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
-      };
-      showNotification('本次文件已解析，预览和导入回执已更新', 'success', { title: `${uploadTypeLabels[completedUploadType]}导入完成` });
-
-      // Update state
-      if (completedUploadType === 'attendance') {
-        state.attendanceData = data.preview;
-        renderAttendanceData();
-      } else if (completedUploadType === 'salary') {
-        state.salaryData = data.preview;
-        renderSalaryData();
-      } else if (completedUploadType === 'performance') {
-        state.performanceData = data.preview;
-        renderPerformanceData();
-      } else if (completedUploadType === 'adjustments') {
-        state.adjustmentData = data.preview;
-        renderPerformanceData();
-      } else if (completedUploadType === 'supplementalLeave') {
-        state.supplementalLeaveData = data.preview;
-        renderSupplementalLeaveData();
-      } else if (completedUploadType === 'baseOverrides') {
-        state.baseOverrideData = data.preview;
-        renderFoundationData();
-      }
-
-      await enterActivity(state.currentActivity.run_id, { preservePage: true });
-      renderUploadReceipt(completedUploadType, data, selectedFile);
-    } else {
-      showNotification(data.detail || '未知错误', 'error', { title: '上传失败' });
-    }
-  } catch (error) {
-    showNotification(error.message, 'error', { title: '上传失败' });
-  } finally {
-    if (uploadStage === 'uploading') {
-      el.btnConfirmUpload.disabled = false;
-      el.btnConfirmUpload.textContent = '确认上传';
-      el.btnCancelUpload.disabled = false;
-      el.btnCloseUploadModal.disabled = false;
-    }
-  }
-});
-
 // ═══ Upload Buttons ═══
-
-el.btnUploadAttendance?.addEventListener('click', () => openUploadModal('attendance'));
-el.btnUploadAttendanceEmpty?.addEventListener('click', () => openUploadModal('attendance'));
-el.btnUploadSalary?.addEventListener('click', () => openUploadModal('salary'));
-el.btnUploadSalaryEmpty?.addEventListener('click', () => openUploadModal('salary'));
-el.btnUploadPerformance?.addEventListener('click', () => openUploadModal('performance'));
-el.btnUploadPerformanceEmpty?.addEventListener('click', () => openUploadModal('performance'));
-el.btnAddPerformanceSupplement?.addEventListener('click', openPerformanceSupplementModal);
-el.btnAddPerformanceSupplementEmpty?.addEventListener('click', openPerformanceSupplementModal);
-el.btnUploadAdjustments?.addEventListener('click', () => openUploadModal('adjustments'));
 el.workbenchUploadRoster?.addEventListener('change', event => handleWorkbenchUploadChange('roster', event));
 el.workbenchUploadAttendance?.addEventListener('change', event => handleWorkbenchUploadChange('attendance', event));
 el.workbenchUploadPreviousAttendance?.addEventListener('change', event => handleWorkbenchUploadChange('previousAttendance', event));
@@ -3348,7 +2854,7 @@ function renderDiagnosticsPanel() {
         <span class="summary-stat-value">${summary.error_count}/${summary.issue_count}</span>
       </div>
       ${issues.length ? `
-        <button class="btn btn-secondary btn-sm" onclick="exportData('diagnostics')">导出诊断</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportData('diagnostics')">导出检查结果</button>
       ` : ''}
     </div>
     ${visibleIssues.length ? `
@@ -3396,7 +2902,7 @@ function renderImportResultNote(type) {
   }[last.type] || '报表';
   return `
     <div class="import-result-note">
-      <span><strong>${typeLabel}</strong> 已上传并刷新预览${last.hasResultFile ? '，导出结果已生成' : ''}</span>
+      <span><strong>${typeLabel}</strong> 已上传并刷新预览${last.hasResultFile ? '，结果文件已生成' : ''}</span>
       <span>${escapeHtml(last.at || '')}</span>
     </div>
   `;
@@ -3408,7 +2914,7 @@ function renderAttendanceContextNote(context) {
   return `
     <div class="import-result-note ${isMissing ? 'warning' : ''}">
       <span>
-        <strong>96工时制跨月上下文</strong>
+        <strong>96工时制跨月关联</strong>
         <span class="import-result-context">${escapeHtml(context.message)}</span>
       </span>
       <span>${isMissing ? '需补传' : '已覆盖'}</span>
@@ -3584,7 +3090,7 @@ function renderAttendanceData() {
         </div>
         <h3 class="empty-state-title">暂无考勤数据</h3>
         <p class="empty-state-sub">上传考勤日报表以查看员工工时明细</p>
-        <button class="btn btn-primary" onclick="openUploadModal('attendance')">上传考勤日报表</button>
+        <button class="btn btn-primary" onclick="openWorkbenchUpload('attendance')">上传考勤日报表</button>
       </div>
     `;
     return;
@@ -3674,7 +3180,7 @@ function renderSalaryData() {
         </div>
         <h3 class="empty-state-title">暂无薪资数据</h3>
         <p class="empty-state-sub">上传薪资档案以查看时薪匹配情况</p>
-        <button class="btn btn-primary" onclick="openUploadModal('salary')">上传薪资档案</button>
+        <button class="btn btn-primary" onclick="openWorkbenchUpload('salary')">上传薪资档案</button>
       </div>
     `;
     return;
@@ -3764,8 +3270,8 @@ function renderPerformanceData() {
         <h3 class="empty-state-title">暂无绩效数据</h3>
         <p class="empty-state-sub">上传绩效报表以查看绩效明细</p>
         <div style="display: flex; gap: 8px; justify-content: center;">
-          <button class="btn btn-secondary" onclick="openPerformanceSupplementModal()">绩效补录</button>
-          <button class="btn btn-primary" onclick="openUploadModal('performance')">上传绩效报表</button>
+          <button class="btn btn-secondary" onclick="setActivityStep('performance')">填写补录</button>
+          <button class="btn btn-primary" onclick="openWorkbenchUpload('performance')">上传绩效报表</button>
         </div>
       </div>
     `;
@@ -4444,6 +3950,7 @@ function renderBonusResultRow(result) {
     : [];
   const exceptionTitle = exceptions.length ? escapeHtml(exceptions.join('；')) : '';
   const employeeId = String(result.employee_id ?? '');
+  const expanded = state.workbenchSelectedResult === employeeId;
 
   return `
     <tr class="${exceptions.length ? 'has-exception' : ''}"
@@ -4463,7 +3970,36 @@ function renderBonusResultRow(result) {
       <td>${exceptions.length ? `<span class="exception-chip" tabindex="0" title="${exceptionTitle}" aria-label="异常：${exceptionTitle}">${exceptions.length}项</span>` : '<span class="muted-cell">-</span>'}</td>
       <td class="amount-cell"><span class="bonus-value">${formatCurrency(result.performance_bonus)}</span></td>
       <td>
-        <button class="btn btn-secondary btn-sm detail-btn" onclick="showCalcChain(${formatJsArg(employeeId)})" title="查看计算过程">查看</button>
+        <button class="btn btn-secondary btn-sm detail-btn" onclick="toggleWorkbenchResultDetail(${formatJsArg(employeeId)})" title="查看说明">${expanded ? '收起' : '查看说明'}</button>
+      </td>
+    </tr>
+    ${expanded ? renderBonusCalculationDetail(result) : ''}
+  `;
+}
+
+function renderBonusCalculationDetail(result) {
+  const rows = result.calculation_segments || [];
+  const detailRows = rows.length ? rows : [{
+    period: result.calc_month || '-',
+    reason: result.calculation_path || '标准计算',
+    performance_base: result.performance_base,
+    performance_ratio: result.performance_ratio,
+    performance_coefficient: result.performance_coefficient,
+    performance_bonus: result.performance_bonus,
+  }];
+
+  return `
+    <tr class="detail-row">
+      <td colspan="12">
+        <div class="calculation-lines">
+          ${detailRows.map(row => `
+            <div class="calculation-line">
+              <span>${escapeHtml(row.period || '-')} · ${escapeHtml(row.reason || '-')}</span>
+              <strong>${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}</strong>
+            </div>
+          `).join('')}
+          ${(result.exceptions || []).length ? `<div class="calculation-line"><span>异常提示</span><strong>${escapeHtml(result.exceptions.join('；'))}</strong></div>` : ''}
+        </div>
       </td>
     </tr>
   `;
@@ -4512,7 +4048,7 @@ function renderResultsData() {
           <span>${formatCurrency(avgBonus)}</span>
         </div>
         <div class="result-summary-item">
-          <span>异常记录</span>
+          <span>异常</span>
           <span>${exceptionCount}</span>
         </div>
       </div>
@@ -4558,53 +4094,6 @@ async function executeCalculate() {
 el.btnCalculate?.addEventListener('click', executeCalculate);
 el.btnCalculateEmpty?.addEventListener('click', executeCalculate);
 
-// ═══ Calc Chain ═══
-
-function showCalcChain(employeeId) {
-  const emp = state.resultsData?.find(r => r.employee_id === employeeId);
-  if (!emp) return;
-  const segments = emp.calculation_segments || [];
-
-  if (segments.length) {
-    el.calcChainContent.innerHTML = `
-      <div class="calc-chain-title">绩效奖金计算过程 - ${escapeHtml(employeeId)}</div>
-      <div class="calc-chain-item">分段/拆行核算</div>
-      ${segments.map(segment => `
-        <div class="calc-chain-item" style="padding-left: 32px;">
-          ${escapeHtml(segment.period || '-')} · ${escapeHtml(segment.reason || '-')}：
-          $${Number(segment.performance_base || 0).toFixed(2)}
-          × ${(Number(segment.performance_ratio || 0) * 100).toFixed(1)}%
-          × ${Number(segment.performance_coefficient || 0).toFixed(2)}
-          = $${Number(segment.performance_bonus || 0).toFixed(2)}
-        </div>
-      `).join('')}
-      <div class="calc-chain-item calc-chain-result">绩效奖金合计 = $${emp.performance_bonus.toFixed(2)}</div>
-      ${(emp.exceptions || []).length ? `<div class="calc-chain-item">异常提示 = ${escapeHtml(emp.exceptions.join('；'))}</div>` : ''}
-    `;
-    openModal(el.calcChainModal, el.btnCloseCalcChain);
-    return;
-  }
-
-  el.calcChainContent.innerHTML = `
-    <div class="calc-chain-title">绩效奖金计算过程 - ${escapeHtml(employeeId)}</div>
-    <div class="calc-chain-item">绩效基数 = $${emp.performance_base.toFixed(2)}</div>
-    <div class="calc-chain-item">绩效比例 = ${(emp.performance_ratio * 100).toFixed(1)}%</div>
-    <div class="calc-chain-item">绩效得分 = ${formatScore(emp.performance_score)}</div>
-    <div class="calc-chain-item">绩效系数 = ${emp.performance_coefficient.toFixed(2)}</div>
-    <div class="calc-chain-item calc-chain-result">绩效奖金 = $${emp.performance_base.toFixed(2)} × ${(emp.performance_ratio * 100).toFixed(1)}% × ${emp.performance_coefficient.toFixed(2)} = $${emp.performance_bonus.toFixed(2)}</div>
-    ${(emp.exceptions || []).length ? `<div class="calc-chain-item">异常提示 = ${escapeHtml(emp.exceptions.join('；'))}</div>` : ''}
-  `;
-
-  openModal(el.calcChainModal, el.btnCloseCalcChain);
-}
-
-function closeCalcChainModal() {
-  closeModal(el.calcChainModal);
-}
-
-el.btnCloseCalcChainModal?.addEventListener('click', closeCalcChainModal);
-el.btnCloseCalcChain?.addEventListener('click', closeCalcChainModal);
-
 // ═══ Export ═══
 
 async function exportData(type) {
@@ -4637,7 +4126,6 @@ async function exportData(type) {
 el.btnExportAttendance?.addEventListener('click', () => exportData('attendance'));
 el.btnExportSalary?.addEventListener('click', () => exportData('salary'));
 el.btnExportPerformance?.addEventListener('click', () => exportData('performance'));
-el.btnExportResults?.addEventListener('click', () => exportData('results'));
 
 // ═══ Attendance Filter ═══
 
@@ -5212,6 +4700,10 @@ function renderCheckPreview(activity) {
   `;
 }
 
+function renderExportStep(activity) {
+  return `${renderFinalResults(activity)}`;
+}
+
 function renderFinalResults(activity) {
   const results = getWorkbenchResults(activity);
   return `
@@ -5322,10 +4814,6 @@ function renderPerformanceStep(activity) {
 
 function renderCheckStep(activity) {
   return `${renderNeedsPanel('check', activity)}${renderCheckPreview(activity)}`;
-}
-
-function renderExportStep(activity) {
-  return `${renderFinalResults(activity)}`;
 }
 
 function renderStepHeader(step, activity) {

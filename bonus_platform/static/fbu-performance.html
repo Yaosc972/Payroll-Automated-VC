@@ -7042,7 +7042,7 @@
                         <th>任务</th>
                         <th>阶段</th>
                         <th>范围</th>
-                        <th>诊断</th>
+                        <th>检查</th>
                         <th>奖金总额</th>
                         <th>创建时间</th>
                         <th>操作</th>
@@ -7058,107 +7058,6 @@
 
         </div>
       </main>
-    </div>
-
-    <!-- Performance Supplement Modal -->
-    <div class="modal-overlay" id="performanceSupplementModal">
-      <div class="modal performance-supplement-modal" role="dialog" aria-modal="true" aria-labelledby="performanceSupplementTitle">
-        <div class="modal-header">
-          <h3 class="modal-title" id="performanceSupplementTitle">绩效补录</h3>
-          <button class="modal-close" id="btnClosePerformanceSupplementModal" type="button" aria-label="关闭">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <div class="modal-body">
-          <div class="performance-supplement-grid">
-            <div class="performance-supplement-field">
-              <label for="supplementEmployeeId">工号</label>
-              <input type="text" id="supplementEmployeeId" autocomplete="off" placeholder="zt0019943" />
-            </div>
-            <div class="performance-supplement-field">
-              <label for="supplementEmployeeName">姓名</label>
-              <input type="text" id="supplementEmployeeName" autocomplete="off" placeholder="员工姓名" />
-            </div>
-            <div class="performance-supplement-field">
-              <label for="supplementScore">绩效得分</label>
-              <input type="number" id="supplementScore" step="0.01" min="0" placeholder="88.75" />
-            </div>
-            <div class="performance-supplement-field">
-              <label for="supplementLevel">绩效等级</label>
-              <select id="supplementLevel">
-                <option value="">未填写</option>
-                <option value="远低于预期">远低于预期</option>
-                <option value="低于预期">低于预期</option>
-                <option value="符合预期-">符合预期-</option>
-                <option value="符合预期">符合预期</option>
-                <option value="符合预期+">符合预期+</option>
-                <option value="超出预期">超出预期</option>
-                <option value="远超预期">远超预期</option>
-              </select>
-            </div>
-            <div class="performance-supplement-field">
-              <label for="supplementCoefficient">绩效系数</label>
-              <input type="number" id="supplementCoefficient" step="0.01" min="0" placeholder="0.93" />
-            </div>
-            <div class="performance-supplement-field full">
-              <label for="supplementNote">备注</label>
-              <textarea id="supplementNote" placeholder="5.29离职，线下绩效考核表"></textarea>
-            </div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" id="btnCancelPerformanceSupplement" type="button">取消</button>
-          <button class="btn btn-primary" id="btnSavePerformanceSupplement" type="button">保存补录</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Upload Modal -->
-    <div class="modal-overlay" id="uploadModal">
-      <div class="modal upload-modal" role="dialog" aria-modal="true" aria-labelledby="uploadModalTitle" aria-describedby="uploadZoneSub">
-        <div class="modal-header">
-          <h3 class="modal-title" id="uploadModalTitle">上传文件</h3>
-          <button class="modal-close" id="btnCloseUploadModal" type="button" aria-label="关闭">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <div class="modal-body">
-          <div class="upload-zone" id="uploadZone" role="button" tabindex="0" aria-labelledby="uploadZoneTitle" aria-describedby="uploadZoneSub">
-            <input type="file" id="uploadFileInput" accept=".xlsx,.xls" hidden />
-            <div class="upload-zone-icon">
-              <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><path d="M24 32V16M16 24l8-8 8 8" stroke="#0071E3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="32" width="32" height="8" rx="4" stroke="#D2D2D7" stroke-width="2"/></svg>
-            </div>
-            <h3 class="upload-zone-title" id="uploadZoneTitle">选择文件</h3>
-            <p class="upload-zone-sub" id="uploadZoneSub">点击选择或拖拽文件到此处 · 支持 .xlsx / .xls</p>
-          </div>
-          <div class="upload-context-field" id="previousAttendanceField" hidden>
-            <input type="file" id="previousAttendanceInput" accept=".xlsx,.xls" hidden />
-            <div>
-              <div class="upload-context-label">上一月考勤日报（可选）</div>
-              <div class="upload-context-sub" id="previousAttendanceSub">用于96工时制跨月首段</div>
-            </div>
-            <button class="btn btn-secondary btn-sm" id="btnChoosePreviousAttendance" type="button">选择</button>
-            <button class="btn btn-secondary btn-sm" id="btnClearPreviousAttendance" type="button" hidden>清除</button>
-          </div>
-          <div class="upload-result-panel" id="uploadResultPanel" hidden>
-            <div class="upload-result-header">
-              <div class="upload-result-icon" aria-hidden="true">
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 10.5l4 4L16 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </div>
-              <div>
-                <div class="upload-result-title" id="uploadResultTitle">上传完成</div>
-                <p class="upload-result-sub" id="uploadResultSub"></p>
-              </div>
-            </div>
-            <div class="upload-result-stats" id="uploadResultStats"></div>
-            <div class="upload-result-file" id="uploadResultFile"></div>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" id="btnCancelUpload" type="button">取消</button>
-          <button class="btn btn-primary" id="btnConfirmUpload" type="button" disabled>确认上传</button>
-        </div>
-      </div>
     </div>
 
     <!-- App Dialog -->
@@ -7195,25 +7094,6 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnCancelAppDialog" type="button">取消</button>
           <button class="btn btn-primary" id="btnConfirmAppDialog" type="button">确定</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Calculation Chain Modal -->
-    <div class="modal-overlay" id="calcChainModal">
-      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="calcChainTitle" style="width: 560px;">
-        <div class="modal-header">
-          <h3 class="modal-title" id="calcChainTitle">计算过程</h3>
-          <button class="modal-close" id="btnCloseCalcChainModal" type="button" aria-label="关闭">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <div class="modal-body">
-          <div class="calc-chain" id="calcChainContent">
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary" id="btnCloseCalcChain" type="button">关闭</button>
         </div>
       </div>
     </div>
