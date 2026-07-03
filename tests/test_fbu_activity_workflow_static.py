@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,6 +64,21 @@ def test_upload_entries_are_owned_by_exactly_one_step():
         assert copy in js
 
 
+def test_supplemental_leave_is_required_attendance_material():
+    js = _js()
+
+    step_match = re.search(r"[\"']考勤工时[\"']", js)
+    assert step_match, "缺失考勤工时步骤定义"
+
+    nearby = js[step_match.start():step_match.start() + 1600]
+    assert (
+        re.search(r"materialKey\s*:\s*['\"]supplementalLeave['\"].{0,260}tag\s*:\s*['\"]必传['\"]", nearby, re.S)
+        or re.search(r"tag\s*:\s*['\"]必传['\"].{0,260}materialKey\s*:\s*['\"]supplementalLeave['\"]", nearby, re.S)
+    ), (
+        "考勤工时材料块未将补充假勤设置为必传"
+    )
+
+
 def test_maintained_lists_replace_rule_upload_in_activity_flow():
     html = _html()
     js = _js()
@@ -94,8 +110,20 @@ def test_no_banned_words_in_workbench_user_copy():
             snippets.append(combined.split(marker, 1)[1][:4000])
     searchable = "\n".join(snippets)
 
-    for forbidden in ["诊断", "阻断项", "审计记录", "人工确认项", "口径", "链路", "规则命中", "来源映射", "异常记录"]:
+    for forbidden in ["诊断", "阻断项", "审计记录", "人工确认项", "口径", "链路", "规则命中", "来源映射", "异常记录", "上下文"]:
         assert forbidden not in searchable
+
+
+def test_activity_step_summary_is_small_text():
+    html = _html()
+
+    style_match = re.search(r"\.activity-step-summary\s*\{([^}]*)\}", html)
+    assert style_match, "activity-step-summary 样式缺失"
+
+    style_block = style_match.group(1)
+    assert re.search(r"font-size\s*:\s*11px\s*;", style_block), (
+        "activity-step-summary 应使用小号字体 11px"
+    )
 
 
 def test_special_person_tags_are_rendered_near_name():
