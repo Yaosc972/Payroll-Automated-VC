@@ -62,6 +62,26 @@ const ACTIVITY_STEPS = [
   { key: 'export', label: '确认导出' },
 ];
 
+const STEP_MATERIALS = {
+  people: [
+    { materialKey: 'roster', label: '花名册', tag: '必传', hint: '上传人员基础资料', uploadType: 'roster', fileField: 'roster_file', required: true },
+  ],
+  attendance: [
+    { materialKey: 'attendance', label: '考勤日报', tag: '必传', hint: '上传OEHR当月考勤日报表', uploadType: 'attendance', fileField: 'attendance_file', required: true },
+    { materialKey: 'previousAttendance', label: '上月考勤', tag: '96工时制员工', hint: '上传OEHR上月考勤日报表', uploadType: 'previousAttendance', fileField: 'previous_attendance_file', required: false, conditional: 'needsPreviousAttendance' },
+    { materialKey: 'supplementalLeave', label: '补充假勤', tag: '必传', hint: '上传线下sickpay与年假补充数据', uploadType: 'supplementalLeave', fileField: 'supplemental_leave_file', required: true },
+  ],
+  salary: [
+    { materialKey: 'salary', label: '薪资档案', tag: '必传', hint: '上传OEHR最新薪资档案（含离职）', uploadType: 'salary', fileField: 'salary_file', required: true },
+    { materialKey: 'adjustments', label: '当月转正/调薪表', tag: '按需', hint: '上传OEHR转正调薪流程', uploadType: 'adjustments', fileField: 'adjustment_file', required: false },
+  ],
+  performance: [
+    { materialKey: 'performance', label: '绩效报表', tag: '必传', hint: '上传OEHR当月绩效报表', uploadType: 'performance', fileField: 'performance_file', required: true },
+  ],
+  check: [],
+  export: [],
+};
+
 // ═══ API Base ═══
 
 const API_BASE = '/api/fbu-performance';
@@ -161,6 +181,61 @@ function formatJsArg(value) {
     .replaceAll('<', '\\u003C')
     .replaceAll('>', '\\u003E')
     .replaceAll('"', '&quot;');
+}
+
+function needsPreviousAttendance(activity) {
+  const context = activity?.attendance_data?.summary?.attendance_context || {};
+  return Boolean(context.required || activity?.previous_attendance_file || state.workbenchPreviousAttendanceFile);
+}
+
+function getMaterialStatus(material, activity) {
+  if (material.conditional === 'needsPreviousAttendance' && !needsPreviousAttendance(activity)) {
+    return { visible: false };
+  }
+  const fileName = activity?.[material.fileField] || '';
+  if (fileName) {
+    return { visible: true, tone: 'success', text: '已上传', fileName };
+  }
+  if (material.materialKey === 'previousAttendance' && state.workbenchPreviousAttendanceFile) {
+    return { visible: true, tone: 'warning', text: '已选择', fileName: state.workbenchPreviousAttendanceFile.name };
+  }
+  return {
+    visible: true,
+    tone: material.required ? 'warning' : 'neutral',
+    text: material.required ? '未上传' : '按需',
+    fileName: '',
+  };
+}
+
+function renderMaterialRow(material, activity) {
+  const status = getMaterialStatus(material, activity);
+  if (!status.visible) return '';
+  const actionText = status.fileName ? '重新上传' : '上传';
+  return `
+    <div class="material-row ${escapeHtml(status.tone)}">
+      <div class="material-marker"></div>
+      <div class="material-main">
+        <div class="material-title">
+          <strong>${escapeHtml(material.label)}</strong>
+          <span class="mini-tag">${escapeHtml(material.tag)}</span>
+          <span class="status-badge ${escapeHtml(status.tone)}">${escapeHtml(status.text)}</span>
+        </div>
+        <div class="material-hint">${escapeHtml(material.hint)}</div>
+      </div>
+      <div class="material-file">${escapeHtml(status.fileName || '-')}</div>
+      <button class="btn btn-secondary btn-sm" type="button" onclick="openWorkbenchUpload(${formatJsArg(material.uploadType)})">${actionText}</button>
+    </div>
+  `;
+}
+
+function renderStepMaterials(stepKey, activity) {
+  const rows = STEP_MATERIALS[stepKey] || [];
+  if (!rows.length) return '';
+  return `
+    <section class="step-section material-list">
+      ${rows.map(row => renderMaterialRow(row, activity)).join('')}
+    </section>
+  `;
 }
 
 function getTableFilter(type) {
@@ -474,7 +549,6 @@ const el = {
   workbenchUploadPerformance: document.getElementById('workbenchUploadPerformance'),
   workbenchUploadAdjustments: document.getElementById('workbenchUploadAdjustments'),
   workbenchUploadSupplementalLeave: document.getElementById('workbenchUploadSupplementalLeave'),
-  workbenchUploadBaseOverrides: document.getElementById('workbenchUploadBaseOverrides'),
 
   // Pages
   pages: {
@@ -1019,6 +1093,9 @@ async function loadActivities() {
     const data = await apiJson(`${API_BASE}/runs`);
 
     state.activities = data.runs || [];
+    if (state.currentPage === 'workbench') {
+      await loadRuleLists();
+    }
     renderActivities();
     updateActivityKPIs();
     loadActivityListDetails();
@@ -1068,6 +1145,13 @@ function getWorkbenchDiagnostics(activity = getWorkbenchActivity()) {
 
 function getWorkbenchSupplementalRows(activity = getWorkbenchActivity()) {
   return activity?.supplemental_leave_data?.rows || state.supplementalLeaveData?.rows || [];
+}
+
+async function loadRuleLists() {
+  if (state.ruleLists) return state.ruleLists;
+  const data = await apiJson(`${API_BASE}/rule-lists`);
+  state.ruleLists = data;
+  return data;
 }
 
 function getWorkbenchSourceKey(label) {
@@ -1142,6 +1226,49 @@ function renderWorkbenchPreviousAttendanceCard(activity) {
         <button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload('attendance')">上传考勤</button>
       </div>
     </article>
+  `;
+}
+
+function renderMaintainedRuleList(kind, activity) {
+  const lists = state.ruleLists || {};
+  const isWorkHour = kind === 'workHour';
+  const rows = isWorkHour ? (lists.work_hour_employees || []) : (lists.fixed_base_employees || []);
+  const title = isWorkHour ? '96工时制员工' : '固定基数人员';
+  const confirmed = isWorkHour
+    ? (activity?.base_override_data?.employees || []).some(row => row.rule_type === '96工时制')
+    : (activity?.base_override_data?.employees || []).some(row => row.rule_type === '线下固定基数覆盖');
+  return `
+    <section class="step-section maintained-list">
+      <div class="section-head compact">
+        <div>
+          <h3>${title}</h3>
+          <p>${isWorkHour ? '本月默认沿用已确认的4名员工。' : '本月默认沿用已确认名单。'}</p>
+        </div>
+        <div class="section-actions">
+          <span class="status-badge ${confirmed ? 'success' : 'warning'}">${confirmed ? '已确认' : '未确认'}</span>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="toggleMaintainedRuleEditor(${formatJsArg(kind)})">管理名单</button>
+          <button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(${formatJsArg(kind)})">确认名单</button>
+        </div>
+      </div>
+      <div class="compact-list-table">
+        <table class="data-table">
+          <thead><tr><th class="sticky-employee-id">工号</th><th class="sticky-employee-name">姓名</th>${isWorkHour ? '' : '<th>固定基数</th>'}<th>状态</th></tr></thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td class="sticky-employee-id">${escapeHtml(row.employee_id)}</td>
+                <td class="sticky-employee-name">${escapeHtml(row.name || '-')}</td>
+                ${isWorkHour ? '' : `<td class="amount-cell">${formatCurrency(row.fixed_performance_base)}</td>`}
+                <td>${row.active === false ? '停用' : '启用'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="maintained-editor-placeholder" data-maintained-editor="${escapeHtml(kind)}" hidden>
+        名单维护入口保留在当前页面，后续任务再补完整编辑能力。
+      </div>
+    </section>
   `;
 }
 
@@ -1249,6 +1376,26 @@ function renderWorkbenchTasks(activity) {
       ${renderWorkbenchPerformanceSupplement()}
     </section>
   `;
+}
+
+async function confirmMaintainedRuleList(kind) {
+  if (!state.currentActivity?.run_id) return;
+  if (!state.ruleLists) await loadRuleLists();
+  const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/rule-lists/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state.ruleLists),
+  });
+  state.baseOverrideData = data.preview;
+  state.currentActivity.base_override_file = '页面维护';
+  state.currentActivity.base_override_data = data.preview;
+  renderWorkbench();
+  showNotification(kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success');
+}
+
+function toggleMaintainedRuleEditor(kind) {
+  const panel = document.querySelector(`[data-maintained-editor="${kind}"]`);
+  if (panel) panel.hidden = !panel.hidden;
 }
 
 function renderWorkbenchPerformanceSupplement() {
@@ -2222,6 +2369,9 @@ async function enterActivity(activityId, options = {}) {
     state.activityStep = getActivityStepFromActivity(activity);
     state.foundationRunDetails[activity.run_id] = activity;
     state.diagnosticsData = activity.diagnostics || null;
+    if (state.currentPage === 'workbench') {
+      await loadRuleLists();
+    }
 
     if (preservePage && state.currentPage !== 'activities') {
       navigateTo(state.currentPage);
@@ -2394,7 +2544,6 @@ const uploadTypeLabels = {
   performance: '绩效报表',
   adjustments: '调薪/转正拆分表',
   supplementalLeave: '补充假勤表',
-  baseOverrides: '工时规则 / 固定基数例外表',
 };
 
 function getWorkbenchUploadInput(type) {
@@ -2406,7 +2555,6 @@ function getWorkbenchUploadInput(type) {
     performance: el.workbenchUploadPerformance,
     adjustments: el.workbenchUploadAdjustments,
     supplementalLeave: el.workbenchUploadSupplementalLeave,
-    baseOverrides: el.workbenchUploadBaseOverrides,
   };
   return map[type] || null;
 }
@@ -2480,9 +2628,6 @@ async function uploadWorkbenchFile(type, file) {
   } else if (type === 'supplementalLeave') {
     formData.append('run_id', state.currentActivity.run_id);
     endpoint = `${API_BASE}/import-supplemental-leave`;
-  } else if (type === 'baseOverrides') {
-    formData.append('run_id', state.currentActivity.run_id);
-    endpoint = `${API_BASE}/import-base-overrides`;
   }
 
   if (!endpoint) return;
@@ -2524,9 +2669,6 @@ async function uploadWorkbenchFile(type, file) {
     } else if (type === 'supplementalLeave') {
       state.supplementalLeaveData = data.preview;
       renderSupplementalLeaveData();
-    } else if (type === 'baseOverrides') {
-      state.baseOverrideData = data.preview;
-      renderFoundationData();
     }
 
     showNotification(`${uploadTypeLabels[type]}已上传并刷新工作台`, 'success');
@@ -2669,9 +2811,6 @@ function getUploadHint(type) {
   if (type === 'supplementalLeave') {
     return '点击选择或拖拽文件到此处 · 支持薪酬 sickpay&年假原始表';
   }
-  if (type === 'baseOverrides') {
-    return '点击选择或拖拽文件到此处 · 96工时制只标记规则，固定基数例外才填写金额';
-  }
   return '点击选择或拖拽文件到此处 · 支持 .xlsx / .xls';
 }
 
@@ -2808,15 +2947,6 @@ function buildUploadReceiptStats(type, summary = {}) {
     ];
   }
 
-  if (type === 'baseOverrides') {
-    return [
-      { label: '解析行数', value: toNumber(summary.total_rows) },
-      { label: '计入行数', value: toNumber(summary.active_count), tone: 'success' },
-      { label: '排除行数', value: toNumber(summary.excluded_count), tone: summary.excluded_count ? 'warning' : '' },
-      { label: '覆盖基数', value: formatCurrency(summary.active_fixed_base) },
-    ];
-  }
-
   return [];
 }
 
@@ -2851,7 +2981,7 @@ function renderUploadReceipt(type, data, file) {
 }
 
 function openUploadModal(type) {
-  if (['attendance', 'salary', 'performance', 'adjustments', 'supplementalLeave', 'baseOverrides'].includes(type) && !state.currentActivity) {
+  if (['attendance', 'salary', 'performance', 'adjustments', 'supplementalLeave'].includes(type) && !state.currentActivity) {
     showNotification('请先进入一个月度活动，再上传该活动的数据文件', 'warning', { title: '缺少月度活动' });
     return;
   }
@@ -3115,7 +3245,6 @@ el.workbenchUploadSalary?.addEventListener('change', event => handleWorkbenchUpl
 el.workbenchUploadPerformance?.addEventListener('change', event => handleWorkbenchUploadChange('performance', event));
 el.workbenchUploadAdjustments?.addEventListener('change', event => handleWorkbenchUploadChange('adjustments', event));
 el.workbenchUploadSupplementalLeave?.addEventListener('change', event => handleWorkbenchUploadChange('supplementalLeave', event));
-el.workbenchUploadBaseOverrides?.addEventListener('change', event => handleWorkbenchUploadChange('baseOverrides', event));
 function downloadAdjustmentsTemplate() {
   const link = document.createElement('a');
   link.href = `${API_BASE}/templates/adjustments/download`;
@@ -4728,14 +4857,6 @@ function renderActivityDetail(activity) {
 }
 
 function renderActivityStepBody(activity, stepKey) {
-  const sourceRows = buildImportBatchRows(activity);
-  const rowByType = new Map(sourceRows.map(row => [row.type, row]));
-  const renderSourceSection = rows => `
-    <div class="workbench-source-grid">
-      ${rows.map(row => renderWorkbenchSourceCard(row)).join('')}
-    </div>
-  `;
-
   if (stepKey === 'people') {
     return `
       <div class="workbench-grid">
@@ -4743,61 +4864,66 @@ function renderActivityStepBody(activity, stepKey) {
           <div class="workbench-panel-head">
             <div>
               <div class="workbench-panel-title">人员与底座</div>
-              <div class="workbench-panel-sub">先确认基础花名册和本月活动，再进入各项导入。</div>
+              <div class="workbench-panel-sub">先确认基础花名册和本月人员范围，再进入后续数据准备。</div>
             </div>
-            <button class="btn btn-secondary btn-sm" type="button" onclick="openWorkbenchUpload('roster')">更新花名册</button>
           </div>
-          ${renderSourceSection(sourceRows.slice(0, 3))}
+          ${renderStepMaterials('people', activity)}
         </section>
       </div>
     `;
   }
 
   if (stepKey === 'attendance') {
-    const rows = [
-      rowByType.get('考勤报表'),
-      rowByType.get('补充假勤'),
-    ].filter(Boolean);
     return `
       <div class="workbench-grid">
         <section class="workbench-panel">
           <div class="workbench-panel-head">
             <div>
-              <div class="workbench-panel-title">考勤与补充假勤</div>
-              <div class="workbench-panel-sub">上月考勤在需要跨月衔接时一起上传。</div>
+              <div class="workbench-panel-title">考勤材料</div>
+              <div class="workbench-panel-sub">每份材料只在当前步骤上传；补充假勤必须在这里补齐。</div>
             </div>
           </div>
-          <div class="workbench-source-grid">
-            ${rows.map(row => renderWorkbenchSourceCard(row)).join('')}
-            ${renderWorkbenchPreviousAttendanceCard(activity)}
+          ${renderStepMaterials('attendance', activity)}
+        </section>
+        <section class="workbench-panel">
+          <div class="workbench-panel-head">
+            <div>
+              <div class="workbench-panel-title">维护名单</div>
+              <div class="workbench-panel-sub">96工时制员工在页面内维护并确认，不再上传单独规则表。</div>
+            </div>
           </div>
+          ${renderMaintainedRuleList('workHour', activity)}
         </section>
       </div>
     `;
   }
 
   if (stepKey === 'salary') {
-    const rows = [
-      rowByType.get('薪资档案'),
-      rowByType.get('调薪拆分'),
-    ].filter(Boolean);
     return `
       <div class="workbench-grid">
         <section class="workbench-panel">
           <div class="workbench-panel-head">
             <div>
-              <div class="workbench-panel-title">薪资与拆分</div>
-              <div class="workbench-panel-sub">时薪、比例和转正调薪拆分都在这一段确认。</div>
+              <div class="workbench-panel-title">薪资材料</div>
+              <div class="workbench-panel-sub">确认薪资档案齐备，再按需补充当月转正调薪表。</div>
             </div>
           </div>
-          ${renderSourceSection(rows)}
+          ${renderStepMaterials('salary', activity)}
+        </section>
+        <section class="workbench-panel">
+          <div class="workbench-panel-head">
+            <div>
+              <div class="workbench-panel-title">固定基数名单</div>
+              <div class="workbench-panel-sub">固定基数人员在页面内维护并确认，不再走上传入口。</div>
+            </div>
+          </div>
+          ${renderMaintainedRuleList('fixedBase', activity)}
         </section>
       </div>
     `;
   }
 
   if (stepKey === 'performance') {
-    const rows = [rowByType.get('绩效报表')].filter(Boolean);
     return `
       <div class="workbench-grid">
         <section class="workbench-panel">
@@ -4807,7 +4933,7 @@ function renderActivityStepBody(activity, stepKey) {
               <div class="workbench-panel-sub">补录入口保留在当前步骤内，不再跳出到单独页面。</div>
             </div>
           </div>
-          ${renderSourceSection(rows)}
+          ${renderStepMaterials('performance', activity)}
         </section>
         ${renderWorkbenchTasks(activity)}
       </div>
