@@ -52,12 +52,17 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "columns": [
             {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN2313"},
             {"name": "姓名", "desc": "员工姓名", "required": True, "example": "何俊伟"},
-            {"name": "工作地区", "desc": "东莞/晋江；嘉善规则待补充", "required": True, "example": "东莞"},
+            {"name": "工作地区", "desc": "东莞/嘉善/晋江；按地区适用平台规则", "required": True, "example": "东莞"},
             {"name": "一级部门名称", "desc": "东莞需命中寮步区或莞深操作", "required": True, "example": "莞深操作"},
             {"name": "岗位名称", "desc": "用于判断是否享有餐补", "required": True, "example": "操作员"},
             {"name": "餐补标准", "desc": "历史字段，当前不作为发放资格入口", "required": False, "example": ""},
             {"name": "出勤天数", "desc": "历史字段，东莞按日考勤工作状态和时数逐日计算", "required": False, "example": "22"},
             {"name": "正班时数合计", "desc": "历史字段，东莞按日考勤逐日计算", "required": False, "example": "176"},
+            {"name": "排班天数", "desc": "嘉善餐补月报折算分母", "required": False, "example": "22"},
+            {"name": "实际在职工作日天数", "desc": "嘉善餐补月报折算基础天数", "required": False, "example": "22"},
+            {"name": "事假时数", "desc": "嘉善按事假时数/8折算扣减", "required": False, "example": "0"},
+            {"name": "病假时数", "desc": "嘉善按病假时数/8后40%扣减", "required": False, "example": "0"},
+            {"name": "旷工天数", "desc": "嘉善按旷工天数扣减", "required": False, "example": "0"},
         ],
         "example_extra": [
             {"工号": "OWHN0424", "姓名": "韩录阳", "工作地区": "东莞", "一级部门名称": "莞深操作",

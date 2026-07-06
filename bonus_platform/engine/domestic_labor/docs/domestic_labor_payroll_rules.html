@@ -531,7 +531,7 @@
           <tbody>
             <tr>
               <td>东莞</td>
-              <td>部门字段任一处包含 <code>寮步区</code> 或 <code>莞深操作</code>；岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>。</td>
+              <td>部门字段任一处包含 <code>寮步区</code> 或 <code>莞深操作</code>；岗位在 <code>安检员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>。未在享有名单即不享有。</td>
               <td>逐日折算，19 元/天，月封顶 500。</td>
               <td>已配置。</td>
             </tr>
@@ -543,9 +543,9 @@
             </tr>
             <tr>
               <td>嘉善</td>
-              <td>规则口径待补充。</td>
-              <td>暂不计算，餐补 = 0，并返回“嘉善餐补规则待补充”。</td>
-              <td>待业务确认。</td>
+              <td>岗位在 <code>安检员</code>、<code>操作员</code>、<code>门禁员</code>、<code>巡场员</code>、<code>仓库文员</code>、<code>操作文员</code>、<code>设备维护专员</code>、<code>数据专员</code>、<code>安全员</code>。未在享有名单即不享有。</td>
+              <td>按月报字段折算，月标准 300 元。</td>
+              <td>已配置。</td>
             </tr>
             <tr>
               <td>其他 / 空</td>
@@ -572,6 +572,16 @@
             <p>系统逐日计算后汇总，金额保留两位小数并封顶。</p>
             <span class="formula">东莞餐补 = min(Σ 单日餐补, 500)</span>
             <p class="note">当前不再优先使用日考勤里的预计算 <code>餐补</code> 字段；平台按规则自行重算。</p>
+          </div>
+          <div class="card">
+            <h3>东莞不享有岗位</h3>
+            <p><code>保洁</code>、<code>理货员</code>、<code>安检组长</code>、<code>操作主管</code>、<code>操作组长</code>、<code>稽查副主管</code>、<code>文员</code>、<code>物流专员</code>、<code>行政专员</code>、<code>质量监控专员</code>、<code>见习组长</code>、<code>HRBP专员</code>、<code>高级HRBP专员</code>、<code>高级招聘专员</code>、<code>招聘专员</code>。</p>
+          </div>
+          <div class="card">
+            <h3>嘉善月度公式</h3>
+            <p>字段来自月考勤数据：<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工天数</code>。</p>
+            <span class="formula">嘉善餐补 = 300 / 排班天数 × (实际在职工作日天数 - 事假时数/8 - 旷工天数 - 病假时数/8 × 0.4)</span>
+            <p class="note">系统对结果做 0 到 300 元的边界保护；排班天数缺失或为 0 时，餐补 = 0 并提示复核。</p>
           </div>
         </div>
       </div>
@@ -847,8 +857,8 @@
             </tr>
             <tr>
               <td>餐补</td>
-              <td>嘉善餐补口径。</td>
-              <td>当前平台暂不计算嘉善，需业务补充确认后配置。</td>
+              <td>嘉善餐补按月报字段折算。</td>
+              <td>系统已按 300 元标准、排班天数、实际在职工作日、事假/病假/旷工字段计算。</td>
             </tr>
             <tr>
               <td>外宿补贴</td>
@@ -894,9 +904,9 @@
       </div>
       <div class="section-body">
         <div class="grid-2">
-          <div class="risk">
-            <strong>嘉善餐补暂未配置。</strong><br>
-            目前平台对工作地区为嘉善的餐补返回 0，并提示“嘉善餐补规则待补充”。需要业务确认封顶 300 元的折算分母、事假/旷工/病假扣减方式、字段口径后再配置。
+          <div class="note">
+            <strong>餐补有效时数口径仍沿用现有系统。</strong><br>
+            东莞工作日继续取 <code>正班时数</code>，休息日/节假日继续取 <code>刷卡加班</code>；满 8 小时边界仍按 <code>&gt;= 8</code> 发 19 元。
           </div>
           <div class="note">
             <strong>工龄奖正班出勤天数为 0 的处理。</strong><br>
