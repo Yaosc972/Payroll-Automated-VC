@@ -50,18 +50,21 @@
         position: sticky;
         top: 0;
         z-index: 20;
-        display: grid;
-        grid-template-columns: minmax(360px, 0.8fr) minmax(420px, 1fr);
-        gap: 20px;
+        display: flex;
+        justify-content: space-between;
         align-items: center;
-        min-height: 64px;
-        padding: 8px 32px;
+        gap: 14px;
+        min-height: 56px;
+        padding: 0 20px;
         border-bottom: 1px solid var(--dl-line);
         background: #ffffff;
         box-shadow: 0 1px 0 rgba(16, 24, 40, 0.06);
       }
 
-      .dl-brand-row,
+      .dl-topbar-left,
+      .dl-topbar-right,
+      .dl-title-lockup,
+      .dl-top-nav,
       .dl-actions,
       .dl-batch-meta,
       .dl-toolbar,
@@ -73,7 +76,69 @@
         align-items: center;
       }
 
+      .dl-topbar-left { gap: 18px; min-width: 0; }
+      .dl-topbar-right { gap: 12px; color: var(--dl-muted); font-size: 12px; font-weight: 650; }
       .dl-brand-row { gap: 12px; min-width: 0; }
+
+      .dl-title-lockup {
+        gap: 10px;
+        min-width: 0;
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .dl-title-lockup img {
+        width: 28px;
+        height: 28px;
+        object-fit: contain;
+      }
+
+      .dl-title-lockup strong {
+        color: var(--dl-ink);
+        font-size: 17px;
+        font-weight: 760;
+        white-space: nowrap;
+      }
+
+      .dl-top-nav {
+        gap: 8px;
+        padding-left: 18px;
+        border-left: 1px solid var(--dl-line);
+      }
+
+      .dl-top-nav a {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 0 12px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--dl-muted);
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .dl-top-nav a.active {
+        border-color: rgba(37, 99, 235, 0.24);
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
+      }
+
+      .dl-top-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+
+      .dl-top-meta + .dl-top-meta::before {
+        content: "";
+        width: 1px;
+        height: 14px;
+        margin-right: 6px;
+        background: var(--dl-line-strong);
+      }
 
       .dl-brand-copy {
         min-width: 0;
@@ -422,10 +487,10 @@
       /* ═══ 主工作台区域 ═══ */
       .dl-main {
         min-width: 0;
-        padding: 32px;
+        padding: 16px;
       }
 
-      .dl-main-full { width: 100%; padding: 24px 32px 32px; }
+      .dl-main-full { width: 100%; padding: 16px 20px 24px; }
 
       .dl-shell-subject { grid-template-columns: 1fr; }
 
@@ -586,14 +651,14 @@
 
       .dl-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 360px;
-        gap: 24px;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 12px;
         align-items: start;
         transition: grid-template-columns 0.24s cubic-bezier(0.4, 0, 0.2, 1);
       }
 
       .dl-grid-workbench {
-        grid-template-columns: minmax(0, 1fr) 340px;
+        grid-template-columns: minmax(0, 1fr) 260px;
       }
 
       .dl-shell.aside-collapsed .dl-grid {
@@ -602,7 +667,7 @@
 
       .dl-stack {
         display: grid;
-        gap: 24px;
+        gap: 12px;
         min-width: 0;
       }
 
@@ -616,14 +681,14 @@
 
       .dl-panel-head {
         justify-content: space-between;
-        gap: 16px;
-        padding: 24px;
+        gap: 12px;
+        padding: 14px 16px;
         border-bottom: 1px solid var(--dl-line);
-        background: #FFFFFF;
+        background: #f8fafc;
       }
 
       .dl-workbench-head .dl-panel-head {
-        align-items: flex-start;
+        align-items: center;
         gap: 12px 18px;
         flex-wrap: wrap;
       }
@@ -636,13 +701,13 @@
       }
 
       .dl-panel-sub {
-        margin: 6px 0 0;
+        margin: 3px 0 0;
         color: var(--dl-muted);
-        font-size: 13px;
+        font-size: 12px;
         line-height: 1.5;
       }
 
-      .dl-panel-body { padding: 24px; }
+      .dl-panel-body { padding: 14px; }
 
       /* ═══ 财务 KPI 看板：消灭大色块与黑线，改用宽阔的呼吸感分隔 ═══ */
       .dl-metrics {
@@ -775,7 +840,7 @@
 
       .dl-table-wrap {
         overflow: auto;
-        max-height: min(68dvh, 760px);
+        max-height: min(76dvh, 860px);
       }
 
       /* ═══ 高级数据表格：消灭深重边框，转换为清爽的横向信息流 ═══ */
@@ -791,7 +856,7 @@
         position: sticky;
         top: 0;
         z-index: 1;
-        padding: 14px 16px;
+        padding: 10px 12px;
         border-bottom: 1px solid var(--dl-line-strong);
         background: #F8FAFC;
         color: var(--dl-muted);
@@ -805,7 +870,7 @@
       }
 
       .dl-table td {
-        padding: 14px 16px;
+        padding: 11px 12px;
         border-bottom: 1px solid var(--dl-line);
         background: #FFFFFF;
         color: #334155;
@@ -848,16 +913,19 @@
 
       .dl-aside {
         position: sticky;
-        top: 88px;
+        top: 72px;
         display: grid;
-        gap: 24px;
-        max-height: calc(100dvh - 112px);
+        gap: 8px;
+        max-height: calc(100dvh - 88px);
         min-width: 0;
       }
 
       .dl-aside-toggle {
         width: 100%;
         align-self: start;
+        min-height: 28px;
+        border-radius: 6px;
+        background: #ffffff;
       }
 
       .dl-shell.aside-collapsed .dl-aside {
@@ -883,9 +951,9 @@
       /* 异常项卡片重构：更干净的警示边缘 */
       .dl-exception-list {
         display: grid;
-        gap: 12px;
-        max-height: calc(100dvh - 300px);
-        min-height: 220px;
+        gap: 8px;
+        max-height: calc(100dvh - 250px);
+        min-height: 140px;
         overflow-y: auto;
         padding-right: 4px;
         overscroll-behavior: contain;
@@ -893,10 +961,10 @@
 
       .dl-exception {
         width: 100%;
-        padding: 16px;
+        padding: 10px 12px;
         border: 1px solid var(--dl-line);
-        border-left: 3px solid var(--dl-warn);
-        border-radius: 10px;
+        border-left: 2px solid var(--dl-warn);
+        border-radius: 7px;
         background: #FFFFFF;
         text-align: left;
         box-shadow: var(--dl-shadow-sm);
@@ -915,15 +983,15 @@
       .dl-exception-title {
         margin: 0;
         color: var(--dl-ink);
-        font-size: 13px;
+        font-size: 12px;
         font-weight: 600;
       }
 
       .dl-exception-meta {
-        margin: 6px 0 0;
+        margin: 4px 0 0;
         color: var(--dl-muted);
-        font-size: 12px;
-        line-height: 1.55;
+        font-size: 11px;
+        line-height: 1.45;
       }
 
       /* ═══ 空状态样式 ═══ */
@@ -1259,8 +1327,8 @@
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 0;
-        margin-top: 20px;
-        padding: 6px 0 0;
+        margin-top: 6px;
+        padding: 0 16px 12px;
       }
 
       .dl-stepper-item {
@@ -1269,7 +1337,7 @@
         grid-template-columns: 32px minmax(0, 1fr);
         align-items: center;
         gap: 10px;
-        min-height: 48px;
+        min-height: 38px;
         border: 0;
         border-radius: 0;
         background: transparent;
@@ -1284,7 +1352,7 @@
         position: absolute;
         left: 42px;
         right: 18px;
-        top: 16px;
+        top: 11px;
         border-top: 1px dashed var(--dl-line-strong);
       }
 
@@ -1293,8 +1361,8 @@
       .dl-stepper-item span {
         display: inline-grid;
         place-items: center;
-        width: 32px;
-        height: 32px;
+        width: 22px;
+        height: 22px;
         margin-right: 0;
         border-radius: 999px;
         background: #fff;
@@ -1313,7 +1381,7 @@
         border-color: var(--dl-accent);
         background: var(--dl-accent);
         color: #ffffff;
-        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
       }
 
       .dl-stepper-item.done {
@@ -1551,24 +1619,21 @@
   <body class="domestic-labor-shell">
 
     <header class="dl-topbar">
-      <div class="dl-brand-row">
-        <a class="dl-logo" href="/" aria-label="返回西格玛工作台首页">
+      <div class="dl-topbar-left">
+        <a class="dl-title-lockup" href="/" aria-label="返回西格玛工作台首页">
           <img src="assets/bonus-logo-header-blue.png" alt="" />
+          <strong>国内劳务薪酬中台</strong>
         </a>
-        <div class="dl-brand-copy">
-          <p class="dl-eyebrow">Σ-WORKBENCH</p>
-          <h1 class="dl-title">西格玛工作台</h1>
-          <div class="dl-batch-meta">
-            <span class="dl-chip">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
-            <span class="dl-chip">规则包 <strong>DL-PAYROLL.v1</strong></span>
-            <span class="dl-chip is-warn" id="batchStatusText">草稿</span>
-            <span class="dl-chip" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
-          </div>
-        </div>
+        <nav class="dl-top-nav" aria-label="国内劳务模块">
+          <a class="active" href="#subjectHomeView">薪酬科目</a>
+          <a href="#canbuBatchListView">批次列表</a>
+        </nav>
       </div>
-      <div class="dl-product-heading">
-        <p class="dl-product-title">国内劳务薪酬中台</p>
-        <p class="dl-product-subtitle">流程：数据上传 → 字段检查 → 餐补核算 → 导出归档</p>
+      <div class="dl-topbar-right">
+        <span class="dl-top-meta">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
+        <span class="dl-top-meta">规则包 <strong>DL-PAYROLL.v1</strong></span>
+        <span class="dl-top-meta is-warn" id="batchStatusText">草稿</span>
+        <span class="dl-top-meta" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
       </div>
     </header>
 

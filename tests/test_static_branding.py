@@ -374,6 +374,7 @@ def test_domestic_labor_page_is_payroll_workbench():
 
 def test_domestic_labor_meal_workbench_static_labels():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
     assert "国内劳务薪酬中台" in html
     assert "餐补核算批次" in html
@@ -381,10 +382,10 @@ def test_domestic_labor_meal_workbench_static_labels():
     assert 'id="canbuBatchModal"' in html
     assert 'id="btnConfirmCanbuBatch"' in html
     assert "核算月份" in html
-    assert "数据上传" in html
-    assert "字段检查" in html
-    assert "餐补核算" in html
-    assert "导出归档" in html
+    assert "数据上传" in js
+    assert "字段检查" in js
+    assert "餐补核算" in js
+    assert "导出归档" in js
     assert "异常复核" not in html
 
 

@@ -490,6 +490,7 @@ function renderCanbuWorkbench(step = 'upload') {
   const canbuRunId = batch.runId || '';
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
   const canbuResults = hasMatchingRun ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
+  const showAside = step === 'results' || canbuResults.length > 0;
   el.canbuWorkbenchRoot.innerHTML = `
     <section class="dl-panel dl-workbench-head">
       <div class="dl-panel-head">
@@ -505,26 +506,28 @@ function renderCanbuWorkbench(step = 'upload') {
       </div>
       ${renderCanbuStepper(step, batch)}
     </section>
-    <div class="dl-grid dl-grid-workbench">
-      <div class="dl-stack" id="canbuStepContent"></div>
-      <aside class="dl-aside">
-        <button class="dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="true" aria-label="收起异常队列">
-          <span class="dl-aside-toggle-icon">›</span>
-          <span class="dl-aside-toggle-text">收起异常</span>
-        </button>
-        <section class="dl-panel dl-aside-panel">
-          <div class="dl-panel-head">
-            <div>
-              <h2 class="dl-panel-title">异常队列</h2>
-              <p class="dl-panel-sub">只展示餐补核算自身可判断的问题。</p>
+    ${showAside ? `
+      <div class="dl-grid dl-grid-workbench">
+        <div class="dl-stack" id="canbuStepContent"></div>
+        <aside class="dl-aside">
+          <button class="dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="true" aria-label="收起异常队列">
+            <span class="dl-aside-toggle-icon">›</span>
+            <span class="dl-aside-toggle-text">收起异常</span>
+          </button>
+          <section class="dl-panel dl-aside-panel">
+            <div class="dl-panel-head">
+              <div>
+                <h2 class="dl-panel-title">异常</h2>
+                <p class="dl-panel-sub">仅显示需处理项。</p>
+              </div>
             </div>
-          </div>
-          <div class="dl-panel-body">
-            <div id="exceptionQueue" class="dl-exception-list"></div>
-          </div>
-        </section>
-      </aside>
-    </div>
+            <div class="dl-panel-body">
+              <div id="exceptionQueue" class="dl-exception-list"></div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    ` : '<div class="dl-stack dl-stack-wide" id="canbuStepContent"></div>'}
   `;
   refreshDynamicWorkbenchRefs();
   renderCanbuStepContent(step, canbuResults);
