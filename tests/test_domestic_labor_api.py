@@ -530,6 +530,29 @@ def test_canbu_jiashan_uses_monthly_attendance_formula():
     assert explanation["intermediate_values"]["有效餐补天数"] == 17.2
 
 
+def test_canbu_yiwu_uses_jiashan_monthly_attendance_formula():
+    """义乌与嘉善使用同一套餐补月报公式"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "义乌",
+        "岗位名称": "操作员",
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+        "事假时数": 8,
+        "病假时数": 0,
+        "旷工天数": 0,
+    }
+
+    result = CanBuEngine().calculate(employee, daily_attendance=[])
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 286.36
+    assert result.details["地区规则"] == "义乌"
+    assert explanation["rule_name"] == "义乌餐补月报折算"
+    assert explanation["intermediate_values"]["有效餐补天数"] == 21
+
+
 def test_canbu_jiashan_unknown_position_is_not_eligible():
     """嘉善未在享有名单的岗位兜底不享有"""
     employee = {
