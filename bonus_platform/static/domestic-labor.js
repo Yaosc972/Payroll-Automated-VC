@@ -625,7 +625,7 @@ function renderFieldGroup(title, fields) {
     <div class="dl-field-group">
       <h3>${escapeHtml(title)}</h3>
       <div class="dl-field-grid">
-        ${fields.map(field => `<span class="dl-field-pill ok">${escapeHtml(field)} · 已识别</span>`).join('')}
+        ${fields.map(field => `<span class="dl-field-pill ok">${escapeHtml(field)}</span>`).join('')}
       </div>
     </div>
   `;
