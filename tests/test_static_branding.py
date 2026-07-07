@@ -369,6 +369,18 @@ def test_domestic_labor_page_is_payroll_workbench():
     assert ".kpi-6col" in css
 
 
+def test_domestic_labor_meal_workbench_static_labels():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+
+    assert "国内劳务薪酬中台" in html
+    assert "餐补核算批次" in html
+    assert "数据上传" in html
+    assert "字段检查" in html
+    assert "餐补核算" in html
+    assert "导出归档" in html
+    assert "异常复核" not in html
+
+
 def test_overseas_labor_page_is_separate_audit_workbench():
     html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")

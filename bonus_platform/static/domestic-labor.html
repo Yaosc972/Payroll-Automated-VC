@@ -11,35 +11,31 @@
       html { color-scheme: light; }
 
       body.domestic-labor-shell {
-        /* 🎨 英伦复古墨绿设计系统变量 */
-        --dl-bg: #F4F6F4;             /* 带有微弱绿意和木质感的暖灰底 */
-        --dl-panel: #FFFFFF;
-        --dl-panel-soft: #F8FAF8;
-        --dl-ink: #1C2421;            /* 极其深沉的绿黑墨色 */
-        --dl-muted: #52605B;          /* 苔藓灰绿 */
-        --dl-faint: #8A9A94;
-        --dl-line: #E4EAE7;
-        --dl-line-strong: #CDD7D2;
-        --dl-accent: #1B4D3E;         /* 核心强调色：复古华贵墨绿 */
-        --dl-accent-strong: #113329;
-        --dl-accent-soft: #E8F0EC;    /* 极其舒适的淡绿底色 */
-        --dl-info: #2E5A88;
-        --dl-ok: #1B4D3E;
-        --dl-ok-soft: #E8F0EC;
-        --dl-warn: #B37D14;           /* 复古熟栗色/暗金 */
-        --dl-warn-soft: #FAF5E8;
-        --dl-danger: #962D2D;         /* 勃艮第红/暗红 */
-        --dl-danger-soft: #F9EEEE;
-        --dl-shadow-sm: 0 1px 2px 0 rgba(27, 77, 62, 0.02);
-        --dl-shadow: 0 4px 10px rgba(27, 77, 62, 0.03);
-        --dl-shadow-lg: 0 16px 28px rgba(27, 77, 62, 0.06);
-        
+        --dl-bg: #eef3f7;
+        --dl-panel: #ffffff;
+        --dl-panel-soft: #f8fafc;
+        --dl-ink: #101828;
+        --dl-muted: #667085;
+        --dl-faint: #98a2b3;
+        --dl-line: rgba(226, 232, 240, 0.68);
+        --dl-line-strong: #cbd5e1;
+        --dl-accent: #2563eb;
+        --dl-accent-strong: #1e3a8a;
+        --dl-accent-soft: #eff6ff;
+        --dl-info: #2563eb;
+        --dl-ok: #0f766e;
+        --dl-ok-soft: #ecfdf3;
+        --dl-warn: #9a6700;
+        --dl-warn-soft: #fffbeb;
+        --dl-danger: #b42318;
+        --dl-danger-soft: #fef3f2;
+        --dl-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+        --dl-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+        --dl-shadow-lg: 0 16px 32px rgba(16, 24, 40, 0.10);
         margin: 0;
         background: var(--dl-bg);
         color: var(--dl-ink);
-        
-        /* 🔤 柔和无锯齿的经典中文字体排版 */
-        font-family: "Garamond", "STHeiti", "MHei", "Microsoft YaHei", sans-serif;
+        font-family: Inter, Geist, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
         font-variant-numeric: tabular-nums;
         -webkit-font-smoothing: antialiased;
       }
@@ -49,7 +45,7 @@
       .domestic-labor-shell input,
       .domestic-labor-shell textarea { font: inherit; }
 
-      /* ═══ 顶部导航栏：收窄高度，改用纯白衬底与极细分界线 ═══ */
+      /* ═══ 顶部导航栏：企业级纯净 framing，主色用于强调，面板基底保持冷灰白 ═══ */
       .dl-topbar {
         position: sticky;
         top: 0;
@@ -62,10 +58,8 @@
         padding: 10px 32px;
         border-bottom: 1px solid var(--dl-line);
         background:
-          linear-gradient(90deg, rgba(232, 240, 236, 0.92) 0%, rgba(255, 255, 255, 0.96) 55%, rgba(250, 245, 232, 0.32) 100%),
-          radial-gradient(circle at 22% 20%, rgba(27, 77, 62, 0.13), transparent 32%),
-          #FFFFFF;
-        box-shadow: inset 0 4px 0 rgba(27, 77, 62, 0.48);
+          linear-gradient(180deg, #ffffff 0%, #f8fafc 65%, #eef3f7 100%);
+        box-shadow: 0 1px 0 rgba(16, 24, 40, 0.06);
       }
 
       .dl-brand-row,
@@ -101,12 +95,12 @@
       .dl-logo img {
         max-width: 36px;
         max-height: 36px;
-        filter: drop-shadow(0 3px 6px rgba(27, 77, 62, 0.10));
+        filter: none;
       }
 
       .dl-eyebrow {
         margin: 0 0 1px;
-        color: #61706A;
+        color: var(--dl-muted);
         font-size: 10px;
         font-weight: 600;
         letter-spacing: 0.14em;
@@ -425,12 +419,94 @@
         padding: 32px;
       }
 
+      .dl-main-full { width: 100%; padding: 24px 32px 32px; }
+
+      .dl-shell-subject { grid-template-columns: 1fr; }
+
+      .dl-view {
+        display: none;
+      }
+
+      .dl-view[hidden] { display: none !important; }
+
+      .dl-view.active {
+        display: block;
+      }
+
+      .dl-view .dl-panel {
+        margin-top: 16px;
+      }
+
+      .dl-subject-hero {
+        margin-bottom: 16px;
+      }
+
+      .dl-subject-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .dl-subject-card {
+        min-height: 150px;
+        padding: 20px;
+        border: 1px solid var(--dl-line);
+        border-radius: 20px;
+        background: var(--dl-panel);
+        color: var(--dl-ink);
+        text-align: left;
+        display: grid;
+        gap: 10px;
+        cursor: pointer;
+        box-shadow: var(--dl-shadow-sm);
+        transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+      }
+
+      .dl-subject-card.primary {
+        border-color: var(--dl-accent);
+        box-shadow: var(--dl-shadow-sm);
+      }
+
+      .dl-subject-card:hover { border-color: var(--dl-accent); box-shadow: var(--dl-shadow); background: var(--dl-accent-soft); }
+
+      .dl-subject-card strong {
+        font-size: 22px;
+        font-weight: 800;
+      }
+
+      .dl-subject-card span {
+        color: var(--dl-muted);
+      }
+
+      .dl-subject-card em {
+        color: var(--dl-accent);
+        font-style: normal;
+        font-weight: 700;
+      }
+
+      .dl-subject-kicker {
+        color: var(--dl-muted);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .dl-actions-inline {
+        display: flex;
+        gap: 10px;
+      }
+
       .dl-grid {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 360px;
         gap: 24px;
         align-items: start;
         transition: grid-template-columns 0.24s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      .dl-grid-workbench {
+        grid-template-columns: minmax(0, 1fr) 340px;
       }
 
       .dl-shell.aside-collapsed .dl-grid {
@@ -457,6 +533,12 @@
         padding: 24px;
         border-bottom: 1px solid var(--dl-line);
         background: #FFFFFF;
+      }
+
+      .dl-workbench-head .dl-panel-head {
+        align-items: flex-start;
+        gap: 12px 18px;
+        flex-wrap: wrap;
       }
 
       .dl-panel-title {
@@ -1065,6 +1147,116 @@
         border-top: 1px solid var(--dl-line);
       }
 
+      .drawer-footer.compact {
+        padding-top: 14px;
+      }
+
+      .dl-stepper {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 18px;
+      }
+
+      .dl-stepper-item {
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: var(--dl-panel-soft);
+        color: var(--dl-muted);
+        padding: 10px 12px;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      .dl-stepper-item span {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        margin-right: 8px;
+        border-radius: 999px;
+        background: #fff;
+        border: 1px solid var(--dl-line);
+      }
+
+      .dl-stepper-item.active {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
+        font-weight: 700;
+      }
+
+      .dl-stepper-item.done {
+        border-color: var(--dl-ok);
+        color: var(--dl-ok);
+      }
+
+      .dl-stepper-item.done span {
+        background: var(--dl-ok);
+        color: #fff;
+        border-color: var(--dl-ok);
+      }
+
+      .dl-upload-list {
+        display: grid;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .dl-upload-row {
+        display: grid;
+        grid-template-columns: 160px 1fr auto;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 16px;
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: var(--dl-panel-soft);
+      }
+
+      .dl-upload-row strong { color: var(--dl-ink); }
+
+      .dl-field-groups {
+        display: grid;
+        gap: 12px;
+      }
+
+      .dl-field-group {
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        padding: 16px;
+        background: var(--dl-panel);
+      }
+
+      .dl-field-group h3 {
+        margin: 0 0 12px;
+        font-size: 14px;
+      }
+
+      .dl-field-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .dl-field-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border-radius: 999px;
+        padding: 6px 10px;
+        border: 1px solid var(--dl-line);
+        background: var(--dl-panel-soft);
+        color: var(--dl-faint);
+        font-weight: 700;
+      }
+
+      .dl-field-pill.ok {
+        border-color: var(--dl-line);
+        background: var(--dl-panel-soft);
+        color: var(--dl-faint);
+      }
+
       /* 核算结果总结网格 */
       .confirm-summary {
         border: 1px solid var(--dl-line);
@@ -1174,15 +1366,16 @@
       .error-text { color: var(--dl-danger); }
 
       /* ═══ 响应式超宽屏/窄屏体验调优 ═══ */
-      @media (max-width: 1100px) {
-        .dl-shell { grid-template-columns: 1fr; }
-        .dl-rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--dl-line); padding: 16px 24px; }
-        .dl-grid { grid-template-columns: 1fr; }
-        .dl-aside { position: static; }
-        .dl-metrics { grid-template-columns: repeat(2, 1fr); }
+      @media (max-width: 1180px) {
+        .dl-subject-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .dl-grid-workbench { grid-template-columns: 1fr; }
       }
 
-      @media (max-width: 720px) {
+      @media (max-width: 760px) {
+        .dl-main-full { padding: 16px; }
+        .dl-subject-grid, .dl-stepper { grid-template-columns: 1fr; }
+        .dl-upload-row { grid-template-columns: 1fr; }
+
         .dl-topbar {
           grid-template-columns: 1fr;
           min-height: auto;
@@ -1196,6 +1389,7 @@
         .dl-product-subtitle { font-size: 16px; }
         .dl-actions { justify-content: flex-start; }
         .dl-main { padding: 16px; }
+        .dl-main-full { padding: 16px; }
         .dl-empty { grid-template-columns: 1fr; padding: 20px; }
         .dl-metrics, .engine-card-grid, .confirm-grid, .dl-kv-grid { grid-template-columns: 1fr; }
         .wizard-steps { grid-template-columns: 1fr 1fr; row-gap: 8px; border-bottom: 0; }
@@ -1223,7 +1417,7 @@
       </div>
       <div class="dl-product-heading">
         <p class="dl-product-title">国内劳务薪酬中台</p>
-        <p class="dl-product-subtitle">把薪酬核算、异常复核和导出归档集中到一个批次流程。</p>
+        <p class="dl-product-subtitle">流程：数据上传 → 字段检查 → 餐补核算 → 导出归档</p>
       </div>
       <div class="dl-actions">
         <button class="dl-btn" id="btnRefreshStatus" type="button">刷新状态</button>
@@ -1236,152 +1430,75 @@
       </div>
     </header>
 
-    <div class="dl-shell" id="payrollShell">
-      <aside class="dl-rail" aria-label="薪酬批次流程">
-        <button class="dl-rail-toggle" id="btnToggleRail" type="button" aria-expanded="true" aria-label="收起批次流程">
-          <span class="dl-rail-toggle-icon">‹</span>
-          <span class="dl-rail-toggle-text">收起流程</span>
-        </button>
-        <p class="dl-rail-title">批次流程</p>
-        <button class="dl-step done" data-workspace-tab="overview" type="button">
-          <span class="dl-step-index">01</span><span class="dl-step-name">数据导入</span><span class="dl-step-state"></span>
-        </button>
-        <button class="dl-step done" data-workspace-tab="mapping" type="button">
-          <span class="dl-step-index">02</span><span class="dl-step-name">字段映射</span><span class="dl-step-state"></span>
-        </button>
-        <button class="dl-step active warn" data-workspace-tab="validation" type="button">
-          <span class="dl-step-index">03</span><span class="dl-step-name">数据校验</span><span class="dl-step-state"></span>
-        </button>
-        <button class="dl-step" data-workspace-tab="results" type="button">
-          <span class="dl-step-index">04</span><span class="dl-step-name">科目核算</span><span class="dl-step-state"></span>
-        </button>
-        <button class="dl-step warn" data-workspace-tab="exceptions" type="button">
-          <span class="dl-step-index">05</span><span class="dl-step-name">异常复核</span><span class="dl-step-state"></span>
-        </button>
-        <button class="dl-step" data-workspace-tab="audit" type="button">
-          <span class="dl-step-index">06</span><span class="dl-step-name">审计解释</span><span class="dl-step-state"></span>
-        </button>
-        <button class="dl-step" data-workspace-tab="approval" type="button">
-          <span class="dl-step-index">07</span><span class="dl-step-name">审批发放</span><span class="dl-step-state"></span>
-        </button>
-      </aside>
-
-      <main class="dl-main">
-        <div class="dl-grid">
-          <div class="dl-stack">
-            <section class="dl-panel" id="taskStatusSection">
-              <div class="dl-panel-head">
-                <div>
-                  <h2 class="dl-panel-title">批次状态</h2>
-                  <p class="dl-panel-sub" id="taskStatusSub">当前批次尚未提交计算。先创建任务，系统会进入数据校验和科目核算流程。</p>
-                </div>
-                <button id="btnExport" class="btn-primary" type="button" hidden>导出 Excel</button>
+    <div class="dl-shell dl-shell-subject" id="payrollShell">
+      <main class="dl-main dl-main-full">
+        <section class="dl-view active" id="subjectHomeView" data-view="home">
+          <div class="dl-metrics kpi-6col" id="kpiBanner" hidden></div>
+          <div class="dl-panel dl-subject-hero">
+            <div class="dl-panel-head">
+              <div>
+                <h2 class="dl-panel-title">选择核算科目</h2>
+                <p class="dl-panel-sub">先选择本次要处理的薪酬科目，再进入对应核算批次。</p>
               </div>
-              <div id="taskStatusCard" class="dl-panel-body"></div>
-              <div class="dl-metrics kpi-6col" id="kpiBanner">
-                <div class="dl-metric">
-                  <span class="dl-metric-label">员工总数 <span class="dl-dot"></span></span>
-                  <span class="dl-metric-value" id="kpiTotalVal">—</span>
-                  <span class="dl-metric-meta">批次覆盖人数</span>
-                </div>
-                <div class="dl-metric">
-                  <span class="dl-metric-label">已计算 <span class="dl-dot"></span></span>
-                  <span class="dl-metric-value" id="kpiProcessedVal">—</span>
-                  <span class="dl-metric-meta">已产出结果行</span>
-                </div>
-                <div class="dl-metric">
-                  <span class="dl-metric-label">异常记录 <span class="dl-dot"></span></span>
-                  <span class="dl-metric-value" id="kpiWarningsVal">—</span>
-                  <span class="dl-metric-meta">待复核或留痕</span>
-                </div>
-                <div class="dl-metric">
-                  <span class="dl-metric-label">应发合计 <span class="dl-dot"></span></span>
-                  <span class="dl-metric-value" id="kpiGrandVal">—</span>
-                  <span class="dl-metric-meta">本批次合计金额</span>
-                </div>
-              </div>
-            </section>
-
-            <section class="dl-panel" id="engineSummarySection">
-              <div class="dl-panel-head">
-                <div>
-                  <h2 class="dl-panel-title">科目金额摘要</h2>
-                  <p class="dl-panel-sub">按科目查看人数、金额与异常分布。</p>
-                </div>
-              </div>
-              <div id="engineSummaryGrid" class="dl-metrics">
-                <div class="dl-metric"><span class="dl-metric-label">全勤奖</span><span class="dl-metric-value" id="kpiQuanqinVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
-                <div class="dl-metric"><span class="dl-metric-label">餐补</span><span class="dl-metric-value" id="kpiCanbuVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
-                <div class="dl-metric"><span class="dl-metric-label">外宿补贴</span><span class="dl-metric-value" id="kpiWaisuVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
-                <div class="dl-metric"><span class="dl-metric-label">工龄奖</span><span class="dl-metric-value" id="kpiGonglingVal">—</span><span class="dl-metric-meta">0 人 · 异常 0</span></div>
-              </div>
-            </section>
-
-            <section class="dl-panel" id="resultsSection">
-              <div class="dl-panel-head">
-                <div>
-                  <h2 class="dl-panel-title">员工薪酬结果表</h2>
-                  <p class="dl-panel-sub">点击员工行查看规则命中、异常、调整和审批解释。</p>
-                </div>
-              </div>
-              <div class="dl-toolbar">
-                <div class="dl-filter-row" id="subjectTabs">
-                  <button class="dl-segment active" data-subject="all" type="button">全部科目</button>
-                  <button class="dl-segment" data-subject="quanqinjiang" type="button">全勤奖</button>
-                  <button class="dl-segment" data-subject="canbu" type="button">餐补</button>
-                  <button class="dl-segment" data-subject="waisu_butie" type="button">外宿补贴</button>
-                  <button class="dl-segment" data-subject="gonglingjiang" type="button">工龄奖</button>
-                  <button class="dl-segment" data-subject="warnings" type="button">只看异常</button>
-                </div>
-                <div class="dl-table-tools">
-                  <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门" aria-label="筛选工号、姓名、部门">
-                  <select class="dl-select" id="reviewStatusFilter" aria-label="筛选复核状态">
-                    <option value="all">全部状态</option>
-                    <option value="review">待复核</option>
-                    <option value="pass">自动通过</option>
-                  </select>
-                  <select class="dl-select" id="amountFilter" aria-label="筛选金额状态">
-                    <option value="all">全部金额</option>
-                    <option value="positive">应发大于0</option>
-                    <option value="zero">应发为0</option>
-                  </select>
-                  <span class="dl-result-count" id="resultCountText">—</span>
-                </div>
-              </div>
-              <div id="resultsTable" class="dl-table-wrap"></div>
-            </section>
+            </div>
+            <div class="dl-subject-grid" id="subjectCardGrid">
+              <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
+                <span class="dl-subject-kicker">Meal Allowance</span>
+                <strong>餐补</strong>
+                <span>样板科目，可进入批次列表</span>
+                <em>进入餐补核算</em>
+              </button>
+              <button class="dl-subject-card" data-subject-entry="gonglingjiang" type="button">
+                <span class="dl-subject-kicker">Seniority Bonus</span>
+                <strong>工龄奖</strong>
+                <span>已配置，后续按同模式改造</span>
+                <em>进入工龄奖核算</em>
+              </button>
+              <button class="dl-subject-card" data-subject-entry="quanqinjiang" type="button">
+                <span class="dl-subject-kicker">Attendance Bonus</span>
+                <strong>全勤奖</strong>
+                <span>已配置，后续按同模式改造</span>
+                <em>进入全勤奖核算</em>
+              </button>
+              <button class="dl-subject-card" data-subject-entry="waisu_butie" type="button">
+                <span class="dl-subject-kicker">Housing Allowance</span>
+                <strong>外宿补贴</strong>
+                <span>已配置，后续按同模式改造</span>
+                <em>进入外宿补贴核算</em>
+              </button>
+            </div>
           </div>
 
-          <aside class="dl-aside">
-            <button class="dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="true" aria-label="收起异常队列">
-              <span class="dl-aside-toggle-icon">›</span>
-              <span class="dl-aside-toggle-text">收起异常</span>
-            </button>
-            <section class="dl-panel dl-aside-panel">
-              <div class="dl-panel-head">
-                <div>
-                  <h2 class="dl-panel-title">异常工作队列</h2>
-                  <p class="dl-panel-sub">阻断、高风险、提示会在这里集中处理。</p>
-                </div>
+          <section class="dl-panel">
+            <div class="dl-panel-head">
+              <div>
+                <h2 class="dl-panel-title">最近核算批次</h2>
+                <p class="dl-panel-sub">回看历史月份和最近导出状态。</p>
               </div>
-              <div class="dl-panel-body">
-                <div id="exceptionQueue" class="dl-exception-list"></div>
+            </div>
+            <div id="recentBatchTable" class="dl-table-wrap"></div>
+          </section>
+        </section>
+
+        <section class="dl-view" id="canbuBatchListView" data-view="canbuBatches" hidden>
+          <div class="dl-panel">
+            <div class="dl-panel-head">
+              <div>
+                <h2 class="dl-panel-title">餐补核算批次</h2>
+                <p class="dl-panel-sub">一个批次对应一次可回看的餐补核算，同一月份可保留多次试算或复算。</p>
               </div>
-            </section>
-            <section class="dl-panel dl-aside-panel">
-              <div class="dl-panel-head">
-                <div>
-                  <h2 class="dl-panel-title">审批发放</h2>
-                  <p class="dl-panel-sub">当前原型保留状态入口，后续接复核和审批流。</p>
-                </div>
+              <div class="dl-actions-inline">
+                <button class="dl-btn" id="btnBackHome" type="button">返回科目首页</button>
+                <button class="btn-new-batch" id="btnNewCanbuBatch" type="button">新建餐补批次</button>
               </div>
-              <div class="dl-panel-body">
-                <div class="dl-status-row"><span class="dl-badge warn">待计算</span></div>
-                <p class="dl-panel-sub">完成核算和异常复核后，可进入提交审批与导出发放。</p>
-              </div>
-            </section>
-          </aside>
-        </div>
+            </div>
+            <div id="canbuBatchTable" class="dl-table-wrap"></div>
+          </div>
+        </section>
+
+        <section class="dl-view" id="canbuWorkbenchView" data-view="canbuWorkbench" hidden>
+          <div id="canbuWorkbenchRoot"></div>
+        </section>
       </main>
     </div>
 
@@ -1510,11 +1627,11 @@
 
     <!-- ═══ TOAST ═══ -->
     <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
-    <aside id="explainDrawer" class="dl-explain-drawer" aria-label="员工审计解释">
+    <aside id="explainDrawer" class="dl-explain-drawer" aria-label="员工核算说明">
       <div class="dl-drawer-head">
         <div>
-          <p class="dl-eyebrow">Audit explanation</p>
-          <h2 class="dl-title" id="explainTitle">员工解释</h2>
+          <p class="dl-eyebrow">Calculation explanation</p>
+          <h2 class="dl-title" id="explainTitle">员工核算说明</h2>
         </div>
         <button class="btn-close-drawer" id="btnCloseExplain" type="button" aria-label="关闭解释抽屉">×</button>
       </div>
