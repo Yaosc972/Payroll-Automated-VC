@@ -13,6 +13,7 @@ DONGGUAN_MONTHLY_CAP = 500.0
 
 DONGGUAN_ELIGIBLE_POSITIONS = {
     "安检员",
+    "操作文员",
     "操作员",
     "叉车司机",
     "揽收充电司机",
@@ -44,8 +45,10 @@ JIASHAN_ELIGIBLE_POSITIONS = {
     "操作员",
     "门禁员",
     "巡场员",
+    "保洁",
     "仓库文员",
     "操作文员",
+    "设备维护员",
     "设备维护专员",
     "数据专员",
     "安全员",
