@@ -51,14 +51,13 @@
         top: 0;
         z-index: 20;
         display: grid;
-        grid-template-columns: minmax(580px, 0.98fr) minmax(320px, 0.95fr) auto;
-        gap: 24px;
+        grid-template-columns: minmax(360px, 0.8fr) minmax(420px, 1fr);
+        gap: 20px;
         align-items: center;
-        min-height: 88px;
-        padding: 10px 32px;
+        min-height: 64px;
+        padding: 8px 32px;
         border-bottom: 1px solid var(--dl-line);
-        background:
-          linear-gradient(180deg, #ffffff 0%, #f8fafc 65%, #eef3f7 100%);
+        background: #ffffff;
         box-shadow: 0 1px 0 rgba(16, 24, 40, 0.06);
       }
 
@@ -74,7 +73,7 @@
         align-items: center;
       }
 
-      .dl-brand-row { gap: 14px; min-width: 0; }
+      .dl-brand-row { gap: 12px; min-width: 0; }
 
       .dl-brand-copy {
         min-width: 0;
@@ -82,8 +81,8 @@
       }
 
       .dl-logo {
-        width: 40px;
-        height: 40px;
+        width: 34px;
+        height: 34px;
         display: grid;
         place-items: center;
         border: 0;
@@ -93,8 +92,8 @@
       }
 
       .dl-logo img {
-        max-width: 36px;
-        max-height: 36px;
+        max-width: 30px;
+        max-height: 30px;
         filter: none;
       }
 
@@ -109,9 +108,9 @@
 
       .dl-title {
         margin: 0;
-        font-size: 22px;
+        font-size: 18px;
         line-height: 1.25;
-        font-weight: 600;
+        font-weight: 760;
         letter-spacing: -0.02em;
       }
 
@@ -123,46 +122,53 @@
       .dl-product-title {
         margin: 0;
         color: var(--dl-ink);
-        font-size: 22px;
+        font-size: 18px;
         line-height: 1.15;
-        font-weight: 600;
+        font-weight: 760;
         letter-spacing: -0.02em;
       }
 
       .dl-product-subtitle {
-        margin: 5px 0 0;
+        margin: 4px 0 0;
         color: var(--dl-muted);
-        font-size: 13px;
+        font-size: 12px;
         line-height: 1.45;
         font-weight: 400;
       }
 
       .dl-batch-meta {
         flex-wrap: wrap;
-        gap: 6px;
+        gap: 0;
         margin-top: 4px;
         max-width: 560px;
       }
 
-      /* 胶囊状态标签：微弱轻底色，消灭突兀的粗边框 */
       .dl-chip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        min-height: 20px;
-        padding: 2px 9px;
+        gap: 4px;
+        min-height: auto;
+        padding: 0;
         border: 0;
-        border-radius: 999px;
-        background: #F1F5F9;
+        border-radius: 0;
+        background: transparent;
         color: var(--dl-muted);
         font-size: 11px;
-        font-weight: 500;
+        font-weight: 650;
         white-space: nowrap;
       }
 
-      .dl-chip strong { color: var(--dl-ink); font-weight: 600; }
-      .dl-chip.is-warn { color: #B45309; background: var(--dl-warn-soft); }
-      .dl-chip.is-ok { color: #047857; background: var(--dl-ok-soft); }
+      .dl-chip + .dl-chip::before {
+        content: "";
+        width: 1px;
+        height: 12px;
+        margin: 0 10px;
+        background: var(--dl-line-strong);
+      }
+
+      .dl-chip strong { color: var(--dl-ink); font-weight: 700; }
+      .dl-chip.is-warn { color: #B45309; background: transparent; }
+      .dl-chip.is-ok { color: #047857; background: transparent; }
 
       .dl-actions {
         gap: 10px;
@@ -1115,17 +1121,19 @@
       .engine-card-check { opacity: 0; color: var(--dl-accent); transition: opacity 0.2s ease; }
       .engine-card.selected .engine-card-check { opacity: 1; }
 
-      /* ═══ 拖拽上传区：摒弃生硬粗虚线，改用高级空气呼吸感虚线 ═══ */
       .upload-zone {
         position: relative;
-        display: grid;
-        place-items: center;
-        min-height: 160px;
-        padding: 24px;
-        border: 1.5px dashed var(--dl-line-strong);
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 58px;
+        padding: 10px 14px;
+        border: 1px solid var(--dl-line);
         border-radius: 12px;
         background: #FFFFFF;
-        text-align: center;
+        text-align: left;
         cursor: pointer;
         transition: all 0.2s ease;
       }
@@ -1133,11 +1141,26 @@
       .upload-zone:hover,
       .upload-zone.has-file {
         border-color: var(--dl-accent);
-        background: var(--dl-accent-soft);
+        background: #FFFFFF;
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
       }
 
       .upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-      .upload-title { margin: 12px 0 4px; font-weight: 600; font-size: 14px; }
+      .upload-title { margin: 0; font-weight: 700; font-size: 14px; white-space: nowrap; }
+      .upload-sub { flex: 1; margin: 0; }
+      .upload-zone::after {
+        content: "选择文件";
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 0 12px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
+        color: var(--dl-accent);
+        background: var(--dl-panel-soft);
+        font-size: 13px;
+        font-weight: 700;
+      }
       
       .upload-sub,
       .template-hint,
@@ -1180,40 +1203,65 @@
       .dl-stepper {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 8px;
-        margin-top: 18px;
+        gap: 0;
+        margin-top: 20px;
+        padding: 6px 0 0;
       }
 
       .dl-stepper-item {
-        border: 1px solid var(--dl-line);
-        border-radius: 12px;
-        background: var(--dl-panel-soft);
+        position: relative;
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        min-height: 48px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
         color: var(--dl-muted);
-        padding: 10px 12px;
+        padding: 0 18px 0 0;
         font-weight: 700;
         text-align: left;
       }
 
+      .dl-stepper-item::after {
+        content: "";
+        position: absolute;
+        left: 42px;
+        right: 18px;
+        top: 16px;
+        border-top: 1px dashed var(--dl-line-strong);
+      }
+
+      .dl-stepper-item:last-child::after { display: none; }
+
       .dl-stepper-item span {
         display: inline-grid;
         place-items: center;
-        width: 22px;
-        height: 22px;
-        margin-right: 8px;
+        width: 32px;
+        height: 32px;
+        margin-right: 0;
         border-radius: 999px;
         background: #fff;
         border: 1px solid var(--dl-line);
+        color: var(--dl-muted);
       }
 
       .dl-stepper-item.active {
-        border-color: var(--dl-accent);
-        background: var(--dl-accent-soft);
+        border-color: transparent;
+        background: transparent;
         color: var(--dl-accent);
         font-weight: 700;
       }
 
+      .dl-stepper-item.active span {
+        border-color: var(--dl-accent);
+        background: var(--dl-accent);
+        color: #ffffff;
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+      }
+
       .dl-stepper-item.done {
-        border-color: var(--dl-ok);
         color: var(--dl-ok);
       }
 
@@ -1225,8 +1273,11 @@
 
       .dl-upload-list {
         display: grid;
-        gap: 12px;
+        gap: 0;
         margin-bottom: 16px;
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        overflow: hidden;
       }
 
       .dl-upload-row {
@@ -1234,12 +1285,14 @@
         grid-template-columns: 160px 1fr auto;
         align-items: center;
         gap: 12px;
-        padding: 14px 16px;
-        border: 1px solid var(--dl-line);
-        border-radius: 12px;
-        background: var(--dl-panel-soft);
+        padding: 13px 16px;
+        border: 0;
+        border-bottom: 1px solid var(--dl-line);
+        border-radius: 0;
+        background: #ffffff;
       }
 
+      .dl-upload-row:last-child { border-bottom: 0; }
       .dl-upload-row strong { color: var(--dl-ink); }
 
       .dl-field-groups {
@@ -1250,37 +1303,54 @@
       .dl-field-group {
         border: 1px solid var(--dl-line);
         border-radius: 12px;
-        padding: 16px;
+        padding: 0;
         background: var(--dl-panel);
+        overflow: hidden;
       }
 
       .dl-field-group h3 {
-        margin: 0 0 12px;
+        margin: 0;
+        padding: 13px 16px;
+        border-bottom: 1px solid var(--dl-line);
+        background: var(--dl-panel-soft);
         font-size: 14px;
       }
 
       .dl-field-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0;
       }
 
       .dl-field-pill {
         display: inline-flex;
+        justify-content: space-between;
         align-items: center;
-        gap: 6px;
-        border-radius: 999px;
-        padding: 6px 10px;
-        border: 1px solid var(--dl-line);
-        background: var(--dl-panel-soft);
-        color: var(--dl-faint);
-        font-weight: 700;
+        gap: 12px;
+        min-height: 42px;
+        border-radius: 0;
+        padding: 10px 16px;
+        border: 0;
+        border-right: 1px solid var(--dl-line);
+        border-bottom: 1px solid var(--dl-line);
+        background: #ffffff;
+        color: var(--dl-ink);
+        font-weight: 650;
       }
+
+      .dl-field-pill:nth-child(2n) { border-right: 0; }
 
       .dl-field-pill.ok {
         border-color: var(--dl-line);
-        background: var(--dl-panel-soft);
-        color: var(--dl-faint);
+        background: #ffffff;
+        color: var(--dl-ink);
+      }
+
+      .dl-field-pill::after {
+        content: "已识别";
+        color: var(--dl-ok);
+        font-size: 12px;
+        font-weight: 700;
       }
 
       /* 核算结果总结网格 */
