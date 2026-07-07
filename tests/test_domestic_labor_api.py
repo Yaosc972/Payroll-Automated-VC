@@ -446,8 +446,8 @@ def test_canbu_dongguan_keeps_existing_piecework_exclusion():
     assert result.details["日餐补明细"] == [0]
 
 
-def test_canbu_dongguan_operation_clerk_is_not_eligible():
-    """东莞最新线下口径不含操作文员"""
+def test_canbu_dongguan_operation_clerk_is_eligible():
+    """东莞操作文员享有餐补，普通文员不享有"""
     employee = {
         "工号": "OWHN001",
         "姓名": "张三",
@@ -462,9 +462,8 @@ def test_canbu_dongguan_operation_clerk_is_not_eligible():
     result = CanBuEngine().calculate(employee, daily_attendance)
     explanation = result.details["audit_explanation"]
 
-    assert result.amount == 0
-    assert result.details["reason"] == "东莞餐补资格不满足"
-    assert explanation["intermediate_values"]["岗位是否在享有名单"] is False
+    assert result.amount == 19
+    assert explanation["rule_name"] == "东莞餐补逐日折算与封顶"
 
 
 def test_canbu_dongguan_explicit_ineligible_position_is_not_eligible():
@@ -551,6 +550,30 @@ def test_canbu_yiwu_uses_jiashan_monthly_attendance_formula():
     assert result.details["地区规则"] == "义乌"
     assert explanation["rule_name"] == "义乌餐补月报折算"
     assert explanation["intermediate_values"]["有效餐补天数"] == 21
+
+
+def test_canbu_jiashan_yiwu_include_cleaner_and_maintenance_alias():
+    """嘉善/义乌保洁享有餐补，设备维护员兼容设备维护专员历史岗位"""
+    base_employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "排班天数": 24,
+        "实际在职工作日天数": 24,
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+    }
+
+    cleaner = {**base_employee, "工作地区": "嘉善", "岗位名称": "保洁"}
+    maintenance = {**base_employee, "工作地区": "义乌", "岗位名称": "设备维护员"}
+
+    cleaner_result = CanBuEngine().calculate(cleaner, daily_attendance=[])
+    maintenance_result = CanBuEngine().calculate(maintenance, daily_attendance=[])
+
+    assert cleaner_result.amount == 300
+    assert cleaner_result.details["地区规则"] == "嘉善"
+    assert maintenance_result.amount == 300
+    assert maintenance_result.details["地区规则"] == "义乌"
 
 
 def test_canbu_jiashan_unknown_position_is_not_eligible():
