@@ -617,6 +617,17 @@
         overflow: hidden;
       }
 
+      .dl-calc-modal {
+        width: min(760px, calc(100vw - 40px));
+      }
+
+      .dl-calc-modal .dl-modal-body {
+        display: grid;
+        gap: 12px;
+        max-height: min(70dvh, 680px);
+        overflow: auto;
+      }
+
       .dl-modal-head,
       .dl-modal-body,
       .dl-modal-foot {
@@ -763,9 +774,93 @@
       .dl-toolbar {
         justify-content: space-between;
         gap: 14px;
-        padding: 16px 24px;
+        padding: 12px 14px;
         border-bottom: 1px solid var(--dl-line);
         background: #FFFFFF;
+      }
+
+      .dl-toolbar-compact {
+        justify-content: flex-end;
+        background: #ffffff;
+      }
+
+      .dl-result-summary {
+        display: grid;
+        grid-template-columns: minmax(170px, 1.2fr) repeat(4, minmax(110px, 0.7fr));
+        gap: 8px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--dl-line);
+        background: #ffffff;
+      }
+
+      .dl-result-stat {
+        min-width: 0;
+        padding: 9px 10px;
+        border: 1px solid var(--dl-line);
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .dl-result-stat.primary {
+        border-color: rgba(37, 99, 235, 0.22);
+        background: var(--dl-accent-soft);
+      }
+
+      .dl-result-stat.warning {
+        border-color: rgba(154, 103, 0, 0.26);
+        background: var(--dl-warn-soft);
+      }
+
+      .dl-result-stat span {
+        display: block;
+        color: var(--dl-muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .dl-result-stat strong {
+        display: block;
+        margin-top: 3px;
+        color: var(--dl-ink);
+        font-size: 20px;
+        line-height: 1.05;
+        font-weight: 850;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dl-result-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--dl-line);
+        background: #f8fafc;
+      }
+
+      .dl-result-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 30px;
+        padding: 0 10px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 6px;
+        background: #ffffff;
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .dl-result-tab strong {
+        color: var(--dl-ink);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dl-result-tab.active {
+        border-color: rgba(37, 99, 235, 0.32);
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
       }
 
       .dl-filter-row { gap: 8px; flex-wrap: wrap; }
@@ -781,7 +876,7 @@
       .dl-select {
         min-height: 34px;
         border: 1px solid var(--dl-line-strong);
-        border-radius: 999px;
+        border-radius: 6px;
         background: #FFFFFF;
         color: var(--dl-ink);
         font: inherit;
@@ -815,9 +910,9 @@
       /* 状态分段选择器 */
       .dl-segment {
         min-height: 32px;
-        padding: 6px 14px;
+        padding: 6px 12px;
         border: 1px solid var(--dl-line-strong);
-        border-radius: 999px;
+        border-radius: 6px;
         background: #FFFFFF;
         color: var(--dl-muted);
         font-size: 12px;
@@ -838,9 +933,67 @@
         font-weight: 600;
       }
 
+      .dl-segment.compact {
+        min-height: 28px;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+
+      .dl-segment:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
       .dl-table-wrap {
         overflow: auto;
         max-height: min(76dvh, 860px);
+      }
+
+      .dl-result-table .sticky-col {
+        position: sticky;
+        z-index: 2;
+        background: #ffffff;
+      }
+
+      .dl-result-table th.sticky-col {
+        z-index: 3;
+        background: #f8fafc;
+      }
+
+      .dl-result-table .id-col {
+        left: 0;
+        min-width: 132px;
+      }
+
+      .dl-result-table .name-col {
+        left: 132px;
+        min-width: 112px;
+        box-shadow: 1px 0 0 var(--dl-line);
+      }
+
+      .dl-table .wrap-cell {
+        max-width: 220px;
+        white-space: normal;
+        word-break: break-word;
+      }
+
+      .dl-pagination {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        border-top: 1px solid var(--dl-line);
+        background: #ffffff;
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .dl-pagination-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
 
       /* ═══ 高级数据表格：消灭深重边框，转换为清爽的横向信息流 ═══ */
@@ -1739,6 +1892,18 @@
       </div>
       <div class="dl-drawer-body" id="explainBody"></div>
     </aside>
+    <div class="dl-modal-backdrop" id="calcModal" role="dialog" aria-modal="true" aria-labelledby="calcModalTitle">
+      <div class="dl-modal dl-calc-modal">
+        <div class="dl-modal-head">
+          <h2 class="dl-modal-title" id="calcModalTitle">计算过程</h2>
+          <p class="dl-modal-sub">展示本员工餐补的规则来源、关键输入和计算公式。</p>
+        </div>
+        <div class="dl-modal-body" id="calcModalBody"></div>
+        <div class="dl-modal-foot">
+          <button class="btn-primary" id="btnCloseCalcModal" type="button">关闭</button>
+        </div>
+      </div>
+    </div>
 
     <script src="domestic-labor.js?v=1"></script>
   </body>

@@ -381,6 +381,7 @@ def test_domestic_labor_meal_workbench_static_labels():
     assert 'id="canbuBatchMonth"' in html
     assert 'id="canbuBatchModal"' in html
     assert 'id="btnConfirmCanbuBatch"' in html
+    assert 'id="calcModal"' in html
     assert "核算月份" in html
     assert "数据上传" in js
     assert "字段检查" in js

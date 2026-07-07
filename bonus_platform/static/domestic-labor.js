@@ -17,6 +17,10 @@ const state = {
   resultSearch: '',
   reviewStatusFilter: 'all',
   amountFilter: 'all',
+  canbuRegionFilter: 'all',
+  canbuPage: 1,
+  canbuPageSize: 50,
+  canbuSearchComposing: false,
   pollTimer: null,
   pollRetryCount: 0,
   pollMaxRetries: 200, // 200 × 3s = 10 min
@@ -197,7 +201,9 @@ const el = {
   resultSearchInput: document.querySelector('#resultSearchInput'),
   reviewStatusFilter: document.querySelector('#reviewStatusFilter'),
   amountFilter: document.querySelector('#amountFilter'),
+  canbuRegionFilter: document.querySelector('#canbuRegionFilter'),
   resultCountText: document.querySelector('#resultCountText'),
+  canbuPagination: document.querySelector('#canbuPagination'),
   // New task 1 views
   subjectHomeView: document.querySelector('#subjectHomeView'),
   canbuBatchListView: document.querySelector('#canbuBatchListView'),
@@ -216,6 +222,10 @@ const el = {
   explainTitle: document.querySelector('#explainTitle'),
   explainBody: document.querySelector('#explainBody'),
   btnCloseExplain: document.querySelector('#btnCloseExplain'),
+  calcModal: document.querySelector('#calcModal'),
+  calcModalTitle: document.querySelector('#calcModalTitle'),
+  calcModalBody: document.querySelector('#calcModalBody'),
+  btnCloseCalcModal: document.querySelector('#btnCloseCalcModal'),
   reportLink: document.querySelector('#reportLink'),
   toast: document.querySelector('#payrollToast'),
 };
@@ -367,6 +377,10 @@ function bindEvents() {
     if (event.target === el.canbuBatchModal) closeCanbuBatchModal();
   });
   el.btnConfirmCanbuBatch?.addEventListener('click', createCanbuBatchFromModal);
+  el.btnCloseCalcModal?.addEventListener('click', closeCalcModal);
+  el.calcModal?.addEventListener('click', (event) => {
+    if (event.target === el.calcModal) closeCalcModal();
+  });
 
   el.btnToggleRail?.addEventListener('click', toggleRail);
   el.btnToggleAside?.addEventListener('click', toggleAside);
@@ -374,6 +388,7 @@ function bindEvents() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeCanbuBatchModal();
+      closeCalcModal();
       closeExplainDrawer();
     }
   });
@@ -389,6 +404,12 @@ function openCanbuBatchModal() {
 function closeCanbuBatchModal() {
   if (!el.canbuBatchModal?.classList.contains('visible')) return;
   el.canbuBatchModal.classList.remove('visible');
+  document.body.style.overflow = '';
+}
+
+function closeCalcModal() {
+  if (!el.calcModal?.classList.contains('visible')) return;
+  el.calcModal.classList.remove('visible');
   document.body.style.overflow = '';
 }
 
@@ -668,21 +689,29 @@ function renderCanbuResults(results = []) {
   const total = sumField(canbuResults, 'canbu');
   const warnings = countCanbuWarnings(canbuResults);
   const capCount = canbuResults.filter(row => Number(row.canbu || 0) >= 500).length;
+  const positiveCount = canbuResults.filter(row => Number(row.canbu || 0) > 0).length;
+  if (!getCanbuRegionFilterValues(canbuResults).includes(state.canbuRegionFilter)) {
+    state.canbuRegionFilter = 'all';
+  }
   root.innerHTML = `
     <section class="dl-panel">
       <div class="dl-panel-head">
         <div>
           <h2 class="dl-panel-title">餐补核算</h2>
-          <p class="dl-panel-sub">查看餐补应发、资格、异常和员工解释。</p>
+          <p class="dl-panel-sub">按线下结果表口径查看应发餐补、适用规则和计算过程。</p>
         </div>
       </div>
-      <div class="dl-toolbar">
-        <div class="dl-metrics dl-metrics-inline">
-          <div class="dl-metric"><span class="dl-metric-label">应发合计</span><span class="dl-metric-value">${formatMoney(total)}</span></div>
-          <div class="dl-metric"><span class="dl-metric-label">员工数</span><span class="dl-metric-value">${canbuResults.length}</span></div>
-          <div class="dl-metric"><span class="dl-metric-label">异常数</span><span class="dl-metric-value">${warnings}</span></div>
-          <div class="dl-metric"><span class="dl-metric-label">封顶人数</span><span class="dl-metric-value">${capCount}</span></div>
-        </div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
+        <div class="dl-result-stat"><span>员工数</span><strong>${canbuResults.length}</strong></div>
+        <div class="dl-result-stat"><span>享有人数</span><strong>${positiveCount}</strong></div>
+        <div class="dl-result-stat"><span>封顶人数</span><strong>${capCount}</strong></div>
+        <div class="dl-result-stat warning"><span>需处理</span><strong>${warnings}</strong></div>
+      </div>
+      <div class="dl-result-tabs" id="canbuRegionTabs">
+        ${renderCanbuRegionTabs(canbuResults)}
+      </div>
+      <div class="dl-toolbar dl-toolbar-compact">
         <div class="dl-table-tools">
           <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门" aria-label="筛选工号、姓名、部门">
           <select class="dl-select" id="reviewStatusFilter" aria-label="筛选异常状态">
@@ -699,6 +728,7 @@ function renderCanbuResults(results = []) {
         </div>
       </div>
       <div id="resultsTable" class="dl-table-wrap"></div>
+      <div class="dl-pagination" id="canbuPagination"></div>
     </section>
   `;
   el.resultsTable = document.querySelector('#resultsTable');
@@ -706,6 +736,7 @@ function renderCanbuResults(results = []) {
   el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
   el.amountFilter = document.querySelector('#amountFilter');
   el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
   const filterValue = (value, allowed) => (allowed.includes(value) ? value : allowed[0]);
   const canbuReviewFilter = filterValue(state.reviewStatusFilter, ['all', 'review', 'pass']);
   const canbuAmountFilter = filterValue(state.amountFilter, ['all', 'positive', 'zero']);
@@ -715,24 +746,66 @@ function renderCanbuResults(results = []) {
   if (el.reviewStatusFilter) el.reviewStatusFilter.value = canbuReviewFilter;
   if (el.amountFilter) el.amountFilter.value = canbuAmountFilter;
   bindCanbuResultFilters();
+  bindCanbuRegionTabs();
   renderCanbuResultsTable(canbuResults);
   renderCanbuExceptionQueue(canbuResults);
+}
+
+function renderCanbuRegionTabs(results) {
+  const items = getCanbuRegionTabs(results);
+  return items.map(item => `
+    <button class="dl-result-tab ${state.canbuRegionFilter === item.value ? 'active' : ''}" data-canbu-region="${escapeHtml(item.value)}" type="button">
+      <span>${escapeHtml(item.label)}</span>
+      <strong>${item.count}</strong>
+    </button>
+  `).join('');
+}
+
+function getCanbuRegionTabs(results) {
+  const base = [{ value: 'all', label: '全部', count: results.length }];
+  const regionCounts = new Map();
+  results.forEach(row => {
+    const region = getCanbuRowRegion(row);
+    regionCounts.set(region, (regionCounts.get(region) || 0) + 1);
+  });
+  Array.from(regionCounts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
+    .forEach(([region, count]) => base.push({ value: region, label: region, count }));
+  const issueCount = results.filter(hasCanbuReviewIssue).length;
+  if (issueCount) base.push({ value: '__issues__', label: '需处理', count: issueCount });
+  return base;
+}
+
+function getCanbuRegionFilterValues(results) {
+  return getCanbuRegionTabs(results).map(item => item.value);
+}
+
+function getCanbuRowRegion(row) {
+  const detail = getSubjectDetail(row, 'canbu');
+  const inputs = detail?.audit_explanation?.inputs || {};
+  return String(inputs['工作地区'] || row.work_region || row.region || '未识别').trim() || '未识别';
 }
 
 function renderCanbuResultsTable(results) {
   const filtered = filterCanbuResults(results || []);
   if (!el.resultsTable) return;
   updateResultCount(results.length, filtered.length);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  if (state.canbuPage > totalPages) state.canbuPage = totalPages;
+  if (state.canbuPage < 1) state.canbuPage = 1;
+  const pageStart = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(pageStart, pageStart + state.canbuPageSize);
   if (!filtered.length) {
     el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无餐补核算结果。</p></div>';
+    renderCanbuPagination(0, 0, 0);
     return;
   }
   el.resultsTable.innerHTML = `
-    <table class="dl-table">
+    <table class="dl-table dl-result-table">
       <thead>
         <tr>
-          <th>工号</th>
-          <th>姓名</th>
+          <th class="sticky-col id-col">工号</th>
+          <th class="sticky-col name-col">姓名</th>
           <th>工作地区</th>
           <th>部门</th>
           <th>岗位</th>
@@ -745,50 +818,102 @@ function renderCanbuResultsTable(results) {
         </tr>
       </thead>
       <tbody>
-        ${filtered.map(row => {
+        ${pageRows.map(row => {
           const level = getCanbuWarningLevel(row);
           const detail = getSubjectDetail(row, 'canbu');
           const inputs = detail?.audit_explanation?.inputs || {};
+          const rowIndex = results.indexOf(row);
           return `
-            <tr data-canbu-result-index="${results.indexOf(row)}">
-              <td class="dl-strong">${escapeHtml(row.employee_id || '')}</td>
-              <td>${escapeHtml(row.employee_name || '')}</td>
-              <td>${escapeHtml(inputs['工作地区'] || row.work_region || row.region || '—')}</td>
-              <td>${escapeHtml(row.department || '—')}</td>
-              <td>${escapeHtml(row.position || inputs['岗位名称'] || '—')}</td>
+            <tr>
+              <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id || '')}</td>
+              <td class="sticky-col name-col">${escapeHtml(row.employee_name || '')}</td>
+              <td>${escapeHtml(getCanbuRowRegion(row))}</td>
+              <td class="wrap-cell" title="${escapeHtml(row.department || '—')}">${escapeHtml(row.department || '—')}</td>
+              <td class="wrap-cell" title="${escapeHtml(row.position || inputs['岗位名称'] || '—')}">${escapeHtml(row.position || inputs['岗位名称'] || '—')}</td>
               <td><span class="dl-badge ${Number(row.canbu || 0) > 0 ? 'ok' : 'warn'}">${Number(row.canbu || 0) > 0 ? '享有' : '不享有/未发放'}</span></td>
               <td class="dl-num">${escapeHtml(inputs['有效出勤'] || inputs['有效时数'] || '—')}</td>
               <td>${escapeHtml(inputs['扣减项'] || '—')}</td>
               <td class="dl-num dl-strong">${formatMoney(row.canbu)}</td>
               <td><span class="dl-badge ${level.className}">${level.label}</span></td>
-              <td><button class="dl-segment" data-canbu-explain-index="${results.indexOf(row)}" type="button">解释</button></td>
+              <td><button class="dl-segment compact" data-canbu-explain-index="${rowIndex}" type="button">计算过程</button></td>
             </tr>
           `;
         }).join('')}
       </tbody>
     </table>
   `;
-  el.resultsTable.querySelectorAll('[data-canbu-result-index], [data-canbu-explain-index]').forEach(item => {
-    item.addEventListener('click', (event) => {
-      const node = event.target.closest('[data-canbu-result-index], [data-canbu-explain-index]');
-      const index = Number(node?.dataset.canbuResultIndex ?? node?.dataset.canbuExplainIndex);
+  el.resultsTable.querySelectorAll('[data-canbu-explain-index]').forEach(item => {
+    item.addEventListener('click', () => {
+      const index = Number(item.dataset.canbuExplainIndex);
       openCanbuExplainDrawer(results[index]);
     });
   });
+  renderCanbuPagination(filtered.length, pageStart + 1, Math.min(pageStart + pageRows.length, filtered.length));
 }
 
 function bindCanbuResultFilters() {
-  el.resultSearchInput?.addEventListener('input', () => {
+  el.resultSearchInput?.addEventListener('compositionstart', () => {
+    state.canbuSearchComposing = true;
+  });
+  el.resultSearchInput?.addEventListener('compositionend', () => {
+    state.canbuSearchComposing = false;
     state.resultSearch = el.resultSearchInput.value.trim();
+    state.canbuPage = 1;
+    renderCanbuResultsTable(state.currentResults);
+  });
+  el.resultSearchInput?.addEventListener('input', () => {
+    if (state.canbuSearchComposing) return;
+    state.resultSearch = el.resultSearchInput.value.trim();
+    state.canbuPage = 1;
     renderCanbuResultsTable(state.currentResults);
   });
   el.reviewStatusFilter?.addEventListener('change', () => {
     state.reviewStatusFilter = el.reviewStatusFilter.value;
+    state.canbuPage = 1;
     renderCanbuResultsTable(state.currentResults);
   });
   el.amountFilter?.addEventListener('change', () => {
     state.amountFilter = el.amountFilter.value;
+    state.canbuPage = 1;
     renderCanbuResultsTable(state.currentResults);
+  });
+}
+
+function bindCanbuRegionTabs() {
+  document.querySelectorAll('[data-canbu-region]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.canbuRegionFilter = button.dataset.canbuRegion || 'all';
+      state.canbuPage = 1;
+      document.querySelectorAll('[data-canbu-region]').forEach(item => {
+        item.classList.toggle('active', item === button);
+      });
+      renderCanbuResultsTable(state.currentResults);
+    });
+  });
+}
+
+function renderCanbuPagination(total, start, end) {
+  if (!el.canbuPagination) return;
+  if (!total) {
+    el.canbuPagination.innerHTML = '';
+    return;
+  }
+  const totalPages = Math.max(1, Math.ceil(total / state.canbuPageSize));
+  el.canbuPagination.innerHTML = `
+    <span>${start}-${end} / ${total}</span>
+    <div class="dl-pagination-actions">
+      <button class="dl-segment compact" data-canbu-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button>
+      <strong>${state.canbuPage} / ${totalPages}</strong>
+      <button class="dl-segment compact" data-canbu-page="next" type="button" ${state.canbuPage >= totalPages ? 'disabled' : ''}>下一页</button>
+    </div>
+  `;
+  el.canbuPagination.querySelectorAll('[data-canbu-page]').forEach(button => {
+    button.addEventListener('click', () => {
+      const direction = button.dataset.canbuPage;
+      if (direction === 'prev') state.canbuPage -= 1;
+      if (direction === 'next') state.canbuPage += 1;
+      renderCanbuResultsTable(state.currentResults);
+    });
   });
 }
 
@@ -826,6 +951,8 @@ function renderCanbuExceptionQueue(results) {
 function filterCanbuResults(results) {
   const keyword = state.resultSearch.trim().toLowerCase();
   return results.filter(row => {
+    if (state.canbuRegionFilter === '__issues__' && !hasCanbuReviewIssue(row)) return false;
+    if (state.canbuRegionFilter !== 'all' && state.canbuRegionFilter !== '__issues__' && getCanbuRowRegion(row) !== state.canbuRegionFilter) return false;
     if (state.reviewStatusFilter === 'review' && !hasCanbuReviewIssue(row)) return false;
     if (state.reviewStatusFilter === 'pass' && hasCanbuReviewIssue(row)) return false;
     const amount = Number(row.canbu || 0);
@@ -844,13 +971,13 @@ function filterCanbuResults(results) {
 }
 
 function openCanbuExplainDrawer(row) {
-  if (!row || !el.explainDrawer || !el.explainTitle || !el.explainBody) return;
-  el.explainTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''}`;
+  if (!row || !el.calcModal || !el.calcModalTitle || !el.calcModalBody) return;
+  el.calcModalTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''} · 计算过程`;
   const detail = getSubjectDetail(row, 'canbu');
   const explanation = detail?.audit_explanation || {};
   const rowExceptions = getCanbuReviewExceptions(row);
   const warningText = getEffectiveWarningText(row);
-  el.explainBody.innerHTML = `
+  el.calcModalBody.innerHTML = `
     <div class="dl-kv-grid">
       <div class="dl-kv"><span>部门</span><strong>${escapeHtml(row.department || '—')}</strong></div>
       <div class="dl-kv"><span>岗位</span><strong>${escapeHtml(row.position || '—')}</strong></div>
@@ -876,7 +1003,8 @@ function openCanbuExplainDrawer(row) {
       </dl>
     </div>
   `;
-  el.explainDrawer.classList.add('open');
+  el.calcModal.classList.add('visible');
+  document.body.style.overflow = 'hidden';
 }
 
 function hasCanbuReviewIssue(row) {
