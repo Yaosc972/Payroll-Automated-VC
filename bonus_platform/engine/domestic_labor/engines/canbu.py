@@ -160,11 +160,12 @@ class CanBuEngine(BaseEngine):
                 department_text,
                 input_snapshot,
             )
-        if work_area == "嘉善":
-            return self._calculate_jiashan(
+        if work_area in {"嘉善", "义乌"}:
+            return self._calculate_jiashan_yiwu(
                 employee_id,
                 employee_name,
                 employee_data,
+                work_area,
                 position,
                 input_snapshot,
             )
@@ -188,7 +189,7 @@ class CanBuEngine(BaseEngine):
             "未命中已配置工作地区 = 0",
             input_snapshot,
             {"工作地区": work_area},
-            ["工作地区未命中东莞、嘉善或晋江", "餐补金额为0"],
+            ["工作地区未命中东莞、嘉善、义乌或晋江", "餐补金额为0"],
         )
 
     def _calculate_dongguan(
@@ -301,11 +302,12 @@ class CanBuEngine(BaseEngine):
             return 0
         return round(effective_hours * (DONGGUAN_DAILY_RATE / 8), 2)
 
-    def _calculate_jiashan(
+    def _calculate_jiashan_yiwu(
         self,
         employee_id: str,
         employee_name: str,
         employee_data: Dict[str, Any],
+        work_area: str,
         position: str,
         input_snapshot: Dict[str, Any],
     ) -> CalculationResult:
@@ -315,8 +317,8 @@ class CanBuEngine(BaseEngine):
             return self._zero_result(
                 employee_id,
                 employee_name,
-                "嘉善餐补资格不满足",
-                "嘉善餐补资格判断",
+                f"{work_area}餐补资格不满足",
+                f"{work_area}餐补资格判断",
                 "岗位不在享有名单 = 0",
                 input_snapshot,
                 {
@@ -324,7 +326,7 @@ class CanBuEngine(BaseEngine):
                     "岗位是否明确不享有": is_explicitly_ineligible,
                     "岗位是否在享有名单": is_eligible_position,
                 },
-                ["工作地区为嘉善", "检查享有岗位和不享有岗位", "餐补金额为0"],
+                [f"工作地区为{work_area}", "检查享有岗位和不享有岗位", "餐补金额为0"],
             )
 
         schedule_days = safe_float(employee_data.get("排班天数", 0))
@@ -344,8 +346,8 @@ class CanBuEngine(BaseEngine):
             return self._zero_result(
                 employee_id,
                 employee_name,
-                "嘉善餐补排班天数缺失",
-                "嘉善餐补月报字段校验",
+                f"{work_area}餐补排班天数缺失",
+                f"{work_area}餐补月报字段校验",
                 "排班天数<=0 = 0",
                 input_snapshot,
                 {
@@ -355,8 +357,8 @@ class CanBuEngine(BaseEngine):
                     "病假天数": sick_leave_days,
                     "旷工天数": absenteeism_days,
                 },
-                ["工作地区为嘉善", "排班天数缺失或为0", "餐补金额为0"],
-                warnings=[f"员工{employee_id}嘉善餐补排班天数缺失"],
+                [f"工作地区为{work_area}", "排班天数缺失或为0", "餐补金额为0"],
+                warnings=[f"员工{employee_id}{work_area}餐补排班天数缺失"],
             )
 
         raw_amount = JIASHAN_MONTHLY_STANDARD / schedule_days * effective_days
@@ -367,7 +369,7 @@ class CanBuEngine(BaseEngine):
             employee_name=employee_name,
             amount=final_amount,
             details={
-                "地区规则": "嘉善",
+                "地区规则": work_area,
                 "月标准": JIASHAN_MONTHLY_STANDARD,
                 "排班天数": schedule_days,
                 "实际在职工作日天数": actual_work_days,
@@ -377,7 +379,7 @@ class CanBuEngine(BaseEngine):
                 "有效餐补天数": effective_days,
                 "audit_explanation": _audit_explanation(
                     final_amount,
-                    "嘉善餐补月报折算",
+                    f"{work_area}餐补月报折算",
                     "300/排班天数×(实际在职工作日天数-事假天数-旷工天数-病假天数×0.4)",
                     input_snapshot,
                     {
@@ -394,7 +396,7 @@ class CanBuEngine(BaseEngine):
                         "最终金额": final_amount,
                     },
                     [
-                        "工作地区为嘉善，按月考勤字段计算餐补",
+                        f"工作地区为{work_area}，按嘉善/义乌同口径月考勤字段计算餐补",
                         "事假天数=事假时数/8，病假天数=病假时数/8",
                         "病假按40%扣减，旷工和事假按天扣减",
                         f"最终餐补=max(min({round(raw_amount, 2)}, {JIASHAN_MONTHLY_STANDARD}), 0)={final_amount}",
