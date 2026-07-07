@@ -419,8 +419,27 @@ def test_canbu_dongguan_uses_platform_rule_without_meal_standard():
     assert explanation["steps"]
 
 
-def test_canbu_dongguan_keeps_existing_piecework_exclusion():
-    """东莞保留理货操作组计件排除规则"""
+def test_canbu_dongguan_uses_max_regular_hours_and_overtime():
+    """东莞按正班时数和刷卡加班较大值计算餐补"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "一级部门名称": "莞深操作",
+        "岗位名称": "操作员",
+    }
+    daily_attendance = [
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 3, "刷卡加班": 4},
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.amount == 9.5
+    assert result.details["日餐补明细"] == [9.5]
+
+
+def test_canbu_dongguan_piecework_tally_is_not_excluded():
+    """东莞不再按理货操作组计件单独排除餐补"""
     employee = {
         "工号": "OWHN001",
         "姓名": "张三",
@@ -442,8 +461,8 @@ def test_canbu_dongguan_keeps_existing_piecework_exclusion():
 
     result = CanBuEngine().calculate(employee, daily_attendance)
 
-    assert result.amount == 0
-    assert result.details["日餐补明细"] == [0]
+    assert result.amount == 19
+    assert result.details["日餐补明细"] == [19]
 
 
 def test_canbu_dongguan_abnormal_absenteeism_formats_are_excluded():
