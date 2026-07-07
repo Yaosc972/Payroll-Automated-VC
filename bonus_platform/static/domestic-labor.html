@@ -494,7 +494,33 @@
 
       .dl-actions-inline {
         display: flex;
+        align-items: center;
         gap: 10px;
+      }
+
+      .dl-month-field {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 40px;
+        padding: 0 12px;
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: var(--dl-panel);
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .dl-month-field input {
+        width: 128px;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--dl-ink);
+        font: inherit;
+        font-weight: 800;
       }
 
       .dl-grid {
@@ -1479,6 +1505,10 @@
                 <p class="dl-panel-sub">一个批次对应一次可回看的餐补核算，同一月份可保留多次试算或复算。</p>
               </div>
               <div class="dl-actions-inline">
+                <label class="dl-month-field">
+                  <span>核算月份</span>
+                  <input id="canbuBatchMonth" type="month" autocomplete="off" />
+                </label>
                 <button class="dl-btn" id="btnBackHome" type="button">返回科目首页</button>
                 <button class="btn-new-batch" id="btnNewCanbuBatch" type="button">新建餐补批次</button>
               </div>

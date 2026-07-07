@@ -207,6 +207,7 @@ const el = {
   canbuBatchTable: document.querySelector('#canbuBatchTable'),
   canbuWorkbenchRoot: document.querySelector('#canbuWorkbenchRoot'),
   btnBackHome: document.querySelector('#btnBackHome'),
+  canbuBatchMonth: document.querySelector('#canbuBatchMonth'),
   btnNewCanbuBatch: document.querySelector('#btnNewCanbuBatch'),
   explainDrawer: document.querySelector('#explainDrawer'),
   explainTitle: document.querySelector('#explainTitle'),
@@ -225,6 +226,7 @@ function init() {
   loadTemplateLinks();
   bindEvents();
   setDefaultMonth();
+  setDefaultCanbuBatchMonth();
   setDefaultHrbpList();
   renderEmptyWorkbench();
   renderRecentBatchTable();
@@ -237,6 +239,11 @@ function setDefaultMonth() {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
   el.attendanceMonth.value = `${y}-${m}`;
+}
+
+function setDefaultCanbuBatchMonth() {
+  if (!el.canbuBatchMonth || el.canbuBatchMonth.value) return;
+  el.canbuBatchMonth.value = getCurrentMonthValue();
 }
 
 function setDefaultHrbpList() {
@@ -352,7 +359,12 @@ function bindEvents() {
   });
 
   el.btnNewCanbuBatch?.addEventListener('click', () => {
-    const month = el.attendanceMonth?.value || getCurrentMonthValue();
+    const month = el.canbuBatchMonth?.value || '';
+    if (!month) {
+      toast('请先选择餐补核算月份。');
+      el.canbuBatchMonth?.focus();
+      return;
+    }
     const batch = createCanbuBatch(month, `${formatMonthLabel(month)} 餐补初算`);
     state.activeCanbuBatchId = batch.id;
     showView('canbuWorkbench');

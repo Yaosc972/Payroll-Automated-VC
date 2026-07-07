@@ -377,6 +377,8 @@ def test_domestic_labor_meal_workbench_static_labels():
 
     assert "国内劳务薪酬中台" in html
     assert "餐补核算批次" in html
+    assert 'id="canbuBatchMonth"' in html
+    assert "核算月份" in html
     assert "数据上传" in html
     assert "字段检查" in html
     assert "餐补核算" in html
