@@ -1419,15 +1419,6 @@
         <p class="dl-product-title">国内劳务薪酬中台</p>
         <p class="dl-product-subtitle">流程：数据上传 → 字段检查 → 餐补核算 → 导出归档</p>
       </div>
-      <div class="dl-actions">
-        <button class="dl-btn" id="btnRefreshStatus" type="button">刷新状态</button>
-        <button class="btn-new-batch" id="btnOpenDrawer" type="button">
-          新建计算任务
-        </button>
-        <a id="reportLink" class="btn-download disabled" href="#" aria-disabled="true">
-          下载报告
-        </a>
-      </div>
     </header>
 
     <div class="dl-shell dl-shell-subject" id="payrollShell">
@@ -1502,129 +1493,6 @@
       </main>
     </div>
 
-    <!-- ═══ WIZARD DRAWER (slides in from right) ═══ -->
-    <div class="drawer-overlay" id="drawerOverlay"></div>
-    <aside class="wizard-drawer" id="wizardDrawer" aria-label="新建计算任务">
-      <div class="drawer-chrome">
-        <div class="drawer-header">
-          <div>
-            <p class="drawer-eyebrow">New Payroll Task</p>
-            <h2 class="drawer-title">新建计算任务</h2>
-          </div>
-          <button class="btn-close-drawer" id="btnCloseDrawer" type="button" aria-label="关闭">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          </button>
-        </div>
-        <!-- Step pills -->
-        <div class="wizard-steps">
-          <button class="wz-step active" data-step="1" type="button"><span>01</span> 选择引擎</button>
-          <div class="wz-connector"></div>
-          <button class="wz-step" data-step="2" type="button"><span>02</span> 上传数据</button>
-          <div class="wz-connector"></div>
-          <button class="wz-step" data-step="3" type="button"><span>03</span> 参数配置</button>
-          <div class="wz-connector"></div>
-          <button class="wz-step" data-step="4" type="button"><span>04</span> 确认计算</button>
-        </div>
-      </div>
-
-      <div class="drawer-body">
-
-        <!-- ── STEP 1: Select Engines ── -->
-        <div class="wz-panel active" data-panel="1">
-          <div class="field-section">
-            <p class="field-hint">选择需要计算的薪酬项目，可多选。每个引擎对应一个薪酬项。</p>
-            <div class="engine-card-grid" id="engineCardGrid">
-              <!-- Engine cards rendered by JS -->
-            </div>
-          </div>
-          <div class="field-section">
-            <label class="field-group">
-              <span class="field-label">考勤月份</span>
-              <input id="attendanceMonth" class="field-input" name="attendanceMonth" type="month" autocomplete="off" />
-            </label>
-          </div>
-          <div class="drawer-footer">
-            <p id="engineStatus" class="inline-status">选择引擎和考勤月份后继续。</p>
-            <button id="btnToStep2" class="btn-primary-lg" type="button" disabled>下一步：上传数据 →</button>
-          </div>
-        </div>
-
-        <!-- ── STEP 2: Upload File ── -->
-        <div class="wz-panel" data-panel="2">
-          <div class="upload-zone" id="fileUploadZone">
-            <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" />
-            <div class="upload-icon">
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 18V8M9 13l5-5 5 5" stroke="#0071E3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="19" width="22" height="6" rx="2" stroke="#D2D2D7" stroke-width="1.5"/></svg>
-            </div>
-            <p class="upload-title">考勤数据 Excel</p>
-            <p class="upload-sub" id="payrollFileName">点击选择 · 支持 .xlsx / .xlsm / .xls</p>
-          </div>
-          <div class="template-links" id="templateLinks">
-            <p class="template-hint">没有模板？下载对应引擎的模板：</p>
-            <!-- Template download links rendered by JS -->
-          </div>
-          <div class="field-section">
-            <label class="field-group">
-              <span class="field-label">文件密码（如有）</span>
-              <input id="filePassword" class="field-input" name="filePassword" type="password" autocomplete="off" placeholder="无密码请留空" />
-            </label>
-          </div>
-          <div class="drawer-footer">
-            <p id="uploadStatus" class="inline-status">选择文件后继续。</p>
-            <button id="btnToStep3" class="btn-primary-lg" type="button" disabled>下一步：参数配置 →</button>
-          </div>
-        </div>
-
-        <!-- ── STEP 3: Parameters (HRBP) ── -->
-        <div class="wz-panel" data-panel="3">
-          <div class="field-section">
-            <p class="field-hint">已预置「莞深区享有工龄奖人员名单」，可在此基础上补充或删除工号。莞深广珠揽收员工需在名单内才发放工龄奖。</p>
-            <label class="field-group">
-              <span class="field-label">揽收发放工号名单（JSON 数组）</span>
-              <textarea id="hrbpList" class="field-textarea" name="hrbpList" rows="7" placeholder='例如: ["OWHN001", "OWHN002"]&#10;默认带入莞深区名单，可继续补充'></textarea>
-            </label>
-          </div>
-          <div class="drawer-footer">
-            <p id="paramStatus" class="inline-status">配置完成后继续。</p>
-            <button id="btnToStep4" class="btn-primary-lg" type="button">下一步：确认计算 →</button>
-          </div>
-        </div>
-
-        <!-- ── STEP 4: Confirm & Submit ── -->
-        <div class="wz-panel" data-panel="4">
-          <div class="confirm-summary" id="confirmSummary">
-            <h3>任务确认</h3>
-            <div class="confirm-grid">
-              <div class="confirm-item">
-                <span class="confirm-label">选择引擎</span>
-                <span class="confirm-value" id="confirmEngines">—</span>
-              </div>
-              <div class="confirm-item">
-                <span class="confirm-label">考勤月份</span>
-                <span class="confirm-value" id="confirmMonth">—</span>
-              </div>
-              <div class="confirm-item">
-                <span class="confirm-label">上传文件</span>
-                <span class="confirm-value" id="confirmFile">—</span>
-              </div>
-              <div class="confirm-item">
-                <span class="confirm-label">揽收工龄奖名单</span>
-                <span class="confirm-value" id="confirmHrbp">未配置</span>
-              </div>
-            </div>
-          </div>
-          <div class="drawer-footer">
-            <p id="submitStatus" class="inline-status">确认信息无误后提交。</p>
-            <button id="btnSubmitTask" class="btn-primary-lg full-width" type="button">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7h10M7 2l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              提交计算任务
-            </button>
-          </div>
-        </div>
-
-      </div><!-- /drawer-body -->
-    </aside>
-
     <!-- ═══ TOAST ═══ -->
     <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
     <aside id="explainDrawer" class="dl-explain-drawer" aria-label="员工核算说明">
@@ -1639,52 +1507,5 @@
     </aside>
 
     <script src="domestic-labor.js?v=1"></script>
-    <script>
-      // ── Drawer open/close ──
-      const drawer = document.getElementById('wizardDrawer');
-      const overlay = document.getElementById('drawerOverlay');
-      const btnOpen = document.getElementById('btnOpenDrawer');
-      const btnClose = document.getElementById('btnCloseDrawer');
-
-      function openDrawer() {
-        drawer.classList.add('open');
-        overlay.classList.add('visible');
-        document.body.style.overflow = 'hidden';
-      }
-      function closeDrawer() {
-        drawer.classList.remove('open');
-        overlay.classList.remove('visible');
-        document.body.style.overflow = '';
-      }
-
-      btnOpen.addEventListener('click', openDrawer);
-      btnClose.addEventListener('click', closeDrawer);
-      overlay.addEventListener('click', closeDrawer);
-
-      // ── Wizard step pills ──
-      document.querySelectorAll('.wz-step').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const step = btn.dataset.step;
-          document.querySelectorAll('.wz-step').forEach(b => b.classList.remove('active'));
-          document.querySelectorAll('.wz-panel').forEach(p => p.classList.remove('active'));
-          btn.classList.add('active');
-          document.querySelector(`.wz-panel[data-panel="${step}"]`).classList.add('active');
-        });
-      });
-
-      // ── File upload zone click delegation ──
-      document.getElementById('fileUploadZone').addEventListener('click', (e) => {
-        if (e.target.tagName !== 'INPUT') {
-          document.getElementById('payrollFile').click();
-        }
-      });
-
-      // ── File name display ──
-      document.getElementById('payrollFile').addEventListener('change', function() {
-        const name = this.files[0]?.name || '';
-        document.getElementById('payrollFileName').textContent = name || '点击选择 · 支持 .xlsx / .xlsm / .xls';
-        if (name) document.getElementById('fileUploadZone').classList.add('has-file');
-      });
-    </script>
   </body>
 </html>

@@ -353,20 +353,23 @@ def test_labor_page_redirects_to_domestic_labor():
 def test_domestic_labor_page_is_payroll_workbench():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
-    css = STYLES_CSS.read_text(encoding="utf-8")
 
     assert "劳务工薪酬核算" in html
     assert 'data-module-id="domestic"' in html
     assert "permission-guard.js" in html
     assert "domestic-labor-shell" in html
     assert "kpi-6col" in html
-    assert "engine-card-grid" in html
-    assert "wizard-drawer" in html
     assert "domestic-labor.js" in html
     assert "/api/domestic-labor/runs" in js
     assert "/api/domestic-labor/templates" in js
-    assert ".engine-card {" in css
-    assert ".kpi-6col" in css
+    assert 'id="wizardDrawer"' not in html
+    assert 'id="drawerOverlay"' not in html
+    assert 'id="btnOpenDrawer"' not in html
+    assert 'id="engineCardGrid"' not in html
+    assert "New Payroll Task" not in html
+    assert "新建计算任务" not in html
+    assert "下载报告" not in html
+    assert "刷新状态" not in html
 
 
 def test_domestic_labor_meal_workbench_static_labels():
