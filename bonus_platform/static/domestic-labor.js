@@ -207,8 +207,11 @@ const el = {
   canbuBatchTable: document.querySelector('#canbuBatchTable'),
   canbuWorkbenchRoot: document.querySelector('#canbuWorkbenchRoot'),
   btnBackHome: document.querySelector('#btnBackHome'),
+  canbuBatchModal: document.querySelector('#canbuBatchModal'),
   canbuBatchMonth: document.querySelector('#canbuBatchMonth'),
   btnNewCanbuBatch: document.querySelector('#btnNewCanbuBatch'),
+  btnCancelCanbuBatch: document.querySelector('#btnCancelCanbuBatch'),
+  btnConfirmCanbuBatch: document.querySelector('#btnConfirmCanbuBatch'),
   explainDrawer: document.querySelector('#explainDrawer'),
   explainTitle: document.querySelector('#explainTitle'),
   explainBody: document.querySelector('#explainBody'),
@@ -358,25 +361,49 @@ function bindEvents() {
     renderRecentBatchTable();
   });
 
-  el.btnNewCanbuBatch?.addEventListener('click', () => {
-    const month = el.canbuBatchMonth?.value || '';
-    if (!month) {
-      toast('请先选择餐补核算月份。');
-      el.canbuBatchMonth?.focus();
-      return;
-    }
-    const batch = createCanbuBatch(month, `${formatMonthLabel(month)} 餐补初算`);
-    state.activeCanbuBatchId = batch.id;
-    showView('canbuWorkbench');
-    renderCanbuWorkbench('upload');
+  el.btnNewCanbuBatch?.addEventListener('click', openCanbuBatchModal);
+  el.btnCancelCanbuBatch?.addEventListener('click', closeCanbuBatchModal);
+  el.canbuBatchModal?.addEventListener('click', (event) => {
+    if (event.target === el.canbuBatchModal) closeCanbuBatchModal();
   });
+  el.btnConfirmCanbuBatch?.addEventListener('click', createCanbuBatchFromModal);
 
   el.btnToggleRail?.addEventListener('click', toggleRail);
   el.btnToggleAside?.addEventListener('click', toggleAside);
   el.btnCloseExplain?.addEventListener('click', closeExplainDrawer);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeExplainDrawer();
+    if (event.key === 'Escape') {
+      closeCanbuBatchModal();
+      closeExplainDrawer();
+    }
   });
+}
+
+function openCanbuBatchModal() {
+  setDefaultCanbuBatchMonth();
+  el.canbuBatchModal?.classList.add('visible');
+  document.body.style.overflow = 'hidden';
+  window.setTimeout(() => el.canbuBatchMonth?.focus(), 0);
+}
+
+function closeCanbuBatchModal() {
+  if (!el.canbuBatchModal?.classList.contains('visible')) return;
+  el.canbuBatchModal.classList.remove('visible');
+  document.body.style.overflow = '';
+}
+
+function createCanbuBatchFromModal() {
+  const month = el.canbuBatchMonth?.value || '';
+  if (!month) {
+    toast('请先选择餐补核算月份。');
+    el.canbuBatchMonth?.focus();
+    return;
+  }
+  const batch = createCanbuBatch(month, `${formatMonthLabel(month)} 餐补初算`);
+  state.activeCanbuBatchId = batch.id;
+  closeCanbuBatchModal();
+  showView('canbuWorkbench');
+  renderCanbuWorkbench('upload');
 }
 
 function showView(viewName) {
