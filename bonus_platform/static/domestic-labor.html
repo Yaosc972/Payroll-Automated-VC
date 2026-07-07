@@ -505,28 +505,83 @@
       }
 
       .dl-month-field {
-        display: inline-flex;
-        align-items: center;
+        display: grid;
         gap: 8px;
-        min-height: 40px;
-        padding: 0 12px;
-        border: 1px solid var(--dl-line);
-        border-radius: 12px;
-        background: var(--dl-panel);
         color: var(--dl-muted);
         font-size: 12px;
         font-weight: 700;
-        white-space: nowrap;
       }
 
       .dl-month-field input {
-        width: 128px;
-        border: 0;
+        width: 100%;
+        min-height: 40px;
+        padding: 0 12px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
         outline: 0;
-        background: transparent;
+        background: #ffffff;
         color: var(--dl-ink);
         font: inherit;
         font-weight: 800;
+      }
+
+      .dl-month-field input:focus {
+        border-color: var(--dl-accent);
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+      }
+
+      .dl-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 55;
+        display: none;
+        place-items: center;
+        padding: 24px;
+        background: rgba(15, 23, 42, 0.24);
+        backdrop-filter: blur(5px);
+      }
+
+      .dl-modal-backdrop.visible { display: grid; }
+
+      .dl-modal {
+        width: min(420px, 100%);
+        border: 1px solid var(--dl-line);
+        border-radius: 12px;
+        background: #ffffff;
+        box-shadow: var(--dl-shadow-lg);
+        overflow: hidden;
+      }
+
+      .dl-modal-head,
+      .dl-modal-body,
+      .dl-modal-foot {
+        padding: 18px 20px;
+      }
+
+      .dl-modal-head {
+        border-bottom: 1px solid var(--dl-line);
+      }
+
+      .dl-modal-title {
+        margin: 0;
+        color: var(--dl-ink);
+        font-size: 16px;
+        font-weight: 760;
+      }
+
+      .dl-modal-sub {
+        margin: 6px 0 0;
+        color: var(--dl-muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .dl-modal-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        border-top: 1px solid var(--dl-line);
+        background: var(--dl-panel-soft);
       }
 
       .dl-grid {
@@ -1575,10 +1630,6 @@
                 <p class="dl-panel-sub">一个批次对应一次可回看的餐补核算，同一月份可保留多次试算或复算。</p>
               </div>
               <div class="dl-actions-inline">
-                <label class="dl-month-field">
-                  <span>核算月份</span>
-                  <input id="canbuBatchMonth" type="month" autocomplete="off" />
-                </label>
                 <button class="dl-btn" id="btnBackHome" type="button">返回科目首页</button>
                 <button class="btn-new-batch" id="btnNewCanbuBatch" type="button">新建餐补批次</button>
               </div>
@@ -1595,6 +1646,24 @@
 
     <!-- ═══ TOAST ═══ -->
     <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
+    <div class="dl-modal-backdrop" id="canbuBatchModal" role="dialog" aria-modal="true" aria-labelledby="canbuBatchModalTitle">
+      <div class="dl-modal">
+        <div class="dl-modal-head">
+          <h2 class="dl-modal-title" id="canbuBatchModalTitle">新建餐补批次</h2>
+          <p class="dl-modal-sub">选择本次餐补核算月份，创建后进入数据上传流程。</p>
+        </div>
+        <div class="dl-modal-body">
+          <label class="dl-month-field">
+            <span>核算月份</span>
+            <input id="canbuBatchMonth" type="month" autocomplete="off" />
+          </label>
+        </div>
+        <div class="dl-modal-foot">
+          <button class="dl-btn" id="btnCancelCanbuBatch" type="button">取消</button>
+          <button class="btn-primary" id="btnConfirmCanbuBatch" type="button">创建批次</button>
+        </div>
+      </div>
+    </div>
     <aside id="explainDrawer" class="dl-explain-drawer" aria-label="员工核算说明">
       <div class="dl-drawer-head">
         <div>
