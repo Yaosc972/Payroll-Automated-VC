@@ -560,12 +560,10 @@
           <div class="card">
             <h3>东莞单日公式</h3>
             <ol>
-              <li>若 <code>四级部门名称 = 理货操作组</code> 且 <code>计时 = 计件</code>，当天餐补 = 0。</li>
-              <li>若 <code>是否异常 = 是</code> 且 <code>异常原因 = 旷工</code>，当天餐补 = 0。</li>
-              <li>若 <code>工作状态</code> 为 <code>星期六休息</code>、<code>星期天休息</code>、<code>法定节假日</code>、<code>休息</code>，有效时数取 <code>刷卡加班</code>。</li>
-              <li>其他工作状态，有效时数取 <code>正班时数</code>。</li>
+              <li>若 <code>是否异常</code> 为异常标记且 <code>异常原因</code> 包含 <code>旷工</code>，当天餐补 = 0。</li>
+              <li>其他日考勤记录，有效时数取 <code>正班时数</code> 和 <code>刷卡加班</code> 的较大值。</li>
             </ol>
-            <span class="formula">单日餐补 = 有效时数 &gt;= 8 ? 19 : max(有效时数, 0) × 19 / 8</span>
+            <span class="formula">单日餐补 = 有效时数 &gt; 8 ? 19 : max(有效时数, 0) × 19 / 8</span>
           </div>
           <div class="card">
             <h3>东莞月度公式</h3>

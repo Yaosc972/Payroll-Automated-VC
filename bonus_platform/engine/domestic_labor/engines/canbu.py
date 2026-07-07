@@ -274,8 +274,7 @@ class CanBuEngine(BaseEngine):
                     },
                     [
                         "工作地区为东莞，按平台内置餐补规则计算，不依赖月报餐补标准字段",
-                        "工作日按正班时数折算，休息日/节假日按刷卡加班时数折算",
-                        "保留原排除规则：四级部门名称=理货操作组且计时=计件时，当天餐补为0",
+                        "按日考勤正班时数和刷卡加班取较大值折算",
                         f"最终餐补=min({round(monthly_total, 2)}, {DONGGUAN_MONTHLY_CAP})={final_amount}",
                     ],
                 ),
@@ -284,23 +283,17 @@ class CanBuEngine(BaseEngine):
         )
 
     def _calculate_dongguan_daily(self, day_data: Dict[str, Any]) -> float:
-        department = str(day_data.get("四级部门名称", ""))
-        timing = str(day_data.get("计时", ""))
-        if department == "理货操作组" and timing == "计件":
-            return 0
-
         is_abnormal = str(day_data.get("是否异常", "")).strip()
         abnormal_reason = str(day_data.get("异常原因", "") or "")
         if is_abnormal in ABNORMAL_TRUE_VALUES and "旷工" in abnormal_reason:
             return 0
 
-        work_status = str(day_data.get("工作状态", "") or "")
-        if work_status in REST_DAY_STATUSES:
-            effective_hours = safe_float(day_data.get("刷卡加班", 0))
-        else:
-            effective_hours = safe_float(day_data.get("正班时数", 0))
+        effective_hours = max(
+            safe_float(day_data.get("正班时数", 0)),
+            safe_float(day_data.get("刷卡加班", 0)),
+        )
 
-        if effective_hours >= 8:
+        if effective_hours > 8:
             return DONGGUAN_DAILY_RATE
         if effective_hours <= 0:
             return 0
