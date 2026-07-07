@@ -66,6 +66,7 @@ JIASHAN_INELIGIBLE_POSITIONS = {
 }
 
 REST_DAY_STATUSES = {"星期六休息", "星期天休息", "法定节假日", "休息"}
+ABNORMAL_TRUE_VALUES = {"是", "1", "true", "True", "TRUE"}
 
 
 def _audit_explanation(
@@ -288,9 +289,9 @@ class CanBuEngine(BaseEngine):
         if department == "理货操作组" and timing == "计件":
             return 0
 
-        is_abnormal = str(day_data.get("是否异常", ""))
-        abnormal_reason = str(day_data.get("异常原因", ""))
-        if is_abnormal == "是" and abnormal_reason == "旷工":
+        is_abnormal = str(day_data.get("是否异常", "")).strip()
+        abnormal_reason = str(day_data.get("异常原因", "") or "")
+        if is_abnormal in ABNORMAL_TRUE_VALUES and "旷工" in abnormal_reason:
             return 0
 
         work_status = str(day_data.get("工作状态", "") or "")

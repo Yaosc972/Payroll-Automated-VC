@@ -446,6 +446,42 @@ def test_canbu_dongguan_keeps_existing_piecework_exclusion():
     assert result.details["日餐补明细"] == [0]
 
 
+def test_canbu_dongguan_abnormal_absenteeism_formats_are_excluded():
+    """东莞旷工异常兼容数字异常标记和复合异常原因"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "一级部门名称": "莞深操作",
+        "岗位名称": "操作员",
+    }
+    daily_attendance = [
+        {
+            "工号": "OWHN001",
+            "工作地区": "东莞",
+            "工作状态": "工作日",
+            "是否异常": "是",
+            "异常原因": "旷工",
+            "正班时数": 8,
+            "刷卡加班": 0,
+        },
+        {
+            "工号": "OWHN001",
+            "工作地区": "东莞",
+            "工作状态": "工作日",
+            "是否异常": 1,
+            "异常原因": "早退;旷工",
+            "正班时数": 8,
+            "刷卡加班": 0,
+        },
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.amount == 0
+    assert result.details["日餐补明细"] == [0, 0]
+
+
 def test_canbu_dongguan_operation_clerk_is_eligible():
     """东莞操作文员享有餐补，普通文员不享有"""
     employee = {
