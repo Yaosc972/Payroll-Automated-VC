@@ -1924,10 +1924,12 @@ async function exportResults(autoDownload = false) {
   try {
     const data = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}/export`);
     const downloadUrl = `/api/domestic-labor/runs/${state.currentRun.id}/download/${encodeURIComponent(data.file_name)}`;
-    el.reportLink.href = downloadUrl;
-    el.reportLink.dataset.readyToExport = 'false';
-    el.reportLink.classList.remove('disabled');
-    el.reportLink.removeAttribute('aria-disabled');
+    if (el.reportLink) {
+      el.reportLink.href = downloadUrl;
+      el.reportLink.dataset.readyToExport = 'false';
+      el.reportLink.classList.remove('disabled');
+      el.reportLink.removeAttribute('aria-disabled');
+    }
     if (autoDownload) {
       window.location.href = downloadUrl;
       toast('Excel 已生成，正在下载。');
