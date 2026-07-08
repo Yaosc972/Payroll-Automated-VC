@@ -4,13 +4,14 @@ from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from bonus_platform.app import app
 from bonus_platform.engine.domestic_labor.engines.canbu import CanBuEngine
 from bonus_platform.engine.domestic_labor.engines.gonglingjiang import GongLingJiangEngine
 from bonus_platform.engine.domestic_labor.engines.quanqinjiang import QuanQinJiangEngine
 from bonus_platform.engine.domestic_labor.engines.waisu_butie import WaiSuBuTieEngine
+from bonus_platform.engine.domestic_labor.exporter import ExcelExporter
 from bonus_platform.engine.domestic_labor import parser as domestic_parser
 from bonus_platform.engine.domestic_labor.parser import ExcelParser
 
@@ -367,6 +368,84 @@ def test_canbu_api_ignores_blank_employee_rows():
     assert metadata["summary"]["total_employees"] == 1
 
     client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_canbu_export_outputs_auditable_detail_sheet(tmp_path):
+    """餐补导出应输出业务可核对字段，并过滤旧批次中的空白员工行。"""
+    output_path = tmp_path / "canbu_export.xlsx"
+    exporter = ExcelExporter(str(output_path))
+    results = [
+        {
+            "employee_id": "OWHN001",
+            "employee_name": "张三",
+            "department": "中国操作部",
+            "canbu": 500,
+            "total": 500,
+            "warnings": "触发封顶: 累计551.00元 > 500.0元",
+            "exceptions": [],
+            "subject_details": {
+                "canbu": {
+                    "amount": 500,
+                    "details": {
+                        "地区规则": "东莞",
+                        "日餐补明细": [19, 19, 9.5],
+                        "月累计": 551,
+                        "封顶金额": 500,
+                        "是否触发封顶": True,
+                    },
+                    "audit_explanation": {
+                        "rule_name": "东莞餐补逐日折算与封顶",
+                        "formula": "min(Σ单日餐补, 500)",
+                        "inputs": {
+                            "工作地区": "东莞",
+                            "岗位名称": "操作员",
+                            "日考勤记录数": 31,
+                        },
+                        "intermediate_values": {
+                            "日标准": 19,
+                            "日餐补合计": 551,
+                            "最终金额": 500,
+                        },
+                        "steps": [
+                            "按日考勤正班时数和刷卡加班取较大值折算",
+                            "最终餐补=min(551, 500)=500",
+                        ],
+                    },
+                }
+            },
+        },
+        {
+            "employee_id": "None",
+            "employee_name": "None",
+            "department": "None",
+            "canbu": 0,
+            "total": 0,
+            "subject_details": {},
+        },
+    ]
+
+    exporter.export(results, "202605", {"total_employees": 2})
+
+    wb = load_workbook(output_path)
+    ws = wb["计算详情"]
+    headers = [cell.value for cell in ws[1]]
+    assert headers == [
+        "工号", "姓名", "工作地区", "部门", "岗位", "餐补资格", "适用规则",
+        "有效餐补天数", "日考勤记录数", "日餐补合计", "封顶金额", "是否触发封顶",
+        "应发餐补", "计算公式", "关键输入", "中间值", "计算步骤", "异常/提示",
+    ]
+    assert ws.max_row == 2
+    row = [cell.value for cell in ws[2]]
+    assert row[0] == "OWHN001"
+    assert row[2] == "东莞"
+    assert row[4] == "操作员"
+    assert row[5] == "享有"
+    assert row[7] == 2.5
+    assert row[12] == 500
+    assert row[13] == "min(Σ单日餐补, 500)"
+    assert "最终餐补=min(551, 500)=500" in row[16]
+    assert "触发封顶" in row[17]
+    wb.close()
 
 
 def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
