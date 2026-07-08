@@ -100,6 +100,24 @@ def _multi_engine_data() -> bytes:
     })
 
 
+def _canbu_data_with_blank_rows() -> bytes:
+    """餐补数据包含空白行，空白行不应进入核算结果。"""
+    return _create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份", "工作地区", "一级部门名称", "二级部门名称", "岗位名称", "排班天数", "实际在职工作日天数", "事假时数", "病假时数", "旷工天数"],
+            ["OWHN001", "张三", "202605", "东莞", "莞深操作", "中国操作部", "操作员", 22, 22, 0, 0, 0],
+            [None, None, None, None, None, None, None, None, None, None, None, None],
+            ["None", "None", None, None, None, None, None, None, None, None, None, None],
+        ],
+        "日考勤": [
+            ["日期", "工号", "姓名", "工作地区", "工作状态", "正班时数", "刷卡加班"],
+            ["2026-05-01", "OWHN001", "张三", "东莞", "工作日", 8, 0],
+            ["2026-05-02", None, None, None, None, None, None],
+            ["2026-05-03", "None", "None", None, None, None, None],
+        ],
+    })
+
+
 def _gonglingjiang_data() -> bytes:
     """工龄奖 API 工作流测试数据"""
     return _create_test_excel({
@@ -321,6 +339,33 @@ def test_full_workflow():
     assert len(download_response.content) > 0
 
     # Cleanup
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_canbu_api_ignores_blank_employee_rows():
+    """空白行或工号为 None 的行不应进入餐补核算结果"""
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("canbu_blank.xlsx", _canbu_data_with_blank_rows(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"engines": "canbu", "attendance_month": "202605"},
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.5)
+        status_response = client.get(f"/api/domestic-labor/runs/{run_id}")
+        metadata = status_response.json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    assert [row["employee_id"] for row in metadata["results"]] == ["OWHN001"]
+    assert metadata["summary"]["total_employees"] == 1
+
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
