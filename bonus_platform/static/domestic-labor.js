@@ -10,6 +10,7 @@ const state = {
   hrbpList: null,
   currentRun: null,
   currentResults: [],
+  currentResultsRunId: '',
   view: 'home',
   canbuBatches: [],
   activeCanbuBatchId: '',
@@ -142,6 +143,25 @@ function updateCanbuBatch(patch, options = {}) {
 
 function updateActiveCanbuBatch(patch) {
   return updateCanbuBatch(patch, { batchId: state.activeCanbuBatchId });
+}
+
+function clearCurrentRunState({ clearFile = false } = {}) {
+  stopPolling();
+  state.currentRun = null;
+  state.currentResults = [];
+  state.currentResultsRunId = '';
+  if (clearFile) {
+    state.payrollFile = null;
+  }
+  resetReportLink();
+}
+
+function resetCanbuFilters() {
+  state.resultSearch = '';
+  state.reviewStatusFilter = 'all';
+  state.amountFilter = 'all';
+  state.canbuRegionFilter = 'all';
+  state.canbuPage = 1;
 }
 
 // ── Element references ──
@@ -466,6 +486,8 @@ function createCanbuBatchFromModal() {
     el.canbuBatchMonth?.focus();
     return;
   }
+  clearCurrentRunState({ clearFile: true });
+  resetCanbuFilters();
   const batch = createCanbuBatch(month, `${formatMonthLabel(month)} 餐补初算`);
   state.activeCanbuBatchId = batch.id;
   closeCanbuBatchModal();
@@ -546,6 +568,12 @@ function bindBatchTableActions(root) {
     button.addEventListener('click', () => {
       state.activeCanbuBatchId = button.dataset.openCanbuBatch;
       const batch = getActiveCanbuBatch();
+      resetCanbuFilters();
+      if (!batch?.runId || state.currentRun?.id !== batch.runId) {
+        state.currentRun = null;
+        state.currentResults = [];
+        state.currentResultsRunId = '';
+      }
       const targetStep = batch?.runId && ['已核算', '可导出', '已导出'].includes(batch.status) ? 'results' : 'upload';
       showView('canbuWorkbench');
       renderCanbuWorkbench(targetStep);
@@ -558,9 +586,10 @@ function renderCanbuWorkbench(step = 'upload') {
   if (!batch || !el.canbuWorkbenchRoot) return;
   const canbuRunId = batch.runId || '';
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
+  const hasMatchingResults = Boolean(hasMatchingRun && state.currentResultsRunId === canbuRunId);
   const shouldRestoreRun = Boolean(
     canbuRunId &&
-      !hasMatchingRun &&
+      (!hasMatchingRun || !hasMatchingResults) &&
       (step === 'results' || (step !== 'upload' && ['已核算', '可导出', '已导出'].includes(batch.status)))
   );
   if (shouldRestoreRun) {
@@ -568,7 +597,7 @@ function renderCanbuWorkbench(step = 'upload') {
     restoreCanbuRun(canbuRunId, step);
     return;
   }
-  const canbuResults = hasMatchingRun ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
+  const canbuResults = hasMatchingResults ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
   const showAside = step === 'results' || canbuResults.length > 0;
   const canbuWarningCount = countCanbuWarnings(canbuResults);
   if (el.payrollShell) {
@@ -650,6 +679,7 @@ async function restoreCanbuRun(runId, step = 'results') {
     const metadata = await requestJson(`/api/domestic-labor/runs/${runId}`);
     state.currentRun = metadata;
     state.currentResults = sanitizePayrollResults(metadata.results);
+    state.currentResultsRunId = metadata.id || runId;
     syncCanbuBatchFromRun(metadata, { includeResults: true });
     renderCanbuWorkbench(step);
   } catch (error) {
@@ -1179,6 +1209,20 @@ function bindCanbuWorkbenchEvents() {
     renderCanbuBatchList();
   });
   document.querySelector('#btnRecalculateCanbu')?.addEventListener('click', () => {
+    const batch = getActiveCanbuBatch();
+    if (batch) {
+      updateActiveCanbuBatch({
+        status: '草稿',
+        employeeCount: 0,
+        payableTotal: 0,
+        exceptionCount: 0,
+        exportFileName: '',
+        exportedAt: '',
+        runId: '',
+      });
+    }
+    clearCurrentRunState({ clearFile: true });
+    resetCanbuFilters();
     renderCanbuWorkbench('upload');
   });
   document.querySelector('#btnExportCanbu')?.addEventListener('click', () => exportResults(true));
@@ -1374,6 +1418,10 @@ async function submitCanbuBatch() {
   if (submit) submit.disabled = true;
   setText(el.uploadStatus, '正在提交餐补核算...');
   resetReportLink();
+  stopPolling();
+  state.currentRun = null;
+  state.currentResults = [];
+  state.currentResultsRunId = '';
 
   try {
     const form = new FormData();
@@ -1388,6 +1436,7 @@ async function submitCanbuBatch() {
     });
 
     state.currentRun = { id: data.run_id, status: data.status };
+    state.currentResultsRunId = '';
     syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: '已上传' });
     startPolling();
     renderCanbuWorkbench('fields');
@@ -1510,22 +1559,26 @@ async function refreshStatus() {
 }
 
 function renderResults(metadata) {
-  if (!el.taskStatusCard) return;
   const results = sanitizePayrollResults(metadata.results);
   const summary = metadata.summary || {};
+  const resultRunId = metadata.id || metadata.run_id || state.currentRun?.id || '';
   state.currentResults = results;
+  state.currentResultsRunId = resultRunId;
   if (results.length) enableReportExportLink();
   else resetReportLink();
 
   const activeBatch = getActiveCanbuBatch?.();
   if (activeBatch && state.view === 'canbuWorkbench') {
+    if (activeBatch.runId && resultRunId && activeBatch.runId !== resultRunId) {
+      return;
+    }
     const canbuWarnings = countCanbuWarnings(results);
     updateActiveCanbuBatch({
       status: canbuWarnings ? '已核算' : '可导出',
       employeeCount: results.length,
       payableTotal: summary.total_canbu ?? sumField(results, 'canbu'),
       exceptionCount: canbuWarnings,
-      runId: metadata.run_id || state.currentRun?.id || activeBatch.runId,
+      runId: resultRunId || activeBatch.runId,
     });
     syncCanbuBatchFromRun(metadata, {
       includeResults: true,
@@ -1534,6 +1587,8 @@ function renderResults(metadata) {
     renderCanbuWorkbench('results');
     return;
   }
+
+  if (!el.taskStatusCard) return;
 
   syncCanbuBatchFromRun(metadata, { includeResults: true });
 
