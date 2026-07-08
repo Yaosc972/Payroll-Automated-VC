@@ -566,9 +566,31 @@ function renderCanbuStepper(activeStep, batch) {
       ${CANBU_STEPS.map((stepItem) => {
         const active = stepItem.key === activeStep;
         const done = completed.has(stepItem.key);
-        return `<button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" type="button"><span>${done ? '✓' : ''}</span>${stepItem.label}</button>`;
+        const index = CANBU_STEPS.indexOf(stepItem) + 1;
+        const status = done ? '已完成' : active ? '进行中' : '未开始';
+        const icon = active
+          ? `<span class="dl-stepper-index active-pin">${renderStepperPin(index)}</span>`
+          : `<span class="dl-stepper-index">${done ? '✓' : index}</span>`;
+        return `
+          <button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" type="button">
+            ${icon}
+            <span class="dl-stepper-label">${stepItem.label}</span>
+            <span class="dl-stepper-status ${done ? 'success' : ''}">${status}</span>
+          </button>
+        `;
       }).join('')}
     </div>
+  `;
+}
+
+function renderStepperPin(index) {
+  return `
+    <svg class="dl-stepper-pin" viewBox="0 0 34 40" aria-hidden="true">
+      <path class="dl-stepper-pin-shadow" d="M17 39c8 0 14-3 14-7s-6-7-14-7S3 28 3 32s6 7 14 7z"></path>
+      <path class="dl-stepper-pin-halo" d="M17 35c9.39 0 17-7.61 17-17S26.39 1 17 1 0 8.61 0 18s7.61 17 17 17z"></path>
+      <path class="dl-stepper-pin-body" d="M17 31c7.18 0 13-5.82 13-13S24.18 5 17 5 4 10.82 4 18s5.82 13 13 13z"></path>
+      <text class="dl-stepper-pin-text" x="17" y="19" text-anchor="middle">${index}</text>
+    </svg>
   `;
 }
 
