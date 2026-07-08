@@ -545,8 +545,10 @@ function bindBatchTableActions(root) {
   root.querySelectorAll('[data-open-canbu-batch]').forEach((button) => {
     button.addEventListener('click', () => {
       state.activeCanbuBatchId = button.dataset.openCanbuBatch;
+      const batch = getActiveCanbuBatch();
+      const targetStep = batch?.runId && ['已核算', '可导出', '已导出'].includes(batch.status) ? 'results' : 'upload';
       showView('canbuWorkbench');
-      renderCanbuWorkbench('upload');
+      renderCanbuWorkbench(targetStep);
     });
   });
 }
@@ -556,6 +558,16 @@ function renderCanbuWorkbench(step = 'upload') {
   if (!batch || !el.canbuWorkbenchRoot) return;
   const canbuRunId = batch.runId || '';
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
+  const shouldRestoreRun = Boolean(
+    canbuRunId &&
+      !hasMatchingRun &&
+      (step === 'results' || (step !== 'upload' && ['已核算', '可导出', '已导出'].includes(batch.status)))
+  );
+  if (shouldRestoreRun) {
+    renderCanbuRunLoading(batch, step);
+    restoreCanbuRun(canbuRunId, step);
+    return;
+  }
   const canbuResults = hasMatchingRun ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
   const showAside = step === 'results' || canbuResults.length > 0;
   const canbuWarningCount = countCanbuWarnings(canbuResults);
@@ -606,6 +618,44 @@ function renderCanbuWorkbench(step = 'upload') {
   refreshDynamicWorkbenchRefs();
   renderCanbuStepContent(step, canbuResults);
   bindCanbuWorkbenchEvents();
+}
+
+function renderCanbuRunLoading(batch, step) {
+  if (!el.canbuWorkbenchRoot) return;
+  el.canbuWorkbenchRoot.innerHTML = `
+    <section class="dl-panel dl-workbench-head">
+      <div class="dl-panel-head">
+        <div>
+          <h2 class="dl-panel-title">${escapeHtml(batch.name)}</h2>
+          <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · 餐补核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
+        </div>
+        <div class="dl-actions-inline">
+          <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回批次列表</button>
+        </div>
+      </div>
+      ${renderCanbuStepper(step, batch)}
+    </section>
+    <section class="dl-panel">
+      <div class="dl-panel-body">
+        <p class="inline-status">正在加载本批次核算结果...</p>
+      </div>
+    </section>
+  `;
+  refreshDynamicWorkbenchRefs();
+  bindCanbuWorkbenchEvents();
+}
+
+async function restoreCanbuRun(runId, step = 'results') {
+  try {
+    const metadata = await requestJson(`/api/domestic-labor/runs/${runId}`);
+    state.currentRun = metadata;
+    state.currentResults = Array.isArray(metadata.results) ? metadata.results : [];
+    syncCanbuBatchFromRun(metadata, { includeResults: true });
+    renderCanbuWorkbench(step);
+  } catch (error) {
+    toast(error.message || '加载核算结果失败。');
+    renderCanbuWorkbench('upload');
+  }
 }
 
 function renderCanbuStepper(activeStep, batch) {
