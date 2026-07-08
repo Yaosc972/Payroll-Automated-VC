@@ -1455,7 +1455,13 @@
         box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
       }
 
-      .upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+      .upload-zone input {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        opacity: 0;
+        cursor: pointer;
+      }
       .upload-title { margin: 0; font-weight: 700; font-size: 14px; white-space: nowrap; }
       .upload-sub { flex: 1; margin: 0; }
       .upload-zone::after {
@@ -1470,6 +1476,7 @@
         background: var(--dl-panel-soft);
         font-size: 13px;
         font-weight: 700;
+        pointer-events: none;
       }
       
       .upload-sub,
