@@ -649,7 +649,7 @@ async function restoreCanbuRun(runId, step = 'results') {
   try {
     const metadata = await requestJson(`/api/domestic-labor/runs/${runId}`);
     state.currentRun = metadata;
-    state.currentResults = Array.isArray(metadata.results) ? metadata.results : [];
+    state.currentResults = sanitizePayrollResults(metadata.results);
     syncCanbuBatchFromRun(metadata, { includeResults: true });
     renderCanbuWorkbench(step);
   } catch (error) {
@@ -956,14 +956,18 @@ function renderCanbuResultsTable(results) {
           const level = getCanbuWarningLevel(row);
           const detail = getSubjectDetail(row, 'canbu');
           const inputs = detail?.audit_explanation?.inputs || {};
+          const employeeId = displayValue(row.employee_id, inputs['工号']);
+          const employeeName = displayValue(row.employee_name, row.name, inputs['姓名']);
+          const department = displayValue(row.department, inputs['部门字段'], '—');
+          const position = displayValue(row.position, inputs['岗位名称'], '—');
           const rowIndex = results.indexOf(row);
           return `
             <tr>
-              <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id || '')}</td>
-              <td class="sticky-col name-col">${escapeHtml(row.employee_name || '')}</td>
+              <td class="sticky-col id-col dl-strong">${escapeHtml(employeeId)}</td>
+              <td class="sticky-col name-col">${escapeHtml(employeeName)}</td>
               <td>${escapeHtml(getCanbuRowRegion(row))}</td>
-              <td class="wrap-cell" title="${escapeHtml(row.department || '—')}">${escapeHtml(row.department || '—')}</td>
-              <td class="wrap-cell" title="${escapeHtml(row.position || inputs['岗位名称'] || '—')}">${escapeHtml(row.position || inputs['岗位名称'] || '—')}</td>
+              <td class="wrap-cell" title="${escapeHtml(department)}">${escapeHtml(department)}</td>
+              <td class="wrap-cell" title="${escapeHtml(position)}">${escapeHtml(position)}</td>
               <td><span class="dl-badge ${Number(row.canbu || 0) > 0 ? 'ok' : 'warn'}">${Number(row.canbu || 0) > 0 ? '享有' : '不享有/未发放'}</span></td>
               <td class="dl-num">${escapeHtml(inputs['有效出勤'] || inputs['有效时数'] || '—')}</td>
               <td>${escapeHtml(inputs['扣减项'] || '—')}</td>
@@ -1507,7 +1511,7 @@ async function refreshStatus() {
 
 function renderResults(metadata) {
   if (!el.taskStatusCard) return;
-  const results = metadata.results || [];
+  const results = sanitizePayrollResults(metadata.results);
   const summary = metadata.summary || {};
   state.currentResults = results;
   if (results.length) enableReportExportLink();
@@ -1518,7 +1522,7 @@ function renderResults(metadata) {
     const canbuWarnings = countCanbuWarnings(results);
     updateActiveCanbuBatch({
       status: canbuWarnings ? '已核算' : '可导出',
-      employeeCount: summary.total_employees || summary.totalEmployees || results.length || 0,
+      employeeCount: results.length,
       payableTotal: summary.total_canbu ?? sumField(results, 'canbu'),
       exceptionCount: canbuWarnings,
       runId: metadata.run_id || state.currentRun?.id || activeBatch.runId,
@@ -1819,6 +1823,15 @@ function countCanbuWarnings(results) {
   return results.filter(hasCanbuReviewIssue).length;
 }
 
+function hasValidEmployeeId(row) {
+  const text = String(row?.employee_id ?? '').trim();
+  return Boolean(text) && !['none', 'null', 'nan'].includes(text.toLowerCase());
+}
+
+function sanitizePayrollResults(results) {
+  return Array.isArray(results) ? results.filter(hasValidEmployeeId) : [];
+}
+
 function countSubjectWarnings(results, key) {
   return results.filter(row => {
     const subjectExceptions = (getSubjectDetail(row, key)?.exceptions || []).filter(item => !isNormalHrbpListExclusionException(item));
@@ -1960,6 +1973,16 @@ function formatMoney(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+function displayValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (!text || ['none', 'null', 'nan'].includes(text.toLowerCase())) continue;
+    return text;
+  }
+  return '';
 }
 
 function escapeHtml(value) {

@@ -288,6 +288,22 @@ class PayrollDataLoader:
 
         return normalized
 
+    @staticmethod
+    def _has_valid_employee_id(row: Dict[str, Any]) -> bool:
+        emp_id = row.get("工号")
+        if emp_id is None:
+            return False
+        text = str(emp_id).strip()
+        return bool(text) and text.lower() not in {"none", "nan", "null"}
+
+    def _normalize_valid_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            normalized
+            for row in rows
+            for normalized in [self._normalize_row(row)]
+            if self._has_valid_employee_id(normalized)
+        ]
+
     @property
     def monthly(self) -> SheetData:
         """Get monthly attendance data."""
@@ -298,7 +314,7 @@ class PayrollDataLoader:
                 if "月报" in name or "月考勤" in name:
                     raw = self.parser.parse_sheet(name)
                     # 标准化行数据
-                    normalized_rows = [self._normalize_row(row) for row in raw.rows]
+                    normalized_rows = self._normalize_valid_rows(raw.rows)
                     self._monthly = SheetData(
                         name=raw.name,
                         headers=raw.headers,
@@ -309,7 +325,7 @@ class PayrollDataLoader:
                     return self._monthly
             # fallback: 取第一个sheet，也做normalize
             raw = self.parser.parse_sheet(sheet_names[0])
-            normalized_rows = [self._normalize_row(row) for row in raw.rows]
+            normalized_rows = self._normalize_valid_rows(raw.rows)
             self._monthly = SheetData(
                 name=raw.name,
                 headers=raw.headers,
@@ -353,7 +369,9 @@ class PayrollDataLoader:
             return {}
         result = {}
         for row in self.daily.rows:
-            emp_id = str(row.get("工号", ""))
+            if not self._has_valid_employee_id(row):
+                continue
+            emp_id = str(row.get("工号", "")).strip()
             if emp_id not in result:
                 result[emp_id] = []
             result[emp_id].append(row)
