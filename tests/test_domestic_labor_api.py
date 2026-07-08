@@ -430,9 +430,10 @@ def test_canbu_export_outputs_business_reconciliation_sheet(tmp_path):
     ws = wb["计算详情"]
     headers = [cell.value for cell in ws[1]]
     assert headers == [
-        "工号", "姓名", "工作地区", "部门", "岗位", "适用规则",
+        "工号", "姓名", "工作地区", "部门", "岗位", "餐补口径",
         "01日餐补", "02日餐补", "03日餐补", "餐补合计",
     ]
+    assert wb.sheetnames == ["计算详情"]
     assert ws.max_row == 2
     row = [cell.value for cell in ws[2]]
     assert row[0] == "OWHN001"

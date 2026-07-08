@@ -30,7 +30,7 @@ class ExcelExporter:
         ("gonglingjiang", "工龄奖"),
     ]
     CANBU_HEADERS = [
-        "工号", "姓名", "工作地区", "部门", "岗位", "适用规则",
+        "工号", "姓名", "工作地区", "部门", "岗位", "餐补口径",
     ]
     GENERAL_HEADERS = [
         "工号", "姓名", "工作地区", "部门", "岗位",
@@ -66,6 +66,12 @@ class ExcelExporter:
         ws_detail = wb.active
         ws_detail.title = "计算详情"
         self._write_detail_sheet(ws_detail, cleaned_results)
+
+        if self._is_canbu_only(cleaned_results):
+            self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            wb.save(str(self.output_path))
+            wb.close()
+            return str(self.output_path)
 
         # 2. 汇总页
         ws_summary = wb.create_sheet("汇总统计")
