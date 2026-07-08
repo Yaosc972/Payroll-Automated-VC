@@ -509,58 +509,166 @@
       }
 
       .dl-subject-hero {
-        margin-bottom: 16px;
+        position: relative;
+        overflow: hidden;
+        min-height: 460px;
+        margin-bottom: 18px;
+        padding: 42px 44px 46px;
+        border-color: rgba(191, 219, 254, 0.62);
+        background:
+          radial-gradient(circle at 18% 12%, rgba(34, 211, 238, 0.26), transparent 34%),
+          radial-gradient(circle at 88% 18%, rgba(109, 40, 217, 0.16), transparent 34%),
+          linear-gradient(115deg, rgba(239, 246, 255, 0.94), rgba(255, 255, 255, 0.96) 46%, rgba(245, 243, 255, 0.9));
+        box-shadow: 0 20px 50px rgba(30, 58, 138, 0.08);
+      }
+
+      .dl-subject-hero::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-image: radial-gradient(rgba(37, 99, 235, 0.14) 1px, transparent 1px);
+        background-size: 18px 18px;
+        mask-image: linear-gradient(90deg, rgba(0,0,0,.72), rgba(0,0,0,.1) 76%, transparent);
+      }
+
+      .dl-subject-hero-layout {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: start;
+        gap: 34px;
+        max-width: 1320px;
+        min-height: 360px;
+      }
+
+      .dl-subject-copy {
+        display: grid;
+        align-content: start;
+        gap: 16px;
+        max-width: 900px;
+      }
+
+      .dl-subject-eyebrow {
+        color: var(--dl-accent);
+        font-size: 13px;
+        font-weight: 850;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .dl-subject-title {
+        margin: 0;
+        color: #0F172A;
+        font-size: clamp(34px, 4vw, 56px);
+        font-weight: 900;
+        line-height: 1.04;
+        letter-spacing: -0.01em;
+      }
+
+      .dl-subject-desc {
+        max-width: 720px;
+        margin: 0;
+        color: #536179;
+        font-size: 17px;
+        line-height: 1.8;
       }
 
       .dl-subject-grid {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 16px;
+        gap: 18px;
+        margin-top: 24px;
       }
 
       .dl-subject-card {
-        min-height: 150px;
-        padding: 20px;
-        border: 1px solid var(--dl-line);
+        position: relative;
+        min-height: 178px;
+        padding: 24px;
+        border: 1px solid rgba(203, 213, 225, 0.7);
         border-radius: 20px;
-        background: var(--dl-panel);
+        background: rgba(255, 255, 255, 0.78);
         color: var(--dl-ink);
         text-align: left;
-        display: grid;
-        gap: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
         cursor: pointer;
-        box-shadow: var(--dl-shadow-sm);
-        transition: border-color .2s ease, box-shadow .2s ease, background .2s ease;
+        box-shadow: 0 10px 30px rgba(30, 58, 138, 0.07);
+        backdrop-filter: blur(14px);
+        transition: border-color .2s ease, box-shadow .2s ease, background .2s ease, transform .2s ease;
       }
 
       .dl-subject-card.primary {
-        border-color: var(--dl-accent);
-        box-shadow: var(--dl-shadow-sm);
+        border-color: rgba(147, 197, 253, 0.92);
+        background:
+          linear-gradient(180deg, rgba(255,255,255,.9), rgba(239,246,255,.82)),
+          radial-gradient(circle at 78% 84%, rgba(37,99,235,.18), transparent 36%);
       }
 
-      .dl-subject-card:hover { border-color: var(--dl-accent); box-shadow: var(--dl-shadow); background: var(--dl-accent-soft); }
+      .dl-subject-card.primary::after {
+        content: none;
+      }
+
+      .dl-subject-card:hover {
+        border-color: var(--dl-accent);
+        box-shadow: 0 18px 42px rgba(37, 99, 235, 0.16);
+        background: rgba(255, 255, 255, 0.94);
+        transform: translateY(-2px);
+      }
 
       .dl-subject-card strong {
-        font-size: 22px;
-        font-weight: 800;
+        color: #0F172A;
+        font-size: 24px;
+        font-weight: 850;
+        letter-spacing: -0.01em;
+      }
+
+      .dl-subject-card.primary strong {
+        font-size: 24px;
       }
 
       .dl-subject-card span {
         color: var(--dl-muted);
+        line-height: 1.55;
       }
 
       .dl-subject-card em {
-        color: var(--dl-accent);
+        align-self: flex-start;
+        margin-top: auto;
+        min-width: max-content;
+        padding: 9px 14px;
+        border-radius: 999px;
+        background: #172554;
+        color: #FFFFFF;
         font-style: normal;
-        font-weight: 700;
+        font-weight: 750;
+      }
+
+      .dl-subject-card:not(.primary) em {
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
       }
 
       .dl-subject-kicker {
-        color: var(--dl-muted);
+        color: #6B7A90;
         font-size: 11px;
-        font-weight: 750;
-        letter-spacing: 0.08em;
+        font-weight: 800;
+        letter-spacing: 0.11em;
         text-transform: uppercase;
+      }
+
+      .dl-subject-secondary {
+        display: contents;
+      }
+
+      .dl-subject-visual {
+        display: none;
+      }
+
+      .dl-subject-recent {
+        background: rgba(255, 255, 255, 0.9);
       }
 
       .dl-actions-inline {
@@ -1920,13 +2028,21 @@
 
       /* ═══ 响应式超宽屏/窄屏体验调优 ═══ */
       @media (max-width: 1180px) {
+        .dl-subject-hero { min-height: auto; padding: 32px; }
+        .dl-subject-hero-layout { grid-template-columns: 1fr; gap: 24px; }
         .dl-subject-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .dl-grid-workbench { grid-template-columns: 1fr; }
       }
 
       @media (max-width: 760px) {
         .dl-main-full { padding: 16px; }
-        .dl-subject-grid, .dl-stepper { grid-template-columns: 1fr; }
+        .dl-subject-hero { padding: 24px 18px; border-radius: 20px; }
+        .dl-subject-hero-layout { min-height: 0; }
+        .dl-subject-title { font-size: 34px; }
+        .dl-subject-desc { font-size: 15px; }
+        .dl-subject-grid, .dl-subject-secondary, .dl-stepper { grid-template-columns: 1fr; }
+        .dl-subject-card { min-height: 150px; }
+        .dl-subject-visual { display: none; }
         .dl-upload-row { grid-template-columns: 1fr; }
 
         .dl-topbar {
@@ -1976,41 +2092,44 @@
         <section class="dl-view active" id="subjectHomeView" data-view="home">
           <div class="dl-metrics kpi-6col" id="kpiBanner" hidden></div>
           <div class="dl-panel dl-subject-hero">
-            <div class="dl-panel-head">
-              <div>
-                <h2 class="dl-panel-title">选择核算科目</h2>
-                <p class="dl-panel-sub">先选择本次要处理的薪酬科目，再进入对应核算批次。</p>
+            <div class="dl-subject-hero-layout">
+              <div class="dl-subject-copy">
+                <span class="dl-subject-eyebrow">DOMESTIC LABOR PAYROLL</span>
+                <h1 class="dl-subject-title">国内劳务薪酬核算</h1>
+                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放餐补核算，后续按同一批次结构扩展工龄奖、全勤奖和外宿补贴。</p>
+                <div class="dl-subject-grid" id="subjectCardGrid">
+                  <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
+                    <span class="dl-subject-kicker">Meal Allowance · 已开放</span>
+                    <strong>餐补核算</strong>
+                    <span>支持东莞逐日餐补、嘉善/义乌月度口径、批次留存和导出归档。</span>
+                    <em>进入核算 →</em>
+                  </button>
+                  <div class="dl-subject-secondary">
+                    <button class="dl-subject-card" data-subject-entry="gonglingjiang" type="button">
+                      <span class="dl-subject-kicker">Seniority Bonus</span>
+                      <strong>工龄奖</strong>
+                      <span>按工龄阶梯和地区口径核算。</span>
+                      <em>待接入</em>
+                    </button>
+                    <button class="dl-subject-card" data-subject-entry="quanqinjiang" type="button">
+                      <span class="dl-subject-kicker">Attendance Bonus</span>
+                      <strong>全勤奖</strong>
+                      <span>按出勤、迟到、旷工规则核算。</span>
+                      <em>待接入</em>
+                    </button>
+                    <button class="dl-subject-card" data-subject-entry="waisu_butie" type="button">
+                      <span class="dl-subject-kicker">Housing Allowance</span>
+                      <strong>外宿补贴</strong>
+                      <span>按住宿资格和出勤扣减核算。</span>
+                      <em>待接入</em>
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="dl-subject-grid" id="subjectCardGrid">
-              <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
-                <span class="dl-subject-kicker">Meal Allowance</span>
-                <strong>餐补</strong>
-                <span>样板科目，可进入批次列表</span>
-                <em>进入餐补核算</em>
-              </button>
-              <button class="dl-subject-card" data-subject-entry="gonglingjiang" type="button">
-                <span class="dl-subject-kicker">Seniority Bonus</span>
-                <strong>工龄奖</strong>
-                <span>已配置，后续按同模式改造</span>
-                <em>进入工龄奖核算</em>
-              </button>
-              <button class="dl-subject-card" data-subject-entry="quanqinjiang" type="button">
-                <span class="dl-subject-kicker">Attendance Bonus</span>
-                <strong>全勤奖</strong>
-                <span>已配置，后续按同模式改造</span>
-                <em>进入全勤奖核算</em>
-              </button>
-              <button class="dl-subject-card" data-subject-entry="waisu_butie" type="button">
-                <span class="dl-subject-kicker">Housing Allowance</span>
-                <strong>外宿补贴</strong>
-                <span>已配置，后续按同模式改造</span>
-                <em>进入外宿补贴核算</em>
-              </button>
             </div>
           </div>
 
-          <section class="dl-panel">
+          <section class="dl-panel dl-subject-recent">
             <div class="dl-panel-head">
               <div>
                 <h2 class="dl-panel-title">最近核算批次</h2>
