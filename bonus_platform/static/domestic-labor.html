@@ -1074,11 +1074,40 @@
       }
 
       .dl-aside-toggle {
+        position: relative;
         width: 100%;
         align-self: start;
         min-height: 28px;
         border-radius: 6px;
         background: #ffffff;
+      }
+
+      .dl-aside-toggle-main {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+
+      .dl-aside-count {
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--dl-danger);
+        color: #ffffff;
+        box-shadow: 0 0 0 2px #ffffff;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+        writing-mode: horizontal-tb;
       }
 
       .dl-shell.aside-collapsed .dl-aside {
@@ -1095,6 +1124,11 @@
 
       .dl-shell.aside-collapsed .dl-aside-toggle-icon {
         transform: rotate(90deg);
+      }
+
+      .dl-shell.aside-collapsed .dl-aside-count {
+        top: -7px;
+        right: -7px;
       }
 
       .dl-shell.aside-collapsed .dl-aside-panel {

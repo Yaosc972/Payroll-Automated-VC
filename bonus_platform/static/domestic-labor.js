@@ -512,6 +512,10 @@ function renderCanbuWorkbench(step = 'upload') {
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
   const canbuResults = hasMatchingRun ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
   const showAside = step === 'results' || canbuResults.length > 0;
+  const canbuWarningCount = countCanbuWarnings(canbuResults);
+  if (el.payrollShell) {
+    el.payrollShell.classList.toggle('aside-collapsed', showAside);
+  }
   el.canbuWorkbenchRoot.innerHTML = `
     <section class="dl-panel dl-workbench-head">
       <div class="dl-panel-head">
@@ -531,9 +535,12 @@ function renderCanbuWorkbench(step = 'upload') {
       <div class="dl-grid dl-grid-workbench">
         <div class="dl-stack" id="canbuStepContent"></div>
         <aside class="dl-aside">
-          <button class="dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="true" aria-label="收起异常队列">
-            <span class="dl-aside-toggle-icon">›</span>
-            <span class="dl-aside-toggle-text">收起异常</span>
+          <button class="dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="false" aria-label="展开异常队列">
+            <span class="dl-aside-toggle-main">
+              <span class="dl-aside-toggle-icon">‹</span>
+              <span class="dl-aside-toggle-text">展开异常</span>
+            </span>
+            ${canbuWarningCount ? `<span class="dl-aside-count" aria-label="${canbuWarningCount} 条异常">${canbuWarningCount}</span>` : ''}
           </button>
           <section class="dl-panel dl-aside-panel">
             <div class="dl-panel-head">
