@@ -1477,41 +1477,52 @@
       }
 
       .dl-stepper {
+        position: relative;
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 0;
-        margin-top: 6px;
-        padding: 0 16px 12px;
+        margin-top: 0;
+        padding: 12px 16px 16px;
+        border: none;
+        background: transparent;
+        overflow: visible;
       }
 
       .dl-stepper-item {
         position: relative;
+        z-index: 1;
         display: grid;
-        grid-template-columns: 32px minmax(0, 1fr);
-        align-items: center;
-        gap: 10px;
-        min-height: 38px;
+        grid-template-columns: 36px minmax(0, 1fr);
+        column-gap: 8px;
+        row-gap: 0;
+        align-items: start;
+        min-height: 40px;
         border: 0;
         border-radius: 0;
         background: transparent;
         color: var(--dl-muted);
-        padding: 0 18px 0 0;
+        padding: 0 16px 0 0;
         font-weight: 700;
         text-align: left;
+        box-shadow: none;
       }
 
       .dl-stepper-item::after {
         content: "";
         position: absolute;
-        left: 42px;
-        right: 18px;
+        left: 110px;
+        right: 14px;
         top: 11px;
         border-top: 1px dashed var(--dl-line-strong);
+        pointer-events: none;
+        transition: border-color 160ms ease;
       }
 
       .dl-stepper-item:last-child::after { display: none; }
+      .dl-stepper-item.done::after { border-top-color: #20c997; }
 
-      .dl-stepper-item span {
+      .dl-stepper-index {
+        grid-row: 1 / span 2;
         display: inline-grid;
         place-items: center;
         width: 22px;
@@ -1521,6 +1532,8 @@
         background: #fff;
         border: 1px solid var(--dl-line);
         color: var(--dl-muted);
+        font-size: 11px;
+        transition: border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
       }
 
       .dl-stepper-item.active {
@@ -1530,22 +1543,75 @@
         font-weight: 700;
       }
 
-      .dl-stepper-item.active span {
+      .dl-stepper-item.active .dl-stepper-index {
         border-color: var(--dl-accent);
         background: var(--dl-accent);
         color: #ffffff;
         box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
       }
 
+      .dl-stepper-item.active .dl-stepper-index.active-pin {
+        width: 34px;
+        height: 40px;
+        margin-top: -8px;
+        border: none;
+        background: transparent;
+        color: #ffffff;
+        box-shadow: none;
+        overflow: visible;
+      }
+
       .dl-stepper-item.done {
         color: var(--dl-ok);
       }
 
-      .dl-stepper-item.done span {
-        background: var(--dl-ok);
-        color: #fff;
-        border-color: var(--dl-ok);
+      .dl-stepper-item.done .dl-stepper-index {
+        border-color: #20c997;
+        background: #ecfdf5;
+        color: #079455;
       }
+
+      .dl-stepper-pin {
+        display: block;
+        width: 34px;
+        height: 40px;
+        overflow: visible;
+      }
+
+      .dl-stepper-pin-shadow { fill: rgba(37, 99, 235, 0.14); }
+      .dl-stepper-pin-halo { fill: #dfe8ff; }
+      .dl-stepper-pin-body { fill: var(--dl-accent); }
+      .dl-stepper-pin-text {
+        fill: #ffffff;
+        font-family: ui-monospace, "SF Mono", "Roboto Mono", monospace;
+        font-size: 22px;
+        font-weight: 800;
+        dominant-baseline: middle;
+      }
+
+      .dl-stepper-label {
+        color: #344054;
+        font-size: 13px;
+        font-weight: 750;
+        line-height: 1.35;
+      }
+
+      .dl-stepper-item.active .dl-stepper-label {
+        color: var(--dl-accent);
+      }
+
+      .dl-stepper-status {
+        min-height: 0;
+        padding: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--dl-faint);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .dl-stepper-status.success { color: #12a075; }
+      .dl-stepper-item.active .dl-stepper-status { color: var(--dl-accent); }
 
       .dl-upload-list {
         display: grid;
