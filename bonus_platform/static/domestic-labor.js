@@ -630,7 +630,7 @@ function renderCanbuStepContent(step, results = []) {
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>
         </div>
-        <div class="upload-zone" id="fileUploadZone">
+        <div class="upload-zone" id="fileUploadZone" role="button" tabindex="0">
           <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" />
           <p class="upload-title">餐补数据 Excel</p>
           <p class="upload-sub" id="payrollFileName">点击选择 · 支持 .xlsx / .xlsm / .xls</p>
@@ -667,6 +667,15 @@ function refreshUploadRefs() {
 
 function bindCanbuUploadEvents() {
   const submit = document.querySelector('#btnSubmitCanbuBatch');
+  el.fileUploadZone?.addEventListener('click', (event) => {
+    if (event.target === el.payrollFile) return;
+    el.payrollFile?.click();
+  });
+  el.fileUploadZone?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    el.payrollFile?.click();
+  });
   el.payrollFile?.addEventListener('change', () => {
     const file = el.payrollFile.files[0];
     state.payrollFile = file || null;
