@@ -386,7 +386,9 @@ def test_domestic_labor_meal_workbench_static_labels():
     assert "数据上传" in js
     assert "字段检查" in js
     assert "餐补核算" in js
-    assert "导出归档" in js
+    assert "导出结果" in js
+    assert "导出作为结果页动作" in js
+    assert "导出归档" not in js
     assert "异常复核" not in html
 
 

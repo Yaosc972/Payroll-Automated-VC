@@ -33,7 +33,6 @@ const CANBU_STEPS = [
   { key: 'upload', label: '数据上传' },
   { key: 'fields', label: '字段检查' },
   { key: 'results', label: '餐补核算' },
-  { key: 'exported', label: '导出归档' },
 ];
 
 const ENGINE_META = {
@@ -693,7 +692,6 @@ function renderCanbuStepper(activeStep, batch) {
   if (batch.status !== '草稿') completed.add('upload');
   if (['已核算', '可导出', '已导出'].includes(batch.status)) completed.add('fields');
   if (['已核算', '可导出', '已导出'].includes(batch.status)) completed.add('results');
-  if (batch.status === '已导出') completed.add('exported');
   return `
     <div class="dl-stepper">
       ${CANBU_STEPS.map((stepItem) => {
@@ -1230,7 +1228,6 @@ function bindCanbuWorkbenchEvents() {
   document.querySelectorAll('[data-canbu-step]').forEach((button) => {
     button.addEventListener('click', () => {
       const nextStep = button.dataset.canbuStep;
-      if (nextStep === 'exported') return;
       renderCanbuWorkbench(nextStep === 'results' ? 'results' : nextStep);
     });
   });
@@ -1463,7 +1460,7 @@ function renderTaskStatusCard(status) {
     submitted: { label: '已提交', tone: 'warn', text: '任务已提交，等待后台计算。' },
     '已上传': { label: '已上传', tone: 'warn', text: '文件已上传，系统正在准备校验和计算。' },
     '计算中': { label: '计算中', tone: 'warn', text: '正在计算薪酬，请稍候。' },
-    '已完成': { label: '已完成', tone: 'ok', text: '计算完成，可进入导出归档。' },
+    '已完成': { label: '已完成', tone: 'ok', text: '计算完成，可在结果页导出。' },
     '失败': { label: '失败', tone: 'block', text: '计算失败，请检查文件后重试。' },
   };
   const s = statusLabels[status] || statusLabels.submitted;
@@ -1472,13 +1469,12 @@ function renderTaskStatusCard(status) {
       <div>
         <span class="dl-badge ${s.tone}">${s.label}</span>
         <h2 style="margin:12px 0 0;">${s.text}</h2>
-        <p>本工作台按「数据上传 → 字段检查 → 餐补核算 → 导出归档」单一路径处理。</p>
+        <p>本工作台按「数据上传 → 字段检查 → 餐补核算」路径处理，导出作为结果页动作。</p>
       </div>
       <div class="dl-empty-map">
         <div class="dl-empty-map-row"><strong>01</strong><span>数据上传</span></div>
         <div class="dl-empty-map-row"><strong>02</strong><span>字段检查</span></div>
         <div class="dl-empty-map-row"><strong>03</strong><span>餐补核算</span></div>
-        <div class="dl-empty-map-row"><strong>04</strong><span>导出归档（同页）</span></div>
       </div>
     </div>
   `;
@@ -1840,7 +1836,7 @@ function openExplainDrawer(row) {
       <dl>
         <dt>异常等级</dt><dd>${getWarningLevel(row).label}</dd>
         <dt>异常说明</dt><dd>${formatExceptions(rowExceptions) || escapeHtml(warningText || '暂无异常')}</dd>
-        <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : (warningText ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，结果可直接进入导出归档。')}</dd>
+        <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : (warningText ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，结果可直接导出。')}</dd>
       </dl>
     </div>
   `;
@@ -1999,6 +1995,9 @@ async function exportResults(autoDownload = false) {
       exportFileName: data.file_name,
       exportedAt: new Date().toISOString(),
     });
+    if (state.view === 'canbuWorkbench' && getActiveCanbuBatch()) {
+      renderCanbuWorkbench('results');
+    }
   } catch (error) {
     toast(error.message);
     setText(el.taskStatusSub, error.message, true);
