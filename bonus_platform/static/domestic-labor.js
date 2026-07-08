@@ -21,6 +21,7 @@ const state = {
   canbuPage: 1,
   canbuPageSize: 50,
   canbuSearchComposing: false,
+  canbuBatchPickerYear: new Date().getFullYear(),
   pollTimer: null,
   pollRetryCount: 0,
   pollMaxRetries: 200, // 200 × 3s = 10 min
@@ -215,6 +216,10 @@ const el = {
   btnBackHome: document.querySelector('#btnBackHome'),
   canbuBatchModal: document.querySelector('#canbuBatchModal'),
   canbuBatchMonth: document.querySelector('#canbuBatchMonth'),
+  canbuBatchYear: document.querySelector('#canbuBatchYear'),
+  canbuBatchMonthGrid: document.querySelector('#canbuBatchMonthGrid'),
+  btnCanbuBatchPrevYear: document.querySelector('#btnCanbuBatchPrevYear'),
+  btnCanbuBatchNextYear: document.querySelector('#btnCanbuBatchNextYear'),
   btnNewCanbuBatch: document.querySelector('#btnNewCanbuBatch'),
   btnCancelCanbuBatch: document.querySelector('#btnCancelCanbuBatch'),
   btnConfirmCanbuBatch: document.querySelector('#btnConfirmCanbuBatch'),
@@ -256,7 +261,34 @@ function setDefaultMonth() {
 
 function setDefaultCanbuBatchMonth() {
   if (!el.canbuBatchMonth || el.canbuBatchMonth.value) return;
-  el.canbuBatchMonth.value = getCurrentMonthValue();
+  setCanbuBatchMonth(getCurrentMonthValue());
+}
+
+function setCanbuBatchMonth(monthValue) {
+  if (!el.canbuBatchMonth) return;
+  const normalized = String(monthValue || getCurrentMonthValue()).match(/^\d{4}-\d{2}$/)
+    ? String(monthValue)
+    : getCurrentMonthValue();
+  el.canbuBatchMonth.value = normalized;
+  state.canbuBatchPickerYear = Number(normalized.slice(0, 4));
+  renderCanbuBatchMonthPicker();
+}
+
+function renderCanbuBatchMonthPicker() {
+  if (!el.canbuBatchYear || !el.canbuBatchMonthGrid) return;
+  const year = Number(state.canbuBatchPickerYear || new Date().getFullYear());
+  const selected = el.canbuBatchMonth?.value || getCurrentMonthValue();
+  el.canbuBatchYear.textContent = String(year);
+  el.canbuBatchMonthGrid.innerHTML = Array.from({ length: 12 }, (_, index) => {
+    const month = String(index + 1).padStart(2, '0');
+    const value = `${year}-${month}`;
+    const active = value === selected;
+    return `
+      <button class="dl-month-picker-option ${active ? 'selected' : ''}" type="button" role="option" aria-selected="${active}" data-canbu-batch-month="${value}">
+        ${month}月
+      </button>
+    `;
+  }).join('');
 }
 
 function setDefaultHrbpList() {
@@ -376,6 +408,19 @@ function bindEvents() {
   el.canbuBatchModal?.addEventListener('click', (event) => {
     if (event.target === el.canbuBatchModal) closeCanbuBatchModal();
   });
+  el.btnCanbuBatchPrevYear?.addEventListener('click', () => {
+    state.canbuBatchPickerYear = Number(state.canbuBatchPickerYear || new Date().getFullYear()) - 1;
+    renderCanbuBatchMonthPicker();
+  });
+  el.btnCanbuBatchNextYear?.addEventListener('click', () => {
+    state.canbuBatchPickerYear = Number(state.canbuBatchPickerYear || new Date().getFullYear()) + 1;
+    renderCanbuBatchMonthPicker();
+  });
+  el.canbuBatchMonthGrid?.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-canbu-batch-month]');
+    if (!option) return;
+    setCanbuBatchMonth(option.dataset.canbuBatchMonth);
+  });
   el.btnConfirmCanbuBatch?.addEventListener('click', createCanbuBatchFromModal);
   el.btnCloseCalcModal?.addEventListener('click', closeCalcModal);
   el.calcModal?.addEventListener('click', (event) => {
@@ -396,9 +441,10 @@ function bindEvents() {
 
 function openCanbuBatchModal() {
   setDefaultCanbuBatchMonth();
+  renderCanbuBatchMonthPicker();
   el.canbuBatchModal?.classList.add('visible');
   document.body.style.overflow = 'hidden';
-  window.setTimeout(() => el.canbuBatchMonth?.focus(), 0);
+  window.setTimeout(() => el.canbuBatchMonthGrid?.querySelector('.selected')?.focus(), 0);
 }
 
 function closeCanbuBatchModal() {
