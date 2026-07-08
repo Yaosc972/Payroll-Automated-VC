@@ -30,9 +30,7 @@ class ExcelExporter:
         ("gonglingjiang", "工龄奖"),
     ]
     CANBU_HEADERS = [
-        "工号", "姓名", "工作地区", "部门", "岗位", "餐补资格", "适用规则",
-        "有效餐补天数", "日考勤记录数", "日餐补合计", "封顶金额", "是否触发封顶",
-        "应发餐补", "计算公式", "关键输入", "中间值", "计算步骤", "异常/提示",
+        "工号", "姓名", "工作地区", "部门", "岗位", "适用规则",
     ]
     GENERAL_HEADERS = [
         "工号", "姓名", "工作地区", "部门", "岗位",
@@ -135,8 +133,14 @@ class ExcelExporter:
         ws.auto_filter.ref = ws.dimensions
 
     def _write_canbu_detail_sheet(self, ws, results: List[Dict[str, Any]]):
-        """Write canbu detail sheet with auditable payroll fields."""
-        for col, header in enumerate(self.CANBU_HEADERS, 1):
+        """Write canbu detail sheet for business reconciliation."""
+        daily_columns = self._canbu_daily_column_count(results)
+        headers = [
+            *self.CANBU_HEADERS,
+            *[f"{day:02d}日餐补" for day in range(1, daily_columns + 1)],
+            "餐补合计",
+        ]
+        for col, header in enumerate(headers, 1):
             self._write_header_cell(ws, 1, col, header)
 
         for row_idx, result in enumerate(results, 2):
@@ -145,17 +149,11 @@ class ExcelExporter:
             inputs = audit.get("inputs", {}) if audit else {}
             intermediate = audit.get("intermediate_values", {}) if audit else {}
             daily_amounts = detail.get("日餐补明细", [])
-            daily_standard = self._number(intermediate.get("日标准", 19))
-            raw_total = self._number(
-                detail.get("月累计", intermediate.get("日餐补合计", result.get("canbu", 0)))
-            )
             final_amount = self._number(result.get("canbu", detail.get("amount", 0)))
-            is_capped = detail.get("是否触发封顶", intermediate.get("是否触发封顶", False))
             work_area = inputs.get("工作地区", intermediate.get("工作地区", ""))
             position = inputs.get("岗位名称", intermediate.get("岗位名称", ""))
-            eligibility = "不享有/未发放" if final_amount <= 0 else "享有"
-            if "岗位是否在享有名单" in intermediate:
-                eligibility = "享有" if intermediate.get("岗位是否在享有名单") else "不享有/未发放"
+            rule_name = detail.get("地区规则", audit.get("rule_name", "") if audit else "")
+            daily_values = self._canbu_daily_values(work_area, daily_amounts, daily_columns)
 
             values = [
                 result.get("employee_id", ""),
@@ -163,32 +161,21 @@ class ExcelExporter:
                 work_area,
                 result.get("department", ""),
                 position,
-                eligibility,
-                detail.get("地区规则", audit.get("rule_name", "") if audit else ""),
-                self._effective_days(daily_amounts, daily_standard),
-                inputs.get("日考勤记录数", intermediate.get("日考勤记录数", "")),
-                raw_total,
-                self._number(detail.get("封顶金额", intermediate.get("月封顶", ""))),
-                "是" if is_capped else "否",
+                rule_name,
+                *daily_values,
                 final_amount,
-                audit.get("formula", "") if audit else "",
-                self._format_mapping(inputs),
-                self._format_mapping(intermediate),
-                self._format_steps(audit.get("steps", []) if audit else []),
-                self._format_warning(result),
             ]
             for col, value in enumerate(values, 1):
                 self._write_body_cell(ws, row_idx, col, value)
 
+            if final_amount <= 0:
+                ws.cell(row=row_idx, column=len(headers)).fill = self.WARNING_FILL
             if result.get("warnings") or result.get("exceptions"):
-                for col in range(1, len(self.CANBU_HEADERS) + 1):
+                for col in range(1, len(headers) + 1):
                     ws.cell(row=row_idx, column=col).fill = self.WARNING_FILL
-            elif final_amount <= 0:
-                ws.cell(row=row_idx, column=6).fill = self.WARNING_FILL
-            else:
-                ws.cell(row=row_idx, column=6).fill = self.OK_FILL
 
-        self._set_widths(ws, [14, 12, 12, 18, 14, 14, 24, 14, 14, 14, 12, 12, 12, 26, 44, 44, 52, 42])
+        widths = [14, 12, 12, 18, 14, 18] + [10] * daily_columns + [12]
+        self._set_widths(ws, widths)
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
 
@@ -314,6 +301,29 @@ class ExcelExporter:
         if not isinstance(standard, (int, float)) or standard <= 0:
             return ""
         return round(sum(cls._number(item) or 0 for item in daily_amounts) / standard, 2)
+
+    @classmethod
+    def _canbu_daily_column_count(cls, results: List[Dict[str, Any]]) -> int:
+        counts = []
+        for result in results:
+            detail = cls._subject_detail(result, "canbu")
+            audit = cls._subject_audit(result, "canbu")
+            inputs = audit.get("inputs", {}) if audit else {}
+            intermediate = audit.get("intermediate_values", {}) if audit else {}
+            work_area = str(inputs.get("工作地区", intermediate.get("工作地区", "")) or "")
+            daily_amounts = detail.get("日餐补明细", [])
+            if "东莞" in work_area and isinstance(daily_amounts, list):
+                counts.append(len(daily_amounts))
+        return max(counts, default=0)
+
+    @classmethod
+    def _canbu_daily_values(cls, work_area: Any, daily_amounts: Any, daily_columns: int) -> List[Any]:
+        if daily_columns <= 0:
+            return []
+        if "东莞" not in str(work_area or "") or not isinstance(daily_amounts, list):
+            return [""] * daily_columns
+        values = [cls._number(value) for value in daily_amounts[:daily_columns]]
+        return values + [""] * (daily_columns - len(values))
 
     @classmethod
     def _format_mapping(cls, mapping: Dict[str, Any]) -> str:

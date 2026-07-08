@@ -370,8 +370,8 @@ def test_canbu_api_ignores_blank_employee_rows():
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
-def test_canbu_export_outputs_auditable_detail_sheet(tmp_path):
-    """餐补导出应输出业务可核对字段，并过滤旧批次中的空白员工行。"""
+def test_canbu_export_outputs_business_reconciliation_sheet(tmp_path):
+    """餐补导出只保留人员信息、适用规则、逐日餐补和月合计。"""
     output_path = tmp_path / "canbu_export.xlsx"
     exporter = ExcelExporter(str(output_path))
     results = [
@@ -430,21 +430,17 @@ def test_canbu_export_outputs_auditable_detail_sheet(tmp_path):
     ws = wb["计算详情"]
     headers = [cell.value for cell in ws[1]]
     assert headers == [
-        "工号", "姓名", "工作地区", "部门", "岗位", "餐补资格", "适用规则",
-        "有效餐补天数", "日考勤记录数", "日餐补合计", "封顶金额", "是否触发封顶",
-        "应发餐补", "计算公式", "关键输入", "中间值", "计算步骤", "异常/提示",
+        "工号", "姓名", "工作地区", "部门", "岗位", "适用规则",
+        "01日餐补", "02日餐补", "03日餐补", "餐补合计",
     ]
     assert ws.max_row == 2
     row = [cell.value for cell in ws[2]]
     assert row[0] == "OWHN001"
     assert row[2] == "东莞"
     assert row[4] == "操作员"
-    assert row[5] == "享有"
-    assert row[7] == 2.5
-    assert row[12] == 500
-    assert row[13] == "min(Σ单日餐补, 500)"
-    assert "最终餐补=min(551, 500)=500" in row[16]
-    assert "触发封顶" in row[17]
+    assert row[5] == "东莞"
+    assert row[6:9] == [19, 19, 9.5]
+    assert row[9] == 500
     wb.close()
 
 
