@@ -15,7 +15,8 @@
 
 | 用途 | 分支 | 说明 |
 |---|---|---|
-| Vercel 生产整合 | `codex/admin-module-release-consolidation` | 当前 Vercel 生产整合基线。只从这里部署 Vercel。 |
+| Vercel 生产整合 | `codex/admin-module-release-consolidation-vercel` | 当前 Vercel 生产整合基线。只从这里部署 Vercel。 |
+| 历史整合基线 | `codex/admin-module-release-consolidation` | Vercel 专用分支创建前的整合基线。后续不要直接从这里部署生产，除非先同步到 Vercel 专用分支。 |
 | 公司服务器整合 | `codex/admin-module-release-consolidation-platform` | IT 已改造的公司服务器部署线。后续公司服务器改动应优先基于这条线。 |
 | 后台管理原型 | `codex/admin-management-console` | 后台管理早期原型来源，后续不应直接作为生产部署分支。 |
 | 招聘奖金核算 | `codex/recruitment-bonus-workbench` | 招聘模块开发分支。 |
@@ -24,13 +25,13 @@
 | FBU 美洲绩效奖金 | `codex/fbu-americas-performance-bonus` | FBU 模块开发分支。当前生产默认不开放。 |
 | 海外劳务报账核对 | `codex/overseas-labor-worker-migration` / `codex/overseas-labor-async-storage` | 海外劳务模块历史开发线。集成时必须按具体 commit 选择，不要整分支硬合。 |
 
-如后续新建更清晰的 Vercel 分支，可命名为：
+当前已从 `codex/admin-module-release-consolidation` 创建 Vercel 专用分支：
 
 ```bash
 codex/admin-module-release-consolidation-vercel
 ```
 
-但在迁移完成前，仍以 `codex/admin-module-release-consolidation` 为当前 Vercel 基线。
+后续 Vercel 生产发布以这条分支为准。
 
 ## 模块状态规则
 
@@ -86,7 +87,7 @@ commit：
 整合窗口执行：
 
 ```bash
-git switch codex/admin-module-release-consolidation
+git switch codex/admin-module-release-consolidation-vercel
 git status --short
 git fetch --all --prune
 ```
