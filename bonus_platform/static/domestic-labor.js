@@ -586,8 +586,10 @@ function renderCanbuWorkbench(step = 'upload') {
   const canbuRunId = batch.runId || '';
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
   const hasMatchingResults = Boolean(hasMatchingRun && state.currentResultsRunId === canbuRunId);
+  const isActiveRunCalculating = Boolean(hasMatchingRun && !hasMatchingResults && isCanbuBatchCalculating(batch));
   const shouldRestoreRun = Boolean(
     canbuRunId &&
+      !isActiveRunCalculating &&
       (!hasMatchingRun || !hasMatchingResults) &&
       (step === 'results' || (step !== 'upload' && ['已核算', '可导出', '已导出'].includes(batch.status)))
   );
@@ -777,6 +779,13 @@ function renderCanbuStepContent(step, results = []) {
     return;
   }
 
+  const batch = getActiveCanbuBatch();
+  if (step === 'results' && !results.length && isCanbuBatchCalculating(batch)) {
+    root.innerHTML = renderCanbuCalculatingState(batch);
+    renderExceptionQueue([]);
+    return;
+  }
+
   root.innerHTML = '<section class="dl-panel"><div id="resultsTable" class="dl-table-wrap"></div></section>';
   el.resultsTable = document.querySelector('#resultsTable');
   renderCanbuResults(results);
@@ -841,6 +850,27 @@ function renderFieldGroup(title, fields) {
         ${fields.map(field => `<span class="dl-field-pill ok">${escapeHtml(field)}</span>`).join('')}
       </div>
     </div>
+  `;
+}
+
+function renderCanbuCalculatingState(batch) {
+  const status = batch?.status || state.currentRun?.status || '计算中';
+  return `
+    <section class="dl-panel">
+      <div class="dl-calc-loading" role="status" aria-live="polite">
+        <div class="dl-calc-spinner" aria-hidden="true"></div>
+        <div>
+          <h3>正在核算餐补</h3>
+          <p>系统已收到本批次数据，正在解析考勤、匹配地区规则并生成应发餐补明细。当前状态：${escapeHtml(status)}。</p>
+          <div class="dl-calc-steps" aria-hidden="true">
+            <span>读取 Excel</span>
+            <span>匹配字段</span>
+            <span>计算餐补</span>
+            <span>生成明细</span>
+          </div>
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -1238,6 +1268,12 @@ function getBatchStatusClass(status) {
   if (status === '已导出' || status === '可导出' || status === '已核算') return 'ok';
   if (status === '字段异常' || status === '失败') return 'block';
   return 'warn';
+}
+
+function isCanbuBatchCalculating(batch) {
+  const status = batch?.status || state.currentRun?.status || '';
+  const hasRun = Boolean(batch?.runId || state.currentRun?.id);
+  return hasRun && ['已提交', '已上传', '计算中'].includes(status);
 }
 
 function formatMonthLabel(value) {
