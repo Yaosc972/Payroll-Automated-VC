@@ -294,7 +294,7 @@ class PayrollDataLoader:
         if emp_id is None:
             return False
         text = str(emp_id).strip()
-        return bool(text) and text.lower() not in {"none", "nan", "null"}
+        return bool(text) and text.lower() not in {"none", "nan", "null"} and text != "工号"
 
     def _normalize_valid_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return [

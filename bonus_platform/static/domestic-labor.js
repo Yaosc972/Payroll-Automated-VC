@@ -1912,7 +1912,7 @@ function countCanbuWarnings(results) {
 
 function hasValidEmployeeId(row) {
   const text = String(row?.employee_id ?? '').trim();
-  return Boolean(text) && !['none', 'null', 'nan'].includes(text.toLowerCase());
+  return Boolean(text) && !['none', 'null', 'nan'].includes(text.toLowerCase()) && text !== '工号';
 }
 
 function sanitizePayrollResults(results) {
