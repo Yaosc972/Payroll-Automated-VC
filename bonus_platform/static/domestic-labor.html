@@ -1408,6 +1408,74 @@
       .dl-empty-map-row:last-child { border-bottom: 0; }
       .dl-empty-map-row strong { color: var(--dl-accent); font-weight: 600; }
 
+      .dl-calc-loading {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 20px;
+        align-items: center;
+        min-height: 220px;
+        padding: 34px;
+      }
+
+      .dl-calc-spinner {
+        position: relative;
+        width: 58px;
+        height: 58px;
+        border-radius: 999px;
+        background:
+          conic-gradient(from 0deg, var(--dl-accent), rgba(37, 99, 235, 0.08) 72%),
+          var(--dl-accent-soft);
+        animation: dl-spin 1s linear infinite;
+      }
+
+      .dl-calc-spinner::after {
+        content: "";
+        position: absolute;
+        inset: 8px;
+        border-radius: inherit;
+        background: #FFFFFF;
+        box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+      }
+
+      .dl-calc-loading h3 {
+        margin: 0;
+        color: var(--dl-ink);
+        font-size: 20px;
+        line-height: 1.25;
+        font-weight: 800;
+      }
+
+      .dl-calc-loading p {
+        margin: 8px 0 0;
+        color: var(--dl-muted);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .dl-calc-steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .dl-calc-steps span {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid rgba(37, 99, 235, 0.14);
+        border-radius: 999px;
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      @keyframes dl-spin {
+        to { transform: rotate(360deg); }
+      }
+
       /* ═══ 右侧向导侧滑抽屉：现代 SaaS 高级毛玻璃叠层 ═══ */
       .wizard-drawer {
         position: fixed;
