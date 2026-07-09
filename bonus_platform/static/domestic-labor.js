@@ -817,7 +817,7 @@ function renderCanbuFieldCheck() {
       <div class="dl-panel-head">
         <div>
           <h2 class="dl-panel-title">字段检查</h2>
-          <p class="dl-panel-sub">字段检查按餐补规则分组展示，当前版本以后端解析结果为准。</p>
+          <p class="dl-panel-sub">字段检查按餐补规则分组展示。文件上传后系统已自动提交餐补核算。</p>
         </div>
       </div>
       <div class="dl-field-groups">
@@ -826,8 +826,8 @@ function renderCanbuFieldCheck() {
         ${renderFieldGroup('嘉善/义乌月考勤字段', ['排班天数', '实际在职工作日天数', '事假时数', '病假时数', '旷工天数'])}
       </div>
       <div class="drawer-footer compact">
-        <p class="inline-status">字段检查通过后进入餐补核算。</p>
-        <button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看餐补核算</button>
+        <p class="inline-status">字段已识别，核算完成后可查看结果。</p>
+        <button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button>
       </div>
     </section>
   `;
