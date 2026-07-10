@@ -226,6 +226,7 @@ def _calculate_row(
         referrer_name=row.text("推荐人姓名"),
         referrer_id=referrer_id,
         referrer_status=_status_value(row, "推荐人人员状态", "推荐人状态"),
+        referrer_last_work_date=row.get("推荐人最后工作日") or row.get("推荐人离职日期"),
         referrer_is_manager=referrer_is_manager,
         referral_rule_scope=referral_scope,
         referral_standard_bonus=referral_standard,
@@ -593,6 +594,7 @@ def _build_pending_confirmations(details: List[RecruitmentDetail], month: int) -
             person_id=detail.recruiter_id,
             person_name=detail.recruiter_name,
             person_status=detail.recruiter_status,
+            person_last_work_date=detail.recruiter_last_work_date,
             node_type="招聘奖金",
             amounts=[
                 (detail.recruiter_1m_period, detail.recruiter_1m_bonus, "入职1月奖金"),
@@ -609,6 +611,7 @@ def _build_pending_confirmations(details: List[RecruitmentDetail], month: int) -
             person_id=detail.assistant_id,
             person_name=detail.assistant_name,
             person_status=detail.assistant_status,
+            person_last_work_date=detail.assistant_last_work_date,
             node_type="招聘奖金",
             amounts=[
                 (detail.assistant_1m_period, detail.assistant_1m_bonus, "入职1月奖金"),
@@ -625,6 +628,7 @@ def _build_pending_confirmations(details: List[RecruitmentDetail], month: int) -
             person_id=detail.referrer_id,
             person_name=detail.referrer_name,
             person_status=detail.referrer_status,
+            person_last_work_date=detail.referrer_last_work_date,
             node_type="内推奖金",
             amounts=[
                 (detail.referral_1m_period, detail.referral_1m_bonus, "入职1月奖金"),
@@ -644,6 +648,7 @@ def _append_pending_nodes(
     person_id: str,
     person_name: str,
     person_status: str,
+    person_last_work_date: Any,
     node_type: str,
     amounts: List[Tuple[Any, float, str]],
 ) -> None:
@@ -664,6 +669,7 @@ def _append_pending_nodes(
                     "发放对象工号": person_id,
                     "发放对象姓名": person_name,
                     "发放对象状态": person_status or "缺失",
+                    "发放对象最后工作日": person_last_work_date,
                     "币种": detail.currency,
                     "发放节点": field,
                     "建议发放周期": period,

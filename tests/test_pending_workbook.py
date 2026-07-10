@@ -1,6 +1,8 @@
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 from bonus_platform.engine.models import CalculationResult
 from bonus_platform.engine.workbook_io import (
@@ -26,6 +28,7 @@ def _pending_result() -> CalculationResult:
                 "发放对象工号": "zt-recruiter",
                 "发放对象姓名": "招聘负责人",
                 "发放对象状态": "离职",
+                "发放对象最后工作日": datetime(2025, 10, 8),
                 "币种": "CNY",
                 "发放节点": "入职1月奖金",
                 "建议发放周期": 202510,
@@ -54,8 +57,14 @@ def test_pending_workbook_is_compact_and_has_confirmation_dropdown(tmp_path: Pat
     assert "确认人" not in headers
     assert "确认时间" not in headers
     assert "币种" in headers
+    assert headers[headers.index("发放对象状态") + 1] == "发放对象最后工作日"
+    date_column = headers.index("发放对象最后工作日") + 1
+    assert sheet.cell(2, date_column).value == datetime(2025, 10, 8)
+    assert sheet.cell(2, date_column).number_format == "yyyy/m/d"
+    result_column = PENDING_CONFIRMATION_HEADERS.index("人工确认结果") + 1
+    result_letter = get_column_letter(result_column)
     assert any(
-        str(validation.sqref) in {"M2", f"M2:M{sheet.max_row}"}
+        str(validation.sqref) in {f"{result_letter}2", f"{result_letter}2:{result_letter}{sheet.max_row}"}
         and validation.formula1 == '"确认发放,不发放,暂缓"'
         for validation in validations
     )
@@ -89,6 +98,7 @@ def test_final_workbook_merges_pending_confirmation_by_currency(tmp_path: Path):
             "zt-recruiter",
             "招聘负责人",
             "离职",
+            None,
             "USD",
             "入职1月奖金",
             202510,
@@ -234,6 +244,7 @@ def test_final_workbook_updates_detail_rows_from_confirmation(tmp_path: Path):
             "zt-recruiter",
             "招聘负责人",
             "离职",
+            None,
             "CNY",
             "入职1月奖金",
             202510,
@@ -254,6 +265,7 @@ def test_final_workbook_updates_detail_rows_from_confirmation(tmp_path: Path):
             "zt-referrer",
             "推荐人",
             "正式",
+            None,
             "CNY",
             "入职1月奖金",
             202510,

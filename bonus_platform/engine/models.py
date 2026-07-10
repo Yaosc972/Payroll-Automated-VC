@@ -122,6 +122,7 @@ class RecruitmentDetail:
     referrer_name: str
     referrer_id: str
     referrer_status: str
+    referrer_last_work_date: Any
     referrer_is_manager: str
     referral_rule_scope: str
     referral_standard_bonus: float

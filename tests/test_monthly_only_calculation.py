@@ -271,3 +271,49 @@ def test_uncalculable_row_with_recruitment_node_due_this_month_remains_in_except
     assert "招聘奖金缺关键字段" in exception_types
     assert "未匹配招聘周期" in exception_types
     assert "未匹配招聘奖金标准" in exception_types
+
+
+def test_pending_rows_include_role_specific_last_work_dates():
+    recruiter_last_work_date = datetime(2026, 6, 5)
+    assistant_last_work_date = datetime(2026, 6, 6)
+    referrer_last_work_date = datetime(2026, 6, 7)
+    result = calculate(
+        [
+            ImportRow(
+                source_row=11,
+                values={
+                    "核算月份": 202606,
+                    "姓名": "待确认日期测试",
+                    "工号": "zt-pending-date-001",
+                    "工作地": "中国大陆",
+                    "标签分类": "国内",
+                    "职级": "P1-3",
+                    "ABC类别": "C类",
+                    "招聘渠道": "招聘网站",
+                    "招聘启动日期": datetime(2026, 5, 1),
+                    "候选人入职时间": datetime(2026, 5, 20),
+                    "招聘负责人工号": "zt-recruiter-date",
+                    "招聘负责人姓名": "招聘负责人日期",
+                    "招聘负责人人员状态": "离职",
+                    "招聘负责人最后工作日": recruiter_last_work_date,
+                    "协助招聘人工号": "zt-assistant-date",
+                    "协助招聘人姓名": "协助招聘人日期",
+                    "协助招聘人人员状态": "离职",
+                    "协助招聘人最后工作日": assistant_last_work_date,
+                    "推荐人姓名": "推荐人日期",
+                    "推荐人工号": "zt-referrer-date",
+                    "推荐人职级": "P2-1",
+                    "推荐人人员状态": "离职",
+                    "推荐人最后工作日": referrer_last_work_date,
+                    "推荐人职位": "销售专员",
+                    "奖金地区类型": "国内发展中国家",
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+
+    pending_by_role = {row["角色"]: row for row in result.pending_confirmations}
+    assert pending_by_role["招聘负责人"]["发放对象最后工作日"] == recruiter_last_work_date
+    assert pending_by_role["协助招聘人"]["发放对象最后工作日"] == assistant_last_work_date
+    assert pending_by_role["推荐人"]["发放对象最后工作日"] == referrer_last_work_date

@@ -56,7 +56,7 @@ REFERRAL_SUMMARY_HEADERS = ["推荐人工号", "推荐人姓名", "币种", "核
 EXCEPTION_HEADERS = ["源行号", "姓名", "工号", "异常类型", "处理建议"]
 PENDING_CONFIRMATION_HEADERS = [
     "源行号", "姓名", "工号", "奖金类型", "角色", "发放对象工号", "发放对象姓名", "发放对象状态",
-    "币种", "发放节点", "建议发放周期", "建议发放金额", "人工确认结果", "人工确认金额",
+    "发放对象最后工作日", "币种", "发放节点", "建议发放周期", "建议发放金额", "人工确认结果", "人工确认金额",
     "不发/暂缓原因", "系统提示",
 ]
 CONFIRMED_VALUES = {"发放", "确认发放", "是", "Y", "y", "YES", "Yes", "yes"}
@@ -250,6 +250,7 @@ def _write_summary_sheet(
         sheet.column_dimensions["E"].width = 42
     if title == "待确认_发放判断":
         _add_pending_confirmation_validation(sheet)
+    _apply_date_format(sheet, _columns_by_headers(sheet, ["发放对象最后工作日"]))
 
 
 def _read_sheet_dicts(workbook, sheet_name: str) -> List[Dict[str, Any]]:
