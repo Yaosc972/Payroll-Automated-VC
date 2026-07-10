@@ -77,9 +77,13 @@ def _has_employee(row: ImportRow) -> bool:
 
 def _detect_month(rows: List[ImportRow]) -> int:
     for row in rows:
-        month = as_number(row.get("核算月份"))
-        if month:
-            return int(month)
+        raw_month = row.get("核算月份")
+        month = int(as_number(raw_month))
+        if 190001 <= month <= 999912 and 1 <= month % 100 <= 12:
+            return month
+        date_month = yyyymm(raw_month)
+        if date_month:
+            return date_month
     today = datetime.today()
     return today.year * 100 + today.month
 
@@ -457,11 +461,22 @@ def _build_exception_rows(details: List[RecruitmentDetail]) -> List[Dict[str, An
 def _is_current_month_exception(detail: RecruitmentDetail, message: str, month: int) -> bool:
     has_recruitment_payment = any(period == month for period, _amount in detail.monthly_recruitment_amounts)
     has_referral_payment = any(period == month for period, _amount in detail.monthly_referral_amounts)
-    if message in {"工号重复", "招聘奖金缺关键字段", "未匹配招聘周期", "未匹配招聘奖金标准"}:
+    if message in {"招聘奖金缺关键字段", "未匹配招聘周期", "未匹配招聘奖金标准"}:
+        return has_recruitment_payment or _has_current_recruitment_event(detail, month)
+    if message == "工号重复":
         return has_recruitment_payment
     if "推荐" in message or "内推" in message:
         return has_referral_payment
     return has_recruitment_payment or has_referral_payment
+
+
+def _has_current_recruitment_event(detail: RecruitmentDetail, month: int) -> bool:
+    event_months = {
+        yyyymm(detail.onboard_date),
+        yyyymm(detail.probation_date),
+        *(yyyymm(_full_month_date(detail.onboard_date, offset)) for offset in (1, 3, 6)),
+    }
+    return month in event_months
 
 
 def _exception_advice(message: str) -> str:

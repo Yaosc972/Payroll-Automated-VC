@@ -1,4 +1,5 @@
 from io import BytesIO
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -144,3 +145,129 @@ def test_pending_source_row_uses_uploaded_excel_row_number():
 
     assert result.pending_confirmations
     assert result.pending_confirmations[0]["源行号"] == 12
+
+
+def test_calculation_accepts_excel_date_as_calculation_month():
+    result = calculate(
+        [
+            ImportRow(
+                source_row=2,
+                values={
+                    "核算月份": datetime(2026, 6, 1),
+                    "姓名": "月份格式测试",
+                    "工号": "zt-month-date-001",
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+
+    assert result.month == 202606
+
+
+def test_calculation_accepts_iso_text_dates_for_actual_cycle():
+    result = calculate(
+        [
+            ImportRow(
+                source_row=2,
+                values={
+                    "核算月份": 202606,
+                    "姓名": "文本日期测试",
+                    "工号": "zt-text-date-001",
+                    "工作地": "中国大陆",
+                    "标签分类": "国内",
+                    "职级": "P1-3",
+                    "ABC类别": "C类",
+                    "招聘渠道": "招聘网站",
+                    "招聘启动日期": "2026-05-20",
+                    "候选人入职时间": "2026-06-20",
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+
+    assert result.details[0].actual_cycle_days == 31
+    assert result.details[0].adjusted_total_bonus > 0
+
+
+def test_uncalculable_current_import_row_remains_in_exception_list():
+    result = calculate(
+        [
+            ImportRow(
+                source_row=8,
+                values={
+                    "核算月份": 202606,
+                    "姓名": "缺字段测试",
+                    "工号": "zt-missing-field-001",
+                    "工作地": "中国大陆",
+                    "标签分类": "国内",
+                    "职级": "P1-3",
+                    "ABC类别": "",
+                    "招聘渠道": "招聘网站",
+                    "招聘启动日期": "",
+                    "候选人入职时间": datetime(2026, 6, 22),
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+
+    exception_types = {row["异常类型"] for row in result.exceptions}
+    assert "招聘奖金缺关键字段" in exception_types
+    assert "未匹配招聘周期" in exception_types
+    assert "未匹配招聘奖金标准" in exception_types
+
+
+def test_uncalculable_historical_row_does_not_pollute_current_month_exception_list():
+    result = calculate(
+        [
+            ImportRow(
+                source_row=9,
+                values={
+                    "核算月份": 202606,
+                    "姓名": "历史缺字段测试",
+                    "工号": "zt-historical-missing-001",
+                    "工作地": "中国大陆",
+                    "标签分类": "国内",
+                    "职级": "P1-3",
+                    "ABC类别": "",
+                    "招聘渠道": "招聘网站",
+                    "招聘启动日期": "",
+                    "候选人入职时间": datetime(2025, 6, 22),
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+
+    assert result.month == 202606
+    assert result.exceptions == []
+
+
+def test_uncalculable_row_with_recruitment_node_due_this_month_remains_in_exception_list():
+    result = calculate(
+        [
+            ImportRow(
+                source_row=10,
+                values={
+                    "核算月份": 202606,
+                    "姓名": "本月节点缺字段测试",
+                    "工号": "zt-current-node-missing-001",
+                    "工作地": "中国大陆",
+                    "标签分类": "国内",
+                    "职级": "P1-3",
+                    "ABC类别": "",
+                    "招聘渠道": "招聘网站",
+                    "招聘启动日期": "",
+                    "候选人入职时间": datetime(2026, 5, 20),
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+
+    exception_types = {row["异常类型"] for row in result.exceptions}
+    assert "招聘奖金缺关键字段" in exception_types
+    assert "未匹配招聘周期" in exception_types
+    assert "未匹配招聘奖金标准" in exception_types

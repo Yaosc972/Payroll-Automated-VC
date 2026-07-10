@@ -25,6 +25,14 @@ def as_number(value: Any, default: float = 0.0) -> float:
 def as_date(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
+    if isinstance(value, str):
+        text = value.strip()
+        for date_format in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(text, date_format)
+            except ValueError:
+                continue
+        return None
     if isinstance(value, (int, float)) and value > 1000:
         try:
             return from_excel(value)
