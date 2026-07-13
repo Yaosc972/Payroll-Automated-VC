@@ -3,11 +3,15 @@ from io import BytesIO
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+import pytest
 
 from bonus_platform import app as app_module
 from bonus_platform.app import app
 from bonus_platform.engine.fbu_performance.engines.base import EmployeeData
 from bonus_platform.engine.fbu_performance.parser import FBUPerformanceParser
+
+
+pytestmark = pytest.mark.usefixtures("bypass_fbu_access_gate")
 
 
 def _leave_workbook(path: Path) -> None:

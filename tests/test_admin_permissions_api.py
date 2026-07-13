@@ -1,8 +1,14 @@
 from fastapi.testclient import TestClient
+import pytest
 
 import bonus_platform.app as app_module
 import bonus_platform.engine.admin_store as admin_store
 from bonus_platform.app import app
+
+
+@pytest.fixture(autouse=True)
+def enable_mock_auth_for_local_api_tests(monkeypatch):
+    monkeypatch.setenv("SIGMA_ENABLE_MOCK_LOGIN", "1")
 
 
 def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeypatch):
@@ -21,7 +27,12 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert any(module["id"] == "employee" and module["enabled"] is True for module in data["modules"])
     assert any(module["id"] == "overseas" and module["enabled"] is True for module in data["modules"])
     assert any(module["id"] == "domestic" and module["enabled"] is False for module in data["modules"])
-    assert any(module["id"] == "fbu" and module["enabled"] is False for module in data["modules"])
+    assert any(
+        module["id"] == "fbu"
+        and module["enabled"] is True
+        and module["developmentStatus"] == "available"
+        for module in data["modules"]
+    )
     assert data["moduleAccess"]["employeeAdmin"]["employee"] is True
     assert data["moduleAccess"]["employeeAdmin"]["domestic"] is False
     assert data["rolePermissions"]["admin"]["archive"] is True
@@ -105,6 +116,64 @@ def test_overseas_labor_requires_module_role_on_page_and_api(tmp_path, monkeypat
     assert api_without_role.status_code == 403
     assert page_with_role.status_code == 200
     assert api_with_role.status_code == 200
+
+
+def test_fbu_requires_enabled_module_and_authorized_role_on_page_and_api(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.setenv("SIGMA_HIDE_DEVELOPING_MODULES", "1")
+
+    with TestClient(app) as client:
+        unauthenticated_page = client.get("/fbu-performance.html")
+        unauthenticated_api = client.get("/api/fbu-performance/runs")
+
+        client.post("/api/auth/mock-login", json={"userId": "recruitmentAdminUser"})
+        unauthorized_page = client.get("/fbu-performance.html")
+        unauthorized_api = client.get("/api/fbu-performance/runs")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "fbuAdminUser"})
+        fbu_admin_page = client.get("/fbu-performance.html")
+        fbu_admin_api = client.get("/api/fbu-performance/runs")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        system_admin_api = client.get("/api/fbu-performance/runs")
+
+    assert unauthenticated_page.status_code == 401
+    assert unauthenticated_api.status_code == 401
+    assert unauthorized_page.status_code == 403
+    assert unauthorized_api.status_code == 403
+    assert fbu_admin_page.status_code == 200
+    assert fbu_admin_api.status_code == 200
+    assert system_admin_api.status_code == 200
+
+
+def test_mock_auth_endpoints_are_disabled_on_vercel(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.setenv("VERCEL_ENV", "production")
+
+    with TestClient(app) as client:
+        users_response = client.get("/api/auth/mock-users")
+        login_response = client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+
+    assert users_response.status_code == 404
+    assert login_response.status_code == 404
+
+
+def test_mock_auth_endpoints_require_explicit_local_flag(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.delenv("SIGMA_ENABLE_MOCK_LOGIN", raising=False)
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+
+    with TestClient(app) as client:
+        users_response = client.get("/api/auth/mock-users")
+        login_response = client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+
+    assert users_response.status_code == 404
+    assert login_response.status_code == 404
 
 
 def test_admin_api_rejects_invalid_ids_and_non_admin_actor(tmp_path, monkeypatch):

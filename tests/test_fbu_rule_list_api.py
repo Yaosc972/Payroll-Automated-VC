@@ -3,9 +3,13 @@ from io import BytesIO
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+import pytest
 
 import bonus_platform.app as app_module
 from bonus_platform.engine.fbu_performance.runs import FBURosterStore, FBURuleListStore, FBURunManager
+
+
+pytestmark = pytest.mark.usefixtures("bypass_fbu_access_gate")
 
 
 def _workbook_bytes(workbook: Workbook) -> bytes:

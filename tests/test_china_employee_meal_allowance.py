@@ -393,7 +393,7 @@ def test_workbench_access_keeps_china_employee_payroll_open_when_developing_modu
     blocked_keys = {item["key"] for item in response.json()["blockedModules"]}
     assert "cn_employee_payroll" not in blocked_keys
     assert "domestic_labor" in blocked_keys
-    assert "fbu_performance" in blocked_keys
+    assert "fbu_performance" not in blocked_keys
 
 
 def test_meal_allowance_api_accepts_multiple_attendance_exports(tmp_path):

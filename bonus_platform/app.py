@@ -467,11 +467,6 @@ def _workbench_access_config() -> dict:
                 "label": "中国区外包工薪酬核算",
                 "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
             },
-            {
-                "key": "fbu_performance",
-                "label": "FBU美洲绩效奖金核算",
-                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
-            },
         ]
     return {
         "hideDevelopingModules": _hide_developing_modules(),
@@ -481,6 +476,10 @@ def _workbench_access_config() -> dict:
 
 def _is_vercel_runtime() -> bool:
     return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
+
+
+def _mock_auth_enabled() -> bool:
+    return not _is_vercel_runtime() and _env_flag("SIGMA_ENABLE_MOCK_LOGIN", False)
 
 
 def _uses_request_scoped_labor_runtime() -> bool:
@@ -549,11 +548,6 @@ def _developing_module_block(path: str) -> dict | None:
             "api_prefixes": ("/api/domestic-labor/",),
             "label": "中国区外包工薪酬核算",
         },
-        "fbu_performance": {
-            "page_paths": {"/fbu-performance.html"},
-            "api_prefixes": ("/api/fbu-performance/",),
-            "label": "FBU美洲绩效奖金核算",
-        },
     }
     for key, config in blocked_paths.items():
         if path in config["page_paths"] or any(path.startswith(prefix) for prefix in config["api_prefixes"]):
@@ -561,9 +555,64 @@ def _developing_module_block(path: str) -> dict | None:
     return None
 
 
+def _fbu_access_response(request: Request) -> Response | None:
+    path = request.url.path
+    is_fbu_api = path.startswith("/api/fbu-performance/")
+    is_fbu_page = path.rstrip("/") == "/fbu-performance.html"
+    if not (is_fbu_api or is_fbu_page):
+        return None
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    user_id = None
+    if session_token:
+        try:
+            user_id = get_session_user_id(session_token)
+        except KeyError:
+            user_id = None
+    if not user_id:
+        if is_fbu_api:
+            return JSONResponse({"detail": "未登录。"}, status_code=401)
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>需要登录</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                <h1>请先登录西格玛工作台</h1>
+                <p>FBU美洲绩效奖金核算仅对已授权用户开放。</p>
+                <p><a href="/login.html?next=/fbu-performance.html">前往登录</a></p>
+              </body>
+            </html>
+            """,
+            status_code=401,
+        )
+
+    if not _user_can_enter_module(user_id, "fbu"):
+        if is_fbu_api:
+            return JSONResponse({"detail": "当前用户没有FBU美洲绩效奖金核算权限，或模块尚未开放。"}, status_code=403)
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>无权限访问</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                <h1>无权限访问：FBU美洲绩效奖金核算</h1>
+                <p>请联系系统管理员开放模块并授予FBU绩效核算管理员角色。</p>
+                <p><a href="/">返回西格玛工作台</a></p>
+              </body>
+            </html>
+            """,
+            status_code=403,
+        )
+    return None
+
+
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
+    fbu_access_response = _fbu_access_response(request)
+    if fbu_access_response is not None:
+        return fbu_access_response
     if _hide_developing_modules():
         blocked = _developing_module_block(path)
         if blocked:
@@ -663,6 +712,8 @@ def health() -> dict:
 
 @app.get("/api/auth/mock-users")
 def api_auth_mock_users() -> dict:
+    if not _mock_auth_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
     users = get_admin_state()["users"]
     return {
         "users": [
@@ -674,6 +725,8 @@ def api_auth_mock_users() -> dict:
 
 @app.post("/api/auth/mock-login")
 def api_auth_mock_login(response: Response, payload: dict = Body(...)) -> dict:
+    if not _mock_auth_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
     user_id = _validate_safe_id(str(payload.get("userId") or payload.get("user_id") or ""), "user_id")
     try:
         token = create_session(user_id)

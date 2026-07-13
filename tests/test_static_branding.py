@@ -464,6 +464,12 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "background: transparent" in css.split(".login-provider-icon", 1)[1].split("}", 1)[0]
     assert ".feishu-login-block" in css
     assert ".mock-login-panel" in css
+    index_html = INDEX_HTML.read_text(encoding="utf-8")
+    domestic_card = index_html.split('class="saas-module-card domestic-module"', 1)[1].split("</a>", 1)[0]
+    fbu_card = index_html.split('class="saas-module-card fbu-module"', 1)[1].split("</a>", 1)[0]
+    assert "Developing · 开发中" in domestic_card
+    assert "Available · 已上线" in fbu_card
+    assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
     with Image.open(LOGIN_SIGMA_LOGO) as logo:
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
@@ -490,9 +496,12 @@ def test_release_info_marks_integration_branch_as_only_production_source():
     assert "Only deploy production from the integration branch" in release_info["policy"]
     assert "admin.html" in release_info["requiredStaticFiles"]
     assert "permission-guard.js" in release_info["requiredStaticFiles"]
+    assert "fbu-performance.html" in release_info["requiredStaticFiles"]
+    assert "fbu-performance.js" in release_info["requiredStaticFiles"]
     assert {module["id"] for module in release_info["modules"]} >= {
         "recruitment",
         "china-employee-payroll",
+        "fbu",
         "overseas",
         "admin",
     }

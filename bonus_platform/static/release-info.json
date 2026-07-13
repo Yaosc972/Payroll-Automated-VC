@@ -23,6 +23,12 @@
       "source": "china payroll browser meal allowance integrated"
     },
     {
+      "id": "fbu",
+      "name": "FBU美洲绩效奖金核算",
+      "status": "released",
+      "source": "FBU performance workflow integrated"
+    },
+    {
       "id": "overseas",
       "name": "海外劳务报账核对",
       "status": "uat",
@@ -41,6 +47,8 @@
     "permission-guard.js",
     "china-employee-payroll.html",
     "china-employee-payroll.js",
+    "fbu-performance.html",
+    "fbu-performance.js",
     "overseas-labor.html",
     "overseas-labor.js",
     "recruitment.html"
