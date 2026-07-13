@@ -1,6 +1,12 @@
 """FBU绩效核算引擎 - 绩效系数计算"""
 from __future__ import annotations
 from typing import Optional
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def _round_half_up(value: float, digits: int = 2) -> float:
+    quant = Decimal("1").scaleb(-digits)
+    return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
 
 
 class CoefficientCalculator:
@@ -32,9 +38,9 @@ class CoefficientCalculator:
         if score <= 60:
             return 0.0
         elif score <= 95:
-            return round(score / 95, 2)
+            return _round_half_up(score / 95, 2)
         elif score <= 125:
-            return round(1 + 0.6 * (score - 95) / 30, 2)
+            return _round_half_up(1 + 0.6 * (score - 95) / 30, 2)
         else:
             return 1.6
 

@@ -1,15 +1,169 @@
 """FBU绩效核算引擎 - 运行管理"""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from typing import Any, Optional
 from pathlib import Path
 import shutil
 import json
 import uuid
 
-from .engines.base import CalculationSegment, EmployeeData
+from .engines.base import CalculationSegment, EmployeeData, get_calculation_path
 from .exporter import FBUPerformanceExporter
+
+
+_FINAL_RESULT_SUM_FIELDS = {
+    "base_hours",
+    "ot15_hours",
+    "ot20_hours",
+    "sick_hours",
+    "sick_settlement_hours",
+    "annual_hours",
+    "holiday_hours",
+    "performance_base",
+    "performance_bonus",
+}
+_FINAL_RESULT_MONEY_FIELDS = {"performance_base", "performance_bonus"}
+
+
+def _parse_saved_date(value) -> date | None:
+    """Parse an ISO date saved in runs.json back into a date object."""
+    if not value:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except ValueError:
+        return None
+
+
+def _result_source_employee_id(row: dict[str, Any]) -> str:
+    source_employee_id = str(row.get("source_employee_id") or "").strip()
+    if source_employee_id:
+        return source_employee_id
+    return str(row.get("employee_id") or "").strip()
+
+
+def _first_present(rows: list[dict[str, Any]], field: str) -> Any:
+    for row in rows:
+        value = row.get(field)
+        if value not in (None, ""):
+            return value
+    return rows[0].get(field) if rows else ""
+
+
+def _unique_ordered(values: list[Any]) -> list[Any]:
+    unique = []
+    seen = set()
+    for value in values:
+        if value in (None, ""):
+            continue
+        key = str(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value)
+    return unique
+
+
+def _sum_result_field(rows: list[dict[str, Any]], field: str) -> float:
+    total = 0.0
+    for row in rows:
+        try:
+            total += float(row.get(field) or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(total, 2 if field in _FINAL_RESULT_MONEY_FIELDS else 4)
+
+
+def _split_segment_reason(row: dict[str, Any], source_employee_id: str) -> str:
+    employee_id = str(row.get("employee_id") or "")
+    if employee_id.endswith("-1"):
+        return "白班拆行"
+    if employee_id == source_employee_id:
+        return "夜班拆行"
+    return "拆行核算"
+
+
+def _build_final_calculation_segments(
+    rows: list[dict[str, Any]],
+    source_employee_id: str,
+) -> list[dict[str, Any]]:
+    if len(rows) == 1:
+        return list(rows[0].get("calculation_segments") or [])
+
+    segments: list[dict[str, Any]] = []
+    for row in rows:
+        raw_segments = row.get("calculation_segments") or []
+        if raw_segments:
+            for segment in raw_segments:
+                segments.append(dict(segment))
+            continue
+        segments.append({
+            "period": row.get("employee_id", ""),
+            "reason": _split_segment_reason(row, source_employee_id),
+            "performance_base": round(float(row.get("performance_base") or 0), 2),
+            "performance_ratio": row.get("performance_ratio") or 0,
+            "performance_coefficient": row.get("performance_coefficient") or 0,
+            "performance_bonus": round(float(row.get("performance_bonus") or 0), 2),
+        })
+    return segments
+
+
+def build_final_result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge internal split rows into final employee result rows for viewing/export."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for row in results:
+        source_employee_id = _result_source_employee_id(row)
+        if source_employee_id not in grouped:
+            grouped[source_employee_id] = []
+            order.append(source_employee_id)
+        grouped[source_employee_id].append(row)
+
+    final_rows: list[dict[str, Any]] = []
+    for source_employee_id in order:
+        rows = grouped[source_employee_id]
+        final_row = dict(rows[0])
+        final_row["employee_id"] = source_employee_id
+        final_row["source_employee_id"] = source_employee_id
+        final_row["raw_employee_ids"] = _unique_ordered([row.get("employee_id") for row in rows])
+        final_row["merged_result"] = len(rows) > 1
+        final_row.pop("hourly_rate", None)
+        final_row.pop("attendance_daily_rows", None)
+        final_row.pop("work_hour_rule_periods", None)
+
+        for field in _FINAL_RESULT_SUM_FIELDS:
+            final_row[field] = _sum_result_field(rows, field)
+
+        for field in [
+            "performance_ratio",
+            "performance_score",
+            "performance_level",
+            "uploaded_coefficient",
+            "coefficient_override_reason",
+            "performance_coefficient",
+            "job_type",
+            "position",
+            "work_hour_rule",
+            "base_override_type",
+            "base_override_reason",
+        ]:
+            final_row[field] = _first_present(rows, field)
+
+        paths = _unique_ordered([row.get("calculation_path") for row in rows])
+        if paths:
+            final_row["calculation_path"] = " / ".join(str(path) for path in paths)
+
+        exceptions: list[Any] = []
+        for row in rows:
+            exceptions.extend(row.get("exceptions") or [])
+        final_row["exceptions"] = _unique_ordered(exceptions)
+        final_row["calculation_segments"] = _build_final_calculation_segments(rows, source_employee_id)
+        final_rows.append(final_row)
+
+    return final_rows
 
 
 @dataclass
@@ -21,16 +175,26 @@ class FBURun:
     status: str = "pending"  # pending / step1 / step2 / step3 / processing / completed / failed
     current_step: int = 0  # 当前步骤 (0=未开始, 1=考勤, 2=薪资, 3=绩效, 4=计算中, 5=完成)
     attendance_file: str = ""
+    previous_attendance_file: str = ""
     salary_file: str = ""
+    previous_salary_file: str = ""
+    current_salary_file: str = ""
     performance_file: str = ""
     adjustment_file: str = ""
+    supplemental_leave_file: str = ""
+    base_override_file: str = ""
     roster_file: str = ""
     roster_source: str = ""  # activity / base
     # 分步数据
     attendance_data: dict = field(default_factory=dict)  # 考勤解析结果
     salary_data: dict = field(default_factory=dict)  # 薪资解析结果
+    previous_salary_data: dict = field(default_factory=dict)
+    current_salary_data: dict = field(default_factory=dict)
+    salary_verification_data: dict = field(default_factory=dict)
     performance_data: dict = field(default_factory=dict)  # 绩效解析结果
     adjustment_data: dict = field(default_factory=dict)  # 调薪/转正拆分解析结果
+    supplemental_leave_data: dict = field(default_factory=dict)  # sickpay&年假补充确认
+    base_override_data: dict = field(default_factory=dict)  # 96工时制/线下固定基数覆盖
     # 最终结果
     total_employees: int = 0
     total_bonus: float = 0.0
@@ -41,6 +205,16 @@ class FBURun:
 
 class FBURunManager:
     """FBU运行管理器"""
+
+    RESULT_INPUT_FIELDS = {
+        "attendance_file", "previous_attendance_file", "salary_file",
+        "previous_salary_file", "current_salary_file", "performance_file",
+        "adjustment_file", "supplemental_leave_file", "base_override_file",
+        "attendance_data", "salary_data",
+        "previous_salary_data", "current_salary_data", "salary_verification_data",
+        "performance_data", "adjustment_data", "supplemental_leave_data",
+        "base_override_data",
+    }
 
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
@@ -114,15 +288,26 @@ class FBURunManager:
     def update_run(self, run_id: str, **kwargs):
         """更新运行状态"""
         if run_id in self.runs:
+            if self.RESULT_INPUT_FIELDS.intersection(kwargs):
+                self._invalidate_results(self.runs[run_id])
             for key, value in kwargs.items():
                 setattr(self.runs[run_id], key, value)
             self._save_runs()
+
+    @staticmethod
+    def _invalidate_results(run: FBURun):
+        run.results = []
+        run.total_employees = 0
+        run.total_bonus = 0.0
+        run.match_rate = 0.0
 
     def save_step_data(self, run_id: str, step: int, data: dict):
         """保存分步数据"""
         run = self.get_run(run_id)
         if not run:
             return
+
+        self._invalidate_results(run)
 
         if step == 1:
             run.attendance_data = data
@@ -168,7 +353,7 @@ class FBURunManager:
             return
 
         results = []
-        total_bonus = 0.0
+        total_bonus_by_source_employee: dict[str, float] = {}
 
         for emp in employees:
             results.append({
@@ -177,21 +362,42 @@ class FBURunManager:
                 "name": emp.name,
                 "department": emp.department,
                 "area": emp.area,
+                "position": emp.position,
+                "personnel_status": emp.personnel_status,
+                "hire_date": emp.hire_date.isoformat() if emp.hire_date else "",
+                "confirmation_date": emp.confirmation_date.isoformat() if emp.confirmation_date else "",
+                "resignation_date": emp.resignation_date.isoformat() if emp.resignation_date else "",
                 "job_type": emp.job_type,
+                "fixed_performance_base": emp.fixed_performance_base,
+                "base_override_amount": emp.base_override_amount,
+                "base_override_type": emp.base_override_type,
+                "base_override_reason": emp.base_override_reason,
+                "work_hour_rule": emp.work_hour_rule,
+                "work_hour_rule_cap": emp.work_hour_rule_cap,
+                "work_hour_rule_include_holiday_in_cap": emp.work_hour_rule_include_holiday_in_cap,
+                "work_hour_rule_special_total_hours": emp.work_hour_rule_special_total_hours,
+                "work_hour_rule_rounded_hourly_rate": emp.work_hour_rule_rounded_hourly_rate,
+                "calculation_path": get_calculation_path(emp),
                 "hourly_rate": emp.hourly_rate,
                 "performance_ratio": emp.performance_ratio,
                 "base_hours": emp.base_hours,
                 "ot15_hours": emp.ot15_hours,
                 "ot20_hours": emp.ot20_hours,
                 "sick_hours": emp.sick_hours,
+                "sick_settlement_hours": emp.sick_settlement_hours,
                 "annual_hours": emp.annual_hours,
                 "holiday_hours": emp.holiday_hours,
+                "attendance_daily_rows": emp.attendance_daily_rows,
+                "work_hour_rule_periods": emp.work_hour_rule_periods,
                 "performance_base": emp.performance_base,
                 "performance_score": emp.performance_score,
                 "performance_level": emp.performance_level,
                 "uploaded_coefficient": emp.uploaded_coefficient,
+                "coefficient_override_reason": emp.coefficient_override_reason,
                 "performance_coefficient": emp.performance_coefficient,
                 "performance_bonus": emp.performance_bonus,
+                "is_deferred": emp.is_deferred,
+                "deferred_reason": emp.deferred_reason,
                 "calculation_segments": [
                     {
                         "period": segment.period,
@@ -205,13 +411,20 @@ class FBURunManager:
                 ],
                 "exceptions": emp.exceptions,
             })
-            total_bonus += emp.performance_bonus
+            total_key = emp.source_employee_id or emp.employee_id
+            total_bonus_by_source_employee[total_key] = (
+                total_bonus_by_source_employee.get(total_key, 0.0)
+                + emp.performance_bonus
+            )
 
         self.update_run(
             run_id,
             results=results,
-            total_employees=len(employees),
-            total_bonus=round(total_bonus, 2),
+            total_employees=len(build_final_result_rows(results)),
+            total_bonus=round(
+                sum(round(amount, 2) for amount in total_bonus_by_source_employee.values()),
+                2,
+            ),
             status="completed",
         )
 
@@ -230,21 +443,41 @@ class FBURunManager:
                 name=r["name"],
                 department=r.get("department", ""),
                 area=r.get("area", ""),
+                position=r.get("position", ""),
+                personnel_status=r.get("personnel_status", ""),
+                hire_date=_parse_saved_date(r.get("hire_date")),
+                confirmation_date=_parse_saved_date(r.get("confirmation_date")),
+                resignation_date=_parse_saved_date(r.get("resignation_date")),
                 job_type=r["job_type"],
+                fixed_performance_base=r.get("fixed_performance_base"),
+                base_override_amount=r.get("base_override_amount"),
+                base_override_type=r.get("base_override_type", ""),
+                base_override_reason=r.get("base_override_reason", ""),
+                work_hour_rule=r.get("work_hour_rule", ""),
+                work_hour_rule_cap=r.get("work_hour_rule_cap", 0),
+                work_hour_rule_include_holiday_in_cap=r.get("work_hour_rule_include_holiday_in_cap", False),
+                work_hour_rule_special_total_hours=r.get("work_hour_rule_special_total_hours", 0),
+                work_hour_rule_rounded_hourly_rate=r.get("work_hour_rule_rounded_hourly_rate", 0),
                 hourly_rate=r["hourly_rate"],
                 performance_ratio=r["performance_ratio"],
                 base_hours=r["base_hours"],
                 ot15_hours=r["ot15_hours"],
                 ot20_hours=r["ot20_hours"],
                 sick_hours=r["sick_hours"],
+                sick_settlement_hours=r.get("sick_settlement_hours", 0),
                 annual_hours=r["annual_hours"],
                 holiday_hours=r["holiday_hours"],
+                attendance_daily_rows=r.get("attendance_daily_rows", []),
+                work_hour_rule_periods=r.get("work_hour_rule_periods", []),
                 performance_base=r["performance_base"],
                 performance_score=r["performance_score"],
                 performance_level=r["performance_level"],
                 uploaded_coefficient=r.get("uploaded_coefficient"),
+                coefficient_override_reason=r.get("coefficient_override_reason", ""),
                 performance_coefficient=r["performance_coefficient"],
                 performance_bonus=r["performance_bonus"],
+                is_deferred=r.get("is_deferred", False),
+                deferred_reason=r.get("deferred_reason", ""),
                 calculation_segments=[
                     CalculationSegment(
                         period=s.get("period", ""),
@@ -360,22 +593,27 @@ class FBURuleListStore:
             "fixed_base_employees": list(DEFAULT_FIXED_BASE_EMPLOYEES),
         }
 
+    def _with_seed_rows(self, payload: dict) -> dict:
+        defaults = self._default_payload()
+        work_hour_employees = payload.get("work_hour_employees") or defaults["work_hour_employees"]
+        fixed_base_employees = payload.get("fixed_base_employees") or defaults["fixed_base_employees"]
+        return {
+            "work_hour_employees": work_hour_employees,
+            "fixed_base_employees": fixed_base_employees,
+        }
+
     def get(self) -> dict:
         if not self.rule_lists_file.exists():
             return self._default_payload()
         with open(self.rule_lists_file, "r", encoding="utf-8") as f:
             payload = json.load(f)
-        defaults = self._default_payload()
-        return {
-            "work_hour_employees": payload.get("work_hour_employees", defaults["work_hour_employees"]),
-            "fixed_base_employees": payload.get("fixed_base_employees", defaults["fixed_base_employees"]),
-        }
+        return self._with_seed_rows(payload)
 
     def save(self, payload: dict) -> dict:
-        normalized = {
+        normalized = self._with_seed_rows({
             "work_hour_employees": self._normalize_work_hour_rows(payload.get("work_hour_employees", [])),
             "fixed_base_employees": self._normalize_fixed_base_rows(payload.get("fixed_base_employees", [])),
-        }
+        })
         with open(self.rule_lists_file, "w", encoding="utf-8") as f:
             json.dump(normalized, f, ensure_ascii=False, indent=2)
         return normalized

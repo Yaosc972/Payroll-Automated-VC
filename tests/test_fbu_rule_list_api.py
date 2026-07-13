@@ -85,6 +85,31 @@ def test_rule_lists_can_be_saved_without_uploading_workbook(monkeypatch, tmp_pat
     assert saved["fixed_base_employees"][0]["fixed_performance_base"] == 3000
 
 
+def test_rule_lists_restore_seed_rows_when_saved_lists_are_empty(monkeypatch, tmp_path):
+    client = _client_with_tmp_store(monkeypatch, tmp_path)
+
+    save_response = client.post(
+        "/api/fbu-performance/rule-lists",
+        json={"work_hour_employees": [], "fixed_base_employees": []},
+    )
+
+    assert save_response.status_code == 200
+    saved_payload = save_response.json()
+    assert {row["employee_id"] for row in saved_payload["work_hour_employees"]} == {
+        "zt12979",
+        "zt12988",
+        "zt14260",
+        "zt17850",
+    }
+    assert saved_payload["fixed_base_employees"][0]["employee_id"] == "zt15638"
+    assert saved_payload["fixed_base_employees"][0]["fixed_performance_base"] == 3000
+
+    get_response = client.get("/api/fbu-performance/rule-lists")
+    assert get_response.status_code == 200
+    payload = get_response.json()
+    assert payload["fixed_base_employees"][0]["employee_id"] == "zt15638"
+
+
 def test_confirm_rule_lists_writes_base_override_data_to_run(monkeypatch, tmp_path):
     client = _client_with_tmp_store(monkeypatch, tmp_path)
     run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]

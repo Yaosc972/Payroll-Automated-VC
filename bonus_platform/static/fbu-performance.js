@@ -23,16 +23,29 @@ const state = {
   foundationRunDetails: {},
   foundationLoadingRunId: '',
   activityListLoadingRunIds: new Set(),
+  selectedActivityIds: new Set(),
   workbenchSelectedResult: '',
+  finalResultSlice: 'warehouse',
+  checkTab: 'base',
   workbenchResultFilter: 'all',
+  workbenchStepSearch: '',
+  hiddenStepNotices: {},
   workbenchTaskFilter: 'open',
-  workbenchSupplementLevel: '',
   workbenchSupplementDraft: {
     employeeId: '',
     name: '',
-    score: '',
+    coefficient: '',
+    note: '',
   },
+  maintainedRuleEditor: '',
+  maintainedRuleDrafts: {
+    workHour: [],
+    fixedBase: [],
+  },
+  inlineActionNotes: {},
   workbenchPreviousAttendanceFile: null,
+  workbenchSalaryHistoryFiles: {},
+  workbenchUploadStates: {},
   tableFilters: {
     attendance: {},
     salary: {},
@@ -43,12 +56,19 @@ const state = {
     exceptions: {},
   },
   tablePagination: {
+    activities: { page: 1, pageSize: 50 },
+    people: { page: 1, pageSize: 50 },
     attendance: { page: 1, pageSize: 50 },
     salary: { page: 1, pageSize: 50 },
     performance: { page: 1, pageSize: 50 },
     supplementalLeave: { page: 1, pageSize: 50 },
+    check: { page: 1, pageSize: 50 },
+    baseSummary: { page: 1, pageSize: 50 },
     baseOverrides: { page: 1, pageSize: 50 },
     results: { page: 1, pageSize: 50 },
+    resultsWarehouse: { page: 1, pageSize: 50 },
+    resultsFunctional: { page: 1, pageSize: 50 },
+    resultsDistrict: { page: 1, pageSize: 50 },
     exceptions: { page: 1, pageSize: 50 },
   },
 };
@@ -72,8 +92,9 @@ const STEP_MATERIALS = {
     { materialKey: 'supplementalLeave', label: '补充假勤', tag: '必传', hint: '上传线下sickpay与年假补充数据', uploadType: 'supplementalLeave', fileField: 'supplemental_leave_file', required: true },
   ],
   salary: [
-    { materialKey: 'salary', label: '薪资档案', tag: '必传', hint: '上传OEHR最新薪资档案（含离职）', uploadType: 'salary', fileField: 'salary_file', required: true },
-    { materialKey: 'adjustments', label: '当月转正/调薪表', tag: '按需', hint: '上传OEHR转正调薪流程', uploadType: 'adjustments', fileField: 'adjustment_file', required: false },
+    { materialKey: 'previousSalary', label: '上月薪资档案', tag: '必传', hint: '上传OEHR上月薪资档案（含离职）', uploadType: 'previousSalary', fileField: 'previous_salary_file', required: true },
+    { materialKey: 'currentSalary', label: '当月薪资档案', tag: '必传', hint: '上传OEHR当月最新薪资档案（含离职）', uploadType: 'currentSalary', fileField: 'salary_file', required: true },
+    { materialKey: 'salaryAdjustments', label: '全量调薪流程', tag: '必传', hint: '上传新泽西区全量调薪管理导出', uploadType: 'salaryAdjustments', fileField: 'adjustment_file', required: true },
   ],
   performance: [
     { materialKey: 'performance', label: '绩效报表', tag: '必传', hint: '上传OEHR当月绩效报表', uploadType: 'performance', fileField: 'performance_file', required: true },
@@ -87,6 +108,8 @@ const STEP_MATERIALS = {
 const API_BASE = '/api/fbu-performance';
 const TABLE_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const DEFAULT_TABLE_PAGE_SIZE = 50;
+const ACTIVITY_DETAIL_PREFETCH_CONCURRENCY = 3;
+const ACTIVITY_DETAIL_PREFETCH_LIMIT = 8;
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -175,6 +198,16 @@ function formatResultJobType(jobType) {
   return `<span class="job-pill ${className}">${escapeHtml(label)}</span>`;
 }
 
+function getDisplayPosition(row, activity = getWorkbenchActivity()) {
+  const position = String(row?.position || '').trim();
+  if (position) return position;
+  const sourceId = sourceEmployeeId(row);
+  const salaryPosition = (activity?.salary_data?.employees || [])
+    .find(item => sourceEmployeeId(item) === sourceId)?.position;
+  if (String(salaryPosition || '').trim()) return String(salaryPosition).trim();
+  return formatJobType(row?.job_type);
+}
+
 function formatJsArg(value) {
   return JSON.stringify(String(value ?? ''))
     .replaceAll('&', '\\u0026')
@@ -193,24 +226,69 @@ function getSpecialPersonTags(row, activity = getWorkbenchActivity()) {
   const baseRows = activity?.base_override_data?.employees || [];
   const adjustmentRows = activity?.adjustment_data?.employees || [];
   const adjustmentEvents = activity?.adjustment_data?.events || [];
+  const salaryHistoryRow = (activity?.salary_verification_data?.employees || [])
+    .find(item => sourceEmployeeId(item) === sourceId);
+  const hasCurrentMonthAdjustment = Boolean(row?.calculation_segments?.length)
+    || salaryHistoryRow?.resolution === 'in_month_split'
+    || adjustmentRows.some(item => sourceEmployeeId(item) === sourceId)
+    || adjustmentEvents.some(event => (
+      sourceEmployeeId(event) === sourceId
+      && String(event.effective_date).startsWith(activity?.calc_month || '')
+    ));
 
   if (row?.job_type === 'district_manager') tags.push('区长');
   if (baseRows.some(item => sourceEmployeeId(item) === sourceId && item.rule_type === '96工时制')) tags.push('96工时制');
   if (baseRows.some(item => sourceEmployeeId(item) === sourceId && item.rule_type === '线下固定基数覆盖')) tags.push('固定基数');
-  if (adjustmentRows.some(item => sourceEmployeeId(item) === sourceId) || adjustmentEvents.some(item => sourceEmployeeId(item) === sourceId)) tags.push('存在调薪');
+  if (hasCurrentMonthAdjustment) tags.push('本月调薪');
   if (row?.personnel_status === '离职' || row?.resignation_date) tags.push('离职发放');
 
   return [...new Set(tags)].slice(0, 4);
+}
+
+function moveEmployeeNamePreview(event) {
+  const preview = document.getElementById('employeeNamePreview');
+  if (!preview || preview.hidden) return;
+  const gap = 12;
+  const rect = preview.getBoundingClientRect();
+  const left = Math.min(event.clientX + gap, window.innerWidth - rect.width - gap);
+  const top = Math.min(event.clientY + gap, window.innerHeight - rect.height - gap);
+  preview.style.left = `${Math.max(gap, left)}px`;
+  preview.style.top = `${Math.max(gap, top)}px`;
+}
+
+function showEmployeeNamePreview(event, name) {
+  const text = event.currentTarget?.querySelector('.name-with-tags-text');
+  if (!text || (text.scrollWidth <= text.clientWidth && String(name || '').length <= 14)) return;
+  let preview = document.getElementById('employeeNamePreview');
+  if (!preview) {
+    preview = document.createElement('div');
+    preview.id = 'employeeNamePreview';
+    preview.className = 'employee-name-preview';
+    document.body.appendChild(preview);
+  }
+  preview.textContent = name;
+  preview.hidden = false;
+  moveEmployeeNamePreview(event);
+}
+
+function hideEmployeeNamePreview() {
+  const preview = document.getElementById('employeeNamePreview');
+  if (preview) preview.hidden = true;
 }
 
 function renderNameWithTags(row, activity = getWorkbenchActivity()) {
   const tags = getSpecialPersonTags(row, activity);
   const visible = tags.slice(0, 3);
   const extra = tags.length - visible.length;
+  const name = row?.name || '-';
+  const tooltip = name === '-' ? '' : ` title="${escapeHtml(name)}"`;
 
   return `
-    <span class="name-with-tags">
-      <span class="name-with-tags-text">${escapeHtml(row?.name || '-')}</span>
+    <span class="name-with-tags"${tooltip}
+          onmouseenter="showEmployeeNamePreview(event, ${formatJsArg(name)})"
+          onmousemove="moveEmployeeNamePreview(event)"
+          onmouseleave="hideEmployeeNamePreview()">
+      <span class="name-with-tags-text">${escapeHtml(name)}</span>
       ${visible.map(tag => `<span class="person-tag">${escapeHtml(tag)}</span>`).join('')}
       ${extra > 0 ? `<span class="person-tag">+${extra}</span>` : ''}
     </span>
@@ -241,23 +319,206 @@ function getMaterialStatus(material, activity) {
   };
 }
 
+const workbenchUploadTimers = {};
+
+function clearWorkbenchUploadTimer(type) {
+  if (workbenchUploadTimers[type]) {
+    clearInterval(workbenchUploadTimers[type]);
+    delete workbenchUploadTimers[type];
+  }
+}
+
+function getWorkbenchUploadState(type, activity = getWorkbenchActivity()) {
+  const uploadState = state.workbenchUploadStates?.[type];
+  if (!uploadState) return null;
+  if (uploadState.runId && activity?.run_id && uploadState.runId !== activity.run_id) {
+    return null;
+  }
+  return uploadState;
+}
+
+function setWorkbenchUploadState(type, nextState, { render = true } = {}) {
+  const currentState = state.workbenchUploadStates[type] || {};
+  const runId = type === 'roster' ? '' : (state.currentActivity?.run_id || currentState.runId || '');
+  state.workbenchUploadStates = {
+    ...state.workbenchUploadStates,
+    [type]: {
+      ...currentState,
+      ...nextState,
+      runId,
+    },
+  };
+  if (render && state.currentPage === 'workbench') {
+    renderWorkbench();
+  }
+}
+
+function clearWorkbenchUploadState(type, { render = true } = {}) {
+  clearWorkbenchUploadTimer(type);
+  if (type === 'previousAttendance') {
+    state.workbenchPreviousAttendanceFile = null;
+  }
+  const nextStates = { ...state.workbenchUploadStates };
+  delete nextStates[type];
+  state.workbenchUploadStates = nextStates;
+  if (render && state.currentPage === 'workbench') {
+    renderWorkbench();
+  }
+}
+
+function startWorkbenchUploadProgress(type, file) {
+  if (!file) return;
+  clearWorkbenchUploadTimer(type);
+  setWorkbenchUploadState(type, {
+    fileName: file.name,
+    fileSize: file.size,
+    status: 'uploading',
+    progress: 100,
+    indeterminate: true,
+    message: '解析中',
+  });
+}
+
+function finishWorkbenchUploadProgress(type, fileName, message = '已解析') {
+  clearWorkbenchUploadTimer(type);
+  setWorkbenchUploadState(type, {
+    fileName: fileName || state.workbenchUploadStates[type]?.fileName || '',
+    status: 'done',
+    progress: 100,
+    message,
+  });
+}
+
+function failWorkbenchUploadProgress(type, fileName, message = '上传失败') {
+  clearWorkbenchUploadTimer(type);
+  setWorkbenchUploadState(type, {
+    fileName: fileName || state.workbenchUploadStates[type]?.fileName || '',
+    status: 'failed',
+    progress: 100,
+    message,
+  });
+}
+
+function getMaterialUploadView(material, status, activity) {
+  const uploadState = getWorkbenchUploadState(material.uploadType, activity);
+  const uploadedFile = status.fileName || '';
+  const baseView = {
+    fileName: uploadedFile,
+    statusText: status.text,
+    detailText: uploadedFile ? '文件已解析' : material.hint,
+    actionNote: uploadedFile ? '已解析' : '',
+    tone: status.tone || 'neutral',
+    progress: uploadedFile ? 100 : 0,
+    showProgress: false,
+    busy: false,
+    clearable: false,
+  };
+
+  if (!uploadState) return baseView;
+
+  const fileName = uploadState.fileName || uploadedFile;
+  if (uploadState.status === 'uploading') {
+    return {
+      fileName,
+      statusText: '上传中',
+      detailText: uploadState.message || '上传中',
+      actionNote: uploadState.message || '上传中',
+      tone: 'uploading',
+      progress: 100,
+      indeterminate: true,
+      showProgress: true,
+      busy: true,
+      clearable: false,
+    };
+  }
+  if (uploadState.status === 'selected') {
+    return {
+      fileName,
+      statusText: '已选择',
+      detailText: uploadState.message || '将随当月考勤一起上传',
+      actionNote: '已选择',
+      tone: 'warning',
+      progress: 100,
+      showProgress: false,
+      busy: false,
+      clearable: material.uploadType === 'previousAttendance',
+    };
+  }
+  if (uploadState.status === 'failed') {
+    return {
+      fileName,
+      statusText: '失败',
+      detailText: uploadState.message || '上传失败',
+      actionNote: uploadState.message || '失败',
+      tone: 'danger',
+      progress: 100,
+      showProgress: true,
+      busy: false,
+      clearable: true,
+    };
+  }
+  if (uploadState.status === 'done') {
+    return {
+      fileName,
+      statusText: '已上传',
+      detailText: uploadState.message || '文件已解析',
+      actionNote: uploadState.message || '已解析',
+      tone: 'success',
+      progress: 100,
+      showProgress: false,
+      busy: false,
+      clearable: false,
+    };
+  }
+  return baseView;
+}
+
 function renderMaterialRow(material, activity) {
   const status = getMaterialStatus(material, activity);
   if (!status.visible) return '';
-  const actionText = status.fileName ? '重新上传' : '上传';
+  const uploadView = getMaterialUploadView(material, status, activity);
+  const safeTone = ['success', 'warning', 'danger', 'neutral', 'uploading'].includes(uploadView.tone)
+    ? uploadView.tone
+    : 'neutral';
+  const statusTone = safeTone === 'uploading' ? 'warning' : safeTone;
+  const hasFile = Boolean(uploadView.fileName);
+  const isPreviousAttendance = material.uploadType === 'previousAttendance';
+  const actionText = uploadView.busy
+    ? '上传中'
+    : isPreviousAttendance && hasFile
+      ? '重选'
+      : isPreviousAttendance
+        ? '选择文件'
+        : hasFile
+        ? '重新上传'
+        : '上传';
   return `
-    <div class="material-row ${escapeHtml(status.tone)}">
-      <div class="material-marker"></div>
+    <div class="material-row ${escapeHtml(safeTone)}" data-upload-type="${escapeHtml(material.uploadType)}">
+      <div class="material-marker" aria-hidden="true">
+        <span class="material-status-dot ${escapeHtml(safeTone)}"></span>
+      </div>
       <div class="material-main">
         <div class="material-title">
           <strong>${escapeHtml(material.label)}</strong>
           <span class="mini-tag">${escapeHtml(material.tag)}</span>
-          <span class="status-badge ${escapeHtml(status.tone)}">${escapeHtml(status.text)}</span>
+          <span class="status-badge ${escapeHtml(statusTone)}">${escapeHtml(uploadView.statusText)}</span>
         </div>
         <div class="material-hint">${escapeHtml(material.hint)}</div>
+        <div class="material-upload-file" title="${escapeHtml(uploadView.fileName || '')}">
+          <span class="material-file-name">${escapeHtml(uploadView.fileName || '未选择文件')}</span>
+          <span class="material-file-state">${escapeHtml(uploadView.detailText)}</span>
+        </div>
+        ${uploadView.showProgress ? `
+          <div class="material-progress ${uploadView.indeterminate ? 'indeterminate' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="100" ${uploadView.indeterminate ? '' : `aria-valuenow="${Math.round(uploadView.progress)}"`}>
+            <span style="width: ${Math.round(uploadView.progress)}%"></span>
+          </div>
+        ` : ''}
       </div>
-      <div class="material-file">${escapeHtml(status.fileName || '-')}</div>
-      <button class="btn btn-secondary btn-sm" type="button" onclick="openWorkbenchUpload(${formatJsArg(material.uploadType)})">${actionText}</button>
+      <div class="material-actions">
+        <button class="btn btn-secondary btn-sm ${isPreviousAttendance ? 'btn-quiet' : ''}" type="button" onclick="openWorkbenchUpload(${formatJsArg(material.uploadType)})" ${uploadView.busy ? 'disabled' : ''}>${actionText}</button>
+        ${uploadView.actionNote ? `<span class="material-action-note ${escapeHtml(statusTone)}">${escapeHtml(uploadView.actionNote)}</span>` : ''}
+        ${uploadView.clearable ? `<button class="material-clear-btn" type="button" aria-label="清除${escapeHtml(material.label)}文件" onclick="clearWorkbenchUpload(${formatJsArg(material.uploadType)})">×</button>` : ''}
+      </div>
     </div>
   `;
 }
@@ -265,8 +526,9 @@ function renderMaterialRow(material, activity) {
 function renderStepMaterials(stepKey, activity) {
   const rows = STEP_MATERIALS[stepKey] || [];
   if (!rows.length) return '';
+  const layoutClass = stepKey === 'attendance' ? ' attendance-material-list' : '';
   return `
-    <section class="step-section material-list">
+    <section class="step-section material-list${layoutClass}">
       ${rows.map(row => renderMaterialRow(row, activity)).join('')}
     </section>
   `;
@@ -489,9 +751,11 @@ function renderTablePagination(type, pageInfo) {
           ${pageButtons.join('')}
         </div>
         <button class="pagination-btn" type="button" ${pageInfo.page >= pageInfo.totalPages ? 'disabled' : ''} onclick="changeTablePage(${formatJsArg(type)}, ${pageInfo.page + 1})">下一页</button>
-        <label class="page-size-select">
-          每页
-          <select onchange="changeTablePageSize(${formatJsArg(type)}, this.value)" aria-label="每页条数">
+        <label class="page-size-select-wrap">
+          <span>每页</span>
+          <select class="page-size-select"
+                  aria-label="每页条数"
+                  onchange="changeTablePageSize(${formatJsArg(type)}, this.value)">
             ${TABLE_PAGE_SIZE_OPTIONS.map(size => `
               <option value="${size}" ${size === pageInfo.pageSize ? 'selected' : ''}>${size}</option>
             `).join('')}
@@ -545,6 +809,26 @@ async function apiJson(url, options = {}) {
   return data;
 }
 
+function setInlineActionNote(key, message, tone = 'success', { render = true } = {}) {
+  state.inlineActionNotes = {
+    ...state.inlineActionNotes,
+    [key]: {
+      message,
+      tone,
+      at: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+    },
+  };
+  if (render && state.currentPage === 'workbench') {
+    renderWorkbench();
+  }
+}
+
+function renderInlineActionNote(key) {
+  const note = state.inlineActionNotes?.[key];
+  if (!note?.message) return '';
+  return `<span class="action-inline-note ${escapeHtml(note.tone || 'success')}">${escapeHtml(note.message)}</span>`;
+}
+
 // ═══ Element References ═══
 
 const el = {
@@ -579,9 +863,10 @@ const el = {
   workbenchUploadRoster: document.getElementById('workbenchUploadRoster'),
   workbenchUploadAttendance: document.getElementById('workbenchUploadAttendance'),
   workbenchUploadPreviousAttendance: document.getElementById('workbenchUploadPreviousAttendance'),
-  workbenchUploadSalary: document.getElementById('workbenchUploadSalary'),
+  workbenchUploadPreviousSalary: document.getElementById('workbenchUploadPreviousSalary'),
+  workbenchUploadCurrentSalary: document.getElementById('workbenchUploadCurrentSalary'),
+  workbenchUploadSalaryAdjustments: document.getElementById('workbenchUploadSalaryAdjustments'),
   workbenchUploadPerformance: document.getElementById('workbenchUploadPerformance'),
-  workbenchUploadAdjustments: document.getElementById('workbenchUploadAdjustments'),
   workbenchUploadSupplementalLeave: document.getElementById('workbenchUploadSupplementalLeave'),
 
   // Pages
@@ -614,6 +899,8 @@ const el = {
   performanceContent: document.getElementById('performanceContent'),
   supplementalLeaveContent: document.getElementById('supplementalLeaveContent'),
   resultsContent: document.getElementById('resultsContent'),
+  finalResultExplanationDialog: document.getElementById('finalResultExplanationDialog'),
+  finalResultExplanationBody: document.getElementById('finalResultExplanationBody'),
 
   // App Dialog
   appDialog: document.getElementById('appDialog'),
@@ -654,6 +941,8 @@ let modalReturnFocus = null;
 const filterTimers = {};
 let composingFilterInput = null;
 let pendingCompositionFilter = null;
+let workbenchStepSearchTimer = null;
+let composingWorkbenchStepSearch = false;
 
 function getFocusableElements(container) {
   if (!container) return [];
@@ -1003,6 +1292,9 @@ function setSidebarCollapsed(collapsed) {
 
 function setActivityStep(stepKey) {
   if (!ACTIVITY_STEPS.some(step => step.key === stepKey)) return;
+  if (state.activityStep !== stepKey) {
+    state.workbenchStepSearch = '';
+  }
   state.activityStep = stepKey;
   renderWorkbench();
 }
@@ -1011,14 +1303,17 @@ function getStepIndex(stepKey) {
   return ACTIVITY_STEPS.findIndex(step => step.key === stepKey);
 }
 
+function getFirstIncompleteInputStep(activity = state.currentActivity) {
+  return ['people', 'attendance', 'salary', 'performance'].find(
+    stepKey => buildNeedsForStep(stepKey, activity).length > 0,
+  ) || '';
+}
+
 function getActivityStepFromActivity(activity = state.currentActivity) {
   if (!activity) return 'people';
-  if (activity.status === 'completed' || Array.isArray(activity.results) && activity.results.length) return 'export';
-  if (activity.diagnostics || activity.base_override_data || activity.adjustment_data) return 'check';
-  if (activity.performance_data || activity.performance_file) return 'performance';
-  if (activity.salary_data || activity.salary_file) return 'salary';
-  if (activity.attendance_data || activity.attendance_file || activity.supplemental_leave_file) return 'attendance';
-  return 'people';
+  if (activity.status === 'completed') return 'export';
+  const incompleteStep = getFirstIncompleteInputStep(activity);
+  return incompleteStep || 'check';
 }
 
 function navigateTo(page) {
@@ -1087,7 +1382,6 @@ async function loadActivities() {
     }
     renderActivities();
     updateActivityKPIs();
-    loadActivityListDetails();
     if (state.currentPage === 'workbench') {
       if (!state.currentActivity) {
         const defaultActivity = getWorkbenchDefaultActivity();
@@ -1099,9 +1393,16 @@ async function loadActivities() {
       } else {
         renderWorkbench();
       }
+    } else if (state.currentPage === 'activities') {
+      loadActivityListDetails();
     }
   } catch (error) {
     console.error('加载活动列表失败:', error);
+    if (state.currentPage === 'workbench') {
+      state.currentActivity = null;
+      state.activities = [];
+      renderWorkbench();
+    }
   }
 }
 
@@ -1235,8 +1536,9 @@ function renderMaintainedRuleList(kind, activity) {
         </div>
         <div class="section-actions">
           <span class="status-badge ${confirmed ? 'success' : 'warning'}">${confirmed ? '已确认' : '未确认'}</span>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="toggleMaintainedRuleEditor(${formatJsArg(kind)})">管理名单</button>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="openMaintainedRuleDialog(${formatJsArg(kind)})">编辑名单</button>
           <button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(${formatJsArg(kind)})">确认名单</button>
+          ${renderInlineActionNote(`ruleList-${kind}`)}
         </div>
       </div>
       <div class="compact-list-table">
@@ -1254,11 +1556,83 @@ function renderMaintainedRuleList(kind, activity) {
           </tbody>
         </table>
       </div>
-      <div class="maintained-editor-placeholder" data-maintained-editor="${escapeHtml(kind)}" hidden>
-        名单维护入口保留在当前页面，后续任务再补完整编辑能力。
-      </div>
     </section>
   `;
+}
+
+function getMaintainedRuleRows(kind) {
+  const lists = state.ruleLists || {};
+  return kind === 'workHour'
+    ? (lists.work_hour_employees || [])
+    : (lists.fixed_base_employees || []);
+}
+
+function cloneMaintainedRuleRows(kind) {
+  return getMaintainedRuleRows(kind).map(row => ({
+    employee_id: row.employee_id || '',
+    name: row.name || '',
+    fixed_performance_base: row.fixed_performance_base ?? '',
+    active: row.active !== false,
+  }));
+}
+
+function renderMaintainedRuleEditor(kind) {
+  if (state.maintainedRuleEditor !== kind) return '';
+  const isWorkHour = kind === 'workHour';
+  const rows = state.maintainedRuleDrafts?.[kind] || [];
+  return `
+    <div class="maintained-editor" data-maintained-editor="${escapeHtml(kind)}">
+      <div class="maintained-editor-head">
+        <strong>${isWorkHour ? '维护96工时制员工' : '维护固定基数人员'}</strong>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="addMaintainedRuleRow(${formatJsArg(kind)})">新增一行</button>
+      </div>
+      <div class="managed-rule-grid ${isWorkHour ? 'work-hour' : 'fixed-base'}">
+        <div class="managed-rule-header">工号</div>
+        <div class="managed-rule-header">姓名</div>
+        ${isWorkHour ? '' : '<div class="managed-rule-header">固定基数</div>'}
+        <div class="managed-rule-header">状态</div>
+        <div class="managed-rule-header">操作</div>
+        ${rows.map((row, index) => `
+          <input class="managed-rule-input mono" type="text" value="${escapeHtml(row.employee_id || '')}" placeholder="zt0000000" oninput="updateMaintainedRuleDraft(${formatJsArg(kind)}, ${index}, 'employee_id', this.value)">
+          <input class="managed-rule-input" type="text" value="${escapeHtml(row.name || '')}" placeholder="员工姓名" oninput="updateMaintainedRuleDraft(${formatJsArg(kind)}, ${index}, 'name', this.value)">
+          ${isWorkHour ? '' : `<input class="managed-rule-input mono" type="number" min="0" step="0.01" value="${escapeHtml(row.fixed_performance_base ?? '')}" placeholder="3000" oninput="updateMaintainedRuleDraft(${formatJsArg(kind)}, ${index}, 'fixed_performance_base', this.value)">`}
+          <div class="managed-rule-status">
+            <button class="${row.active !== false ? 'active' : ''}" type="button" onclick="updateMaintainedRuleDraft(${formatJsArg(kind)}, ${index}, 'active', true)">启用</button>
+            <button class="${row.active === false ? 'active danger' : ''}" type="button" onclick="updateMaintainedRuleDraft(${formatJsArg(kind)}, ${index}, 'active', false)">停用</button>
+          </div>
+          <button class="managed-rule-remove" type="button" onclick="removeMaintainedRuleRow(${formatJsArg(kind)}, ${index})">移除</button>
+        `).join('')}
+      </div>
+      <div class="maintained-editor-actions">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="closeMaintainedRuleDialog()">取消</button>
+        <button class="btn btn-primary btn-sm" type="button" onclick="saveMaintainedRuleList(${formatJsArg(kind)})">保存名单</button>
+      </div>
+    </div>
+  `;
+}
+
+function openMaintainedRuleDialog(kind) {
+  state.maintainedRuleEditor = kind;
+  state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
+  const dialog = document.getElementById('ruleListDialog');
+  const title = document.getElementById('ruleListDialogTitle');
+  const body = document.getElementById('ruleListDialogBody');
+  if (!dialog || !body || !title) return;
+  title.textContent = kind === 'workHour' ? '编辑96工时制员工' : '编辑固定基数人员';
+  body.innerHTML = renderMaintainedRuleEditor(kind);
+  openModal(dialog, body.querySelector('input, button'));
+}
+
+function closeMaintainedRuleDialog() {
+  const dialog = document.getElementById('ruleListDialog');
+  closeModal(dialog);
+  state.maintainedRuleEditor = '';
+}
+
+function renderMaintainedRuleDialogBody() {
+  if (!state.maintainedRuleEditor) return;
+  const body = document.getElementById('ruleListDialogBody');
+  if (body) body.innerHTML = renderMaintainedRuleEditor(state.maintainedRuleEditor);
 }
 
 function buildWorkbenchTasks(activity = getWorkbenchActivity()) {
@@ -1365,42 +1739,135 @@ async function confirmMaintainedRuleList(kind) {
   state.baseOverrideData = data.preview;
   state.currentActivity.base_override_file = '页面维护';
   state.currentActivity.base_override_data = data.preview;
+  setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success', { render: false });
   renderWorkbench();
-  showNotification(kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success');
 }
 
 function toggleMaintainedRuleEditor(kind) {
-  const panel = document.querySelector(`[data-maintained-editor="${kind}"]`);
-  if (panel) panel.hidden = !panel.hidden;
+  if (state.maintainedRuleEditor === kind) {
+    state.maintainedRuleEditor = '';
+  } else {
+    state.maintainedRuleEditor = kind;
+    state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
+  }
+  renderWorkbench();
+}
+
+function updateMaintainedRuleDraft(kind, index, field, value) {
+  const rows = state.maintainedRuleDrafts?.[kind] || [];
+  if (!rows[index]) return;
+  rows[index] = {
+    ...rows[index],
+    [field]: value,
+  };
+  state.maintainedRuleDrafts[kind] = rows;
+  if (field === 'active') renderMaintainedRuleDialogBody();
+}
+
+function addMaintainedRuleRow(kind) {
+  const rows = state.maintainedRuleDrafts?.[kind] || [];
+  rows.push({
+    employee_id: '',
+    name: '',
+    fixed_performance_base: '',
+    active: true,
+  });
+  state.maintainedRuleDrafts[kind] = rows;
+  renderMaintainedRuleDialogBody();
+}
+
+function removeMaintainedRuleRow(kind, index) {
+  const rows = state.maintainedRuleDrafts?.[kind] || [];
+  state.maintainedRuleDrafts[kind] = rows.filter((_, rowIndex) => rowIndex !== index);
+  renderMaintainedRuleDialogBody();
+}
+
+function normalizeMaintainedRuleRows(kind) {
+  const isWorkHour = kind === 'workHour';
+  return (state.maintainedRuleDrafts?.[kind] || [])
+    .map(row => ({
+      employee_id: String(row.employee_id || '').trim(),
+      name: String(row.name || '').trim(),
+      fixed_performance_base: isWorkHour ? undefined : row.fixed_performance_base,
+      active: row.active !== false,
+    }))
+    .filter(row => row.employee_id)
+    .map(row => {
+      if (isWorkHour) {
+        return {
+          employee_id: row.employee_id,
+          name: row.name,
+          active: row.active,
+        };
+      }
+      return {
+        employee_id: row.employee_id,
+        name: row.name,
+        fixed_performance_base: row.fixed_performance_base === '' ? null : row.fixed_performance_base,
+        active: row.active,
+      };
+    });
+}
+
+async function saveMaintainedRuleList(kind) {
+  if (!state.ruleLists) await loadRuleLists();
+  const payload = {
+    work_hour_employees: kind === 'workHour'
+      ? normalizeMaintainedRuleRows('workHour')
+      : (state.ruleLists.work_hour_employees || []),
+    fixed_base_employees: kind === 'fixedBase'
+      ? normalizeMaintainedRuleRows('fixedBase')
+      : (state.ruleLists.fixed_base_employees || []),
+  };
+  const data = await apiJson(`${API_BASE}/rule-lists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  state.ruleLists = data;
+  state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
+  setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已保存' : '固定基数名单已保存', 'success', { render: false });
+  closeMaintainedRuleDialog();
+  renderWorkbench();
 }
 
 function renderWorkbenchPerformanceSupplement() {
-  // 绩效补录不再打开弹窗，离职/漏绩效员工直接在工作台内联写入。
-  const levelOptions = ['S', 'A', 'B', 'C', 'D'];
+  // 页面只补充核算必须值；明细留痕仍走线下表导入。
   const draft = state.workbenchSupplementDraft || {};
+  const supplementRows = (state.performanceData?.employees || [])
+    .filter(row => row?.performance_source === '绩效补录');
   return `
-    <div class="workbench-inline-form" aria-label="绩效补录">
-      <div class="workbench-inline-field">
-        <label for="workbenchSupplementEmployeeId">工号</label>
-        <input id="workbenchSupplementEmployeeId" type="text" value="${escapeHtml(draft.employeeId || '')}" placeholder="zt0000000" oninput="updateWorkbenchSupplementDraft()">
+    <div class="performance-supplement-inline">
+      <div class="workbench-inline-form" aria-label="绩效补录">
+        <div class="workbench-inline-field">
+          <label for="workbenchSupplementEmployeeId">工号</label>
+          <input id="workbenchSupplementEmployeeId" type="text" value="${escapeHtml(draft.employeeId || '')}" placeholder="zt0000000" oninput="updateWorkbenchSupplementDraft()">
+        </div>
+        <div class="workbench-inline-field">
+          <label for="workbenchSupplementName">姓名</label>
+          <input id="workbenchSupplementName" type="text" value="${escapeHtml(draft.name || '')}" placeholder="员工姓名" oninput="updateWorkbenchSupplementDraft()">
+        </div>
+        <div class="workbench-inline-field">
+          <label for="workbenchSupplementCoefficient">绩效系数</label>
+          <input id="workbenchSupplementCoefficient" type="number" step="0.01" min="0" value="${escapeHtml(draft.coefficient || '')}" placeholder="0.93" oninput="updateWorkbenchSupplementDraft()">
+        </div>
+        <div class="workbench-inline-field wide">
+          <label for="workbenchSupplementNote">备注</label>
+          <input id="workbenchSupplementNote" type="text" value="${escapeHtml(draft.note || '')}" placeholder="离职绩效补录" oninput="updateWorkbenchSupplementDraft()">
+        </div>
+        <button class="btn btn-primary" id="btnWorkbenchSaveSupplement" type="button" onclick="saveWorkbenchPerformanceSupplement()">保存并继续</button>
       </div>
-      <div class="workbench-inline-field">
-        <label for="workbenchSupplementName">姓名</label>
-        <input id="workbenchSupplementName" type="text" value="${escapeHtml(draft.name || '')}" placeholder="员工姓名" oninput="updateWorkbenchSupplementDraft()">
-      </div>
-      <div class="workbench-inline-field">
-        <label for="workbenchSupplementScore">得分</label>
-        <input id="workbenchSupplementScore" type="number" step="0.01" value="${escapeHtml(draft.score || '')}" placeholder="0.00" oninput="updateWorkbenchSupplementDraft()">
-      </div>
-      <div class="workbench-inline-field">
-        <label>等级</label>
-        <div class="workbench-source-actions">
-          ${levelOptions.map(level => `
-            <button class="workbench-segment ${state.workbenchSupplementLevel === level ? 'active' : ''}" type="button" onclick="setWorkbenchSupplementLevel(${formatJsArg(level)})">${level}</button>
+      ${supplementRows.length ? `
+        <div class="performance-supplement-list" aria-label="已补录人员">
+          ${supplementRows.slice(-6).map(row => `
+            <span class="performance-supplement-chip">
+              <strong>${escapeHtml(row.employee_id || '-')}</strong>
+              ${escapeHtml(row.name || '-')}
+              <em>${formatCoefficient(row.coefficient)}</em>
+            </span>
           `).join('')}
         </div>
-      </div>
-      <button class="btn btn-primary" id="btnWorkbenchSaveSupplement" type="button" onclick="saveWorkbenchPerformanceSupplement()">保存补录</button>
+      ` : ''}
     </div>
   `;
 }
@@ -1415,7 +1882,7 @@ function renderWorkbenchResultRow(result) {
       <td>${escapeHtml(result.name || '-')}</td>
       <td>${escapeHtml(result.area || '-')}</td>
       <td>${escapeHtml(result.department || '-')}</td>
-      <td>${formatResultJobType(result.job_type)}</td>
+      <td>${escapeHtml(getDisplayPosition(result, getWorkbenchActivity()))}</td>
       <td class="amount-cell">${formatCurrency(result.hourly_rate)}</td>
       <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
@@ -1468,7 +1935,8 @@ function getWorkbenchFilteredResults(results) {
 
 function renderWorkbenchResults(activity) {
   const results = getWorkbenchResults(activity);
-  const filteredResults = getWorkbenchFilteredResults(results).slice(0, 80);
+  const filteredResults = getWorkbenchFilteredResults(results);
+  const pageInfo = getPaginatedRows('results', filteredResults);
   const filters = [
     ['all', `全部 ${results.length}`],
     ['exception', `异常 ${results.filter(result => (result.exceptions || []).length).length}`],
@@ -1508,10 +1976,11 @@ function renderWorkbenchResults(activity) {
             </tr>
           </thead>
           <tbody>
-            ${filteredResults.length ? filteredResults.map(renderWorkbenchResultRow).join('') : renderEmptyTableRow(12, results.length ? '当前筛选没有记录' : '暂无核算结果')}
+            ${pageInfo.items.length ? pageInfo.items.map(renderWorkbenchResultRow).join('') : renderEmptyTableRow(12, results.length ? '当前筛选没有记录' : '暂无核算结果')}
           </tbody>
         </table>
       </div>
+      ${renderTablePagination('results', pageInfo)}
     </section>
   `;
 }
@@ -1556,23 +2025,40 @@ function renderWorkbench() {
   if (!activity) {
     el.workbenchContent.innerHTML = `
       <div class="workbench-empty">
+        <svg class="workbench-empty-illustration" viewBox="0 0 156 112" fill="none" aria-hidden="true">
+          <rect x="20" y="18" width="116" height="76" rx="10" fill="#EEF4FF" stroke="#B8CCFF" stroke-width="1.5"/>
+          <rect x="34" y="32" width="48" height="8" rx="4" fill="#2563EB" opacity="0.9"/>
+          <rect x="34" y="48" width="88" height="6" rx="3" fill="#C9D8FF"/>
+          <rect x="34" y="61" width="72" height="6" rx="3" fill="#DDE7FF"/>
+          <rect x="34" y="74" width="58" height="6" rx="3" fill="#DDE7FF"/>
+          <circle cx="118" cy="35" r="12" fill="#D1FAE5" stroke="#65CFA6" stroke-width="1.5"/>
+          <path d="M112.5 35.2l3.5 3.5 7-8" stroke="#0F766E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M46 94h64" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
+          <path d="M106 16l7-7 7 7M113 9v17" stroke="#8BA5F8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
         <h2>暂无月度活动</h2>
-        <p>先创建月度活动。</p>
+        <p>创建本月活动后，再导入花名册、考勤、薪资和绩效数据。</p>
         <button class="btn btn-primary" type="button" onclick="document.getElementById('btnNewActivity')?.click()">新建活动</button>
       </div>
     `;
     return;
   }
   const activeStep = ACTIVITY_STEPS.find(step => step.key === state.activityStep) || ACTIVITY_STEPS[0];
+  const canCalculate = buildNeedsForStep('check', activity).length === 0;
   el.workbenchContent.innerHTML = `
-    <section class="activity-titlebar">
-      <div>
-        <button class="link-button" type="button" onclick="navigateTo('activities')">返回活动列表</button>
-        <h2>${escapeHtml(activity.calc_month || '-')} FBU美洲绩效核算</h2>
-        <span class="activity-id">活动 ${escapeHtml(activity.run_id || '-')}</span>
+    <section class="activity-titlebar activity-page-titlebar">
+      <div class="activity-title-main">
+        <div class="activity-title-line">
+          <h2>${escapeHtml(activity.calc_month || '-')} FBU美洲绩效核算</h2>
+        </div>
+        <div class="activity-title-meta">
+          <span>活动 ${escapeHtml(activity.run_id || '-')}</span>
+          <span>${escapeHtml(activeStep.label || '-')}</span>
+        </div>
       </div>
       <div class="activity-title-actions">
-        ${state.activityStep === 'check' ? '<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()">开始核算</button>' : ''}
+        ${state.activityStep === 'check' ? `<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()" ${canCalculate ? '' : 'disabled'}>开始核算</button>` : ''}
+        <button class="btn btn-secondary btn-sm activity-return-button" type="button" onclick="navigateTo('activities')">返回</button>
       </div>
     </section>
     ${renderActivityStepper(activity)}
@@ -1584,12 +2070,21 @@ function renderWorkbench() {
 }
 
 function renderActivities() {
+  const validIds = new Set(state.activities.map(activity => activity.run_id).filter(Boolean));
+  state.selectedActivityIds = new Set([...state.selectedActivityIds].filter(id => validIds.has(id)));
+
   if (!state.activities.length) {
-    el.activitiesBody.innerHTML = renderEmptyTableRow(7, '暂无月度活动');
+    el.activitiesBody.innerHTML = renderEmptyTableRow(8, '暂无月度活动');
+    renderActivitiesBatchBar();
+    renderActivitiesPagination(null);
     return;
   }
 
-  el.activitiesBody.innerHTML = state.activities.map(activity => {
+  const pageInfo = getPaginatedRows('activities', state.activities);
+  renderActivitiesBatchBar(pageInfo);
+  renderActivitiesPagination(pageInfo);
+
+  el.activitiesBody.innerHTML = pageInfo.items.map(activity => {
     const statusMeta = getActivityStatusMeta(activity);
     const completedSteps = getActivityCompletedSteps(activity);
     const progress = `${completedSteps}/${activityStepLabels.length}`;
@@ -1605,7 +2100,15 @@ function renderActivities() {
       : `enterActivity(${formatJsArg(activity.run_id)})`;
 
     return `
-      <tr class="activity-row ${statusMeta.rowClass}">
+      <tr class="activity-row ${statusMeta.rowClass}" data-activity-row-id="${escapeHtml(activity.run_id || '')}">
+        <td class="activity-select-cell">
+          <input class="activity-row-check"
+                 type="checkbox"
+                 value="${escapeHtml(activity.run_id || '')}"
+                 data-activity-id="${escapeHtml(activity.run_id || '')}"
+                 aria-label="选择活动 ${escapeHtml(activity.run_id || '')}"
+                 ${state.selectedActivityIds.has(activity.run_id) ? 'checked' : ''}>
+        </td>
         <td>
           <div class="activity-task">
             <div class="activity-task-main">
@@ -1646,6 +2149,39 @@ function renderActivities() {
   }).join('');
 }
 
+function renderActivitiesBatchBar(pageInfo = null) {
+  const bar = document.getElementById('activitiesBatchBar');
+  if (!bar) return;
+  const selectedCount = state.selectedActivityIds.size;
+  const pageIds = (pageInfo?.items || []).map(activity => activity.run_id).filter(Boolean);
+  const pageSelected = pageIds.length > 0 && pageIds.every(id => state.selectedActivityIds.has(id));
+  bar.innerHTML = `
+    <label class="activity-bulk-check">
+      <input type="checkbox"
+             data-activity-page-select
+             ${pageSelected ? 'checked' : ''}
+             ${pageIds.length ? '' : 'disabled'}>
+      <span>当前页全选</span>
+    </label>
+    <span class="activity-bulk-count">已选 ${selectedCount} 项</span>
+    <button class="btn btn-danger btn-sm"
+            type="button"
+            ${selectedCount ? '' : 'disabled'}
+            data-activity-bulk-delete
+            onclick="event.preventDefault(); event.stopPropagation(); deleteSelectedActivities()">
+      批量删除
+    </button>
+  `;
+}
+
+function renderActivitiesPagination(pageInfo) {
+  const wrap = document.getElementById('activitiesPagination');
+  if (!wrap) return;
+  wrap.innerHTML = pageInfo && pageInfo.total
+    ? renderTablePagination('activities', pageInfo)
+    : '';
+}
+
 function updateActivityKPIs() {
   el.kpiTotalActivities.textContent = state.activities.length;
   el.kpiCompleted.textContent = state.activities.filter(a => a.status === 'completed').length;
@@ -1662,24 +2198,30 @@ function getActivityDetail(activity) {
 }
 
 async function loadActivityListDetails() {
-  const pendingActivities = state.activities.filter(activity => activity.run_id
+  if (state.currentPage !== 'activities') return;
+  const pageInfo = getPaginatedRows('activities', state.activities);
+  const pendingActivities = pageInfo.items.filter(activity => activity.run_id
     && state.currentActivity?.run_id !== activity.run_id
     && !state.foundationRunDetails[activity.run_id]
-    && !state.activityListLoadingRunIds.has(activity.run_id));
+    && !state.activityListLoadingRunIds.has(activity.run_id))
+    .slice(0, ACTIVITY_DETAIL_PREFETCH_LIMIT);
 
   if (!pendingActivities.length) return;
 
   pendingActivities.forEach(activity => state.activityListLoadingRunIds.add(activity.run_id));
-  if (state.currentPage === 'activities') renderActivities();
+  renderActivities();
 
-  await Promise.allSettled(pendingActivities.map(async activity => {
-    try {
-      const detail = await apiJson(`${API_BASE}/runs/${activity.run_id}`);
-      state.foundationRunDetails[activity.run_id] = detail;
-    } finally {
-      state.activityListLoadingRunIds.delete(activity.run_id);
-    }
-  }));
+  for (let index = 0; index < pendingActivities.length; index += ACTIVITY_DETAIL_PREFETCH_CONCURRENCY) {
+    const batch = pendingActivities.slice(index, index + ACTIVITY_DETAIL_PREFETCH_CONCURRENCY);
+    await Promise.allSettled(batch.map(async activity => {
+      try {
+        const detail = await apiJson(`${API_BASE}/runs/${activity.run_id}`);
+        state.foundationRunDetails[activity.run_id] = detail;
+      } finally {
+        state.activityListLoadingRunIds.delete(activity.run_id);
+      }
+    }));
+  }
 
   if (state.currentPage === 'activities') {
     renderActivities();
@@ -2344,7 +2886,8 @@ async function openActivityPage(activityId, page) {
 }
 
 async function enterActivity(activityId, options = {}) {
-  const { preservePage = false } = options;
+  const { preservePage = false, preserveStep = false, initialStep = '' } = options;
+  const previousStep = state.activityStep;
 
   try {
     const isDifferentActivity = state.currentActivity?.run_id !== activityId;
@@ -2355,14 +2898,22 @@ async function enterActivity(activityId, options = {}) {
     }
 
     state.currentActivity = activity;
-    state.activityStep = getActivityStepFromActivity(activity);
+    if (preserveStep && !isDifferentActivity && ACTIVITY_STEPS.some(step => step.key === previousStep)) {
+      state.activityStep = previousStep;
+    } else if (ACTIVITY_STEPS.some(step => step.key === initialStep)) {
+      state.activityStep = initialStep;
+    } else {
+      state.activityStep = getActivityStepFromActivity(activity);
+    }
     state.foundationRunDetails[activity.run_id] = activity;
     state.diagnosticsData = activity.diagnostics || null;
     if (state.currentPage === 'workbench') {
       await loadRuleLists();
     }
 
-    if (preservePage && state.currentPage !== 'activities') {
+    if (preservePage && state.currentPage === 'activities') {
+      // Keep list interactions stable while background activity details are loading.
+    } else if (preservePage) {
       navigateTo(state.currentPage);
     } else {
       navigateTo('workbench');
@@ -2386,9 +2937,18 @@ async function enterActivity(activityId, options = {}) {
     if (activity.results) {
       state.resultsData = activity.results;
     }
+    if (preservePage && state.currentPage === 'activities') {
+      renderActivities();
+      loadActivityListDetails();
+      return;
+    }
     renderWorkbench();
   } catch (error) {
     console.error('加载活动详情失败:', error);
+    if (state.currentPage === 'workbench') {
+      state.currentActivity = null;
+      renderWorkbench();
+    }
     showNotification('加载活动详情失败', 'error');
   }
 }
@@ -2428,7 +2988,7 @@ el.btnNewActivity.addEventListener('click', async () => {
 
     if (data.run_id) {
       showNotification('月度活动创建成功', 'success');
-      enterActivity(data.run_id);
+      enterActivity(data.run_id, { initialStep: 'people' });
     }
   } catch (error) {
     console.error('创建活动失败:', error);
@@ -2449,13 +3009,103 @@ async function deleteActivity(activityId) {
   });
   if (!dialogResult.confirmed) return;
 
-  try {
-    await apiJson(`${API_BASE}/runs/${activityId}`, { method: 'DELETE' });
-    showNotification('已删除', 'success');
-    loadActivities();
-  } catch (error) {
-    showNotification('删除失败', 'error');
+  await deleteActivitiesByIds([activityId], {
+    successMessage: '已删除',
+    failureMessage: '删除失败',
+  });
+}
+
+async function deleteActivitiesByIds(ids, options = {}) {
+  const runIds = [...new Set((ids || []).filter(Boolean))];
+  if (!runIds.length) return;
+
+  state.activities = state.activities.filter(activity => !runIds.includes(activity.run_id));
+  runIds.forEach(id => {
+    state.selectedActivityIds.delete(id);
+    delete state.foundationRunDetails[id];
+    state.activityListLoadingRunIds.delete(id);
+  });
+  updateActivityKPIs();
+  if (state.currentPage === 'activities') {
+    renderActivities();
   }
+
+  try {
+    const data = await apiJson(`${API_BASE}/runs/bulk-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_ids: runIds }),
+    });
+    showNotification(options.successMessage || `已删除 ${data.deleted_count || runIds.length} 个活动`, 'success');
+    await loadActivities();
+  } catch (error) {
+    showNotification(options.failureMessage || '删除失败', 'error');
+    await loadActivities();
+  }
+}
+
+function toggleActivitySelection(activityId, checked) {
+  if (!activityId) return;
+  if (checked) {
+    state.selectedActivityIds.add(activityId);
+  } else {
+    state.selectedActivityIds.delete(activityId);
+  }
+  renderActivities();
+}
+
+function toggleActivityPageSelection(checked) {
+  const pageInfo = getPaginatedRows('activities', state.activities);
+  pageInfo.items.forEach(activity => {
+    if (!activity.run_id) return;
+    if (checked) {
+      state.selectedActivityIds.add(activity.run_id);
+    } else {
+      state.selectedActivityIds.delete(activity.run_id);
+    }
+  });
+  renderActivities();
+}
+
+async function deleteSelectedActivities() {
+  const ids = [...state.selectedActivityIds].filter(Boolean);
+  if (!ids.length) return;
+  const dialogResult = await openAppDialog({
+    title: '批量删除月度活动',
+    message: `将删除已选择的 ${ids.length} 个活动记录和已导入数据。`,
+    confirmText: '删除',
+    cancelText: '保留',
+    tone: 'danger',
+  });
+  if (!dialogResult.confirmed) return;
+
+  await deleteActivitiesByIds(ids, {
+    successMessage: `已删除 ${ids.length} 个活动`,
+    failureMessage: '批量删除失败',
+  });
+}
+
+function setupActivityListInteractions() {
+  const table = document.getElementById('activitiesTable');
+  const batchBar = document.getElementById('activitiesBatchBar');
+
+  table?.addEventListener('change', event => {
+    const checkbox = event.target?.closest?.('.activity-row-check');
+    if (!checkbox) return;
+    toggleActivitySelection(checkbox.dataset.activityId || checkbox.value, checkbox.checked);
+  });
+
+  batchBar?.addEventListener('change', event => {
+    const checkbox = event.target?.closest?.('[data-activity-page-select]');
+    if (!checkbox) return;
+    toggleActivityPageSelection(checkbox.checked);
+  });
+
+  batchBar?.addEventListener('click', event => {
+    const button = event.target?.closest?.('[data-activity-bulk-delete]');
+    if (!button || button.disabled) return;
+    deleteSelectedActivities();
+  });
 }
 
 // ═══ Base Roster ═══
@@ -2519,10 +3169,13 @@ function chooseRosterFile() {
 el.btnUploadRoster?.addEventListener('click', chooseRosterFile);
 
 const uploadTypeLabels = {
+  roster: '花名册',
   attendance: '考勤日报表',
-  salary: '薪资档案',
+  previousAttendance: '上月考勤',
+  previousSalary: '上月薪资档案',
+  currentSalary: '当月薪资档案',
+  salaryAdjustments: '全量调薪流程',
   performance: '绩效报表',
-  adjustments: '调薪/转正拆分表',
   supplementalLeave: '补充假勤表',
 };
 
@@ -2531,9 +3184,10 @@ function getWorkbenchUploadInput(type) {
     roster: el.workbenchUploadRoster,
     attendance: el.workbenchUploadAttendance,
     previousAttendance: el.workbenchUploadPreviousAttendance,
-    salary: el.workbenchUploadSalary,
+    previousSalary: el.workbenchUploadPreviousSalary,
+    currentSalary: el.workbenchUploadCurrentSalary,
+    salaryAdjustments: el.workbenchUploadSalaryAdjustments,
     performance: el.workbenchUploadPerformance,
-    adjustments: el.workbenchUploadAdjustments,
     supplementalLeave: el.workbenchUploadSupplementalLeave,
   };
   return map[type] || null;
@@ -2542,7 +3196,7 @@ function getWorkbenchUploadInput(type) {
 function openWorkbenchUpload(type) {
   const input = getWorkbenchUploadInput(type);
   if (!input) return;
-  if (!state.currentActivity && !['roster', 'previousAttendance'].includes(type)) {
+  if (!state.currentActivity && type !== 'roster') {
     showNotification('请先进入一个月度活动，再上传该活动的数据文件', 'warning', { title: '缺少月度活动' });
     return;
   }
@@ -2552,8 +3206,13 @@ function openWorkbenchUpload(type) {
 
 async function uploadWorkbenchRosterFile(file) {
   if (!file) return;
+  if (!/\.(xlsx|xls)$/i.test(file.name)) {
+    failWorkbenchUploadProgress('roster', file.name, '仅支持 .xlsx / .xls');
+    return;
+  }
   const formData = new FormData();
   formData.append('file', file);
+  startWorkbenchUploadProgress('roster', file);
   if (el.btnUploadRoster) {
     el.btnUploadRoster.disabled = true;
     el.btnUploadRoster.textContent = '花名册上传中...';
@@ -2566,10 +3225,9 @@ async function uploadWorkbenchRosterFile(file) {
     state.baseRoster = data.roster;
     updateRosterButton();
     renderFoundationData();
-    renderWorkbench();
-    showNotification('基础花名册已更新', 'success');
+    finishWorkbenchUploadProgress('roster', file.name, '已更新');
   } catch (error) {
-    showNotification('花名册上传失败: ' + error.message, 'error');
+    failWorkbenchUploadProgress('roster', file.name, error.message);
   } finally {
     if (el.btnUploadRoster) {
       el.btnUploadRoster.disabled = false;
@@ -2581,19 +3239,20 @@ async function uploadWorkbenchRosterFile(file) {
 async function uploadWorkbenchFile(type, file) {
   if (!file || !state.currentActivity) return;
   if (!/\.(xlsx|xls)$/i.test(file.name)) {
-    showNotification('仅支持 .xlsx / .xls 格式，请重新选择文件', 'error', { title: '文件格式不支持' });
+    failWorkbenchUploadProgress(type, file.name, '仅支持 .xlsx / .xls');
     return;
   }
 
   const formData = new FormData();
   formData.append('file', file);
   let endpoint = '';
+  const previousAttendanceFile = state.workbenchPreviousAttendanceFile;
 
   if (type === 'attendance') {
     formData.append('calc_month', state.currentActivity.calc_month);
     formData.append('run_id', state.currentActivity.run_id);
-    if (state.workbenchPreviousAttendanceFile) {
-      formData.append('previous_attendance', state.workbenchPreviousAttendanceFile);
+    if (previousAttendanceFile) {
+      formData.append('previous_attendance', previousAttendanceFile);
     }
     endpoint = `${API_BASE}/import-attendance`;
   } else if (type === 'salary') {
@@ -2613,14 +3272,14 @@ async function uploadWorkbenchFile(type, file) {
   if (!endpoint) return;
 
   try {
-    showNotification(`${uploadTypeLabels[type] || '文件'}上传中`, 'info', { duration: 1200 });
+    startWorkbenchUploadProgress(type, file);
     const data = await apiJson(endpoint, {
       method: 'POST',
       body: formData,
     });
 
     if (!data.success) {
-      showNotification(data.detail || '未知错误', 'error', { title: '上传失败' });
+      failWorkbenchUploadProgress(type, file.name, data.detail || '上传失败');
       return;
     }
 
@@ -2636,6 +3295,9 @@ async function uploadWorkbenchFile(type, file) {
     if (type === 'attendance') {
       state.attendanceData = data.preview;
       state.workbenchPreviousAttendanceFile = null;
+      if (previousAttendanceFile) {
+        finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入');
+      }
     } else if (type === 'salary') {
       state.salaryData = data.preview;
     } else if (type === 'performance') {
@@ -2646,25 +3308,137 @@ async function uploadWorkbenchFile(type, file) {
       state.supplementalLeaveData = data.preview;
     }
 
-    showNotification(`${uploadTypeLabels[type]}已上传并刷新工作台`, 'success');
-    await enterActivity(state.currentActivity.run_id, { preservePage: true });
+    finishWorkbenchUploadProgress(type, file.name, '已解析');
+    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
     renderWorkbench();
   } catch (error) {
-    showNotification(error.message, 'error', { title: '上传失败' });
+    failWorkbenchUploadProgress(type, file.name, error.message);
+  }
+}
+
+async function uploadWorkbenchSalaryHistory() {
+  const files = state.workbenchSalaryHistoryFiles;
+  if (!state.currentActivity || !files.previousSalary || !files.currentSalary || !files.salaryAdjustments) return;
+
+  const formData = new FormData();
+  formData.append('run_id', state.currentActivity.run_id);
+  formData.append('previous_salary', files.previousSalary);
+  formData.append('current_salary', files.currentSalary);
+  formData.append('adjustments', files.salaryAdjustments);
+  try {
+    const data = await apiJson(`${API_BASE}/import-salary-history`, { method: 'POST', body: formData });
+    state.salaryData = data.preview;
+    state.adjustmentData = state.currentActivity?.adjustment_data || null;
+    state.lastImportResult = {
+      type: 'salary',
+      hasResultFile: Boolean(data.result_file),
+      filename: files.currentSalary.name,
+      summary: data.verification?.summary || data.preview?.summary || {},
+      at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    };
+    ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
+      finishWorkbenchUploadProgress(type, files[type].name, '已核验');
+    });
+    state.workbenchSalaryHistoryFiles = {};
+    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
+    renderWorkbench();
+  } catch (error) {
+    ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
+      failWorkbenchUploadProgress(type, files[type]?.name || '', error.message);
+    });
+  }
+}
+
+async function confirmSalaryVerification(employeeId, choice) {
+  if (!state.currentActivity?.run_id) return;
+  try {
+    const data = await apiJson(
+      `${API_BASE}/runs/${state.currentActivity.run_id}/salary-verification/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee_id: employeeId, choice }),
+      },
+    );
+    state.salaryData = data.preview;
+    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
+    renderWorkbench();
+  } catch (error) {
+    state.inlineActionNotes.salary = `薪资差异确认失败：${error.message}`;
+    renderWorkbench();
+  }
+}
+
+async function uploadWorkbenchPreviousAttendanceFile(file) {
+  if (!file || !state.currentActivity?.attendance_file) return;
+  if (!/\.(xlsx|xls)$/i.test(file.name)) {
+    failWorkbenchUploadProgress('previousAttendance', file.name, '仅支持 .xlsx / .xls');
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append('calc_month', state.currentActivity.calc_month);
+  formData.append('run_id', state.currentActivity.run_id);
+  formData.append('previous_attendance', file);
+
+  try {
+    startWorkbenchUploadProgress('previousAttendance', file);
+    const data = await apiJson(`${API_BASE}/import-attendance`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!data.success) {
+      failWorkbenchUploadProgress('previousAttendance', file.name, data.detail || '上传失败');
+      return;
+    }
+    state.attendanceData = data.preview;
+    state.workbenchPreviousAttendanceFile = null;
+    finishWorkbenchUploadProgress('previousAttendance', file.name, '已随考勤纳入');
+    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
+    renderWorkbench();
+  } catch (error) {
+    failWorkbenchUploadProgress('previousAttendance', file.name, error.message);
   }
 }
 
 function handleWorkbenchUploadChange(type, event) {
   const file = event.target.files?.[0];
   if (!file) return;
+  if (['previousSalary', 'currentSalary', 'salaryAdjustments'].includes(type)) {
+    if (!/\.(xlsx|xls)$/i.test(file.name)) {
+      failWorkbenchUploadProgress(type, file.name, '仅支持 .xlsx / .xls');
+      return;
+    }
+    state.workbenchSalaryHistoryFiles[type] = file;
+    setWorkbenchUploadState(type, {
+      fileName: file.name,
+      fileSize: file.size,
+      status: 'selected',
+      progress: 100,
+      message: '已选择，集齐三份文件后自动核验',
+    });
+    renderWorkbench();
+    uploadWorkbenchSalaryHistory();
+    return;
+  }
   if (type === 'previousAttendance') {
     if (!/\.(xlsx|xls)$/i.test(file.name)) {
-      showNotification('仅支持 .xlsx / .xls 格式，请重新选择文件', 'error', { title: '文件格式不支持' });
+      failWorkbenchUploadProgress(type, file.name, '仅支持 .xlsx / .xls');
+      return;
+    }
+    if (state.currentActivity?.attendance_file) {
+      uploadWorkbenchPreviousAttendanceFile(file);
       return;
     }
     state.workbenchPreviousAttendanceFile = file;
+    setWorkbenchUploadState(type, {
+      fileName: file.name,
+      fileSize: file.size,
+      status: 'selected',
+      progress: 100,
+      message: '将随当月考勤一起上传',
+    });
     renderWorkbench();
-    showNotification('上月考勤已暂存，将随本月考勤一起上传', 'success');
     return;
   }
   if (type === 'roster') {
@@ -2672,6 +3446,10 @@ function handleWorkbenchUploadChange(type, event) {
     return;
   }
   uploadWorkbenchFile(type, file);
+}
+
+function clearWorkbenchUpload(type) {
+  clearWorkbenchUploadState(type);
 }
 
 function setWorkbenchTaskFilter(filter) {
@@ -2684,6 +3462,57 @@ function setWorkbenchResultFilter(filter) {
   renderWorkbench();
 }
 
+function getActiveWorkbenchTableType() {
+  return {
+    people: 'people',
+    attendance: 'attendance',
+    salary: 'salary',
+    performance: 'performance',
+    results: 'results',
+  }[state.activityStep] || '';
+}
+
+function setWorkbenchStepSearch(value = '') {
+  const focusSnapshot = captureInputFocus();
+  state.workbenchStepSearch = value || '';
+  if (workbenchStepSearchTimer) {
+    window.clearTimeout(workbenchStepSearchTimer);
+    workbenchStepSearchTimer = null;
+  }
+  const activeType = getActiveWorkbenchTableType();
+  if (activeType) {
+    getTablePagination(activeType).page = 1;
+  }
+  renderWorkbench();
+  restoreInputFocus(focusSnapshot);
+}
+
+function handleWorkbenchStepSearchInput(event) {
+  const input = event?.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  state.workbenchStepSearch = input.value || '';
+  if (composingWorkbenchStepSearch || event?.isComposing) return;
+  setWorkbenchStepSearch(input.value);
+}
+
+function handleWorkbenchStepSearchCompositionStart() {
+  composingWorkbenchStepSearch = true;
+  if (workbenchStepSearchTimer) {
+    window.clearTimeout(workbenchStepSearchTimer);
+    workbenchStepSearchTimer = null;
+  }
+}
+
+function handleWorkbenchStepSearchCompositionEnd(event) {
+  composingWorkbenchStepSearch = false;
+  handleWorkbenchStepSearchInput(event);
+}
+
+function setCheckTab(tab = 'base') {
+  state.checkTab = tab === 'issues' ? 'issues' : 'base';
+  renderWorkbench();
+}
+
 function toggleWorkbenchResultDetail(employeeId) {
   state.workbenchSelectedResult = state.workbenchSelectedResult === employeeId ? '' : employeeId;
   renderWorkbench();
@@ -2693,14 +3522,9 @@ function updateWorkbenchSupplementDraft() {
   state.workbenchSupplementDraft = {
     employeeId: document.getElementById('workbenchSupplementEmployeeId')?.value || '',
     name: document.getElementById('workbenchSupplementName')?.value || '',
-    score: document.getElementById('workbenchSupplementScore')?.value || '',
+    coefficient: document.getElementById('workbenchSupplementCoefficient')?.value || '',
+    note: document.getElementById('workbenchSupplementNote')?.value || '',
   };
-}
-
-function setWorkbenchSupplementLevel(level) {
-  updateWorkbenchSupplementDraft();
-  state.workbenchSupplementLevel = state.workbenchSupplementLevel === level ? '' : level;
-  renderWorkbench();
 }
 
 async function saveWorkbenchPerformanceSupplement() {
@@ -2708,8 +3532,9 @@ async function saveWorkbenchPerformanceSupplement() {
   const employeeIdInput = document.getElementById('workbenchSupplementEmployeeId');
   const employeeId = employeeIdInput?.value.trim() || '';
   const name = document.getElementById('workbenchSupplementName')?.value.trim() || '';
-  const score = document.getElementById('workbenchSupplementScore')?.value.trim() || '';
-  const level = state.workbenchSupplementLevel;
+  const coefficientInput = document.getElementById('workbenchSupplementCoefficient');
+  const coefficient = coefficientInput?.value.trim() || '';
+  const note = document.getElementById('workbenchSupplementNote')?.value.trim() || '工作台内联补录';
   const button = document.getElementById('btnWorkbenchSaveSupplement');
 
   if (!employeeId) {
@@ -2717,9 +3542,9 @@ async function saveWorkbenchPerformanceSupplement() {
     employeeIdInput?.focus();
     return;
   }
-  if (!score && !level) {
-    showNotification('请至少填写绩效得分或绩效等级', 'warning', { title: '无法保存' });
-    document.getElementById('workbenchSupplementScore')?.focus();
+  if (!coefficient) {
+    showNotification('请填写绩效系数', 'warning', { title: '无法保存' });
+    coefficientInput?.focus();
     return;
   }
 
@@ -2735,10 +3560,10 @@ async function saveWorkbenchPerformanceSupplement() {
       body: JSON.stringify({
         employee_id: employeeId,
         name,
-        score,
-        level,
-        coefficient: '',
-        note: '工作台内联补录',
+        score: '',
+        level: '',
+        coefficient,
+        note,
       }),
     });
 
@@ -2747,8 +3572,7 @@ async function saveWorkbenchPerformanceSupplement() {
     if (!state.currentActivity.performance_file) {
       state.currentActivity.performance_file = '页面绩效补录';
     }
-    state.workbenchSupplementLevel = '';
-    state.workbenchSupplementDraft = { employeeId: '', name: '', score: '' };
+    state.workbenchSupplementDraft = { employeeId: '', name: '', coefficient: '', note: '' };
     renderWorkbench();
     showNotification('绩效补录已保存', 'success');
   } catch (error) {
@@ -2774,9 +3598,10 @@ function locateWorkbenchSupplementalRow(rowId) {
 el.workbenchUploadRoster?.addEventListener('change', event => handleWorkbenchUploadChange('roster', event));
 el.workbenchUploadAttendance?.addEventListener('change', event => handleWorkbenchUploadChange('attendance', event));
 el.workbenchUploadPreviousAttendance?.addEventListener('change', event => handleWorkbenchUploadChange('previousAttendance', event));
-el.workbenchUploadSalary?.addEventListener('change', event => handleWorkbenchUploadChange('salary', event));
+el.workbenchUploadPreviousSalary?.addEventListener('change', event => handleWorkbenchUploadChange('previousSalary', event));
+el.workbenchUploadCurrentSalary?.addEventListener('change', event => handleWorkbenchUploadChange('currentSalary', event));
+el.workbenchUploadSalaryAdjustments?.addEventListener('change', event => handleWorkbenchUploadChange('salaryAdjustments', event));
 el.workbenchUploadPerformance?.addEventListener('change', event => handleWorkbenchUploadChange('performance', event));
-el.workbenchUploadAdjustments?.addEventListener('change', event => handleWorkbenchUploadChange('adjustments', event));
 el.workbenchUploadSupplementalLeave?.addEventListener('change', event => handleWorkbenchUploadChange('supplementalLeave', event));
 function downloadAdjustmentsTemplate() {
   const link = document.createElement('a');
@@ -3167,8 +3992,8 @@ function renderSalaryData() {
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><path d="M32 16v32M20 24h24M20 40h24M16 32h32" stroke="#94A3B8" stroke-width="3" stroke-linecap="round"/></svg>
         </div>
         <h3 class="empty-state-title">暂无薪资数据</h3>
-        <p class="empty-state-sub">上传薪资档案以查看时薪匹配情况</p>
-        <button class="btn btn-primary" onclick="openWorkbenchUpload('salary')">上传薪资档案</button>
+        <p class="empty-state-sub">上传相邻两月薪资档案和全量调薪流程，核验时薪与绩效比例生效日期</p>
+        <button class="btn btn-primary" onclick="openWorkbenchUpload('previousSalary')">开始上传</button>
       </div>
     `;
     return;
@@ -3193,6 +4018,9 @@ function renderSalaryData() {
     <div class="import-workbench">
       ${renderImportSummary([
         { label: '薪资档案人数', value: summary.total_employees, mono: true },
+        { label: '字段变化', value: summary.changed_count ?? 0, mono: true, tone: summary.changed_count ? 'warning' : '' },
+        { label: '已核验', value: summary.resolved_count ?? summary.total_employees, mono: true, tone: 'success' },
+        { label: '待处理', value: summary.blocking_count ?? 0, mono: true, tone: summary.blocking_count ? 'danger' : '' },
         { label: '有效时薪', value: summary.valid_hourly_count ?? summary.total_employees, mono: true, tone: 'success' },
         { label: '0时薪', value: summary.zero_hourly_count ?? 0, mono: true, tone: (summary.zero_hourly_count ?? 0) ? 'danger' : '' },
         { label: '有效平均时薪', value: formatCurrency(summary.avg_hourly_rate), mono: true },
@@ -3208,17 +4036,21 @@ function renderSalaryData() {
         filterValues: getTableFilter('salary'),
       })}
       ${renderImportTable(`
-      <table class="data-table" id="salaryTable">
+      <table class="data-table salary-activity-table" id="salaryTable">
         <thead>
           <tr>
             <th>工号</th>
             <th>姓名</th>
-            <th>划分区域</th>
             <th>部门全称</th>
+            <th>岗位</th>
+            <th>人员状态</th>
+            <th>划分区域</th>
+            <th>成本归属</th>
             <th>时薪</th>
             <th>绩效比例</th>
             <th>固定绩效基数</th>
             <th>导入状态</th>
+            <th>历史核验</th>
           </tr>
         </thead>
         <tbody>
@@ -3229,15 +4061,21 @@ function renderSalaryData() {
                 data-area="${escapeHtml(emp.area || '')}"
                 data-dept="${escapeHtml(emp.department || '')}">
               <td>${escapeHtml(emp.employee_id)}</td>
-              <td>${escapeHtml(emp.name || '-')}</td>
+              <td><span class="wrap-cell">${escapeHtml(emp.name || '-')}</span></td>
+              <td><span class="wrap-cell">${escapeHtml(emp.department || '-')}</span></td>
+              <td><span class="wrap-cell">${escapeHtml(emp.position || '-')}</span></td>
+              <td>${escapeHtml(emp.personnel_status || '-')}</td>
               <td>${escapeHtml(emp.area || '-')}</td>
-              <td>${escapeHtml(emp.department || '-')}</td>
+              <td><span class="wrap-cell">${escapeHtml(emp.cost_owner || '-')}</span></td>
               <td>${formatCurrency(emp.hourly_rate)}</td>
               <td>${formatPercent(emp.ratio)}</td>
               <td>${toNumber(emp.fixed_performance_base) > 0 ? formatCurrency(emp.fixed_performance_base) : '-'}</td>
               <td>${renderSalaryQualityStatus(emp)}</td>
+              <td>${emp.verification_status === 'blocking'
+                ? `<div class="table-actions"><button class="btn btn-sm btn-secondary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'previous')">按上月</button><button class="btn btn-sm btn-primary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'current')">按当月</button></div>`
+                : escapeHtml(emp.resolution || '已核验')}</td>
             </tr>
-          `).join('') : renderEmptyTableRow(8, '没有匹配的薪资记录')}
+          `).join('') : renderEmptyTableRow(12, '没有匹配的薪资记录')}
         </tbody>
       </table>
       `, renderTablePagination('salary', pageInfo))}
@@ -3360,10 +4198,10 @@ function renderPerformanceData() {
 }
 
 function formatLeaveConfirmationStatus(status, includeInBase) {
-  if (status === 'excluded') return '<span class="status-badge danger">已排除</span>';
-  if (status === 'confirmed' && includeInBase) return '<span class="status-badge success">确认计入</span>';
-  if (status === 'confirmed') return '<span class="status-badge neutral">已确认</span>';
-  return '<span class="status-badge warning">待确认</span>';
+  if (status === 'excluded') return '<span class="status-dot-badge danger"><i></i>已排除</span>';
+  if (status === 'confirmed' && includeInBase) return '<span class="status-dot-badge success"><i></i>确认计入</span>';
+  if (status === 'confirmed') return '<span class="status-dot-badge neutral"><i></i>已确认</span>';
+  return '<span class="status-dot-badge warning"><i></i>待确认</span>';
 }
 
 function getSupplementalLeavePeriodOptions(rows) {
@@ -3428,6 +4266,84 @@ function renderSupplementalSummaryItem(summary, key, label, tone = '') {
   return `<div class="${dynamicTone}" data-summary-key="${escapeHtml(key)}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
 }
 
+const supplementalLeaveQualityOptions = [
+  ['all', '全部'],
+  ['pending', '待确认'],
+  ['include', '确认计入'],
+  ['excluded', '已排除'],
+  ['termination', '离职结算'],
+];
+
+function getSupplementalLeaveQualityCount(rows, key) {
+  if (key === 'all') return rows.length;
+  return rows.filter(row => matchesQualityFilter('supplementalLeave', row, key)).length;
+}
+
+function renderSupplementalLeaveFilterBar(rows, filteredRows) {
+  const filters = getTableFilter('supplementalLeave');
+  const quality = String(filters.quality || 'all');
+  return `
+    <div class="supplemental-filter-bar">
+      <label class="supplemental-filter-input" for="filterLeaveId">
+        <span>工号</span>
+        <input type="text" id="filterLeaveId" value="${escapeHtml(filters.id || '')}" placeholder="zt0000000" oninput="queueFilter('filterSupplementalLeaveData', event)">
+      </label>
+      <label class="supplemental-filter-input" for="filterLeaveName">
+        <span>姓名</span>
+        <input type="text" id="filterLeaveName" value="${escapeHtml(filters.name || '')}" placeholder="员工姓名" oninput="queueFilter('filterSupplementalLeaveData', event)">
+      </label>
+      <input type="hidden" id="filterLeaveQuality" value="${escapeHtml(quality)}">
+      <div class="supplemental-filter-segments" aria-label="处理状态">
+        ${supplementalLeaveQualityOptions.map(([key, label]) => `
+          <button class="${quality === key ? 'active' : ''}" type="button" onclick="setSupplementalLeaveQuality(${formatJsArg(key)})">
+            ${escapeHtml(label)} <span>${getSupplementalLeaveQualityCount(rows, key)}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="supplemental-filter-actions">
+        <span>显示 ${filteredRows.length}/${rows.length}</span>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="resetSupplementalLeaveFilter()">重置</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSupplementalLeaveBulkBar(calcMonth = '') {
+  return `
+    <div class="supplemental-bulk-bar">
+      <label class="bulk-check">
+        <input type="checkbox" id="supplementalLeaveCheckAll" onchange="toggleSupplementalLeavePageSelection(this.checked)">
+        <span>本页全选</span>
+      </label>
+      <input type="hidden" id="bulkLeaveStatus" value="">
+      <input type="hidden" id="bulkLeaveInclude" value="">
+      <div class="supplemental-bulk-presets" data-bulk-field="bulkLeaveStatus">
+        <span>批量</span>
+        <button type="button" onclick="setSupplementalBulkPreset('confirmed', 'true', this)">确认计入</button>
+        <button type="button" onclick="setSupplementalBulkPreset('excluded', 'false', this)">排除</button>
+        <button type="button" onclick="setSupplementalBulkPreset('pending', '', this)">退回待确认</button>
+      </div>
+      <label class="supplemental-bulk-input" for="bulkLeaveMonth">
+        <span>月份</span>
+        <input id="bulkLeaveMonth" type="text" value="" placeholder="${escapeHtml(calcMonth || 'YYYY-MM')}" aria-label="归属月份">
+      </label>
+      <label class="supplemental-bulk-input" for="bulkLeavePeriod">
+        <span>周期</span>
+        <input id="bulkLeavePeriod" type="text" value="" placeholder="如 4.1-4.11" aria-label="归属周期">
+      </label>
+      <label class="supplemental-bulk-input hours" for="bulkLeaveHours">
+        <span>小时</span>
+        <input id="bulkLeaveHours" type="number" min="0" step="0.01" placeholder="计入小时" aria-label="批量计入小时">
+      </label>
+      <label class="supplemental-bulk-input note" for="bulkLeaveNote">
+        <span>备注</span>
+        <input id="bulkLeaveNote" type="text" placeholder="例如：已在3月计入" aria-label="备注">
+      </label>
+      <button class="btn btn-primary btn-sm" type="button" onclick="applySupplementalLeaveBatchFromToolbar()">批量填充</button>
+    </div>
+  `;
+}
+
 function renderSupplementalLeaveRow(row) {
   return `
     <td><input class="supplemental-row-check" type="checkbox" value="${escapeHtml(row.row_id)}" aria-label="选择 ${escapeHtml(row.employee_id)}"></td>
@@ -3487,7 +4403,6 @@ function renderSupplementalLeaveData() {
   const summary = data.summary || {};
   const filteredRows = getFilteredRows('supplementalLeave', rows);
   const pageInfo = getPaginatedRows('supplementalLeave', filteredRows);
-  const periodOptions = getSupplementalLeavePeriodOptions(rows);
   const calcMonth = state.currentActivity?.calc_month || '';
   const suggestionRows = getSupplementalSuggestionRows(rows);
 
@@ -3515,41 +4430,8 @@ function renderSupplementalLeaveData() {
         ${renderSupplementalSummaryItem(summary, 'attendance_unmatched_count', '未匹配考勤')}
         ${renderSupplementalSummaryItem(summary, 'include_hours', '计入小时')}
       </div>
-      ${renderImportToolbar({
-        title: '筛选补充假勤',
-        subtitle: '按处理状态、员工快速定位需要人工确认的行。',
-        filters: employeeFilters.supplementalLeave,
-        filterFn: 'filterSupplementalLeaveData',
-        resetFn: 'resetSupplementalLeaveFilter',
-        filterValues: getTableFilter('supplementalLeave'),
-      })}
-      <div class="bulk-action-bar">
-        <label class="bulk-check">
-          <input type="checkbox" id="supplementalLeaveCheckAll" onchange="toggleSupplementalLeavePageSelection(this.checked)">
-          当前页全选
-        </label>
-        <select id="bulkLeaveStatus" aria-label="批量状态">
-          <option value="" selected>状态不修改</option>
-          <option value="confirmed">确认计入</option>
-          <option value="excluded">排除</option>
-          <option value="pending">退回待确认</option>
-        </select>
-        <select id="bulkLeaveInclude" aria-label="是否计入">
-          <option value="" selected>计入不修改</option>
-          <option value="true">计入基数</option>
-          <option value="false">不计入</option>
-        </select>
-        <input id="bulkLeaveMonth" type="text" value="" placeholder="${escapeHtml(calcMonth || 'YYYY-MM')}" aria-label="归属月份">
-        <select id="bulkLeavePeriod" aria-label="归属周期">
-          <option value="" selected>周期不修改</option>
-          ${periodOptions.map(period => `
-            <option value="${escapeHtml(period)}">${escapeHtml(period)}</option>
-          `).join('')}
-        </select>
-        <input id="bulkLeaveHours" type="number" min="0" step="0.01" placeholder="计入小时" aria-label="批量计入小时">
-        <input id="bulkLeaveNote" type="text" placeholder="备注，例如：已在3月计入" aria-label="备注">
-        <button class="btn btn-primary btn-sm" type="button" onclick="applySupplementalLeaveBatchFromToolbar()">批量填充</button>
-      </div>
+      ${renderSupplementalLeaveFilterBar(rows, filteredRows)}
+      ${renderSupplementalLeaveBulkBar(calcMonth)}
       ${renderImportTable(`
         <table class="data-table" id="supplementalLeaveTable">
           <thead>
@@ -3950,7 +4832,7 @@ function renderBonusResultRow(result) {
       <td class="sticky-name" title="${escapeHtml(result.name || '-')}">${escapeHtml(result.name || '-')}</td>
       <td class="muted-cell" title="${escapeHtml(result.area || '-')}">${escapeHtml(result.area || '-')}</td>
       <td class="muted-cell" title="${escapeHtml(result.department || '-')}">${escapeHtml(result.department || '-')}</td>
-      <td>${formatResultJobType(result.job_type)}</td>
+      <td>${escapeHtml(getDisplayPosition(result, getWorkbenchActivity()))}</td>
       <td class="amount-cell">${formatCurrency(result.hourly_rate)}</td>
       <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
@@ -4182,6 +5064,10 @@ function renderTableByType(type, focusSnapshot = null) {
   if (type === 'supplementalLeave') renderSupplementalLeaveData();
   if (type === 'results') renderResultsData();
   if (type === 'exceptions') renderExceptionQueue();
+  if (type === 'activities') {
+    renderActivities();
+    loadActivityListDetails();
+  }
   restoreInputFocus(focusSnapshot);
 }
 
@@ -4246,6 +5132,25 @@ function filterSupplementalLeaveData() {
 
 function resetSupplementalLeaveFilter() {
   resetTableFilter('supplementalLeave');
+}
+
+function setSupplementalLeaveQuality(value) {
+  const input = document.getElementById('filterLeaveQuality');
+  if (input) input.value = value || 'all';
+  filterSupplementalLeaveData();
+}
+
+function setSupplementalBulkPreset(status, includeValue, button = null) {
+  const statusInput = document.getElementById('bulkLeaveStatus');
+  const includeInput = document.getElementById('bulkLeaveInclude');
+  const currentStatus = statusInput?.value || '';
+  const nextStatus = currentStatus === status ? '' : status;
+  if (statusInput) statusInput.value = nextStatus;
+  if (includeInput) includeInput.value = nextStatus ? includeValue : '';
+  const group = button?.closest?.('.supplemental-bulk-presets');
+  group?.querySelectorAll('button').forEach(item => {
+    item.classList.toggle('active', Boolean(nextStatus) && item === button);
+  });
 }
 
 // ═══ Results Filter ═══
@@ -4317,7 +5222,7 @@ const STEP_HELP = {
   people: ['花名册用于匹配姓名、部门和岗位。'],
   attendance: ['普通病假、年假按申请时间计入本月。', '离职年假默认不计入。', '96工时制员工按本月和必要的上月考勤计算。'],
   salary: ['当月转正或调薪按生效日期拆分。', '未发生转正或调薪的员工按薪资档案计算。'],
-  performance: ['有绩效报表的员工按报表得分计算。', '离职员工可在本页补充绩效得分。'],
+  performance: ['有绩效报表的员工按报表数据计算。', '离职员工可在本页补充绩效系数。'],
   check: ['只展示必须处理后才能继续的问题。'],
   export: ['最终结果按员工合并展示，拆分明细在行内展开。'],
 };
@@ -4347,38 +5252,87 @@ function getStepStatus(stepKey, activity) {
   if (needs.length) return '需要处理';
   if (stepKey === 'people') return activity?.roster_file ? '已完成' : '未完成';
   if (stepKey === 'attendance') return activity?.attendance_file && activity?.supplemental_leave_file ? '已完成' : '未完成';
-  if (stepKey === 'salary') return activity?.salary_file ? '已完成' : '未完成';
+  if (stepKey === 'salary') {
+    return activity?.previous_salary_file && activity?.salary_file && activity?.adjustment_file ? '已完成' : '未完成';
+  }
   if (stepKey === 'performance') return activity?.performance_file || activity?.performance_data?.employees?.length ? '已完成' : '未完成';
   if (stepKey === 'check') return activity?.results?.length ? '已完成' : '未开始';
   if (stepKey === 'export') return activity?.results?.length ? '已完成' : '未开始';
   return '未开始';
 }
 
-function getStepSummary(stepKey, activity) {
-  if (stepKey === 'people') return `${toNumber(activity?.attendance_data?.summary?.roster_matched)}已匹配`;
-  if (stepKey === 'attendance') return `${formatHours(activity?.attendance_data?.summary?.total_base_hours)}工时`;
-  if (stepKey === 'salary') return `${toNumber(activity?.salary_data?.summary?.valid_hourly_count)}有效时薪`;
-  if (stepKey === 'performance') return `${toNumber(activity?.performance_data?.summary?.total_employees)}人`;
-  if (stepKey === 'check') return `${buildNeedsForStep(stepKey, activity).length}项`;
-  if (stepKey === 'export') return `${getWorkbenchResults(activity).length}人`;
-  return '-';
+function renderActivityStepIndex(index, done, active) {
+  const label = String(index + 1);
+  if (active) {
+    return `
+      <span class="activity-step-index active-pin" aria-hidden="true">
+        <svg class="activity-step-pin" viewBox="0 0 48 56" focusable="false">
+          <ellipse class="activity-step-pin-shadow" cx="24" cy="51" rx="14" ry="4"></ellipse>
+          <path class="activity-step-pin-halo" d="M24 1C11.3 1 1 11.3 1 24c0 12.7 13.5 20.6 20.7 29.6a3 3 0 0 0 4.6 0C33.5 44.6 47 36.7 47 24 47 11.3 36.7 1 24 1Z"></path>
+          <path class="activity-step-pin-body" d="M24 6C14.1 6 6 14.1 6 24c0 10.4 11.2 17.2 16.2 24.4a2.2 2.2 0 0 0 3.6 0C30.8 41.2 42 34.4 42 24 42 14.1 33.9 6 24 6Z"></path>
+          <text class="activity-step-pin-text" x="24" y="31" text-anchor="middle">${escapeHtml(label)}</text>
+        </svg>
+      </span>
+    `;
+  }
+  return `<span class="activity-step-index">${done ? '✓' : escapeHtml(label)}</span>`;
 }
 
 function renderActivityStepper(activity) {
   return `
-    <div class="activity-stepper" role="tablist" aria-label="核算步骤">
+    <div class="activity-stepper payroll-activity-stepper activity-progress-strip" role="tablist" aria-label="核算步骤">
       ${ACTIVITY_STEPS.map((step, index) => {
         const active = state.activityStep === step.key;
         const status = getStepStatus(step.key, activity);
+        const done = status === '已完成';
+        const warning = status === '需要处理';
         return `
-          <button class="activity-step ${active ? 'active' : ''}" type="button" role="tab" aria-selected="${active}" onclick="setActivityStep(${formatJsArg(step.key)})">
-            <span class="activity-step-index">${index + 1}</span>
+          <button class="activity-step activity-step-link ${active ? 'active' : ''} ${done ? 'done' : ''} ${warning ? 'warning' : ''}" type="button" role="tab" aria-selected="${active}" onclick="setActivityStep(${formatJsArg(step.key)})">
+            ${renderActivityStepIndex(index, done, active)}
             <span class="activity-step-label">${escapeHtml(step.label)}</span>
-            <span class="activity-step-summary">${escapeHtml(getStepSummary(step.key, activity))}</span>
             <span class="activity-step-status ${status === '需要处理' ? 'warning' : status === '已完成' ? 'success' : ''}">${escapeHtml(status)}</span>
           </button>
         `;
       }).join('')}
+    </div>
+  `;
+}
+
+function getStepInfoText(stepKey) {
+  const notices = {
+    people: '上传花名册后，系统自动核对本月参与核算人员。',
+    attendance: '上传当月考勤和补充假勤后，系统自动计算本月工时。',
+    salary: '上传上月和当月薪资档案及全量调薪流程后，系统按生效日核验时薪和绩效比例。',
+    performance: '上传绩效报表后，缺少绩效数据的离职人员可在本步骤补充系数。',
+    check: '确认没有需要继续处理的事项后，开始本月核算。',
+    export: '确认最终结果后，导出本月绩效奖金表。',
+  };
+  return notices[stepKey] || '';
+}
+
+function getStepNoticeKey(stepKey, activity = getWorkbenchActivity()) {
+  return `${activity?.run_id || 'draft'}:${stepKey || ''}`;
+}
+
+function hideCurrentStepNotice(stepKey) {
+  const noticeKey = getStepNoticeKey(stepKey);
+  state.hiddenStepNotices = {
+    ...state.hiddenStepNotices,
+    [noticeKey]: true,
+  };
+  renderWorkbench();
+}
+
+function renderStepInfoStrip(stepKey, activity = getWorkbenchActivity()) {
+  const text = getStepInfoText(stepKey);
+  if (!text) return '';
+  const noticeKey = getStepNoticeKey(stepKey, activity);
+  if (state.hiddenStepNotices?.[noticeKey]) return '';
+  return `
+    <div class="step-info-strip" role="note">
+      <span class="step-info-icon">i</span>
+      <span class="step-info-text">${escapeHtml(text)}</span>
+      <button class="step-info-close" type="button" aria-label="关闭提示" onclick="hideCurrentStepNotice(${formatJsArg(stepKey)})">×</button>
     </div>
   `;
 }
@@ -4406,7 +5360,12 @@ function buildNeedsForStep(stepKey, activity) {
     });
   }
   if (stepKey === 'salary') {
-    if (!activity.salary_file) push('salary', '请上传薪资档案', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'salary\')">上传</button>');
+    if (!activity.previous_salary_file) push('previousSalary', '请上传上月薪资档案', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'previousSalary\')">上传</button>');
+    if (!activity.salary_file) push('currentSalary', '请上传当月薪资档案', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'currentSalary\')">上传</button>');
+    if (!activity.adjustment_file) push('salaryAdjustments', '请上传全量调薪流程', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'salaryAdjustments\')">上传</button>');
+    if (toNumber(activity.salary_verification_data?.summary?.blocking_count) > 0) {
+      push('salaryVerification', `请处理 ${toNumber(activity.salary_verification_data.summary.blocking_count)} 条薪资历史差异`);
+    }
     if (!activity.base_override_data?.employees?.some(row => row.rule_type === '线下固定基数覆盖')) {
       push('fixedBaseList', '请确认固定基数人员名单', '<button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(\'fixedBase\')">确认名单</button>');
     }
@@ -4415,9 +5374,19 @@ function buildNeedsForStep(stepKey, activity) {
     push('performance', '请上传绩效报表或补充离职人员绩效', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'performance\')">上传</button>');
   }
   if (stepKey === 'check') {
-    ['people', 'attendance', 'salary', 'performance'].forEach(key => {
-      buildNeedsForStep(key, activity).forEach(item => needs.push(item));
-    });
+    const incompleteStep = getFirstIncompleteInputStep(activity);
+    if (incompleteStep) {
+      const stepLabel = ACTIVITY_STEPS.find(step => step.key === incompleteStep)?.label || '前置步骤';
+      const salaryBlockingCount = toNumber(activity.salary_verification_data?.summary?.blocking_count);
+      const incompleteMessage = incompleteStep === 'salary' && salaryBlockingCount > 0
+        ? `薪资历史核验还有 ${salaryBlockingCount} 条差异待确认`
+        : `请先完成“${stepLabel}”后再进行核算前检查`;
+      push(
+        'incompleteInputStep',
+        incompleteMessage,
+        `<button class="btn btn-primary btn-sm" type="button" onclick="setActivityStep(${formatJsArg(incompleteStep)})">前往处理</button>`,
+      );
+    }
   }
   return needs;
 }
@@ -4464,35 +5433,77 @@ function renderInlineEmptyState(title, message, actionLabel = '', action = '') {
   `;
 }
 
-function renderCompactEmployeeTable(title, rows, headers, cellsForRow, activity) {
+function rowMatchesWorkbenchStepSearch(row, term) {
+  if (!term) return true;
+  const values = [
+    row?.employee_id,
+    row?.source_employee_id,
+    row?.name,
+    row?.department,
+    row?.area,
+    row?.personnel_status,
+    row?.job_type,
+    row?.position,
+    row?.cost_owner,
+  ];
+  return values.some(value => normalizeSearch(value).includes(term));
+}
+
+function getWorkbenchStepRows(rows) {
+  const term = normalizeSearch(state.workbenchStepSearch);
+  if (!term) return rows;
+  return rows.filter(row => rowMatchesWorkbenchStepSearch(row, term));
+}
+
+function renderCompactEmployeeTable(title, type, rows, headers, cellsForRow, activity) {
+  const filteredRows = getWorkbenchStepRows(rows);
+  const pageInfo = getPaginatedRows(type, filteredRows);
+  const visibleRows = pageInfo.items;
+  const rowCountLabel = `${pageInfo.total}/${rows.length}`;
+  const searchValue = escapeHtml(state.workbenchStepSearch || '');
   return `
     <section class="step-section table-section">
-      <div class="section-head compact"><h3>${escapeHtml(title)}</h3></div>
+      <div class="activity-table-toolbar">
+        <div class="activity-table-title">
+          <h3>${escapeHtml(title)}</h3>
+          <span>${escapeHtml(rowCountLabel)}</span>
+        </div>
+        <label class="activity-table-search" for="workbenchStepSearchInput">
+          <span class="activity-table-search-icon" aria-hidden="true">
+            <svg class="activity-search-icon-svg" viewBox="0 0 16 16" fill="none" focusable="false">
+              <circle cx="7" cy="7" r="4.6"></circle>
+              <path d="M10.4 10.4L14 14"></path>
+            </svg>
+          </span>
+          <input id="workbenchStepSearchInput" class="activity-table-search-input" type="text" value="${searchValue}" placeholder="工号/姓名" oninput="handleWorkbenchStepSearchInput(event)" oncompositionstart="handleWorkbenchStepSearchCompositionStart()" oncompositionend="handleWorkbenchStepSearchCompositionEnd(event)" aria-label="搜索工号或姓名">
+        </label>
+      </div>
       <div class="data-table-container">
-        <table class="data-table activity-table">
+        <table class="data-table activity-table ${escapeHtml(type)}-activity-table">
           <thead>
             <tr><th class="sticky-employee-id">工号</th><th class="sticky-employee-name">姓名</th>${headers.map(header => `<th>${escapeHtml(header)}</th>`).join('')}</tr>
           </thead>
           <tbody>
-            ${rows.length ? rows.slice(0, 80).map(row => `
+            ${visibleRows.length ? visibleRows.map(row => `
               <tr>
                 <td class="sticky-employee-id">${escapeHtml(row.employee_id || '-')}</td>
                 <td class="sticky-employee-name">${renderNameWithTags(row, activity)}</td>
                 ${cellsForRow(row).map(value => `<td>${value}</td>`).join('')}
               </tr>
-            `).join('') : renderEmptyTableRow(headers.length + 2, '暂无数据')}
+            `).join('') : renderEmptyTableRow(headers.length + 2, rows.length ? '没有匹配的员工' : '暂无数据')}
           </tbody>
         </table>
       </div>
+      ${renderTablePagination(type, pageInfo)}
     </section>
   `;
 }
 
 function renderPeopleTable(activity) {
-  const rows = activity?.attendance_data?.employees || activity?.salary_data?.employees || [];
-  return renderCompactEmployeeTable('人员表', rows, ['部门', '岗位', '状态'], row => [
+  const rows = activity?.roster_data?.employees || activity?.attendance_data?.employees || activity?.salary_data?.employees || [];
+  return renderCompactEmployeeTable('人员表', 'people', rows, ['部门', '岗位', '状态'], row => [
     escapeHtml(row.department || row.area || '-'),
-    formatResultJobType(row.job_type),
+    escapeHtml(getDisplayPosition(row, activity)),
     escapeHtml(row.personnel_status || '参与'),
   ], activity);
 }
@@ -4506,7 +5517,6 @@ function renderSupplementalLeaveSection(activity) {
   const summary = data.summary || {};
   const filteredRows = getFilteredRows('supplementalLeave', rows);
   const pageInfo = getPaginatedRows('supplementalLeave', filteredRows);
-  const periodOptions = getSupplementalLeavePeriodOptions(rows);
   const calcMonth = activity?.calc_month || state.currentActivity?.calc_month || '';
   const suggestionRows = getSupplementalSuggestionRows(rows);
 
@@ -4529,39 +5539,8 @@ function renderSupplementalLeaveSection(activity) {
         ${renderSupplementalSummaryItem(summary, 'attendance_unmatched_count', '未匹配考勤')}
         ${renderSupplementalSummaryItem(summary, 'include_hours', '计入小时')}
       </div>
-      ${renderImportToolbar({
-        title: '筛选补充假勤',
-        subtitle: '按处理状态、员工快速定位。',
-        filters: employeeFilters.supplementalLeave,
-        filterFn: 'filterSupplementalLeaveData',
-        resetFn: 'resetSupplementalLeaveFilter',
-        filterValues: getTableFilter('supplementalLeave'),
-      })}
-      <div class="bulk-action-bar">
-        <label class="bulk-check">
-          <input type="checkbox" id="supplementalLeaveCheckAll" onchange="toggleSupplementalLeavePageSelection(this.checked)">
-          当前页全选
-        </label>
-        <select id="bulkLeaveStatus" aria-label="批量状态">
-          <option value="" selected>状态不修改</option>
-          <option value="confirmed">确认计入</option>
-          <option value="excluded">排除</option>
-          <option value="pending">退回待确认</option>
-        </select>
-        <select id="bulkLeaveInclude" aria-label="是否计入">
-          <option value="" selected>计入不修改</option>
-          <option value="true">计入基数</option>
-          <option value="false">不计入</option>
-        </select>
-        <input id="bulkLeaveMonth" type="text" value="" placeholder="${escapeHtml(calcMonth || 'YYYY-MM')}" aria-label="归属月份">
-        <select id="bulkLeavePeriod" aria-label="归属周期">
-          <option value="" selected>周期不修改</option>
-          ${periodOptions.map(period => `<option value="${escapeHtml(period)}">${escapeHtml(period)}</option>`).join('')}
-        </select>
-        <input id="bulkLeaveHours" type="number" min="0" step="0.01" placeholder="计入小时" aria-label="批量计入小时">
-        <input id="bulkLeaveNote" type="text" placeholder="备注，例如：已在3月计入" aria-label="备注">
-        <button class="btn btn-primary btn-sm" type="button" onclick="applySupplementalLeaveBatchFromToolbar()">批量填充</button>
-      </div>
+      ${renderSupplementalLeaveFilterBar(rows, filteredRows)}
+      ${renderSupplementalLeaveBulkBar(calcMonth)}
       ${renderImportTable(`
         <table class="data-table" id="supplementalLeaveTable">
           <thead>
@@ -4596,19 +5575,95 @@ function renderSupplementalLeaveSection(activity) {
 
 function renderAttendanceSummaryTable(activity) {
   const rows = activity?.attendance_data?.employees || [];
-  return `
-    ${renderCompactEmployeeTable('工时表', rows, ['普通工时', '计入病假/年假', '96工时制'], row => [
+  return renderCompactEmployeeTable('工时表', 'attendance', rows, ['普通工时', 'OT1.5', 'OT2.0', '病假', '年假', '计薪工时'], row => [
       escapeHtml(formatHours(toNumber(row.base_hours || row.total_base_hours))),
-      escapeHtml(formatHours(toNumber(row.sick_hours) + toNumber(row.annual_hours) + toNumber(row.sick_settlement_hours))),
-      escapeHtml(getSpecialPersonTags(row, activity).includes('96工时制') ? '是' : '-'),
-    ], activity)}
-    ${renderSupplementalLeaveSection(activity)}
+      escapeHtml(formatHours(row.total_ot15)),
+      escapeHtml(formatHours(row.total_ot20)),
+      escapeHtml(formatHours(toNumber(row.sick_hours) + toNumber(row.sick_settlement_hours))),
+      escapeHtml(formatHours(row.annual_hours)),
+      escapeHtml(formatHours(row.total_base_hours)),
+    ], activity);
+}
+
+function getSalarySnapshotMonthLabels(calcMonth) {
+  const match = String(calcMonth || '').match(/^(\d{4})-(\d{1,2})$/);
+  if (!match) return { previous: '上月', current: '当月' };
+  const currentYear = Number(match[1]);
+  const currentMonth = Number(match[2]);
+  const previousDate = new Date(currentYear, currentMonth - 2, 1);
+  const previousYear = previousDate.getFullYear();
+  const previousMonth = previousDate.getMonth() + 1;
+  const crossesYear = previousYear !== currentYear;
+  const format = (year, month) => crossesYear ? `${year}年${month}月` : `${month}月`;
+  return {
+    previous: format(previousYear, previousMonth),
+    current: format(currentYear, currentMonth),
+  };
+}
+
+function renderSalaryVerificationReview(activity) {
+  const rows = (activity?.salary_verification_data?.employees || []).filter(
+    row => row.verification_status === 'blocking',
+  );
+  if (!rows.length) return '';
+  const monthLabels = getSalarySnapshotMonthLabels(activity?.calc_month);
+
+  return `
+    <section class="step-section salary-verification-review">
+      <div class="section-head compact">
+        <div>
+          <h3>薪资历史差异确认</h3>
+          <p>以下员工的${monthLabels.previous}与${monthLabels.current}薪资字段发生变化，但未匹配到有效调薪流程。请根据薪酬依据选择核算值。</p>
+        </div>
+        <span class="status-badge warning">${rows.length}条待确认</span>
+      </div>
+      <div class="compact-list-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>${monthLabels.previous}时薪</th>
+              <th>${monthLabels.current}时薪</th>
+              <th>${monthLabels.previous}比例</th>
+              <th>${monthLabels.current}比例</th>
+              <th>核验结果</th>
+              <th>确认核算值</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr class="row-warning">
+                <td>${escapeHtml(row.employee_id || '-')}</td>
+                <td>${escapeHtml(row.name || '-')}</td>
+                <td>${formatCurrency(row.previous_hourly_rate)}</td>
+                <td>${formatCurrency(row.current_hourly_rate)}</td>
+                <td>${formatPercent(row.previous_ratio)}</td>
+                <td>${formatPercent(row.current_ratio)}</td>
+                <td>未匹配已完成调薪流程</td>
+                <td>
+                  <div class="table-actions">
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'previous')">按${monthLabels.previous}值</button>
+                    <button class="btn btn-sm btn-primary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'current')">按${monthLabels.current}值</button>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
   `;
 }
 
 function renderSalarySummaryTable(activity) {
   const rows = activity?.salary_data?.employees || [];
-  return renderCompactEmployeeTable('薪资表', rows, ['时薪', '绩效比例', '固定基数'], row => [
+  return renderCompactEmployeeTable('薪资表', 'salary', rows, ['部门全称', '岗位', '人员状态', '划分区域', '成本归属', '时薪', '绩效比例', '固定基数'], row => [
+    `<span class="wrap-cell">${escapeHtml(row.department || '-')}</span>`,
+    `<span class="wrap-cell">${escapeHtml(row.position || '-')}</span>`,
+    escapeHtml(row.personnel_status || '-'),
+    escapeHtml(row.area || '-'),
+    `<span class="wrap-cell">${escapeHtml(row.cost_owner || '-')}</span>`,
     escapeHtml(formatCurrency(row.hourly_rate)),
     escapeHtml(formatPercent(row.ratio)),
     escapeHtml(toNumber(row.fixed_performance_base) ? formatCurrency(row.fixed_performance_base) : '-'),
@@ -4621,7 +5676,7 @@ function renderPerformanceInlineSupplement() {
       <div class="section-head compact">
         <div>
           <h3>离职人员补充</h3>
-          <p>缺少绩效报表的离职员工可在这里补充得分。</p>
+          <p>缺少绩效数据的离职员工可在这里补充系数。</p>
         </div>
       </div>
       ${renderWorkbenchPerformanceSupplement()}
@@ -4631,7 +5686,7 @@ function renderPerformanceInlineSupplement() {
 
 function renderPerformanceSummaryTable(activity) {
   const rows = getPerformanceReviewRows(activity?.performance_data?.employees || []);
-  return renderCompactEmployeeTable('绩效表', rows, ['得分', '等级', '系数'], row => [
+  return renderCompactEmployeeTable('绩效表', 'performance', rows, ['得分', '等级', '系数'], row => [
     escapeHtml(formatScore(row.score)),
     escapeHtml(row.level || '-'),
     escapeHtml(formatCoefficient(row.coefficient)),
@@ -4639,15 +5694,138 @@ function renderPerformanceSummaryTable(activity) {
 }
 
 function renderCheckPreview(activity) {
+  const activeTab = state.checkTab === 'issues' ? 'issues' : 'base';
+  state.checkTab = activeTab;
+  const tabs = [
+    { key: 'base', label: '绩效基数汇总' },
+    { key: 'issues', label: '检查事项' },
+  ];
+  return `
+    <section class="step-section check-review-section">
+      <div class="check-tabbar" role="tablist" aria-label="核算检查">
+        ${tabs.map(tab => `
+          <button class="workbench-segment ${activeTab === tab.key ? 'active' : ''}"
+                  type="button"
+                  role="tab"
+                  aria-selected="${activeTab === tab.key ? 'true' : 'false'}"
+                  onclick="setCheckTab(${formatJsArg(tab.key)})">
+            ${escapeHtml(tab.label)}
+          </button>
+        `).join('')}
+      </div>
+      ${activeTab === 'base' ? renderPerformanceBaseSummary(activity) : renderCheckIssuesPanel(activity)}
+    </section>
+  `;
+}
+
+function getBasePathLabel(result) {
+  return result?.calculation_path || '标准绩效基数路径';
+}
+
+function getPerformanceBaseGroups(results) {
+  const byPath = new Map();
+  results.forEach(result => {
+    const path = getBasePathLabel(result);
+    if (!byPath.has(path)) {
+      byPath.set(path, { path, count: 0, totalBase: 0, totalBonus: 0 });
+    }
+    const group = byPath.get(path);
+    group.count += 1;
+    group.totalBase += toNumber(result.performance_base);
+    group.totalBonus += toNumber(result.performance_bonus);
+  });
+  return [...byPath.values()].sort((a, b) => b.totalBase - a.totalBase);
+}
+
+function renderPerformanceBaseSummary(activity) {
+  const results = getWorkbenchResults(activity);
+  const pageInfo = getPaginatedRows('baseSummary', results);
+  const groups = getPerformanceBaseGroups(results);
+  const totalBase = results.reduce((sum, result) => sum + toNumber(result.performance_base), 0);
+  const totalBonus = results.reduce((sum, result) => sum + toNumber(result.performance_bonus), 0);
+  const specialCount = results.filter(result => getBasePathLabel(result) !== '标准绩效基数路径').length;
+
+  return `
+    <div class="check-tab-panel">
+      ${renderImportSummary([
+        { label: '结果人数', value: results.length, mono: true },
+        { label: '绩效基数合计', value: formatCurrency(totalBase), mono: true },
+        { label: '特殊基数', value: `${specialCount}人`, mono: true, tone: specialCount ? 'warning' : 'success' },
+        { label: '奖金总额', value: formatCurrency(totalBonus), mono: true },
+      ])}
+      <div class="compact-list-table base-path-summary-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>核算路径</th>
+              <th class="metric-cell">人数</th>
+              <th class="amount-cell">绩效基数</th>
+              <th class="amount-cell">奖金</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${groups.length ? groups.map(group => `
+              <tr>
+                <td>${escapeHtml(group.path)}</td>
+                <td class="metric-cell">${group.count}</td>
+                <td class="amount-cell">${formatCurrency(group.totalBase)}</td>
+                <td class="amount-cell">${formatCurrency(group.totalBonus)}</td>
+              </tr>
+            `).join('') : renderEmptyTableRow(4, '暂无绩效基数数据')}
+          </tbody>
+        </table>
+      </div>
+      <div class="compact-list-table base-summary-detail-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="sticky-employee-id">工号</th>
+              <th class="sticky-employee-name">姓名</th>
+              <th>部门</th>
+              <th>岗位</th>
+              <th>核算路径</th>
+              <th class="amount-cell">绩效基数</th>
+              <th class="metric-cell">绩效比例</th>
+              <th class="metric-cell">绩效系数</th>
+              <th class="amount-cell">最终奖金</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.length ? pageInfo.items.map(result => {
+              const isNinetySixHour = isNinetySixHourResult(result);
+              return `
+                <tr>
+                  <td class="sticky-employee-id">${escapeHtml(result.employee_id || '-')}</td>
+                  <td class="sticky-employee-name">${renderNameWithTags(result, activity)}</td>
+                  <td>${escapeHtml(result.department || result.area || '-')}</td>
+                  <td>${escapeHtml(getDisplayPosition(result, activity))}</td>
+                  <td>${escapeHtml(getBasePathLabel(result))}</td>
+                  <td class="amount-cell ${isNinetySixHour ? 'highlight-base' : ''}">${formatCurrency(result.performance_base)}</td>
+                  <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
+                  <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
+                  <td class="amount-cell">${formatCurrency(result.performance_bonus)}</td>
+                </tr>
+              `;
+            }).join('') : renderEmptyTableRow(9, '暂无绩效基数数据')}
+          </tbody>
+        </table>
+      </div>
+      ${results.length ? renderTablePagination('baseSummary', pageInfo) : ''}
+    </div>
+  `;
+}
+
+function renderCheckIssuesPanel(activity) {
   const diagnostics = getWorkbenchDiagnostics(activity);
   const summary = diagnostics?.summary || {};
   const issues = (diagnostics?.issues || []).filter(Boolean);
+  const pageInfo = getPaginatedRows('check', issues);
   const readyCount = toNumber(summary.can_calculate_count);
   const totalCount = toNumber(summary.attendance_count);
   const severityLabel = { error: '严重', warning: '提醒', info: '信息' };
 
   return `
-    <section class="step-section">
+    <div class="check-tab-panel">
       ${renderImportSummary([
         { label: '严重', value: toNumber(summary.error_count), mono: true, tone: toNumber(summary.error_count) ? 'danger' : 'success' },
         { label: '提醒', value: toNumber(summary.warning_count), mono: true, tone: toNumber(summary.warning_count) ? 'warning' : 'success' },
@@ -4667,7 +5845,7 @@ function renderCheckPreview(activity) {
             </tr>
           </thead>
           <tbody>
-            ${issues.length ? issues.slice(0, 20).map(issue => {
+            ${pageInfo.items.length ? pageInfo.items.map(issue => {
               const source = getExceptionSource(issue);
               const severity = safeExceptionSeverity(issue.severity);
               return `
@@ -4684,7 +5862,8 @@ function renderCheckPreview(activity) {
           </tbody>
         </table>
       </div>
-    </section>
+      ${renderTablePagination('check', pageInfo)}
+    </div>
   `;
 }
 
@@ -4692,13 +5871,97 @@ function renderExportStep(activity) {
   return `${renderFinalResults(activity)}`;
 }
 
+function getFinalResultGroupKey(result) {
+  if (result?.job_type === 'district_manager') return 'district';
+  if (result?.job_type === 'functional') return 'functional';
+  return 'warehouse';
+}
+
+function getFinalResultGroups(results) {
+  const groups = [
+    { key: 'warehouse', paginationKey: 'resultsWarehouse', label: '仓库管理人员', rows: [] },
+    { key: 'functional', paginationKey: 'resultsFunctional', label: '非仓人员', rows: [] },
+    { key: 'district', paginationKey: 'resultsDistrict', label: '区长', rows: [] },
+  ];
+  const byKey = Object.fromEntries(groups.map(group => [group.key, group]));
+  results.forEach(result => {
+    byKey[getFinalResultGroupKey(result)]?.rows.push(result);
+  });
+  return groups;
+}
+
+function getFinalResultGroupMeta(group) {
+  const totalBonus = group.rows.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
+  return {
+    count: group.rows.length,
+    totalBonus,
+  };
+}
+
+function setFinalResultSlice(sliceKey) {
+  state.finalResultSlice = sliceKey || 'warehouse';
+  renderWorkbench();
+}
+
+function isNinetySixHourResult(result) {
+  return result?.work_hour_rule === '96工时制'
+    || String(result?.calculation_path || '').includes('96工时制')
+    || String(result?.base_override_type || '').includes('96工时制');
+}
+
 function renderFinalResults(activity) {
   const results = getWorkbenchResults(activity);
+  const groups = getFinalResultGroups(results);
+  const activeGroup = groups.find(group => group.key === state.finalResultSlice) || groups[0];
+  state.finalResultSlice = activeGroup?.key || 'warehouse';
+  const totalBonus = results.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
   return `
     <section class="step-section final-results">
       <div class="section-head compact">
         <h3>最终结果</h3>
         <button class="btn btn-primary btn-sm" type="button" onclick="exportData('results')" ${results.length ? '' : 'disabled'}>导出结果</button>
+      </div>
+      <div class="result-summary-bar compact">
+        <div class="result-summary-item">
+          <span>结果人数</span>
+          <span>${results.length}</span>
+        </div>
+        <div class="result-summary-item">
+          <span>奖金总额</span>
+          <span>${formatCurrency(totalBonus)}</span>
+        </div>
+      </div>
+      <div class="final-result-slices" role="tablist" aria-label="最终结果切面">
+        ${groups.map(group => {
+          const meta = getFinalResultGroupMeta(group);
+          const isActive = group.key === activeGroup.key;
+          return `
+            <button class="final-result-slice ${isActive ? 'active' : ''}"
+                    type="button"
+                    role="tab"
+                    aria-selected="${isActive ? 'true' : 'false'}"
+                    onclick="setFinalResultSlice(${formatJsArg(group.key)})">
+              <span>${escapeHtml(group.label)}</span>
+              <strong>${meta.count}人</strong>
+              <em>${formatCurrency(meta.totalBonus)}</em>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      ${renderFinalResultGroup(activeGroup, activity)}
+    </section>
+  `;
+}
+
+function renderFinalResultGroup(group, activity) {
+  const pageInfo = getPaginatedRows(group.paginationKey, group.rows);
+  const groupBonus = group.rows.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
+  return `
+    <section class="final-result-group">
+      <div class="final-result-group-head">
+        <h4>${escapeHtml(group.label)}</h4>
+        <span>${group.rows.length}人</span>
+        <span>${formatCurrency(groupBonus)}</span>
       </div>
       <div class="data-table-container">
         <table class="data-table final-result-table">
@@ -4713,64 +5976,133 @@ function renderFinalResults(activity) {
               <th class="metric-cell">绩效比例</th>
               <th class="metric-cell">绩效系数</th>
               <th class="amount-cell">最终奖金</th>
-              <th>说明</th>
+              <th>计算过程</th>
             </tr>
           </thead>
           <tbody>
-            ${results.length ? results.map(result => renderFinalResultRow(result, activity)).join('') : renderEmptyTableRow(10, '暂无结果')}
+            ${pageInfo.items.length ? pageInfo.items.map(result => renderFinalResultRow(result, activity)).join('') : renderEmptyTableRow(10, '当前切面暂无结果')}
           </tbody>
         </table>
       </div>
+      ${group.rows.length ? renderTablePagination(group.paginationKey, pageInfo) : ''}
     </section>
   `;
 }
 
 function renderFinalResultRow(result, activity) {
   const employeeId = String(result.employee_id || '');
-  const expanded = state.workbenchSelectedResult === employeeId;
+  const isNinetySixHour = isNinetySixHourResult(result);
+  const detailKey = getFinalResultDetailKey(result);
 
   return `
     <tr>
       <td class="sticky-employee-id">${escapeHtml(employeeId)}</td>
       <td class="sticky-employee-name">${renderNameWithTags(result, activity)}</td>
       <td>${escapeHtml(result.department || result.area || '-')}</td>
-      <td>${formatResultJobType(result.job_type)}</td>
+      <td>${escapeHtml(getDisplayPosition(result, activity))}</td>
       <td class="metric-cell">${formatScore(result.performance_score)}</td>
-      <td class="amount-cell">${formatCurrency(result.performance_base)}</td>
+      <td class="amount-cell ${isNinetySixHour ? 'highlight-base' : ''}">${formatCurrency(result.performance_base)}</td>
       <td class="metric-cell">${formatPercent(result.performance_ratio)}</td>
       <td class="metric-cell">${formatCoefficient(result.performance_coefficient)}</td>
       <td class="amount-cell">${formatCurrency(result.performance_bonus)}</td>
-      <td><button class="btn btn-secondary btn-sm" type="button" onclick="toggleWorkbenchResultDetail(${formatJsArg(employeeId)})">${expanded ? '收起' : '查看说明'}</button></td>
+      <td><button class="btn btn-secondary btn-sm" type="button" onclick="openFinalResultExplanation(${formatJsArg(detailKey)})">计算过程</button></td>
     </tr>
-    ${expanded ? renderFinalCalculationDetail(result) : ''}
   `;
 }
 
-function renderFinalCalculationDetail(result) {
-  const rows = result.calculation_segments || [];
-  const detailRows = rows.length ? rows : [{
-    period: result.calc_month || '-',
-    reason: result.calculation_path || '标准计算',
+function getFinalResultDetailKey(result) {
+  const employeeId = String(result?.employee_id || '');
+  const rawIds = Array.isArray(result?.raw_employee_ids) ? result.raw_employee_ids.join('|') : '';
+  return `${employeeId}::${rawIds}`;
+}
+
+function findFinalResultByDetailKey(detailKey) {
+  const results = getWorkbenchResults(getWorkbenchActivity());
+  return results.find(result => getFinalResultDetailKey(result) === detailKey);
+}
+
+function getFinalResultDetailRows(result) {
+  const rows = Array.isArray(result?.calculation_segments) ? result.calculation_segments : [];
+  return rows.length ? rows : [{
+    period: result?.calc_month || getWorkbenchActivity()?.calc_month || '-',
+    reason: result?.calculation_path || '标准绩效基数路径',
     performance_base: result.performance_base,
     performance_ratio: result.performance_ratio,
     performance_coefficient: result.performance_coefficient,
     performance_bonus: result.performance_bonus,
   }];
+}
+
+function renderFinalCalculationDetail(result) {
+  const detailRows = getFinalResultDetailRows(result);
 
   return `
-    <tr class="detail-row">
-      <td colspan="10">
-        <div class="calculation-lines">
-          ${detailRows.map(row => `
-            <div class="calculation-line">
-              <span>${escapeHtml(row.period || '-')} · ${escapeHtml(row.reason || '-')}</span>
-              <strong>${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}</strong>
-            </div>
-          `).join('')}
+    <div class="calculation-lines">
+      ${detailRows.map(row => `
+        <div class="calculation-line">
+          <span>${escapeHtml(row.period || '-')} · ${escapeHtml(row.reason || '-')}</span>
+          <strong>${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}</strong>
         </div>
-      </td>
-    </tr>
+      `).join('')}
+    </div>
   `;
+}
+
+function renderFinalResultExplanation(result) {
+  const detailRows = getFinalResultDetailRows(result);
+  const isNinetySixHour = isNinetySixHourResult(result);
+  const formulaText = `${formatCurrency(result.performance_base)} × ${formatPercent(result.performance_ratio)} × ${formatCoefficient(result.performance_coefficient)} = ${formatCurrency(result.performance_bonus)}`;
+  const fields = [
+    ['绩效基数', '按该员工核算路径得到的本月奖金基数。96工时制员工使用跨周期规则，页面和导出会标红。', formatCurrency(result.performance_base)],
+    ['绩效比例', '薪资档案或调薪拆分后适用的月度绩效奖金比例。', formatPercent(result.performance_ratio)],
+    ['绩效系数', '由绩效得分或绩效等级换算；有人工补录时以补录值为准。', formatCoefficient(result.performance_coefficient)],
+    ['最终奖金', '绩效基数 × 绩效比例 × 绩效系数，拆分行会先分别计算再合并。', formatCurrency(result.performance_bonus)],
+  ];
+  return `
+    <div class="result-explanation-head">
+      <div>
+        <strong>${escapeHtml(result.name || '-')}</strong>
+        <span>${escapeHtml(result.employee_id || '-')} · ${escapeHtml(getDisplayPosition(result))}</span>
+      </div>
+      ${isNinetySixHour ? '<em>96工时制</em>' : ''}
+    </div>
+    <div class="result-explanation-formula">
+      <span>本月奖金</span>
+      <strong>${escapeHtml(formulaText)}</strong>
+    </div>
+    <div class="result-explanation-grid">
+      ${fields.map(([label, desc, value]) => `
+        <div class="result-explanation-field">
+          <div>
+            <strong>${escapeHtml(label)}</strong>
+            <span>${escapeHtml(desc)}</span>
+          </div>
+          <em>${escapeHtml(value)}</em>
+        </div>
+      `).join('')}
+    </div>
+    <div class="result-explanation-section">
+      <h4>计算过程</h4>
+      ${renderFinalCalculationDetail(result)}
+    </div>
+    ${(result.exceptions || []).length ? `
+      <div class="result-explanation-section">
+        <h4>需要关注</h4>
+        <p>${escapeHtml(result.exceptions.join('；'))}</p>
+      </div>
+    ` : ''}
+  `;
+}
+
+function openFinalResultExplanation(detailKey) {
+  const result = findFinalResultByDetailKey(detailKey);
+  if (!result || !el.finalResultExplanationDialog || !el.finalResultExplanationBody) return;
+  el.finalResultExplanationBody.innerHTML = renderFinalResultExplanation(result);
+  openModal(el.finalResultExplanationDialog, el.finalResultExplanationDialog.querySelector('.modal-close'));
+}
+
+function closeFinalResultExplanation() {
+  closeModal(el.finalResultExplanationDialog);
 }
 
 function renderStepContent(activity) {
@@ -4789,15 +6121,38 @@ function renderPeopleStep(activity) {
 }
 
 function renderAttendanceStep(activity) {
-  return `${renderStepMaterials('attendance', activity)}${renderMaintainedRuleList('workHour', activity)}${renderNeedsPanel('attendance', activity)}${renderAttendanceSummaryTable(activity)}`;
+  return `
+    <div class="step-rule-grid">
+      ${renderStepMaterials('attendance', activity)}
+      ${renderMaintainedRuleList('workHour', activity)}
+    </div>
+    ${renderNeedsPanel('attendance', activity)}
+    ${renderSupplementalLeaveSection(activity)}
+    ${renderAttendanceSummaryTable(activity)}
+  `;
 }
 
 function renderSalaryStep(activity) {
-  return `${renderStepMaterials('salary', activity)}${renderMaintainedRuleList('fixedBase', activity)}${renderNeedsPanel('salary', activity)}${renderSalarySummaryTable(activity)}`;
+  return `
+    <div class="step-rule-grid">
+      ${renderStepMaterials('salary', activity)}
+      ${renderMaintainedRuleList('fixedBase', activity)}
+    </div>
+    ${renderNeedsPanel('salary', activity)}
+    ${renderSalaryVerificationReview(activity)}
+    ${renderSalarySummaryTable(activity)}
+  `;
 }
 
 function renderPerformanceStep(activity) {
-  return `${renderStepMaterials('performance', activity)}${renderPerformanceInlineSupplement(activity)}${renderNeedsPanel('performance', activity)}${renderPerformanceSummaryTable(activity)}`;
+  return `
+    <div class="performance-step-grid">
+      ${renderStepMaterials('performance', activity)}
+      ${renderPerformanceInlineSupplement(activity)}
+    </div>
+    ${renderNeedsPanel('performance', activity)}
+    ${renderPerformanceSummaryTable(activity)}
+  `;
 }
 
 function renderCheckStep(activity) {
@@ -4805,13 +6160,17 @@ function renderCheckStep(activity) {
 }
 
 function renderStepHeader(step, activity) {
+  const status = getStepStatus(step?.key || '', activity);
   return `
-    <div class="step-topline">
-      <div>
-        <h3>${escapeHtml(step?.label || '')}</h3>
-        <p class="step-topline-summary">${escapeHtml(getStepSummary(step?.key || '', activity))}</p>
+    <div class="step-header-block">
+      <div class="step-topline">
+        <div>
+          <h3>${escapeHtml(step?.label || '')}</h3>
+          <p class="step-topline-status ${status === '需要处理' ? 'warning' : status === '已完成' ? 'success' : ''}">${escapeHtml(status)}</p>
+        </div>
+        ${renderStepHelp(step?.key || '')}
       </div>
-      ${renderStepHelp(step?.key || '')}
+      ${renderStepInfoStrip(step?.key || '', activity)}
     </div>
   `;
 }
@@ -4819,8 +6178,8 @@ function renderStepHeader(step, activity) {
 // ═══ Notification ═══
 
 function showNotification(message, type = 'info', options = {}) {
+  if (type === 'success') return;
   const toastConfig = {
-    success: { title: '操作完成', icon: 'OK' },
     error: { title: '操作失败', icon: '!' },
     warning: { title: '需要注意', icon: '!' },
     info: { title: '提示', icon: 'i' },
@@ -4860,6 +6219,7 @@ function showNotification(message, type = 'info', options = {}) {
 
 document.addEventListener('DOMContentLoaded', () => {
   setSidebarCollapsed(false);
+  setupActivityListInteractions();
   loadBaseRoster();
   loadActivities();
 });

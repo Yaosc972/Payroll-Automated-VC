@@ -131,6 +131,20 @@ def build_work_hour_rule_payload() -> dict[str, list[dict[str, Any]]]:
     }
 
 
+def create_work_hour_rule_marker(path: Path, calc_month: str) -> Path:
+    """Create a small workbook documenting the 96-hour rule rows used by E2E."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "规则名单"
+    sheet.append(["工号", "姓名", "规则类型", "固定绩效基数", "归属月份", "状态", "备注"])
+    for employee_id, name in DEFAULT_96_WORK_HOUR_RULES:
+        sheet.append([employee_id, name, "96工时制", None, calc_month, "启用", "E2E默认规则名单"])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    workbook.save(path)
+    return path
+
+
 def post_file(
     client: TestClient,
     url: str,
@@ -213,7 +227,11 @@ def read_final_performance_base(performance_path: Path) -> dict[str, dict[str, A
     final_base: dict[str, dict[str, Any]] = {}
 
     for sheet_name in wb.sheetnames:
-        if sheet_name in {"总金额", "4月绩效报表", "4月花名册5.20", "调薪", "仓经调薪差额"}:
+        if (
+            sheet_name in {"总金额", "调薪", "仓经调薪差额"}
+            or "绩效报表" in sheet_name
+            or "花名册" in sheet_name
+        ):
             continue
         ws = wb[sheet_name]
         rows = list(ws.iter_rows(values_only=True))
