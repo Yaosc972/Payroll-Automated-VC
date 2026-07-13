@@ -10,6 +10,15 @@ import uuid
 
 from .engines.base import CalculationSegment, EmployeeData, get_calculation_path
 from .exporter import FBUPerformanceExporter
+from .persistent_storage import (
+    delete_fbu_run_from_persistent,
+    fbu_persistent_storage_enabled,
+    list_fbu_run_metadata_from_persistent,
+    load_fbu_file_from_persistent,
+    load_fbu_run_metadata_from_persistent,
+    save_fbu_files_to_persistent,
+    save_fbu_run_metadata_to_persistent,
+)
 
 
 _FINAL_RESULT_SUM_FIELDS = {
@@ -254,7 +263,7 @@ class FBURunManager:
         except OSError:
             pass
 
-    def _save_runs(self):
+    def _save_runs(self, changed_run_id: str | None = None):
         """保存运行记录"""
         runs_file = self.data_dir / "runs.json"
         with open(runs_file, "w", encoding="utf-8") as f:
@@ -264,6 +273,10 @@ class FBURunManager:
                 ensure_ascii=False,
                 indent=2,
             )
+        if fbu_persistent_storage_enabled() and changed_run_id:
+            run = self.runs.get(changed_run_id)
+            if run:
+                save_fbu_run_metadata_to_persistent(changed_run_id, vars(run))
 
     def create_run(
         self,
@@ -282,17 +295,19 @@ class FBURunManager:
             performance_file=performance_file,
         )
         self.runs[run.run_id] = run
-        self._save_runs()
+        self._save_runs(run.run_id)
         return run
 
     def update_run(self, run_id: str, **kwargs):
         """更新运行状态"""
-        if run_id in self.runs:
+        run = self.get_run(run_id)
+        if run:
             if self.RESULT_INPUT_FIELDS.intersection(kwargs):
-                self._invalidate_results(self.runs[run_id])
+                self._invalidate_results(run)
             for key, value in kwargs.items():
-                setattr(self.runs[run_id], key, value)
-            self._save_runs()
+                setattr(run, key, value)
+            self.runs[run_id] = run
+            self._save_runs(run_id)
 
     @staticmethod
     def _invalidate_results(run: FBURun):
@@ -324,14 +339,30 @@ class FBURunManager:
         elif step == 4:
             run.adjustment_data = data
 
-        self._save_runs()
+        self._save_runs(run_id)
 
     def get_run(self, run_id: str) -> Optional[FBURun]:
         """获取运行记录"""
+        if fbu_persistent_storage_enabled():
+            payload = load_fbu_run_metadata_from_persistent(run_id)
+            if payload:
+                try:
+                    self.runs[run_id] = FBURun(**payload)
+                except TypeError:
+                    return None
         return self.runs.get(run_id)
 
     def list_runs(self) -> list[FBURun]:
         """获取所有运行记录"""
+        if fbu_persistent_storage_enabled():
+            restored: dict[str, FBURun] = {}
+            for payload in list_fbu_run_metadata_from_persistent():
+                try:
+                    run = FBURun(**payload)
+                except TypeError:
+                    continue
+                restored[run.run_id] = run
+            self.runs = restored
         return sorted(
             self.runs.values(),
             key=lambda r: r.created_at,
@@ -340,11 +371,25 @@ class FBURunManager:
 
     def delete_run(self, run_id: str) -> bool:
         """删除运行记录"""
-        if run_id in self.runs:
+        if self.get_run(run_id):
             del self.runs[run_id]
             self._save_runs()
+            if fbu_persistent_storage_enabled():
+                delete_fbu_run_from_persistent(run_id)
             return True
         return False
+
+    def persist_files(self, run_id: str, relative_paths: list[str]) -> None:
+        if fbu_persistent_storage_enabled():
+            save_fbu_files_to_persistent(run_id, self.data_dir / run_id, relative_paths)
+
+    def materialize_file(self, run_id: str, relative_path: str) -> Optional[Path]:
+        target = self.data_dir / run_id / relative_path
+        if target.is_file():
+            return target
+        if not fbu_persistent_storage_enabled():
+            return None
+        return load_fbu_file_from_persistent(run_id, self.data_dir / run_id, relative_path)
 
     def save_results(self, run_id: str, employees: list[EmployeeData]):
         """保存核算结果"""
@@ -523,10 +568,18 @@ class FBURosterStore:
         return self.roster_dir / f"active_roster{extension}"
 
     def get_metadata(self) -> dict:
+        if fbu_persistent_storage_enabled():
+            load_fbu_file_from_persistent("_roster", self.roster_dir, "metadata.json")
         if not self.metadata_file.exists():
             return {"has_roster": False}
         with open(self.metadata_file, "r", encoding="utf-8") as f:
             metadata = json.load(f)
+        if fbu_persistent_storage_enabled():
+            load_fbu_file_from_persistent(
+                "_roster",
+                self.roster_dir,
+                self._active_roster_path(metadata).name,
+            )
         metadata["has_roster"] = self._active_roster_path(metadata).exists()
         return metadata
 
@@ -547,6 +600,12 @@ class FBURosterStore:
         }
         with open(self.metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
+        if fbu_persistent_storage_enabled():
+            save_fbu_files_to_persistent(
+                "_roster",
+                self.roster_dir,
+                ["metadata.json", active_roster.name],
+            )
         return metadata
 
     def copy_active_to_run(self, run_id: str) -> Optional[Path]:
@@ -558,6 +617,8 @@ class FBURosterStore:
         run_dir.mkdir(parents=True, exist_ok=True)
         target = run_dir / f"roster{metadata.get('extension', '.xlsx')}"
         shutil.copyfile(active_roster, target)
+        if fbu_persistent_storage_enabled():
+            save_fbu_files_to_persistent(run_id, run_dir, [target.name])
         return target
 
 
@@ -603,6 +664,8 @@ class FBURuleListStore:
         }
 
     def get(self) -> dict:
+        if fbu_persistent_storage_enabled():
+            load_fbu_file_from_persistent("_settings", self.settings_dir, "rule_lists.json")
         if not self.rule_lists_file.exists():
             return self._default_payload()
         with open(self.rule_lists_file, "r", encoding="utf-8") as f:
@@ -616,6 +679,12 @@ class FBURuleListStore:
         })
         with open(self.rule_lists_file, "w", encoding="utf-8") as f:
             json.dump(normalized, f, ensure_ascii=False, indent=2)
+        if fbu_persistent_storage_enabled():
+            save_fbu_files_to_persistent(
+                "_settings",
+                self.settings_dir,
+                ["rule_lists.json"],
+            )
         return normalized
 
     def _normalize_work_hour_rows(self, rows: list[dict]) -> list[dict]:

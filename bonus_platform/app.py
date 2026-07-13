@@ -7541,6 +7541,9 @@ def _build_base_override_data_from_rule_lists(
 def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
     """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("roster.xlsx", "roster.xls"):
+        fbu_run_manager.materialize_file(run_id, filename)
     roster_path = next((path for path in [run_dir / "roster.xlsx", run_dir / "roster.xls"] if path.exists()), None)
     if roster_path is None:
         roster_path = fbu_roster_store.copy_active_to_run(run_id)
@@ -7722,6 +7725,7 @@ async def import_fbu_attendance(
                 previous_attendance_file=previous_attendance_filename,
             )
             fbu_run_manager.save_step_data(run.run_id, 1, preview)
+            fbu_run_manager.persist_files(run.run_id, [previous_path.name])
             result_file = _fbu_result_file_payload(run.run_id, "attendance")
             return {
                 "success": True,
@@ -7781,6 +7785,12 @@ async def import_fbu_attendance(
             metadata.update(roster_file=roster.filename, roster_source="activity")
         fbu_run_manager.update_run(run.run_id, **metadata)
         fbu_run_manager.save_step_data(run.run_id, 1, preview)
+        persisted_files = ["attendance.xlsx"]
+        if previous_path and previous_path.exists():
+            persisted_files.append(previous_path.name)
+        if roster_path and roster_path.exists():
+            persisted_files.append(roster_path.name)
+        fbu_run_manager.persist_files(run.run_id, persisted_files)
         result_file = _fbu_result_file_payload(run.run_id, "attendance")
 
         return {
@@ -7814,6 +7824,7 @@ async def import_fbu_salary(
 
     # 保存上传文件
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
     file_path = run_dir / "salary.xlsx"
     with open(file_path, "wb") as f:
         content = await file.read()
@@ -7833,6 +7844,7 @@ async def import_fbu_salary(
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run_id, 2, preview)
+        fbu_run_manager.persist_files(run_id, ["salary.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "salary")
 
         return {
@@ -7902,6 +7914,10 @@ async def import_fbu_salary_history(
             adjustment_data=adjustment_preview,
         )
         fbu_run_manager.save_step_data(run_id, 2, resolved_salary)
+        fbu_run_manager.persist_files(
+            run_id,
+            ["previous_salary.xlsx", "salary.xlsx", "adjustments.xlsx"],
+        )
         return {
             "success": True,
             "run_id": run_id,
@@ -7956,6 +7972,7 @@ async def import_fbu_performance(
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run_id, 3, preview)
+        fbu_run_manager.persist_files(run_id, ["performance.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "performance")
 
         return {
@@ -8091,6 +8108,7 @@ async def import_fbu_adjustments(
         _load_fbu_roster_for_run(parser, run_id)
         preview = parser.parse_adjustments_preview(str(file_path))
         fbu_run_manager.save_step_data(run_id, 4, preview)
+        fbu_run_manager.persist_files(run_id, ["adjustments.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "adjustments")
 
         return {
@@ -8135,6 +8153,7 @@ async def import_fbu_supplemental_leave(
             supplemental_leave_file=file.filename,
             supplemental_leave_data=preview,
         )
+        fbu_run_manager.persist_files(run_id, ["supplemental_leave.xlsx"])
         return {
             "success": True,
             "run_id": run_id,
@@ -8171,6 +8190,7 @@ async def import_fbu_base_overrides(
             base_override_file=file.filename,
             base_override_data=preview,
         )
+        fbu_run_manager.persist_files(run_id, ["base_overrides.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "base_overrides")
 
         return {
@@ -8446,6 +8466,7 @@ async def import_fbu_performance_data(
             f.write(content)
 
     fbu_run_manager.update_run(run.run_id, status="imported")
+    fbu_run_manager.persist_files(run.run_id, ["attendance.xlsx", "salary.xlsx", "performance.xlsx"])
 
     return {
         "success": True,
@@ -8486,6 +8507,8 @@ def calculate_fbu_performance(run_id: str) -> dict:
         else:
             # 一次性导入模式：从文件计算
             run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+            for filename in ("attendance.xlsx", "salary.xlsx", "performance.xlsx"):
+                fbu_run_manager.materialize_file(run_id, filename)
             target_month = int(run.calc_month.split("-")[1]) if "-" in run.calc_month else int(run.calc_month)
             _load_fbu_roster_for_run(parser, run_id)
 
@@ -9300,7 +9323,25 @@ def download_fbu_performance_file(run_id: str, filename: str) -> FileResponse:
     """下载FBU绩效核算文件"""
     path = EXPORT_DIR / Path(filename).name
     if not path.exists():
-        raise HTTPException(404, "文件不存在")
+        export_types = {
+            "考勤汇总_": "attendance",
+            "薪资匹配_": "salary",
+            "绩效明细_": "performance",
+            "调薪拆分_": "adjustments",
+            "工时规则与固定基数例外_": "base_overrides",
+            "数据诊断_": "diagnostics",
+            "核算结果_": "results",
+        }
+        result_type = next(
+            (value for prefix, value in export_types.items() if path.name.startswith(prefix)),
+            "",
+        )
+        if not result_type:
+            raise HTTPException(404, "文件不存在")
+        export_payload = export_fbu_excel(run_id, type=result_type)
+        path = EXPORT_DIR / Path(export_payload["filename"]).name
+        if not path.exists():
+            raise HTTPException(404, "文件不存在")
     return FileResponse(path, filename=path.name)
 
 

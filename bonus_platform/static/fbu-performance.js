@@ -2940,9 +2940,10 @@ async function enterActivity(activityId, options = {}) {
     if (preservePage && state.currentPage === 'activities') {
       renderActivities();
       loadActivityListDetails();
-      return;
+      return activity;
     }
     renderWorkbench();
+    return activity;
   } catch (error) {
     console.error('加载活动详情失败:', error);
     if (state.currentPage === 'workbench') {
@@ -2950,6 +2951,7 @@ async function enterActivity(activityId, options = {}) {
       renderWorkbench();
     }
     showNotification('加载活动详情失败', 'error');
+    return null;
   }
 }
 
@@ -3272,6 +3274,7 @@ async function uploadWorkbenchFile(type, file) {
   if (!endpoint) return;
 
   try {
+    const activityId = state.currentActivity.run_id;
     startWorkbenchUploadProgress(type, file);
     const data = await apiJson(endpoint, {
       method: 'POST',
@@ -3309,7 +3312,10 @@ async function uploadWorkbenchFile(type, file) {
     }
 
     finishWorkbenchUploadProgress(type, file.name, '已解析');
-    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
+    const refreshedActivity = await enterActivity(activityId, { preservePage: true, preserveStep: true });
+    if (!refreshedActivity) {
+      throw new Error('文件已解析，但活动详情刷新失败，请重新进入活动后确认');
+    }
     renderWorkbench();
   } catch (error) {
     failWorkbenchUploadProgress(type, file.name, error.message);
