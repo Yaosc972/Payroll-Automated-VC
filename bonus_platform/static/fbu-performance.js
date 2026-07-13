@@ -4544,6 +4544,26 @@ function setSupplementalLeaveRowSaving(rowId, isSaving) {
   }
 }
 
+function getSupplementalLeaveActionActivity() {
+  const activity = getWorkbenchActivity();
+  if (activity?.run_id) return activity;
+  showNotification('当前活动尚未加载完成，请重新进入活动后再试', 'warning');
+  return null;
+}
+
+function applySupplementalLeavePreview(activity, preview) {
+  const updatedActivity = {
+    ...activity,
+    supplemental_leave_data: preview,
+  };
+  state.supplementalLeaveData = preview;
+  state.currentActivity = updatedActivity;
+  state.activities = state.activities.map(item => (
+    item.run_id === updatedActivity.run_id ? updatedActivity : item
+  ));
+  state.foundationRunDetails[updatedActivity.run_id] = updatedActivity;
+}
+
 function updateSupplementalLeaveSummary(summary = state.supplementalLeaveData?.summary || {}) {
   document.querySelectorAll('.leave-summary-compact [data-summary-key]').forEach(item => {
     const key = item.dataset.summaryKey;
@@ -4597,7 +4617,9 @@ function handleSupplementalLeaveHoursKeydown(event, rowId) {
 
 async function applySupplementalLeaveBatchFromToolbar() {
   const rowIds = getSelectedSupplementalLeaveRowIds();
-  if (!rowIds.length || !state.currentActivity) {
+  const activity = getSupplementalLeaveActionActivity();
+  if (!activity) return;
+  if (!rowIds.length) {
     showNotification('请先勾选需要处理的补充假勤行', 'warning');
     return;
   }
@@ -4638,13 +4660,12 @@ async function applySupplementalLeaveBatchFromToolbar() {
   }
 
   try {
-    const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/supplemental-leave/batch`, {
+    const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/supplemental-leave/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    state.supplementalLeaveData = data.preview;
-    state.currentActivity.supplemental_leave_data = data.preview;
+    applySupplementalLeavePreview(activity, data.preview);
     renderSupplementalLeaveDataPreservingScroll(anchorRowId);
     showNotification(`已批量处理 ${rowIds.length} 行补充假勤`, 'success');
   } catch (error) {
@@ -4662,7 +4683,8 @@ async function applySupplementalLeaveSuggestion(rowId, suggestedHours) {
 }
 
 async function applyAllSupplementalLeaveSuggestions() {
-  if (!state.currentActivity) return;
+  const activity = getSupplementalLeaveActionActivity();
+  if (!activity) return;
   const suggestionRows = getSupplementalSuggestionRows();
   if (!suggestionRows.length) {
     showNotification('当前没有可应用的建议计入行', 'warning');
@@ -4673,13 +4695,12 @@ async function applyAllSupplementalLeaveSuggestions() {
     || '';
 
   try {
-    const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/supplemental-leave/batch`, {
+    const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/supplemental-leave/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apply_suggestions: true }),
     });
-    state.supplementalLeaveData = data.preview;
-    state.currentActivity.supplemental_leave_data = data.preview;
+    applySupplementalLeavePreview(activity, data.preview);
     renderSupplementalLeaveDataPreservingScroll(anchorRowId);
     showNotification(`已应用 ${data.applied_count || suggestionRows.length} 条建议计入`, 'success');
   } catch (error) {
@@ -4688,7 +4709,11 @@ async function applyAllSupplementalLeaveSuggestions() {
 }
 
 async function updateSupplementalLeaveRow(rowId, explicitHours) {
-  if (!rowId || !state.currentActivity) return;
+  const activity = getWorkbenchActivity();
+  if (!rowId || !activity?.run_id) {
+    showNotification('当前活动尚未加载完成，请重新进入活动后再试', 'warning');
+    return;
+  }
   const scrollX = window.scrollX;
   const scrollY = window.scrollY;
   const input = [...document.querySelectorAll('.supplemental-included-hours-input')]
@@ -4713,13 +4738,12 @@ async function updateSupplementalLeaveRow(rowId, explicitHours) {
 
   try {
     setSupplementalLeaveRowSaving(rowId, true);
-    const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/supplemental-leave/batch`, {
+    const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/supplemental-leave/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    state.supplementalLeaveData = data.preview;
-    state.currentActivity.supplemental_leave_data = data.preview;
+    applySupplementalLeavePreview(activity, data.preview);
     if (updateSupplementalLeaveRowInPlace(rowId)) {
       restoreScrollPosition(scrollX, scrollY);
     } else {

@@ -512,6 +512,17 @@ def test_attendance_step_places_supplemental_leave_above_work_hour_table():
     assert "renderSupplementalLeaveSection(activity)" not in attendance_table
 
 
+def test_supplemental_leave_row_save_uses_visible_workbench_activity():
+    js = _js()
+    save_handler = js.split("async function updateSupplementalLeaveRow", 1)[1].split(
+        "// ═══ Render Results Data ═══", 1
+    )[0]
+
+    assert "const activity = getWorkbenchActivity();" in save_handler
+    assert "activity?.run_id" in save_handler
+    assert "state.currentActivity.run_id" not in save_handler
+
+
 def test_performance_supplement_inline_form_supports_name_and_continuous_entries():
     js = _js()
     render_section = js.split("function renderWorkbenchPerformanceSupplement", 1)[1].split("function renderWorkbenchResultRow", 1)[0]
@@ -600,7 +611,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=work-hour-rule-v1-20260706-search-v3" in html
+    assert "fbu-performance.js?v=supplemental-save-v1-20260713" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():
