@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import json
 import logging
 import os
@@ -23,7 +23,7 @@ from urllib.parse import quote, urlencode
 from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 logger = logging.getLogger("bonus_platform.labor")
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -76,8 +76,21 @@ from .engine.labor.profiles import (
 )
 
 # --- FBU Performance engine imports ---
-from .engine.fbu_performance.parser import FBUPerformanceParser
-from .engine.fbu_performance.runs import FBURunManager
+from .engine.fbu_performance.engines.base import (
+    ADJUSTMENT_SPLIT_PATH,
+    DISTRICT_MANAGER_FIXED_BASE_PATH,
+    NINETY_SIX_HOUR_FIXED_BASE_PATH,
+    STANDARD_PERFORMANCE_BASE_PATH,
+)
+from .engine.fbu_performance.engines.attendance import AttendanceProcessor
+from .engine.fbu_performance.parser import FBUPerformanceParser, normalize_shift_employee_id
+from .engine.fbu_performance.runs import (
+    build_final_result_rows,
+    FBURosterStore,
+    FBURun,
+    FBURunManager,
+)
+from .engine.fbu_performance.runs import FBURuleListStore
 from .engine.admin_store import (
     create_session,
     delete_session,
@@ -7030,11 +7043,569 @@ def download_domestic_labor_template(engine_key: str) -> FileResponse:
 # =========================================================================
 
 fbu_run_manager = FBURunManager(str(FBU_PERFORMANCE_RUNS_DIR))
+fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
+fbu_rule_list_store = FBURuleListStore(str(FBU_PERFORMANCE_RUNS_DIR))
+
+
+def _fbu_result_file_payload(run_id: str, result_type: str) -> dict:
+    export_payload = export_fbu_excel(run_id, type=result_type)
+    filename = export_payload["filename"]
+    return {
+        "type": result_type,
+        "filename": filename,
+        "download_url": f"/api/fbu-performance/runs/{run_id}/download/{quote(filename)}",
+    }
+
+
+def _merge_fbu_attendance_context(
+    current_path: Path,
+    previous_path: Path,
+    output_path: Path,
+    calc_month: str,
+) -> Path:
+    """Merge previous/current attendance reports so 96-hour rules can inspect cross-month weeks."""
+    current_wb = load_workbook(current_path, read_only=True, data_only=True)
+    previous_wb = load_workbook(previous_path, read_only=True, data_only=True)
+    merged_wb = Workbook()
+    merged_wb.remove(merged_wb.active)
+    window = _fbu_96_previous_context_window(calc_month)
+    required_start = window[2] if window else None
+    required_end = window[3] if window else None
+
+    try:
+        for sheet_name in current_wb.sheetnames:
+            merged_sheet = merged_wb.create_sheet(sheet_name)
+            current_sheet = current_wb[sheet_name]
+            previous_sheet = previous_wb[sheet_name] if sheet_name in previous_wb.sheetnames else None
+
+            if sheet_name == "sheet1" and previous_sheet is not None:
+                for row in current_sheet.iter_rows(min_row=1, max_row=1, values_only=True):
+                    merged_sheet.append(list(row))
+                if required_start and required_end:
+                    for row in previous_sheet.iter_rows(min_row=2, values_only=True):
+                        parsed_date = _parse_fbu_attendance_date(row[0] if row else None)
+                        if parsed_date and required_start <= parsed_date <= required_end:
+                            merged_sheet.append(list(row))
+                for row in current_sheet.iter_rows(min_row=2, values_only=True):
+                    merged_sheet.append(list(row))
+                continue
+
+            for row in current_sheet.iter_rows(values_only=True):
+                merged_sheet.append(list(row))
+    finally:
+        current_wb.close()
+        previous_wb.close()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    merged_wb.save(output_path)
+    return output_path
+
+
+def _parse_fbu_attendance_date(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        for fmt in ("%Y/%m/%d", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+    return None
+
+
+def _fbu_96_previous_context_window(calc_month: str) -> tuple[date, date, date, date] | None:
+    match = re.match(r"^(\d{4})-(\d{1,2})$", str(calc_month or "").strip())
+    if not match:
+        return None
+    month_start = date(int(match.group(1)), int(match.group(2)), 1)
+    period_start = date(2026, 3, 29)
+    while period_start > month_start:
+        period_start -= timedelta(days=14)
+    while period_start + timedelta(days=13) < month_start:
+        period_start += timedelta(days=14)
+    if period_start >= month_start:
+        return None
+    period_end = period_start + timedelta(days=13)
+    required_end = month_start - timedelta(days=1)
+    return period_start, period_end, period_start, required_end
+
+
+def _build_fbu_attendance_context_summary(
+    filepath: Path,
+    calc_month: str,
+    previous_attendance_file: str = "",
+    available_dates: set[date] | None = None,
+) -> dict:
+    window = _fbu_96_previous_context_window(calc_month)
+    if not window:
+        return {
+            "required": False,
+            "status": "not_required",
+            "message": "当前核算月96工时制首段不需要上一月考勤上下文。",
+        }
+
+    period_start, period_end, required_start, required_end = window
+    required_dates = []
+    current = required_start
+    while current <= required_end:
+        required_dates.append(current)
+        current += timedelta(days=1)
+
+    if available_dates is None:
+        available_dates = set()
+        try:
+            wb = load_workbook(filepath, read_only=True, data_only=True)
+            if "sheet1" in wb.sheetnames:
+                ws = wb["sheet1"]
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    parsed_date = _parse_fbu_attendance_date(row[0] if row else None)
+                    if parsed_date:
+                        available_dates.add(parsed_date)
+            wb.close()
+        except Exception:
+            available_dates = set()
+
+    covered_dates = [item for item in required_dates if item in available_dates]
+    missing_dates = [item for item in required_dates if item not in available_dates]
+    required_start_text = required_start.isoformat()
+    required_end_text = required_end.isoformat()
+    if missing_dates:
+        message = (
+            f"缺少上一月 {required_start_text} 至 {required_end_text} 考勤，"
+            "96工时制首段可能无法对齐线下结果。"
+        )
+        status = "missing"
+    else:
+        message = (
+            f"已识别96工时制跨月首段：{period_start.isoformat()} 至 {period_end.isoformat()}，"
+            f"已使用上月考勤 {required_start_text} 至 {required_end_text}。"
+        )
+        status = "complete"
+
+    return {
+        "required": True,
+        "status": status,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "required_start": required_start_text,
+        "required_end": required_end_text,
+        "previous_attendance_file": previous_attendance_file,
+        "covered_dates": [item.isoformat() for item in covered_dates],
+        "missing_dates": [item.isoformat() for item in missing_dates],
+        "message": message,
+    }
+
+
+def _append_fbu_previous_attendance_context_to_preview(
+    preview: dict,
+    previous_path: Path,
+    calc_month: str,
+    previous_attendance_filename: str,
+) -> dict:
+    """Append only the previous-month daily rows needed for 96-hour cross-month periods."""
+    window = _fbu_96_previous_context_window(calc_month)
+    if not window:
+        preview.setdefault("summary", {})["attendance_context"] = _build_fbu_attendance_context_summary(
+            previous_path,
+            calc_month,
+            previous_attendance_filename,
+        )
+        return preview
+
+    _, _, required_start, required_end = window
+    previous_rows = []
+    available_dates = set()
+    previous_headers = ()
+    wb = load_workbook(previous_path, read_only=True, data_only=True)
+    try:
+        if "sheet1" in wb.sheetnames:
+            ws = wb["sheet1"]
+            previous_headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                parsed_date = _parse_fbu_attendance_date(row[0] if row else None)
+                if parsed_date:
+                    available_dates.add(parsed_date)
+                    if required_start <= parsed_date <= required_end:
+                        previous_rows.append(row)
+    finally:
+        wb.close()
+
+    if previous_rows:
+        processor = AttendanceProcessor()
+        previous_by_employee = processor.process(previous_rows, required_start.month, headers=previous_headers)
+        for employee in preview.get("employees", []):
+            source_id = normalize_shift_employee_id(employee.get("source_employee_id") or employee.get("employee_id"))
+            previous_hours = previous_by_employee.get(source_id)
+            if not previous_hours:
+                continue
+            shift_type = str(employee.get("shift_type") or "").strip()
+            if shift_type in {"白班", "夜班"}:
+                context_rows = list(previous_hours.get(f"{shift_type}_daily_rows") or [])
+            else:
+                context_rows = list(previous_hours.get("daily_rows") or [])
+            if not context_rows:
+                continue
+            existing_rows = list(employee.get("attendance_daily_rows") or [])
+            seen = {
+                (str(row.get("date") or ""), str(row.get("shift_type") or ""))
+                for row in existing_rows
+            }
+            for row in context_rows:
+                key = (str(row.get("date") or ""), str(row.get("shift_type") or ""))
+                if key not in seen:
+                    existing_rows.append(row)
+                    seen.add(key)
+            employee["attendance_daily_rows"] = sorted(existing_rows, key=lambda item: str(item.get("date") or ""))
+
+    preview.setdefault("summary", {})["attendance_context"] = _build_fbu_attendance_context_summary(
+        previous_path,
+        calc_month,
+        previous_attendance_filename,
+        available_dates,
+    )
+    return preview
+
+
+def _fbu_run_diagnostics(run: FBURun) -> dict:
+    """生成紧凑的数据匹配诊断。"""
+    attendance_employees = run.attendance_data.get("employees", []) if run.attendance_data else []
+    salary_employees = run.salary_data.get("employees", []) if run.salary_data else []
+    performance_employees = run.performance_data.get("employees", []) if run.performance_data else []
+    adjustment_employees = run.adjustment_data.get("employees", []) if run.adjustment_data else []
+    base_override_employees = run.base_override_data.get("employees", []) if run.base_override_data else []
+
+    attendance_by_id = {emp.get("employee_id"): emp for emp in attendance_employees if emp.get("employee_id")}
+    salary_by_id = {emp.get("employee_id"): emp for emp in salary_employees if emp.get("employee_id")}
+    performance_by_id = {emp.get("employee_id"): emp for emp in performance_employees if emp.get("employee_id")}
+    adjustment_by_id = {emp.get("employee_id"): emp for emp in adjustment_employees if emp.get("employee_id")}
+    base_override_by_id = {
+        emp.get("employee_id"): emp
+        for emp in base_override_employees
+        if emp.get("employee_id") and emp.get("include_in_calculation")
+    }
+
+    attendance_ids = set(attendance_by_id)
+    salary_ids = set(salary_by_id)
+    performance_ids = set(performance_by_id)
+    adjustment_ids = set(adjustment_by_id)
+    base_override_ids = set(base_override_by_id)
+
+    def source_id(emp_id: str) -> str:
+        text = str(emp_id or "").strip()
+        return text[:-2] if text.endswith("-1") else text
+
+    salary_source_ids = {source_id(emp_id) for emp_id in salary_ids}
+    performance_source_ids = {source_id(emp_id) for emp_id in performance_ids}
+    adjustment_source_ids = {source_id(emp_id) for emp_id in adjustment_ids}
+    attendance_source_ids = {source_id(emp_id) for emp_id in attendance_ids}
+
+    def name_for(emp_id: str) -> str:
+        for source in (attendance_by_id, salary_by_id, performance_by_id, adjustment_by_id, base_override_by_id):
+            if emp_id in source:
+                return source[emp_id].get("name", "")
+            split_id = f"{emp_id}-1"
+            if split_id in source:
+                return source[split_id].get("name", "")
+        return ""
+
+    issues = []
+    has_salary_data = bool(salary_ids) or bool(run.salary_file)
+    has_performance_data = bool(performance_ids) or bool(adjustment_ids) or bool(run.performance_file) or bool(run.adjustment_file)
+
+    def add_issue(kind: str, emp_id: str, detail: str, severity: str = "warning"):
+        issues.append({
+            "severity": severity,
+            "type": kind,
+            "employee_id": emp_id,
+            "name": name_for(emp_id),
+            "detail": detail,
+        })
+
+    if has_salary_data:
+        for emp_id in sorted(emp_id for emp_id in attendance_source_ids if emp_id not in salary_source_ids):
+            add_issue("考勤有薪资无", emp_id, "该员工有考勤记录，但薪资档案未匹配", "error")
+
+    if has_performance_data:
+        for emp_id in sorted(
+            emp_id
+            for emp_id in attendance_source_ids
+            if emp_id not in performance_source_ids
+            and emp_id not in adjustment_source_ids
+        ):
+            add_issue("考勤有绩效无", emp_id, "该员工有考勤记录，但绩效报表未匹配", "warning")
+
+    for emp_id in sorted(emp_id for emp_id in salary_ids if source_id(emp_id) not in attendance_source_ids):
+        add_issue("薪资有考勤无", emp_id, "薪资档案存在该员工，但本月考勤未出现", "info")
+
+    for emp_id in sorted(emp_id for emp_id in performance_ids if source_id(emp_id) not in attendance_source_ids):
+        add_issue("绩效有考勤无", emp_id, "绩效报表存在该员工，但本月考勤未出现", "info")
+
+    for emp_id in sorted(emp_id for emp_id in adjustment_ids if source_id(emp_id) not in attendance_source_ids):
+        add_issue("拆分有考勤无", emp_id, "调薪/转正拆分表存在该员工，但本月考勤未出现", "error")
+
+    if has_salary_data:
+        for emp_id in sorted(emp_id for emp_id in adjustment_ids if source_id(emp_id) not in salary_source_ids):
+            add_issue("拆分有薪资无", emp_id, "调薪/转正拆分表存在该员工，但薪资档案未匹配", "error")
+        for emp_id in sorted(emp_id for emp_id in base_override_ids if source_id(emp_id) not in salary_source_ids):
+            add_issue("规则表有薪资无", emp_id, "工时规则/固定基数例外表存在该员工，但薪资档案未匹配", "error")
+
+    for emp_id in sorted(emp_id for emp_id in base_override_ids if source_id(emp_id) not in attendance_source_ids):
+        add_issue("规则表有考勤无", emp_id, "工时规则/固定基数例外表存在该员工，但本月考勤未出现", "error")
+
+    for emp_id in sorted(attendance_ids):
+        salary = salary_by_id.get(source_id(emp_id))
+        if not salary:
+            continue
+        if (salary.get("hourly_rate") or 0) <= 0:
+            add_issue("时薪为0", emp_id, "薪资档案时薪为0，绩效基数可能无法计算", "error")
+        if (salary.get("ratio") or 0) <= 0:
+            add_issue("绩效比例为空", emp_id, "薪资档案绩效比例为空或为0", "warning")
+
+    for emp in adjustment_employees:
+        emp_id = emp.get("employee_id", "")
+        active_base = sum(
+            (segment.get("performance_base") or 0)
+            for segment in emp.get("segments", [])
+            if "前" not in str(segment.get("reason", ""))
+        )
+        if active_base <= 0:
+            add_issue("拆分有效基数为0", emp_id, "调薪/转正拆分表未识别到调薪后有效基数", "warning")
+
+    severity_rank = {"error": 0, "warning": 1, "info": 2}
+    issues.sort(key=lambda item: (severity_rank.get(item["severity"], 9), item["type"], item["employee_id"]))
+
+    matched_salary = sum(1 for emp_id in attendance_ids if source_id(emp_id) in salary_source_ids)
+    matched_performance = sum(1 for emp_id in attendance_ids if source_id(emp_id) in performance_source_ids)
+    can_calculate = matched_salary
+
+    return {
+        "summary": {
+            "attendance_count": len(attendance_ids),
+            "salary_count": len(salary_ids),
+            "performance_count": len(performance_ids),
+            "adjustment_count": len(adjustment_ids),
+            "base_override_count": len(base_override_ids),
+            "matched_salary_count": matched_salary,
+            "matched_performance_count": matched_performance,
+            "can_calculate_count": can_calculate,
+            "issue_count": len(issues),
+            "error_count": sum(1 for issue in issues if issue["severity"] == "error"),
+            "warning_count": sum(1 for issue in issues if issue["severity"] == "warning"),
+        },
+        "issues": issues,
+    }
+
+
+def _rule_list_roster_info(roster_lookup: dict[str, dict] | None, employee_id: str) -> dict:
+    if not roster_lookup:
+        return {}
+    return roster_lookup.get(employee_id, {})
+
+
+def _build_rule_list_override_row(
+    row: dict,
+    *,
+    calc_month: str,
+    rule_type: str,
+    fixed_performance_base,
+    calculation_path: str,
+    roster_lookup: dict[str, dict] | None = None,
+) -> dict:
+    employee_id = str(row.get("employee_id") or "").strip()
+    roster_info = _rule_list_roster_info(roster_lookup, employee_id)
+    name = str(roster_info.get("name") or row.get("name") or "").strip()
+    area = str(roster_info.get("area") or "").strip()
+    department = str(roster_info.get("department") or "").strip()
+    return {
+        "employee_id": employee_id,
+        "source_employee_id": employee_id,
+        "name": name,
+        "area": area,
+        "department": department,
+        "rule_type": rule_type,
+        "fixed_performance_base": fixed_performance_base,
+        "allocation_month": calc_month,
+        "status": "启用",
+        "include_in_calculation": True,
+        "note": "页面维护",
+        "calculation_path": calculation_path,
+    }
+
+
+def _build_base_override_data_from_rule_lists(
+    calc_month: str,
+    payload: dict,
+    roster_lookup: dict[str, dict] | None = None,
+) -> dict:
+    employees = []
+    for row in payload.get("work_hour_employees", []):
+        if not row.get("active", True):
+            continue
+        employee_id = str(row.get("employee_id") or "").strip()
+        if not employee_id:
+            continue
+        employees.append(_build_rule_list_override_row(
+            row,
+            calc_month=calc_month,
+            rule_type="96工时制",
+            fixed_performance_base=None,
+            calculation_path="96工时制自动基数路径",
+            roster_lookup=roster_lookup,
+        ))
+    for row in payload.get("fixed_base_employees", []):
+        if not row.get("active", True):
+            continue
+        employee_id = str(row.get("employee_id") or "").strip()
+        if not employee_id:
+            continue
+        employees.append(_build_rule_list_override_row(
+            row,
+            calc_month=calc_month,
+            rule_type="线下固定基数覆盖",
+            fixed_performance_base=float(row.get("fixed_performance_base") or 0),
+            calculation_path="线下固定基数覆盖路径",
+            roster_lookup=roster_lookup,
+        ))
+    fixed_base_total = sum(float(row.get("fixed_performance_base") or 0) for row in employees)
+    work_hour_rule_count = sum(1 for row in employees if row["rule_type"] == "96工时制")
+    fixed_base_count = sum(1 for row in employees if row["rule_type"] == "线下固定基数覆盖")
+    return {
+        "employees": employees,
+        "summary": {
+            "total_rows": len(employees),
+            "active_count": len(employees),
+            "excluded_count": 0,
+            "work_hour_rule_count": work_hour_rule_count,
+            "fixed_base_count": fixed_base_count,
+            "active_fixed_base": fixed_base_total,
+        },
+    }
+
+
+def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
+    """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    roster_path = next((path for path in [run_dir / "roster.xlsx", run_dir / "roster.xls"] if path.exists()), None)
+    if roster_path is None:
+        roster_path = fbu_roster_store.copy_active_to_run(run_id)
+        if roster_path:
+            run = fbu_run_manager.get_run(run_id)
+            metadata = fbu_roster_store.get_metadata()
+            if run:
+                fbu_run_manager.update_run(
+                    run_id,
+                    roster_file=metadata.get("filename", "active_roster.xlsx"),
+                    roster_source="base",
+                )
+    if roster_path and roster_path.exists():
+        parser.load_roster(str(roster_path))
+        return roster_path
+    return None
+
+
+def _fbu_roster_preview_for_run(run_id: str) -> dict | None:
+    parser = FBUPerformanceParser()
+    roster_path = _load_fbu_roster_for_run(parser, run_id)
+    if not roster_path:
+        return None
+
+    employees = []
+    for employee_id, row in parser.employee_roster.items():
+        employees.append({
+            "employee_id": employee_id,
+            "name": row.get("name", ""),
+            "department": row.get("department", ""),
+            "area": row.get("area", ""),
+            "position": row.get("position", ""),
+            "personnel_status": row.get("personnel_status", ""),
+            "job_type": row.get("job_type", ""),
+        })
+
+    return {
+        "employees": employees,
+        "summary": {
+            "total_employees": len(employees),
+        },
+    }
+
+
+@app.get("/api/fbu-performance/roster")
+def get_fbu_base_roster() -> dict:
+    """获取FBU基础花名册状态"""
+    return fbu_roster_store.get_metadata()
+
+
+@app.post("/api/fbu-performance/roster")
+async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
+    """上传FBU基础花名册，供后续月度活动默认引用"""
+    try:
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, "请上传 .xlsx 或 .xls 格式的花名册")
+        content = await file.read()
+        tmp_path = FBU_PERFORMANCE_RUNS_DIR / "_roster" / f"_upload_check{suffix}"
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_bytes(content)
+
+        parser = FBUPerformanceParser()
+        roster = parser.load_roster(str(tmp_path))
+        metadata = fbu_roster_store.save_active_roster(
+            content=content,
+            filename=file.filename,
+            total_employees=len(roster),
+        )
+        tmp_path.unlink(missing_ok=True)
+        return {"success": True, "roster": metadata}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"花名册解析失败: {str(e)}")
+
+
+@app.get("/api/fbu-performance/rule-lists")
+def get_fbu_rule_lists() -> dict:
+    return fbu_rule_list_store.get()
+
+
+@app.post("/api/fbu-performance/rule-lists")
+def save_fbu_rule_lists(body: dict = Body(...)) -> dict:
+    try:
+        return fbu_rule_list_store.save(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/rule-lists/confirm")
+def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    try:
+        saved = fbu_rule_list_store.save(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    parser = FBUPerformanceParser()
+    _load_fbu_roster_for_run(parser, run_id)
+    preview = _build_base_override_data_from_rule_lists(
+        run.calc_month,
+        saved,
+        roster_lookup=parser.employee_roster,
+    )
+    fbu_run_manager.update_run(
+        run_id,
+        base_override_file="页面维护",
+        base_override_data=preview,
+    )
+    return {"success": True, "run_id": run_id, "preview": preview, "rule_lists": saved}
 
 
 @app.post("/api/fbu-performance/import-attendance")
 async def import_fbu_attendance(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    previous_attendance: UploadFile = File(None),
     calc_month: str = Body(...),
     roster: UploadFile = File(None),
     run_id: str = Body(None),
@@ -7048,49 +7619,134 @@ async def import_fbu_attendance(
     else:
         run = fbu_run_manager.create_run(calc_month=calc_month)
 
-    # 保存上传文件
+    # 先解析临时文件，成功后再替换活动正式文件。
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     file_path = run_dir / "attendance.xlsx"
-    with open(file_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    pending_file_path = run_dir / ".attendance-upload.xlsx"
+    current_attendance_filename = run.attendance_file or ""
+    if file:
+        pending_file_path.write_bytes(await file.read())
+        current_attendance_filename = file.filename
+    elif not file_path.exists():
+        raise HTTPException(400, "请先上传当月考勤日报表")
+    attendance_parse_path = pending_file_path if file else file_path
 
-    # 保存花名册（如果提供）
+    previous_attendance_filename = run.previous_attendance_file or ""
+    previous_path = None
+    pending_previous_path = None
+    if previous_attendance:
+        previous_suffix = Path(previous_attendance.filename or "").suffix.lower()
+        if previous_suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, "请上传 .xlsx 或 .xls 格式的上一月考勤日报表")
+        previous_attendance_filename = previous_attendance.filename
+        previous_path = run_dir / f"previous_attendance{previous_suffix}"
+        pending_previous_path = run_dir / f".previous-attendance-upload{previous_suffix}"
+        pending_previous_path.write_bytes(await previous_attendance.read())
+
     roster_path = None
+    pending_roster_path = None
     if roster:
-        roster_path = run_dir / "roster.xlsx"
-        with open(roster_path, "wb") as f:
-            content = await roster.read()
-            f.write(content)
+        roster_suffix = Path(roster.filename or "").suffix.lower()
+        if roster_suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, "请上传 .xlsx 或 .xls 格式的花名册")
+        roster_path = run_dir / f"roster{roster_suffix}"
+        pending_roster_path = run_dir / f".roster-upload{roster_suffix}"
+        pending_roster_path.write_bytes(await roster.read())
 
-    # 更新文件名
-    fbu_run_manager.update_run(run.run_id, attendance_file=file.filename)
+    if previous_attendance and not file and run.attendance_data and pending_previous_path is not None:
+        try:
+            preview = _append_fbu_previous_attendance_context_to_preview(
+                dict(run.attendance_data),
+                pending_previous_path,
+                calc_month,
+                previous_attendance_filename,
+            )
+            pending_previous_path.replace(previous_path)
+            fbu_run_manager.update_run(
+                run.run_id,
+                previous_attendance_file=previous_attendance_filename,
+            )
+            fbu_run_manager.save_step_data(run.run_id, 1, preview)
+            result_file = _fbu_result_file_payload(run.run_id, "attendance")
+            return {
+                "success": True,
+                "run_id": run.run_id,
+                "step": 1,
+                "preview": preview,
+                "result_file": result_file,
+            }
+        except Exception as e:
+            raise HTTPException(500, f"上一月考勤解析失败: {str(e)}")
+        finally:
+            pending_previous_path.unlink(missing_ok=True)
 
     # 解析并预览
     try:
         target_month = int(calc_month.split("-")[1]) if "-" in calc_month else int(calc_month)
         parser = FBUPerformanceParser()
 
-        # 加载花名册（如果存在）
-        if roster_path and roster_path.exists():
-            parser.load_roster(str(roster_path))
+        # 加载本活动花名册；没有时自动引用当前基础花名册
+        if pending_roster_path and pending_roster_path.exists():
+            parser.load_roster(str(pending_roster_path))
+        else:
+            _load_fbu_roster_for_run(parser, run.run_id)
 
-        preview = parser.parse_attendance_preview(str(file_path), target_month)
+        preview = parser.parse_attendance_preview(str(attendance_parse_path), target_month)
+        if not preview.get("employees"):
+            raise HTTPException(
+                400,
+                f"考勤日报未包含 {calc_month} 的数据，请确认活动月份或重新上传文件",
+            )
+        if previous_attendance and pending_previous_path is not None:
+            preview = _append_fbu_previous_attendance_context_to_preview(
+                preview,
+                pending_previous_path,
+                calc_month,
+                previous_attendance_filename,
+            )
+        else:
+            preview.setdefault("summary", {})["attendance_context"] = _build_fbu_attendance_context_summary(
+                attendance_parse_path,
+                calc_month,
+                previous_attendance_filename,
+            )
 
-        # 保存分步数据
+        if file:
+            pending_file_path.replace(file_path)
+        if pending_previous_path and previous_path:
+            pending_previous_path.replace(previous_path)
+        if pending_roster_path and roster_path:
+            pending_roster_path.replace(roster_path)
+
+        metadata = {
+            "attendance_file": current_attendance_filename,
+            "previous_attendance_file": previous_attendance_filename,
+        }
+        if roster:
+            metadata.update(roster_file=roster.filename, roster_source="activity")
+        fbu_run_manager.update_run(run.run_id, **metadata)
         fbu_run_manager.save_step_data(run.run_id, 1, preview)
+        result_file = _fbu_result_file_payload(run.run_id, "attendance")
 
         return {
             "success": True,
             "run_id": run.run_id,
             "step": 1,
             "preview": preview,
+            "result_file": result_file,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        fbu_run_manager.update_run(run.run_id, status="failed", error=str(e))
         raise HTTPException(500, f"考勤数据解析失败: {str(e)}")
+    finally:
+        pending_file_path.unlink(missing_ok=True)
+        if pending_previous_path:
+            pending_previous_path.unlink(missing_ok=True)
+        if pending_roster_path:
+            pending_roster_path.unlink(missing_ok=True)
 
 
 @app.post("/api/fbu-performance/import-salary")
@@ -7117,25 +7773,96 @@ async def import_fbu_salary(
     try:
         parser = FBUPerformanceParser()
 
-        # 加载花名册（如果存在）
-        roster_path = run_dir / "roster.xlsx"
-        if roster_path.exists():
-            parser.load_roster(str(roster_path))
+        # 加载活动花名册或基础花名册快照
+        _load_fbu_roster_for_run(parser, run_id)
 
         preview = parser.parse_salary_preview(str(file_path))
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run_id, 2, preview)
+        result_file = _fbu_result_file_payload(run_id, "salary")
 
         return {
             "success": True,
             "run_id": run_id,
             "step": 2,
             "preview": preview,
+            "result_file": result_file,
         }
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
         raise HTTPException(500, f"薪资数据解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import-salary-history")
+async def import_fbu_salary_history(
+    run_id: str = Form(...),
+    previous_salary: UploadFile = File(...),
+    current_salary: UploadFile = File(...),
+    adjustments: UploadFile = File(...),
+) -> dict:
+    """Step 2: import adjacent salary snapshots and the full adjustment export."""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    uploads = [
+        (previous_salary, run_dir / "previous_salary.xlsx"),
+        (current_salary, run_dir / "salary.xlsx"),
+        (adjustments, run_dir / "adjustments.xlsx"),
+    ]
+    for upload, path in uploads:
+        with open(path, "wb") as file_handle:
+            file_handle.write(await upload.read())
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        previous_preview = parser.parse_salary_preview(str(run_dir / "previous_salary.xlsx"))
+        current_preview = parser.parse_salary_preview(str(run_dir / "salary.xlsx"))
+        adjustment_preview = parser.parse_adjustments_preview(str(run_dir / "adjustments.xlsx"))
+        verification = parser.reconcile_salary_history(
+            previous_preview.get("employees", []),
+            current_preview.get("employees", []),
+            adjustment_preview.get("events", []),
+            run.calc_month,
+            roster_by_id=parser.employee_roster,
+        )
+        resolved_salary = {
+            "employees": verification["employees"],
+            "summary": {
+                **current_preview.get("summary", {}),
+                **verification["summary"],
+            },
+        }
+        fbu_run_manager.update_run(
+            run_id,
+            previous_salary_file=previous_salary.filename,
+            current_salary_file=current_salary.filename,
+            salary_file=current_salary.filename,
+            adjustment_file=adjustments.filename,
+            previous_salary_data=previous_preview,
+            current_salary_data=current_preview,
+            salary_verification_data=verification,
+            adjustment_data=adjustment_preview,
+        )
+        fbu_run_manager.save_step_data(run_id, 2, resolved_salary)
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 2,
+            "preview": resolved_salary,
+            "verification": verification,
+            "result_file": _fbu_result_file_payload(run_id, "salary"),
+        }
+    except ValueError as exc:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(exc))
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(exc))
+        raise HTTPException(500, f"薪资历史核验失败: {str(exc)}")
 
 
 @app.post("/api/fbu-performance/import-performance")
@@ -7150,6 +7877,7 @@ async def import_fbu_performance(
 
     # 保存上传文件
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
     file_path = run_dir / "performance.xlsx"
     with open(file_path, "wb") as f:
         content = await file.read()
@@ -7162,15 +7890,116 @@ async def import_fbu_performance(
     try:
         parser = FBUPerformanceParser()
 
-        # 加载花名册（如果存在）
-        roster_path = run_dir / "roster.xlsx"
-        if roster_path.exists():
-            parser.load_roster(str(roster_path))
+        # 加载活动花名册或基础花名册快照
+        _load_fbu_roster_for_run(parser, run_id)
 
         preview = parser.parse_performance_preview(str(file_path))
+        existing_performance = run.performance_data if isinstance(run.performance_data, dict) else {}
+        if (
+            preview.get("summary", {}).get("source_type") == "performance_supplement"
+            and existing_performance.get("employees")
+        ):
+            preview = parser.merge_performance_supplement_preview(existing_performance, preview)
 
         # 保存分步数据
         fbu_run_manager.save_step_data(run_id, 3, preview)
+        result_file = _fbu_result_file_payload(run_id, "performance")
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 3,
+            "preview": preview,
+            "result_file": result_file,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"绩效数据解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/salary-verification/confirm")
+def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict:
+    """Resolve one blocked salary snapshot difference using an explicit snapshot choice."""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    employee_id = str(body.get("employee_id") or "").strip()
+    choice = str(body.get("choice") or "").strip()
+    if not employee_id or choice not in {"previous", "current"}:
+        raise HTTPException(400, "请选择按上月值或按当月值")
+
+    verification = dict(run.salary_verification_data or {})
+    employees = [dict(row) for row in verification.get("employees", [])]
+    target = next((row for row in employees if row.get("employee_id") == employee_id), None)
+    if not target or target.get("verification_status") != "blocking":
+        raise HTTPException(404, "未找到该员工的待处理薪资差异")
+
+    prefix = "previous" if choice == "previous" else "current"
+    target["hourly_rate"] = target.get(f"{prefix}_hourly_rate", target.get("hourly_rate", 0))
+    target["ratio"] = target.get(f"{prefix}_ratio", target.get("ratio", 0))
+    target["verification_status"] = "resolved"
+    target["resolution"] = f"manual_use_{choice}"
+    target["manual_note"] = str(body.get("note") or "").strip()
+
+    issues = [issue for issue in verification.get("issues", []) if issue.get("employee_id") != employee_id]
+    summary = dict(verification.get("summary", {}))
+    blocking_count = sum(row.get("verification_status") == "blocking" for row in employees)
+    summary["blocking_count"] = blocking_count
+    summary["resolved_count"] = len(employees) - blocking_count
+    verification.update({"employees": employees, "issues": issues, "summary": summary})
+    salary_data = dict(run.salary_data or {})
+    salary_data["employees"] = employees
+    salary_data["summary"] = {**salary_data.get("summary", {}), **summary}
+    fbu_run_manager.update_run(
+        run_id,
+        salary_verification_data=verification,
+        salary_data=salary_data,
+        status="step2",
+        error="",
+    )
+    return {"success": True, "preview": salary_data, "verification": verification}
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/performance-supplement")
+def add_fbu_performance_supplement(run_id: str, body: dict = Body(...)) -> dict:
+    """页面录入离职/线下绩效补录。"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    employee_id = str(body.get("employee_id") or "").strip()
+    if not employee_id:
+        raise HTTPException(400, "请填写工号")
+
+    score = body.get("score")
+    level = str(body.get("level") or "").strip()
+    coefficient = body.get("coefficient")
+    if score in (None, "") and not level and coefficient in (None, ""):
+        raise HTTPException(400, "请至少填写绩效得分、绩效等级或绩效系数")
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        supplement_preview = parser.build_performance_supplement_preview([
+            {
+                "employee_id": employee_id,
+                "name": body.get("name"),
+                "score": score,
+                "level": level,
+                "coefficient": coefficient,
+                "note": body.get("note"),
+            }
+        ])
+        existing_performance = run.performance_data if isinstance(run.performance_data, dict) else {}
+        if existing_performance.get("employees"):
+            preview = parser.merge_performance_supplement_preview(existing_performance, supplement_preview)
+        else:
+            preview = supplement_preview
+
+        fbu_run_manager.save_step_data(run_id, 3, preview)
+        if not run.performance_file:
+            fbu_run_manager.update_run(run_id, performance_file="页面绩效补录")
 
         return {
             "success": True,
@@ -7178,9 +8007,363 @@ async def import_fbu_performance(
             "step": 3,
             "preview": preview,
         }
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
-        raise HTTPException(500, f"绩效数据解析失败: {str(e)}")
+        raise HTTPException(500, f"绩效补录保存失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import-adjustments")
+async def import_fbu_adjustments(
+    run_id: str = Body(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """可选：导入调薪/转正拆分表"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    file_path = run_dir / "adjustments.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    fbu_run_manager.update_run(run_id, adjustment_file=file.filename)
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        preview = parser.parse_adjustments_preview(str(file_path))
+        fbu_run_manager.save_step_data(run_id, 4, preview)
+        result_file = _fbu_result_file_payload(run_id, "adjustments")
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 4,
+            "preview": preview,
+            "result_file": result_file,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"调薪拆分表解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import-supplemental-leave")
+async def import_fbu_supplemental_leave(
+    run_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """导入薪酬补充 sickpay&年假表，并生成待确认清单。"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    file_path = run_dir / "supplemental_leave.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        preview = parser.parse_supplemental_leave_preview(str(file_path), run.calc_month)
+        preview = parser.validate_supplemental_leave_against_attendance(
+            preview,
+            run.attendance_data,
+        )
+        fbu_run_manager.update_run(
+            run_id,
+            supplemental_leave_file=file.filename,
+            supplemental_leave_data=preview,
+        )
+        return {
+            "success": True,
+            "run_id": run_id,
+            "preview": preview,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"补充假勤解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/import-base-overrides")
+async def import_fbu_base_overrides(
+    run_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """导入96工时制标记/线下固定绩效基数例外表。"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    file_path = run_dir / "base_overrides.xlsx"
+    with open(file_path, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        preview = parser.parse_base_overrides_preview(str(file_path), run.calc_month)
+        fbu_run_manager.update_run(
+            run_id,
+            base_override_file=file.filename,
+            base_override_data=preview,
+        )
+        result_file = _fbu_result_file_payload(run_id, "base_overrides")
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "preview": preview,
+            "result_file": result_file,
+        }
+    except Exception as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e))
+        raise HTTPException(500, f"工时规则/固定基数例外表解析失败: {str(e)}")
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/supplemental-leave/batch")
+def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
+    """批量更新补充假勤确认状态。"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    if not run.supplemental_leave_data:
+        raise HTTPException(400, "尚未导入补充假勤表")
+
+    apply_suggestions = bool(body.get("apply_suggestions"))
+    row_ids = body.get("row_ids") or []
+    if not row_ids and not apply_suggestions:
+        raise HTTPException(400, "请选择需要处理的行")
+
+    parser = FBUPerformanceParser()
+    if apply_suggestions:
+        preview, applied_count = parser.apply_supplemental_leave_all_suggestions(run.supplemental_leave_data)
+        fbu_run_manager.update_run(run_id, supplemental_leave_data=preview)
+        return {
+            "success": True,
+            "run_id": run_id,
+            "preview": preview,
+            "applied_count": applied_count,
+        }
+
+    updates = {}
+    if "confirmation_status" in body:
+        status = str(body.get("confirmation_status") or "").strip()
+        if not status:
+            status = None
+    else:
+        status = None
+    if status:
+        if status not in {"pending", "confirmed", "excluded"}:
+            raise HTTPException(400, "确认状态无效")
+        updates["confirmation_status"] = status
+    if "include_in_base" in body:
+        include_raw = body.get("include_in_base")
+        if include_raw != "":
+            if isinstance(include_raw, bool):
+                updates["include_in_base"] = include_raw
+            elif str(include_raw).strip().lower() in {"true", "1", "yes"}:
+                updates["include_in_base"] = True
+            elif str(include_raw).strip().lower() in {"false", "0", "no"}:
+                updates["include_in_base"] = False
+            else:
+                raise HTTPException(400, "是否计入参数无效")
+    if "allocation_month" in body:
+        allocation_month = str(body.get("allocation_month") or "").strip()
+        if allocation_month and not re.match(r"^\d{4}-\d{2}$", allocation_month):
+            raise HTTPException(400, "归属月份格式应为YYYY-MM")
+        if allocation_month:
+            updates["allocation_month"] = allocation_month
+    if "allocation_period" in body:
+        allocation_period = str(body.get("allocation_period") or "").strip()
+        if allocation_period:
+            updates["allocation_period"] = allocation_period
+    if "confirmation_note" in body:
+        confirmation_note = str(body.get("confirmation_note") or "").strip()
+        if confirmation_note:
+            updates["confirmation_note"] = confirmation_note
+    if "included_hours" in body:
+        try:
+            included_hours = float(body.get("included_hours"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "计入小时必须为数字")
+        if included_hours < 0:
+            raise HTTPException(400, "计入小时不能小于0")
+        updates["included_hours"] = included_hours
+        if "confirmation_status" not in updates and "include_in_base" not in updates:
+            if included_hours > 0:
+                updates["confirmation_status"] = "confirmed"
+                updates["include_in_base"] = True
+            else:
+                updates["confirmation_status"] = "excluded"
+                updates["include_in_base"] = False
+
+    preview = parser.apply_supplemental_leave_batch(run.supplemental_leave_data, row_ids, updates)
+    fbu_run_manager.update_run(run_id, supplemental_leave_data=preview)
+    return {
+        "success": True,
+        "run_id": run_id,
+        "preview": preview,
+    }
+
+
+@app.get("/api/fbu-performance/templates/adjustments/download")
+def download_fbu_adjustments_template() -> FileResponse:
+    """下载FBU调薪/转正拆分表模板"""
+    import openpyxl
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.comments import Comment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "调薪拆分"
+
+    headers = ["工号", "姓名", "分段期间", "分段绩效基数", "核算标识", "备注"]
+    header_row = 6
+    data_start_row = header_row + 1
+    notes = [
+        "填报说明：",
+        "下面三行为脱敏填写示例，不参与导入；请从第7行开始填写真实数据。",
+        "必填列：工号、分段期间、分段绩效基数、核算标识。核算标识请从下拉选项选择。",
+    ]
+    examples = [
+        ["zt0000001", "花名一", "4.1-4.15", 1200.00, "调薪前", "示例：调薪前不参与绩效奖金"],
+        ["zt0000001", "花名一", "4.16-4.30", 900.00, "调薪后", "示例：调薪后按薪资档案绩效比例核算"],
+    ]
+
+    header_fill = PatternFill(start_color="1E88E5", end_color="1E88E5", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF")
+    note_font = Font(color="475569")
+    thin_border = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+
+    for offset, note in enumerate(notes, 1):
+        cell = ws.cell(row=offset, column=1, value=note)
+        cell.font = Font(bold=(offset == 1), color="334155") if offset == 1 else note_font
+
+    for row_idx, row in enumerate(examples, 3):
+        for col_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.border = thin_border
+            cell.alignment = Alignment(vertical="center")
+            if col_idx == 5:
+                cell.fill = PatternFill(start_color="E0F2FE", end_color="E0F2FE", fill_type="solid")
+
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+
+    widths = [16, 14, 18, 18, 14, 38]
+    for idx, width in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + idx)].width = width
+    ws.freeze_panes = f"A{data_start_row}"
+    reason_validation = DataValidation(
+        type="list",
+        formula1='"调薪前,调薪后"',
+        allow_blank=False,
+        showErrorMessage=True,
+        errorTitle="核算标识无效",
+        error="请选择“调薪前”或“调薪后”。",
+    )
+    ws.add_data_validation(reason_validation)
+    reason_validation.add(f"E{data_start_row}:E1000")
+
+    output_path = EXPORT_DIR / "FBU调薪转正拆分表模板.xlsx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+    return FileResponse(
+        output_path,
+        filename=output_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/api/fbu-performance/templates/base-overrides/download")
+def download_fbu_base_overrides_template() -> FileResponse:
+    """下载FBU工时规则/线下固定基数模板。"""
+    import openpyxl
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.comments import Comment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "工时规则标记"
+
+    headers = ["工号", "姓名", "规则类型", "固定绩效基数", "归属月份", "状态", "备注"]
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF")
+    thin_border = Border(
+        left=Side(style="thin", color="CBD5E1"),
+        right=Side(style="thin", color="CBD5E1"),
+        top=Side(style="thin", color="CBD5E1"),
+        bottom=Side(style="thin", color="CBD5E1"),
+    )
+
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+    ws["C1"].comment = Comment("96工时制只作为规则标记；平台会按考勤日报明细自动计算特殊合计时长。线下固定基数覆盖仅用于人工例外。", "Codex")
+    ws["D1"].comment = Comment("96工时制必须留空；线下固定基数覆盖才填写最终基数金额。", "Codex")
+    ws["E1"].comment = Comment("请使用 YYYY-MM，例如 2026-04。", "Codex")
+
+    widths = [16, 16, 20, 18, 14, 12, 34]
+    for idx, width in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + idx)].width = width
+    ws.freeze_panes = "A2"
+
+    rule_validation = DataValidation(
+        type="list",
+        formula1='"96工时制,线下固定基数覆盖"',
+        allow_blank=False,
+        showErrorMessage=True,
+        errorTitle="规则类型无效",
+        error="请选择“96工时制”或“线下固定基数覆盖”。",
+    )
+    status_validation = DataValidation(
+        type="list",
+        formula1='"启用,停用,排除"',
+        allow_blank=True,
+        showErrorMessage=True,
+        errorTitle="状态无效",
+        error="请选择“启用”“停用”或“排除”。",
+    )
+    ws.add_data_validation(rule_validation)
+    ws.add_data_validation(status_validation)
+    rule_validation.add("C2:C1000")
+    status_validation.add("F2:F1000")
+
+    output_path = EXPORT_DIR / "FBU工时规则与固定基数模板.xlsx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+    return FileResponse(
+        output_path,
+        filename=output_path.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.post("/api/fbu-performance/import")
@@ -7225,40 +8408,73 @@ def calculate_fbu_performance(run_id: str) -> dict:
     if not run:
         raise HTTPException(404, "任务不存在")
 
+    salary_verification = run.salary_verification_data or {}
+    blocking_count = salary_verification.get("summary", {}).get("blocking_count", 0)
+    if blocking_count:
+        raise HTTPException(409, f"薪资历史核验仍有 {blocking_count} 条待处理差异，暂不能核算")
+
     try:
         fbu_run_manager.update_run(run_id, status="processing")
 
         parser = FBUPerformanceParser()
 
         # 判断是分步模式还是一次性导入模式
-        if run.current_step >= 3 and run.attendance_data and run.salary_data and run.performance_data:
+        if run.attendance_data and run.salary_data and run.performance_data:
             # 分步模式：从已保存的分步数据计算
             engine = parser.parse_all_from_step_data(
                 attendance_data=run.attendance_data.get('employees', []),
                 salary_data=run.salary_data.get('employees', []),
                 performance_data=run.performance_data.get('employees', []),
+                adjustment_data=run.adjustment_data,
+                supplemental_leave_data=run.supplemental_leave_data,
+                base_override_data=run.base_override_data,
+                calc_month=run.calc_month,
             )
         else:
             # 一次性导入模式：从文件计算
             run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
             target_month = int(run.calc_month.split("-")[1]) if "-" in run.calc_month else int(run.calc_month)
+            _load_fbu_roster_for_run(parser, run_id)
 
             engine = parser.parse_all(
                 attendance_file=str(run_dir / "attendance.xlsx"),
                 salary_file=str(run_dir / "salary.xlsx"),
                 performance_file=str(run_dir / "performance.xlsx"),
                 target_month=target_month,
+                calc_month=run.calc_month,
             )
 
         # 保存结果
         employees = engine.get_all_employees()
+        if run.supplemental_leave_data and run.base_override_data:
+            offline_bases = run.base_override_data.get("offline_bases", [])
+            if offline_bases:
+                supplemental_leave_data = parser.apply_supplemental_leave_suggestions(
+                    run.supplemental_leave_data,
+                    employees,
+                    offline_bases,
+                    run.calc_month,
+                )
+                fbu_run_manager.update_run(run_id, supplemental_leave_data=supplemental_leave_data)
         fbu_run_manager.save_results(run_id, employees)
+        final_results = build_final_result_rows(fbu_run_manager.get_run(run_id).results)
+
+        total_bonus_by_source_employee = {}
+        for employee in employees:
+            total_key = employee.source_employee_id or employee.employee_id
+            total_bonus_by_source_employee[total_key] = (
+                total_bonus_by_source_employee.get(total_key, 0.0)
+                + employee.performance_bonus
+            )
 
         return {
             "success": True,
             "run_id": run_id,
-            "total_employees": len(employees),
-            "total_bonus": sum(e.performance_bonus for e in employees),
+            "total_employees": len(final_results),
+            "total_bonus": round(
+                sum(round(amount, 2) for amount in total_bonus_by_source_employee.values()),
+                2,
+            ),
         }
 
     except Exception as e:
@@ -7287,12 +8503,23 @@ def create_fbu_performance_run(body: dict) -> dict:
         raise HTTPException(400, "核算月份格式无效")
 
     run = fbu_run_manager.create_run(calc_month=calc_month)
+    roster_path = fbu_roster_store.copy_active_to_run(run.run_id)
+    if roster_path:
+        metadata = fbu_roster_store.get_metadata()
+        fbu_run_manager.update_run(
+            run.run_id,
+            roster_file=metadata.get("filename", "active_roster.xlsx"),
+            roster_source="base",
+        )
+        run = fbu_run_manager.get_run(run.run_id) or run
 
     return {
         "success": True,
         "run_id": run.run_id,
         "calc_month": run.calc_month,
         "status": run.status,
+        "roster_file": run.roster_file,
+        "roster_source": run.roster_source,
     }
 
 
@@ -7310,6 +8537,8 @@ def list_fbu_performance_runs() -> dict:
                 "current_step": r.current_step,
                 "total_employees": r.total_employees,
                 "total_bonus": r.total_bonus,
+                "roster_file": r.roster_file,
+                "roster_source": r.roster_source,
             }
             for r in runs
         ]
@@ -7322,7 +8551,22 @@ def get_fbu_performance_run(run_id: str) -> dict:
     run = fbu_run_manager.get_run(run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
-    return vars(run)
+    payload = vars(run).copy()
+    if payload.get("results"):
+        payload["results"] = build_final_result_rows(payload["results"])
+        payload["total_employees"] = len(payload["results"])
+    payload["roster_data"] = _fbu_roster_preview_for_run(run_id)
+    payload["diagnostics"] = _fbu_run_diagnostics(run)
+    return payload
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/diagnostics")
+def get_fbu_performance_diagnostics(run_id: str) -> dict:
+    """获取FBU数据匹配诊断"""
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    return _fbu_run_diagnostics(run)
 
 
 @app.get("/api/fbu-performance/runs/{run_id}/results")
@@ -7333,7 +8577,7 @@ def get_fbu_performance_results(run_id: str) -> dict:
         raise HTTPException(404, "任务不存在")
     if run.status != "completed":
         raise HTTPException(400, "任务未完成")
-    return {"results": run.results}
+    return {"results": build_final_result_rows(run.results)}
 
 
 @app.get("/api/fbu-performance/runs/{run_id}/export")
@@ -7361,6 +8605,98 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
     """导出带样式的Excel文件"""
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    def safe_excel_value(value):
+        if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
+            return "'" + value
+        return value
+
+    def format_fbu_job_type(job_type: str) -> str:
+        if job_type == "district_manager":
+            return "区长"
+        if job_type == "functional":
+            return "职能"
+        if job_type == "warehouse":
+            return "仓库"
+        return job_type or ""
+
+    def result_calculation_path(item: dict) -> str:
+        if item.get("calculation_path"):
+            return item["calculation_path"]
+        if item.get("job_type") == "district_manager":
+            return DISTRICT_MANAGER_FIXED_BASE_PATH
+        if item.get("calculation_segments"):
+            return ADJUSTMENT_SPLIT_PATH
+        return STANDARD_PERFORMANCE_BASE_PATH
+
+    def is_ninety_six_hour_result(item: dict) -> bool:
+        return (
+            item.get("work_hour_rule") == "96工时制"
+            or "96工时制" in str(item.get("calculation_path") or "")
+            or "96工时制" in str(item.get("base_override_type") or "")
+        )
+
+    def final_result_group_key(item: dict) -> str:
+        if item.get("job_type") == "district_manager":
+            return "district"
+        if item.get("job_type") == "functional":
+            return "functional"
+        return "warehouse"
+
+    def month_label(calc_month: str) -> str:
+        try:
+            return f"{int(str(calc_month).split('-')[1])}月"
+        except (IndexError, TypeError, ValueError):
+            return str(calc_month or "")
+
+    def department_levels(item: dict) -> list[str]:
+        area = str(item.get("area") or "").strip()
+        department = str(item.get("department") or "").strip()
+        parts = [part.strip() for part in department.split("-") if part.strip()]
+        if area and (not parts or area not in parts):
+            parts.insert(0, area)
+        return (parts + ["", "", ""])[:3]
+
+    def result_note(item: dict) -> str:
+        notes = []
+        if item.get("base_override_reason"):
+            notes.append(str(item["base_override_reason"]))
+        if item.get("coefficient_override_reason"):
+            notes.append(str(item["coefficient_override_reason"]))
+        if item.get("deferred_reason"):
+            notes.append(str(item["deferred_reason"]))
+        if item.get("merged_result"):
+            notes.append("白夜班拆分行已合并")
+        return "；".join(note for note in notes if note)
+
+    def normalize_shift_employee_id(employee_id: str) -> str:
+        text = str(employee_id or "").strip()
+        return text[:-2] if text.endswith("-1") else text
+
+    def result_position_lookup(run: FBURun) -> dict[str, str]:
+        lookup: dict[str, str] = {}
+        for source in (
+            (run.attendance_data or {}).get("employees", []),
+            (run.salary_data or {}).get("employees", []),
+        ):
+            for row in source:
+                emp_id = normalize_shift_employee_id(row.get("source_employee_id") or row.get("employee_id"))
+                position = str(row.get("position") or "").strip()
+                if emp_id and position and emp_id not in lookup:
+                    lookup[emp_id] = position
+        return lookup
+
+    def enrich_result_positions(rows: list[dict], run: FBURun) -> list[dict]:
+        positions = result_position_lookup(run)
+        enriched = []
+        for row in rows:
+            item = dict(row)
+            emp_id = normalize_shift_employee_id(item.get("source_employee_id") or item.get("employee_id"))
+            if not str(item.get("position") or "").strip() and emp_id in positions:
+                item["position"] = positions[emp_id]
+            enriched.append(item)
+        return enriched
 
     # 检查任务是否存在
     run = fbu_run_manager.get_run(run_id)
@@ -7384,8 +8720,49 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
         data = run.performance_data.get('employees', [])
         title = "绩效明细"
         filename = f"绩效明细_{run.calc_month}_{run_id}.xlsx"
+    elif type == "adjustments" and run.adjustment_data:
+        data = []
+        for employee in run.adjustment_data.get('employees', []):
+            for segment in employee.get("segments", []):
+                data.append({
+                    "record_type": "调薪拆分",
+                    "employee_id": employee.get("employee_id", ""),
+                    "name": employee.get("name", ""),
+                    "area": employee.get("area", ""),
+                    "department": employee.get("department", ""),
+                    "period": segment.get("period", ""),
+                    "performance_base": segment.get("performance_base", 0),
+                    "reason": segment.get("reason", ""),
+        })
+        for event in run.adjustment_data.get("events", []):
+            data.append({
+                "record_type": "OEHR调薪事件",
+                "employee_id": event.get("employee_id", ""),
+                "name": event.get("name", ""),
+                "area": event.get("area", ""),
+                "department": event.get("department", ""),
+                "period": event.get("effective_date", ""),
+                "performance_base": event.get("performance_base", 0),
+                "reason": event.get("adjustment_reason", ""),
+                "approval_status": event.get("approval_status", ""),
+                "adjustment_type": event.get("adjustment_type", ""),
+                "hourly_rate": event.get("hourly_rate", 0),
+                "performance_ratio": event.get("performance_ratio", 0),
+                "note": event.get("note", ""),
+            })
+        title = "调薪拆分"
+        filename = f"调薪拆分_{run.calc_month}_{run_id}.xlsx"
+    elif type == "base_overrides" and run.base_override_data:
+        data = run.base_override_data.get("employees", [])
+        title = "工时规则与固定基数例外"
+        filename = f"工时规则与固定基数例外_{run.calc_month}_{run_id}.xlsx"
+    elif type == "diagnostics":
+        diagnostics = _fbu_run_diagnostics(run)
+        data = diagnostics.get("issues", [])
+        title = "数据诊断"
+        filename = f"数据诊断_{run.calc_month}_{run_id}.xlsx"
     elif type == "results" and run.results:
-        data = run.results
+        data = enrich_result_positions(build_final_result_rows(run.results), run)
         title = "核算结果"
         filename = f"核算结果_{run.calc_month}_{run_id}.xlsx"
     else:
@@ -7432,10 +8809,250 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
         bottom=Side(style='thin', color='BDBDBD')
     )
 
-    # 写入标题
-    ws.merge_cells('A1:L1')
+    if type == "results":
+        group_defs = [
+            ("warehouse", "1.仓库管理人员"),
+            ("functional", "2.非仓人员"),
+            ("district", "3.区长"),
+        ]
+        grouped = {key: [] for key, _ in group_defs}
+        for item in data:
+            grouped.setdefault(final_result_group_key(item), []).append(item)
+
+        dark_fill = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
+        dark_font = Font(bold=True, color="FFFFFF")
+        summary_fill = PatternFill(start_color="F3F6FA", end_color="F3F6FA", fill_type="solid")
+        red_base_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+        red_base_font = Font(bold=True, color="C00000")
+        title_fill_results = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+
+        def write_title(sheet, title_text: str, last_col: int) -> None:
+            sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+            cell = sheet.cell(row=1, column=1, value=safe_excel_value(title_text))
+            cell.font = Font(bold=True, size=14, color="111827")
+            cell.fill = title_fill_results
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            sheet.row_dimensions[1].height = 22
+
+        def style_result_header_cell(cell, fill=dark_fill) -> None:
+            cell.fill = fill
+            cell.font = dark_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = thin_border
+
+        def apply_body_style(cell, number_type: str = "text") -> None:
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            if number_type == "money":
+                cell.number_format = '"$"#,##0.00'
+            elif number_type == "percent":
+                cell.number_format = "0.0%"
+            elif number_type == "number":
+                cell.number_format = "0.00"
+
+        def write_staff_detail_sheet(sheet, rows: list[dict], sheet_title: str) -> None:
+            columns = [
+                ("绩效周期", "period", 8, "text"),
+                ("三级部门", "dept_1", 13, "text"),
+                ("四级部门", "dept_2", 13, "text"),
+                ("五级部门", "dept_3", 16, "text"),
+                ("姓名", "name", 14, "text"),
+                ("员工工号", "employee_id", 14, "text"),
+                ("职位", "position", 34, "text"),
+                (f"{month_label(run.calc_month)}绩效基数", "performance_base", 15, "money"),
+                ("绩效比例", "performance_ratio", 11, "percent"),
+                ("绩效得分", "performance_score", 12, "number"),
+                ("绩效等级", "performance_level", 12, "text"),
+                ("绩效系数", "performance_coefficient", 12, "number"),
+                ("本月应发绩效工资", "performance_bonus", 15, "money"),
+                ("备注", "note", 34, "text"),
+            ]
+            write_title(sheet, f"新泽西区绩效考核与奖金核算——{sheet_title.split('.', 1)[-1]}", len(columns))
+            sheet.merge_cells("A2:I2")
+            sheet.merge_cells("J2:L2")
+            sheet.merge_cells("M2:M3")
+            sheet.merge_cells("N2:N3")
+            group_headers = {
+                "A2": "员工信息",
+                "J2": "本月绩效考核结果(OEHR)",
+                "M2": "本月应发绩效工资",
+                "N2": "备注",
+            }
+            for address, value in group_headers.items():
+                style_result_header_cell(sheet[address])
+                sheet[address] = safe_excel_value(value)
+            for col_idx, (header, _, width, _) in enumerate(columns, 1):
+                sheet.column_dimensions[get_column_letter(col_idx)].width = width
+                if col_idx in (13, 14):
+                    continue
+                cell = sheet.cell(row=3, column=col_idx, value=safe_excel_value(header))
+                style_result_header_cell(cell)
+            sheet.row_dimensions[2].height = 26
+            sheet.row_dimensions[3].height = 38
+
+            for row_idx, item in enumerate(rows, 4):
+                levels = department_levels(item)
+                values = {
+                    "period": month_label(run.calc_month),
+                    "dept_1": levels[0],
+                    "dept_2": levels[1],
+                    "dept_3": levels[2],
+                    "name": item.get("name", ""),
+                    "employee_id": item.get("employee_id", ""),
+                    "position": item.get("position") or format_fbu_job_type(item.get("job_type", "")),
+                    "performance_base": item.get("performance_base", 0),
+                    "performance_ratio": item.get("performance_ratio", 0),
+                    "performance_score": item.get("performance_score", ""),
+                    "performance_level": item.get("performance_level", ""),
+                    "performance_coefficient": item.get("performance_coefficient", 0),
+                    "performance_bonus": item.get("performance_bonus", 0),
+                    "note": result_note(item),
+                }
+                for col_idx, (_, field, _, number_type) in enumerate(columns, 1):
+                    cell = sheet.cell(row=row_idx, column=col_idx, value=safe_excel_value(values.get(field, "")))
+                    apply_body_style(cell, number_type)
+                    if field == "performance_base" and is_ninety_six_hour_result(item):
+                        cell.fill = red_base_fill
+                        cell.font = red_base_font
+                sheet.row_dimensions[row_idx].height = 18
+            sheet.freeze_panes = "G6"
+            sheet.auto_filter.ref = f"A3:N{max(3, 3 + len(rows))}"
+            if sheet.sheet_view.selection:
+                sheet.sheet_view.selection[0].activeCell = "A3"
+                sheet.sheet_view.selection[0].sqref = "A3"
+
+        def write_district_sheet(sheet, rows: list[dict]) -> None:
+            columns = [
+                ("区域", "area", 12, "text"),
+                ("被考核人", "name", 14, "text"),
+                ("工号", "employee_id", 12, "text"),
+                ("岗位", "position", 12, "text"),
+                ("考核周期", "period", 12, "text"),
+                ("绩效得分", "performance_score", 12, "number"),
+                ("绩效等级", "performance_level", 12, "text"),
+                ("绩效申诉", "appeal", 12, "text"),
+                ("绩效奖金基数", "performance_base", 14, "money"),
+                ("绩效系数", "performance_coefficient", 12, "number"),
+                ("绩效奖金", "performance_bonus", 12, "money"),
+                ("备注", "note", 26, "text"),
+            ]
+            write_title(sheet, "海外区长-绩效奖金核算", len(columns))
+            sheet.merge_cells("A2:D2")
+            sheet.merge_cells("E2:H2")
+            sheet.merge_cells("I2:K2")
+            sheet.merge_cells("L2:L3")
+            group_headers = {
+                "A2": "区长/副区长/商务负责人信息",
+                "E2": "绩效考核结果",
+                "I2": "绩效奖金核算（美元）",
+                "L2": "备注",
+            }
+            for address, value in group_headers.items():
+                style_result_header_cell(sheet[address])
+                sheet[address] = safe_excel_value(value)
+            for col_idx, (header, _, width, _) in enumerate(columns, 1):
+                sheet.column_dimensions[get_column_letter(col_idx)].width = width
+                if col_idx == 12:
+                    continue
+                cell = sheet.cell(row=3, column=col_idx, value=safe_excel_value(header))
+                style_result_header_cell(cell)
+            sheet.row_dimensions[2].height = 30
+            sheet.row_dimensions[3].height = 35
+
+            for row_idx, item in enumerate(rows, 4):
+                values = {
+                    "area": item.get("area") or "新泽西区",
+                    "name": item.get("name", ""),
+                    "employee_id": item.get("employee_id", ""),
+                    "position": item.get("position") or "区长",
+                    "period": month_label(run.calc_month),
+                    "performance_score": item.get("performance_score", ""),
+                    "performance_level": item.get("performance_level", ""),
+                    "appeal": "无",
+                    "performance_base": item.get("performance_base", 0),
+                    "performance_coefficient": item.get("performance_coefficient", 0),
+                    "performance_bonus": item.get("performance_bonus", 0),
+                    "note": result_note(item),
+                }
+                for col_idx, (_, field, _, number_type) in enumerate(columns, 1):
+                    cell = sheet.cell(row=row_idx, column=col_idx, value=safe_excel_value(values.get(field, "")))
+                    apply_body_style(cell, number_type)
+                sheet.row_dimensions[row_idx].height = 22
+            total_row = 4 + len(rows)
+            sheet.cell(row=total_row, column=1, value="合计")
+            sheet.cell(row=total_row, column=11, value=sum(float(item.get("performance_bonus") or 0) for item in rows))
+            for col_idx in range(1, len(columns) + 1):
+                cell = sheet.cell(row=total_row, column=col_idx)
+                cell.border = thin_border
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                if col_idx == 11:
+                    cell.number_format = '"$"#,##0.00'
+            sheet.freeze_panes = "E4"
+            sheet.auto_filter.ref = f"A3:L{max(3, total_row)}"
+
+        summary = wb.active
+        summary.title = "汇总表"
+        write_title(summary, "新泽西区绩效考核与奖金核算", 5)
+        summary_headers = ["绩效周期", "区域", "部门", "实际奖金总数($)", "备注"]
+        for col_idx, header in enumerate(summary_headers, 1):
+            cell = summary.cell(row=2, column=col_idx, value=safe_excel_value(header))
+            cell.fill = dark_fill
+            cell.font = dark_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.border = thin_border
+            summary.column_dimensions[get_column_letter(col_idx)].width = [10, 12, 22, 20, 24][col_idx - 1]
+        summary.row_dimensions[2].height = 30
+
+        total_rows = []
+        for row_idx, (key, sheet_label) in enumerate(group_defs, 3):
+            rows = grouped.get(key, [])
+            label = sheet_label.split(".", 1)[-1]
+            total_bonus = sum(float(row.get("performance_bonus") or 0) for row in rows)
+            total_rows.append((label, len(rows), total_bonus))
+            values = [month_label(run.calc_month), "新泽西区", label, total_bonus, "详见后附子表"]
+            for col_idx, value in enumerate(values, 1):
+                cell = summary.cell(row=row_idx, column=col_idx, value=safe_excel_value(value))
+                cell.border = thin_border
+                cell.fill = summary_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                if col_idx == 4:
+                    cell.number_format = '"$"#,##0.00'
+
+        total_row_idx = 3 + len(group_defs)
+        for col_idx, value in enumerate(["", "新泽西区", "总额", sum(row[2] for row in total_rows), ""], 1):
+            cell = summary.cell(row=total_row_idx, column=col_idx, value=safe_excel_value(value))
+            cell.border = thin_border
+            cell.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            if col_idx == 4:
+                cell.number_format = '"$"#,##0.00'
+        summary.freeze_panes = "A3"
+        if summary.sheet_view.selection:
+            summary.sheet_view.selection[0].activeCell = "A2"
+            summary.sheet_view.selection[0].sqref = "A2"
+
+        for key, label in group_defs:
+            sheet = wb.create_sheet(label)
+            if key == "district":
+                write_district_sheet(sheet, grouped.get(key, []))
+            else:
+                write_staff_detail_sheet(sheet, grouped.get(key, []), label)
+
+        wb.active = 0
+        output_path = EXPORT_DIR / filename
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        wb.save(str(output_path))
+        return {
+            "success": True,
+            "filename": filename,
+            "file_path": str(output_path),
+        }
+
+    # 写入标题。保持普通单元格，避免部分表格软件打开时误触发公式编辑状态。
     title_cell = ws['A1']
-    title_cell.value = f"FBU美洲绩效核算 - {title} ({run.calc_month})"
+    title_cell.value = safe_excel_value(f"FBU美洲绩效核算 - {title} ({run.calc_month})")
     title_cell.font = title_font
     title_cell.fill = title_fill
     title_cell.alignment = Alignment(horizontal='center', vertical='center')
@@ -7477,6 +9094,38 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             ('绩效等级', 'level', 'data', 12),
             ('绩效系数', 'coefficient', 'calc', 12),
         ]
+    elif type == "adjustments":
+        columns = [
+            ('工号', 'employee_id', 'emp', 15),
+            ('姓名', 'name', 'emp', 12),
+            ('划分区域', 'area', 'emp', 15),
+            ('部门全称', 'department', 'emp', 40),
+            ('分段期间', 'period', 'data', 16),
+            ('分段绩效基数($)', 'performance_base', 'money', 18),
+            ('核算标识', 'reason', 'calc', 14),
+        ]
+    elif type == "base_overrides":
+        columns = [
+            ('工号', 'employee_id', 'emp', 15),
+            ('姓名', 'name', 'emp', 12),
+            ('划分区域', 'area', 'emp', 15),
+            ('部门全称', 'department', 'emp', 40),
+            ('规则类型', 'rule_type', 'data', 18),
+            ('固定绩效基数($)', 'fixed_performance_base', 'money', 18),
+            ('归属月份', 'allocation_month', 'data', 12),
+            ('状态', 'status', 'data', 12),
+            ('是否计入', 'include_in_calculation', 'calc', 12),
+            ('核算路径', 'calculation_path', 'calc', 22),
+            ('备注', 'note', 'data', 36),
+        ]
+    elif type == "diagnostics":
+        columns = [
+            ('严重程度', 'severity', 'calc', 12),
+            ('问题类型', 'type', 'data', 18),
+            ('工号', 'employee_id', 'emp', 15),
+            ('姓名', 'name', 'emp', 12),
+            ('说明', 'detail', 'data', 42),
+        ]
     elif type == "results":
         columns = [
             ('工号', 'employee_id', 'emp', 15),
@@ -7484,9 +9133,11 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             ('划分区域', 'area', 'emp', 15),
             ('部门全称', 'department', 'emp', 40),
             ('岗位类型', 'job_type', 'emp', 10),
-            ('时薪($)', 'hourly_rate', 'money', 12),
+            ('核算路径', 'calculation_path', 'calc', 18),
             ('绩效基数($)', 'performance_base', 'calc', 14),
             ('绩效比例', 'performance_ratio', 'money', 12),
+            ('绩效得分', 'performance_score', 'data', 12),
+            ('绩效等级', 'performance_level', 'data', 12),
             ('绩效系数', 'performance_coefficient', 'calc', 12),
             ('绩效奖金($)', 'performance_bonus', 'money', 14),
         ]
@@ -7494,7 +9145,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
     # 写入表头
     header_row = 3
     for col_idx, (header, _, style_type, width) in enumerate(columns, 1):
-        cell = ws.cell(row=header_row, column=col_idx, value=header)
+        cell = ws.cell(row=header_row, column=col_idx, value=safe_excel_value(header))
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal='center', vertical='center')
@@ -7510,8 +9161,12 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
 
             # 特殊处理
             if field == 'job_type':
-                value = '仓库' if value == 'warehouse' else '职能'
+                value = format_fbu_job_type(value)
+            elif field == 'calculation_path':
+                value = result_calculation_path(item)
             elif field == 'has_night_shift':
+                value = '是' if value else '否'
+            elif field == 'include_in_calculation':
                 value = '是' if value else '否'
             elif field == 'sick':
                 # 从day_shift和night_shift获取
@@ -7538,7 +9193,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 elif field in ['score', 'coefficient', 'performance_coefficient']:
                     value = round(value, 2)
 
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = ws.cell(row=row_idx, column=col_idx, value=safe_excel_value(value))
             cell.border = thin_border
             cell.alignment = Alignment(horizontal='center', vertical='center')
 
@@ -7556,20 +9211,24 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
 
     # 添加汇总行
     summary_row = len(data) + header_row + 2
-    ws.cell(row=summary_row, column=1, value="汇总").font = Font(bold=True, size=12)
+    ws.cell(row=summary_row, column=1, value=safe_excel_value("汇总")).font = Font(bold=True, size=12)
 
     if type == "attendance":
         total_base = sum(e.get('total_base_hours', 0) for e in data)
         total_ot15 = sum(e.get('total_ot15', 0) for e in data)
         total_ot20 = sum(e.get('total_ot20', 0) for e in data)
-        ws.cell(row=summary_row, column=2, value=f"员工数: {len(data)}")
-        ws.cell(row=summary_row, column=7, value=f"{total_base:.2f}h")
-        ws.cell(row=summary_row, column=8, value=f"{total_ot15:.2f}h")
-        ws.cell(row=summary_row, column=9, value=f"{total_ot20:.2f}h")
+        ws.cell(row=summary_row, column=2, value=safe_excel_value(f"员工数: {len(data)}"))
+        ws.cell(row=summary_row, column=7, value=safe_excel_value(f"{total_base:.2f}h"))
+        ws.cell(row=summary_row, column=8, value=safe_excel_value(f"{total_ot15:.2f}h"))
+        ws.cell(row=summary_row, column=9, value=safe_excel_value(f"{total_ot20:.2f}h"))
     elif type == "results":
         total_bonus = sum(e.get('performance_bonus', 0) for e in data)
-        ws.cell(row=summary_row, column=2, value=f"员工数: {len(data)}")
-        ws.cell(row=summary_row, column=10, value=f"${total_bonus:,.2f}")
+        ws.cell(row=summary_row, column=2, value=safe_excel_value(f"员工数: {len(data)}"))
+        ws.cell(row=summary_row, column=len(columns), value=safe_excel_value(f"${total_bonus:,.2f}"))
+
+    if ws.sheet_view.selection:
+        ws.sheet_view.selection[0].activeCell = f"A{header_row}"
+        ws.sheet_view.selection[0].sqref = f"A{header_row}"
 
     # 保存文件
     output_path = EXPORT_DIR / filename
@@ -7590,6 +9249,34 @@ def download_fbu_performance_file(run_id: str, filename: str) -> FileResponse:
     if not path.exists():
         raise HTTPException(404, "文件不存在")
     return FileResponse(path, filename=path.name)
+
+
+@app.post("/api/fbu-performance/runs/bulk-delete")
+def bulk_delete_fbu_performance_runs(body: dict = Body(...)) -> dict:
+    """批量删除FBU绩效核算任务"""
+    run_ids = [str(run_id).strip() for run_id in body.get("run_ids", []) if str(run_id).strip()]
+    if not run_ids:
+        raise HTTPException(400, "请选择要删除的活动")
+
+    deleted_ids: list[str] = []
+    missing_ids: list[str] = []
+    for run_id in dict.fromkeys(run_ids):
+        run = fbu_run_manager.get_run(run_id)
+        if not run:
+            missing_ids.append(run_id)
+            continue
+
+        run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+        if run_dir.exists():
+            shutil.rmtree(run_dir, ignore_errors=True)
+        fbu_run_manager.delete_run(run_id)
+        deleted_ids.append(run_id)
+
+    return {
+        "deleted_count": len(deleted_ids),
+        "deleted_ids": deleted_ids,
+        "missing_ids": missing_ids,
+    }
 
 
 @app.delete("/api/fbu-performance/runs/{run_id}")

@@ -5,7 +5,15 @@ from typing import Optional
 import openpyxl
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
-from .engines.base import EmployeeData
+from .engines.base import EmployeeData, get_calculation_path
+
+
+def _format_job_type(job_type: str) -> str:
+    if job_type == "district_manager":
+        return "区长"
+    if job_type == "functional":
+        return "职能"
+    return "仓库"
 
 
 class FBUPerformanceExporter:
@@ -61,14 +69,15 @@ class FBUPerformanceExporter:
     def _write_detail_sheet(self, ws, employees: list[EmployeeData]):
         """写入明细表"""
         headers = [
-            "工号", "姓名", "岗位类型",
+            "核算工号", "原始工号", "姓名", "人员状态", "岗位类型",
+            "核算路径",
             "计薪出勤时长", "OT1.5时长", "OT2.0时长",
-            "病假时长", "年假时长", "节假日时长",
+            "病假时长", "病假清算时长", "年假时长", "节假日时长",
             "时薪", "绩效比例",
             "基础工资", "OT1.5工资", "OT2.0工资",
-            "病假工资", "年假补贴", "节日补贴",
-            "绩效基数", "绩效得分", "绩效等级", "绩效系数",
-            "绩效奖金",
+            "病假工资", "病假清算工资", "年假补贴", "节日补贴",
+            "绩效基数", "绩效得分", "绩效等级", "上传绩效系数", "系统绩效系数",
+            "绩效奖金", "是否延期", "延期原因", "异常提示",
         ]
 
         # 写入表头
@@ -83,12 +92,16 @@ class FBUPerformanceExporter:
         for row, emp in enumerate(employees, 2):
             data = [
                 emp.employee_id,
+                emp.source_employee_id,
                 emp.name,
-                "仓库" if emp.job_type == "warehouse" else "职能",
+                emp.personnel_status,
+                _format_job_type(emp.job_type),
+                get_calculation_path(emp),
                 emp.base_hours,
                 emp.ot15_hours,
                 emp.ot20_hours,
                 emp.sick_hours,
+                emp.sick_settlement_hours,
                 emp.annual_hours,
                 emp.holiday_hours,
                 emp.hourly_rate,
@@ -97,13 +110,18 @@ class FBUPerformanceExporter:
                 emp.ot15_salary,
                 emp.ot20_salary,
                 emp.sick_pay,
+                emp.sick_settlement_pay,
                 emp.annual_leave_pay,
                 emp.holiday_pay,
                 emp.performance_base,
                 emp.performance_score or "",
                 emp.performance_level or "",
+                emp.uploaded_coefficient if emp.uploaded_coefficient is not None else "",
                 emp.performance_coefficient,
                 emp.performance_bonus,
+                "是" if emp.is_deferred else "否",
+                emp.deferred_reason,
+                "；".join(emp.exceptions),
             ]
 
             for col, value in enumerate(data, 1):
