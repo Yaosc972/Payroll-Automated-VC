@@ -217,9 +217,22 @@ def _download_bytes(object_path: str) -> bytes | None:
     try:
         return _request("GET", url, headers=_headers())
     except FBUStorageStatusError as exc:
-        if exc.status_code == 404:
+        if _storage_error_status(exc) == 404:
             return None
         raise
+
+
+def _storage_error_status(exc: FBUStorageStatusError) -> int:
+    try:
+        payload = json.loads(exc.text)
+    except (json.JSONDecodeError, TypeError):
+        return exc.status_code
+    if not isinstance(payload, dict):
+        return exc.status_code
+    try:
+        return int(payload.get("statusCode"))
+    except (TypeError, ValueError):
+        return exc.status_code
 
 
 def _list_objects(prefix: str) -> list[dict[str, Any]]:

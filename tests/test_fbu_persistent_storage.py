@@ -9,9 +9,41 @@ import pytest
 
 import bonus_platform.app as app_module
 from bonus_platform.engine.fbu_performance import runs as fbu_runs
+from bonus_platform.engine.fbu_performance import persistent_storage as fbu_storage
 
 
 pytestmark = pytest.mark.usefixtures("bypass_fbu_access_gate")
+
+
+def test_download_treats_supabase_wrapped_not_found_as_missing(monkeypatch):
+    monkeypatch.setattr(fbu_storage, "_storage_url", lambda path: f"https://storage.test/{path}")
+    monkeypatch.setattr(fbu_storage, "_headers", lambda extra=None: {})
+
+    def raise_wrapped_not_found(*args, **kwargs):
+        raise fbu_storage.FBUStorageStatusError(
+            400,
+            '{"statusCode":"404","error":"not_found","message":"Object not found"}',
+        )
+
+    monkeypatch.setattr(fbu_storage, "_request", raise_wrapped_not_found)
+
+    assert fbu_storage._download_bytes("fbu-performance-runs/production/run-1/roster.xlsx") is None
+
+
+def test_download_does_not_hide_real_supabase_bad_request(monkeypatch):
+    monkeypatch.setattr(fbu_storage, "_storage_url", lambda path: f"https://storage.test/{path}")
+    monkeypatch.setattr(fbu_storage, "_headers", lambda extra=None: {})
+
+    def raise_bad_request(*args, **kwargs):
+        raise fbu_storage.FBUStorageStatusError(
+            400,
+            '{"statusCode":"400","error":"InvalidKey","message":"Invalid key"}',
+        )
+
+    monkeypatch.setattr(fbu_storage, "_request", raise_bad_request)
+
+    with pytest.raises(fbu_storage.FBUStorageStatusError):
+        fbu_storage._download_bytes("bad-key")
 
 
 def _install_fake_persistent_backend(monkeypatch):
