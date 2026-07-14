@@ -809,6 +809,37 @@ async function apiJson(url, options = {}) {
   return data;
 }
 
+function applyCurrentActivityPatch(patch = {}, { invalidateResults = false } = {}) {
+  const runId = patch.run_id || state.currentActivity?.run_id;
+  if (!runId) return null;
+  const listed = state.activities.find(item => item.run_id === runId) || {};
+  const current = state.currentActivity?.run_id === runId ? state.currentActivity : {};
+  const updated = { ...listed, ...current, ...patch, run_id: runId };
+  if (invalidateResults) {
+    updated.results = [];
+    updated.total_employees = 0;
+    updated.total_bonus = 0;
+    updated.match_rate = 0;
+    updated.diagnostics = null;
+    state.resultsData = null;
+    state.diagnosticsData = null;
+  }
+  state.currentActivity = updated;
+  state.activities = [
+    updated,
+    ...state.activities.filter(item => item.run_id !== runId),
+  ];
+  state.foundationRunDetails[runId] = updated;
+  if (Object.hasOwn(patch, 'attendance_data')) state.attendanceData = patch.attendance_data;
+  if (Object.hasOwn(patch, 'salary_data')) state.salaryData = patch.salary_data;
+  if (Object.hasOwn(patch, 'performance_data')) state.performanceData = patch.performance_data;
+  if (Object.hasOwn(patch, 'adjustment_data')) state.adjustmentData = patch.adjustment_data;
+  if (Object.hasOwn(patch, 'supplemental_leave_data')) state.supplementalLeaveData = patch.supplemental_leave_data;
+  if (Object.hasOwn(patch, 'base_override_data')) state.baseOverrideData = patch.base_override_data;
+  if (Object.hasOwn(patch, 'results')) state.resultsData = patch.results;
+  return updated;
+}
+
 function setInlineActionNote(key, message, tone = 'success', { render = true } = {}) {
   state.inlineActionNotes = {
     ...state.inlineActionNotes,
@@ -2202,6 +2233,7 @@ async function loadActivityListDetails() {
   const pageInfo = getPaginatedRows('activities', state.activities);
   const pendingActivities = pageInfo.items.filter(activity => activity.run_id
     && state.currentActivity?.run_id !== activity.run_id
+    && !activity.diagnostics
     && !state.foundationRunDetails[activity.run_id]
     && !state.activityListLoadingRunIds.has(activity.run_id))
     .slice(0, ACTIVITY_DETAIL_PREFETCH_LIMIT);
@@ -2990,7 +3022,18 @@ el.btnNewActivity.addEventListener('click', async () => {
 
     if (data.run_id) {
       showNotification('月度活动创建成功', 'success');
-      enterActivity(data.run_id, { initialStep: 'people' });
+      applyCurrentActivityPatch(data.activity || {
+        run_id: data.run_id,
+        calc_month: data.calc_month,
+        status: data.status,
+        current_step: 0,
+        roster_file: data.roster_file,
+        roster_source: data.roster_source,
+      });
+      state.activityStep = 'people';
+      resetTableControls();
+      navigateTo('workbench');
+      renderWorkbench();
     }
   } catch (error) {
     console.error('创建活动失败:', error);
@@ -3311,11 +3354,14 @@ async function uploadWorkbenchFile(type, file) {
       state.supplementalLeaveData = data.preview;
     }
 
+    const activityPatch = { run_id: activityId };
+    if (type === 'attendance') Object.assign(activityPatch, { attendance_file: file.name, attendance_data: data.preview, current_step: 1, status: 'step1' });
+    if (type === 'salary') Object.assign(activityPatch, { salary_file: file.name, salary_data: data.preview, current_step: 2, status: 'step2' });
+    if (type === 'performance') Object.assign(activityPatch, { performance_file: file.name, performance_data: data.preview, current_step: 3, status: 'step3' });
+    if (type === 'adjustments') Object.assign(activityPatch, { adjustment_file: file.name, adjustment_data: data.preview });
+    if (type === 'supplementalLeave') Object.assign(activityPatch, { supplemental_leave_file: file.name, supplemental_leave_data: data.preview });
+    applyCurrentActivityPatch(activityPatch, { invalidateResults: true });
     finishWorkbenchUploadProgress(type, file.name, '已解析');
-    const refreshedActivity = await enterActivity(activityId, { preservePage: true, preserveStep: true });
-    if (!refreshedActivity) {
-      throw new Error('文件已解析，但活动详情刷新失败，请重新进入活动后确认');
-    }
     renderWorkbench();
   } catch (error) {
     failWorkbenchUploadProgress(type, file.name, error.message);
@@ -3334,7 +3380,7 @@ async function uploadWorkbenchSalaryHistory() {
   try {
     const data = await apiJson(`${API_BASE}/import-salary-history`, { method: 'POST', body: formData });
     state.salaryData = data.preview;
-    state.adjustmentData = state.currentActivity?.adjustment_data || null;
+    state.adjustmentData = data.adjustment_preview || null;
     state.lastImportResult = {
       type: 'salary',
       hasResultFile: Boolean(data.result_file),
@@ -3346,7 +3392,18 @@ async function uploadWorkbenchSalaryHistory() {
       finishWorkbenchUploadProgress(type, files[type].name, '已核验');
     });
     state.workbenchSalaryHistoryFiles = {};
-    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
+    applyCurrentActivityPatch({
+      run_id: state.currentActivity.run_id,
+      previous_salary_file: files.previousSalary.name,
+      current_salary_file: files.currentSalary.name,
+      salary_file: files.currentSalary.name,
+      adjustment_file: files.salaryAdjustments.name,
+      salary_data: data.preview,
+      salary_verification_data: data.verification,
+      adjustment_data: data.adjustment_preview,
+      current_step: 2,
+      status: 'step2',
+    }, { invalidateResults: true });
     renderWorkbench();
   } catch (error) {
     ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
@@ -3366,8 +3423,12 @@ async function confirmSalaryVerification(employeeId, choice) {
         body: JSON.stringify({ employee_id: employeeId, choice }),
       },
     );
-    state.salaryData = data.preview;
-    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
+    applyCurrentActivityPatch({
+      run_id: state.currentActivity.run_id,
+      salary_data: data.preview,
+      salary_verification_data: data.verification,
+      status: 'step2',
+    }, { invalidateResults: true });
     renderWorkbench();
   } catch (error) {
     state.inlineActionNotes.salary = `薪资差异确认失败：${error.message}`;
@@ -3397,10 +3458,15 @@ async function uploadWorkbenchPreviousAttendanceFile(file) {
       failWorkbenchUploadProgress('previousAttendance', file.name, data.detail || '上传失败');
       return;
     }
-    state.attendanceData = data.preview;
+    applyCurrentActivityPatch({
+      run_id: state.currentActivity.run_id,
+      previous_attendance_file: file.name,
+      attendance_data: data.preview,
+      current_step: 1,
+      status: 'step1',
+    }, { invalidateResults: true });
     state.workbenchPreviousAttendanceFile = null;
     finishWorkbenchUploadProgress('previousAttendance', file.name, '已随考勤纳入');
-    await enterActivity(state.currentActivity.run_id, { preservePage: true, preserveStep: true });
     renderWorkbench();
   } catch (error) {
     failWorkbenchUploadProgress('previousAttendance', file.name, error.message);
@@ -4982,7 +5048,16 @@ async function executeCalculate() {
 
     if (data.success) {
       showNotification('核算完成', 'success');
-      enterActivity(state.currentActivity.run_id);
+      applyCurrentActivityPatch(data.activity || {
+        run_id: state.currentActivity.run_id,
+        status: 'completed',
+        current_step: 5,
+        total_employees: data.total_employees,
+        total_bonus: data.total_bonus,
+      });
+      state.diagnosticsData = state.currentActivity.diagnostics || null;
+      state.activityStep = 'export';
+      renderWorkbench();
     } else {
       showNotification('核算失败: ' + (data.detail || '未知错误'), 'error');
     }

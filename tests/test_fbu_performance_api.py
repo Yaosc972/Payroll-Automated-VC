@@ -185,6 +185,13 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     assert run_response.status_code == 200
     run_id = run_response.json()["run_id"]
     assert run_response.json()["roster_source"] == "base"
+    assert run_response.json()["activity"]["run_id"] == run_id
+    assert run_response.json()["activity"]["roster_data"]["summary"]["total_employees"] == 1
+
+    listed = client.get("/api/fbu-performance/runs")
+    assert listed.status_code == 200
+    listed_run = next(row for row in listed.json()["runs"] if row["run_id"] == run_id)
+    assert "summary" in listed_run["diagnostics"]
 
     run_detail = client.get(f"/api/fbu-performance/runs/{run_id}")
     assert run_detail.status_code == 200
@@ -409,6 +416,15 @@ def test_fbu_attendance_upload_reports_missing_previous_context_dates(monkeypatc
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
     monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    context_workbook_reads = 0
+    original_load_workbook = app_module.load_workbook
+
+    def count_context_workbook_reads(*args, **kwargs):
+        nonlocal context_workbook_reads
+        context_workbook_reads += 1
+        return original_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "load_workbook", count_context_workbook_reads)
 
     client = TestClient(app_module.app)
     run_response = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"})
@@ -431,6 +447,7 @@ def test_fbu_attendance_upload_reports_missing_previous_context_dates(monkeypatc
     context = attendance_response.json()["preview"]["summary"]["attendance_context"]
     assert context["required"] is True
     assert context["status"] == "missing"
+    assert context_workbook_reads == 0
     assert context["required_start"] == "2026-03-29"
     assert context["required_end"] == "2026-03-31"
     assert context["covered_dates"] == []

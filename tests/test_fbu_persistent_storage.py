@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 from io import BytesIO
 from pathlib import Path
 
@@ -13,6 +14,33 @@ from bonus_platform.engine.fbu_performance import persistent_storage as fbu_stor
 
 
 pytestmark = pytest.mark.usefixtures("bypass_fbu_access_gate")
+
+
+def test_run_metadata_is_compressed_and_old_plain_json_remains_readable(monkeypatch):
+    uploaded: dict[str, object] = {}
+    payload = {
+        "run_id": "run-1",
+        "attendance_data": {"employees": [{"employee_id": f"zt{index}"} for index in range(200)]},
+    }
+
+    def capture_upload(object_path, content, *, content_type):
+        uploaded.update({"path": object_path, "content": content, "content_type": content_type})
+
+    monkeypatch.setattr(fbu_storage, "_upload_bytes", capture_upload)
+    fbu_storage.save_fbu_run_metadata_to_persistent("run-1", payload)
+
+    content = uploaded["content"]
+    assert isinstance(content, bytes)
+    assert content.startswith(b"\x1f\x8b")
+    assert uploaded["content_type"] == "application/gzip"
+    assert len(content) < len(gzip.decompress(content))
+
+    monkeypatch.setattr(fbu_storage, "_download_bytes", lambda object_path: content)
+    assert fbu_storage.load_fbu_run_metadata_from_persistent("run-1") == payload
+
+    plain = b'{"run_id":"legacy-run","status":"pending"}'
+    monkeypatch.setattr(fbu_storage, "_download_bytes", lambda object_path: plain)
+    assert fbu_storage.load_fbu_run_metadata_from_persistent("legacy-run")["run_id"] == "legacy-run"
 
 
 def test_download_treats_supabase_wrapped_not_found_as_missing(monkeypatch):
@@ -106,6 +134,52 @@ def test_run_metadata_survives_separate_manager_instances(monkeypatch, tmp_path)
     assert restored.calc_month == "2026-05"
     assert restored.attendance_data["employees"][0]["employee_id"] == "zt1"
     assert [run.run_id for run in second.list_runs()] == [created.run_id]
+
+
+def test_mutating_loaded_run_does_not_download_metadata_again(monkeypatch, tmp_path):
+    metadata, _ = _install_fake_persistent_backend(monkeypatch)
+    seed = fbu_runs.FBURun(
+        run_id="run-1",
+        created_at="2026-07-14T09:00:00",
+        calc_month="2026-05",
+    )
+    metadata[seed.run_id] = vars(seed).copy()
+    load_count = 0
+
+    def load_metadata(run_id):
+        nonlocal load_count
+        load_count += 1
+        return dict(metadata[run_id])
+
+    monkeypatch.setattr(fbu_runs, "load_fbu_run_metadata_from_persistent", load_metadata)
+    manager = fbu_runs.FBURunManager(str(tmp_path))
+
+    assert manager.get_run(seed.run_id) is not None
+    manager.update_run(seed.run_id, status="step1")
+    manager.save_step_data(seed.run_id, 1, {"employees": []})
+
+    assert load_count == 1
+
+
+def test_save_step_data_applies_metadata_and_persists_once(monkeypatch, tmp_path):
+    manager = fbu_runs.FBURunManager(str(tmp_path))
+    created = manager.create_run("2026-05", persist=False)
+    save_calls: list[str] = []
+    monkeypatch.setattr(manager, "_save_runs", save_calls.append)
+
+    manager.save_step_data(
+        created.run_id,
+        1,
+        {"employees": [{"employee_id": "zt1"}]},
+        attendance_file="attendance.xlsx",
+        previous_attendance_file="previous.xlsx",
+    )
+
+    updated = manager.runs[created.run_id]
+    assert updated.attendance_file == "attendance.xlsx"
+    assert updated.previous_attendance_file == "previous.xlsx"
+    assert updated.attendance_data["employees"][0]["employee_id"] == "zt1"
+    assert save_calls == [created.run_id]
 
 
 def test_run_file_can_be_materialized_in_another_instance(monkeypatch, tmp_path):

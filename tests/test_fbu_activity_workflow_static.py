@@ -611,7 +611,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=supplemental-save-v1-20260713" in html
+    assert "fbu-performance.js?v=workflow-speed-v1-20260714" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():
@@ -816,31 +816,45 @@ def test_workbench_success_paths_do_not_call_removed_page_renderers():
         assert forbidden not in workflow_refresh_area
 
 
-def test_upload_refresh_preserves_current_activity_step():
+def test_upload_success_updates_current_activity_without_refetching_detail():
     js = _js()
 
-    enter_activity_area = js.split("async function enterActivity", 1)[1].split("// ═══ Base Roster ═══", 1)[0]
     upload_area = js.split("async function uploadWorkbenchFile", 1)[1].split("function handleWorkbenchUploadChange", 1)[0]
 
-    assert "preserveStep = false" in enter_activity_area
-    assert "initialStep = ''" in enter_activity_area
-    assert "preserveStep" in upload_area
-    assert re.search(
-        r"enterActivity\(\s*state\.currentActivity\.run_id,\s*\{\s*preservePage:\s*true,\s*preserveStep:\s*true\s*\}\s*\)",
-        upload_area,
-        re.S,
-    )
+    assert "applyCurrentActivityPatch" in upload_area
+    assert "await enterActivity" not in upload_area
 
 
-def test_new_activity_opens_first_step_instead_of_auto_detected_step():
+def test_new_activity_uses_created_activity_payload_without_detail_refetch():
     js = _js()
 
     new_activity_area = js.split("el.btnNewActivity.addEventListener", 1)[1].split("// ═══ Delete Activity ═══", 1)[0]
-    enter_activity_area = js.split("async function enterActivity", 1)[1].split("// ═══ New Activity ═══", 1)[0]
 
-    assert "enterActivity(data.run_id, { initialStep: 'people' })" in new_activity_area
-    assert "ACTIVITY_STEPS.some(step => step.key === initialStep)" in enter_activity_area
-    assert "state.activityStep = initialStep" in enter_activity_area
+    assert "data.activity" in new_activity_area
+    assert "applyCurrentActivityPatch" in new_activity_area
+    assert "state.activityStep = 'people'" in new_activity_area
+    assert "enterActivity(data.run_id" not in new_activity_area
+
+
+def test_activity_list_diagnostics_do_not_prefetch_full_run_details():
+    js = _js()
+
+    detail_loader = js.split("async function loadActivityListDetails", 1)[1].split(
+        "function renderActivityDiagnostics", 1
+    )[0]
+
+    assert "!activity.diagnostics" in detail_loader
+
+
+def test_salary_confirmation_updates_local_activity_without_detail_refetch():
+    js = _js()
+
+    confirmation_area = js.split("async function confirmSalaryVerification", 1)[1].split(
+        "async function uploadWorkbenchPreviousAttendanceFile", 1
+    )[0]
+
+    assert "applyCurrentActivityPatch" in confirmation_area
+    assert "await enterActivity" not in confirmation_area
 
 
 def test_existing_activity_opens_earliest_incomplete_input_step_before_check():

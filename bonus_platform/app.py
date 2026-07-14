@@ -7186,6 +7186,16 @@ def _fbu_96_previous_context_window(calc_month: str) -> tuple[date, date, date, 
     return period_start, period_end, period_start, required_end
 
 
+def _fbu_attendance_dates_from_preview(preview: dict) -> set[date]:
+    available_dates = set()
+    for employee in preview.get("employees", []):
+        for row in employee.get("attendance_daily_rows", []):
+            parsed_date = _parse_fbu_attendance_date(row.get("date"))
+            if parsed_date:
+                available_dates.add(parsed_date)
+    return available_dates
+
+
 def _build_fbu_attendance_context_summary(
     filepath: Path,
     calc_month: str,
@@ -7563,6 +7573,10 @@ def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path 
 
 
 def _fbu_roster_preview_for_run(run_id: str) -> dict | None:
+    run = fbu_run_manager.runs.get(run_id)
+    if run and run.roster_data:
+        return run.roster_data
+
     parser = FBUPerformanceParser()
     roster_path = _load_fbu_roster_for_run(parser, run_id)
     if not roster_path:
@@ -7580,12 +7594,15 @@ def _fbu_roster_preview_for_run(run_id: str) -> dict | None:
             "job_type": row.get("job_type", ""),
         })
 
-    return {
+    preview = {
         "employees": employees,
         "summary": {
             "total_employees": len(employees),
         },
     }
+    if run:
+        fbu_run_manager.update_run(run_id, roster_data=preview)
+    return preview
 
 
 @app.get("/api/fbu-performance/roster")
@@ -7720,11 +7737,12 @@ async def import_fbu_attendance(
                 previous_attendance_filename,
             )
             pending_previous_path.replace(previous_path)
-            fbu_run_manager.update_run(
+            fbu_run_manager.save_step_data(
                 run.run_id,
+                1,
+                preview,
                 previous_attendance_file=previous_attendance_filename,
             )
-            fbu_run_manager.save_step_data(run.run_id, 1, preview)
             fbu_run_manager.persist_files(run.run_id, [previous_path.name])
             result_file = _fbu_result_file_payload(run.run_id, "attendance")
             return {
@@ -7768,6 +7786,7 @@ async def import_fbu_attendance(
                 attendance_parse_path,
                 calc_month,
                 previous_attendance_filename,
+                available_dates=_fbu_attendance_dates_from_preview(preview),
             )
 
         if file:
@@ -7783,8 +7802,7 @@ async def import_fbu_attendance(
         }
         if roster:
             metadata.update(roster_file=roster.filename, roster_source="activity")
-        fbu_run_manager.update_run(run.run_id, **metadata)
-        fbu_run_manager.save_step_data(run.run_id, 1, preview)
+        fbu_run_manager.save_step_data(run.run_id, 1, preview, **metadata)
         persisted_files = ["attendance.xlsx"]
         if previous_path and previous_path.exists():
             persisted_files.append(previous_path.name)
@@ -7830,9 +7848,6 @@ async def import_fbu_salary(
         content = await file.read()
         f.write(content)
 
-    # 更新文件名
-    fbu_run_manager.update_run(run_id, salary_file=file.filename)
-
     # 解析并预览
     try:
         parser = FBUPerformanceParser()
@@ -7843,7 +7858,7 @@ async def import_fbu_salary(
         preview = parser.parse_salary_preview(str(file_path))
 
         # 保存分步数据
-        fbu_run_manager.save_step_data(run_id, 2, preview)
+        fbu_run_manager.save_step_data(run_id, 2, preview, salary_file=file.filename)
         fbu_run_manager.persist_files(run_id, ["salary.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "salary")
 
@@ -7902,8 +7917,10 @@ async def import_fbu_salary_history(
                 **verification["summary"],
             },
         }
-        fbu_run_manager.update_run(
+        fbu_run_manager.save_step_data(
             run_id,
+            2,
+            resolved_salary,
             previous_salary_file=previous_salary.filename,
             current_salary_file=current_salary.filename,
             salary_file=current_salary.filename,
@@ -7913,7 +7930,6 @@ async def import_fbu_salary_history(
             salary_verification_data=verification,
             adjustment_data=adjustment_preview,
         )
-        fbu_run_manager.save_step_data(run_id, 2, resolved_salary)
         fbu_run_manager.persist_files(
             run_id,
             ["previous_salary.xlsx", "salary.xlsx", "adjustments.xlsx"],
@@ -7924,6 +7940,7 @@ async def import_fbu_salary_history(
             "step": 2,
             "preview": resolved_salary,
             "verification": verification,
+            "adjustment_preview": adjustment_preview,
             "result_file": _fbu_result_file_payload(run_id, "salary"),
         }
     except ValueError as exc:
@@ -7952,9 +7969,6 @@ async def import_fbu_performance(
         content = await file.read()
         f.write(content)
 
-    # 更新文件名
-    fbu_run_manager.update_run(run_id, performance_file=file.filename)
-
     # 解析并预览
     try:
         parser = FBUPerformanceParser()
@@ -7971,7 +7985,7 @@ async def import_fbu_performance(
             preview = parser.merge_performance_supplement_preview(existing_performance, preview)
 
         # 保存分步数据
-        fbu_run_manager.save_step_data(run_id, 3, preview)
+        fbu_run_manager.save_step_data(run_id, 3, preview, performance_file=file.filename)
         fbu_run_manager.persist_files(run_id, ["performance.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "performance")
 
@@ -8067,9 +8081,12 @@ def add_fbu_performance_supplement(run_id: str, body: dict = Body(...)) -> dict:
         else:
             preview = supplement_preview
 
-        fbu_run_manager.save_step_data(run_id, 3, preview)
-        if not run.performance_file:
-            fbu_run_manager.update_run(run_id, performance_file="页面绩效补录")
+        fbu_run_manager.save_step_data(
+            run_id,
+            3,
+            preview,
+            performance_file=run.performance_file or "页面绩效补录",
+        )
 
         return {
             "success": True,
@@ -8101,13 +8118,11 @@ async def import_fbu_adjustments(
         content = await file.read()
         f.write(content)
 
-    fbu_run_manager.update_run(run_id, adjustment_file=file.filename)
-
     try:
         parser = FBUPerformanceParser()
         _load_fbu_roster_for_run(parser, run_id)
         preview = parser.parse_adjustments_preview(str(file_path))
-        fbu_run_manager.save_step_data(run_id, 4, preview)
+        fbu_run_manager.save_step_data(run_id, 4, preview, adjustment_file=file.filename)
         fbu_run_manager.persist_files(run_id, ["adjustments.xlsx"])
         result_file = _fbu_result_file_payload(run_id, "adjustments")
 
@@ -8533,7 +8548,8 @@ def calculate_fbu_performance(run_id: str) -> dict:
                 )
                 fbu_run_manager.update_run(run_id, supplemental_leave_data=supplemental_leave_data)
         fbu_run_manager.save_results(run_id, employees)
-        final_results = build_final_result_rows(fbu_run_manager.get_run(run_id).results)
+        completed_run = fbu_run_manager.runs.get(run_id) or fbu_run_manager.get_run(run_id)
+        final_results = build_final_result_rows(completed_run.results)
 
         total_bonus_by_source_employee = {}
         for employee in employees:
@@ -8551,6 +8567,12 @@ def calculate_fbu_performance(run_id: str) -> dict:
                 sum(round(amount, 2) for amount in total_bonus_by_source_employee.values()),
                 2,
             ),
+            "activity": {
+                **vars(completed_run),
+                "results": final_results,
+                "total_employees": len(final_results),
+                "diagnostics": _fbu_run_diagnostics(completed_run),
+            },
         }
 
     except Exception as e:
@@ -8578,16 +8600,38 @@ def create_fbu_performance_run(body: dict) -> dict:
     except ValueError:
         raise HTTPException(400, "核算月份格式无效")
 
-    run = fbu_run_manager.create_run(calc_month=calc_month)
-    roster_path = fbu_roster_store.copy_active_to_run(run.run_id)
+    run = fbu_run_manager.create_run(calc_month=calc_month, persist=False)
+    metadata = fbu_roster_store.get_metadata()
+    roster_path = fbu_roster_store.copy_active_to_run(run.run_id, metadata=metadata)
+    roster_data = None
     if roster_path:
-        metadata = fbu_roster_store.get_metadata()
+        parser = FBUPerformanceParser()
+        parser.load_roster(str(roster_path))
+        employees = [
+            {
+                "employee_id": employee_id,
+                "name": row.get("name", ""),
+                "department": row.get("department", ""),
+                "area": row.get("area", ""),
+                "position": row.get("position", ""),
+                "personnel_status": row.get("personnel_status", ""),
+                "job_type": row.get("job_type", ""),
+            }
+            for employee_id, row in parser.employee_roster.items()
+        ]
+        roster_data = {"employees": employees, "summary": {"total_employees": len(employees)}}
         fbu_run_manager.update_run(
             run.run_id,
             roster_file=metadata.get("filename", "active_roster.xlsx"),
             roster_source="base",
+            roster_data=roster_data,
         )
-        run = fbu_run_manager.get_run(run.run_id) or run
+    else:
+        fbu_run_manager.update_run(run.run_id)
+    run = fbu_run_manager.runs.get(run.run_id) or run
+    activity = vars(run).copy()
+    activity["roster_data"] = roster_data or run.roster_data or {}
+    activity["diagnostics"] = _fbu_run_diagnostics(run)
 
     return {
         "success": True,
@@ -8596,6 +8640,7 @@ def create_fbu_performance_run(body: dict) -> dict:
         "status": run.status,
         "roster_file": run.roster_file,
         "roster_source": run.roster_source,
+        "activity": activity,
     }
 
 
@@ -8615,6 +8660,7 @@ def list_fbu_performance_runs() -> dict:
                 "total_bonus": r.total_bonus,
                 "roster_file": r.roster_file,
                 "roster_source": r.roster_source,
+                "diagnostics": {"summary": _fbu_run_diagnostics(r)["summary"]},
             }
             for r in runs
         ]
@@ -8627,11 +8673,13 @@ def get_fbu_performance_run(run_id: str) -> dict:
     run = fbu_run_manager.get_run(run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
+    roster_data = run.roster_data or _fbu_roster_preview_for_run(run_id)
+    run = fbu_run_manager.runs.get(run_id) or run
     payload = vars(run).copy()
     if payload.get("results"):
         payload["results"] = build_final_result_rows(payload["results"])
         payload["total_employees"] = len(payload["results"])
-    payload["roster_data"] = _fbu_roster_preview_for_run(run_id)
+    payload["roster_data"] = roster_data
     payload["diagnostics"] = _fbu_run_diagnostics(run)
     return payload
 

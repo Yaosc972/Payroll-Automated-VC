@@ -1,5 +1,8 @@
 from datetime import date
 
+import openpyxl
+from openpyxl import Workbook
+
 from bonus_platform.engine.fbu_performance.engines.base import EmployeeData
 from bonus_platform.engine.fbu_performance.engines.bonus import BonusCalculator
 from bonus_platform.engine.fbu_performance.engines.coefficient import CoefficientCalculator
@@ -1519,6 +1522,29 @@ def test_attendance_preview_daily_rows_keep_each_attendance_date(tmp_path):
     daily_rows = preview["employees"][0]["attendance_daily_rows"]
     assert [row["date"] for row in daily_rows] == ["2026-04-30", "2026-04-29"]
     assert [row["base_hours"] for row in daily_rows] == [8.25, 7.75]
+
+
+def test_attendance_preview_loads_large_workbook_in_read_only_mode(monkeypatch, tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "sheet1"
+    sheet.append(["考勤日期", "姓名", "工号"])
+    sheet.append(["2026-04-01", "测试员工", "zt1"])
+    path = tmp_path / "attendance.xlsx"
+    workbook.save(path)
+
+    observed = {}
+    original_load_workbook = openpyxl.load_workbook
+
+    def capture_load_workbook(*args, **kwargs):
+        observed.update(kwargs)
+        return original_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(openpyxl, "load_workbook", capture_load_workbook)
+
+    FBUPerformanceParser().parse_attendance_preview(str(path), 4)
+
+    assert observed["read_only"] is True
 
 
 def test_roster_loader_finds_shifted_lingse_column_by_header(tmp_path):

@@ -726,7 +726,12 @@ class FBUPerformanceParser:
         self.employee_roster = {}  # 花名册数据 {emp_id: {name, department, ...}}
 
     @staticmethod
-    def load_excel(filepath: str, password: Optional[str] = None) -> openpyxl.Workbook:
+    def load_excel(
+        filepath: str,
+        password: Optional[str] = None,
+        *,
+        read_only: bool = False,
+    ) -> openpyxl.Workbook:
         """加载Excel文件（支持密码保护）"""
         if password:
             with open(filepath, "rb") as f:
@@ -735,9 +740,9 @@ class FBUPerformanceParser:
                 decrypted = io.BytesIO()
                 ms_file.decrypt(decrypted)
                 decrypted.seek(0)
-                return openpyxl.load_workbook(decrypted, data_only=True)
+                return openpyxl.load_workbook(decrypted, data_only=True, read_only=read_only)
         else:
-            return openpyxl.load_workbook(filepath, data_only=True)
+            return openpyxl.load_workbook(filepath, data_only=True, read_only=read_only)
 
     def load_roster(self, filepath: str) -> dict:
         """
@@ -841,7 +846,7 @@ class FBUPerformanceParser:
 
     def parse_attendance(self, filepath: str, target_month: int) -> dict:
         """解析考勤数据"""
-        wb = self.load_excel(filepath)
+        wb = self.load_excel(filepath, read_only=True)
         ws = wb['sheet1']
         headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
 
@@ -850,6 +855,7 @@ class FBUPerformanceParser:
         for row in ws.iter_rows(min_row=2, values_only=True):
             if _cell(row, 0) is not None:
                 rows.append(row)
+        wb.close()
 
         # 处理考勤数据
         return self.attendance_processor.process(rows, target_month, headers=headers)
@@ -1876,7 +1882,7 @@ class FBUPerformanceParser:
         Returns:
             预览数据 {员工明细列表, 汇总统计}
         """
-        wb = self.load_excel(filepath)
+        wb = self.load_excel(filepath, read_only=True)
         ws = wb['sheet1']
         headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
 
@@ -1885,6 +1891,7 @@ class FBUPerformanceParser:
         for row in ws.iter_rows(min_row=2, values_only=True):
             if _cell(row, 0) is not None:
                 rows.append(row)
+        wb.close()
 
         # 处理考勤数据
         attendance_data = self.attendance_processor.process(rows, target_month, headers=headers)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import mimetypes
 import os
@@ -61,10 +62,11 @@ def fbu_supabase_bucket() -> str:
 
 
 def save_fbu_run_metadata_to_persistent(run_id: str, payload: dict[str, Any]) -> None:
+    content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     _upload_bytes(
         _object_path(run_id, "metadata.json"),
-        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
-        content_type="application/json",
+        gzip.compress(content, compresslevel=6),
+        content_type="application/gzip",
     )
 
 
@@ -72,6 +74,8 @@ def load_fbu_run_metadata_from_persistent(run_id: str) -> dict[str, Any] | None:
     content = _download_bytes(_object_path(run_id, "metadata.json"))
     if content is None:
         return None
+    if content.startswith(b"\x1f\x8b"):
+        content = gzip.decompress(content)
     payload = json.loads(content.decode("utf-8"))
     return payload if isinstance(payload, dict) else None
 

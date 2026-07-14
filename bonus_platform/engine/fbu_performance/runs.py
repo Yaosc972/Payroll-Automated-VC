@@ -194,6 +194,7 @@ class FBURun:
     base_override_file: str = ""
     roster_file: str = ""
     roster_source: str = ""  # activity / base
+    roster_data: dict = field(default_factory=dict)
     # 分步数据
     attendance_data: dict = field(default_factory=dict)  # 考勤解析结果
     salary_data: dict = field(default_factory=dict)  # 薪资解析结果
@@ -284,6 +285,7 @@ class FBURunManager:
         attendance_file: str = "",
         salary_file: str = "",
         performance_file: str = "",
+        persist: bool = True,
     ) -> FBURun:
         """创建新的运行"""
         run = FBURun(
@@ -295,12 +297,13 @@ class FBURunManager:
             performance_file=performance_file,
         )
         self.runs[run.run_id] = run
-        self._save_runs(run.run_id)
+        if persist:
+            self._save_runs(run.run_id)
         return run
 
     def update_run(self, run_id: str, **kwargs):
         """更新运行状态"""
-        run = self.get_run(run_id)
+        run = self.runs.get(run_id) or self.get_run(run_id)
         if run:
             if self.RESULT_INPUT_FIELDS.intersection(kwargs):
                 self._invalidate_results(run)
@@ -316,13 +319,15 @@ class FBURunManager:
         run.total_bonus = 0.0
         run.match_rate = 0.0
 
-    def save_step_data(self, run_id: str, step: int, data: dict):
+    def save_step_data(self, run_id: str, step: int, data: dict, **updates):
         """保存分步数据"""
-        run = self.get_run(run_id)
+        run = self.runs.get(run_id) or self.get_run(run_id)
         if not run:
             return
 
         self._invalidate_results(run)
+        for key, value in updates.items():
+            setattr(run, key, value)
 
         if step == 1:
             run.attendance_data = data
@@ -339,6 +344,7 @@ class FBURunManager:
         elif step == 4:
             run.adjustment_data = data
 
+        self.runs[run_id] = run
         self._save_runs(run_id)
 
     def get_run(self, run_id: str) -> Optional[FBURun]:
@@ -393,7 +399,7 @@ class FBURunManager:
 
     def save_results(self, run_id: str, employees: list[EmployeeData]):
         """保存核算结果"""
-        run = self.get_run(run_id)
+        run = self.runs.get(run_id) or self.get_run(run_id)
         if not run:
             return
 
@@ -608,8 +614,8 @@ class FBURosterStore:
             )
         return metadata
 
-    def copy_active_to_run(self, run_id: str) -> Optional[Path]:
-        metadata = self.get_metadata()
+    def copy_active_to_run(self, run_id: str, metadata: Optional[dict] = None) -> Optional[Path]:
+        metadata = metadata or self.get_metadata()
         active_roster = self._active_roster_path(metadata)
         if not active_roster.exists():
             return None
