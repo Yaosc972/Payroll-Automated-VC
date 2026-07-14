@@ -349,7 +349,7 @@ function setWorkbenchUploadState(type, nextState, { render = true } = {}) {
     },
   };
   if (render && state.currentPage === 'workbench') {
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
   }
 }
 
@@ -362,7 +362,7 @@ function clearWorkbenchUploadState(type, { render = true } = {}) {
   delete nextStates[type];
   state.workbenchUploadStates = nextStates;
   if (render && state.currentPage === 'workbench') {
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
   }
 }
 
@@ -379,24 +379,24 @@ function startWorkbenchUploadProgress(type, file) {
   });
 }
 
-function finishWorkbenchUploadProgress(type, fileName, message = '已解析') {
+function finishWorkbenchUploadProgress(type, fileName, message = '已解析', { render = true } = {}) {
   clearWorkbenchUploadTimer(type);
   setWorkbenchUploadState(type, {
     fileName: fileName || state.workbenchUploadStates[type]?.fileName || '',
     status: 'done',
     progress: 100,
     message,
-  });
+  }, { render });
 }
 
-function failWorkbenchUploadProgress(type, fileName, message = '上传失败') {
+function failWorkbenchUploadProgress(type, fileName, message = '上传失败', { render = true } = {}) {
   clearWorkbenchUploadTimer(type);
   setWorkbenchUploadState(type, {
     fileName: fileName || state.workbenchUploadStates[type]?.fileName || '',
     status: 'failed',
     progress: 100,
     message,
-  });
+  }, { render });
 }
 
 function getMaterialUploadView(material, status, activity) {
@@ -850,7 +850,7 @@ function setInlineActionNote(key, message, tone = 'success', { render = true } =
     },
   };
   if (render && state.currentPage === 'workbench') {
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
   }
 }
 
@@ -1327,7 +1327,7 @@ function setActivityStep(stepKey) {
     state.workbenchStepSearch = '';
   }
   state.activityStep = stepKey;
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function getStepIndex(stepKey) {
@@ -1771,7 +1771,7 @@ async function confirmMaintainedRuleList(kind) {
   state.currentActivity.base_override_file = '页面维护';
   state.currentActivity.base_override_data = data.preview;
   setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success', { render: false });
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function toggleMaintainedRuleEditor(kind) {
@@ -1781,7 +1781,7 @@ function toggleMaintainedRuleEditor(kind) {
     state.maintainedRuleEditor = kind;
     state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
   }
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function updateMaintainedRuleDraft(kind, index, field, value) {
@@ -1859,7 +1859,7 @@ async function saveMaintainedRuleList(kind) {
   state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
   setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已保存' : '固定基数名单已保存', 'success', { render: false });
   closeMaintainedRuleDialog();
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function renderWorkbenchPerformanceSupplement() {
@@ -2098,6 +2098,37 @@ function renderWorkbench() {
       ${renderStepContent(activity)}
     </section>
   `;
+}
+
+function renderWorkbenchCurrentStep({ preserveScroll = true } = {}) {
+  if (!el.workbenchContent) return;
+  const activity = getWorkbenchActivity();
+  const stepBody = el.workbenchContent.querySelector('.activity-step-body');
+  const stepper = el.workbenchContent.querySelector('.activity-stepper');
+  if (!activity || !stepBody || !stepper) {
+    renderWorkbench();
+    return;
+  }
+
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const activeStep = ACTIVITY_STEPS.find(step => step.key === state.activityStep) || ACTIVITY_STEPS[0];
+  const canCalculate = buildNeedsForStep('check', activity).length === 0;
+  const titleMeta = el.workbenchContent.querySelectorAll('.activity-title-meta span');
+  if (titleMeta.length) titleMeta[titleMeta.length - 1].textContent = activeStep.label || '-';
+  const titleActions = el.workbenchContent.querySelector('.activity-title-actions');
+  if (titleActions) {
+    titleActions.innerHTML = `
+      ${state.activityStep === 'check' ? `<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()" ${canCalculate ? '' : 'disabled'}>开始核算</button>` : ''}
+      <button class="btn btn-secondary btn-sm activity-return-button" type="button" onclick="navigateTo('activities')">返回</button>
+    `;
+  }
+  stepper.outerHTML = renderActivityStepper(activity);
+  stepBody.innerHTML = `
+    ${renderStepHeader(activeStep, activity)}
+    ${renderStepContent(activity)}
+  `;
+  if (preserveScroll) restoreScrollPosition(scrollX, scrollY);
 }
 
 function renderActivities() {
@@ -2912,9 +2943,9 @@ async function openActivityPage(activityId, page) {
     exceptions: 'check',
     results: 'export',
   };
-  await enterActivity(activityId, { preservePage: true });
-  setActivityStep(stepMap[page] || getActivityStepFromActivity(state.currentActivity));
-  navigateTo('workbench');
+  await enterActivity(activityId, {
+    initialStep: stepMap[page] || '',
+  });
 }
 
 async function enterActivity(activityId, options = {}) {
@@ -2943,14 +2974,6 @@ async function enterActivity(activityId, options = {}) {
       await loadRuleLists();
     }
 
-    if (preservePage && state.currentPage === 'activities') {
-      // Keep list interactions stable while background activity details are loading.
-    } else if (preservePage) {
-      navigateTo(state.currentPage);
-    } else {
-      navigateTo('workbench');
-    }
-
     // Load data if available
     if (activity.attendance_data) {
       state.attendanceData = activity.attendance_data;
@@ -2970,11 +2993,12 @@ async function enterActivity(activityId, options = {}) {
       state.resultsData = activity.results;
     }
     if (preservePage && state.currentPage === 'activities') {
+      // Keep list interactions stable while background activity details are loading.
       renderActivities();
       loadActivityListDetails();
       return activity;
     }
-    renderWorkbench();
+    navigateTo(preservePage ? state.currentPage : 'workbench');
     return activity;
   } catch (error) {
     console.error('加载活动详情失败:', error);
@@ -3033,7 +3057,6 @@ el.btnNewActivity.addEventListener('click', async () => {
       state.activityStep = 'people';
       resetTableControls();
       navigateTo('workbench');
-      renderWorkbench();
     }
   } catch (error) {
     console.error('创建活动失败:', error);
@@ -3342,7 +3365,7 @@ async function uploadWorkbenchFile(type, file) {
       state.attendanceData = data.preview;
       state.workbenchPreviousAttendanceFile = null;
       if (previousAttendanceFile) {
-        finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入');
+        finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入', { render: false });
       }
     } else if (type === 'salary') {
       state.salaryData = data.preview;
@@ -3362,7 +3385,6 @@ async function uploadWorkbenchFile(type, file) {
     if (type === 'supplementalLeave') Object.assign(activityPatch, { supplemental_leave_file: file.name, supplemental_leave_data: data.preview });
     applyCurrentActivityPatch(activityPatch, { invalidateResults: true });
     finishWorkbenchUploadProgress(type, file.name, '已解析');
-    renderWorkbench();
   } catch (error) {
     failWorkbenchUploadProgress(type, file.name, error.message);
   }
@@ -3389,7 +3411,7 @@ async function uploadWorkbenchSalaryHistory() {
       at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     };
     ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
-      finishWorkbenchUploadProgress(type, files[type].name, '已核验');
+      finishWorkbenchUploadProgress(type, files[type].name, '已核验', { render: false });
     });
     state.workbenchSalaryHistoryFiles = {};
     applyCurrentActivityPatch({
@@ -3404,11 +3426,12 @@ async function uploadWorkbenchSalaryHistory() {
       current_step: 2,
       status: 'step2',
     }, { invalidateResults: true });
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
   } catch (error) {
     ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
-      failWorkbenchUploadProgress(type, files[type]?.name || '', error.message);
+      failWorkbenchUploadProgress(type, files[type]?.name || '', error.message, { render: false });
     });
+    renderWorkbenchCurrentStep();
   }
 }
 
@@ -3531,7 +3554,6 @@ async function uploadWorkbenchPreviousAttendanceFile(file) {
     }, { invalidateResults: true });
     state.workbenchPreviousAttendanceFile = null;
     finishWorkbenchUploadProgress('previousAttendance', file.name, '已随考勤纳入');
-    renderWorkbench();
   } catch (error) {
     failWorkbenchUploadProgress('previousAttendance', file.name, error.message);
   }
@@ -3553,7 +3575,7 @@ function handleWorkbenchUploadChange(type, event) {
       progress: 100,
       message: '已选择，集齐三份文件后自动核验',
     });
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
     uploadWorkbenchSalaryHistory();
     return;
   }
@@ -3574,7 +3596,7 @@ function handleWorkbenchUploadChange(type, event) {
       progress: 100,
       message: '将随当月考勤一起上传',
     });
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
     return;
   }
   if (type === 'roster') {
@@ -3590,12 +3612,12 @@ function clearWorkbenchUpload(type) {
 
 function setWorkbenchTaskFilter(filter) {
   state.workbenchTaskFilter = filter || 'open';
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function setWorkbenchResultFilter(filter) {
   state.workbenchResultFilter = filter || 'all';
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function getActiveWorkbenchTableType() {
@@ -3619,7 +3641,7 @@ function setWorkbenchStepSearch(value = '') {
   if (activeType) {
     getTablePagination(activeType).page = 1;
   }
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
   restoreInputFocus(focusSnapshot);
 }
 
@@ -3646,12 +3668,12 @@ function handleWorkbenchStepSearchCompositionEnd(event) {
 
 function setCheckTab(tab = 'base') {
   state.checkTab = tab === 'issues' ? 'issues' : 'base';
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function toggleWorkbenchResultDetail(employeeId) {
   state.workbenchSelectedResult = state.workbenchSelectedResult === employeeId ? '' : employeeId;
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function updateWorkbenchSupplementDraft() {
@@ -3663,8 +3685,35 @@ function updateWorkbenchSupplementDraft() {
   };
 }
 
+function applyPerformanceSupplementCompactResult(activity, employeeId, data) {
+  if (data.preview) {
+    return applyCurrentActivityPatch({
+      run_id: activity.run_id,
+      performance_file: activity.performance_file || '页面绩效补录',
+      performance_data: data.preview,
+      status: 'step3',
+    }, { invalidateResults: true });
+  }
+  const existingRows = activity.performance_data?.employees || [];
+  const hasEmployee = existingRows.some(row => row.employee_id === employeeId);
+  const employees = hasEmployee
+    ? existingRows.map(row => row.employee_id === employeeId ? data.employee : row)
+    : [...existingRows, data.employee];
+  return applyCurrentActivityPatch({
+    run_id: activity.run_id,
+    performance_file: activity.performance_file || '页面绩效补录',
+    performance_data: {
+      ...(activity.performance_data || {}),
+      employees,
+      summary: data.summary || activity.performance_data?.summary || {},
+    },
+    status: 'step3',
+  }, { invalidateResults: true });
+}
+
 async function saveWorkbenchPerformanceSupplement() {
-  if (!state.currentActivity) return;
+  const activity = getWorkbenchActivity();
+  if (!activity) return;
   const employeeIdInput = document.getElementById('workbenchSupplementEmployeeId');
   const employeeId = employeeIdInput?.value.trim() || '';
   const name = document.getElementById('workbenchSupplementName')?.value.trim() || '';
@@ -3690,7 +3739,7 @@ async function saveWorkbenchPerformanceSupplement() {
   }
 
   try {
-    const data = await apiJson(`${API_BASE}/runs/${encodeURIComponent(state.currentActivity.run_id)}/performance-supplement`, {
+    const data = await apiJson(`${API_BASE}/runs/${encodeURIComponent(activity.run_id)}/performance-supplement`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3700,16 +3749,13 @@ async function saveWorkbenchPerformanceSupplement() {
         level: '',
         coefficient,
         note,
+        response_mode: 'employee',
       }),
     });
 
-    state.performanceData = data.preview;
-    state.currentActivity.performance_data = data.preview;
-    if (!state.currentActivity.performance_file) {
-      state.currentActivity.performance_file = '页面绩效补录';
-    }
+    applyPerformanceSupplementCompactResult(activity, employeeId, data);
     state.workbenchSupplementDraft = { employeeId: '', name: '', coefficient: '', note: '' };
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
     showNotification('绩效补录已保存', 'success');
   } catch (error) {
     showNotification(error.message, 'error', { title: '保存失败' });
@@ -3722,12 +3768,14 @@ async function saveWorkbenchPerformanceSupplement() {
 
 async function applyWorkbenchSupplementalSuggestion(rowId, suggestedHours) {
   await applySupplementalLeaveSuggestion(rowId, suggestedHours);
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function locateWorkbenchSupplementalRow(rowId) {
   setActivityStep('attendance');
-  renderWorkbench();
+  requestAnimationFrame(() => {
+    findSupplementalLeaveRowElement(rowId)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
 }
 
 // ═══ Upload Buttons ═══
@@ -5168,7 +5216,7 @@ async function executeCalculate() {
   }
 
   try {
-    const data = await apiJson(`${API_BASE}/calculate/${state.currentActivity.run_id}`, {
+    const data = await apiJson(`${API_BASE}/calculate/${state.currentActivity.run_id}?response_mode=compact`, {
       method: 'POST',
     });
 
@@ -5183,7 +5231,7 @@ async function executeCalculate() {
       });
       state.diagnosticsData = state.currentActivity.diagnostics || null;
       state.activityStep = 'export';
-      renderWorkbench();
+      renderWorkbenchCurrentStep({ preserveScroll: false });
     } else {
       showNotification('核算失败: ' + (data.detail || '未知错误'), 'error');
     }
@@ -5285,7 +5333,7 @@ function readTableFilters(type) {
 
 function renderTableByType(type, focusSnapshot = null) {
   if (state.currentPage === 'workbench') {
-    renderWorkbench();
+    renderWorkbenchCurrentStep();
     restoreInputFocus(focusSnapshot);
     return;
   }
@@ -5551,7 +5599,7 @@ function hideCurrentStepNotice(stepKey) {
     ...state.hiddenStepNotices,
     [noticeKey]: true,
   };
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function renderStepInfoStrip(stepKey, activity = getWorkbenchActivity()) {
@@ -6131,7 +6179,7 @@ function getFinalResultGroupMeta(group) {
 
 function setFinalResultSlice(sliceKey) {
   state.finalResultSlice = sliceKey || 'warehouse';
-  renderWorkbench();
+  renderWorkbenchCurrentStep();
 }
 
 function isNinetySixHourResult(result) {

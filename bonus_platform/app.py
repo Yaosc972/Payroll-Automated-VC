@@ -8096,6 +8096,21 @@ def add_fbu_performance_supplement(run_id: str, body: dict = Body(...)) -> dict:
             performance_file=run.performance_file or "页面绩效补录",
         )
 
+        if body.get("response_mode") == "employee":
+            updated_employee = next(
+                (row for row in preview.get("employees", []) if row.get("employee_id") == employee_id),
+                None,
+            )
+            if updated_employee is None:
+                raise HTTPException(404, "未找到补录员工")
+            return {
+                "success": True,
+                "run_id": run_id,
+                "step": 3,
+                "employee": updated_employee,
+                "summary": preview.get("summary", {}),
+            }
+
         return {
             "success": True,
             "run_id": run_id,
@@ -8509,7 +8524,7 @@ async def import_fbu_performance_data(
 
 
 @app.post("/api/fbu-performance/calculate/{run_id}")
-def calculate_fbu_performance(run_id: str) -> dict:
+def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
     """执行FBU绩效核算"""
     run = fbu_run_manager.get_run(run_id)
     if not run:
@@ -8577,6 +8592,26 @@ def calculate_fbu_performance(run_id: str) -> dict:
                 + employee.performance_bonus
             )
 
+        activity_payload = {
+            **vars(completed_run),
+            "results": final_results,
+            "total_employees": len(final_results),
+            "diagnostics": _fbu_run_diagnostics(completed_run),
+        }
+        if response_mode == "compact":
+            activity_payload = {
+                "run_id": completed_run.run_id,
+                "calc_month": completed_run.calc_month,
+                "status": completed_run.status,
+                "current_step": completed_run.current_step,
+                "results": final_results,
+                "total_employees": len(final_results),
+                "total_bonus": completed_run.total_bonus,
+                "match_rate": completed_run.match_rate,
+                "diagnostics": _fbu_run_diagnostics(completed_run),
+                "error": completed_run.error,
+            }
+
         return {
             "success": True,
             "run_id": run_id,
@@ -8585,12 +8620,7 @@ def calculate_fbu_performance(run_id: str) -> dict:
                 sum(round(amount, 2) for amount in total_bonus_by_source_employee.values()),
                 2,
             ),
-            "activity": {
-                **vars(completed_run),
-                "results": final_results,
-                "total_employees": len(final_results),
-                "diagnostics": _fbu_run_diagnostics(completed_run),
-            },
+            "activity": activity_payload,
         }
 
     except Exception as e:

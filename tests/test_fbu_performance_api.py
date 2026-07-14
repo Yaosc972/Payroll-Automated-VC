@@ -583,6 +583,22 @@ def test_fbu_performance_supplement_can_be_entered_from_page(monkeypatch, tmp_pa
     assert second_employees["zt009999"]["coefficient"] == 0.88
     assert second_employees["zt009999"]["performance_source"] == "绩效补录"
 
+    compact_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/performance-supplement",
+        json={
+            "employee_id": "zt008888",
+            "name": "紧凑响应员工",
+            "coefficient": 0.91,
+            "response_mode": "employee",
+        },
+    )
+    assert compact_response.status_code == 200
+    compact_payload = compact_response.json()
+    assert "preview" not in compact_payload
+    assert compact_payload["employee"]["employee_id"] == "zt008888"
+    assert compact_payload["employee"]["coefficient"] == 0.91
+    assert compact_payload["summary"]["supplement_added"] >= 1
+
 
 def test_fbu_adjustment_upload_is_saved_as_optional_run_data(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
@@ -1098,9 +1114,15 @@ def test_fbu_calculate_uses_saved_rule_lists_even_when_current_step_is_behind(mo
     assert app_module.fbu_run_manager.get_run(run.run_id).current_step == 2
 
     client = TestClient(app_module.app)
-    response = client.post(f"/api/fbu-performance/calculate/{run.run_id}")
+    response = client.post(f"/api/fbu-performance/calculate/{run.run_id}?response_mode=compact")
 
     assert response.status_code == 200
+    activity = response.json()["activity"]
+    assert "attendance_data" not in activity
+    assert "salary_data" not in activity
+    assert "performance_data" not in activity
+    assert activity["results"]
+    assert activity["diagnostics"] is not None
     result = app_module.fbu_run_manager.get_run(run.run_id).results[0]
     assert result["work_hour_rule"] == "96工时制"
     assert result["calculation_path"] == "96工时制自动基数路径"

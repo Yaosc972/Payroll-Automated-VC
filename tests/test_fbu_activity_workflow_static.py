@@ -348,7 +348,7 @@ def test_activity_table_search_renders_immediately_and_preserves_composition_eve
     assert "composingWorkbenchStepSearch" in js
     assert "getActiveWorkbenchTableType" in js
     assert "getTablePagination(activeType).page = 1" in section
-    assert "renderWorkbench();" in section
+    assert "renderWorkbenchCurrentStep();" in section
     assert "restoreInputFocus(focusSnapshot);" in section
     assert "window.setTimeout" not in section
     assert "360" not in section
@@ -360,6 +360,40 @@ def test_activity_table_search_renders_immediately_and_preserves_composition_eve
     assert 'type="text"' in table_section
     assert 'type="search"' not in table_section
     assert "oninput=\"setWorkbenchStepSearch(this.value)\"" not in table_section
+
+
+def test_high_frequency_workbench_interactions_use_current_step_rendering():
+    js = _js()
+
+    assert "function renderWorkbenchCurrentStep" in js
+    for function_name, next_marker in [
+        ("setWorkbenchUploadState", "function clearWorkbenchUploadState"),
+        ("setActivityStep", "function getStepIndex"),
+        ("setWorkbenchTaskFilter", "function setWorkbenchResultFilter"),
+        ("setWorkbenchResultFilter", "function getActiveWorkbenchTableType"),
+        ("setCheckTab", "function toggleWorkbenchResultDetail"),
+        ("toggleWorkbenchResultDetail", "function updateWorkbenchSupplementDraft"),
+        ("setFinalResultSlice", "function isNinetySixHourResult"),
+    ]:
+        area = js.split(f"function {function_name}", 1)[1].split(next_marker, 1)[0]
+        assert "renderWorkbenchCurrentStep" in area
+        assert "renderWorkbench();" not in area
+
+
+def test_compact_performance_supplement_and_calculation_responses_are_requested():
+    js = _js()
+    supplement = js.split("async function saveWorkbenchPerformanceSupplement", 1)[1].split(
+        "function openPerformanceSupplementModal", 1
+    )[0]
+    calculation = js.split("async function executeCalculate", 1)[1].split(
+        "el.btnCalculate", 1
+    )[0]
+
+    assert "response_mode: 'employee'" in supplement
+    assert "applyPerformanceSupplementCompactResult" in supplement
+    assert "renderWorkbenchCurrentStep" in supplement
+    assert "response_mode=compact" in calculation
+    assert "renderWorkbenchCurrentStep" in calculation
 
 
 def test_activity_header_matches_light_payroll_activity_pattern():
@@ -616,7 +650,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=verification-speed-v3-20260714" in html
+    assert "fbu-performance.js?v=interaction-speed-v4-20260714" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():
@@ -964,7 +998,8 @@ def test_background_activity_detail_load_preserves_activity_list_page():
     assert "Keep list interactions stable while background activity details are loading." in enter_activity_area
     assert "renderActivities();" in enter_activity_area
     assert "loadActivityListDetails();" in enter_activity_area
-    assert enter_activity_area.index("if (preservePage && state.currentPage === 'activities')") < enter_activity_area.index("} else if (preservePage)")
+    assert "navigateTo(preservePage ? state.currentPage : 'workbench');" in enter_activity_area
+    assert enter_activity_area.index("if (preservePage && state.currentPage === 'activities')") < enter_activity_area.index("navigateTo(preservePage ? state.currentPage : 'workbench');")
 
 
 def test_workbench_initial_load_enters_activity_before_activity_list_detail_prefetch():
