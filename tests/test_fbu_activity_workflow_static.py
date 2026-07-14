@@ -616,7 +616,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=row-save-speed-v2-20260714" in html
+    assert "fbu-performance.js?v=verification-speed-v3-20260714" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():
@@ -854,12 +854,19 @@ def test_activity_list_diagnostics_do_not_prefetch_full_run_details():
 def test_salary_confirmation_updates_local_activity_without_detail_refetch():
     js = _js()
 
+    compact_result_area = js.split("function applySalaryVerificationCompactResult", 1)[1].split(
+        "async function confirmSalaryVerification", 1
+    )[0]
     confirmation_area = js.split("async function confirmSalaryVerification", 1)[1].split(
         "async function uploadWorkbenchPreviousAttendanceFile", 1
     )[0]
 
-    assert "applyCurrentActivityPatch" in confirmation_area
+    assert "applyCurrentActivityPatch" in compact_result_area
     assert "await enterActivity" not in confirmation_area
+    assert "response_mode: 'employee'" in confirmation_area
+    assert "setSalaryVerificationRowSaving(employeeId, true)" in confirmation_area
+    assert "applySalaryVerificationCompactResult" in confirmation_area
+    assert "renderWorkbench();" not in confirmation_area
 
 
 def test_existing_activity_opens_earliest_incomplete_input_step_before_check():
@@ -901,6 +908,8 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
     assert "${monthLabels.current}时薪" in salary_review
     assert "按${monthLabels.previous}值" in salary_review
     assert "按${monthLabels.current}值" in salary_review
+    assert 'id="salaryVerificationReview"' in salary_review
+    assert 'data-employee-id="${escapeHtml(row.employee_id)}"' in salary_review
 
 
 def test_salary_snapshot_month_labels_handle_year_boundary():

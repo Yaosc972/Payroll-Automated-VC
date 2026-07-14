@@ -3412,27 +3412,91 @@ async function uploadWorkbenchSalaryHistory() {
   }
 }
 
-async function confirmSalaryVerification(employeeId, choice) {
-  if (!state.currentActivity?.run_id) return;
-  try {
-    const data = await apiJson(
-      `${API_BASE}/runs/${state.currentActivity.run_id}/salary-verification/confirm`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employee_id: employeeId, choice }),
-      },
-    );
-    applyCurrentActivityPatch({
-      run_id: state.currentActivity.run_id,
+function findSalaryVerificationRowElement(employeeId) {
+  return [...document.querySelectorAll('#salaryVerificationReview tr[data-employee-id]')]
+    .find(row => row.dataset.employeeId === String(employeeId)) || null;
+}
+
+function setSalaryVerificationRowSaving(employeeId, isSaving) {
+  const row = findSalaryVerificationRowElement(employeeId);
+  if (!row) return;
+  row.classList.toggle('is-saving', Boolean(isSaving));
+  row.querySelectorAll('button').forEach(button => {
+    if (isSaving) {
+      button.dataset.originalText = button.textContent;
+      button.textContent = '确认中…';
+    } else if (button.dataset.originalText) {
+      button.textContent = button.dataset.originalText;
+      delete button.dataset.originalText;
+    }
+    button.disabled = Boolean(isSaving);
+  });
+}
+
+function replaceSalaryStepSection(elementId, markup) {
+  const element = document.getElementById(elementId);
+  if (!element) return;
+  if (!markup) {
+    element.remove();
+    return;
+  }
+  element.outerHTML = markup;
+}
+
+function refreshSalaryVerificationSections(activity) {
+  replaceSalaryStepSection('salaryNeedsPanel', renderNeedsPanel('salary', activity));
+  replaceSalaryStepSection('salaryVerificationReview', renderSalaryVerificationReview(activity));
+}
+
+function applySalaryVerificationCompactResult(activity, employeeId, data) {
+  if (data.preview && data.verification) {
+    return applyCurrentActivityPatch({
+      run_id: activity.run_id,
       salary_data: data.preview,
       salary_verification_data: data.verification,
       status: 'step2',
     }, { invalidateResults: true });
-    renderWorkbench();
+  }
+
+  const replaceEmployee = row => row.employee_id === employeeId ? data.employee : row;
+  const verification = {
+    ...(activity.salary_verification_data || {}),
+    employees: (activity.salary_verification_data?.employees || []).map(replaceEmployee),
+    issues: (activity.salary_verification_data?.issues || []).filter(issue => issue.employee_id !== employeeId),
+    summary: data.verification_summary || activity.salary_verification_data?.summary || {},
+  };
+  const salaryData = {
+    ...(activity.salary_data || {}),
+    employees: (activity.salary_data?.employees || []).map(replaceEmployee),
+    summary: data.salary_summary || activity.salary_data?.summary || {},
+  };
+  return applyCurrentActivityPatch({
+    run_id: activity.run_id,
+    salary_data: salaryData,
+    salary_verification_data: verification,
+    status: 'step2',
+  }, { invalidateResults: true });
+}
+
+async function confirmSalaryVerification(employeeId, choice) {
+  const activity = getWorkbenchActivity();
+  if (!activity?.run_id) return;
+  setSalaryVerificationRowSaving(employeeId, true);
+  try {
+    const data = await apiJson(
+      `${API_BASE}/runs/${activity.run_id}/salary-verification/confirm`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ employee_id: employeeId, choice, response_mode: 'employee' }),
+      },
+    );
+    const updated = applySalaryVerificationCompactResult(activity, employeeId, data);
+    refreshSalaryVerificationSections(updated);
   } catch (error) {
     state.inlineActionNotes.salary = `薪资差异确认失败：${error.message}`;
-    renderWorkbench();
+    setSalaryVerificationRowSaving(employeeId, false);
+    showNotification(error.message, 'error', { title: '薪资差异确认失败' });
   }
 }
 
@@ -5561,10 +5625,10 @@ function buildNeedsForStep(stepKey, activity) {
 function renderNeedsPanel(stepKey, activity) {
   const needs = buildNeedsForStep(stepKey, activity);
   if (!needs.length) {
-    return '<section class="step-section needs-panel complete">本步骤已完成</section>';
+    return `<section id="${escapeHtml(stepKey)}NeedsPanel" class="step-section needs-panel complete">本步骤已完成</section>`;
   }
   return `
-    <section class="step-section needs-panel">
+    <section id="${escapeHtml(stepKey)}NeedsPanel" class="step-section needs-panel">
       <div class="section-head compact"><h3>需要处理</h3></div>
       <div class="needs-list">
         ${needs.map(item => `
@@ -5776,7 +5840,7 @@ function renderSalaryVerificationReview(activity) {
   const monthLabels = getSalarySnapshotMonthLabels(activity?.calc_month);
 
   return `
-    <section class="step-section salary-verification-review">
+    <section id="salaryVerificationReview" class="step-section salary-verification-review">
       <div class="section-head compact">
         <div>
           <h3>薪资历史差异确认</h3>
@@ -5800,7 +5864,7 @@ function renderSalaryVerificationReview(activity) {
           </thead>
           <tbody>
             ${rows.map(row => `
-              <tr class="row-warning">
+              <tr class="row-warning" data-employee-id="${escapeHtml(row.employee_id)}">
                 <td>${escapeHtml(row.employee_id || '-')}</td>
                 <td>${escapeHtml(row.name || '-')}</td>
                 <td>${formatCurrency(row.previous_hourly_rate)}</td>

@@ -701,6 +701,44 @@ def test_fbu_salary_history_upload_persists_three_sources_and_blocks_unmatched_c
     assert confirmed["preview"]["employees"][0]["resolution"] == "manual_use_previous"
 
 
+def test_fbu_salary_verification_supports_compact_employee_response(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-05"}).json()["run_id"]
+    run = app_module.fbu_run_manager.get_run(run_id)
+    employee = {
+        "employee_id": "E001",
+        "hourly_rate": 21,
+        "ratio": 0.09,
+        "previous_hourly_rate": 18,
+        "previous_ratio": 0.05,
+        "current_hourly_rate": 21,
+        "current_ratio": 0.09,
+        "verification_status": "blocking",
+    }
+    run.salary_data = {"employees": [dict(employee)], "summary": {"total_employees": 1}}
+    run.salary_verification_data = {
+        "employees": [dict(employee)],
+        "issues": [{"employee_id": "E001"}],
+        "summary": {"blocking_count": 1, "resolved_count": 0},
+    }
+
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/salary-verification/confirm",
+        json={"employee_id": "E001", "choice": "previous", "response_mode": "employee"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "preview" not in payload
+    assert "verification" not in payload
+    assert payload["employee"]["employee_id"] == "E001"
+    assert payload["employee"]["hourly_rate"] == 18
+    assert payload["verification_summary"]["blocking_count"] == 0
+    assert payload["salary_summary"]["total_employees"] == 1
+
+
 def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
 

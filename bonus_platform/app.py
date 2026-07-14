@@ -8042,6 +8042,14 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
         status="step2",
         error="",
     )
+    if body.get("response_mode") == "employee":
+        return {
+            "success": True,
+            "run_id": run_id,
+            "employee": target,
+            "verification_summary": summary,
+            "salary_summary": salary_data.get("summary", {}),
+        }
     return {"success": True, "preview": salary_data, "verification": verification}
 
 
