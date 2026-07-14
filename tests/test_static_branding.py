@@ -469,6 +469,10 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     fbu_card = index_html.split('class="saas-module-card fbu-module"', 1)[1].split("</a>", 1)[0]
     assert "Developing · 开发中" in domestic_card
     assert "Available · 已上线" in fbu_card
+    assert '<span class="module-version">V1.0</span>' in fbu_card
+    assert "<dt>最新批次</dt><dd>2026-05</dd>" in fbu_card
+    assert "真实回归" not in fbu_card
+    assert "96.86%" not in fbu_card
     assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
     with Image.open(LOGIN_SIGMA_LOGO) as logo:
         assert logo.mode == "RGBA"
