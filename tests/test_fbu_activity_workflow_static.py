@@ -521,6 +521,11 @@ def test_supplemental_leave_row_save_uses_visible_workbench_activity():
     assert "const activity = getWorkbenchActivity();" in save_handler
     assert "activity?.run_id" in save_handler
     assert "state.currentActivity.run_id" not in save_handler
+    assert "response_mode: 'row'" in save_handler
+    assert "applyOptimisticSupplementalLeaveRow" in save_handler
+    assert save_handler.index("applyOptimisticSupplementalLeaveRow") < save_handler.index("await apiJson")
+    assert "applySupplementalLeaveCompactResult" in save_handler
+    assert "rollbackOptimisticSupplementalLeaveRow" in save_handler
 
 
 def test_performance_supplement_inline_form_supports_name_and_continuous_entries():
@@ -611,7 +616,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=workflow-speed-v1-20260714" in html
+    assert "fbu-performance.js?v=row-save-speed-v2-20260714" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():

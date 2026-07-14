@@ -8298,6 +8298,16 @@ def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
 
     preview = parser.apply_supplemental_leave_batch(run.supplemental_leave_data, row_ids, updates)
     fbu_run_manager.update_run(run_id, supplemental_leave_data=preview)
+    if body.get("response_mode") == "row" and len(row_ids) == 1:
+        updated_row = next((row for row in preview.get("rows", []) if row.get("row_id") == row_ids[0]), None)
+        if updated_row is None:
+            raise HTTPException(404, "补充假勤记录不存在")
+        return {
+            "success": True,
+            "run_id": run_id,
+            "row": updated_row,
+            "summary": preview.get("summary", {}),
+        }
     return {
         "success": True,
         "run_id": run_id,

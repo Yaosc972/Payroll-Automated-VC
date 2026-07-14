@@ -4666,6 +4666,68 @@ function updateSupplementalLeaveRowInPlace(rowId) {
   return true;
 }
 
+function summarizeSupplementalLeaveRows(rows, previousSummary = {}) {
+  const includeRows = rows.filter(row => row.include_in_base);
+  return {
+    ...previousSummary,
+    total_rows: rows.length,
+    include_count: includeRows.length,
+    include_hours: includeRows.reduce((total, row) => total + getSupplementalIncludedHours(row), 0),
+    pending_count: rows.filter(row => row.confirmation_status === 'pending').length,
+    confirmed_count: rows.filter(row => row.confirmation_status === 'confirmed').length,
+    excluded_count: rows.filter(row => row.confirmation_status === 'excluded').length,
+  };
+}
+
+function applyOptimisticSupplementalLeaveRow(rowId, includedHours) {
+  const data = state.supplementalLeaveData;
+  const rowIndex = (data?.rows || []).findIndex(row => row.row_id === rowId);
+  if (!data || rowIndex < 0) return null;
+
+  const snapshot = {
+    row: { ...data.rows[rowIndex] },
+    summary: { ...(data.summary || {}) },
+  };
+  data.rows[rowIndex] = {
+    ...data.rows[rowIndex],
+    included_hours: includedHours,
+    confirmation_status: includedHours > 0 ? 'confirmed' : 'excluded',
+    include_in_base: includedHours > 0,
+  };
+  data.summary = summarizeSupplementalLeaveRows(data.rows, data.summary);
+  updateSupplementalLeaveRowInPlace(rowId);
+  setSupplementalLeaveRowSaving(rowId, true);
+  return snapshot;
+}
+
+function rollbackOptimisticSupplementalLeaveRow(rowId, snapshot) {
+  const data = state.supplementalLeaveData;
+  const rowIndex = (data?.rows || []).findIndex(row => row.row_id === rowId);
+  if (!data || rowIndex < 0 || !snapshot) return;
+  data.rows[rowIndex] = snapshot.row;
+  data.summary = snapshot.summary;
+  updateSupplementalLeaveRowInPlace(rowId);
+}
+
+function applySupplementalLeaveCompactResult(activity, rowId, data) {
+  if (data.preview) {
+    applySupplementalLeavePreview(activity, data.preview);
+    return updateSupplementalLeaveRowInPlace(rowId);
+  }
+  if (!data.row || !data.summary) return false;
+
+  const preview = state.supplementalLeaveData;
+  const rowIndex = (preview?.rows || []).findIndex(row => row.row_id === rowId);
+  if (!preview || rowIndex < 0) return false;
+  preview.rows[rowIndex] = data.row;
+  preview.summary = data.summary;
+  applyCurrentActivityPatch(
+    { run_id: activity.run_id, supplemental_leave_data: preview },
+    { invalidateResults: true },
+  );
+  return updateSupplementalLeaveRowInPlace(rowId);
+}
+
 function restoreScrollPosition(scrollX, scrollY) {
   window.scrollTo(scrollX, scrollY);
   requestAnimationFrame(() => window.scrollTo(scrollX, scrollY));
@@ -4799,25 +4861,25 @@ async function updateSupplementalLeaveRow(rowId, explicitHours) {
     included_hours: includedHours,
     confirmation_status: includedHours > 0 ? 'confirmed' : 'excluded',
     include_in_base: includedHours > 0,
+    response_mode: 'row',
   };
   const anchorRowId = getSupplementalLeaveContinuationAnchor(rowId);
+  const optimisticSnapshot = applyOptimisticSupplementalLeaveRow(rowId, includedHours);
 
   try {
-    setSupplementalLeaveRowSaving(rowId, true);
     const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/supplemental-leave/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    applySupplementalLeavePreview(activity, data.preview);
-    if (updateSupplementalLeaveRowInPlace(rowId)) {
+    if (applySupplementalLeaveCompactResult(activity, rowId, data)) {
       restoreScrollPosition(scrollX, scrollY);
     } else {
       renderSupplementalLeaveDataPreservingScroll(anchorRowId, { focusInput: true });
     }
     showNotification(includedHours > 0 ? '已确认计入' : '已排除', 'success');
   } catch (error) {
-    setSupplementalLeaveRowSaving(rowId, false);
+    rollbackOptimisticSupplementalLeaveRow(rowId, optimisticSnapshot);
     showNotification(error.message, 'error', { title: '保存失败' });
   }
 }

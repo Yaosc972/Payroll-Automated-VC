@@ -661,6 +661,35 @@ def test_supplemental_leave_api_infers_status_when_saving_included_hours_only():
     assert updated.json()["preview"]["summary"]["include_hours"] == 8
 
 
+def test_supplemental_leave_api_supports_compact_row_response():
+    client = TestClient(app)
+    created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
+
+    imported = client.post(
+        "/api/fbu-performance/import-supplemental-leave",
+        data={"run_id": created["run_id"]},
+        files={"file": ("leave.xlsx", _cross_month_leave_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    row = imported.json()["preview"]["rows"][0]
+
+    updated = client.post(
+        f"/api/fbu-performance/runs/{created['run_id']}/supplemental-leave/batch",
+        json={
+            "row_ids": [row["row_id"]],
+            "included_hours": 8,
+            "response_mode": "row",
+        },
+    )
+
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert "preview" not in payload
+    assert payload["row"]["row_id"] == row["row_id"]
+    assert payload["row"]["included_hours"] == 8
+    assert payload["summary"]["pending_count"] == 0
+    assert payload["summary"]["include_hours"] == 8
+
+
 def test_supplemental_leave_api_merges_duplicate_flow_rows_on_import():
     client = TestClient(app)
     created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
