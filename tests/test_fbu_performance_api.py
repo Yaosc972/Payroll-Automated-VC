@@ -717,6 +717,45 @@ def test_fbu_salary_history_upload_persists_three_sources_and_blocks_unmatched_c
     assert confirmed["preview"]["employees"][0]["resolution"] == "manual_use_previous"
 
 
+def test_fbu_salary_history_compact_response_does_not_duplicate_employee_rows(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    previews = iter([
+        {"employees": [{"employee_id": "E001", "hourly_rate": 18, "ratio": 0.05}]},
+        {"employees": [{"employee_id": "E001", "hourly_rate": 21, "ratio": 0.09}]},
+    ])
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_salary_preview",
+        lambda self, path: next(previews),
+    )
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_adjustments_preview",
+        lambda self, path: {"employees": [], "events": [], "summary": {"total_events": 0}},
+    )
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-05"}).json()["run_id"]
+    response = client.post(
+        "/api/fbu-performance/import-salary-history",
+        data={"run_id": run_id, "response_mode": "compact"},
+        files={
+            "previous_salary": ("april.xlsx", b"previous", "application/octet-stream"),
+            "current_salary": ("may.xlsx", b"current", "application/octet-stream"),
+            "adjustments": ("adjustments.xlsx", b"adjustments", "application/octet-stream"),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["preview"]["employees"][0]["verification_status"] == "blocking"
+    assert "employees" not in payload["verification"]
+    assert payload["verification"]["summary"]["blocking_count"] == 1
+
+
 def test_fbu_salary_verification_supports_compact_employee_response(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
@@ -753,6 +792,64 @@ def test_fbu_salary_verification_supports_compact_employee_response(monkeypatch,
     assert payload["employee"]["hourly_rate"] == 18
     assert payload["verification_summary"]["blocking_count"] == 0
     assert payload["salary_summary"]["total_employees"] == 1
+
+
+def test_fbu_salary_verification_batches_multiple_rows_and_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-05"}).json()["run_id"]
+    run = app_module.fbu_run_manager.get_run(run_id)
+    employees = [
+        {
+            "employee_id": employee_id,
+            "hourly_rate": 21,
+            "ratio": 0.09,
+            "previous_hourly_rate": 18,
+            "previous_ratio": 0.05,
+            "current_hourly_rate": 21,
+            "current_ratio": 0.09,
+            "verification_status": "blocking",
+        }
+        for employee_id in ("E001", "E002", "E003")
+    ]
+    run.salary_data = {"employees": [dict(row) for row in employees], "summary": {"total_employees": 3}}
+    run.salary_verification_data = {
+        "employees": [dict(row) for row in employees],
+        "issues": [{"employee_id": row["employee_id"]} for row in employees],
+        "summary": {"blocking_count": 3, "resolved_count": 0},
+    }
+    save_calls: list[str] = []
+    original_save = app_module.fbu_run_manager._save_runs
+
+    def capture_save(changed_run_id=None):
+        save_calls.append(changed_run_id)
+        return original_save(changed_run_id)
+
+    monkeypatch.setattr(app_module.fbu_run_manager, "_save_runs", capture_save)
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/salary-verification/confirm",
+        json={
+            "confirmations": [
+                {"employee_id": "E001", "choice": "previous"},
+                {"employee_id": "E002", "choice": "current"},
+            ],
+            "response_mode": "employees",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert {row["employee_id"] for row in payload["employees"]} == {"E001", "E002"}
+    assert payload["verification_summary"]["blocking_count"] == 1
+    assert save_calls == [run_id]
+
+    duplicate = client.post(
+        f"/api/fbu-performance/runs/{run_id}/salary-verification/confirm",
+        json={"employee_id": "E001", "choice": "previous", "response_mode": "employee"},
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["employee"]["resolution"] == "manual_use_previous"
 
 
 def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path):
@@ -1113,6 +1210,15 @@ def test_fbu_calculate_uses_saved_rule_lists_even_when_current_step_is_behind(mo
     })
     assert app_module.fbu_run_manager.get_run(run.run_id).current_step == 2
 
+    save_calls: list[str] = []
+    original_save = app_module.fbu_run_manager._save_runs
+
+    def capture_save(changed_run_id=None):
+        save_calls.append(changed_run_id)
+        return original_save(changed_run_id)
+
+    monkeypatch.setattr(app_module.fbu_run_manager, "_save_runs", capture_save)
+
     client = TestClient(app_module.app)
     response = client.post(f"/api/fbu-performance/calculate/{run.run_id}?response_mode=compact")
 
@@ -1126,6 +1232,7 @@ def test_fbu_calculate_uses_saved_rule_lists_even_when_current_step_is_behind(mo
     result = app_module.fbu_run_manager.get_run(run.run_id).results[0]
     assert result["work_hour_rule"] == "96工时制"
     assert result["calculation_path"] == "96工时制自动基数路径"
+    assert save_calls == [run.run_id]
 
 
 def test_fbu_diagnostics_reports_matching_issues_and_exports(monkeypatch, tmp_path):

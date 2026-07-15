@@ -301,7 +301,7 @@ class FBURunManager:
             self._save_runs(run.run_id)
         return run
 
-    def update_run(self, run_id: str, **kwargs):
+    def update_run(self, run_id: str, *, persist: bool = True, **kwargs):
         """更新运行状态"""
         run = self.runs.get(run_id) or self.get_run(run_id)
         if run:
@@ -310,7 +310,8 @@ class FBURunManager:
             for key, value in kwargs.items():
                 setattr(run, key, value)
             self.runs[run_id] = run
-            self._save_runs(run_id)
+            if persist:
+                self._save_runs(run_id)
 
     @staticmethod
     def _invalidate_results(run: FBURun):

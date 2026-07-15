@@ -7880,6 +7880,7 @@ async def import_fbu_salary_history(
     previous_salary: UploadFile = File(...),
     current_salary: UploadFile = File(...),
     adjustments: UploadFile = File(...),
+    response_mode: str = Form(""),
 ) -> dict:
     """Step 2: import adjacent salary snapshots and the full adjustment export."""
     run = fbu_run_manager.get_run(run_id)
@@ -7934,12 +7935,18 @@ async def import_fbu_salary_history(
             run_id,
             ["previous_salary.xlsx", "salary.xlsx", "adjustments.xlsx"],
         )
+        response_verification = verification
+        if response_mode == "compact":
+            response_verification = {
+                "issues": verification.get("issues", []),
+                "summary": verification.get("summary", {}),
+            }
         return {
             "success": True,
             "run_id": run_id,
             "step": 2,
             "preview": resolved_salary,
-            "verification": verification,
+            "verification": response_verification,
             "adjustment_preview": adjustment_preview,
             "result_file": _fbu_result_file_payload(run_id, "salary"),
         }
@@ -8003,30 +8010,55 @@ async def import_fbu_performance(
 
 @app.post("/api/fbu-performance/runs/{run_id}/salary-verification/confirm")
 def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict:
-    """Resolve one blocked salary snapshot difference using an explicit snapshot choice."""
+    """Resolve one or more salary snapshot differences using explicit snapshot choices."""
     run = fbu_run_manager.get_run(run_id)
     if not run:
         raise HTTPException(404, "任务不存在")
 
-    employee_id = str(body.get("employee_id") or "").strip()
-    choice = str(body.get("choice") or "").strip()
-    if not employee_id or choice not in {"previous", "current"}:
-        raise HTTPException(400, "请选择按上月值或按当月值")
+    raw_confirmations = body.get("confirmations")
+    if isinstance(raw_confirmations, list) and raw_confirmations:
+        confirmations = raw_confirmations
+    else:
+        confirmations = [body]
+    if len(confirmations) > 100:
+        raise HTTPException(400, "单次最多确认 100 条薪资差异")
+
+    normalized_confirmations: dict[str, dict] = {}
+    for confirmation in confirmations:
+        employee_id = str(confirmation.get("employee_id") or "").strip()
+        choice = str(confirmation.get("choice") or "").strip()
+        if not employee_id or choice not in {"previous", "current"}:
+            raise HTTPException(400, "请选择按上月值或按当月值")
+        normalized_confirmations[employee_id] = {
+            "employee_id": employee_id,
+            "choice": choice,
+            "note": str(confirmation.get("note") or "").strip(),
+        }
 
     verification = dict(run.salary_verification_data or {})
     employees = [dict(row) for row in verification.get("employees", [])]
-    target = next((row for row in employees if row.get("employee_id") == employee_id), None)
-    if not target or target.get("verification_status") != "blocking":
-        raise HTTPException(404, "未找到该员工的待处理薪资差异")
+    employees_by_id = {str(row.get("employee_id") or ""): row for row in employees}
+    updated_employees: list[dict] = []
+    missing_employee_ids: list[str] = []
+    for employee_id, confirmation in normalized_confirmations.items():
+        target = employees_by_id.get(employee_id)
+        if not target:
+            missing_employee_ids.append(employee_id)
+            continue
+        choice = confirmation["choice"]
+        prefix = "previous" if choice == "previous" else "current"
+        target["hourly_rate"] = target.get(f"{prefix}_hourly_rate", target.get("hourly_rate", 0))
+        target["ratio"] = target.get(f"{prefix}_ratio", target.get("ratio", 0))
+        target["verification_status"] = "resolved"
+        target["resolution"] = f"manual_use_{choice}"
+        target["manual_note"] = confirmation["note"]
+        updated_employees.append(target)
 
-    prefix = "previous" if choice == "previous" else "current"
-    target["hourly_rate"] = target.get(f"{prefix}_hourly_rate", target.get("hourly_rate", 0))
-    target["ratio"] = target.get(f"{prefix}_ratio", target.get("ratio", 0))
-    target["verification_status"] = "resolved"
-    target["resolution"] = f"manual_use_{choice}"
-    target["manual_note"] = str(body.get("note") or "").strip()
+    if not updated_employees:
+        raise HTTPException(404, "未找到该员工的薪资差异记录，请刷新后重试")
 
-    issues = [issue for issue in verification.get("issues", []) if issue.get("employee_id") != employee_id]
+    confirmed_ids = set(normalized_confirmations) - set(missing_employee_ids)
+    issues = [issue for issue in verification.get("issues", []) if issue.get("employee_id") not in confirmed_ids]
     summary = dict(verification.get("summary", {}))
     blocking_count = sum(row.get("verification_status") == "blocking" for row in employees)
     summary["blocking_count"] = blocking_count
@@ -8042,11 +8074,20 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
         status="step2",
         error="",
     )
+    if body.get("response_mode") == "employees":
+        return {
+            "success": True,
+            "run_id": run_id,
+            "employees": updated_employees,
+            "missing_employee_ids": missing_employee_ids,
+            "verification_summary": summary,
+            "salary_summary": salary_data.get("summary", {}),
+        }
     if body.get("response_mode") == "employee":
         return {
             "success": True,
             "run_id": run_id,
-            "employee": target,
+            "employee": updated_employees[0],
             "verification_summary": summary,
             "salary_summary": salary_data.get("summary", {}),
         }
@@ -8536,8 +8577,6 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
         raise HTTPException(409, f"薪资历史核验仍有 {blocking_count} 条待处理差异，暂不能核算")
 
     try:
-        fbu_run_manager.update_run(run_id, status="processing")
-
         parser = FBUPerformanceParser()
 
         # 判断是分步模式还是一次性导入模式
@@ -8579,7 +8618,11 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
                     offline_bases,
                     run.calc_month,
                 )
-                fbu_run_manager.update_run(run_id, supplemental_leave_data=supplemental_leave_data)
+                fbu_run_manager.update_run(
+                    run_id,
+                    supplemental_leave_data=supplemental_leave_data,
+                    persist=False,
+                )
         fbu_run_manager.save_results(run_id, employees)
         completed_run = fbu_run_manager.runs.get(run_id) or fbu_run_manager.get_run(run_id)
         final_results = build_final_result_rows(completed_run.results)

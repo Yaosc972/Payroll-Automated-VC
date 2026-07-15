@@ -650,7 +650,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=interaction-speed-v4-20260714" in html
+    assert "fbu-performance.js?v=workflow-speed-v5-20260715" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():
@@ -897,10 +897,39 @@ def test_salary_confirmation_updates_local_activity_without_detail_refetch():
 
     assert "applyCurrentActivityPatch" in compact_result_area
     assert "await enterActivity" not in confirmation_area
-    assert "response_mode: 'employee'" in confirmation_area
+    assert "salaryVerificationQueue" in confirmation_area
+    assert "flushSalaryVerificationQueue" in confirmation_area
+    assert "response_mode: 'employees'" in confirmation_area
+    assert "confirmations" in confirmation_area
+    assert "}, 300)" in confirmation_area
     assert "setSalaryVerificationRowSaving(employeeId, true)" in confirmation_area
-    assert "applySalaryVerificationCompactResult" in confirmation_area
+    assert "applySalaryVerificationBatchResult" in confirmation_area
     assert "renderWorkbench();" not in confirmation_area
+
+
+def test_salary_history_upload_requests_compact_response_and_restores_verification_rows():
+    js = _js()
+    upload_area = js.split("async function uploadWorkbenchSalaryHistory", 1)[1].split(
+        "function findSalaryVerificationRowElement", 1
+    )[0]
+
+    assert "formData.append('response_mode', 'compact')" in upload_area
+    assert "employees: data.verification?.employees || data.preview?.employees || []" in upload_area
+
+
+def test_calculation_button_shows_loading_state_and_refreshes_results():
+    js = _js()
+    calculation = js.split("async function executeCalculate", 1)[1].split(
+        "el.btnCalculate", 1
+    )[0]
+
+    assert "calculationPending" in js
+    assert "button-spinner" in js
+    assert "if (state.calculationPending) return" in calculation
+    assert "state.calculationPending = true" in calculation
+    assert "state.calculationPending = false" in calculation
+    assert "state.activityStep = 'export'" in calculation
+    assert "renderWorkbenchCurrentStep" in calculation
 
 
 def test_existing_activity_opens_earliest_incomplete_input_step_before_check():
@@ -940,8 +969,8 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
     assert "getSalarySnapshotMonthLabels(activity?.calc_month)" in salary_review
     assert "${monthLabels.previous}时薪" in salary_review
     assert "${monthLabels.current}时薪" in salary_review
-    assert "按${monthLabels.previous}值" in salary_review
-    assert "按${monthLabels.current}值" in salary_review
+    assert "'按' + monthLabels.previous + '值'" in salary_review
+    assert "'按' + monthLabels.current + '值'" in salary_review
     assert 'id="salaryVerificationReview"' in salary_review
     assert 'data-employee-id="${escapeHtml(row.employee_id)}"' in salary_review
 
@@ -969,7 +998,11 @@ def test_calculate_button_is_disabled_until_precalculation_check_is_ready():
     renderer = js.split("function renderWorkbench()", 1)[1].split("function renderActivityCard", 1)[0]
 
     assert "const canCalculate = buildNeedsForStep('check', activity).length === 0" in renderer
-    assert "canCalculate ? '' : 'disabled'" in renderer
+    assert "renderCalculateButton(canCalculate)" in renderer
+    calculate_button = js.split("function renderCalculateButton", 1)[1].split(
+        "function renderWorkbench", 1
+    )[0]
+    assert "const disabled = !canCalculate || isPending" in calculate_button
 
 
 def test_workbench_initial_activity_load_cannot_stay_on_reading_placeholder():

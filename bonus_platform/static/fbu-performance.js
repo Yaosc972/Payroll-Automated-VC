@@ -46,6 +46,11 @@ const state = {
   workbenchPreviousAttendanceFile: null,
   workbenchSalaryHistoryFiles: {},
   workbenchUploadStates: {},
+  salaryVerificationQueue: [],
+  salaryVerificationPendingIds: new Set(),
+  salaryVerificationFlushTimer: null,
+  salaryVerificationFlushing: false,
+  calculationPending: false,
   tableFilters: {
     attendance: {},
     salary: {},
@@ -2050,6 +2055,17 @@ function renderWorkbenchAudit(activity) {
   `;
 }
 
+function renderCalculateButton(canCalculate) {
+  const isPending = state.calculationPending;
+  const disabled = !canCalculate || isPending;
+  return `
+    <button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()"
+      ${disabled ? 'disabled' : ''} aria-busy="${isPending ? 'true' : 'false'}">
+      ${isPending ? '<span class="button-spinner" aria-hidden="true"></span>核算中…' : '开始核算'}
+    </button>
+  `;
+}
+
 function renderWorkbench() {
   if (!el.workbenchContent) return;
   const activity = getWorkbenchActivity();
@@ -2088,7 +2104,7 @@ function renderWorkbench() {
         </div>
       </div>
       <div class="activity-title-actions">
-        ${state.activityStep === 'check' ? `<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()" ${canCalculate ? '' : 'disabled'}>开始核算</button>` : ''}
+        ${state.activityStep === 'check' ? renderCalculateButton(canCalculate) : ''}
         <button class="btn btn-secondary btn-sm activity-return-button" type="button" onclick="navigateTo('activities')">返回</button>
       </div>
     </section>
@@ -2119,7 +2135,7 @@ function renderWorkbenchCurrentStep({ preserveScroll = true } = {}) {
   const titleActions = el.workbenchContent.querySelector('.activity-title-actions');
   if (titleActions) {
     titleActions.innerHTML = `
-      ${state.activityStep === 'check' ? `<button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()" ${canCalculate ? '' : 'disabled'}>开始核算</button>` : ''}
+      ${state.activityStep === 'check' ? renderCalculateButton(canCalculate) : ''}
       <button class="btn btn-secondary btn-sm activity-return-button" type="button" onclick="navigateTo('activities')">返回</button>
     `;
   }
@@ -3399,15 +3415,20 @@ async function uploadWorkbenchSalaryHistory() {
   formData.append('previous_salary', files.previousSalary);
   formData.append('current_salary', files.currentSalary);
   formData.append('adjustments', files.salaryAdjustments);
+  formData.append('response_mode', 'compact');
   try {
     const data = await apiJson(`${API_BASE}/import-salary-history`, { method: 'POST', body: formData });
+    const verification = {
+      ...(data.verification || {}),
+      employees: data.verification?.employees || data.preview?.employees || [],
+    };
     state.salaryData = data.preview;
     state.adjustmentData = data.adjustment_preview || null;
     state.lastImportResult = {
       type: 'salary',
       hasResultFile: Boolean(data.result_file),
       filename: files.currentSalary.name,
-      summary: data.verification?.summary || data.preview?.summary || {},
+      summary: verification.summary || data.preview?.summary || {},
       at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     };
     ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
@@ -3421,7 +3442,7 @@ async function uploadWorkbenchSalaryHistory() {
       salary_file: files.currentSalary.name,
       adjustment_file: files.salaryAdjustments.name,
       salary_data: data.preview,
-      salary_verification_data: data.verification,
+      salary_verification_data: verification,
       adjustment_data: data.adjustment_preview,
       current_step: 2,
       status: 'step2',
@@ -3501,25 +3522,80 @@ function applySalaryVerificationCompactResult(activity, employeeId, data) {
   }, { invalidateResults: true });
 }
 
+function applySalaryVerificationBatchResult(activity, data) {
+  const employees = (data.employees || []).filter(Boolean);
+  if (!employees.length) return activity;
+  const employeeById = new Map(employees.map(row => [String(row.employee_id), row]));
+  const replaceEmployee = row => employeeById.get(String(row.employee_id)) || row;
+  const updatedIds = new Set(employeeById.keys());
+  const verification = {
+    ...(activity.salary_verification_data || {}),
+    employees: (activity.salary_verification_data?.employees || []).map(replaceEmployee),
+    issues: (activity.salary_verification_data?.issues || [])
+      .filter(issue => !updatedIds.has(String(issue.employee_id))),
+    summary: data.verification_summary || activity.salary_verification_data?.summary || {},
+  };
+  const salaryData = {
+    ...(activity.salary_data || {}),
+    employees: (activity.salary_data?.employees || []).map(replaceEmployee),
+    summary: data.salary_summary || activity.salary_data?.summary || {},
+  };
+  return applyCurrentActivityPatch({
+    run_id: activity.run_id,
+    salary_data: salaryData,
+    salary_verification_data: verification,
+    status: 'step2',
+  }, { invalidateResults: true });
+}
+
 async function confirmSalaryVerification(employeeId, choice) {
   const activity = getWorkbenchActivity();
-  if (!activity?.run_id) return;
+  const normalizedId = String(employeeId);
+  if (!activity?.run_id || state.salaryVerificationPendingIds.has(normalizedId)) return;
+  state.salaryVerificationPendingIds.add(normalizedId);
+  state.salaryVerificationQueue.push({ employee_id: employeeId, choice });
   setSalaryVerificationRowSaving(employeeId, true);
+  scheduleSalaryVerificationFlush();
+}
+
+function scheduleSalaryVerificationFlush() {
+  if (state.salaryVerificationFlushTimer || state.salaryVerificationFlushing) return;
+  state.salaryVerificationFlushTimer = window.setTimeout(() => {
+    state.salaryVerificationFlushTimer = null;
+    flushSalaryVerificationQueue();
+  }, 300);
+}
+
+async function flushSalaryVerificationQueue() {
+  if (state.salaryVerificationFlushing || !state.salaryVerificationQueue.length) return;
+  const activity = getWorkbenchActivity();
+  if (!activity?.run_id) return;
+
+  state.salaryVerificationFlushing = true;
+  const confirmations = state.salaryVerificationQueue.splice(0);
+  const employeeIds = confirmations.map(item => String(item.employee_id));
   try {
     const data = await apiJson(
       `${API_BASE}/runs/${activity.run_id}/salary-verification/confirm`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ employee_id: employeeId, choice, response_mode: 'employee' }),
+        body: JSON.stringify({ confirmations, response_mode: 'employees' }),
       },
     );
-    const updated = applySalaryVerificationCompactResult(activity, employeeId, data);
+    const updated = applySalaryVerificationBatchResult(getWorkbenchActivity() || activity, data);
+    employeeIds.forEach(employeeId => state.salaryVerificationPendingIds.delete(employeeId));
     refreshSalaryVerificationSections(updated);
   } catch (error) {
+    employeeIds.forEach(employeeId => {
+      state.salaryVerificationPendingIds.delete(employeeId);
+      setSalaryVerificationRowSaving(employeeId, false);
+    });
     state.inlineActionNotes.salary = `薪资差异确认失败：${error.message}`;
-    setSalaryVerificationRowSaving(employeeId, false);
     showNotification(error.message, 'error', { title: '薪资差异确认失败' });
+  } finally {
+    state.salaryVerificationFlushing = false;
+    if (state.salaryVerificationQueue.length) scheduleSalaryVerificationFlush();
   }
 }
 
@@ -4256,7 +4332,7 @@ function renderSalaryData() {
               <td>${toNumber(emp.fixed_performance_base) > 0 ? formatCurrency(emp.fixed_performance_base) : '-'}</td>
               <td>${renderSalaryQualityStatus(emp)}</td>
               <td>${emp.verification_status === 'blocking'
-                ? `<div class="table-actions"><button class="btn btn-sm btn-secondary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'previous')">按上月</button><button class="btn btn-sm btn-primary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'current')">按当月</button></div>`
+                ? `<div class="table-actions"><button class="btn btn-sm btn-secondary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'previous')" ${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? 'disabled' : ''}>${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? '确认中…' : '按上月'}</button><button class="btn btn-sm btn-primary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'current')" ${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? 'disabled' : ''}>${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? '确认中…' : '按当月'}</button></div>`
                 : escapeHtml(emp.resolution || '已核验')}</td>
             </tr>
           `).join('') : renderEmptyTableRow(12, '没有匹配的薪资记录')}
@@ -5202,6 +5278,7 @@ function renderResultsData() {
 
 async function executeCalculate() {
   if (!state.currentActivity) return;
+  if (state.calculationPending) return;
 
   const summary = state.diagnosticsData?.summary;
   if (summary?.error_count > 0) {
@@ -5215,6 +5292,8 @@ async function executeCalculate() {
     if (!dialogResult.confirmed) return;
   }
 
+  state.calculationPending = true;
+  renderWorkbenchCurrentStep();
   try {
     const data = await apiJson(`${API_BASE}/calculate/${state.currentActivity.run_id}?response_mode=compact`, {
       method: 'POST',
@@ -5231,12 +5310,14 @@ async function executeCalculate() {
       });
       state.diagnosticsData = state.currentActivity.diagnostics || null;
       state.activityStep = 'export';
-      renderWorkbenchCurrentStep({ preserveScroll: false });
     } else {
       showNotification('核算失败: ' + (data.detail || '未知错误'), 'error');
     }
   } catch (error) {
     showNotification('核算失败: ' + error.message, 'error');
+  } finally {
+    state.calculationPending = false;
+    renderWorkbenchCurrentStep({ preserveScroll: state.activityStep !== 'export' });
   }
 }
 
@@ -5911,7 +5992,9 @@ function renderSalaryVerificationReview(activity) {
             </tr>
           </thead>
           <tbody>
-            ${rows.map(row => `
+            ${rows.map(row => {
+              const isPending = state.salaryVerificationPendingIds.has(String(row.employee_id));
+              return `
               <tr class="row-warning" data-employee-id="${escapeHtml(row.employee_id)}">
                 <td>${escapeHtml(row.employee_id || '-')}</td>
                 <td>${escapeHtml(row.name || '-')}</td>
@@ -5922,12 +6005,13 @@ function renderSalaryVerificationReview(activity) {
                 <td>未匹配已完成调薪流程</td>
                 <td>
                   <div class="table-actions">
-                    <button class="btn btn-sm btn-secondary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'previous')">按${monthLabels.previous}值</button>
-                    <button class="btn btn-sm btn-primary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'current')">按${monthLabels.current}值</button>
+                    <button class="btn btn-sm btn-secondary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'previous')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.previous + '值'}</button>
+                    <button class="btn btn-sm btn-primary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'current')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.current + '值'}</button>
                   </div>
                 </td>
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </tbody>
         </table>
       </div>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 from io import BytesIO
 from pathlib import Path
+import threading
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -41,6 +42,26 @@ def test_run_metadata_is_compressed_and_old_plain_json_remains_readable(monkeypa
     plain = b'{"run_id":"legacy-run","status":"pending"}'
     monkeypatch.setattr(fbu_storage, "_download_bytes", lambda object_path: plain)
     assert fbu_storage.load_fbu_run_metadata_from_persistent("legacy-run")["run_id"] == "legacy-run"
+
+
+def test_multiple_run_files_are_uploaded_in_parallel(monkeypatch, tmp_path):
+    run_dir = tmp_path / "run-1"
+    run_dir.mkdir()
+    filenames = ["previous_salary.xlsx", "salary.xlsx", "adjustments.xlsx"]
+    for filename in filenames:
+        (run_dir / filename).write_bytes(filename.encode())
+
+    barrier = threading.Barrier(len(filenames))
+    thread_ids: set[int] = set()
+
+    def capture_upload(object_path, content, *, content_type):
+        thread_ids.add(threading.get_ident())
+        barrier.wait(timeout=2)
+
+    monkeypatch.setattr(fbu_storage, "_upload_bytes", capture_upload)
+    fbu_storage.save_fbu_files_to_persistent("run-1", run_dir, filenames)
+
+    assert len(thread_ids) == len(filenames)
 
 
 def test_download_treats_supabase_wrapped_not_found_as_missing(monkeypatch):

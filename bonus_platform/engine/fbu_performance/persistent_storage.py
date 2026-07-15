@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any, Iterable
@@ -94,16 +95,29 @@ def list_fbu_run_metadata_from_persistent() -> list[dict[str, Any]]:
 
 
 def save_fbu_files_to_persistent(run_id: str, run_dir: Path, relative_paths: Iterable[str]) -> None:
+    uploads: list[tuple[str, bytes, str]] = []
     for relative_path in _normalized_paths(relative_paths):
         path = run_dir / relative_path
         if not path.is_file() or path.name.startswith("."):
             continue
         content_type, _ = mimetypes.guess_type(path.name)
+        uploads.append((relative_path, path.read_bytes(), content_type or "application/octet-stream"))
+
+    def upload(item: tuple[str, bytes, str]) -> None:
+        relative_path, content, content_type = item
         _upload_bytes(
             _object_path(run_id, relative_path),
-            path.read_bytes(),
-            content_type=content_type or "application/octet-stream",
+            content,
+            content_type=content_type,
         )
+
+    if len(uploads) <= 1:
+        for item in uploads:
+            upload(item)
+        return
+
+    with ThreadPoolExecutor(max_workers=min(4, len(uploads))) as executor:
+        list(executor.map(upload, uploads))
 
 
 def load_fbu_file_from_persistent(run_id: str, run_dir: Path, relative_path: str) -> Path | None:
