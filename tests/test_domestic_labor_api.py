@@ -1,12 +1,13 @@
 """国内劳务工薪酬核算 API 测试"""
 from datetime import date
 from io import BytesIO
+import re
 
 import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
-from bonus_platform.app import app
+from bonus_platform.app import app, _domestic_labor_export_filename
 from bonus_platform.engine.domestic_labor.engines.canbu import CanBuEngine
 from bonus_platform.engine.domestic_labor.engines.gonglingjiang import GongLingJiangEngine
 from bonus_platform.engine.domestic_labor.engines.quanqinjiang import QuanQinJiangEngine
@@ -76,6 +77,34 @@ def test_excel_parser_supports_legacy_xls(monkeypatch, tmp_path):
     assert parsed.rows == [{"工号": "OWHN001", "姓名": "张三", "正班出勤天数": 20, "旷工天数": 1}]
 
 
+def test_payroll_loader_supports_dormitory_sheet_and_date_aliases(tmp_path):
+    """宿舍名单及入宿/离宿字段应统一为外宿引擎使用的标准字段。"""
+    path = tmp_path / "dormitory-aliases.xlsx"
+    path.write_bytes(_create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份"],
+            ["OWHN001", "张三", "202605"],
+        ],
+        "宿舍名单": [
+            ["工号", "入宿时间", "离宿时间"],
+            [" OWHN001 ", date(2026, 5, 1), date(2026, 5, 31)],
+        ],
+    }))
+
+    with domestic_parser.PayrollDataLoader(str(path)) as loader:
+        grouped = loader.group_housing_by_employee()
+
+    assert grouped == {
+        "OWHN001": [{
+            "工号": "OWHN001",
+            "入宿时间": date(2026, 5, 1),
+            "离宿时间": date(2026, 5, 31),
+            "入住时间": date(2026, 5, 1),
+            "退宿时间": date(2026, 5, 31),
+        }]
+    }
+
+
 def _quanqinjiang_data() -> bytes:
     """全勤奖测试数据"""
     return _create_test_excel({
@@ -130,7 +159,92 @@ def _gonglingjiang_data() -> bytes:
     })
 
 
+def _waisu_butie_data() -> bytes:
+    """外宿补贴平台端到端测试数据。"""
+    return _create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份", "工作地区", "一级部门名称", "岗位名称", "入职日期", "最后工作日", "外宿补贴标准", "休年假小时", "病假时数"],
+            ["OWHN001", "张三", "202606", "嘉善", "华东操作", "操作员", date(2023, 1, 1), "", 999, 0, 0],
+        ],
+        "日考勤": [
+            ["工号", "姓名", "工作地区", "岗位名称", "日期", "上班一", "下班一"],
+            ["OWHN001", "张三", "嘉善", "操作员", date(2026, 6, 12), "09:00", "18:00"],
+        ],
+        "住宿名单": [
+            ["工号", "姓名", "入住时间", "退宿时间"],
+            ["OWHN001", "张三", date(2026, 5, 1), date(2026, 6, 11)],
+        ],
+    })
+
+
 # ── 测试用例 ──
+
+
+def test_rule_package_only_publishes_verified_subjects():
+    client = TestClient(app)
+
+    response = client.get("/api/domestic-labor/rule-package")
+
+    assert response.status_code == 200
+    package = response.json()
+    assert package["package_id"] == "DL-PAYROLL"
+    assert package["version"] == "1.0.0"
+    assert package["status"] == "已发布"
+    assert {category["id"] for category in package["categories"]} == {"allowance"}
+    assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie"}
+    assert all(subject["status"] == "已验证" for subject in package["subjects"])
+    assert all(subject["version"].startswith("DL-") for subject in package["subjects"])
+    assert all(subject["verification"] for subject in package["subjects"])
+    assert all(subject["regions"] for subject in package["subjects"])
+    assert all(subject["change_log"] for subject in package["subjects"])
+    assert package["version_history"][0]["version"] == "1.0.0"
+    assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie"]
+
+
+def test_rule_package_does_not_publish_unverified_bonus_subjects():
+    client = TestClient(app)
+
+    package = client.get("/api/domestic-labor/rule-package").json()
+    payload = str(package)
+
+    assert "quanqinjiang" not in payload
+    assert "gonglingjiang" not in payload
+    assert "全勤奖" not in payload
+    assert "工龄奖" not in payload
+
+
+def test_rule_package_supports_immutable_version_lookup():
+    client = TestClient(app)
+
+    published = client.get("/api/domestic-labor/rule-package", params={"version": "1.0.0"})
+    missing = client.get("/api/domestic-labor/rule-package", params={"version": "9.9.9"})
+
+    assert published.status_code == 200
+    assert published.json()["display_version"] == "DL-PAYROLL.v1.0.0"
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == "规则包版本不存在: 9.9.9"
+
+
+@pytest.mark.parametrize(
+    ("engines", "subject_name"),
+    [
+        (["canbu"], "餐补"),
+        (["waisu_butie"], "外宿补贴"),
+        (["quanqinjiang"], "全勤奖"),
+        (["gonglingjiang"], "工龄奖"),
+        (["canbu", "waisu_butie"], "多科目"),
+    ],
+)
+def test_domestic_labor_export_filename_uses_chinese_subject_and_timestamp(engines, subject_name):
+    file_name = _domestic_labor_export_filename({
+        "engines": engines,
+        "attendanceMonth": "2026-05",
+    })
+
+    assert re.fullmatch(
+        rf"{subject_name}核算结果_202605_\d{{8}}\.xlsx",
+        file_name,
+    )
 
 
 def test_list_templates():
@@ -161,6 +275,29 @@ def test_download_template():
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     assert len(response.content) > 0
+
+
+def test_download_waisu_template_is_directly_uploadable_workbook():
+    """外宿补贴模板应包含资格、日考勤和住宿记录三类输入，且不把说明写成数据行。"""
+    client = TestClient(app)
+    response = client.get("/api/domestic-labor/templates/waisu_butie/download")
+
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.content), data_only=True)
+    assert workbook.sheetnames == ["月考勤", "日考勤", "住宿名单"]
+
+    monthly_headers = [cell.value for cell in workbook["月考勤"][1]]
+    assert {"工号", "姓名", "考勤月份", "工作地区", "一级部门名称", "岗位名称"}.issubset(monthly_headers)
+    assert {"入职日期", "最后工作日", "休年假小时", "病假时数"}.issubset(monthly_headers)
+    assert workbook["月考勤"].max_row == 1
+
+    daily_headers = [cell.value for cell in workbook["日考勤"][1]]
+    assert {"日期", "工号", "姓名", "工作地区", "岗位名称", "上班一", "下班一"}.issubset(daily_headers)
+    assert workbook["日考勤"].max_row == 1
+
+    housing_headers = [cell.value for cell in workbook["住宿名单"][1]]
+    assert housing_headers == ["工号", "姓名", "入住时间", "退宿时间"]
+    assert workbook["住宿名单"].max_row == 1
 
 
 def test_download_template_invalid_engine():
@@ -333,7 +470,7 @@ def test_full_workflow():
     export_response = client.get(f"/api/domestic-labor/runs/{run_id}/export")
     assert export_response.status_code == 200
     file_name = export_response.json()["file_name"]
-    assert "薪酬核算" in file_name
+    assert re.fullmatch(r"多科目核算结果_202606_\d{8}\.xlsx", file_name)
 
     # 5. 下载文件
     download_response = client.get(f"/api/domestic-labor/runs/{run_id}/download/{file_name}")
@@ -444,6 +581,118 @@ def test_canbu_export_outputs_business_reconciliation_sheet(tmp_path):
     assert row[6:9] == [19, 19, 9.5]
     assert row[9] == 500
     wb.close()
+
+
+def test_waisu_butie_export_outputs_business_reconciliation_sheet(tmp_path):
+    """外宿补贴单科目导出包含住宿、缺勤和补贴天数审计字段。"""
+    output_path = tmp_path / "waisu_export.xlsx"
+    exporter = ExcelExporter(str(output_path))
+    results = [{
+        "employee_id": "OWHN001",
+        "employee_name": "张三",
+        "department": "华东操作",
+        "position": "操作员",
+        "waisu_butie": 100,
+        "total": 100,
+        "warnings": "",
+        "exceptions": [],
+        "subject_details": {
+            "waisu_butie": {
+                "amount": 100,
+                "details": {
+                    "在职天数": 30,
+                    "住宿扣除天数": 10,
+                    "外宿补贴天数": 20,
+                    "缺勤时数": 0,
+                    "补贴标准": 150,
+                },
+                "audit_explanation": {
+                    "rule_name": "嘉善外宿补贴住宿与缺勤折算",
+                    "formula": "补贴标准/月天数 × 有效补贴天数",
+                    "inputs": {"工作地区": "嘉善", "岗位名称": "操作员"},
+                    "intermediate_values": {"在职天数": 30, "住宿扣除天数": 10, "外宿补贴天数": 20, "缺勤时数": 0, "补贴标准": 150},
+                    "steps": ["住宿名单扣除10天", "最终外宿补贴为100"],
+                },
+            }
+        },
+    }, {
+        "employee_id": "OWHN002",
+        "employee_name": "李四",
+        "department": "华东操作",
+        "position": "保洁",
+        "waisu_butie": 0,
+        "total": 0,
+        "warnings": "",
+        "exceptions": [],
+        "subject_details": {
+            "waisu_butie": {
+                "amount": 0,
+                "details": {"reason": "嘉善外宿补贴资格不满足"},
+                "audit_explanation": {
+                    "rule_name": "嘉善外宿补贴资格判断",
+                    "inputs": {"工作地区": "嘉善", "岗位名称": "保洁"},
+                },
+            }
+        },
+    }]
+
+    exporter.export(results, "202606", {"total_employees": 1})
+
+    wb = load_workbook(output_path)
+    assert wb.sheetnames == ["计算详情"]
+    ws = wb["计算详情"]
+    assert [cell.value for cell in ws[1]] == [
+        "工号", "姓名", "工作地区", "部门", "岗位", "外宿补贴口径",
+        "在职天数", "住宿扣除天数", "外宿补贴天数", "缺勤时数",
+        "补贴标准", "应发外宿补贴", "异常/提示",
+    ]
+    assert [cell.value for cell in ws[2]][:12] == [
+        "OWHN001", "张三", "嘉善", "华东操作", "操作员", "嘉善外宿补贴",
+        30, 10, 20, 0, 150, 100,
+    ]
+    assert ws.cell(3, 6).value == "嘉善外宿补贴"
+    assert ws.cell(3, 13).value == "嘉善外宿补贴资格不满足"
+    wb.close()
+
+
+def test_waisu_butie_full_api_workflow_exposes_audit_and_export():
+    """外宿补贴完整流程：上传、计算、审计、导出和下载。"""
+    client = TestClient(app)
+    create_response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("waisu.xlsx", _waisu_butie_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"engines": "waisu_butie", "attendance_month": "202606"},
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.25)
+        metadata = client.get(f"/api/domestic-labor/runs/{run_id}").json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    assert metadata["summary"]["total_waisu_butie"] == 100
+    row = metadata["results"][0]
+    assert row["waisu_butie"] == 100
+    assert row["subject_details"]["waisu_butie"]["details"]["外宿补贴天数"] == 20
+    assert row["subject_details"]["waisu_butie"]["details"]["补贴标准"] == 150
+    assert row["subject_details"]["waisu_butie"]["audit_explanation"]["rule_name"] == "嘉善外宿补贴住宿与缺勤折算"
+
+    export_response = client.get(f"/api/domestic-labor/runs/{run_id}/export")
+    assert export_response.status_code == 200
+    file_name = export_response.json()["file_name"]
+    assert re.fullmatch(r"外宿补贴核算结果_202606_\d{8}\.xlsx", file_name)
+    download_response = client.get(f"/api/domestic-labor/runs/{run_id}/download/{file_name}")
+    assert download_response.status_code == 200
+    wb = load_workbook(BytesIO(download_response.content))
+    assert wb.sheetnames == ["计算详情"]
+    assert wb["计算详情"]["L2"].value == 100
+    wb.close()
+
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
 def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
@@ -797,6 +1046,377 @@ def test_waisu_butie_returns_audit_explanation():
     assert explanation["formula"] == "补贴标准/月天数 × 有效补贴天数"
     assert explanation["intermediate_values"]["外宿补贴天数"] == 30
     assert explanation["steps"]
+
+
+def test_waisu_butie_dongguan_ineligible_position_gets_zero():
+    """东莞外宿补贴按岗位不享有名单排除"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "保洁",
+        "考勤月份": "202606",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 0
+    assert result.details["reason"] == "东莞外宿补贴资格不满足"
+    assert result.details["audit_explanation"]["intermediate_values"]["岗位是否明确不享有"] is True
+
+
+def test_waisu_butie_dongguan_absence_excludes_annual_leave_hours():
+    """东莞缺勤满56小时不包含休年假小时"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "考勤月份": "202606",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "排班天数": 26,
+        "实际在职工作日天数": 26,
+        "事假时数": 16,
+        "排休请假时数": 16,
+        "病假时数": 8,
+        "旷工时数": 0,
+        "休年假小时": 16,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 150
+    assert result.details["缺勤时数"] == 40
+    assert explanation["rule_name"] == "东莞外宿补贴住宿与缺勤折算"
+    assert explanation["intermediate_values"]["休年假小时"] == 16
+
+
+def test_waisu_butie_dongguan_slash_standard_does_not_block_rule_calculation():
+    """外宿补贴标准为/时不再作为资格依据"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "考勤月份": "202606",
+        "外宿补贴标准": "/",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 150
+
+
+def test_waisu_butie_ignores_uploaded_standard_value():
+    """上传的外宿补贴标准不参与资格或金额计算。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "考勤月份": "202606",
+        "外宿补贴标准": "999",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 150
+    assert result.details["补贴标准"] == 150
+
+
+def test_waisu_butie_jiashan_mid_month_checkout_keeps_checkout_day_external():
+    """嘉善退宿当天开始享有外宿补贴。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": "操作员",
+        "考勤月份": "202606",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+    housing_records = [{"工号": "OWHN001", "入住时间": date(2026, 5, 1), "退宿时间": date(2026, 6, 11)}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records)
+
+    assert result.amount == 100
+    assert result.details["外宿补贴天数"] == 20
+    assert result.details["audit_explanation"]["rule_name"] == "嘉善外宿补贴住宿与缺勤折算"
+
+
+def test_waisu_butie_yiwu_mid_month_checkout_keeps_checkout_day_external():
+    """义乌沿用原规则，退宿当天开始享有外宿补贴。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "义乌",
+        "岗位名称": "仓库文员",
+        "考勤月份": "202606",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+    housing_records = [{"工号": "OWHN001", "入住时间": date(2026, 5, 1), "退宿时间": date(2026, 6, 11)}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records)
+
+    assert result.amount == 100
+    assert result.details["外宿补贴天数"] == 20
+
+
+def test_waisu_butie_jiashan_absence_includes_annual_leave_and_weights_sick_leave():
+    """嘉善请假总时数包含年假小时，病假小时按60%计入。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+        "休年假小时": 8,
+        "病假时数": 80,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.details["缺勤时数"] == 56
+    assert result.amount == 116.13
+
+
+@pytest.mark.parametrize("work_area", ["嘉善", "义乌"])
+def test_waisu_butie_jiashan_yiwu_absence_includes_paid_leave_types(work_area):
+    """嘉善/义乌请假总时数包含年假、婚假、陪产假和工伤假。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": work_area,
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+        "休年假小时": 8,
+        "婚假天数": 2,
+        "陪产假天数": 2,
+        "工伤假天数": 2,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.details["缺勤时数"] == 56
+    assert result.amount == 116.13
+
+
+@pytest.mark.parametrize("position", ["数据专员", "保洁", "操作文员"])
+def test_waisu_butie_jiashan_confirmed_positions_are_eligible(position):
+    """薪酬确认的数据专员、保洁、操作文员享有嘉善外宿补贴。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": position,
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 150
+
+
+def test_waisu_butie_jiashan_mid_month_exit_still_deducts_absence_over_56_hours():
+    """嘉善当月离职人员也按请假总时数满56小时扣减。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": date(2026, 5, 18),
+        "旷工天数": 9,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.details["缺勤时数"] == 72
+    assert result.amount == 43.55
+
+
+def test_waisu_butie_jinjiang_deducts_entry_exit_and_leave_days():
+    """晋江外宿补贴按入离职自然日和请假旷工天数扣减"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "晋江",
+        "岗位名称": "操作员",
+        "考勤月份": "202606",
+        "外宿补贴标准": "150",
+        "入职日期": date(2026, 6, 6),
+        "最后工作日": None,
+        "事假时数": 24,
+        "病假时数": 16,
+        "旷工天数": 2,
+        "排休请假天数": 1,
+        "休年假小时": 16,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 75
+    assert explanation["rule_name"] == "晋江外宿补贴月考勤扣减"
+    assert explanation["intermediate_values"]["入离职缺勤自然日天数"] == 5
+    assert explanation["intermediate_values"]["请假旷工天数"] == 10
+
+
+def test_waisu_butie_jinjiang_same_month_hire_and_exit_uses_exit_days_only():
+    """晋江同月入职又离职时线下只扣最后工作日后的自然日"""
+    employee = {
+        "工号": "OWDN0243",
+        "姓名": "吴绍阳",
+        "工作地区": "晋江",
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2026, 5, 5),
+        "最后工作日": date(2026, 5, 15),
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+        "排休请假天数": 0,
+        "休年假小时": 0,
+    }
+    daily_attendance = [{"工号": "OWDN0243", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+    explanation = result.details["audit_explanation"]
+
+    assert result.amount == 72.58
+    assert explanation["intermediate_values"]["入离职缺勤自然日天数"] == 16
+    assert explanation["intermediate_values"]["入离职扣减"] == 77.42
+
+
+def test_waisu_butie_mid_month_exit_without_punches_still_prorates():
+    """月中离职无打卡时仍按线下入离职天数折算"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "监察员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2024, 7, 24),
+        "最后工作日": date(2026, 5, 4),
+        "排班天数": 22,
+        "实际在职工作日天数": 3,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "", "下班一": ""} for _ in range(4)]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 19.35
+    assert result.details["在职天数"] == 4
+
+
+def test_waisu_butie_first_day_exit_without_punches_gets_zero():
+    """当月首日离职且无打卡时线下不发外宿补贴"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2024, 10, 22),
+        "最后工作日": date(2026, 5, 1),
+        "排班天数": 22,
+        "实际在职工作日天数": 0,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "", "下班一": ""}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 0
+    assert result.details["reason"] == "首日离职且无打卡"
+
+
+def test_waisu_butie_checkout_on_last_workday_keeps_checkout_day_external():
+    """退宿日等于最后工作日，当天仍享有外宿补贴。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "/",
+        "入职日期": date(2026, 5, 14),
+        "最后工作日": date(2026, 5, 18),
+        "排班天数": 22,
+        "实际在职工作日天数": 3,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+    housing_records = [{"工号": "OWHN001", "入住时间": date(2026, 5, 12), "退宿时间": date(2026, 5, 18)}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records)
+
+    assert result.amount == 4.84
+    assert result.details["外宿补贴天数"] == 1
+
+
+def test_waisu_butie_active_housing_and_absence_over_56_gets_zero():
+    """入住未退宿且缺勤满56小时按线下结果不发外宿补贴"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "考勤月份": "202605",
+        "外宿补贴标准": "150",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+        "病假时数": 64,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+    housing_records = [{"工号": "OWHN001", "入住时间": date(2026, 5, 13), "退宿时间": None}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records)
+
+    assert result.amount == 0
+    assert result.details["reason"] == "在宿且缺勤满56小时"
 
 
 def test_gonglingjiang_returns_structured_exception_for_missing_hrbp_list():

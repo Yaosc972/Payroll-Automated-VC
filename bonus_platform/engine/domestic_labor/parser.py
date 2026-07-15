@@ -352,8 +352,33 @@ class PayrollDataLoader:
         if self._housing is None:
             sheet_names = self.parser.get_sheet_names()
             for name in sheet_names:
-                if "住宿" in name:
-                    self._housing = self.parser.parse_sheet(name)
+                if "住宿" in name or "宿舍" in name:
+                    raw = self.parser.parse_sheet(name)
+                    normalized_rows = []
+                    for row in raw.rows:
+                        normalized = dict(row)
+                        emp_id = str(normalized.get("工号", "") or "").strip()
+                        if not emp_id:
+                            continue
+                        normalized["工号"] = emp_id
+                        for canonical, aliases in {
+                            "入住时间": ("入住时间", "入宿时间"),
+                            "退宿时间": ("退宿时间", "离宿时间"),
+                        }.items():
+                            value = next((normalized.get(alias) for alias in aliases if normalized.get(alias) not in (None, "")), None)
+                            if isinstance(value, datetime):
+                                value = value.date()
+                            normalized[canonical] = value
+                            for alias in aliases:
+                                if alias in normalized and isinstance(normalized[alias], datetime):
+                                    normalized[alias] = normalized[alias].date()
+                        normalized_rows.append(normalized)
+                    self._housing = SheetData(
+                        name=raw.name,
+                        headers=raw.headers,
+                        rows=normalized_rows,
+                        row_count=len(normalized_rows),
+                    )
                     return self._housing
         return self._housing
 
@@ -383,7 +408,9 @@ class PayrollDataLoader:
             return {}
         result = {}
         for row in self.housing.rows:
-            emp_id = str(row.get("工号", ""))
+            emp_id = str(row.get("工号", "")).strip()
+            if not emp_id:
+                continue
             if emp_id not in result:
                 result[emp_id] = []
             result[emp_id].append(row)

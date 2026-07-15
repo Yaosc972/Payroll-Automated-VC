@@ -32,6 +32,11 @@ class ExcelExporter:
     CANBU_HEADERS = [
         "工号", "姓名", "工作地区", "部门", "岗位", "餐补口径",
     ]
+    WAISU_HEADERS = [
+        "工号", "姓名", "工作地区", "部门", "岗位", "外宿补贴口径",
+        "在职天数", "住宿扣除天数", "外宿补贴天数", "缺勤时数",
+        "补贴标准", "应发外宿补贴", "异常/提示",
+    ]
     GENERAL_HEADERS = [
         "工号", "姓名", "工作地区", "部门", "岗位",
         "全勤奖", "餐补", "外宿补贴", "工龄奖", "应发合计",
@@ -67,7 +72,7 @@ class ExcelExporter:
         ws_detail.title = "计算详情"
         self._write_detail_sheet(ws_detail, cleaned_results)
 
-        if self._is_canbu_only(cleaned_results):
+        if self._is_canbu_only(cleaned_results) or self._is_waisu_only(cleaned_results):
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
             wb.save(str(self.output_path))
             wb.close()
@@ -94,6 +99,9 @@ class ExcelExporter:
         """Write detail sheet."""
         if self._is_canbu_only(results):
             self._write_canbu_detail_sheet(ws, results)
+            return
+        if self._is_waisu_only(results):
+            self._write_waisu_detail_sheet(ws, results)
             return
 
         headers = self.GENERAL_HEADERS
@@ -185,6 +193,44 @@ class ExcelExporter:
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
 
+    def _write_waisu_detail_sheet(self, ws, results: List[Dict[str, Any]]):
+        """Write housing allowance details for payroll review."""
+        for col, header in enumerate(self.WAISU_HEADERS, 1):
+            self._write_header_cell(ws, 1, col, header)
+
+        for row_idx, result in enumerate(results, 2):
+            detail = self._subject_detail(result, "waisu_butie")
+            audit = self._subject_audit(result, "waisu_butie")
+            inputs = audit.get("inputs", {}) if audit else {}
+            intermediate = audit.get("intermediate_values", {}) if audit else {}
+            final_amount = self._number(result.get("waisu_butie", detail.get("amount", 0)))
+            work_area = inputs.get("工作地区", intermediate.get("工作地区", ""))
+            values = [
+                result.get("employee_id", ""),
+                result.get("employee_name", ""),
+                work_area,
+                result.get("department", ""),
+                result.get("position", inputs.get("岗位名称", intermediate.get("岗位名称", ""))),
+                f"{work_area}外宿补贴" if work_area else "外宿补贴",
+                detail.get("在职天数", intermediate.get("在职天数", "")),
+                detail.get("住宿扣除天数", intermediate.get("住宿扣除天数", "")),
+                detail.get("外宿补贴天数", intermediate.get("外宿补贴天数", "")),
+                detail.get("缺勤时数", intermediate.get("缺勤时数", "")),
+                detail.get("补贴标准", intermediate.get("补贴标准", "")),
+                final_amount,
+                self._format_waisu_note(result, detail),
+            ]
+            for col, value in enumerate(values, 1):
+                self._write_body_cell(ws, row_idx, col, value)
+
+            if final_amount <= 0 or result.get("warnings") or result.get("exceptions"):
+                for col in range(1, len(self.WAISU_HEADERS) + 1):
+                    ws.cell(row=row_idx, column=col).fill = self.WARNING_FILL
+
+        self._set_widths(ws, [14, 12, 12, 18, 14, 24, 12, 14, 14, 12, 12, 14, 42])
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
     def _write_summary_sheet(self, ws, attendance_month: str, summary: Dict[str, Any], results: List[Dict[str, Any]]):
         """Write summary sheet."""
         ws.cell(row=1, column=1, value="AI薪酬核算汇总").font = Font(bold=True, size=14)
@@ -253,15 +299,22 @@ class ExcelExporter:
 
     @classmethod
     def _is_canbu_only(cls, results: List[Dict[str, Any]]) -> bool:
+        return cls._present_subjects(results) == {"canbu"}
+
+    @classmethod
+    def _is_waisu_only(cls, results: List[Dict[str, Any]]) -> bool:
+        return cls._present_subjects(results) == {"waisu_butie"}
+
+    @classmethod
+    def _present_subjects(cls, results: List[Dict[str, Any]]) -> set:
         if not results:
-            return False
-        present_subjects = {
+            return set()
+        return {
             key
             for result in results
             for key, _label in cls.SUBJECTS
             if result.get(key, 0) or key in (result.get("subject_details") or {})
         }
-        return present_subjects == {"canbu"}
 
     @classmethod
     def _subject_detail(cls, result: Dict[str, Any], subject: str) -> Dict[str, Any]:
@@ -370,6 +423,13 @@ class ExcelExporter:
             if message:
                 pieces.append(message)
         return "\n".join(pieces)
+
+    @classmethod
+    def _format_waisu_note(cls, result: Dict[str, Any], detail: Dict[str, Any]) -> str:
+        warning = cls._format_warning(result)
+        if warning:
+            return warning
+        return str(detail.get("reason") or "")
 
     def _write_header_cell(self, ws, row: int, col: int, value: Any) -> None:
         cell = ws.cell(row=row, column=col, value=value)
