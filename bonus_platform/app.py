@@ -34,6 +34,7 @@ from .engine.domestic_labor.parser import PayrollDataLoader
 from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
 from .engine.domestic_labor.exporter import ExcelExporter
+from .engine.domestic_labor.rule_package import get_rule_package
 from .engine.domestic_labor.runs import (
     create_payroll_run, update_payroll_metadata, load_payroll_metadata,
     list_payroll_metadata, get_payroll_run_dir, attach_payroll_file, safe_payroll_filename,
@@ -6867,6 +6868,36 @@ PAYROLL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 payroll_logger = logging.getLogger("bonus_platform.payroll")
 
+DOMESTIC_LABOR_SUBJECT_NAMES = {
+    "canbu": "餐补",
+    "waisu_butie": "外宿补贴",
+    "quanqinjiang": "全勤奖",
+    "gonglingjiang": "工龄奖",
+}
+
+
+def _domestic_labor_export_filename(metadata: dict) -> str:
+    engines = [engine for engine in metadata.get("engines", []) if engine]
+    if len(engines) == 1:
+        subject_name = DOMESTIC_LABOR_SUBJECT_NAMES.get(engines[0], "薪酬")
+    elif len(engines) > 1:
+        subject_name = "多科目"
+    else:
+        subject_name = "薪酬"
+
+    month_digits = re.sub(r"\D", "", str(metadata.get("attendanceMonth", "")))
+    attendance_month = month_digits[:6] if len(month_digits) >= 6 else "未指定月份"
+    exported_at = datetime.now().strftime("%Y%m%d")
+    return f"{subject_name}核算结果_{attendance_month}_{exported_at}.xlsx"
+
+
+@app.get("/api/domestic-labor/rule-package")
+def get_domestic_labor_rule_package(version: str = "") -> dict:
+    try:
+        return get_rule_package(version)
+    except KeyError as exc:
+        raise HTTPException(404, f"规则包版本不存在: {version}") from exc
+
 
 def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> None:
     """Attach one engine result while keeping the legacy flat response fields."""
@@ -7050,7 +7081,7 @@ def export_domestic_labor(run_id: str) -> dict:
     results = metadata.get("results", [])
     if not results:
         raise HTTPException(400, "暂无计算结果可导出")
-    file_name = f"薪酬核算_{metadata.get('attendanceMonth', '')}_{run_id}.xlsx"
+    file_name = _domestic_labor_export_filename(metadata)
     out_path = PAYROLL_OUTPUT_DIR / file_name
     exporter = ExcelExporter(str(out_path))
     summary = metadata.get("summary", {})

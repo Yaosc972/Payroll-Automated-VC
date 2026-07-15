@@ -634,6 +634,22 @@
         line-height: 1.55;
       }
 
+      .dl-subject-card .dl-subject-line-tag {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        min-height: 24px;
+        padding: 3px 8px;
+        border: 1px solid rgba(37, 99, 235, 0.2);
+        border-radius: 4px;
+        background: #EEF4FF;
+        color: #2563EB;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 16px;
+        white-space: nowrap;
+      }
+
       .dl-subject-card em {
         align-self: flex-start;
         margin-top: auto;
@@ -652,6 +668,7 @@
       }
 
       .dl-subject-kicker {
+        padding-right: 64px;
         color: #6B7A90;
         font-size: 11px;
         font-weight: 800;
@@ -670,6 +687,148 @@
       .dl-subject-recent {
         background: rgba(255, 255, 255, 0.9);
       }
+
+      .dl-rule-package-entry {
+        position: absolute;
+        z-index: 2;
+        top: 24px;
+        right: 24px;
+        width: auto;
+        min-width: 250px;
+        padding: 12px 14px;
+        border: 1px solid rgba(147, 197, 253, 0.78);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--dl-ink);
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        text-align: left;
+        cursor: pointer;
+        box-shadow: 0 8px 22px rgba(30, 58, 138, 0.06);
+        backdrop-filter: blur(12px);
+      }
+
+      .dl-rule-package-entry:hover {
+        border-color: var(--dl-accent);
+        background: #F8FBFF;
+      }
+
+      .dl-rule-entry-copy { display: grid; gap: 5px; }
+      .dl-rule-entry-copy span,
+      .dl-rule-entry-meta { color: var(--dl-muted); font-size: 12px; font-weight: 700; }
+      .dl-rule-entry-copy strong { font-size: 15px; font-weight: 850; }
+      .dl-rule-entry-action { color: var(--dl-accent); font-size: 13px; font-weight: 800; }
+
+      .dl-rule-package-shell { display: grid; gap: 16px; }
+      .dl-rule-package-head { padding: 20px; }
+      .dl-rule-package-head .dl-panel-head { margin: 0; }
+      .dl-rule-version-control { display: grid; gap: 6px; color: var(--dl-muted); font-size: 11px; font-weight: 750; }
+      .dl-rule-version-control select {
+        min-width: 190px;
+        min-height: 38px;
+        padding: 0 34px 0 11px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 6px;
+        background: #FFFFFF;
+        color: var(--dl-ink);
+        font: inherit;
+      }
+
+      .dl-rule-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border-top: 1px solid var(--dl-line);
+        margin-top: 18px;
+      }
+
+      .dl-rule-summary-item { padding: 16px 18px 0 0; }
+      .dl-rule-summary-item span { display: block; margin-bottom: 5px; color: var(--dl-muted); font-size: 11px; font-weight: 750; }
+      .dl-rule-summary-item strong { display: block; font-size: 18px; font-weight: 850; overflow-wrap: anywhere; }
+
+      .dl-rule-layout {
+        display: grid;
+        grid-template-columns: 240px minmax(0, 1fr);
+        gap: 16px;
+      }
+
+      .dl-rule-sidebar,
+      .dl-rule-content,
+      .dl-rule-history { padding: 18px; }
+      .dl-rule-section-label { margin: 0 0 10px; color: var(--dl-muted); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+      .dl-rule-category-tabs,
+      .dl-rule-subject-tabs { display: grid; gap: 6px; }
+      .dl-rule-subject-tabs { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--dl-line); }
+
+      .dl-rule-tab {
+        width: 100%;
+        min-height: 38px;
+        padding: 0 11px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--dl-muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        text-align: left;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 750;
+      }
+
+      .dl-rule-tab.active {
+        border-color: rgba(37, 99, 235, 0.22);
+        background: var(--dl-accent-soft);
+        color: var(--dl-accent);
+      }
+
+      .dl-rule-status {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #EAF8EF;
+        color: #167044;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .dl-rule-subject-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 18px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--dl-line);
+      }
+
+      .dl-rule-subject-head h2 { margin: 3px 0 7px; font-size: 24px; }
+      .dl-rule-subject-head p { margin: 0; color: var(--dl-muted); line-height: 1.65; }
+      .dl-rule-version-tag { color: var(--dl-accent); font-size: 12px; font-weight: 800; white-space: nowrap; }
+      .dl-rule-block { padding: 18px 0; border-bottom: 1px solid var(--dl-line); }
+      .dl-rule-block:last-child { border-bottom: 0; padding-bottom: 0; }
+      .dl-rule-block h3 { margin: 0 0 10px; font-size: 15px; }
+      .dl-rule-list { margin: 0; padding-left: 20px; color: #40506A; line-height: 1.75; }
+
+      .dl-rule-region-grid { display: grid; gap: 10px; }
+      .dl-rule-region {
+        padding: 14px;
+        border: 1px solid var(--dl-line);
+        border-radius: 8px;
+        background: #FBFCFE;
+      }
+      .dl-rule-region-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .dl-rule-region-head strong { font-size: 14px; }
+      .dl-rule-formula { color: var(--dl-accent); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 700; }
+      .dl-rule-region p { margin: 9px 0; color: #40506A; line-height: 1.6; }
+      .dl-rule-region .dl-rule-list { font-size: 13px; }
+
+      .dl-rule-loading { min-height: 260px; display: grid; place-items: center; color: var(--dl-muted); }
+      .dl-rule-history .dl-table-wrap { margin-top: 12px; }
 
       .dl-actions-inline {
         display: flex;
@@ -2114,10 +2273,53 @@
         .dl-upload-row { grid-template-columns: 1fr; }
 
         .dl-topbar {
-          grid-template-columns: 1fr;
+          position: static;
+          flex-direction: column;
+          align-items: stretch;
           min-height: auto;
-          padding: 22px 18px;
+          gap: 8px;
+          padding: 10px 16px;
         }
+        .dl-topbar-left { flex-direction: column; align-items: stretch; gap: 8px; }
+        .dl-title-lockup { gap: 8px; }
+        .dl-title-lockup img { width: 24px; height: 24px; }
+        .dl-title-lockup strong { font-size: 15px; }
+        .dl-top-nav {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 6px;
+          padding: 7px 0 0;
+          border-top: 1px solid var(--dl-line);
+          border-left: 0;
+        }
+        .dl-top-nav a { justify-content: center; min-height: 32px; padding: 0 8px; }
+        .dl-topbar-right { display: none; }
+        .dl-rule-package-entry {
+          position: static;
+          width: min(250px, 100%);
+          min-width: 0;
+          margin-left: auto;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 10px;
+        }
+        .dl-rule-package-head .dl-panel-head { flex-direction: column; align-items: stretch; }
+        .dl-rule-package-head .dl-actions-inline {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          align-items: end;
+        }
+        .dl-rule-package-head .dl-btn { width: 100%; min-width: 104px; }
+        .dl-rule-version-control select { width: 100%; min-width: 0; }
+        .dl-rule-layout { grid-template-columns: 1fr; }
+        .dl-rule-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .dl-rule-category-tabs,
+        .dl-rule-subject-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .dl-rule-subject-tabs { margin-top: 12px; padding-top: 12px; }
+        .dl-rule-subject-tabs .dl-rule-section-label { grid-column: 1 / -1; }
+        .dl-rule-summary-item strong { font-size: 15px; }
+        .dl-rule-summary-item:first-child strong { font-size: 13px; white-space: nowrap; }
+        .dl-rule-subject-head { flex-direction: column; }
+        .dl-rule-region-head { align-items: flex-start; flex-direction: column; }
         .dl-brand-row { gap: 16px; }
         .dl-logo { width: 62px; height: 62px; }
         .dl-logo img { max-width: 58px; max-height: 58px; }
@@ -2143,13 +2345,14 @@
           <strong>国内劳务薪酬中台</strong>
         </a>
         <nav class="dl-top-nav" aria-label="国内劳务模块">
-          <a class="active" href="#subjectHomeView">薪酬科目</a>
-          <a href="#canbuBatchListView">批次列表</a>
+          <a class="active" id="navSubjectHome" href="#subjectHomeView">薪酬科目</a>
+          <a id="navBatchList" href="#canbuBatchListView">批次列表</a>
+          <a id="navRulePackage" href="#rulePackageView">规则包</a>
         </nav>
       </div>
       <div class="dl-topbar-right">
         <span class="dl-top-meta">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
-        <span class="dl-top-meta">规则包 <strong>DL-PAYROLL.v1</strong></span>
+        <span class="dl-top-meta">规则包 <strong>当前版 1.0.0</strong></span>
         <span class="dl-top-meta is-warn" id="batchStatusText">草稿</span>
         <span class="dl-top-meta" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
       </div>
@@ -2160,13 +2363,22 @@
         <section class="dl-view active" id="subjectHomeView" data-view="home">
           <div class="dl-metrics kpi-6col" id="kpiBanner" hidden></div>
           <div class="dl-panel dl-subject-hero">
+            <button class="dl-rule-package-entry" id="rulePackageEntry" type="button">
+              <span class="dl-rule-entry-copy">
+                <span>核算规则包</span>
+                <strong>当前版本 1.0.0</strong>
+                <span>补贴类 · 已验证科目 2</span>
+              </span>
+              <span class="dl-rule-entry-action">查看规则 →</span>
+            </button>
             <div class="dl-subject-hero-layout">
               <div class="dl-subject-copy">
                 <span class="dl-subject-eyebrow">DOMESTIC LABOR PAYROLL</span>
                 <h1 class="dl-subject-title">国内劳务薪酬核算</h1>
-                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放餐补核算，后续按同一批次结构扩展工龄奖、全勤奖和外宿补贴。</p>
+                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放餐补与外宿补贴核算，后续按同一批次结构扩展工龄奖和全勤奖。</p>
                 <div class="dl-subject-grid" id="subjectCardGrid">
                   <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
+                    <span class="dl-subject-line-tag">操作线</span>
                     <span class="dl-subject-kicker">Meal Allowance · 已开放</span>
                     <strong>餐补核算</strong>
                     <span>支持东莞逐日餐补、嘉善/义乌月度口径、批次留存和导出归档。</span>
@@ -2174,22 +2386,25 @@
                   </button>
                   <div class="dl-subject-secondary">
                     <button class="dl-subject-card" data-subject-entry="gonglingjiang" type="button">
+                      <span class="dl-subject-line-tag">操作线</span>
                       <span class="dl-subject-kicker">Seniority Bonus</span>
                       <strong>工龄奖</strong>
                       <span>按工龄阶梯和地区口径核算。</span>
                       <em>待接入</em>
                     </button>
                     <button class="dl-subject-card" data-subject-entry="quanqinjiang" type="button">
+                      <span class="dl-subject-line-tag">操作线</span>
                       <span class="dl-subject-kicker">Attendance Bonus</span>
                       <strong>全勤奖</strong>
                       <span>按出勤、迟到、旷工规则核算。</span>
                       <em>待接入</em>
                     </button>
-                    <button class="dl-subject-card" data-subject-entry="waisu_butie" type="button">
-                      <span class="dl-subject-kicker">Housing Allowance</span>
-                      <strong>外宿补贴</strong>
-                      <span>按住宿资格和出勤扣减核算。</span>
-                      <em>待接入</em>
+                    <button class="dl-subject-card primary" data-subject-entry="waisu_butie" type="button">
+                      <span class="dl-subject-line-tag">操作线</span>
+                      <span class="dl-subject-kicker">Housing Allowance · 已开放</span>
+                      <strong>外宿补贴核算</strong>
+                      <span>按实际入住、退宿日期和缺勤口径核算。</span>
+                      <em>进入核算 →</em>
                     </button>
                   </div>
                 </div>
@@ -2208,12 +2423,57 @@
           </section>
         </section>
 
+        <section class="dl-view" id="rulePackageView" data-view="rulePackage" hidden>
+          <div class="dl-rule-package-shell">
+            <section class="dl-panel dl-rule-package-head">
+              <div class="dl-panel-head">
+                <div>
+                  <p class="dl-subject-eyebrow">RULE PACKAGE</p>
+                  <h1 class="dl-panel-title" id="rulePackageTitle">国内劳务薪酬核算规则包</h1>
+                  <p class="dl-panel-sub" id="rulePackageScope">仅展示平台已使用真实线下数据验证通过的核算科目。</p>
+                </div>
+                <div class="dl-actions-inline">
+                  <label class="dl-rule-version-control">
+                    <span>规则包版本</span>
+                    <select id="rulePackageVersionSelect" aria-label="选择规则包版本">
+                      <option>DL-PAYROLL.v1.0.0 · 当前</option>
+                    </select>
+                  </label>
+                  <button class="dl-btn" id="btnBackFromRules" type="button">返回科目首页</button>
+                </div>
+              </div>
+              <div class="dl-rule-summary" id="rulePackageSummary"></div>
+            </section>
+
+            <div class="dl-rule-layout">
+              <aside class="dl-panel dl-rule-sidebar" aria-label="规则分类与科目">
+                <p class="dl-rule-section-label">规则分类</p>
+                <div class="dl-rule-category-tabs" id="rulePackageCategoryTabs"></div>
+                <div class="dl-rule-subject-tabs" id="rulePackageSubjectTabs"></div>
+              </aside>
+              <section class="dl-panel dl-rule-content" id="rulePackageContent">
+                <div class="dl-rule-loading">正在读取已发布规则...</div>
+              </section>
+            </div>
+
+            <section class="dl-panel dl-rule-history">
+              <div class="dl-panel-head">
+                <div>
+                  <h2 class="dl-panel-title">版本历史</h2>
+                  <p class="dl-panel-sub">规则版本按发布记录留存，历史版本不覆盖。</p>
+                </div>
+              </div>
+              <div class="dl-table-wrap" id="rulePackageHistory"></div>
+            </section>
+          </div>
+        </section>
+
         <section class="dl-view" id="canbuBatchListView" data-view="canbuBatches" hidden>
           <div class="dl-panel">
             <div class="dl-panel-head">
               <div>
-                <h2 class="dl-panel-title">餐补核算批次</h2>
-                <p class="dl-panel-sub">一个批次对应一次可回看的餐补核算，同一月份可保留多次试算或复算。</p>
+                <h2 class="dl-panel-title" id="subjectBatchListTitle">餐补核算批次</h2>
+                <p class="dl-panel-sub" id="subjectBatchListSub">一个批次对应一次可回看的餐补核算，同一月份可保留多次试算或复算。</p>
               </div>
               <div class="dl-actions-inline">
                 <button class="dl-btn" id="btnBackHome" type="button">返回科目首页</button>
@@ -2236,7 +2496,7 @@
       <div class="dl-modal">
         <div class="dl-modal-head">
           <h2 class="dl-modal-title" id="canbuBatchModalTitle">新建餐补批次</h2>
-          <p class="dl-modal-sub">选择本次餐补核算月份，创建后进入数据上传流程。</p>
+          <p class="dl-modal-sub" id="subjectBatchModalSub">选择本次餐补核算月份，创建后进入数据上传流程。</p>
         </div>
         <div class="dl-modal-body">
           <label class="dl-month-field">
@@ -2272,7 +2532,7 @@
       <div class="dl-modal dl-calc-modal">
         <div class="dl-modal-head">
           <h2 class="dl-modal-title" id="calcModalTitle">计算过程</h2>
-          <p class="dl-modal-sub">展示本员工餐补的规则来源、关键输入和计算公式。</p>
+          <p class="dl-modal-sub" id="calcModalSub">展示本员工核算的规则来源、关键输入和计算公式。</p>
         </div>
         <div class="dl-modal-body" id="calcModalBody"></div>
         <div class="dl-modal-foot">

@@ -14,6 +14,7 @@ const state = {
   view: 'home',
   canbuBatches: [],
   activeCanbuBatchId: '',
+  activeWorkbenchSubject: 'canbu',
   activeSubject: 'all',
   resultSearch: '',
   reviewStatusFilter: 'all',
@@ -23,6 +24,10 @@ const state = {
   canbuPageSize: 50,
   canbuSearchComposing: false,
   canbuBatchPickerYear: new Date().getFullYear(),
+  rulePackage: null,
+  rulePackageLoading: false,
+  activeRuleCategory: 'all',
+  activeRuleSubject: 'canbu',
   pollTimer: null,
   pollRetryCount: 0,
   pollMaxRetries: 200, // 200 × 3s = 10 min
@@ -34,6 +39,25 @@ const CANBU_STEPS = [
   { key: 'fields', label: '字段检查' },
   { key: 'results', label: '餐补核算' },
 ];
+
+const SUBJECT_WORKBENCH = {
+  canbu: {
+    name: '餐补',
+    batchNoun: '餐补批次',
+    resultField: 'canbu',
+    totalField: 'total_canbu',
+    uploadTitle: '餐补数据 Excel',
+    uploadDescription: '餐补核算需要日考勤和月考勤数据。文件内可包含多张工作表。',
+  },
+  waisu_butie: {
+    name: '外宿补贴',
+    batchNoun: '外宿补贴批次',
+    resultField: 'waisu_butie',
+    totalField: 'total_waisu_butie',
+    uploadTitle: '外宿补贴数据 Excel',
+    uploadDescription: '外宿补贴核算需要月考勤、日考勤和住宿名单。文件内可包含多张工作表。',
+  },
+};
 
 const ENGINE_META = {
   quanqinjiang: {
@@ -81,7 +105,9 @@ function loadCanbuBatches() {
   try {
     const raw = window.localStorage.getItem(CANBU_BATCH_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    state.canbuBatches = Array.isArray(parsed) ? parsed : [];
+    state.canbuBatches = Array.isArray(parsed)
+      ? parsed.map(batch => ({ ...batch, subject: batch.subject || 'canbu' }))
+      : [];
   } catch {
     state.canbuBatches = [];
   }
@@ -91,13 +117,13 @@ function saveCanbuBatches() {
   window.localStorage.setItem(CANBU_BATCH_STORAGE_KEY, JSON.stringify(state.canbuBatches));
 }
 
-function createCanbuBatch(month, name) {
+function createCanbuBatch(month, name, subject = state.activeWorkbenchSubject) {
   const now = new Date().toISOString();
   const batch = {
-    id: `canbu-${Date.now()}`,
-    subject: 'canbu',
+    id: `${subject}-${Date.now()}`,
+    subject,
     month,
-    name: name || `${month} 餐补初算`,
+    name: name || `${month} ${getWorkbenchConfig(subject).name}初算`,
     status: '草稿',
     employeeCount: 0,
     payableTotal: 0,
@@ -116,6 +142,14 @@ function createCanbuBatch(month, name) {
 
 function getActiveCanbuBatch() {
   return state.canbuBatches.find((batch) => batch.id === state.activeCanbuBatchId) || null;
+}
+
+function getWorkbenchConfig(subject = state.activeWorkbenchSubject) {
+  return SUBJECT_WORKBENCH[subject] || SUBJECT_WORKBENCH.canbu;
+}
+
+function getActiveWorkbenchSubject() {
+  return getActiveCanbuBatch()?.subject || state.activeWorkbenchSubject || 'canbu';
 }
 
 function getCanbuBatchById(batchId) {
@@ -174,6 +208,7 @@ const el = {
   kpiGonglingVal: document.querySelector('#kpiGonglingVal'),
   kpiWarningsVal: document.querySelector('#kpiWarningsVal'),
   kpiGrandVal: document.querySelector('#kpiGrandVal'),
+  batchNameText: document.querySelector('#batchNameText'),
   batchStatusText: document.querySelector('#batchStatusText'),
 
   // Run badge
@@ -226,14 +261,32 @@ const el = {
   canbuPagination: document.querySelector('#canbuPagination'),
   // New task 1 views
   subjectHomeView: document.querySelector('#subjectHomeView'),
+  rulePackageView: document.querySelector('#rulePackageView'),
   canbuBatchListView: document.querySelector('#canbuBatchListView'),
   canbuWorkbenchView: document.querySelector('#canbuWorkbenchView'),
   subjectCardGrid: document.querySelector('#subjectCardGrid'),
   recentBatchTable: document.querySelector('#recentBatchTable'),
   canbuBatchTable: document.querySelector('#canbuBatchTable'),
+  subjectBatchListTitle: document.querySelector('#subjectBatchListTitle'),
+  subjectBatchListSub: document.querySelector('#subjectBatchListSub'),
   canbuWorkbenchRoot: document.querySelector('#canbuWorkbenchRoot'),
   btnBackHome: document.querySelector('#btnBackHome'),
+  navSubjectHome: document.querySelector('#navSubjectHome'),
+  navBatchList: document.querySelector('#navBatchList'),
+  navRulePackage: document.querySelector('#navRulePackage'),
+  rulePackageEntry: document.querySelector('#rulePackageEntry'),
+  btnBackFromRules: document.querySelector('#btnBackFromRules'),
+  rulePackageTitle: document.querySelector('#rulePackageTitle'),
+  rulePackageScope: document.querySelector('#rulePackageScope'),
+  rulePackageVersionSelect: document.querySelector('#rulePackageVersionSelect'),
+  rulePackageSummary: document.querySelector('#rulePackageSummary'),
+  rulePackageCategoryTabs: document.querySelector('#rulePackageCategoryTabs'),
+  rulePackageSubjectTabs: document.querySelector('#rulePackageSubjectTabs'),
+  rulePackageContent: document.querySelector('#rulePackageContent'),
+  rulePackageHistory: document.querySelector('#rulePackageHistory'),
   canbuBatchModal: document.querySelector('#canbuBatchModal'),
+  canbuBatchModalTitle: document.querySelector('#canbuBatchModalTitle'),
+  subjectBatchModalSub: document.querySelector('#subjectBatchModalSub'),
   canbuBatchMonth: document.querySelector('#canbuBatchMonth'),
   canbuBatchYear: document.querySelector('#canbuBatchYear'),
   canbuBatchMonthGrid: document.querySelector('#canbuBatchMonthGrid'),
@@ -248,6 +301,7 @@ const el = {
   btnCloseExplain: document.querySelector('#btnCloseExplain'),
   calcModal: document.querySelector('#calcModal'),
   calcModalTitle: document.querySelector('#calcModalTitle'),
+  calcModalSub: document.querySelector('#calcModalSub'),
   calcModalBody: document.querySelector('#calcModalBody'),
   btnCloseCalcModal: document.querySelector('#btnCloseCalcModal'),
   reportLink: document.querySelector('#reportLink'),
@@ -408,13 +462,56 @@ function bindEvents() {
     const card = event.target.closest('[data-subject-entry]');
     if (!card) return;
     const subject = card.dataset.subjectEntry;
-    if (subject === 'canbu') {
+    if (subject === 'canbu' || subject === 'waisu_butie') {
+      state.activeWorkbenchSubject = subject;
       state.activeCanbuBatchId = '';
       showView('canbuBatches');
+      updateSubjectWorkbenchLabels();
       renderCanbuBatchList();
       return;
     }
     toast('该科目将按餐补样板工作台后续改造。');
+  });
+
+  el.navSubjectHome?.addEventListener('click', (event) => {
+    event.preventDefault();
+    showView('home');
+    renderRecentBatchTable();
+  });
+  el.navBatchList?.addEventListener('click', (event) => {
+    event.preventDefault();
+    showView('canbuBatches');
+    renderCanbuBatchList();
+  });
+  el.navRulePackage?.addEventListener('click', (event) => {
+    event.preventDefault();
+    openRulePackageView();
+  });
+  el.rulePackageEntry?.addEventListener('click', openRulePackageView);
+  el.btnBackFromRules?.addEventListener('click', () => {
+    showView('home');
+    renderRecentBatchTable();
+  });
+  el.rulePackageCategoryTabs?.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-rule-category]');
+    if (!tab) return;
+    state.activeRuleCategory = tab.dataset.ruleCategory;
+    const visibleSubjects = getVisibleRuleSubjects();
+    if (!visibleSubjects.some(subject => subject.id === state.activeRuleSubject)) {
+      state.activeRuleSubject = visibleSubjects[0]?.id || '';
+    }
+    renderRulePackageNavigation();
+    renderRulePackageSubject();
+  });
+  el.rulePackageSubjectTabs?.addEventListener('click', (event) => {
+    const tab = event.target.closest('[data-rule-subject]');
+    if (!tab) return;
+    state.activeRuleSubject = tab.dataset.ruleSubject;
+    renderRulePackageNavigation();
+    renderRulePackageSubject();
+  });
+  el.rulePackageVersionSelect?.addEventListener('change', () => {
+    loadRulePackageVersion(el.rulePackageVersionSelect.value);
   });
 
   el.btnBackHome?.addEventListener('click', () => {
@@ -459,6 +556,7 @@ function bindEvents() {
 }
 
 function openCanbuBatchModal() {
+  updateSubjectWorkbenchLabels();
   setDefaultCanbuBatchMonth();
   renderCanbuBatchMonthPicker();
   el.canbuBatchModal?.classList.add('visible');
@@ -479,33 +577,210 @@ function closeCalcModal() {
 }
 
 function createCanbuBatchFromModal() {
+  const config = getWorkbenchConfig();
   const month = el.canbuBatchMonth?.value || '';
   if (!month) {
-    toast('请先选择餐补核算月份。');
+    toast(`请先选择${config.name}核算月份。`);
     el.canbuBatchMonth?.focus();
     return;
   }
   clearCurrentRunState({ clearFile: true });
   resetCanbuFilters();
-  const batch = createCanbuBatch(month, `${formatMonthLabel(month)} 餐补初算`);
+  const batch = createCanbuBatch(month, `${formatMonthLabel(month)} ${config.name}初算`, state.activeWorkbenchSubject);
   state.activeCanbuBatchId = batch.id;
   closeCanbuBatchModal();
   showView('canbuWorkbench');
   renderCanbuWorkbench('upload');
 }
 
+function updateSubjectWorkbenchLabels() {
+  const config = getWorkbenchConfig();
+  if (el.subjectBatchListTitle) el.subjectBatchListTitle.textContent = `${config.name}核算批次`;
+  if (el.subjectBatchListSub) el.subjectBatchListSub.textContent = `一个批次对应一次可回看的${config.name}核算，同一月份可保留多次试算或复算。`;
+  if (el.btnNewCanbuBatch) el.btnNewCanbuBatch.textContent = `新建${config.name}批次`;
+  if (el.canbuBatchModalTitle) el.canbuBatchModalTitle.textContent = `新建${config.name}批次`;
+  if (el.subjectBatchModalSub) el.subjectBatchModalSub.textContent = `选择本次${config.name}核算月份，创建后进入数据上传流程。`;
+}
+
 function showView(viewName) {
   state.view = viewName;
   [
     ['home', el.subjectHomeView],
+    ['rulePackage', el.rulePackageView],
     ['canbuBatches', el.canbuBatchListView],
     ['canbuWorkbench', el.canbuWorkbenchView],
   ].forEach(([name, node]) => {
     if (!node) return;
     const active = name === viewName;
     node.hidden = !active;
-    node.classList.toggle('active', active);
+      node.classList.toggle('active', active);
   });
+  el.navSubjectHome?.classList.toggle('active', viewName === 'home');
+  el.navBatchList?.classList.toggle('active', ['canbuBatches', 'canbuWorkbench'].includes(viewName));
+  el.navRulePackage?.classList.toggle('active', viewName === 'rulePackage');
+}
+
+async function openRulePackageView() {
+  showView('rulePackage');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (state.rulePackage) {
+    renderRulePackage();
+    return;
+  }
+  await loadRulePackageVersion();
+}
+
+async function loadRulePackageVersion(version = '') {
+  if (state.rulePackageLoading) return;
+  state.rulePackageLoading = true;
+  if (el.rulePackageContent) {
+    el.rulePackageContent.innerHTML = '<div class="dl-rule-loading">正在读取已发布规则...</div>';
+  }
+  try {
+    const query = version ? `?version=${encodeURIComponent(version)}` : '';
+    state.rulePackage = await requestJson(`/api/domestic-labor/rule-package${query}`);
+    const subjects = Array.isArray(state.rulePackage.subjects) ? state.rulePackage.subjects : [];
+    state.activeRuleSubject = subjects.some(subject => subject.id === state.activeRuleSubject)
+      ? state.activeRuleSubject
+      : (subjects[0]?.id || '');
+    renderRulePackage();
+  } catch (error) {
+    if (el.rulePackageContent) {
+      el.rulePackageContent.innerHTML = `<div class="dl-rule-loading error-text">${escapeHtml(error.message)}</div>`;
+    }
+  } finally {
+    state.rulePackageLoading = false;
+  }
+}
+
+function renderRulePackage() {
+  const packageData = state.rulePackage;
+  if (!packageData) return;
+  if (el.rulePackageTitle) el.rulePackageTitle.textContent = packageData.name;
+  if (el.rulePackageScope) el.rulePackageScope.textContent = packageData.scope_note;
+  if (el.rulePackageVersionSelect) {
+    el.rulePackageVersionSelect.innerHTML = (packageData.version_history || []).map((version) => `
+      <option value="${escapeHtml(version.version)}" ${version.version === packageData.version ? 'selected' : ''}>${escapeHtml(version.display_version)} · ${escapeHtml(version.status)}</option>
+    `).join('');
+  }
+  if (el.rulePackageSummary) {
+    const summary = [
+      ['当前版本', packageData.display_version],
+      ['发布状态', packageData.status],
+      ['已验证科目', String((packageData.subjects || []).length)],
+      ['生效月份', formatRuleEffectiveMonth(packageData.effective_from)],
+    ];
+    el.rulePackageSummary.innerHTML = summary.map(([label, value]) => `
+      <div class="dl-rule-summary-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>
+    `).join('');
+  }
+  renderRulePackageNavigation();
+  renderRulePackageSubject();
+  renderRulePackageHistory();
+}
+
+function getVisibleRuleSubjects() {
+  const subjects = state.rulePackage?.subjects || [];
+  if (state.activeRuleCategory === 'all') return subjects;
+  return subjects.filter(subject => subject.category_id === state.activeRuleCategory);
+}
+
+function renderRulePackageNavigation() {
+  const packageData = state.rulePackage;
+  if (!packageData) return;
+  const categories = packageData.categories || [];
+  if (el.rulePackageCategoryTabs) {
+    const tabs = [{ id: 'all', name: '全部已验证', subject_ids: packageData.subjects.map(subject => subject.id) }, ...categories];
+    el.rulePackageCategoryTabs.innerHTML = tabs.map((category) => `
+      <button class="dl-rule-tab ${category.id === state.activeRuleCategory ? 'active' : ''}" type="button" data-rule-category="${escapeHtml(category.id)}">
+        <span>${escapeHtml(category.name)}</span><span>${category.subject_ids.length}</span>
+      </button>
+    `).join('');
+  }
+  if (el.rulePackageSubjectTabs) {
+    const subjects = getVisibleRuleSubjects();
+    el.rulePackageSubjectTabs.innerHTML = `
+      <p class="dl-rule-section-label">核算科目</p>
+      ${subjects.map((subject) => `
+        <button class="dl-rule-tab ${subject.id === state.activeRuleSubject ? 'active' : ''}" type="button" data-rule-subject="${escapeHtml(subject.id)}">
+          <span>${escapeHtml(subject.name)}</span><span class="dl-rule-status">${escapeHtml(subject.status)}</span>
+        </button>
+      `).join('')}
+    `;
+  }
+}
+
+function renderRulePackageSubject() {
+  if (!el.rulePackageContent || !state.rulePackage) return;
+  const subject = state.rulePackage.subjects.find(item => item.id === state.activeRuleSubject);
+  if (!subject) {
+    el.rulePackageContent.innerHTML = '<div class="dl-rule-loading">当前分类暂无已验证科目。</div>';
+    return;
+  }
+  el.rulePackageContent.innerHTML = `
+    <div class="dl-rule-subject-head">
+      <div>
+        <span class="dl-rule-status">${escapeHtml(subject.status)}</span>
+        <h2>${escapeHtml(subject.name)}</h2>
+        <p>${escapeHtml(subject.summary)}</p>
+      </div>
+      <span class="dl-rule-version-tag">${escapeHtml(subject.version)}</span>
+    </div>
+    ${renderRulePackageBlock('数据来源', subject.data_sources)}
+    ${renderRulePackageBlock('通用规则', subject.common_rules)}
+    <section class="dl-rule-block">
+      <h3>地区口径</h3>
+      <div class="dl-rule-region-grid">
+        ${(subject.regions || []).map((region) => `
+          <article class="dl-rule-region">
+            <div class="dl-rule-region-head">
+              <strong>${escapeHtml(region.name)}</strong>
+              <span class="dl-rule-formula">${escapeHtml(region.formula)}</span>
+            </div>
+            <p>${escapeHtml(region.rule)}</p>
+            ${renderRuleList(region.details)}
+          </article>
+        `).join('')}
+      </div>
+    </section>
+    ${renderRulePackageBlock('验证依据', subject.verification)}
+    ${renderRulePackageBlock('科目版本记录', (subject.change_log || []).map(item => `${item.version} · ${item.released_at} · ${item.changes}`))}
+  `;
+}
+
+function renderRulePackageBlock(title, items) {
+  return `<section class="dl-rule-block"><h3>${escapeHtml(title)}</h3>${renderRuleList(items)}</section>`;
+}
+
+function renderRuleList(items = []) {
+  return `<ul class="dl-rule-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+}
+
+function renderRulePackageHistory() {
+  if (!el.rulePackageHistory || !state.rulePackage) return;
+  const rows = state.rulePackage.version_history || [];
+  el.rulePackageHistory.innerHTML = `
+    <table class="dl-table">
+      <thead><tr><th>规则包版本</th><th>状态</th><th>发布日期</th><th>生效月份</th><th>已验证科目</th><th>变更说明</th></tr></thead>
+      <tbody>
+        ${rows.map((row) => `
+          <tr>
+            <td class="dl-strong">${escapeHtml(row.display_version)}</td>
+            <td><span class="dl-rule-status">${escapeHtml(row.status)}</span></td>
+            <td>${escapeHtml(row.released_at)}</td>
+            <td>${escapeHtml(formatRuleEffectiveMonth(row.effective_from))}</td>
+            <td>${row.subject_ids.length}</td>
+            <td>${escapeHtml(row.summary)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function formatRuleEffectiveMonth(value) {
+  const matched = String(value || '').match(/^(\d{4})-(\d{2})$/);
+  return matched ? `${matched[1]}年${matched[2]}月` : String(value || '');
 }
 
 function renderRecentBatchTable() {
@@ -521,11 +796,14 @@ function renderRecentBatchTable() {
 
 function renderCanbuBatchList() {
   if (!el.canbuBatchTable) return;
-  if (!state.canbuBatches.length) {
-    el.canbuBatchTable.innerHTML = '<div class="dl-empty compact"><p>暂无餐补核算批次，请先新建餐补批次。</p></div>';
+  updateSubjectWorkbenchLabels();
+  const config = getWorkbenchConfig();
+  const batches = state.canbuBatches.filter(batch => (batch.subject || 'canbu') === state.activeWorkbenchSubject);
+  if (!batches.length) {
+    el.canbuBatchTable.innerHTML = `<div class="dl-empty compact"><p>暂无${escapeHtml(config.name)}核算批次，请先新建${escapeHtml(config.name)}批次。</p></div>`;
     return;
   }
-  el.canbuBatchTable.innerHTML = renderBatchTable(state.canbuBatches);
+  el.canbuBatchTable.innerHTML = renderBatchTable(batches);
   bindBatchTableActions(el.canbuBatchTable);
 }
 
@@ -567,6 +845,7 @@ function bindBatchTableActions(root) {
     button.addEventListener('click', () => {
       state.activeCanbuBatchId = button.dataset.openCanbuBatch;
       const batch = getActiveCanbuBatch();
+      state.activeWorkbenchSubject = batch?.subject || 'canbu';
       resetCanbuFilters();
       if (!batch?.runId || state.currentRun?.id !== batch.runId) {
         state.currentRun = null;
@@ -583,6 +862,9 @@ function bindBatchTableActions(root) {
 function renderCanbuWorkbench(step = 'upload') {
   const batch = getActiveCanbuBatch();
   if (!batch || !el.canbuWorkbenchRoot) return;
+  state.activeWorkbenchSubject = batch.subject || 'canbu';
+  const config = getWorkbenchConfig(batch.subject);
+  syncWorkbenchChrome(batch);
   const canbuRunId = batch.runId || '';
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
   const hasMatchingResults = Boolean(hasMatchingRun && state.currentResultsRunId === canbuRunId);
@@ -600,7 +882,9 @@ function renderCanbuWorkbench(step = 'upload') {
   }
   const canbuResults = hasMatchingResults ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
   const showAside = step === 'results' || canbuResults.length > 0;
-  const canbuWarningCount = countCanbuWarnings(canbuResults);
+  const canbuWarningCount = batch.subject === 'waisu_butie'
+    ? canbuResults.filter(hasWaisuReviewIssue).length
+    : countCanbuWarnings(canbuResults);
   if (el.payrollShell) {
     el.payrollShell.classList.toggle('aside-collapsed', showAside);
   }
@@ -609,7 +893,7 @@ function renderCanbuWorkbench(step = 'upload') {
       <div class="dl-panel-head">
         <div>
           <h2 class="dl-panel-title">${escapeHtml(batch.name)}</h2>
-          <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · 餐补核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
+          <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · ${escapeHtml(config.name)}核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
         </div>
         <div class="dl-actions-inline">
           <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回批次列表</button>
@@ -650,14 +934,29 @@ function renderCanbuWorkbench(step = 'upload') {
   bindCanbuWorkbenchEvents();
 }
 
+function syncWorkbenchChrome(batch) {
+  if (!batch) return;
+  const complete = ['已核算', '可导出', '已导出'].includes(batch.status);
+  if (el.batchNameText) el.batchNameText.textContent = batch.name;
+  if (el.batchStatusText) {
+    el.batchStatusText.textContent = batch.status;
+    el.batchStatusText.classList.toggle('is-ok', complete);
+    el.batchStatusText.classList.toggle('is-warn', !complete);
+  }
+  if (el.chromeRunBadge) el.chromeRunBadge.hidden = !batch.runId;
+  if (el.chromeRunLabel) el.chromeRunLabel.textContent = batch.runId ? `任务 #${batch.runId.slice(-8)}` : '任务 #—';
+}
+
 function renderCanbuRunLoading(batch, step) {
   if (!el.canbuWorkbenchRoot) return;
+  const config = getWorkbenchConfig(batch.subject);
+  syncWorkbenchChrome(batch);
   el.canbuWorkbenchRoot.innerHTML = `
     <section class="dl-panel dl-workbench-head">
       <div class="dl-panel-head">
         <div>
           <h2 class="dl-panel-title">${escapeHtml(batch.name)}</h2>
-          <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · 餐补核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
+          <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · ${escapeHtml(config.name)}核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
         </div>
         <div class="dl-actions-inline">
           <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回批次列表</button>
@@ -690,6 +989,7 @@ async function restoreCanbuRun(runId, step = 'results') {
 }
 
 function renderCanbuStepper(activeStep, batch) {
+  const config = getWorkbenchConfig(batch?.subject);
   const completed = new Set();
   if (batch.status !== '草稿') completed.add('upload');
   if (['已核算', '可导出', '已导出'].includes(batch.status)) completed.add('fields');
@@ -707,7 +1007,7 @@ function renderCanbuStepper(activeStep, batch) {
         return `
           <button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" type="button">
             ${icon}
-            <span class="dl-stepper-label">${stepItem.label}</span>
+            <span class="dl-stepper-label">${stepItem.key === 'results' ? `${escapeHtml(config.name)}核算` : stepItem.label}</span>
             <span class="dl-stepper-status ${done ? 'success' : ''}">${status}</span>
           </button>
         `;
@@ -735,30 +1035,38 @@ function refreshDynamicWorkbenchRefs() {
 function renderCanbuStepContent(step, results = []) {
   const root = document.querySelector('#canbuStepContent');
   if (!root) return;
+  const batch = getActiveCanbuBatch();
+  const config = getWorkbenchConfig(batch?.subject);
   if (step === 'upload') {
     root.innerHTML = `
       <section class="dl-panel">
         <div class="dl-panel-head">
           <div>
             <h2 class="dl-panel-title">数据上传</h2>
-            <p class="dl-panel-sub">餐补核算需要日考勤和月考勤数据。第一版沿用当前单 Excel 上传入口，文件内可包含多张工作表。</p>
+            <p class="dl-panel-sub">${escapeHtml(config.uploadDescription)}</p>
           </div>
         </div>
         <div class="dl-upload-list">
           <div class="dl-upload-row">
             <strong>日考勤数据</strong>
-            <span>东莞餐补逐日计算</span>
+            <span>${batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : '东莞餐补逐日计算'}</span>
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>
           <div class="dl-upload-row">
             <strong>月考勤数据</strong>
-            <span>嘉善/义乌汇总计算、人员字段补充</span>
+            <span>${batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>
+          ${batch?.subject === 'waisu_butie' ? `
+          <div class="dl-upload-row">
+            <strong>住宿名单字段</strong>
+            <span>工号、入住时间、退宿时间</span>
+            <span class="dl-badge warn">随 Excel 上传</span>
+          </div>` : ''}
         </div>
         <div class="upload-zone" id="fileUploadZone" role="button" tabindex="0">
           <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" />
-          <p class="upload-title">餐补数据 Excel</p>
+          <p class="upload-title">${escapeHtml(config.uploadTitle)}</p>
           <p class="upload-sub" id="payrollFileName">点击选择 · 支持 .xlsx / .xlsm / .xls</p>
         </div>
         <div class="drawer-footer compact">
@@ -774,12 +1082,11 @@ function renderCanbuStepContent(step, results = []) {
   }
 
   if (step === 'fields') {
-    root.innerHTML = renderCanbuFieldCheck();
+    root.innerHTML = renderCanbuFieldCheck(batch?.subject);
     renderExceptionQueue([]);
     return;
   }
 
-  const batch = getActiveCanbuBatch();
   if (step === 'results' && !results.length && isCanbuBatchCalculating(batch)) {
     root.innerHTML = renderCanbuCalculatingState(batch);
     renderExceptionQueue([]);
@@ -788,7 +1095,8 @@ function renderCanbuStepContent(step, results = []) {
 
   root.innerHTML = '<section class="dl-panel"><div id="resultsTable" class="dl-table-wrap"></div></section>';
   el.resultsTable = document.querySelector('#resultsTable');
-  renderCanbuResults(results);
+  if (batch?.subject === 'waisu_butie') renderWaisuResults(results);
+  else renderCanbuResults(results);
 }
 
 function refreshUploadRefs() {
@@ -820,7 +1128,20 @@ function bindCanbuUploadEvents() {
   submit?.addEventListener('click', submitCanbuBatch);
 }
 
-function renderCanbuFieldCheck() {
+function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
+  if (subject === 'waisu_butie') {
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">字段检查按外宿补贴资格、住宿区间和缺勤折算分组展示。</p></div></div>
+        <div class="dl-field-groups">
+          ${renderFieldGroup('基础员工字段', ['工号', '姓名', '工作地区', '岗位名称', '考勤月份', '入职日期', '最后工作日'])}
+          ${renderFieldGroup('住宿名单字段', ['工号', '入住时间/入宿时间', '退宿时间/离宿时间'])}
+          ${renderFieldGroup('缺勤折算字段', ['休年假小时', '事假时数', '病假时数', '排休请假时数/天数', '旷工时数/天数'])}
+        </div>
+        <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看结果。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+      </section>
+    `;
+  }
   return `
     <section class="dl-panel">
       <div class="dl-panel-head">
@@ -855,17 +1176,18 @@ function renderFieldGroup(title, fields) {
 
 function renderCanbuCalculatingState(batch) {
   const status = batch?.status || state.currentRun?.status || '计算中';
+  const config = getWorkbenchConfig(batch?.subject);
   return `
     <section class="dl-panel">
       <div class="dl-calc-loading" role="status" aria-live="polite">
         <div class="dl-calc-spinner" aria-hidden="true"></div>
         <div>
-          <h3>正在核算餐补</h3>
-          <p>系统已收到本批次数据，正在解析考勤、匹配地区规则并生成应发餐补明细。当前状态：${escapeHtml(status)}。</p>
+          <h3>正在核算${escapeHtml(config.name)}</h3>
+          <p>系统已收到本批次数据，正在解析考勤、匹配地区规则并生成应发${escapeHtml(config.name)}明细。当前状态：${escapeHtml(status)}。</p>
           <div class="dl-calc-steps" aria-hidden="true">
             <span>读取 Excel</span>
             <span>匹配字段</span>
-            <span>计算餐补</span>
+            <span>计算${escapeHtml(config.name)}</span>
             <span>生成明细</span>
           </div>
         </div>
@@ -1169,6 +1491,7 @@ function filterCanbuResults(results) {
 function openCanbuExplainDrawer(row) {
   if (!row || !el.calcModal || !el.calcModalTitle || !el.calcModalBody) return;
   el.calcModalTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''} · 计算过程`;
+  if (el.calcModalSub) el.calcModalSub.textContent = '展示本员工餐补的规则来源、关键输入和计算公式。';
   const detail = getSubjectDetail(row, 'canbu');
   const explanation = detail?.audit_explanation || {};
   const rowExceptions = getCanbuReviewExceptions(row);
@@ -1198,6 +1521,200 @@ function openCanbuExplainDrawer(row) {
         <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : '无需人工处理。'}</dd>
       </dl>
     </div>
+  `;
+  el.calcModal.classList.add('visible');
+  document.body.style.overflow = 'hidden';
+}
+
+function renderWaisuResults(results = []) {
+  const root = document.querySelector('#canbuStepContent');
+  if (!root) return;
+  const rows = Array.isArray(results) ? results : [];
+  const total = sumField(rows, 'waisu_butie');
+  const positiveCount = rows.filter(row => Number(row.waisu_butie || 0) > 0).length;
+  const housedCount = rows.filter(row => Number(getWaisuDetails(row)['住宿扣除天数'] || 0) > 0).length;
+  const warnings = rows.filter(hasWaisuReviewIssue).length;
+  if (!getWaisuRegionTabs(rows).some(item => item.value === state.canbuRegionFilter)) state.canbuRegionFilter = 'all';
+  root.innerHTML = `
+    <section class="dl-panel">
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">外宿补贴核算</h2><p class="dl-panel-sub">按地区岗位资格、实际入住退宿区间和缺勤口径复核应发外宿补贴。</p></div></div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
+        <div class="dl-result-stat"><span>员工数</span><strong>${rows.length}</strong></div>
+        <div class="dl-result-stat"><span>享有人数</span><strong>${positiveCount}</strong></div>
+        <div class="dl-result-stat"><span>有住宿扣除</span><strong>${housedCount}</strong></div>
+        <div class="dl-result-stat warning"><span>需处理</span><strong>${warnings}</strong></div>
+      </div>
+      <div class="dl-result-tabs" id="canbuRegionTabs">${renderWaisuRegionTabs(rows)}</div>
+      <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
+        <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门、岗位" aria-label="筛选外宿补贴结果">
+        <select class="dl-select" id="reviewStatusFilter" aria-label="筛选异常状态"><option value="all">全部状态</option><option value="review">只看异常</option><option value="pass">只看通过</option></select>
+        <select class="dl-select" id="amountFilter" aria-label="筛选金额状态"><option value="all">全部金额</option><option value="positive">应发大于0</option><option value="zero">应发为0</option></select>
+        <span class="dl-result-count" id="resultCountText">—</span>
+      </div></div>
+      <div id="resultsTable" class="dl-table-wrap"></div><div class="dl-pagination" id="canbuPagination"></div>
+    </section>
+  `;
+  el.resultsTable = document.querySelector('#resultsTable');
+  el.resultSearchInput = document.querySelector('#resultSearchInput');
+  el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
+  el.amountFilter = document.querySelector('#amountFilter');
+  el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
+  if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
+  if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
+  if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
+  bindWaisuResultFilters();
+  bindWaisuRegionTabs();
+  renderWaisuResultsTable(rows);
+  renderWaisuExceptionQueue(rows);
+}
+
+function getWaisuDetails(row) {
+  return getSubjectDetail(row, 'waisu_butie')?.details || {};
+}
+
+function getWaisuAudit(row) {
+  const payload = getSubjectDetail(row, 'waisu_butie') || {};
+  return payload.audit_explanation || payload.details?.audit_explanation || {};
+}
+
+function getWaisuRowRegion(row) {
+  const audit = getWaisuAudit(row);
+  return displayValue(audit.inputs?.['工作地区'], row.work_region, row.region, '未识别');
+}
+
+function getWaisuReviewExceptions(row) {
+  return (getSubjectDetail(row, 'waisu_butie')?.exceptions || []).filter(item => !isOfflineAnswerComparison(item));
+}
+
+function hasWaisuReviewIssue(row) {
+  return getWaisuReviewExceptions(row).length > 0 || Boolean(getEffectiveWarningText(row));
+}
+
+function getWaisuWarningLevel(row) {
+  const warnings = getWaisuReviewExceptions(row);
+  if (warnings.some(item => item.level === 'blocking')) return { label: '阻断', className: 'block' };
+  if (warnings.length || getEffectiveWarningText(row)) return { label: '需关注', className: 'warn' };
+  return { label: '通过', className: 'ok' };
+}
+
+function getWaisuRegionTabs(results) {
+  const tabs = [{ value: 'all', label: '全部', count: results.length }];
+  const counts = new Map();
+  results.forEach(row => counts.set(getWaisuRowRegion(row), (counts.get(getWaisuRowRegion(row)) || 0) + 1));
+  Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN')).forEach(([region, count]) => tabs.push({ value: region, label: region, count }));
+  const issueCount = results.filter(hasWaisuReviewIssue).length;
+  if (issueCount) tabs.push({ value: '__issues__', label: '需处理', count: issueCount });
+  return tabs;
+}
+
+function renderWaisuRegionTabs(results) {
+  return getWaisuRegionTabs(results).map(item => `<button class="dl-result-tab ${state.canbuRegionFilter === item.value ? 'active' : ''}" data-waisu-region="${escapeHtml(item.value)}" type="button"><span>${escapeHtml(item.label)}</span><strong>${item.count}</strong></button>`).join('');
+}
+
+function filterWaisuResults(results) {
+  const keyword = state.resultSearch.trim().toLowerCase();
+  return results.filter(row => {
+    if (state.canbuRegionFilter === '__issues__' && !hasWaisuReviewIssue(row)) return false;
+    if (!['all', '__issues__'].includes(state.canbuRegionFilter) && getWaisuRowRegion(row) !== state.canbuRegionFilter) return false;
+    if (state.reviewStatusFilter === 'review' && !hasWaisuReviewIssue(row)) return false;
+    if (state.reviewStatusFilter === 'pass' && hasWaisuReviewIssue(row)) return false;
+    const amount = Number(row.waisu_butie || 0);
+    if (state.amountFilter === 'positive' && amount <= 0) return false;
+    if (state.amountFilter === 'zero' && amount !== 0) return false;
+    if (!keyword) return true;
+    const audit = getWaisuAudit(row);
+    return [row.employee_id, row.employee_name, row.department, row.position, audit.inputs?.['岗位名称'], getEffectiveWarningText(row)]
+      .map(value => String(value || '').toLowerCase()).join(' ').includes(keyword);
+  });
+}
+
+function renderWaisuResultsTable(results) {
+  if (!el.resultsTable) return;
+  const filtered = filterWaisuResults(results);
+  updateResultCount(results.length, filtered.length);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  state.canbuPage = Math.min(Math.max(state.canbuPage, 1), totalPages);
+  const start = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(start, start + state.canbuPageSize);
+  if (!filtered.length) {
+    el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无外宿补贴核算结果。</p></div>';
+    renderWaisuPagination(0, 0, 0);
+    return;
+  }
+  el.resultsTable.innerHTML = `
+    <table class="dl-table dl-result-table"><thead><tr>
+      <th class="sticky-col id-col">工号</th><th class="sticky-col name-col">姓名</th><th>工作地区</th><th>部门</th><th>岗位</th><th>资格/状态</th>
+      <th class="dl-num">在职天数</th><th class="dl-num">住宿扣除</th><th class="dl-num">外宿天数</th><th class="dl-num">缺勤时数</th><th class="dl-num">应发外宿补贴</th><th>异常</th><th>解释</th>
+    </tr></thead><tbody>${pageRows.map(row => {
+      const detail = getWaisuDetails(row);
+      const audit = getWaisuAudit(row);
+      const inputs = audit.inputs || {};
+      const level = getWaisuWarningLevel(row);
+      const amount = Number(row.waisu_butie || 0);
+      const reason = detail.reason || (amount > 0 ? '享有' : '不享有/未发放');
+      const rowIndex = results.indexOf(row);
+      return `<tr>
+        <td class="sticky-col id-col dl-strong">${escapeHtml(displayValue(row.employee_id, inputs['工号']))}</td>
+        <td class="sticky-col name-col">${escapeHtml(displayValue(row.employee_name, inputs['姓名']))}</td>
+        <td>${escapeHtml(getWaisuRowRegion(row))}</td><td class="wrap-cell">${escapeHtml(displayValue(row.department, inputs['部门字段'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(row.position, inputs['岗位名称'], '—'))}</td>
+        <td><span class="dl-badge ${amount > 0 ? 'ok' : 'warn'}">${escapeHtml(reason)}</span></td>
+        <td class="dl-num">${escapeHtml(displayValue(detail['在职天数'], '—'))}</td><td class="dl-num">${escapeHtml(displayValue(detail['住宿扣除天数'], '—'))}</td><td class="dl-num">${escapeHtml(displayValue(detail['外宿补贴天数'], '—'))}</td><td class="dl-num">${escapeHtml(displayValue(detail['缺勤时数'], '—'))}</td>
+        <td class="dl-num dl-strong">${formatMoney(amount)}</td><td><span class="dl-badge ${level.className}">${level.label}</span></td><td><button class="dl-segment compact" data-waisu-explain-index="${rowIndex}" type="button">计算过程</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+  `;
+  el.resultsTable.querySelectorAll('[data-waisu-explain-index]').forEach(button => button.addEventListener('click', () => openWaisuExplainDrawer(results[Number(button.dataset.waisuExplainIndex)])));
+  renderWaisuPagination(filtered.length, start + 1, Math.min(start + pageRows.length, filtered.length));
+}
+
+function bindWaisuResultFilters() {
+  const rerender = () => { state.canbuPage = 1; renderWaisuResultsTable(state.currentResults); };
+  el.resultSearchInput?.addEventListener('input', () => { state.resultSearch = el.resultSearchInput.value.trim(); rerender(); });
+  el.reviewStatusFilter?.addEventListener('change', () => { state.reviewStatusFilter = el.reviewStatusFilter.value; rerender(); });
+  el.amountFilter?.addEventListener('change', () => { state.amountFilter = el.amountFilter.value; rerender(); });
+}
+
+function bindWaisuRegionTabs() {
+  document.querySelectorAll('[data-waisu-region]').forEach(button => button.addEventListener('click', () => {
+    state.canbuRegionFilter = button.dataset.waisuRegion || 'all';
+    state.canbuPage = 1;
+    document.querySelectorAll('[data-waisu-region]').forEach(item => item.classList.toggle('active', item === button));
+    renderWaisuResultsTable(state.currentResults);
+  }));
+}
+
+function renderWaisuPagination(total, start, end) {
+  if (!el.canbuPagination) return;
+  if (!total) { el.canbuPagination.innerHTML = ''; return; }
+  const pages = Math.max(1, Math.ceil(total / state.canbuPageSize));
+  el.canbuPagination.innerHTML = `<span>${start}-${end} / ${total}</span><div class="dl-pagination-actions"><button class="dl-segment compact" data-waisu-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button><strong>${state.canbuPage} / ${pages}</strong><button class="dl-segment compact" data-waisu-page="next" type="button" ${state.canbuPage >= pages ? 'disabled' : ''}>下一页</button></div>`;
+  el.canbuPagination.querySelectorAll('[data-waisu-page]').forEach(button => button.addEventListener('click', () => { state.canbuPage += button.dataset.waisuPage === 'prev' ? -1 : 1; renderWaisuResultsTable(state.currentResults); }));
+}
+
+function renderWaisuExceptionQueue(results) {
+  if (!el.exceptionQueue) return;
+  const rows = results.filter(hasWaisuReviewIssue);
+  if (!rows.length) {
+    el.exceptionQueue.innerHTML = '<div class="dl-exception"><p class="dl-exception-title">暂无异常</p><p class="dl-exception-meta">完成计算后，外宿补贴可复核异常会进入这里。</p></div>';
+    return;
+  }
+  el.exceptionQueue.innerHTML = rows.map(row => `<button class="dl-exception ${getWaisuWarningLevel(row).className}" data-waisu-exception-id="${escapeHtml(row.employee_id)}" type="button"><p class="dl-exception-title">${getWaisuWarningLevel(row).label} · ${escapeHtml(row.employee_id)} ${escapeHtml(row.employee_name)}</p><p class="dl-exception-meta">${escapeHtml(getWaisuReviewExceptions(row)[0]?.message || getEffectiveWarningText(row))}</p></button>`).join('');
+  el.exceptionQueue.querySelectorAll('[data-waisu-exception-id]').forEach(button => button.addEventListener('click', () => openWaisuExplainDrawer(results.find(row => row.employee_id === button.dataset.waisuExceptionId))));
+}
+
+function openWaisuExplainDrawer(row) {
+  if (!row || !el.calcModal || !el.calcModalTitle || !el.calcModalBody) return;
+  const audit = getWaisuAudit(row);
+  const detail = getWaisuDetails(row);
+  const exceptions = getWaisuReviewExceptions(row);
+  el.calcModalTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''} · 外宿补贴计算过程`;
+  if (el.calcModalSub) el.calcModalSub.textContent = '展示资格判断、住宿日期、缺勤折算和最终应发金额。';
+  el.calcModalBody.innerHTML = `
+    <div class="dl-kv-grid"><div class="dl-kv"><span>工作地区</span><strong>${escapeHtml(getWaisuRowRegion(row))}</strong></div><div class="dl-kv"><span>岗位</span><strong>${escapeHtml(displayValue(row.position, audit.inputs?.['岗位名称'], '—'))}</strong></div><div class="dl-kv"><span>应发外宿补贴</span><strong>${formatMoney(row.waisu_butie)}</strong></div><div class="dl-kv"><span>外宿天数</span><strong>${escapeHtml(displayValue(detail['外宿补贴天数'], '—'))}</strong></div></div>
+    <div class="dl-rule-card"><h3>规则命中</h3><dl><dt>规则状态</dt><dd>${escapeHtml(audit.rule_name || detail.reason || '外宿补贴规则')}</dd><dt>计算公式</dt><dd>${escapeHtml(audit.formula || '按地区岗位资格、在职区间、住宿区间和缺勤时数计算。')}</dd><dt>关键输入</dt><dd>${formatAuditMap(audit.inputs)}</dd><dt>中间值</dt><dd>${formatAuditMap(audit.intermediate_values)}</dd><dt>计算步骤</dt><dd>${formatAuditSteps(audit.steps) || '按外宿补贴规则计算应发金额。'}</dd></dl></div>
+    <div class="dl-rule-card"><h3>异常与建议</h3><dl><dt>异常等级</dt><dd>${getWaisuWarningLevel(row).label}</dd><dt>异常说明</dt><dd>${formatExceptions(exceptions) || escapeHtml(getEffectiveWarningText(row) || '暂无异常')}</dd><dt>建议动作</dt><dd>${exceptions[0]?.suggested_action ? escapeHtml(exceptions[0].suggested_action) : '无需人工处理。'}</dd></dl></div>
   `;
   el.calcModal.classList.add('visible');
   document.body.style.overflow = 'hidden';
@@ -1318,9 +1835,10 @@ function syncCanbuBatchFromRun(targetRun = state.currentRun, options = {}) {
   if (options.includeResults) {
     const results = state.currentResults || [];
     const summary = targetRun.summary || {};
+    const config = getWorkbenchConfig(batch.subject);
     patch.employeeCount = results.length;
-    patch.exceptionCount = countCanbuWarnings(results);
-    patch.payableTotal = Number(summary.total_canbu ?? sumField(results, 'canbu'));
+    patch.exceptionCount = countWorkbenchWarnings(results, batch.subject);
+    patch.payableTotal = Number(summary[config.totalField] ?? sumField(results, config.resultField));
   }
 
   if (options.exportFileName) {
@@ -1424,7 +1942,7 @@ async function submitTask() {
 
     // Update run badge
     el.chromeRunBadge.hidden = false;
-    el.chromeRunLabel.textContent = `任务 #${data.run_id.slice(0, 8)}`;
+    el.chromeRunLabel.textContent = `任务 #${data.run_id.slice(-8)}`;
 
     // Close drawer and start polling
     setTimeout(() => {
@@ -1443,13 +1961,14 @@ async function submitTask() {
 }
 
 async function submitCanbuBatch() {
-  if (!state.payrollFile) return toast('请先上传餐补数据文件。');
   const batch = getActiveCanbuBatch();
-  if (!batch) return toast('暂无餐补批次。');
+  const config = getWorkbenchConfig(batch?.subject);
+  if (!state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
+  if (!batch) return toast(`暂无${config.name}批次。`);
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
   if (submit) submit.disabled = true;
-  setText(el.uploadStatus, '正在提交餐补核算...');
+  setText(el.uploadStatus, `正在提交${config.name}核算...`);
   resetReportLink();
   stopPolling();
   state.currentRun = null;
@@ -1459,7 +1978,7 @@ async function submitCanbuBatch() {
   try {
     const form = new FormData();
     form.append('file', state.payrollFile);
-    form.append('engines', 'canbu');
+    form.append('engines', batch.subject);
     form.append('attendance_month', String(batch.month || '').replace('-', ''));
     form.append('password', el.filePassword?.value || '');
 
@@ -1473,7 +1992,7 @@ async function submitCanbuBatch() {
     syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: '已上传' });
     startPolling();
     renderCanbuWorkbench('fields');
-    toast('餐补批次已提交，正在后台处理。');
+    toast(`${config.name}批次已提交，正在后台处理。`);
   } catch (error) {
     updateCanbuBatch({ status: '失败' }, { batchId: batch.id });
     setText(el.uploadStatus, error.message, true);
@@ -1500,17 +2019,18 @@ function renderTaskStatusCard(status) {
     '失败': { label: '失败', tone: 'block', text: '计算失败，请检查文件后重试。' },
   };
   const s = statusLabels[status] || statusLabels.submitted;
+  const config = getWorkbenchConfig(getActiveWorkbenchSubject());
   el.taskStatusCard.innerHTML = `
     <div class="dl-empty">
       <div>
         <span class="dl-badge ${s.tone}">${s.label}</span>
         <h2 style="margin:12px 0 0;">${s.text}</h2>
-        <p>本工作台按「数据上传 → 字段检查 → 餐补核算」路径处理，导出作为结果页动作。</p>
+        <p>本工作台按「数据上传 → 字段检查 → ${escapeHtml(config.name)}核算」路径处理，导出作为结果页动作。</p>
       </div>
       <div class="dl-empty-map">
         <div class="dl-empty-map-row"><strong>01</strong><span>数据上传</span></div>
         <div class="dl-empty-map-row"><strong>02</strong><span>字段检查</span></div>
-        <div class="dl-empty-map-row"><strong>03</strong><span>餐补核算</span></div>
+        <div class="dl-empty-map-row"><strong>03</strong><span>${escapeHtml(config.name)}核算</span></div>
       </div>
     </div>
   `;
@@ -1604,17 +2124,18 @@ function renderResults(metadata) {
     if (activeBatch.runId && resultRunId && activeBatch.runId !== resultRunId) {
       return;
     }
-    const canbuWarnings = countCanbuWarnings(results);
+    const config = getWorkbenchConfig(activeBatch.subject);
+    const subjectWarnings = countWorkbenchWarnings(results, activeBatch.subject);
     updateActiveCanbuBatch({
-      status: canbuWarnings ? '已核算' : '可导出',
+      status: subjectWarnings ? '已核算' : '可导出',
       employeeCount: results.length,
-      payableTotal: summary.total_canbu ?? sumField(results, 'canbu'),
-      exceptionCount: canbuWarnings,
+      payableTotal: summary[config.totalField] ?? sumField(results, config.resultField),
+      exceptionCount: subjectWarnings,
       runId: resultRunId || activeBatch.runId,
     });
     syncCanbuBatchFromRun(metadata, {
       includeResults: true,
-      status: canbuWarnings ? '已核算' : '可导出',
+      status: subjectWarnings ? '已核算' : '可导出',
     });
     renderCanbuWorkbench('results');
     return;
@@ -1908,6 +2429,12 @@ function countWarnings(results) {
 
 function countCanbuWarnings(results) {
   return results.filter(hasCanbuReviewIssue).length;
+}
+
+function countWorkbenchWarnings(results, subject) {
+  if (subject === 'canbu') return countCanbuWarnings(results);
+  if (subject === 'waisu_butie') return results.filter(hasWaisuReviewIssue).length;
+  return countSubjectWarnings(results, subject);
 }
 
 function hasValidEmployeeId(row) {

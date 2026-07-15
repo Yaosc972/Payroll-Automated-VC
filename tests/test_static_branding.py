@@ -392,6 +392,53 @@ def test_domestic_labor_meal_workbench_static_labels():
     assert "异常复核" not in html
 
 
+def test_domestic_labor_housing_allowance_workbench_is_available():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "当前开放餐补与外宿补贴核算" in html
+    assert "外宿补贴核算" in html
+    assert "Housing Allowance · 已开放" in html
+    assert 'class="dl-subject-card primary" data-subject-entry="waisu_butie"' in html
+    assert "按实际入住、退宿日期和缺勤口径核算" in html
+    assert "subject === 'canbu' || subject === 'waisu_butie'" in js
+    assert "form.append('engines', batch.subject)" in js
+    assert "el.batchNameText.textContent = batch.name" in js
+    assert "el.chromeRunBadge.hidden = !batch.runId" in js
+    assert "batch.runId.slice(-8)" in js
+    assert "if (subject === 'waisu_butie') return results.filter(hasWaisuReviewIssue).length" in js
+    assert "住宿名单字段" in js
+    assert "应发外宿补贴" in js
+
+
+def test_domestic_labor_subject_cards_are_labeled_as_operations_line():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+
+    assert html.count('class="dl-subject-line-tag">操作线</span>') == 4
+    assert ".dl-subject-line-tag" in html
+
+
+def test_domestic_labor_home_exposes_versioned_verified_rule_package():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="navRulePackage"' in html
+    assert 'id="rulePackageEntry"' in html
+    assert 'id="rulePackageView"' in html
+    assert 'id="rulePackageCategoryTabs"' in html
+    assert 'id="rulePackageVersionSelect"' in html
+    assert "DL-PAYROLL.v1.0.0" in html
+    assert "已验证科目 2" in html
+    assert "/api/domestic-labor/rule-package" in js
+    assert "renderRulePackage" in js
+    assert "data-rule-category" in js
+    assert "data-rule-subject" in js
+    assert "核算规则包" in html
+    assert "当前版本 1.0.0" in html
+    assert "RULE PACKAGE · CURRENT" not in html
+    assert "position: absolute" in html.split(".dl-rule-package-entry {", 1)[1].split("}", 1)[0]
+
+
 def test_overseas_labor_page_is_separate_audit_workbench():
     html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")

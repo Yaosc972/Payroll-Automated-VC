@@ -589,7 +589,7 @@
       <div class="section-head">
         <div>
           <h2>4. 外宿补贴</h2>
-          <p class="section-sub">按月标准 150 元，根据当月在职区间、住宿名单和缺勤时数折算。</p>
+          <p class="section-sub">按地区岗位资格、当月在职区间、住宿名单和缺勤时数折算。</p>
         </div>
         <span class="chip strong">科目字段：waisu_butie</span>
       </div>
@@ -598,14 +598,15 @@
           <div class="card">
             <h3>涉及表和字段</h3>
             <p><span class="tag">月报/月考勤</span><span class="tag">日考勤</span><span class="tag">住宿名单</span></p>
-            <p>月报字段：<code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>外宿补贴标准</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>事假时数</code>、<code>排休请假时数</code>、<code>病假时数</code>、<code>旷工时数</code>、<code>入离职缺勤时数</code>。</p>
+            <p>月报字段：<code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>事假时数</code>、<code>排休请假时数</code>、<code>病假时数</code>、<code>旷工时数</code>、<code>入离职缺勤时数</code>；嘉善/义乌还读取休年假及婚假、陪产假、工伤假等有薪假字段。</p>
             <p>日考勤字段：<code>上班一</code>、<code>下班一</code>。</p>
-            <p>住宿名单字段：<code>工号</code>、<code>入住时间</code>、<code>退宿时间</code>。</p>
+            <p>住宿名单字段：<code>工号</code>、<code>入住时间</code>、<code>退宿时间</code>；兼容工作表名 <code>宿舍名单</code> 以及字段别名 <code>入宿时间</code>、<code>离宿时间</code>。</p>
           </div>
           <div class="card">
             <h3>标准与总公式</h3>
-            <p>默认外宿补贴标准：<strong>150 元/月</strong>。</p>
-            <span class="formula">外宿补贴 = 150 / 当月天数 × 有效补贴天数</span>
+            <p>规则外宿补贴标准：<strong>150 元/月</strong>；上传文件中的 <code>外宿补贴标准</code> 不参与资格或金额计算。</p>
+            <span class="formula">常规地区：外宿补贴 = 标准 / 当月天数 × 有效补贴天数</span>
+            <span class="formula">晋江：外宿补贴 = 标准 - 入离职扣款 - 请假扣款</span>
           </div>
         </div>
 
@@ -630,8 +631,8 @@
             </tr>
             <tr>
               <td>资格判断</td>
-              <td><code>外宿补贴标准</code> 为 <code>/</code>、空或 None。</td>
-              <td>无补贴资格，外宿补贴 = 0。</td>
+              <td>按工作地区、岗位和线下名单判断：东莞排除不享有岗位，嘉善/义乌/晋江按享有岗位名单判断，东莞支持姓名特批；嘉善/义乌享有名单包含数据专员、保洁和操作文员。</td>
+              <td>资格不满足时外宿补贴 = 0；上传文件中的补贴标准字段不参与判断。</td>
             </tr>
             <tr>
               <td>当月在职区间</td>
@@ -640,7 +641,7 @@
             </tr>
             <tr>
               <td>住宿扣除</td>
-              <td>若住宿名单命中工号，计算住宿区间与当月在职区间重叠天数；退宿日在当月内时，住宿结束日为退宿日前一天。</td>
+              <td>若住宿名单命中工号，按实际入住时间、退宿时间计算住宿区间与当月在职区间的重叠天数；退宿当天开始享有外宿补贴，不计入住宿扣除。</td>
               <td>住宿扣除天数从外宿补贴天数中扣除。</td>
             </tr>
             <tr>
@@ -650,8 +651,13 @@
             </tr>
             <tr>
               <td>缺勤折算</td>
-              <td>仅当员工全月在职，且缺勤时数合计 ≥ 56，并且无住宿扣除时，按 <code>当月天数 - 缺勤时数 / 8</code> 计算有效天数。</td>
+              <td>东莞仅全月在职员工进入缺勤折算；嘉善/义乌当月入离职员工也进入。缺勤时数合计 ≥ 56 且无住宿扣除时，按 <code>基础补贴天数 - 缺勤时数 / 8</code> 计算有效天数。</td>
               <td>否则按基础补贴天数计算，避免住宿扣除和缺勤重复扣。</td>
+            </tr>
+            <tr>
+              <td>晋江扣减</td>
+              <td>入离职扣款按自然日折算；当月有 <code>最后工作日</code> 时只扣最后工作日后的自然日，没有最后工作日时才扣当月入职日前自然日。请假旷工天数超过 7 天才扣请假。</td>
+              <td>用于晋江月考勤扣减公式。</td>
             </tr>
           </tbody>
         </table>
@@ -659,8 +665,9 @@
         <div class="grid-2">
           <div class="card">
             <h3>缺勤时数口径</h3>
-            <span class="formula">缺勤时数 = 事假时数 + 排休请假时数 + 病假时数 + 旷工时数 + 入离职缺勤时数</span>
-            <p class="muted">仅全月在职员工进入缺勤折算逻辑。</p>
+            <span class="formula">东莞缺勤时数 = 事假时数 + 排休请假时数 + 病假时数 + 旷工时数 + 入离职缺勤时数</span>
+            <p class="muted">东莞按 5 月实际核算口径：病假小时按 100% 计入；休年假、婚假、陪产假、工伤假等有薪假不计入 56 小时。</p>
+            <p class="muted">嘉善/义乌按华东线下月考勤公式：婚假、陪产假、工伤假等各类请假天数及排休请假天数按 8 小时折算，并计入休年假、事假、调休、哺乳假和旷工；病假小时按 60% 计入。当月入离职员工也执行 56 小时判断。</p>
           </div>
           <div class="card">
             <h3>金额保护</h3>
@@ -860,13 +867,13 @@
             </tr>
             <tr>
               <td>外宿补贴</td>
-              <td>住宿名单退宿日是否扣到退宿日前一天。</td>
-              <td>系统退宿日在当月内时，退宿当天不计住宿扣除。</td>
+              <td>住宿名单、宿舍名单及入住/退宿字段别名是否正确识别。</td>
+              <td>系统统一清理工号空格，并按实际入住、退宿日期计算；退宿当天开始享有外宿补贴。</td>
             </tr>
             <tr>
               <td>外宿补贴</td>
-              <td>缺勤 ≥ 56 小时折算是否只适用于全月在职且无住宿扣除人员。</td>
-              <td>系统避免住宿扣除和缺勤扣减重复计算。</td>
+              <td>缺勤 ≥ 56 小时折算的地区口径。</td>
+              <td>嘉善/义乌按华东月考勤公式处理当月入离职、年假、多类有薪假和病假 60% 权重；东莞保持常规口径。</td>
             </tr>
             <tr>
               <td>工龄奖</td>
@@ -951,8 +958,8 @@
             </tr>
             <tr>
               <td>外宿补贴</td>
-              <td><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>外宿补贴标准</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>事假时数</code>、<code>排休请假时数</code>、<code>病假时数</code>、<code>旷工时数</code>、<code>入离职缺勤时数</code></td>
-              <td>日考勤：<code>上班一</code>、<code>下班一</code>；住宿名单：<code>工号</code>、<code>入住时间</code>、<code>退宿时间</code></td>
+              <td><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>事假时数</code>、<code>排休请假时数</code>、<code>病假时数</code>、<code>旷工时数</code>、<code>入离职缺勤时数</code></td>
+              <td>日考勤：<code>上班一</code>、<code>下班一</code>；住宿/宿舍名单：<code>工号</code>、<code>入住时间</code>/<code>入宿时间</code>、<code>退宿时间</code>/<code>离宿时间</code></td>
             </tr>
             <tr>
               <td>工龄奖</td>
