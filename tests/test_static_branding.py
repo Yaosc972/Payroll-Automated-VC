@@ -291,7 +291,7 @@ def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     assert "中国区正式工薪酬核算" in html
     assert "技术部餐补核算" in html
     assert 'data-module-id="employee"' in html
-    assert "permission-guard.js?v=8" in html
+    assert "permission-guard.js?v=9" in html
     assert "china-employee-payroll.js" in html
     assert "/api/china-employee-payroll/meal-allowance" in js
     assert ".china-employee-payroll-shell" in css
@@ -485,6 +485,26 @@ def test_permission_guard_blocks_direct_module_access_with_static_permissions():
     assert "无权限访问" in guard_js
     assert "后台管理仅系统管理员可访问" in guard_js
     assert "window.stop()" in guard_js
+
+
+def test_server_guarded_pages_skip_the_duplicate_client_auth_request():
+    guarded_pages = [
+        RECRUITMENT_HTML,
+        EMPLOYEE_PAYROLL_HTML,
+        DOMESTIC_LABOR_HTML,
+        ROOT / "bonus_platform" / "static" / "fbu-performance.html",
+        OVERSEAS_LABOR_HTML,
+        ADMIN_HTML,
+    ]
+    guard_js = PERMISSION_GUARD_JS.read_text(encoding="utf-8")
+
+    for page in guarded_pages:
+        html = page.read_text(encoding="utf-8")
+        assert 'data-server-guarded="true"' in html
+        assert "permission-guard.js?v=9" in html
+
+    assert 'const serverGuarded = document.documentElement.dataset.serverGuarded === "true"' in guard_js
+    assert "if (serverGuarded && !isDirectStaticPreview) return" in guard_js
 
 
 def test_production_auth_does_not_block_static_startup_on_admin_db():

@@ -185,6 +185,38 @@ def test_domestic_labor_requires_enabled_module_and_authorized_role_on_page_and_
     assert system_admin_api.status_code == 200
 
 
+def test_remaining_protected_pages_are_authorized_before_static_html_is_served(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+
+    with TestClient(app) as client:
+        unauthenticated_recruitment = client.get("/recruitment.html", follow_redirects=False)
+        unauthenticated_employee = client.get("/china-employee-payroll.html", follow_redirects=False)
+        unauthenticated_admin = client.get("/admin.html", follow_redirects=False)
+
+        client.post("/api/auth/mock-login", json={"userId": "recruitmentAdminUser"})
+        recruitment_page = client.get("/recruitment.html")
+        forbidden_employee = client.get("/china-employee-payroll.html")
+        forbidden_admin = client.get("/admin.html")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "cnPayrollAdminUser"})
+        employee_page = client.get("/china-employee-payroll.html")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        admin_page = client.get("/admin.html")
+
+    assert unauthenticated_recruitment.status_code == 302
+    assert unauthenticated_employee.status_code == 302
+    assert unauthenticated_admin.status_code == 302
+    assert recruitment_page.status_code == 200
+    assert forbidden_employee.status_code == 403
+    assert forbidden_admin.status_code == 403
+    assert employee_page.status_code == 200
+    assert admin_page.status_code == 200
+
+
 def test_mock_auth_endpoints_are_disabled_on_vercel(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)

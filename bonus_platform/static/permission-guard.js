@@ -2,6 +2,9 @@
   const moduleId = document.documentElement.dataset.moduleId;
   const adminOnly = document.documentElement.dataset.adminOnly === "true";
   if (!moduleId && !adminOnly) return;
+  const serverGuarded = document.documentElement.dataset.serverGuarded === "true";
+  const isDirectStaticPreview = window.location.protocol === "file:" || window.location.hostname === "";
+  if (serverGuarded && !isDirectStaticPreview) return;
   const authCacheKey = "sigma-auth-context-v2";
   const authCacheTtlMs = 5 * 60 * 1000;
   const authFetchTimeoutMs = 8 * 1000;

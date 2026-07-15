@@ -635,6 +635,59 @@ def _domestic_labor_access_response(request: Request) -> Response | None:
     return None
 
 
+def _protected_static_page_access_response(request: Request) -> Response | None:
+    path = request.url.path.rstrip("/")
+    page_config = {
+        "/recruitment.html": {"module_id": "recruitment", "label": "全球招聘奖金核算"},
+        "/china-employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
+        "/employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
+        "/admin.html": {"admin_only": True, "label": "后台管理"},
+    }.get(path)
+    if not page_config:
+        return None
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    user_id = None
+    if session_token:
+        try:
+            user_id = get_session_user_id(session_token)
+        except KeyError:
+            user_id = None
+    if not user_id:
+        return RedirectResponse(
+            url=f"/login.html?next={quote(path)}",
+            status_code=302,
+        )
+
+    if page_config.get("admin_only"):
+        try:
+            current = _get_cached_current_user(user_id)
+        except KeyError:
+            current = {}
+        can_enter = any(role.get("id") == "admin" for role in current.get("roles", []))
+    else:
+        can_enter = _user_can_enter_module(user_id, str(page_config["module_id"]))
+    if can_enter:
+        return None
+
+    label = page_config["label"]
+    detail = "该页面仅系统管理员可访问。" if page_config.get("admin_only") else "请联系系统管理员开放模块并授予对应模块管理员角色。"
+    return HTMLResponse(
+        f"""
+        <!doctype html>
+        <html lang="zh-CN">
+          <head><meta charset="utf-8"><title>无权限访问</title></head>
+          <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+            <h1>无权限访问：{label}</h1>
+            <p>{detail}</p>
+            <p><a href="/">返回西格玛工作台</a></p>
+          </body>
+        </html>
+        """,
+        status_code=403,
+    )
+
+
 def _overseas_labor_access_response(request: Request) -> Response | None:
     path = request.url.path
     is_labor_api = path.startswith("/api/labor/") and path != "/api/labor/access"
@@ -706,6 +759,9 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
+    protected_page_response = _protected_static_page_access_response(request)
+    if protected_page_response is not None:
+        return protected_page_response
     fbu_access_response = _fbu_access_response(request)
     if fbu_access_response is not None:
         return fbu_access_response
