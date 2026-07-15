@@ -460,18 +460,9 @@ def _hide_developing_modules() -> bool:
 
 
 def _workbench_access_config() -> dict:
-    blocked_modules = []
-    if _hide_developing_modules():
-        blocked_modules = [
-            {
-                "key": "domestic_labor",
-                "label": "中国区外包工薪酬核算",
-                "reason": "UAT 环境仅开放已上线或试用模块，开发中模块暂不开放。",
-            },
-        ]
     return {
         "hideDevelopingModules": _hide_developing_modules(),
-        "blockedModules": blocked_modules,
+        "blockedModules": [],
     }
 
 
@@ -543,13 +534,7 @@ def _raise_labor_run_missing(exc: FileNotFoundError) -> None:
 
 
 def _developing_module_block(path: str) -> dict | None:
-    blocked_paths = {
-        "domestic_labor": {
-            "page_paths": {"/domestic-labor.html", "/labor.html"},
-            "api_prefixes": ("/api/domestic-labor/",),
-            "label": "中国区外包工薪酬核算",
-        },
-    }
+    blocked_paths: dict[str, dict] = {}
     for key, config in blocked_paths.items():
         if path in config["page_paths"] or any(path.startswith(prefix) for prefix in config["api_prefixes"]):
             return {"key": key, **config}
@@ -608,12 +593,125 @@ def _fbu_access_response(request: Request) -> Response | None:
     return None
 
 
+def _domestic_labor_access_response(request: Request) -> Response | None:
+    path = request.url.path
+    is_domestic_api = path.startswith("/api/domestic-labor/")
+    is_domestic_page = path.rstrip("/") in {"/domestic-labor.html", "/labor.html"}
+    if not (is_domestic_api or is_domestic_page):
+        return None
+
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    user_id = None
+    if session_token:
+        try:
+            user_id = get_session_user_id(session_token)
+        except KeyError:
+            user_id = None
+    if not user_id:
+        if is_domestic_api:
+            return JSONResponse({"detail": "未登录。"}, status_code=401)
+        return RedirectResponse(
+            url=f"/login.html?next={quote(path)}",
+            status_code=302,
+        )
+
+    if not _user_can_enter_module(user_id, "domestic"):
+        if is_domestic_api:
+            return JSONResponse({"detail": "当前用户没有中国区外包工薪酬核算权限，或模块尚未开放。"}, status_code=403)
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>无权限访问</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                <h1>无权限访问：中国区外包工薪酬核算</h1>
+                <p>请联系系统管理员开放模块并授予国内外包工核算管理员角色。</p>
+                <p><a href="/">返回西格玛工作台</a></p>
+              </body>
+            </html>
+            """,
+            status_code=403,
+        )
+    return None
+
+
+def _overseas_labor_access_response(request: Request) -> Response | None:
+    path = request.url.path
+    is_labor_api = path.startswith("/api/labor/") and path != "/api/labor/access"
+    is_labor_page = path.rstrip("/") == "/overseas-labor.html"
+    if not (is_labor_api or is_labor_page):
+        return None
+    access = _overseas_labor_access_config()
+    if not access["canUse"]:
+        if is_labor_api:
+            return JSONResponse({"detail": access["message"], "access": access}, status_code=403)
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>模块未开放</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                <h1>海外劳务报账核对暂未开放</h1>
+                <p>当前生产权限未开放此 UAT 模块。请联系薪酬自动化管理员调整权限后再访问。</p>
+                <p><a href="/">返回西格玛工作台</a></p>
+              </body>
+            </html>
+            """,
+            status_code=403,
+        )
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    user_id = None
+    if session_token:
+        try:
+            user_id = get_session_user_id(session_token)
+        except KeyError:
+            user_id = None
+    if not user_id:
+        if is_labor_api:
+            return JSONResponse({"detail": "未登录。", "access": access}, status_code=401)
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>需要登录</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                <h1>请先登录西格玛工作台</h1>
+                <p>海外劳务报账核对仅对已授权用户开放。</p>
+                <p><a href="/login.html?next=/overseas-labor.html">前往登录</a></p>
+              </body>
+            </html>
+            """,
+            status_code=401,
+        )
+    if not _user_can_enter_module(user_id, "overseas"):
+        if is_labor_api:
+            return JSONResponse({"detail": "当前用户没有海外劳务报账核对权限。", "access": access}, status_code=403)
+        return HTMLResponse(
+            """
+            <!doctype html>
+            <html lang="zh-CN">
+              <head><meta charset="utf-8"><title>无权限访问</title></head>
+              <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                <h1>无权限访问：海外劳务报账核对</h1>
+                <p>该模块保持 UAT 试点，仅海外报账管理员或系统管理员可进入。</p>
+                <p><a href="/">返回西格玛工作台</a></p>
+              </body>
+            </html>
+            """,
+            status_code=403,
+        )
+    return None
+
+
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
     fbu_access_response = _fbu_access_response(request)
     if fbu_access_response is not None:
         return fbu_access_response
+    domestic_access_response = _domestic_labor_access_response(request)
+    if domestic_access_response is not None:
+        return domestic_access_response
     if _hide_developing_modules():
         blocked = _developing_module_block(path)
         if blocked:
@@ -640,68 +738,9 @@ async def overseas_labor_access_gate(request: Request, call_next):
                 """,
                 status_code=403,
             )
-    is_labor_api = path.startswith("/api/labor/") and path != "/api/labor/access"
-    is_labor_page = path.rstrip("/") == "/overseas-labor.html"
-    if is_labor_api or is_labor_page:
-        access = _overseas_labor_access_config()
-        if not access["canUse"]:
-            if is_labor_api:
-                return JSONResponse({"detail": access["message"], "access": access}, status_code=403)
-            return HTMLResponse(
-                """
-                <!doctype html>
-                <html lang="zh-CN">
-                  <head><meta charset="utf-8"><title>模块未开放</title></head>
-                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
-                    <h1>海外劳务报账核对暂未开放</h1>
-                    <p>当前生产权限未开放此 UAT 模块。请联系薪酬自动化管理员调整权限后再访问。</p>
-                    <p><a href="/">返回西格玛工作台</a></p>
-                  </body>
-                </html>
-                """,
-                status_code=403,
-            )
-        session_token = request.cookies.get(SESSION_COOKIE_NAME)
-        user_id = None
-        if session_token:
-            try:
-                user_id = get_session_user_id(session_token)
-            except KeyError:
-                user_id = None
-        if not user_id:
-            if is_labor_api:
-                return JSONResponse({"detail": "未登录。", "access": access}, status_code=401)
-            return HTMLResponse(
-                """
-                <!doctype html>
-                <html lang="zh-CN">
-                  <head><meta charset="utf-8"><title>需要登录</title></head>
-                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
-                    <h1>请先登录西格玛工作台</h1>
-                    <p>海外劳务报账核对仅对已授权用户开放。</p>
-                    <p><a href="/login.html?next=/overseas-labor.html">前往登录</a></p>
-                  </body>
-                </html>
-                """,
-                status_code=401,
-            )
-        if not _user_can_enter_module(user_id, "overseas"):
-            if is_labor_api:
-                return JSONResponse({"detail": "当前用户没有海外劳务报账核对权限。", "access": access}, status_code=403)
-            return HTMLResponse(
-                """
-                <!doctype html>
-                <html lang="zh-CN">
-                  <head><meta charset="utf-8"><title>无权限访问</title></head>
-                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
-                    <h1>无权限访问：海外劳务报账核对</h1>
-                    <p>该模块保持 UAT 试点，仅海外报账管理员或系统管理员可进入。</p>
-                    <p><a href="/">返回西格玛工作台</a></p>
-                  </body>
-                </html>
-                """,
-                status_code=403,
-            )
+    overseas_access_response = _overseas_labor_access_response(request)
+    if overseas_access_response is not None:
+        return overseas_access_response
     return await call_next(request)
 
 

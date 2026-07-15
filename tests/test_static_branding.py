@@ -537,7 +537,8 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     index_html = INDEX_HTML.read_text(encoding="utf-8")
     domestic_card = index_html.split('class="saas-module-card domestic-module"', 1)[1].split("</a>", 1)[0]
     fbu_card = index_html.split('class="saas-module-card fbu-module"', 1)[1].split("</a>", 1)[0]
-    assert "Developing · 开发中" in domestic_card
+    assert "试运行 · 已开放" in domestic_card
+    assert "V0.7" in domestic_card
     assert "Available · 已上线" in fbu_card
     assert '<span class="module-version">V1.0</span>' in fbu_card
     assert "<dt>最新批次</dt><dd>2026-05</dd>" in fbu_card

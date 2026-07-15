@@ -23,6 +23,12 @@
       "source": "china payroll browser meal allowance integrated"
     },
     {
+      "id": "domestic-labor",
+      "name": "中国区外包工薪酬核算",
+      "status": "uat",
+      "source": "domestic labor payroll workflow integrated"
+    },
+    {
       "id": "fbu",
       "name": "FBU美洲绩效奖金核算",
       "status": "released",
@@ -45,6 +51,8 @@
     "admin.html",
     "admin.js",
     "permission-guard.js",
+    "domestic-labor.html",
+    "domestic-labor.js",
     "china-employee-payroll.html",
     "china-employee-payroll.js",
     "fbu-performance.html",

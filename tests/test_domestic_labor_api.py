@@ -17,6 +17,9 @@ from bonus_platform.engine.domestic_labor import parser as domestic_parser
 from bonus_platform.engine.domestic_labor.parser import ExcelParser
 
 
+pytestmark = pytest.mark.usefixtures("bypass_domestic_labor_access_gate")
+
+
 def _create_test_excel(sheet_names: dict[str, list[list]]) -> bytes:
     """创建测试 Excel 文件"""
     wb = Workbook()

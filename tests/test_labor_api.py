@@ -12,6 +12,10 @@ from bonus_platform.app import app
 from bonus_platform.engine.labor.models import LaborLineItem
 
 
+OVERSEAS_LABOR_ACCESS_RESPONSE = app_module._overseas_labor_access_response
+pytestmark = pytest.mark.usefixtures("bypass_overseas_labor_access_gate")
+
+
 def _excel_bytes() -> bytes:
     workbook = Workbook()
     sheet = workbook.active
@@ -362,6 +366,7 @@ def test_labor_direct_upload_complete_registers_synced_files(monkeypatch):
 
 
 def test_labor_access_gate_can_disable_uat_module(monkeypatch):
+    monkeypatch.setattr(app_module, "_overseas_labor_access_response", OVERSEAS_LABOR_ACCESS_RESPONSE)
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "disabled")
     client = TestClient(app)
 

@@ -26,7 +26,12 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert {user["id"] for user in data["users"]} >= {"payrollAdmin", "cnPayrollAdminUser"}
     assert any(module["id"] == "employee" and module["enabled"] is True for module in data["modules"])
     assert any(module["id"] == "overseas" and module["enabled"] is True for module in data["modules"])
-    assert any(module["id"] == "domestic" and module["enabled"] is False for module in data["modules"])
+    assert any(
+        module["id"] == "domestic"
+        and module["enabled"] is True
+        and module["developmentStatus"] == "uat"
+        for module in data["modules"]
+    )
     assert any(
         module["id"] == "fbu"
         and module["enabled"] is True
@@ -71,7 +76,7 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     assert module_response.status_code == 200
     assert module_response.json()["module"]["enabled"] is True
     assert domestic_module_response.status_code == 200
-    assert domestic_module_response.json()["module"]["enabled"] is False
+    assert domestic_module_response.json()["module"]["enabled"] is True
     assert access_response.status_code == 200
     assert access_response.json()["moduleAccess"]["domestic"] is True
     assert user_response.status_code == 200
@@ -89,8 +94,8 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     employee = next(module for module in me["modules"] if module["id"] == "employee")
     assert employee["enabled"] is True
     domestic = next(module for module in me["modules"] if module["id"] == "domestic")
-    assert domestic["enabled"] is False
-    assert domestic["canEnter"] is False
+    assert domestic["enabled"] is True
+    assert domestic["canEnter"] is True
 
     assert logs_response.status_code == 200
     actions = [log["action"] for log in logs_response.json()["logs"]]
@@ -146,6 +151,37 @@ def test_fbu_requires_enabled_module_and_authorized_role_on_page_and_api(tmp_pat
     assert unauthorized_api.status_code == 403
     assert fbu_admin_page.status_code == 200
     assert fbu_admin_api.status_code == 200
+    assert system_admin_api.status_code == 200
+
+
+def test_domestic_labor_requires_enabled_module_and_authorized_role_on_page_and_api(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+
+    with TestClient(app) as client:
+        unauthenticated_page = client.get("/domestic-labor.html", follow_redirects=False)
+        unauthenticated_api = client.get("/api/domestic-labor/runs")
+
+        client.post("/api/auth/mock-login", json={"userId": "recruitmentAdminUser"})
+        unauthorized_page = client.get("/domestic-labor.html")
+        unauthorized_api = client.get("/api/domestic-labor/runs")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "cnPayrollAdminUser"})
+        domestic_admin_page = client.get("/domestic-labor.html")
+        domestic_admin_api = client.get("/api/domestic-labor/runs")
+
+        client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        system_admin_api = client.get("/api/domestic-labor/runs")
+
+    assert unauthenticated_page.status_code == 302
+    assert unauthenticated_page.headers["location"].startswith("/login.html?next=")
+    assert unauthenticated_api.status_code == 401
+    assert unauthorized_page.status_code == 403
+    assert unauthorized_api.status_code == 403
+    assert domestic_admin_page.status_code == 200
+    assert domestic_admin_api.status_code == 200
     assert system_admin_api.status_code == 200
 
 
