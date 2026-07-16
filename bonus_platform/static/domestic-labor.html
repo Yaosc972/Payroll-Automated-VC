@@ -323,6 +323,55 @@
         animation: dl-spin 0.75s linear infinite;
       }
 
+      .dl-operation-status {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+        margin: 0 0 16px;
+        padding: 14px 16px;
+        border: 1px solid #BFDBFE;
+        border-radius: 10px;
+        background: #EFF6FF;
+        color: #1D4ED8;
+        box-shadow: 0 6px 18px rgba(37, 99, 235, 0.08);
+      }
+
+      .dl-operation-status.failed {
+        border-color: #FECACA;
+        background: #FEF2F2;
+        color: #B91C1C;
+      }
+
+      .dl-operation-status strong,
+      .dl-operation-status p,
+      .dl-operation-status small {
+        display: block;
+        margin: 0;
+      }
+
+      .dl-operation-status p {
+        margin-top: 3px;
+        color: var(--dl-ink);
+        font-size: 13px;
+      }
+
+      .dl-operation-status small {
+        margin-top: 3px;
+        color: var(--dl-muted);
+        font-size: 12px;
+      }
+
+      .dl-operation-error {
+        display: grid;
+        width: 24px;
+        height: 24px;
+        place-items: center;
+        border-radius: 50%;
+        background: #FEE2E2;
+        font-weight: 800;
+      }
+
       .btn-download.disabled {
         opacity: 0.4;
         pointer-events: none;
@@ -2620,6 +2669,6 @@
       </div>
     </div>
 
-    <script src="domestic-labor.js?v=3"></script>
+    <script src="domestic-labor.js?v=4"></script>
   </body>
 </html>

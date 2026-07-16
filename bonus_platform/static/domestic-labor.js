@@ -15,6 +15,7 @@ const state = {
   view: 'home',
   canbuBatches: [],
   activeCanbuBatchId: '',
+  activeCanbuOperation: null,
   activeWorkbenchSubject: 'canbu',
   activeSubject: 'all',
   resultSearch: '',
@@ -631,6 +632,69 @@ function showView(viewName) {
   el.navRulePackage?.classList.toggle('active', viewName === 'rulePackage');
 }
 
+function beginCanbuOperation(batch, message = '正在准备上传文件...') {
+  if (!batch) return;
+  state.activeCanbuOperation = {
+    batchId: batch.id,
+    runId: batch.runId || '',
+    phase: 'running',
+    message,
+    startedAt: new Date().toISOString(),
+  };
+  refreshCanbuOperationStatus();
+}
+
+function updateCanbuOperation(message, patch = {}) {
+  if (!state.activeCanbuOperation) return;
+  Object.assign(state.activeCanbuOperation, patch, { message });
+  refreshCanbuOperationStatus();
+}
+
+function finishCanbuOperation(runId = '', errorMessage = '') {
+  const operation = state.activeCanbuOperation;
+  if (!operation || (runId && operation.runId && operation.runId !== runId)) return;
+  if (errorMessage) {
+    operation.phase = 'failed';
+    operation.message = errorMessage;
+  } else {
+    state.activeCanbuOperation = null;
+  }
+  refreshCanbuOperationStatus();
+}
+
+function renderCanbuOperationStatus(batch) {
+  const operation = state.activeCanbuOperation;
+  if (!batch || !operation || operation.batchId !== batch.id) return '';
+  const failed = operation.phase === 'failed';
+  return `
+    <section class="dl-operation-status ${failed ? 'failed' : ''}" id="canbuOperationStatus" role="status" aria-live="polite">
+      ${failed ? '<span class="dl-operation-error" aria-hidden="true">!</span>' : '<span class="dl-button-spinner" aria-hidden="true"></span>'}
+      <div>
+        <strong>${failed ? '本次处理未完成' : '批次正在处理'}</strong>
+        <p id="canbuOperationMessage">${escapeHtml(operation.message)}</p>
+        ${failed ? '' : '<small>正在后台继续处理，可安全切换步骤；请勿关闭或刷新当前页面。</small>'}
+      </div>
+    </section>
+  `;
+}
+
+function refreshCanbuOperationStatus() {
+  const batch = getActiveCanbuBatch();
+  const current = document.querySelector('#canbuOperationStatus');
+  const markup = renderCanbuOperationStatus(batch);
+  if (!markup) {
+    current?.remove();
+    return;
+  }
+  if (current) {
+    current.outerHTML = markup;
+    return;
+  }
+  if (state.view === 'canbuWorkbench') {
+    document.querySelector('#canbuWorkbenchRoot .dl-workbench-head')?.insertAdjacentHTML('afterend', markup);
+  }
+}
+
 async function openRulePackageView() {
   showView('rulePackage');
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -864,7 +928,8 @@ function bindBatchTableActions(root) {
         state.currentResults = [];
         state.currentResultsRunId = '';
       }
-      const targetStep = batch?.runId && ['已核算', '可导出', '已导出'].includes(batch.status) ? 'results' : 'upload';
+      const targetStep = isCanbuBatchCalculating(batch) ? 'results'
+        : batch?.runId && ['已核算', '可导出', '已导出'].includes(batch.status) ? 'results' : 'upload';
       showView('canbuWorkbench');
       renderCanbuWorkbench(targetStep);
     });
@@ -880,16 +945,17 @@ function renderCanbuWorkbench(step = 'upload') {
   const canbuRunId = batch.runId || '';
   const hasMatchingRun = Boolean(canbuRunId && state.currentRun && state.currentRun.id === canbuRunId);
   const hasMatchingResults = Boolean(hasMatchingRun && state.currentResultsRunId === canbuRunId);
-  const isActiveRunCalculating = Boolean(hasMatchingRun && !hasMatchingResults && isCanbuBatchCalculating(batch));
+  const batchIsCalculating = isCanbuBatchCalculating(batch);
+  const isActiveRunCalculating = Boolean(hasMatchingRun && !hasMatchingResults && batchIsCalculating);
   const shouldRestoreRun = Boolean(
     canbuRunId &&
       !isActiveRunCalculating &&
       (!hasMatchingRun || !hasMatchingResults) &&
-      (step === 'results' || (step !== 'upload' && ['已核算', '可导出', '已导出'].includes(batch.status)))
+      (batchIsCalculating || step === 'results' || (step !== 'upload' && ['已核算', '可导出', '已导出'].includes(batch.status)))
   );
   if (shouldRestoreRun) {
     renderCanbuRunLoading(batch, step);
-    restoreCanbuRun(canbuRunId, step);
+    restoreCanbuRunStatus(canbuRunId, step);
     return;
   }
   const canbuResults = hasMatchingResults ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
@@ -913,6 +979,7 @@ function renderCanbuWorkbench(step = 'upload') {
       </div>
       ${renderCanbuStepper(step, batch)}
     </section>
+    ${renderCanbuOperationStatus(batch)}
     ${showAside ? `
       <div class="dl-grid dl-grid-workbench">
         <div class="dl-stack" id="canbuStepContent"></div>
@@ -974,6 +1041,7 @@ function renderCanbuRunLoading(batch, step) {
       </div>
       ${renderCanbuStepper(step, batch)}
     </section>
+    ${renderCanbuOperationStatus(batch)}
     <section class="dl-panel">
       <div class="dl-panel-body">
         <p class="inline-status">正在加载本批次核算结果...</p>
@@ -984,19 +1052,36 @@ function renderCanbuRunLoading(batch, step) {
   bindCanbuWorkbenchEvents();
 }
 
-async function restoreCanbuRun(runId, step = 'results') {
+async function restoreCanbuRunStatus(runId, step = 'results') {
   try {
-    const [runStatus, resultPayload] = await Promise.all([
-      requestJson(`/api/domestic-labor/runs/${runId}?response_mode=status`),
-      requestJson(`/api/domestic-labor/runs/${runId}/results`),
-    ]);
+    const runStatus = await requestJson(`/api/domestic-labor/runs/${runId}?response_mode=status`);
+    if (runStatus.status !== '已完成') {
+      state.currentRun = { ...runStatus, id: runStatus.id || runId };
+      syncCanbuBatchFromRun(state.currentRun);
+      if (runStatus.status === '失败') {
+        finishCanbuOperation(runId, runStatus.error || '核算失败，请重新上传文件。');
+        renderCanbuWorkbench('upload');
+        return;
+      }
+      if (!state.activeCanbuOperation) {
+        beginCanbuOperation(getActiveCanbuBatch(), '已恢复后台任务状态，正在等待核算完成...');
+        updateCanbuOperation('已恢复后台任务状态，正在等待核算完成...', { runId });
+      }
+      renderCanbuWorkbench('results');
+      startPolling();
+      return;
+    }
+    const resultPayload = await requestJson(`/api/domestic-labor/runs/${runId}/results`);
     const metadata = { ...runStatus, ...resultPayload, id: runStatus.id || runId };
     state.currentRun = metadata;
     state.currentResults = sanitizePayrollResults(metadata.results);
     state.currentResultsRunId = metadata.id || runId;
     syncCanbuBatchFromRun(metadata, { includeResults: true });
+    finishCanbuOperation(runId);
     renderCanbuWorkbench(step);
   } catch (error) {
+    updateActiveCanbuBatch({ status: '失败' });
+    finishCanbuOperation(runId, error.message || '读取后台任务状态失败，请稍后重试。');
     toast(error.message || '加载核算结果失败。');
     renderCanbuWorkbench('upload');
   }
@@ -1051,6 +1136,12 @@ function renderCanbuStepContent(step, results = []) {
   if (!root) return;
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
+  const operation = state.activeCanbuOperation;
+  if (step !== 'upload' && operation?.batchId === batch?.id && operation.phase !== 'failed') {
+    root.innerHTML = renderCanbuCalculatingState(batch);
+    renderExceptionQueue([]);
+    return;
+  }
   if (step === 'upload') {
     root.innerHTML = `
       <section class="dl-panel">
@@ -2008,7 +2099,7 @@ function getBatchStatusClass(status) {
 function isCanbuBatchCalculating(batch) {
   const status = batch?.status || state.currentRun?.status || '';
   const hasRun = Boolean(batch?.runId || state.currentRun?.id);
-  return hasRun && ['已提交', '已上传', '计算中'].includes(status);
+  return hasRun && ['上传中', '校验中', '已提交', '已上传', '等待上传', '计算中'].includes(status);
 }
 
 function formatMonthLabel(value) {
@@ -2033,6 +2124,7 @@ function getBatchStatusFromRunStatus(runStatus) {
   if (!runStatus) return undefined;
   if (runStatus === '已完成') return '已核算';
   if (runStatus === '失败') return '失败';
+  if (runStatus === '等待上传') return '上传中';
   if (runStatus === '已上传' || runStatus === '计算中') return '已提交';
   return runStatus;
 }
@@ -2185,6 +2277,8 @@ async function submitCanbuBatch() {
   if (!batch) return toast(`暂无${config.name}批次。`);
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
+  beginCanbuOperation(batch, '正在生成安全直传地址...');
+  updateCanbuBatch({ status: '上传中' }, { batchId: batch.id });
   setButtonBusy(submit, true, '准备上传...');
   setText(el.uploadStatus, `正在上传并完成${config.name}核算，请稍候...`);
   resetReportLink();
@@ -2218,6 +2312,11 @@ async function submitCanbuBatch() {
       hrbpList,
       statusElement: el.uploadStatus,
       progressButton: submit,
+      onPlanCreated: (plan) => {
+        state.currentRun = { id: plan.runId, status: '等待上传' };
+        updateCanbuBatch({ runId: plan.runId, status: '上传中' }, { batchId: batch.id });
+        updateCanbuOperation('安全直传地址已生成，正在上传文件...', { runId: plan.runId });
+      },
     });
     if (data.status === '失败') {
       throw new Error(data.error || `${config.name}核算失败，请检查文件后重试。`);
@@ -2228,14 +2327,17 @@ async function submitCanbuBatch() {
     syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: data.status });
     if (data.status === '已完成') {
       await loadCompletedRun(data.run_id);
+      finishCanbuOperation(data.run_id);
       toast(`${config.name}核算完成。`);
     } else {
+      updateCanbuOperation(`${config.name}数据已上传，后台正在核算...`, { runId: data.run_id, phase: 'calculating' });
       startPolling();
       renderCanbuWorkbench('fields');
       toast(`${config.name}批次已提交，正在处理。`);
     }
   } catch (error) {
     updateCanbuBatch({ status: '失败' }, { batchId: batch.id });
+    finishCanbuOperation(state.activeCanbuOperation?.runId || '', error.message || `${config.name}核算失败。`);
     setText(el.uploadStatus, error.message, true);
     toast(error.message);
   } finally {
@@ -2243,7 +2345,7 @@ async function submitCanbuBatch() {
   }
 }
 
-async function submitDomesticLaborRun({ file, files = [], engines, attendanceMonth, password, hrbpList, statusElement, progressButton }) {
+async function submitDomesticLaborRun({ file, files = [], engines, attendanceMonth, password, hrbpList, statusElement, progressButton, onPlanCreated }) {
   const selectedFiles = files.length ? files : [file].filter(Boolean);
   try {
     return await submitDomesticLaborRunDirect({
@@ -2254,6 +2356,7 @@ async function submitDomesticLaborRun({ file, files = [], engines, attendanceMon
       hrbpList,
       statusElement,
       progressButton,
+      onPlanCreated,
     });
   } catch (error) {
     const localHost = ['', 'localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
@@ -2265,7 +2368,7 @@ async function submitDomesticLaborRun({ file, files = [], engines, attendanceMon
   }
 }
 
-async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, password, hrbpList, statusElement, progressButton }) {
+async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, password, hrbpList, statusElement, progressButton, onPlanCreated }) {
   updateUploadProgress(statusElement, progressButton, '正在生成安全直传地址...');
   const plan = await requestJson('/api/domestic-labor/runs/direct-upload-plan', {
     method: 'POST',
@@ -2278,6 +2381,7 @@ async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, p
       })),
     }),
   });
+  onPlanCreated?.(plan);
   const uploads = plan.uploads || (plan.upload ? [plan.upload] : []);
   if (uploads.length !== files.length) {
     await fetch(`/api/domestic-labor/runs/${plan.runId}`, { method: 'DELETE' }).catch(() => {});
@@ -2410,6 +2514,7 @@ async function loadCompletedRun(runId) {
   renderTaskStatusCard(completedRun.status || '已完成');
   renderResults(completedRun);
   if (el.btnExport) el.btnExport.hidden = false;
+  finishCanbuOperation(runId);
   return completedRun;
 }
 
@@ -2420,6 +2525,7 @@ async function pollStatus() {
 
   if (state.pollRetryCount > state.pollMaxRetries) {
     stopPolling();
+    finishCanbuOperation(state.currentRun?.id || '', '计算超时，请稍后重新进入批次查看状态。');
     renderTaskStatusCard('失败');
     setText(el.taskStatusSub, '计算超时（10分钟），请刷新重试。', true);
     toast('计算超时。');
@@ -2442,6 +2548,7 @@ async function pollStatus() {
     } else if (status === '失败') {
       stopPolling();
       const errMsg = metadata.error || '计算失败，请检查文件后重试。';
+      finishCanbuOperation(metadata.id, errMsg);
       setText(el.taskStatusSub, errMsg, true);
       toast(errMsg);
     }
@@ -2975,6 +3082,7 @@ function setButtonBusy(button, busy, label = '处理中...') {
 
 function updateUploadProgress(statusElement, progressButton, message, buttonLabel = message) {
   setText(statusElement, message);
+  updateCanbuOperation(message);
   const label = progressButton?.querySelector('.dl-button-busy-label');
   if (label) label.textContent = buttonLabel;
 }

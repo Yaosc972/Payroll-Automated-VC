@@ -383,6 +383,19 @@ def test_domestic_labor_uses_signed_storage_upload_before_calculation():
     assert "plan.uploads" in js
     assert "setButtonBusy" in js
     assert "dl-button-spinner" in html
+    assert "activeCanbuOperation" in js
+    assert "renderCanbuOperationStatus" in js
+    assert "正在后台继续处理，可安全切换步骤" in js
+    assert "onPlanCreated" in js
+    assert "dl-operation-status" in html
+
+
+def test_domestic_labor_restores_an_in_progress_batch_run():
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "isCanbuBatchCalculating(batch) ? 'results'" in js
+    assert "restoreCanbuRunStatus" in js
+    assert "startPolling()" in js
 
 
 def test_domestic_labor_meal_workbench_static_labels():
