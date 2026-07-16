@@ -387,6 +387,7 @@ def test_domestic_labor_uses_signed_storage_upload_before_calculation():
     assert "renderCanbuOperationStatus" in js
     assert "正在后台继续处理，可安全切换步骤" in js
     assert "onPlanCreated" in js
+    assert "uploadDomesticFilesConcurrently" in js
     assert "dl-operation-status" in html
 
 

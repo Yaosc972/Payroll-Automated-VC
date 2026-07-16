@@ -2388,17 +2388,14 @@ async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, p
     throw new Error('上传计划与所选文件数量不一致，请重新选择文件。');
   }
   try {
-    for (let index = 0; index < files.length; index += 1) {
-      await uploadDomesticFileToSignedUrl(uploads[index], files[index], (percent) => {
-        const overall = Math.round(((index + percent / 100) / files.length) * 100);
-        updateUploadProgress(
-          statusElement,
-          progressButton,
-          `正在上传 ${index + 1}/${files.length}：${files[index].name}（总进度 ${overall}%）`,
-          `上传中 ${overall}%`
-        );
-      });
-    }
+    await uploadDomesticFilesConcurrently(uploads, files, (overall, completed) => {
+      updateUploadProgress(
+        statusElement,
+        progressButton,
+        `正在并行上传 ${files.length} 个文件：已完成 ${completed}/${files.length}（总进度 ${overall}%）`,
+        `上传中 ${overall}%`
+      );
+    });
   } catch (error) {
     await fetch(`/api/domestic-labor/runs/${plan.runId}`, { method: 'DELETE' }).catch(() => {});
     throw error;
@@ -2409,6 +2406,32 @@ async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, p
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ engines, attendanceMonth, password, hrbpList }),
   });
+}
+
+async function uploadDomesticFilesConcurrently(uploads, files, onProgress) {
+  const progressByFile = files.map(() => 0);
+  const totalBytes = files.reduce((sum, file) => sum + Math.max(1, Number(file.size || 0)), 0);
+  const report = () => {
+    const uploadedBytes = files.reduce((sum, file, index) => {
+      return sum + Math.max(1, Number(file.size || 0)) * progressByFile[index] / 100;
+    }, 0);
+    const overall = Math.min(100, Math.round(uploadedBytes / totalBytes * 100));
+    const completed = progressByFile.filter(percent => percent >= 100).length;
+    onProgress(overall, completed);
+  };
+  let nextIndex = 0;
+  const workerCount = Math.min(3, files.length);
+  const uploadNext = async () => {
+    while (nextIndex < files.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await uploadDomesticFileToSignedUrl(uploads[index], files[index], (percent) => {
+        progressByFile[index] = percent;
+        report();
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: workerCount }, uploadNext));
 }
 
 function uploadDomesticFileToSignedUrl(upload, file, onProgress) {

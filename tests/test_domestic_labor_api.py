@@ -566,9 +566,13 @@ def test_domestic_direct_upload_complete_materializes_and_calculates(monkeypatch
 
     calculated = []
 
-    def fake_calculate(target_run_id, file_path, month, engines, password, hrbp):
+    def fake_calculate(target_run_id, file_path, month, engines, password, hrbp, validate_inputs=False):
         calculated.append((target_run_id, file_path, month, engines, password, hrbp))
-        return app_module.update_payroll_metadata(target_run_id, {"status": "已完成", "results": []})
+        return app_module.update_payroll_metadata(target_run_id, {
+            "status": "已完成",
+            "results": [],
+            "inputSummary": {"file_count": 1},
+        })
 
     monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
     monkeypatch.setattr(app_module, "_run_payroll_calculation", fake_calculate)
@@ -627,9 +631,13 @@ def test_domestic_direct_upload_complete_materializes_multiple_files(monkeypatch
 
     calculated = []
 
-    def fake_calculate(target_run_id, file_paths, month, engines, password, hrbp):
+    def fake_calculate(target_run_id, file_paths, month, engines, password, hrbp, validate_inputs=False):
         calculated.append((target_run_id, file_paths, month, engines, password, hrbp))
-        return app_module.update_payroll_metadata(target_run_id, {"status": "已完成", "results": []})
+        return app_module.update_payroll_metadata(target_run_id, {
+            "status": "已完成",
+            "results": [],
+            "inputSummary": {"file_count": len(file_paths)},
+        })
 
     monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
     monkeypatch.setattr(app_module, "_run_payroll_calculation", fake_calculate)
@@ -644,6 +652,63 @@ def test_domestic_direct_upload_complete_materializes_multiple_files(monkeypatch
     assert payload["status"] == "已完成"
     assert payload["input_summary"]["file_count"] == 2
     assert len(calculated[0][1]) == 2
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_domestic_direct_upload_parses_each_workbook_only_once(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monthly, daily = _split_canbu_files()
+    file_payloads = {"月考勤.xlsx": monthly, "日考勤.xlsx": daily}
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_domestic_labor_signed_upload",
+        lambda run_id, filename: {
+            "signedUrl": f"https://example.supabase.co/storage/v1/object/upload/sign/{filename}",
+            "objectPath": f"domestic-labor-runs/production/{run_id}/{filename}",
+            "relativePath": filename,
+        },
+    )
+    client = TestClient(app)
+    plan = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={
+            "files": [
+                {"fileName": name, "fileSize": len(content)}
+                for name, content in file_payloads.items()
+            ]
+        },
+    ).json()
+    run_id = plan["runId"]
+    content_by_saved_name = {
+        upload["filename"]: file_payloads[upload["originalFilename"]]
+        for upload in plan["uploads"]
+    }
+
+    def fake_materialize(target_run_id, target_filename):
+        target = app_module.get_payroll_run_dir(target_run_id) / target_filename
+        target.write_bytes(content_by_saved_name[target_filename])
+        return target
+
+    load_calls = []
+    original_load = domestic_parser.ExcelParser.load
+
+    def counted_load(parser, *args, **kwargs):
+        load_calls.append(parser.file_path.name)
+        return original_load(parser, *args, **kwargs)
+
+    monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
+    monkeypatch.setattr(domestic_parser.ExcelParser, "load", counted_load)
+
+    response = client.post(
+        f"/api/domestic-labor/runs/{run_id}/direct-upload-complete",
+        json={"engines": ["canbu"], "attendanceMonth": "202606"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "已完成"
+    assert len(load_calls) == 2
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 

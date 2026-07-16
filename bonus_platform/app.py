@@ -7026,12 +7026,35 @@ def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> N
 
 def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
-                              hrbp_list: list = None) -> dict:
+                              hrbp_list: list = None,
+                              validate_inputs: bool = False) -> dict:
     """Load Excel, run engines, and persist the terminal task state."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
+    calculation_started = monotonic()
     try:
         update_payroll_metadata(run_id, {"status": "计算中"})
         with MultiFilePayrollDataLoader(file_paths, password=password) as loader:
+            input_summary = None
+            if validate_inputs:
+                validation_started = monotonic()
+                try:
+                    input_summary = loader.validate_inputs(engines, attendance_month)
+                    payroll_logger.info(
+                        "Payroll input parsed for %s in %.2fs: files=%s monthly=%s daily=%s housing=%s",
+                        run_id,
+                        monotonic() - validation_started,
+                        input_summary.get("file_count", 0),
+                        input_summary.get("monthly_rows", 0),
+                        input_summary.get("daily_rows", 0),
+                        input_summary.get("housing_rows", 0),
+                    )
+                except Exception as exc:
+                    payroll_logger.warning("Payroll input validation failed for %s: %s", run_id, exc)
+                    return update_payroll_metadata(run_id, {
+                        "status": "失败",
+                        "error": f"数据文件校验失败：{exc}",
+                        "errorCode": "INPUT_VALIDATION_FAILED",
+                    })
             monthly = loader.monthly
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
@@ -7084,12 +7107,20 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 "warning_count": sum(1 for r in results if r["warnings"]),
             }
 
-            metadata = update_payroll_metadata(run_id, {
+            terminal_patch = {
                 "status": "已完成",
                 "results": results,
                 "summary": summary,
-            })
-            payroll_logger.info("Payroll calculation completed for %s: %d employees", run_id, len(results))
+            }
+            if input_summary is not None:
+                terminal_patch["inputSummary"] = input_summary
+            metadata = update_payroll_metadata(run_id, terminal_patch)
+            payroll_logger.info(
+                "Payroll calculation completed for %s in %.2fs: %d employees",
+                run_id,
+                monotonic() - calculation_started,
+                len(results),
+            )
             return metadata
     except Exception as exc:
         payroll_logger.exception("Payroll calculation failed for %s", run_id)
@@ -7315,22 +7346,36 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         "originalFilename": str(metadata.get("fileName") or ""),
         "size": int(metadata.get("expectedFileSize") or 0),
     }]
-    file_paths = []
-    try:
-        for expected in expected_files:
-            saved_name = str(expected.get("filename") or "")
+    materialize_started = monotonic()
+    materialize_slots = asyncio.Semaphore(4)
+
+    async def materialize_expected_file(expected: dict) -> Path:
+        saved_name = str(expected.get("filename") or "")
+        async with materialize_slots:
             file_path = await asyncio.to_thread(materialize_payroll_file, run_id, saved_name)
-            if not file_path or not file_path.is_file():
-                raise HTTPException(400, f"未找到已上传文件：{expected.get('originalFilename') or saved_name}")
-            actual_size = file_path.stat().st_size
-            expected_size = int(expected.get("size") or 0)
-            if expected_size and actual_size != expected_size:
-                file_path.unlink(missing_ok=True)
-                raise HTTPException(
-                    400,
-                    f"上传文件大小不一致（{expected.get('originalFilename') or saved_name}：预期 {expected_size}，实际 {actual_size}），请重新上传。",
-                )
-            file_paths.append(file_path)
+        if not file_path or not file_path.is_file():
+            raise HTTPException(400, f"未找到已上传文件：{expected.get('originalFilename') or saved_name}")
+        actual_size = file_path.stat().st_size
+        expected_size = int(expected.get("size") or 0)
+        if expected_size and actual_size != expected_size:
+            file_path.unlink(missing_ok=True)
+            raise HTTPException(
+                400,
+                f"上传文件大小不一致（{expected.get('originalFilename') or saved_name}：预期 {expected_size}，实际 {actual_size}），请重新上传。",
+            )
+        return file_path
+
+    try:
+        file_paths = list(await asyncio.gather(*[
+            materialize_expected_file(expected)
+            for expected in expected_files
+        ]))
+        payroll_logger.info(
+            "Materialized %d domestic labor files for %s in %.2fs",
+            len(file_paths),
+            run_id,
+            monotonic() - materialize_started,
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -7342,12 +7387,6 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         raise HTTPException(400, "HRBP 名单格式不正确。")
     attendance_month = str(payload.get("attendanceMonth") or "")
     password = str(payload.get("password") or "") or None
-    try:
-        with MultiFilePayrollDataLoader([str(path) for path in file_paths], password=password) as loader:
-            input_summary = loader.validate_inputs(engine_list, attendance_month)
-    except Exception as exc:
-        raise HTTPException(400, f"数据文件校验失败：{exc}") from exc
-
     actual_size = sum(path.stat().st_size for path in file_paths)
     update_payroll_metadata(run_id, {
         "status": "已上传",
@@ -7356,7 +7395,6 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         "filePath": str(file_paths[0]),
         "filePaths": [str(path) for path in file_paths],
         "fileSize": actual_size,
-        "inputSummary": input_summary,
     })
     result = await asyncio.to_thread(
         _run_payroll_calculation,
@@ -7366,8 +7404,12 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         engine_list,
         password,
         hrbp,
+        True,
     )
     status = result.get("status", "失败")
+    if result.get("errorCode") == "INPUT_VALIDATION_FAILED":
+        raise HTTPException(400, result.get("error") or "数据文件校验失败。")
+    input_summary = result.get("inputSummary") or {}
     return {
         "run_id": run_id,
         "status": status,
