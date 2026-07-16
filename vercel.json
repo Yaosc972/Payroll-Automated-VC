@@ -2,7 +2,7 @@
   "version": 2,
   "functions": {
     "api/index.py": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "rewrites": [

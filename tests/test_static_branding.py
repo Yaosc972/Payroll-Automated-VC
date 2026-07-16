@@ -372,6 +372,15 @@ def test_domestic_labor_page_is_payroll_workbench():
     assert "刷新状态" not in html
 
 
+def test_domestic_labor_uses_signed_storage_upload_before_calculation():
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "/api/domestic-labor/runs/direct-upload-plan" in js
+    assert "/direct-upload-complete" in js
+    assert "XMLHttpRequest" in js
+    assert "upload.onprogress" in js
+
+
 def test_domestic_labor_meal_workbench_static_labels():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
@@ -402,7 +411,7 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
     assert 'class="dl-subject-card primary" data-subject-entry="waisu_butie"' in html
     assert "按实际入住、退宿日期和缺勤口径核算" in html
     assert "subject === 'canbu' || subject === 'waisu_butie'" in js
-    assert "form.append('engines', batch.subject)" in js
+    assert "engines: [batch.subject]" in js
     assert "el.batchNameText.textContent = batch.name" in js
     assert "el.chromeRunBadge.hidden = !batch.runId" in js
     assert "batch.runId.slice(-8)" in js

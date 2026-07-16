@@ -324,11 +324,201 @@ def test_create_run_with_valid_data():
     assert response.status_code == 200
     data = response.json()
     assert "run_id" in data
-    assert data["status"] == "已上传"
-    assert "计算任务已提交" in data["message"]
+    assert data["status"] == "已完成"
+    assert "计算完成" in data["message"]
+
+    results_response = client.get(f"/api/domestic-labor/runs/{data['run_id']}/results")
+    assert results_response.status_code == 200
+    assert results_response.json()["status"] == "已完成"
+    assert results_response.json()["results"]
 
     # Cleanup
     client.delete(f"/api/domestic-labor/runs/{data['run_id']}")
+
+
+def test_create_run_persists_uploaded_file_before_returning(monkeypatch):
+    import bonus_platform.app as app_module
+
+    persisted = []
+    monkeypatch.setattr(
+        app_module,
+        "persist_payroll_file",
+        lambda run_id, path: persisted.append((run_id, str(path))),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("test.xlsx", _quanqinjiang_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"engines": "quanqinjiang", "attendance_month": "202606"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "已完成"
+    assert len(persisted) == 1
+    assert persisted[0][0] == response.json()["run_id"]
+    assert persisted[0][1].endswith(".xlsx")
+    client.delete(f"/api/domestic-labor/runs/{response.json()['run_id']}")
+
+
+def test_domestic_direct_upload_plan_returns_signed_url(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_domestic_labor_signed_upload",
+        lambda run_id, filename: {
+            "signedUrl": "https://example.supabase.co/storage/v1/object/upload/sign/token",
+            "objectPath": f"domestic-labor-runs/production/{run_id}/{filename}",
+            "relativePath": filename,
+        },
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={
+            "fileName": "考勤.xlsx",
+            "fileSize": len(_quanqinjiang_data()),
+            "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runId"].startswith("payroll_")
+    assert payload["upload"]["signedUrl"].startswith("https://example.supabase.co/")
+    assert payload["upload"]["filename"].endswith(".xlsx")
+    assert "service-role" not in str(payload)
+    client.delete(f"/api/domestic-labor/runs/{payload['runId']}")
+
+
+def test_domestic_direct_upload_plan_rejects_invalid_file(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={"fileName": "考勤.csv", "fileSize": 10, "contentType": "text/csv"},
+    )
+
+    assert response.status_code == 400
+    assert "Excel" in response.json()["detail"]
+
+
+def test_domestic_direct_upload_plan_rejects_oversized_file(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(app_module, "_domestic_labor_direct_upload_max_bytes", lambda: 100)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={"fileName": "考勤.xlsx", "fileSize": 101},
+    )
+
+    assert response.status_code == 413
+    assert "100" in response.json()["detail"]
+
+
+def test_domestic_direct_upload_complete_materializes_and_calculates(monkeypatch):
+    import bonus_platform.app as app_module
+
+    file_bytes = _quanqinjiang_data()
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_domestic_labor_signed_upload",
+        lambda run_id, filename: {
+            "signedUrl": "https://example.supabase.co/storage/v1/object/upload/sign/token",
+            "objectPath": f"domestic-labor-runs/production/{run_id}/{filename}",
+            "relativePath": filename,
+        },
+    )
+    client = TestClient(app)
+    plan = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={"fileName": "考勤.xlsx", "fileSize": len(file_bytes)},
+    ).json()
+    run_id = plan["runId"]
+    filename = plan["upload"]["filename"]
+
+    def fake_materialize(target_run_id, target_filename):
+        assert target_run_id == run_id
+        assert target_filename == filename
+        target = app_module.get_payroll_run_dir(run_id) / filename
+        target.write_bytes(file_bytes)
+        return target
+
+    calculated = []
+
+    def fake_calculate(target_run_id, file_path, month, engines, password, hrbp):
+        calculated.append((target_run_id, file_path, month, engines, password, hrbp))
+        return app_module.update_payroll_metadata(target_run_id, {"status": "已完成", "results": []})
+
+    monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
+    monkeypatch.setattr(app_module, "_run_payroll_calculation", fake_calculate)
+
+    response = client.post(
+        f"/api/domestic-labor/runs/{run_id}/direct-upload-complete",
+        json={
+            "engines": "quanqinjiang",
+            "attendanceMonth": "202606",
+            "password": "secret",
+            "hrbpList": [{"工号": "OWHN001"}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "已完成"
+    assert calculated[0][2:] == ("202606", ["quanqinjiang"], "secret", [{"工号": "OWHN001"}])
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_domestic_direct_upload_complete_rejects_size_mismatch(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_domestic_labor_signed_upload",
+        lambda run_id, filename: {
+            "signedUrl": "https://example.supabase.co/storage/v1/object/upload/sign/token",
+            "objectPath": f"domestic-labor-runs/production/{run_id}/{filename}",
+            "relativePath": filename,
+        },
+    )
+    client = TestClient(app)
+    plan = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={"fileName": "考勤.xlsx", "fileSize": 100},
+    ).json()
+    run_id = plan["runId"]
+
+    def fake_materialize(target_run_id, filename):
+        target = app_module.get_payroll_run_dir(target_run_id) / filename
+        target.write_bytes(b"short")
+        return target
+
+    monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
+    monkeypatch.setattr(
+        app_module,
+        "_run_payroll_calculation",
+        lambda *args, **kwargs: pytest.fail("size mismatch must not start calculation"),
+    )
+
+    response = client.post(
+        f"/api/domestic-labor/runs/{run_id}/direct-upload-complete",
+        json={"engines": "quanqinjiang", "attendanceMonth": "202606"},
+    )
+
+    assert response.status_code == 400
+    assert "大小不一致" in response.json()["detail"]
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
 def test_create_run_without_engines():
@@ -396,6 +586,34 @@ def test_get_run_status():
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
+def test_get_run_compact_status_excludes_large_results():
+    """轮询状态不应重复传输完整员工结果。"""
+    client = TestClient(app)
+    create_response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("test.xlsx", _quanqinjiang_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"engines": "quanqinjiang", "attendance_month": "202606"},
+    )
+    run_id = create_response.json()["run_id"]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.1)
+        response = client.get(f"/api/domestic-labor/runs/{run_id}?response_mode=status")
+        if response.json()["status"] in ["已完成", "失败"]:
+            break
+
+    assert response.status_code == 200
+    assert response.json()["id"] == run_id
+    assert "results" not in response.json()
+    assert "filePath" not in response.json()
+
+    results_response = client.get(f"/api/domestic-labor/runs/{run_id}/results")
+    assert results_response.status_code == 200
+    assert "results" in results_response.json()
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
 def test_get_run_not_found():
     """测试获取不存在的任务"""
     client = TestClient(app)
@@ -413,6 +631,8 @@ def test_list_runs():
     data = response.json()
     assert "runs" in data
     assert isinstance(data["runs"], list)
+    assert all("results" not in run for run in data["runs"])
+    assert all("filePath" not in run for run in data["runs"])
 
 
 def test_delete_run():

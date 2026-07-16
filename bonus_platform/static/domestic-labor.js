@@ -29,8 +29,9 @@ const state = {
   activeRuleCategory: 'all',
   activeRuleSubject: 'canbu',
   pollTimer: null,
+  pollRequestInFlight: false,
   pollRetryCount: 0,
-  pollMaxRetries: 200, // 200 × 3s = 10 min
+  pollMaxRetries: 400, // 400 × 1.5s = 10 min
 };
 
 const CANBU_BATCH_STORAGE_KEY = 'domesticLabor.canbuBatches.v1';
@@ -976,7 +977,11 @@ function renderCanbuRunLoading(batch, step) {
 
 async function restoreCanbuRun(runId, step = 'results') {
   try {
-    const metadata = await requestJson(`/api/domestic-labor/runs/${runId}`);
+    const [runStatus, resultPayload] = await Promise.all([
+      requestJson(`/api/domestic-labor/runs/${runId}?response_mode=status`),
+      requestJson(`/api/domestic-labor/runs/${runId}/results`),
+    ]);
+    const metadata = { ...runStatus, ...resultPayload, id: runStatus.id || runId };
     state.currentRun = metadata;
     state.currentResults = sanitizePayrollResults(metadata.results);
     state.currentResultsRunId = metadata.id || runId;
@@ -1917,41 +1922,40 @@ async function submitTask() {
   if (!state.payrollFile) return toast('请先上传文件。');
   if (!state.selectedEngines.length) return toast('请至少选择一个引擎。');
 
-  setText(el.submitStatus, '正在提交计算任务...');
+  setText(el.submitStatus, '正在上传并完成核算，请稍候...');
   el.btnSubmitTask.disabled = true;
   resetReportLink();
 
   try {
-    const form = new FormData();
-    form.append('file', state.payrollFile);
-    form.append('engines', state.selectedEngines.join(','));
-    form.append('attendance_month', el.attendanceMonth.value);
-    form.append('password', el.filePassword.value || '');
-    if (state.hrbpList) {
-      form.append('hrbp_list', JSON.stringify(state.hrbpList));
-    }
-
-    const data = await requestJson('/api/domestic-labor/runs', {
-      method: 'POST',
-      body: form,
+    const data = await submitDomesticLaborRun({
+      file: state.payrollFile,
+      engines: state.selectedEngines,
+      attendanceMonth: el.attendanceMonth.value,
+      password: el.filePassword.value || '',
+      hrbpList: state.hrbpList,
+      statusElement: el.submitStatus,
     });
+    if (data.status === '失败') {
+      throw new Error(data.error || '计算失败，请检查文件后重试。');
+    }
 
     state.currentRun = { id: data.run_id, status: data.status };
     syncCanbuBatchFromRun(state.currentRun);
-    setText(el.submitStatus, `任务已提交: ${data.run_id}`);
+    setText(el.submitStatus, `核算完成: ${data.run_id}`);
 
     // Update run badge
     el.chromeRunBadge.hidden = false;
     el.chromeRunLabel.textContent = `任务 #${data.run_id.slice(-8)}`;
 
-    // Close drawer and start polling
-    setTimeout(() => {
-      document.querySelector('.btn-close-drawer').click();
-      showTaskSection();
+    document.querySelector('.btn-close-drawer').click();
+    showTaskSection();
+    if (data.status === '已完成') {
+      await loadCompletedRun(data.run_id);
+      toast('薪酬计算完成！');
+    } else {
       startPolling();
-    }, 600);
-
-    toast('计算任务已提交，正在后台处理...');
+      toast('计算任务已提交，正在处理...');
+    }
   } catch (error) {
     setText(el.submitStatus, error.message, true);
     toast(error.message);
@@ -1968,7 +1972,7 @@ async function submitCanbuBatch() {
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
   if (submit) submit.disabled = true;
-  setText(el.uploadStatus, `正在提交${config.name}核算...`);
+  setText(el.uploadStatus, `正在上传并完成${config.name}核算，请稍候...`);
   resetReportLink();
   stopPolling();
   state.currentRun = null;
@@ -1976,23 +1980,29 @@ async function submitCanbuBatch() {
   state.currentResultsRunId = '';
 
   try {
-    const form = new FormData();
-    form.append('file', state.payrollFile);
-    form.append('engines', batch.subject);
-    form.append('attendance_month', String(batch.month || '').replace('-', ''));
-    form.append('password', el.filePassword?.value || '');
-
-    const data = await requestJson('/api/domestic-labor/runs', {
-      method: 'POST',
-      body: form,
+    const data = await submitDomesticLaborRun({
+      file: state.payrollFile,
+      engines: [batch.subject],
+      attendanceMonth: String(batch.month || '').replace('-', ''),
+      password: el.filePassword?.value || '',
+      hrbpList: null,
+      statusElement: el.uploadStatus,
     });
+    if (data.status === '失败') {
+      throw new Error(data.error || `${config.name}核算失败，请检查文件后重试。`);
+    }
 
     state.currentRun = { id: data.run_id, status: data.status };
     state.currentResultsRunId = '';
-    syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: '已上传' });
-    startPolling();
-    renderCanbuWorkbench('fields');
-    toast(`${config.name}批次已提交，正在后台处理。`);
+    syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: data.status });
+    if (data.status === '已完成') {
+      await loadCompletedRun(data.run_id);
+      toast(`${config.name}核算完成。`);
+    } else {
+      startPolling();
+      renderCanbuWorkbench('fields');
+      toast(`${config.name}批次已提交，正在处理。`);
+    }
   } catch (error) {
     updateCanbuBatch({ status: '失败' }, { batchId: batch.id });
     setText(el.uploadStatus, error.message, true);
@@ -2000,6 +2010,89 @@ async function submitCanbuBatch() {
   } finally {
     if (submit) submit.disabled = false;
   }
+}
+
+async function submitDomesticLaborRun({ file, engines, attendanceMonth, password, hrbpList, statusElement }) {
+  try {
+    return await submitDomesticLaborRunDirect({
+      file,
+      engines,
+      attendanceMonth,
+      password,
+      hrbpList,
+      statusElement,
+    });
+  } catch (error) {
+    const localHost = ['', 'localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    const directUnavailable = error.status === 409
+      || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
+    if (!localHost || !directUnavailable) throw error;
+    setText(statusElement, '本地未启用对象存储，改用本地上传并核算...');
+    return submitDomesticLaborRunMultipart({ file, engines, attendanceMonth, password, hrbpList });
+  }
+}
+
+async function submitDomesticLaborRunDirect({ file, engines, attendanceMonth, password, hrbpList, statusElement }) {
+  setText(statusElement, '正在生成安全直传地址...');
+  const plan = await requestJson('/api/domestic-labor/runs/direct-upload-plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileName: file.name,
+      fileSize: file.size,
+      contentType: file.type || 'application/octet-stream',
+    }),
+  });
+  try {
+    await uploadDomesticFileToSignedUrl(plan.upload, file, (percent) => {
+      setText(statusElement, `正在直传文件 ${percent}%...`);
+    });
+  } catch (error) {
+    await fetch(`/api/domestic-labor/runs/${plan.runId}`, { method: 'DELETE' }).catch(() => {});
+    throw error;
+  }
+  setText(statusElement, '文件上传完成，正在校验并核算...');
+  return requestJson(`/api/domestic-labor/runs/${plan.runId}/direct-upload-complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ engines, attendanceMonth, password, hrbpList }),
+  });
+}
+
+function uploadDomesticFileToSignedUrl(upload, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', upload.signedUrl);
+    request.setRequestHeader('x-upsert', 'true');
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+      reject(new Error(`直传文件失败（HTTP ${request.status}）${request.responseText ? ` ${request.responseText.slice(0, 160)}` : ''}`));
+    };
+    request.onerror = () => reject(new Error('直传文件失败，请检查网络后重试。'));
+    request.ontimeout = () => reject(new Error('直传文件超时，请检查网络后重试。'));
+    const body = new FormData();
+    body.append('cacheControl', '3600');
+    body.append('', file);
+    request.send(body);
+  });
+}
+
+function submitDomesticLaborRunMultipart({ file, engines, attendanceMonth, password, hrbpList }) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('engines', engines.join(','));
+  form.append('attendance_month', attendanceMonth);
+  form.append('password', password || '');
+  if (hrbpList) form.append('hrbp_list', JSON.stringify(hrbpList));
+  return requestJson('/api/domestic-labor/runs', { method: 'POST', body: form });
 }
 
 function showTaskSection() {
@@ -2045,8 +2138,9 @@ function renderTaskStatusCard(status) {
 function startPolling() {
   stopPolling();
   state.pollRetryCount = 0;
+  state.pollRequestInFlight = false;
   pollStatus();
-  state.pollTimer = window.setInterval(pollStatus, 3000);
+  state.pollTimer = window.setInterval(pollStatus, 1500);
 }
 
 function stopPolling() {
@@ -2054,10 +2148,26 @@ function stopPolling() {
     window.clearInterval(state.pollTimer);
     state.pollTimer = null;
   }
+  state.pollRequestInFlight = false;
+}
+
+async function loadCompletedRun(runId) {
+  const [metadata, resultPayload] = await Promise.all([
+    requestJson(`/api/domestic-labor/runs/${runId}?response_mode=status`),
+    requestJson(`/api/domestic-labor/runs/${runId}/results`),
+  ]);
+  const completedRun = { ...metadata, ...resultPayload, id: metadata.id || runId };
+  state.currentRun = completedRun;
+  syncCanbuBatchFromRun(completedRun);
+  renderTaskStatusCard(completedRun.status || '已完成');
+  renderResults(completedRun);
+  if (el.btnExport) el.btnExport.hidden = false;
+  return completedRun;
 }
 
 async function pollStatus() {
-  if (!state.currentRun) return;
+  if (!state.currentRun || state.pollRequestInFlight) return;
+  state.pollRequestInFlight = true;
   state.pollRetryCount++;
 
   if (state.pollRetryCount > state.pollMaxRetries) {
@@ -2065,11 +2175,12 @@ async function pollStatus() {
     renderTaskStatusCard('失败');
     setText(el.taskStatusSub, '计算超时（10分钟），请刷新重试。', true);
     toast('计算超时。');
+    state.pollRequestInFlight = false;
     return;
   }
 
   try {
-    const metadata = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}`);
+    const metadata = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}?response_mode=status`);
     state.currentRun = metadata;
 
     const status = metadata.status || '计算中';
@@ -2078,8 +2189,7 @@ async function pollStatus() {
 
     if (status === '已完成') {
       stopPolling();
-      renderResults(metadata);
-      if (el.btnExport) el.btnExport.hidden = false;
+      await loadCompletedRun(metadata.id);
       toast('薪酬计算完成！');
     } else if (status === '失败') {
       stopPolling();
@@ -2089,20 +2199,21 @@ async function pollStatus() {
     }
   } catch (error) {
     // Ignore transient errors during polling
+  } finally {
+    state.pollRequestInFlight = false;
   }
 }
 
 async function refreshStatus() {
   if (!state.currentRun) return toast('暂无任务。');
   try {
-    const metadata = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}`);
+    const metadata = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}?response_mode=status`);
     state.currentRun = metadata;
     const status = metadata.status || '计算中';
     syncCanbuBatchFromRun(metadata);
     renderTaskStatusCard(status);
     if (status === '已完成') {
-      renderResults(metadata);
-      if (el.btnExport) el.btnExport.hidden = false;
+      await loadCompletedRun(metadata.id);
     }
     toast('状态已刷新。');
   } catch (error) {
@@ -2559,7 +2670,7 @@ async function exportResults(autoDownload = false) {
       exportedAt: new Date().toISOString(),
     });
     if (state.view === 'canbuWorkbench' && getActiveCanbuBatch()) {
-      renderCanbuWorkbench('results');
+      syncWorkbenchChrome(getActiveCanbuBatch());
     }
   } catch (error) {
     toast(error.message);
@@ -2571,7 +2682,16 @@ async function exportResults(autoDownload = false) {
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || '请求失败。');
+  if (!response.ok) {
+    const detail = data.detail;
+    const message = typeof detail === 'string'
+      ? detail
+      : detail?.message || detail?.nextAction || '请求失败。';
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = detail?.errorCode || '';
+    throw error;
+  }
   return data;
 }
 

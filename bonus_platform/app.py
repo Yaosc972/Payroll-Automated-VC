@@ -36,8 +36,13 @@ from .engine.domestic_labor.templates import generate_template, get_template_inf
 from .engine.domestic_labor.exporter import ExcelExporter
 from .engine.domestic_labor.rule_package import get_rule_package
 from .engine.domestic_labor.runs import (
-    create_payroll_run, update_payroll_metadata, load_payroll_metadata,
+    create_payroll_run, update_payroll_metadata, load_payroll_metadata, load_payroll_status,
     list_payroll_metadata, get_payroll_run_dir, attach_payroll_file, safe_payroll_filename,
+    delete_payroll_run, materialize_payroll_file, persist_payroll_file,
+)
+from .engine.domestic_labor.persistent_storage import (
+    create_domestic_labor_signed_upload,
+    domestic_labor_persistent_storage_enabled,
 )
 from .engine.china_employee_payroll import calculate_meal_allowance, parse_attendance_workbooks, parse_wx_attendance_workbooks
 from .engine.calculator import calculate
@@ -6986,6 +6991,15 @@ def _domestic_labor_export_filename(metadata: dict) -> str:
     return f"{subject_name}核算结果_{attendance_month}_{exported_at}.xlsx"
 
 
+def _compact_domestic_labor_metadata(metadata: dict) -> dict:
+    """Return run state without the potentially large employee result payload."""
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"results", "filePath"}
+    }
+
+
 @app.get("/api/domestic-labor/rule-package")
 def get_domestic_labor_rule_package(version: str = "") -> dict:
     try:
@@ -7012,8 +7026,8 @@ def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> N
 
 def _run_payroll_calculation(run_id: str, file_path: str, attendance_month: str,
                               engines: list, password: str = None,
-                              hrbp_list: list = None):
-    """Background worker: load Excel, run engines, save results."""
+                              hrbp_list: list = None) -> dict:
+    """Load Excel, run engines, and persist the terminal task state."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     try:
         update_payroll_metadata(run_id, {"status": "计算中"})
@@ -7070,20 +7084,26 @@ def _run_payroll_calculation(run_id: str, file_path: str, attendance_month: str,
                 "warning_count": sum(1 for r in results if r["warnings"]),
             }
 
-            update_payroll_metadata(run_id, {
+            metadata = update_payroll_metadata(run_id, {
                 "status": "已完成",
                 "results": results,
                 "summary": summary,
             })
             payroll_logger.info("Payroll calculation completed for %s: %d employees", run_id, len(results))
+            return metadata
     except Exception as exc:
         payroll_logger.exception("Payroll calculation failed for %s", run_id)
-        update_payroll_metadata(run_id, {"status": "失败", "error": str(exc)})
+        return update_payroll_metadata(run_id, {"status": "失败", "error": str(exc)})
 
 
 @app.get("/api/domestic-labor/runs")
 def list_domestic_labor_runs() -> dict:
-    return {"runs": list_payroll_metadata()}
+    return {
+        "runs": [
+            _compact_domestic_labor_metadata(metadata)
+            for metadata in list_payroll_metadata(compact=True)
+        ]
+    }
 
 
 @app.post("/api/domestic-labor/runs")
@@ -7105,7 +7125,6 @@ async def create_domestic_labor_run(file: UploadFile = File(...), engines: str =
 
     # Save uploaded file
     DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    run_id_temp = safe_payroll_filename(file.filename)
     # We'll create the run first, then save file into its directory
     run = create_payroll_run({
         "engines": engine_list,
@@ -7118,7 +7137,8 @@ async def create_domestic_labor_run(file: UploadFile = File(...), engines: str =
     saved_name = safe_payroll_filename(file.filename)
     file_path = run_dir / saved_name
     with open(file_path, "wb") as f:
-        f.write(await file.read())
+        while chunk := await file.read(1024 * 1024):
+            f.write(chunk)
 
     # Parse hrbp_list if provided
     hrbp = None
@@ -7134,20 +7154,165 @@ async def create_domestic_labor_run(file: UploadFile = File(...), engines: str =
         "savedFileName": saved_name,
         "fileSize": file_path.stat().st_size,
     })
+    try:
+        await asyncio.to_thread(persist_payroll_file, run_id, file_path)
+    except Exception as exc:
+        payroll_logger.exception("Failed to persist payroll upload for %s", run_id)
+        update_payroll_metadata(run_id, {"status": "失败", "error": f"文件持久化失败: {exc}"})
+        raise HTTPException(503, "上传文件未能保存到持久化存储，请稍后重试。") from exc
 
-    # Launch background calculation
-    asyncio.get_event_loop().run_in_executor(
-        None, _run_payroll_calculation, run_id, str(file_path),
+    # Keep the invocation alive until the calculation reaches a terminal state.
+    metadata = await asyncio.to_thread(
+        _run_payroll_calculation, run_id, str(file_path),
         attendance_month, engine_list, password or None, hrbp,
     )
 
-    return {"run_id": run_id, "status": "已上传", "message": "计算任务已提交"}
+    status = metadata.get("status", "失败")
+    return {
+        "run_id": run_id,
+        "status": status,
+        "message": "计算完成" if status == "已完成" else "计算失败",
+        "error": metadata.get("error", ""),
+    }
+
+
+def _domestic_labor_direct_upload_max_bytes() -> int:
+    raw = os.environ.get("SIGMA_DOMESTIC_LABOR_MAX_UPLOAD_BYTES", "262144000")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 262144000
+
+
+def _validate_domestic_labor_engine_list(raw: Any) -> list[str]:
+    values = raw if isinstance(raw, list) else str(raw or "").split(",")
+    engine_list = [str(value).strip() for value in values if str(value).strip()]
+    if not engine_list:
+        raise HTTPException(400, "请至少选择一个计算引擎")
+    unknown = [engine for engine in engine_list if engine not in ENGINE_TEMPLATES]
+    if unknown:
+        raise HTTPException(400, f"未知引擎: {unknown[0]}")
+    return engine_list
+
+
+@app.post("/api/domestic-labor/runs/direct-upload-plan")
+def create_domestic_labor_direct_upload_plan(payload: dict = Body(...)) -> dict:
+    if not domestic_labor_persistent_storage_enabled():
+        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+    original_name = Path(str(payload.get("fileName") or "")).name
+    if not original_name.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        raise HTTPException(400, "请上传 Excel 文件（.xlsx / .xlsm / .xls）")
+    try:
+        file_size = int(payload.get("fileSize") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "上传文件大小无效。") from exc
+    if file_size <= 0:
+        raise HTTPException(400, "上传文件不能为空。")
+    max_bytes = _domestic_labor_direct_upload_max_bytes()
+    if file_size > max_bytes:
+        raise HTTPException(413, f"上传文件超过当前上限 {max_bytes} 字节。")
+
+    suffix = Path(original_name).suffix.lower()
+    saved_name = f"upload_{secrets.token_hex(12)}{suffix}"
+    run = create_payroll_run({
+        "status": "等待上传",
+        "fileName": original_name,
+        "savedFileName": saved_name,
+        "expectedFileSize": file_size,
+        "contentType": str(payload.get("contentType") or "application/octet-stream"),
+        "uploadMode": "direct",
+    })
+    run_id = run["id"]
+    try:
+        signed = create_domestic_labor_signed_upload(run_id, saved_name)
+    except Exception as exc:
+        payroll_logger.exception("Failed to create domestic labor signed upload for %s", run_id)
+        try:
+            delete_payroll_run(run_id)
+            shutil.rmtree(get_payroll_run_dir(run_id), ignore_errors=True)
+        except Exception:
+            payroll_logger.exception("Failed to clean domestic labor upload plan %s", run_id)
+        raise HTTPException(503, "生成 Supabase 直传地址失败，请稍后重试。") from exc
+    return {
+        "runId": run_id,
+        "upload": {
+            **signed,
+            "filename": saved_name,
+            "originalFilename": original_name,
+            "size": file_size,
+            "contentType": run["contentType"],
+        },
+    }
+
+
+@app.post("/api/domestic-labor/runs/{run_id}/direct-upload-complete")
+async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
+    if not domestic_labor_persistent_storage_enabled():
+        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+    try:
+        metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    if metadata.get("uploadMode") != "direct":
+        raise HTTPException(400, "该任务不是浏览器直传任务。")
+    if metadata.get("status") == "已完成":
+        return {"run_id": run_id, "status": "已完成", "message": "计算完成", "error": ""}
+    if metadata.get("status") == "计算中":
+        raise HTTPException(409, "该任务正在计算，请勿重复提交。")
+
+    engine_list = _validate_domestic_labor_engine_list(payload.get("engines"))
+    saved_name = str(metadata.get("savedFileName") or "")
+    try:
+        file_path = await asyncio.to_thread(materialize_payroll_file, run_id, saved_name)
+    except Exception as exc:
+        payroll_logger.exception("Failed to materialize direct domestic labor upload %s", run_id)
+        raise HTTPException(503, "读取已上传文件失败，请稍后重试。") from exc
+    if not file_path or not file_path.is_file():
+        raise HTTPException(400, "未找到已上传文件，请重新选择文件上传。")
+    actual_size = file_path.stat().st_size
+    expected_size = int(metadata.get("expectedFileSize") or 0)
+    if expected_size and actual_size != expected_size:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(400, f"上传文件大小不一致（预期 {expected_size}，实际 {actual_size}），请重新上传。")
+
+    hrbp = payload.get("hrbpList")
+    if hrbp is not None and not isinstance(hrbp, list):
+        raise HTTPException(400, "HRBP 名单格式不正确。")
+    attendance_month = str(payload.get("attendanceMonth") or "")
+    update_payroll_metadata(run_id, {
+        "status": "已上传",
+        "engines": engine_list,
+        "attendanceMonth": attendance_month,
+        "filePath": str(file_path),
+        "fileSize": actual_size,
+    })
+    result = await asyncio.to_thread(
+        _run_payroll_calculation,
+        run_id,
+        str(file_path),
+        attendance_month,
+        engine_list,
+        str(payload.get("password") or "") or None,
+        hrbp,
+    )
+    status = result.get("status", "失败")
+    return {
+        "run_id": run_id,
+        "status": status,
+        "message": "计算完成" if status == "已完成" else "计算失败",
+        "error": result.get("error", ""),
+    }
 
 
 @app.get("/api/domestic-labor/runs/{run_id}")
-def get_domestic_labor_run(run_id: str) -> dict:
+def get_domestic_labor_run(run_id: str, response_mode: str = "") -> dict:
     try:
-        metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
+        run_dir = get_payroll_run_dir(run_id)
+        metadata = (
+            load_payroll_status(run_dir)
+            if response_mode in {"compact", "status"}
+            else load_payroll_metadata(run_dir)
+        )
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
     return metadata
@@ -7177,10 +7342,12 @@ def export_domestic_labor(run_id: str) -> dict:
     if not results:
         raise HTTPException(400, "暂无计算结果可导出")
     file_name = _domestic_labor_export_filename(metadata)
-    out_path = PAYROLL_OUTPUT_DIR / file_name
-    exporter = ExcelExporter(str(out_path))
-    summary = metadata.get("summary", {})
-    exporter.export(results, metadata.get("attendanceMonth", ""), summary)
+    out_path = get_payroll_run_dir(run_id) / file_name
+    if not out_path.exists():
+        exporter = ExcelExporter(str(out_path))
+        summary = metadata.get("summary", {})
+        exporter.export(results, metadata.get("attendanceMonth", ""), summary)
+        persist_payroll_file(run_id, out_path)
     return {"file_path": str(out_path), "file_name": file_name}
 
 
@@ -7191,8 +7358,8 @@ def download_domestic_labor_file(run_id: str, filename: str) -> FileResponse:
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
     # Check run dir first, then output dir
-    path = run_dir / Path(filename).name
-    if not path.exists():
+    path = materialize_payroll_file(run_id, filename)
+    if path is None:
         path = PAYROLL_OUTPUT_DIR / Path(filename).name
     if not path.exists():
         raise HTTPException(404, "文件不存在或已被清理。")
@@ -7205,6 +7372,7 @@ def delete_domestic_labor_run(run_id: str) -> dict:
         run_dir = get_payroll_run_dir(run_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    delete_payroll_run(run_id)
     shutil.rmtree(run_dir, ignore_errors=True)
     return {"message": f"已删除任务: {run_id}"}
 
