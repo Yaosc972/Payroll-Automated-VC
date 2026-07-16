@@ -2,8 +2,33 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 
 from bonus_platform.engine.domestic_labor import persistent_storage, runs
+
+
+def test_domestic_labor_persists_metadata_and_status_in_parallel(monkeypatch):
+    upload_barrier = threading.Barrier(2)
+    uploads = []
+    uploads_lock = threading.Lock()
+
+    def fake_upload(object_path, content, *, content_type):
+        upload_barrier.wait(timeout=1)
+        with uploads_lock:
+            uploads.append((object_path, content_type, content))
+
+    monkeypatch.setattr(persistent_storage, "_upload_bytes", fake_upload)
+
+    persistent_storage.save_domestic_labor_metadata_to_persistent(
+        "payroll_123",
+        {"id": "payroll_123", "status": "已完成", "results": [{"employee_id": "OWHN001"}]},
+        {"id": "payroll_123", "status": "已完成"},
+    )
+
+    assert {object_path.rsplit("/", 1)[-1] for object_path, _, _ in uploads} == {
+        "metadata.json",
+        "status.json",
+    }
 
 
 def test_domestic_labor_storage_reuses_existing_supabase_configuration(monkeypatch):

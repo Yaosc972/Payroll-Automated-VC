@@ -566,7 +566,16 @@ def test_domestic_direct_upload_complete_materializes_and_calculates(monkeypatch
 
     calculated = []
 
-    def fake_calculate(target_run_id, file_path, month, engines, password, hrbp, validate_inputs=False):
+    def fake_calculate(
+        target_run_id,
+        file_path,
+        month,
+        engines,
+        password,
+        hrbp,
+        validate_inputs=False,
+        initial_metadata=None,
+    ):
         calculated.append((target_run_id, file_path, month, engines, password, hrbp))
         return app_module.update_payroll_metadata(target_run_id, {
             "status": "已完成",
@@ -631,13 +640,22 @@ def test_domestic_direct_upload_complete_materializes_multiple_files(monkeypatch
 
     calculated = []
 
-    def fake_calculate(target_run_id, file_paths, month, engines, password, hrbp, validate_inputs=False):
-        calculated.append((target_run_id, file_paths, month, engines, password, hrbp))
-        return app_module.update_payroll_metadata(target_run_id, {
+    def fake_calculate(
+        target_run_id,
+        file_paths,
+        month,
+        engines,
+        password,
+        hrbp,
+        validate_inputs=False,
+        initial_metadata=None,
+    ):
+        calculated.append((target_run_id, file_paths, month, engines, password, hrbp, initial_metadata))
+        return {
             "status": "已完成",
             "results": [],
             "inputSummary": {"file_count": len(file_paths)},
-        })
+        }
 
     monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
     monkeypatch.setattr(app_module, "_run_payroll_calculation", fake_calculate)
@@ -652,6 +670,13 @@ def test_domestic_direct_upload_complete_materializes_multiple_files(monkeypatch
     assert payload["status"] == "已完成"
     assert payload["input_summary"]["file_count"] == 2
     assert len(calculated[0][1]) == 2
+    assert calculated[0][6] == {
+        "engines": ["canbu"],
+        "attendanceMonth": "202606",
+        "filePath": calculated[0][1][0],
+        "filePaths": calculated[0][1],
+        "fileSize": len(monthly) + len(daily),
+    }
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 

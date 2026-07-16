@@ -7027,12 +7027,22 @@ def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> N
 def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
                               hrbp_list: list = None,
-                              validate_inputs: bool = False) -> dict:
+                              validate_inputs: bool = False,
+                              initial_metadata: dict | None = None) -> dict:
     """Load Excel, run engines, and persist the terminal task state."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     calculation_started = monotonic()
     try:
-        update_payroll_metadata(run_id, {"status": "计算中"})
+        running_state_started = monotonic()
+        update_payroll_metadata(run_id, {
+            **(initial_metadata or {}),
+            "status": "计算中",
+        })
+        payroll_logger.info(
+            "Persisted running payroll state for %s in %.2fs",
+            run_id,
+            monotonic() - running_state_started,
+        )
         with MultiFilePayrollDataLoader(file_paths, password=password) as loader:
             input_summary = None
             if validate_inputs:
@@ -7066,6 +7076,7 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 if any(k in dept2 for k in ("华东枢纽", "华东揽收组", "华西枢纽", "华西揽收组")):
                     region = "wes"
 
+            engine_started = monotonic()
             results = []
             for row in monthly.rows:
                 emp_id = str(row.get("工号", ""))
@@ -7095,6 +7106,12 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 r["total"] = r["quanqinjiang"] + r["canbu"] + r["waisu_butie"] + r["gonglingjiang"]
                 r["warnings"] = "; ".join(r["warnings"]) if r["warnings"] else ""
                 results.append(r)
+            payroll_logger.info(
+                "Calculated payroll rules for %s in %.2fs: %d employees",
+                run_id,
+                monotonic() - engine_started,
+                len(results),
+            )
 
             # Compute summary
             summary = {
@@ -7114,7 +7131,13 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
             }
             if input_summary is not None:
                 terminal_patch["inputSummary"] = input_summary
+            persistence_started = monotonic()
             metadata = update_payroll_metadata(run_id, terminal_patch)
+            payroll_logger.info(
+                "Persisted completed payroll state for %s in %.2fs",
+                run_id,
+                monotonic() - persistence_started,
+            )
             payroll_logger.info(
                 "Payroll calculation completed for %s in %.2fs: %d employees",
                 run_id,
@@ -7388,14 +7411,13 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
     attendance_month = str(payload.get("attendanceMonth") or "")
     password = str(payload.get("password") or "") or None
     actual_size = sum(path.stat().st_size for path in file_paths)
-    update_payroll_metadata(run_id, {
-        "status": "已上传",
+    initial_metadata = {
         "engines": engine_list,
         "attendanceMonth": attendance_month,
         "filePath": str(file_paths[0]),
         "filePaths": [str(path) for path in file_paths],
         "fileSize": actual_size,
-    })
+    }
     result = await asyncio.to_thread(
         _run_payroll_calculation,
         run_id,
@@ -7405,6 +7427,7 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         password,
         hrbp,
         True,
+        initial_metadata,
     )
     status = result.get("status", "失败")
     if result.get("errorCode") == "INPUT_VALIDATION_FAILED":

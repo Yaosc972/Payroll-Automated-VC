@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import gzip
 import json
 import mimetypes
@@ -69,16 +70,21 @@ def save_domestic_labor_metadata_to_persistent(
 ) -> None:
     metadata = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     status = json.dumps(status_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    _upload_bytes(
-        _object_path(run_id, "metadata.json"),
-        gzip.compress(metadata, compresslevel=6),
-        content_type="application/gzip",
+    uploads = (
+        (
+            _object_path(run_id, "metadata.json"),
+            gzip.compress(metadata, compresslevel=6),
+            "application/gzip",
+        ),
+        (_object_path(run_id, "status.json"), status, "application/json"),
     )
-    _upload_bytes(
-        _object_path(run_id, "status.json"),
-        status,
-        content_type="application/json",
-    )
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="domestic-labor-state") as executor:
+        futures = [
+            executor.submit(_upload_bytes, object_path, content, content_type=content_type)
+            for object_path, content, content_type in uploads
+        ]
+        for future in futures:
+            future.result()
 
 
 def load_domestic_labor_metadata_from_persistent(run_id: str) -> dict[str, Any] | None:
