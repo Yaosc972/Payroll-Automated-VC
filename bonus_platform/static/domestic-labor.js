@@ -2136,7 +2136,7 @@ async function submitTask() {
   if (!state.selectedEngines.length) return toast('请至少选择一个引擎。');
 
   setText(el.submitStatus, '正在上传并完成核算，请稍候...');
-  el.btnSubmitTask.disabled = true;
+  setButtonBusy(el.btnSubmitTask, true, '准备上传...');
   resetReportLink();
 
   try {
@@ -2147,6 +2147,7 @@ async function submitTask() {
       password: el.filePassword.value || '',
       hrbpList: state.hrbpList,
       statusElement: el.submitStatus,
+      progressButton: el.btnSubmitTask,
     });
     if (data.status === '失败') {
       throw new Error(data.error || '计算失败，请检查文件后重试。');
@@ -2173,7 +2174,7 @@ async function submitTask() {
     setText(el.submitStatus, error.message, true);
     toast(error.message);
   } finally {
-    el.btnSubmitTask.disabled = false;
+    setButtonBusy(el.btnSubmitTask, false);
   }
 }
 
@@ -2184,7 +2185,7 @@ async function submitCanbuBatch() {
   if (!batch) return toast(`暂无${config.name}批次。`);
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
-  if (submit) submit.disabled = true;
+  setButtonBusy(submit, true, '准备上传...');
   setText(el.uploadStatus, `正在上传并完成${config.name}核算，请稍候...`);
   resetReportLink();
   stopPolling();
@@ -2216,6 +2217,7 @@ async function submitCanbuBatch() {
       password: el.filePassword?.value || '',
       hrbpList,
       statusElement: el.uploadStatus,
+      progressButton: submit,
     });
     if (data.status === '失败') {
       throw new Error(data.error || `${config.name}核算失败，请检查文件后重试。`);
@@ -2237,24 +2239,21 @@ async function submitCanbuBatch() {
     setText(el.uploadStatus, error.message, true);
     toast(error.message);
   } finally {
-    if (submit) submit.disabled = false;
+    setButtonBusy(submit, false);
   }
 }
 
-async function submitDomesticLaborRun({ file, files = [], engines, attendanceMonth, password, hrbpList, statusElement }) {
+async function submitDomesticLaborRun({ file, files = [], engines, attendanceMonth, password, hrbpList, statusElement, progressButton }) {
   const selectedFiles = files.length ? files : [file].filter(Boolean);
-  if (selectedFiles.length > 1) {
-    setText(statusElement, `正在上传 ${selectedFiles.length} 个文件并核算...`);
-    return submitDomesticLaborRunMultipart({ files: selectedFiles, engines, attendanceMonth, password, hrbpList });
-  }
   try {
     return await submitDomesticLaborRunDirect({
-      file: selectedFiles[0],
+      files: selectedFiles,
       engines,
       attendanceMonth,
       password,
       hrbpList,
       statusElement,
+      progressButton,
     });
   } catch (error) {
     const localHost = ['', 'localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
@@ -2266,26 +2265,41 @@ async function submitDomesticLaborRun({ file, files = [], engines, attendanceMon
   }
 }
 
-async function submitDomesticLaborRunDirect({ file, engines, attendanceMonth, password, hrbpList, statusElement }) {
-  setText(statusElement, '正在生成安全直传地址...');
+async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, password, hrbpList, statusElement, progressButton }) {
+  updateUploadProgress(statusElement, progressButton, '正在生成安全直传地址...');
   const plan = await requestJson('/api/domestic-labor/runs/direct-upload-plan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      fileName: file.name,
-      fileSize: file.size,
-      contentType: file.type || 'application/octet-stream',
+      files: files.map(file => ({
+        fileName: file.name,
+        fileSize: file.size,
+        contentType: file.type || 'application/octet-stream',
+      })),
     }),
   });
+  const uploads = plan.uploads || (plan.upload ? [plan.upload] : []);
+  if (uploads.length !== files.length) {
+    await fetch(`/api/domestic-labor/runs/${plan.runId}`, { method: 'DELETE' }).catch(() => {});
+    throw new Error('上传计划与所选文件数量不一致，请重新选择文件。');
+  }
   try {
-    await uploadDomesticFileToSignedUrl(plan.upload, file, (percent) => {
-      setText(statusElement, `正在直传文件 ${percent}%...`);
-    });
+    for (let index = 0; index < files.length; index += 1) {
+      await uploadDomesticFileToSignedUrl(uploads[index], files[index], (percent) => {
+        const overall = Math.round(((index + percent / 100) / files.length) * 100);
+        updateUploadProgress(
+          statusElement,
+          progressButton,
+          `正在上传 ${index + 1}/${files.length}：${files[index].name}（总进度 ${overall}%）`,
+          `上传中 ${overall}%`
+        );
+      });
+    }
   } catch (error) {
     await fetch(`/api/domestic-labor/runs/${plan.runId}`, { method: 'DELETE' }).catch(() => {});
     throw error;
   }
-  setText(statusElement, '文件上传完成，正在校验并核算...');
+  updateUploadProgress(statusElement, progressButton, '上传完成，正在校验并核算...');
   return requestJson(`/api/domestic-labor/runs/${plan.runId}/direct-upload-complete`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2933,6 +2947,36 @@ function setText(element, value, error = false) {
   if (!element) return;
   element.textContent = value;
   element.classList.toggle('error-text', error);
+}
+
+function setButtonBusy(button, busy, label = '处理中...') {
+  if (!button) return;
+  if (busy) {
+    if (!button.dataset.idleText) button.dataset.idleText = button.textContent.trim();
+    button.classList.add('is-busy');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.replaceChildren();
+    const spinner = document.createElement('span');
+    spinner.className = 'dl-button-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'dl-button-busy-label';
+    text.textContent = label;
+    button.append(spinner, text);
+    return;
+  }
+  button.classList.remove('is-busy');
+  button.disabled = false;
+  button.removeAttribute('aria-busy');
+  button.textContent = button.dataset.idleText || button.textContent;
+  delete button.dataset.idleText;
+}
+
+function updateUploadProgress(statusElement, progressButton, message, buttonLabel = message) {
+  setText(statusElement, message);
+  const label = progressButton?.querySelector('.dl-button-busy-label');
+  if (label) label.textContent = buttonLabel;
 }
 
 function toast(message) {

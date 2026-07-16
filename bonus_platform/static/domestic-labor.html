@@ -305,6 +305,24 @@
         box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
       }
 
+      .dl-btn.is-busy,
+      .btn-primary.is-busy,
+      .btn-primary-lg.is-busy {
+        cursor: wait;
+        opacity: 0.9;
+        transform: none;
+      }
+
+      .dl-button-spinner {
+        width: 15px;
+        height: 15px;
+        flex: 0 0 15px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 50%;
+        animation: dl-spin 0.75s linear infinite;
+      }
+
       .btn-download.disabled {
         opacity: 0.4;
         pointer-events: none;
@@ -2602,6 +2620,6 @@
       </div>
     </div>
 
-    <script src="domestic-labor.js?v=2"></script>
+    <script src="domestic-labor.js?v=3"></script>
   </body>
 </html>

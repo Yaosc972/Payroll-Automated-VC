@@ -7215,36 +7215,70 @@ def _validate_domestic_labor_engine_list(raw: Any) -> list[str]:
     return engine_list
 
 
+def _domestic_labor_direct_upload_specs(payload: dict) -> list[dict]:
+    raw_files = payload.get("files")
+    if raw_files is None:
+        raw_files = [payload]
+    if not isinstance(raw_files, list) or not raw_files:
+        raise HTTPException(400, "请至少选择一个 Excel 文件。")
+    if len(raw_files) > 20:
+        raise HTTPException(400, "单次最多上传 20 个 Excel 文件。")
+
+    specs = []
+    total_size = 0
+    for raw in raw_files:
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "上传文件信息格式不正确。")
+        original_name = Path(str(raw.get("fileName") or "")).name
+        if not original_name.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            raise HTTPException(400, f"请上传 Excel 文件（.xlsx / .xlsm / .xls）：{original_name or '未知文件'}")
+        try:
+            file_size = int(raw.get("fileSize") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"上传文件大小无效：{original_name}") from exc
+        if file_size <= 0:
+            raise HTTPException(400, f"上传文件不能为空：{original_name}")
+        total_size += file_size
+        suffix = Path(original_name).suffix.lower()
+        specs.append({
+            "originalFilename": original_name,
+            "filename": f"upload_{secrets.token_hex(12)}{suffix}",
+            "size": file_size,
+            "contentType": str(raw.get("contentType") or "application/octet-stream"),
+        })
+
+    max_bytes = _domestic_labor_direct_upload_max_bytes()
+    if total_size > max_bytes:
+        raise HTTPException(413, f"上传文件总大小超过当前上限 {max_bytes} 字节。")
+    return specs
+
+
 @app.post("/api/domestic-labor/runs/direct-upload-plan")
 def create_domestic_labor_direct_upload_plan(payload: dict = Body(...)) -> dict:
     if not domestic_labor_persistent_storage_enabled():
         raise HTTPException(409, "当前环境未启用 Supabase 直传。")
-    original_name = Path(str(payload.get("fileName") or "")).name
-    if not original_name.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        raise HTTPException(400, "请上传 Excel 文件（.xlsx / .xlsm / .xls）")
-    try:
-        file_size = int(payload.get("fileSize") or 0)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(400, "上传文件大小无效。") from exc
-    if file_size <= 0:
-        raise HTTPException(400, "上传文件不能为空。")
-    max_bytes = _domestic_labor_direct_upload_max_bytes()
-    if file_size > max_bytes:
-        raise HTTPException(413, f"上传文件超过当前上限 {max_bytes} 字节。")
-
-    suffix = Path(original_name).suffix.lower()
-    saved_name = f"upload_{secrets.token_hex(12)}{suffix}"
+    specs = _domestic_labor_direct_upload_specs(payload)
+    first = specs[0]
     run = create_payroll_run({
         "status": "等待上传",
-        "fileName": original_name,
-        "savedFileName": saved_name,
-        "expectedFileSize": file_size,
-        "contentType": str(payload.get("contentType") or "application/octet-stream"),
+        "fileName": first["originalFilename"],
+        "fileNames": [spec["originalFilename"] for spec in specs],
+        "savedFileName": first["filename"],
+        "savedFileNames": [spec["filename"] for spec in specs],
+        "expectedFileSize": sum(spec["size"] for spec in specs),
+        "expectedFiles": specs,
+        "contentType": first["contentType"],
         "uploadMode": "direct",
     })
     run_id = run["id"]
     try:
-        signed = create_domestic_labor_signed_upload(run_id, saved_name)
+        uploads = [
+            {
+                **create_domestic_labor_signed_upload(run_id, spec["filename"]),
+                **spec,
+            }
+            for spec in specs
+        ]
     except Exception as exc:
         payroll_logger.exception("Failed to create domestic labor signed upload for %s", run_id)
         try:
@@ -7255,13 +7289,8 @@ def create_domestic_labor_direct_upload_plan(payload: dict = Body(...)) -> dict:
         raise HTTPException(503, "生成 Supabase 直传地址失败，请稍后重试。") from exc
     return {
         "runId": run_id,
-        "upload": {
-            **signed,
-            "filename": saved_name,
-            "originalFilename": original_name,
-            "size": file_size,
-            "contentType": run["contentType"],
-        },
+        "upload": uploads[0],
+        "uploads": uploads,
     }
 
 
@@ -7281,38 +7310,61 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         raise HTTPException(409, "该任务正在计算，请勿重复提交。")
 
     engine_list = _validate_domestic_labor_engine_list(payload.get("engines"))
-    saved_name = str(metadata.get("savedFileName") or "")
+    expected_files = metadata.get("expectedFiles") or [{
+        "filename": str(metadata.get("savedFileName") or ""),
+        "originalFilename": str(metadata.get("fileName") or ""),
+        "size": int(metadata.get("expectedFileSize") or 0),
+    }]
+    file_paths = []
     try:
-        file_path = await asyncio.to_thread(materialize_payroll_file, run_id, saved_name)
+        for expected in expected_files:
+            saved_name = str(expected.get("filename") or "")
+            file_path = await asyncio.to_thread(materialize_payroll_file, run_id, saved_name)
+            if not file_path or not file_path.is_file():
+                raise HTTPException(400, f"未找到已上传文件：{expected.get('originalFilename') or saved_name}")
+            actual_size = file_path.stat().st_size
+            expected_size = int(expected.get("size") or 0)
+            if expected_size and actual_size != expected_size:
+                file_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    400,
+                    f"上传文件大小不一致（{expected.get('originalFilename') or saved_name}：预期 {expected_size}，实际 {actual_size}），请重新上传。",
+                )
+            file_paths.append(file_path)
+    except HTTPException:
+        raise
     except Exception as exc:
         payroll_logger.exception("Failed to materialize direct domestic labor upload %s", run_id)
         raise HTTPException(503, "读取已上传文件失败，请稍后重试。") from exc
-    if not file_path or not file_path.is_file():
-        raise HTTPException(400, "未找到已上传文件，请重新选择文件上传。")
-    actual_size = file_path.stat().st_size
-    expected_size = int(metadata.get("expectedFileSize") or 0)
-    if expected_size and actual_size != expected_size:
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(400, f"上传文件大小不一致（预期 {expected_size}，实际 {actual_size}），请重新上传。")
 
     hrbp = payload.get("hrbpList")
     if hrbp is not None and not isinstance(hrbp, list):
         raise HTTPException(400, "HRBP 名单格式不正确。")
     attendance_month = str(payload.get("attendanceMonth") or "")
+    password = str(payload.get("password") or "") or None
+    try:
+        with MultiFilePayrollDataLoader([str(path) for path in file_paths], password=password) as loader:
+            input_summary = loader.validate_inputs(engine_list, attendance_month)
+    except Exception as exc:
+        raise HTTPException(400, f"数据文件校验失败：{exc}") from exc
+
+    actual_size = sum(path.stat().st_size for path in file_paths)
     update_payroll_metadata(run_id, {
         "status": "已上传",
         "engines": engine_list,
         "attendanceMonth": attendance_month,
-        "filePath": str(file_path),
+        "filePath": str(file_paths[0]),
+        "filePaths": [str(path) for path in file_paths],
         "fileSize": actual_size,
+        "inputSummary": input_summary,
     })
     result = await asyncio.to_thread(
         _run_payroll_calculation,
         run_id,
-        [str(file_path)],
+        [str(path) for path in file_paths],
         attendance_month,
         engine_list,
-        str(payload.get("password") or "") or None,
+        password,
         hrbp,
     )
     status = result.get("status", "失败")
@@ -7321,6 +7373,7 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         "status": status,
         "message": "计算完成" if status == "已完成" else "计算失败",
         "error": result.get("error", ""),
+        "input_summary": input_summary,
     }
 
 

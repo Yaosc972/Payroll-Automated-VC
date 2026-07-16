@@ -373,12 +373,16 @@ def test_domestic_labor_page_is_payroll_workbench():
 
 
 def test_domestic_labor_uses_signed_storage_upload_before_calculation():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
     assert "/api/domestic-labor/runs/direct-upload-plan" in js
     assert "/direct-upload-complete" in js
     assert "XMLHttpRequest" in js
     assert "upload.onprogress" in js
+    assert "plan.uploads" in js
+    assert "setButtonBusy" in js
+    assert "dl-button-spinner" in html
 
 
 def test_domestic_labor_meal_workbench_static_labels():

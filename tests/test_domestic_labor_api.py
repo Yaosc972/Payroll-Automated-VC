@@ -467,6 +467,43 @@ def test_domestic_direct_upload_plan_returns_signed_url(monkeypatch):
     client.delete(f"/api/domestic-labor/runs/{payload['runId']}")
 
 
+def test_domestic_direct_upload_plan_returns_signed_urls_for_multiple_files(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_domestic_labor_signed_upload",
+        lambda run_id, filename: {
+            "signedUrl": f"https://example.supabase.co/storage/v1/object/upload/sign/{filename}",
+            "objectPath": f"domestic-labor-runs/production/{run_id}/{filename}",
+            "relativePath": filename,
+        },
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={
+            "files": [
+                {"fileName": "月考勤.xlsx", "fileSize": 1024, "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                {"fileName": "日考勤.xlsx", "fileSize": 2048, "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["uploads"]) == 2
+    assert [upload["originalFilename"] for upload in payload["uploads"]] == ["月考勤.xlsx", "日考勤.xlsx"]
+    assert len({upload["filename"] for upload in payload["uploads"]}) == 2
+    assert payload["upload"] == payload["uploads"][0]
+    metadata = client.get(f"/api/domestic-labor/runs/{payload['runId']}").json()
+    assert metadata["fileNames"] == ["月考勤.xlsx", "日考勤.xlsx"]
+    assert metadata["expectedFileSize"] == 3072
+    client.delete(f"/api/domestic-labor/runs/{payload['runId']}")
+
+
 def test_domestic_direct_upload_plan_rejects_invalid_file(monkeypatch):
     import bonus_platform.app as app_module
 
@@ -541,14 +578,72 @@ def test_domestic_direct_upload_complete_materializes_and_calculates(monkeypatch
         json={
             "engines": "quanqinjiang",
             "attendanceMonth": "202606",
-            "password": "secret",
+            "password": "",
             "hrbpList": [{"工号": "OWHN001"}],
         },
     )
 
     assert response.status_code == 200
     assert response.json()["status"] == "已完成"
-    assert calculated[0][2:] == ("202606", ["quanqinjiang"], "secret", [{"工号": "OWHN001"}])
+    assert calculated[0][2:] == ("202606", ["quanqinjiang"], None, [{"工号": "OWHN001"}])
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_domestic_direct_upload_complete_materializes_multiple_files(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monthly, daily = _split_canbu_files()
+    file_payloads = {"月考勤.xlsx": monthly, "日考勤.xlsx": daily}
+    monkeypatch.setattr(app_module, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "create_domestic_labor_signed_upload",
+        lambda run_id, filename: {
+            "signedUrl": f"https://example.supabase.co/storage/v1/object/upload/sign/{filename}",
+            "objectPath": f"domestic-labor-runs/production/{run_id}/{filename}",
+            "relativePath": filename,
+        },
+    )
+    client = TestClient(app)
+    plan = client.post(
+        "/api/domestic-labor/runs/direct-upload-plan",
+        json={
+            "files": [
+                {"fileName": name, "fileSize": len(content), "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+                for name, content in file_payloads.items()
+            ]
+        },
+    ).json()
+    run_id = plan["runId"]
+    content_by_saved_name = {
+        upload["filename"]: file_payloads[upload["originalFilename"]]
+        for upload in plan["uploads"]
+    }
+
+    def fake_materialize(target_run_id, target_filename):
+        target = app_module.get_payroll_run_dir(target_run_id) / target_filename
+        target.write_bytes(content_by_saved_name[target_filename])
+        return target
+
+    calculated = []
+
+    def fake_calculate(target_run_id, file_paths, month, engines, password, hrbp):
+        calculated.append((target_run_id, file_paths, month, engines, password, hrbp))
+        return app_module.update_payroll_metadata(target_run_id, {"status": "已完成", "results": []})
+
+    monkeypatch.setattr(app_module, "materialize_payroll_file", fake_materialize)
+    monkeypatch.setattr(app_module, "_run_payroll_calculation", fake_calculate)
+
+    response = client.post(
+        f"/api/domestic-labor/runs/{run_id}/direct-upload-complete",
+        json={"engines": ["canbu"], "attendanceMonth": "202606"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "已完成"
+    assert payload["input_summary"]["file_count"] == 2
+    assert len(calculated[0][1]) == 2
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
