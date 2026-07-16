@@ -399,7 +399,7 @@
             <tr>
               <td>缺勤字段回填</td>
               <td>若月报缺勤字段为 0/空，系统会尝试从日考勤汇总：<code>正班旷职 → 旷工时数</code>、<code>事假 → 事假时数</code>、<code>病假时数 → 病假时数</code>、<code>排休请假 → 排休请假时数</code>。</td>
-              <td>工龄奖当前使用 <code>旷工天数</code>，不是 <code>旷工时数</code>；如线下用时数，需要单独确认。</td>
+              <td>工龄奖优先读取 <code>旷工时数</code>、<code>排休请假时数</code>；仅缺少小时字段时，才按对应天数字段 × 8 折算。</td>
             </tr>
             <tr>
               <td>入离职缺勤时数推导</td>
@@ -681,7 +681,7 @@
       <div class="section-head">
         <div>
           <h2>5. 工龄奖</h2>
-          <p class="section-sub">按部门类别、工作地区、岗位、HRBP 名单和司龄确定应发，再按请假、入离职缺勤、工伤折算。</p>
+          <p class="section-sub">按部门类别、工作地区、岗位、HRBP 名单和司龄确定应发，再按请假与入离职缺勤折算。</p>
         </div>
         <span class="chip strong">科目字段：gonglingjiang</span>
       </div>
@@ -690,12 +690,12 @@
           <div class="card">
             <h3>涉及表和字段</h3>
             <p><span class="tag">月报/月考勤</span><span class="tag">参数：HRBP名单</span></p>
-            <p><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工天数</code>、<code>排休请假天数</code>、<code>工伤假天数</code>、<code>备注</code>。</p>
+            <p><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工时数/旷工天数</code>、<code>排休请假时数/排休请假天数</code>、<code>备注</code>。</p>
           </div>
           <div class="card">
             <h3>总公式</h3>
             <span class="formula">应发 = min(年度标准 × 工龄年数, 上限)</span>
-            <span class="formula">最终 = 应发 → 事病旷排休折算 → 入离职缺勤折算 → 工伤折算 → 0 到上限兜底</span>
+            <span class="formula">最终 = 应发 → 事病旷排休折算 → 入离职缺勤折算 → Excel ROUND 保留2位</span>
           </div>
         </div>
 
@@ -722,14 +722,14 @@
               <td>600 元</td>
             </tr>
             <tr>
-              <td>嘉善 / 操作</td>
-              <td>嘉善区域无工龄奖。</td>
+              <td>嘉善、义乌 / 操作</td>
+              <td>嘉善、义乌区域无工龄奖。</td>
               <td>0</td>
               <td>0</td>
             </tr>
             <tr>
               <td>晋江 / 操作</td>
-              <td>仅 <code>岗位名称=操作员</code>。</td>
+              <td><code>岗位名称</code>为操作员或门禁员。</td>
               <td>50 元/年</td>
               <td>150 元</td>
             </tr>
@@ -769,7 +769,7 @@
           </div>
           <div class="card">
             <h3>正班出勤为 0 的处理</h3>
-            <p>当前不会直接置 0。系统会继续按缺勤折算规则计算金额，同时生成提示异常。</p>
+            <p>正班出勤天数为 0 且存在事假时，按线下工资表人工归零口径，工龄奖为 0；仅病假等其他缺勤仍按公式折算。</p>
             <p class="info">异常码：<code>ZERO_REGULAR_ATTENDANCE_DAYS</code>，等级：提示。</p>
           </div>
         </div>
@@ -785,7 +785,7 @@
           <tbody>
             <tr>
               <td>事病旷排休时数</td>
-              <td><code>事假时数 + 病假时数 + 旷工天数 × 8 + 排休请假天数 × 8</code></td>
+              <td><code>事假时数 + 病假时数 + 旷工时数 + 排休请假时数</code>；缺少小时字段时按对应天数 × 8。</td>
               <td>若合计 ≥ 56 小时，按出勤天数比例折算；否则应发金额全额保留。</td>
             </tr>
             <tr>
@@ -809,14 +809,9 @@
               <td>入离职缺勤时数大于 0 时扣减。</td>
             </tr>
             <tr>
-              <td>工伤折算</td>
-              <td><code>工伤假天数 × 8</code></td>
-              <td>仅操作类别计入工伤折算；按日折算金额扣减。</td>
-            </tr>
-            <tr>
-              <td>最终兜底</td>
-              <td><code>round(max(min(折算后金额, 上限), 0), 2)</code></td>
-              <td>最终金额不低于 0，不超过上限。</td>
+              <td>最终舍入</td>
+              <td><code>Excel ROUND(折算后金额, 2)</code></td>
+              <td>按线下公式四舍五入，不额外设置最低 0 元兜底；请假折算后可能为负数。</td>
             </tr>
           </tbody>
         </table>
@@ -923,7 +918,7 @@
           </div>
           <div class="note">
             <strong>外宿补贴缺勤字段。</strong><br>
-            当前使用 <code>旷工时数</code>，而工龄奖使用 <code>旷工天数</code>。两个科目的字段口径不同，线下比对时需分别确认。
+            餐补与工龄奖均可读取 <code>旷工时数</code>；工龄奖在小时字段缺失时兼容 <code>旷工天数 × 8</code>。
           </div>
         </div>
       </div>
@@ -963,7 +958,7 @@
             </tr>
             <tr>
               <td>工龄奖</td>
-              <td><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工天数</code>、<code>排休请假天数</code>、<code>工伤假天数</code>、<code>备注</code></td>
+              <td><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工时数/旷工天数</code>、<code>排休请假时数/排休请假天数/排休请假</code>、<code>备注</code></td>
               <td>参数：HRBP 发放工号名单。</td>
             </tr>
           </tbody>

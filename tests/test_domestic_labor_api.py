@@ -108,6 +108,38 @@ def test_payroll_loader_supports_dormitory_sheet_and_date_aliases(tmp_path):
     }
 
 
+def test_multi_file_loader_identifies_business_fields_after_columns_are_reordered(tmp_path):
+    """输入列顺序变化时应始终按表头字段取值，不依赖固定列号。"""
+    path = tmp_path / "reordered-columns.xlsx"
+    path.write_bytes(_create_test_excel({
+        "月考勤": [
+            ["岗位名称", "考勤月份", "姓名", "工号", "工作地区", "实际在职工作日天数", "排班天数", "一级部门名称"],
+            ["操作员", "202606", "张三", "OWHN001", "嘉善", 26, 26, "华东操作"],
+        ],
+        "日考勤": [
+            ["刷卡加班", "工号", "日期", "正班时数", "岗位名称", "工作地区", "姓名", "工作状态"],
+            [0, "OWHN001", date(2026, 6, 1), 8, "操作员", "嘉善", "张三", "工作日"],
+        ],
+        "住宿名单": [
+            ["退宿时间", "姓名", "工号", "入住时间"],
+            [date(2026, 6, 11), "张三", "OWHN001", date(2026, 5, 1)],
+        ],
+    }))
+
+    with domestic_parser.MultiFilePayrollDataLoader([str(path)]) as loader:
+        summary = loader.validate_inputs(["waisu_butie"], "202606")
+        monthly = loader.monthly.rows[0]
+        daily = loader.group_daily_by_employee()["OWHN001"][0]
+        housing = loader.group_housing_by_employee()["OWHN001"][0]
+
+    assert summary["present_types"] == ["daily", "housing", "monthly"]
+    assert (monthly["工号"], monthly["工作地区"], monthly["岗位名称"]) == ("OWHN001", "嘉善", "操作员")
+    assert (daily["工号"], daily["正班时数"], daily["刷卡加班"]) == ("OWHN001", 8, 0)
+    assert (housing["工号"], housing["入住时间"], housing["退宿时间"]) == (
+        "OWHN001", date(2026, 5, 1), date(2026, 6, 11),
+    )
+
+
 def _quanqinjiang_data() -> bytes:
     """全勤奖测试数据"""
     return _create_test_excel({
@@ -180,6 +212,44 @@ def _waisu_butie_data() -> bytes:
     })
 
 
+def _split_waisu_butie_files() -> tuple[bytes, bytes, bytes]:
+    monthly = _create_test_excel({
+        "Sheet1": [
+            ["工号", "姓名", "考勤月份", "工作地区", "一级部门名称", "岗位名称", "入职日期", "最后工作日", "休年假小时", "病假时数"],
+            ["OWHN001", "张三", "202606", "嘉善", "华东操作", "操作员", date(2023, 1, 1), "", 0, 0],
+        ],
+    })
+    daily = _create_test_excel({
+        "Sheet1": [
+            ["工号", "姓名", "工作地区", "岗位名称", "日期", "上班一", "下班一"],
+            ["OWHN001", "张三", "嘉善", "操作员", date(2026, 6, 12), "09:00", "18:00"],
+        ],
+    })
+    housing = _create_test_excel({
+        "Sheet1": [
+            ["工号", "姓名", "入住时间", "退宿时间"],
+            ["OWHN001", "张三", date(2026, 5, 1), date(2026, 6, 11)],
+        ],
+    })
+    return monthly, daily, housing
+
+
+def _split_canbu_files() -> tuple[bytes, bytes]:
+    monthly = _create_test_excel({
+        "月度汇总": [
+            ["工号", "姓名", "考勤月份", "工作地区", "一级部门名称", "二级部门名称", "岗位名称", "排班天数", "实际在职工作日天数"],
+            ["OWHN001", "张三", "202606", "东莞", "莞深操作", "中国操作部", "操作员", 26, 26],
+        ],
+    })
+    daily = _create_test_excel({
+        "考勤明细": [
+            ["日期", "工号", "姓名", "工作地区", "岗位名称", "工作状态", "正班时数", "刷卡加班"],
+            [date(2026, 6, 1), "OWHN001", "张三", "东莞", "操作员", "工作日", 8, 0],
+        ],
+    })
+    return monthly, daily
+
+
 # ── 测试用例 ──
 
 
@@ -191,29 +261,31 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.0.0"
+    assert package["version"] == "1.1.0"
     assert package["status"] == "已发布"
-    assert {category["id"] for category in package["categories"]} == {"allowance"}
-    assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie"}
+    assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
+    assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie", "gonglingjiang"}
     assert all(subject["status"] == "已验证" for subject in package["subjects"])
     assert all(subject["version"].startswith("DL-") for subject in package["subjects"])
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.0.0"
-    assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie"]
+    assert package["version_history"][0]["version"] == "1.1.0"
+    assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie", "gonglingjiang"]
 
 
-def test_rule_package_does_not_publish_unverified_bonus_subjects():
+def test_rule_package_publishes_verified_seniority_but_not_attendance_bonus():
     client = TestClient(app)
 
     package = client.get("/api/domestic-labor/rule-package").json()
     payload = str(package)
 
     assert "quanqinjiang" not in payload
-    assert "gonglingjiang" not in payload
     assert "全勤奖" not in payload
-    assert "工龄奖" not in payload
+    gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
+    assert gongling["status"] == "已验证"
+    assert gongling["pending_confirmations"]
+    assert "OWHN2187" in gongling["pending_confirmations"][0]
 
 
 def test_rule_package_supports_immutable_version_lookup():
@@ -224,6 +296,7 @@ def test_rule_package_supports_immutable_version_lookup():
 
     assert published.status_code == 200
     assert published.json()["display_version"] == "DL-PAYROLL.v1.0.0"
+    assert {subject["id"] for subject in published.json()["subjects"]} == {"canbu", "waisu_butie"}
     assert missing.status_code == 404
     assert missing.json()["detail"] == "规则包版本不存在: 9.9.9"
 
@@ -519,6 +592,101 @@ def test_domestic_direct_upload_complete_rejects_size_mismatch(monkeypatch):
     assert response.status_code == 400
     assert "大小不一致" in response.json()["detail"]
     client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+
+def test_create_run_supports_split_monthly_daily_and_housing_workbooks():
+    """拆分为三个Excel时应自动识别、合并并完成外宿补贴核算。"""
+    client = TestClient(app)
+    monthly, daily, housing = _split_waisu_butie_files()
+
+    response = client.post(
+        "/api/domestic-labor/runs",
+        files=[
+            ("files", ("月考勤.xlsx", monthly, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+            ("files", ("日考勤.xlsx", daily, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+            ("files", ("住宿名单.xlsx", housing, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+        data={"engines": "waisu_butie", "attendance_month": "202606"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["input_summary"] == {
+        "file_count": 3,
+        "monthly_rows": 1,
+        "daily_rows": 1,
+        "housing_rows": 1,
+        "present_types": ["daily", "housing", "monthly"],
+        "sources": payload["input_summary"]["sources"],
+    }
+    assert [source["sheets"][0]["type"] for source in payload["input_summary"]["sources"]] == [
+        "monthly", "daily", "housing",
+    ]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.25)
+        metadata = client.get(f"/api/domestic-labor/runs/{payload['run_id']}").json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    assert metadata["summary"]["total_waisu_butie"] == 100
+    assert metadata["fileNames"] == ["月考勤.xlsx", "日考勤.xlsx", "住宿名单.xlsx"]
+    client.delete(f"/api/domestic-labor/runs/{payload['run_id']}")
+
+
+def test_create_run_supports_split_monthly_and_daily_canbu_workbooks():
+    """餐补拆分月考勤和日考勤后应自动合并核算。"""
+    client = TestClient(app)
+    monthly, daily = _split_canbu_files()
+
+    response = client.post(
+        "/api/domestic-labor/runs",
+        files=[
+            ("files", ("月考勤.xlsx", monthly, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+            ("files", ("日考勤.xlsx", daily, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+        data={"engines": "canbu", "attendance_month": "202606"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["input_summary"]["file_count"] == 2
+    assert payload["input_summary"]["monthly_rows"] == 1
+    assert payload["input_summary"]["daily_rows"] == 1
+
+    import time
+    for _ in range(20):
+        time.sleep(0.25)
+        metadata = client.get(f"/api/domestic-labor/runs/{payload['run_id']}").json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    assert metadata["summary"]["total_canbu"] == 19
+    client.delete(f"/api/domestic-labor/runs/{payload['run_id']}")
+
+
+def test_waisu_split_upload_rejects_missing_housing_workbook():
+    """外宿补贴缺少住宿名单时应在计算前明确阻断。"""
+    client = TestClient(app)
+    monthly, daily, _ = _split_waisu_butie_files()
+
+    response = client.post(
+        "/api/domestic-labor/runs",
+        files=[
+            ("files", ("月考勤.xlsx", monthly, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+            ("files", ("日考勤.xlsx", daily, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+        data={"engines": "waisu_butie", "attendance_month": "202606"},
+    )
+
+    assert response.status_code == 400
+    assert "缺少住宿名单" in response.json()["detail"]
+
+
 
 
 def test_create_run_without_engines():
@@ -1726,20 +1894,91 @@ def test_gonglingjiang_absence_components_trigger_proration():
     assert "达到56小时门槛" in " ".join(explanation["steps"])
 
 
-def test_gonglingjiang_final_amount_floors_at_zero():
-    """工龄奖折算后金额为负时按规则卡兜底为0"""
+def test_gonglingjiang_prefers_offline_hour_fields_for_dongguan_proration():
+    """东莞月报的旷工、排休小时字段按线下工资表口径直接参与56小时判断"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+        "旷工时数": 0,
+        "排休请假天数": 0,
+        "排休请假时数": 80,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 245.45
+    explanation = result.details["audit_explanation"]
+    assert explanation["intermediate_values"]["事病旷排休时数"] == 80
+    assert explanation["intermediate_values"]["排休字段口径"] == "排休请假时数"
+
+
+def test_gonglingjiang_uses_absenteeism_hours_when_days_field_is_missing():
+    """东莞仅提供旷工时数时不得漏算"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+        "事假时数": 31,
+        "病假时数": 0,
+        "旷工天数": 0,
+        "旷工时数": 68,
+        "排休请假天数": 0,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 196.88
+    explanation = result.details["audit_explanation"]
+    assert explanation["intermediate_values"]["事病旷排休时数"] == 99
+    assert explanation["intermediate_values"]["旷工字段口径"] == "旷工时数"
+
+
+def test_domestic_loader_normalizes_rest_leave_day_alias():
+    """晋江月报的排休请假列按天数兼容"""
+    loader = domestic_parser.PayrollDataLoader.__new__(domestic_parser.PayrollDataLoader)
+
+    row = loader._normalize_row({"工号": "OWDN001", "排休请假": "2"})
+
+    assert row["排休请假天数"] == 2
+    assert "排休请假时数" not in row
+
+
+def test_excel_parser_preserves_first_nonempty_duplicate_header_value(tmp_path):
+    """重复月报表头不得用后面的空值覆盖前面的真实值"""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "月考勤"
+    sheet.append(["工号", "正班出勤天数", "正班出勤天数"])
+    sheet.append(["OWHN001", 16.25, None])
+    path = tmp_path / "duplicate-header.xlsx"
+    workbook.save(path)
+
+    with ExcelParser(str(path)) as parser:
+        row = parser.parse_sheet("月考勤").rows[0]
+
+    assert row["正班出勤天数"] == 16.25
+
+
+def test_gonglingjiang_keeps_negative_amount_from_offline_formula():
+    """线下工资表未设置最低0元兜底，折算结果可为负数"""
     employee = {
         **_gongling_collection_employee(),
         "实际在职工作日天数": -10,
     }
     result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
 
-    assert result.amount == 0
+    assert result.amount == -173.08
     assert result.details["audit_explanation"]["intermediate_values"]["入离职折算后金额"] < 0
 
 
-def test_gonglingjiang_zero_regular_attendance_days_still_prorates():
-    """正班出勤天数为0不直接归0，继续折算并给出提示异常"""
+def test_gonglingjiang_full_month_personal_leave_is_zero():
+    """正班出勤为0且存在事假时按线下工资表人工归零口径处理"""
     employee = {
         **_gongling_collection_employee(),
         "正班出勤天数": 0,
@@ -1749,9 +1988,10 @@ def test_gonglingjiang_zero_regular_attendance_days_still_prorates():
     }
     result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
 
-    assert result.amount == 90
+    assert result.amount == 0
     assert result.details["audit_explanation"]["rule_name"] == "工龄奖标准与缺勤折算"
     assert result.details["audit_explanation"]["intermediate_values"]["事病旷排休时数"] == 128
+    assert result.details["audit_explanation"]["intermediate_values"]["全月事假未出勤归零"] is True
     assert result.details["exceptions"][0]["code"] == "ZERO_REGULAR_ATTENDANCE_DAYS"
     assert result.details["exceptions"][0]["level"] == "info"
     assert "正班出勤天数为0" in result.warnings[0]
@@ -1802,6 +2042,20 @@ def test_gonglingjiang_jiashan_operation_has_no_seniority_bonus():
     assert result.details["audit_explanation"]["rule_name"] == "工龄奖工作地区判断"
 
 
+def test_gonglingjiang_yiwu_operation_has_no_seniority_bonus():
+    """义乌操作区域按跨月实际工资表不发工龄奖"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "义乌",
+        "二级部门名称": "华东B2B枢纽",
+        "岗位名称": "操作员",
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="wes")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "义乌区域无工龄奖"
+
+
 def test_gonglingjiang_jinjiang_operation_uses_50_rate_and_150_cap():
     """晋江操作员按50元/年且150封顶"""
     employee = {
@@ -1821,8 +2075,44 @@ def test_gonglingjiang_jinjiang_operation_uses_50_rate_and_150_cap():
     assert explanation["intermediate_values"]["上限"] == 150
 
 
-def test_gonglingjiang_operation_deducts_work_injury_days():
-    """操作类工龄奖按工伤假天数×8折算扣减"""
+def test_gonglingjiang_jinjiang_gate_guard_is_eligible():
+    """晋江门禁员按跨月实际工资表享有工龄奖"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "晋江",
+        "一级部门名称": "东南区",
+        "二级部门名称": "东南枢纽",
+        "岗位名称": "门禁员",
+        "入职日期": date(2025, 1, 2),
+        "考勤月份": "202602",
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="wes")
+
+    assert result.amount == 50
+
+
+def test_gonglingjiang_uses_excel_half_up_rounding():
+    """线下Excel ROUND的0.005按远离0方向四舍五入"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+        "入职日期": date(2024, 12, 4),
+        "考勤月份": "202602",
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+        "事假时数": 2,
+        "病假时数": 0,
+        "旷工天数": 1,
+        "排休请假天数": 7,
+    }
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 88.13
+
+
+def test_gonglingjiang_operation_does_not_deduct_work_injury_days():
+    """线下工龄奖公式未配置工伤假额外扣减"""
     employee = {
         **_operation_employee(),
         "工作地区": "东莞",
@@ -1833,11 +2123,10 @@ def test_gonglingjiang_operation_deducts_work_injury_days():
     }
     result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
 
-    assert result.amount == 405
+    assert result.amount == 450
     explanation = result.details["audit_explanation"]
-    assert explanation["intermediate_values"]["工伤假天数"] == 2
-    assert explanation["intermediate_values"]["工伤折算时数"] == 16
-    assert "工伤假天数2" in " ".join(explanation["steps"])
+    assert "工伤假天数" not in explanation["intermediate_values"]
+    assert "工伤" not in " ".join(explanation["steps"])
 
 
 def _gongling_collection_employee() -> dict:

@@ -1892,6 +1892,67 @@
       .template-hint,
       .inline-status { color: var(--dl-muted); font-size: 12px; line-height: 1.5; }
 
+      .dl-selected-files {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .dl-selected-files[hidden] { display: none; }
+
+      .dl-selected-file {
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) auto 32px;
+        align-items: center;
+        gap: 10px;
+        min-height: 46px;
+        padding: 6px 8px 6px 10px;
+        border: 1px solid var(--dl-line);
+        border-radius: 8px;
+        background: var(--dl-panel-soft);
+      }
+
+      .dl-selected-file-icon {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 4px;
+        background: #E8F7EF;
+        color: #118654;
+        font-size: 9px;
+        font-weight: 850;
+      }
+
+      .dl-selected-file-name {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--dl-ink);
+        font-size: 13px;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .dl-selected-file-size { color: var(--dl-muted); font-size: 12px; white-space: nowrap; }
+
+      .dl-selected-file-remove {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--dl-muted);
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .dl-selected-file-remove:hover { background: #FEE2E2; color: #B91C1C; }
+
       .template-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 24px; }
       .template-hint { width: 100%; margin: 0; }
 
@@ -2341,7 +2402,7 @@
     <header class="dl-topbar">
       <div class="dl-topbar-left">
         <a class="dl-title-lockup" href="/" aria-label="返回西格玛工作台首页">
-          <img src="assets/bonus-logo-header-blue.png" alt="" />
+          <img src="assets/workbench-logo-2026.png" alt="" />
           <strong>国内劳务薪酬中台</strong>
         </a>
         <nav class="dl-top-nav" aria-label="国内劳务模块">
@@ -2352,7 +2413,7 @@
       </div>
       <div class="dl-topbar-right">
         <span class="dl-top-meta">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
-        <span class="dl-top-meta">规则包 <strong>当前版 1.0.0</strong></span>
+        <span class="dl-top-meta">规则包 <strong>当前版 1.1.0</strong></span>
         <span class="dl-top-meta is-warn" id="batchStatusText">草稿</span>
         <span class="dl-top-meta" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
       </div>
@@ -2366,8 +2427,8 @@
             <button class="dl-rule-package-entry" id="rulePackageEntry" type="button">
               <span class="dl-rule-entry-copy">
                 <span>核算规则包</span>
-                <strong>当前版本 1.0.0</strong>
-                <span>补贴类 · 已验证科目 2</span>
+                <strong>当前版本 1.1.0</strong>
+                <span>补贴类、奖金类 · 已验证科目 3</span>
               </span>
               <span class="dl-rule-entry-action">查看规则 →</span>
             </button>
@@ -2375,7 +2436,7 @@
               <div class="dl-subject-copy">
                 <span class="dl-subject-eyebrow">DOMESTIC LABOR PAYROLL</span>
                 <h1 class="dl-subject-title">国内劳务薪酬核算</h1>
-                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放餐补与外宿补贴核算，后续按同一批次结构扩展工龄奖和全勤奖。</p>
+                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放餐补、外宿补贴与工龄奖核算，全勤奖待完成线下验证后接入。</p>
                 <div class="dl-subject-grid" id="subjectCardGrid">
                   <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
                     <span class="dl-subject-line-tag">操作线</span>
@@ -2385,12 +2446,12 @@
                     <em>进入核算 →</em>
                   </button>
                   <div class="dl-subject-secondary">
-                    <button class="dl-subject-card" data-subject-entry="gonglingjiang" type="button">
+                    <button class="dl-subject-card primary" data-subject-entry="gonglingjiang" type="button">
                       <span class="dl-subject-line-tag">操作线</span>
-                      <span class="dl-subject-kicker">Seniority Bonus</span>
-                      <strong>工龄奖</strong>
-                      <span>按工龄阶梯和地区口径核算。</span>
-                      <em>待接入</em>
+                      <span class="dl-subject-kicker">工龄奖 · 已开放</span>
+                      <strong>工龄奖核算</strong>
+                      <span>按地区、岗位、工龄和缺勤口径核算，支持当月发放名单复核。</span>
+                      <em>进入核算 →</em>
                     </button>
                     <button class="dl-subject-card" data-subject-entry="quanqinjiang" type="button">
                       <span class="dl-subject-line-tag">操作线</span>
@@ -2436,7 +2497,7 @@
                   <label class="dl-rule-version-control">
                     <span>规则包版本</span>
                     <select id="rulePackageVersionSelect" aria-label="选择规则包版本">
-                      <option>DL-PAYROLL.v1.0.0 · 当前</option>
+                      <option>DL-PAYROLL.v1.1.0 · 当前</option>
                     </select>
                   </label>
                   <button class="dl-btn" id="btnBackFromRules" type="button">返回科目首页</button>

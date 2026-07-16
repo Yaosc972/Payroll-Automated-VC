@@ -7,6 +7,7 @@ const state = {
   selectedEngines: [],
   attendanceMonth: '',
   payrollFile: null,
+  payrollFiles: [],
   hrbpList: null,
   currentRun: null,
   currentResults: [],
@@ -57,6 +58,14 @@ const SUBJECT_WORKBENCH = {
     totalField: 'total_waisu_butie',
     uploadTitle: '外宿补贴数据 Excel',
     uploadDescription: '外宿补贴核算需要月考勤、日考勤和住宿名单。文件内可包含多张工作表。',
+  },
+  gonglingjiang: {
+    name: '工龄奖',
+    batchNoun: '工龄奖批次',
+    resultField: 'gonglingjiang',
+    totalField: 'total_gonglingjiang',
+    uploadTitle: '工龄奖数据 Excel',
+    uploadDescription: '工龄奖核算需要月考勤数据；莞深区揽收人员还需确认当月 HRBP 发放名单。',
   },
 };
 
@@ -186,6 +195,7 @@ function clearCurrentRunState({ clearFile = false } = {}) {
   state.currentResultsRunId = '';
   if (clearFile) {
     state.payrollFile = null;
+    state.payrollFiles = [];
   }
   resetReportLink();
 }
@@ -463,7 +473,7 @@ function bindEvents() {
     const card = event.target.closest('[data-subject-entry]');
     if (!card) return;
     const subject = card.dataset.subjectEntry;
-    if (subject === 'canbu' || subject === 'waisu_butie') {
+    if (subject === 'canbu' || subject === 'waisu_butie' || subject === 'gonglingjiang') {
       state.activeWorkbenchSubject = subject;
       state.activeCanbuBatchId = '';
       showView('canbuBatches');
@@ -745,6 +755,7 @@ function renderRulePackageSubject() {
       </div>
     </section>
     ${renderRulePackageBlock('验证依据', subject.verification)}
+    ${(subject.pending_confirmations || []).length ? renderRulePackageBlock('待薪酬确认', subject.pending_confirmations) : ''}
     ${renderRulePackageBlock('科目版本记录', (subject.change_log || []).map(item => `${item.version} · ${item.released_at} · ${item.changes}`))}
   `;
 }
@@ -883,9 +894,7 @@ function renderCanbuWorkbench(step = 'upload') {
   }
   const canbuResults = hasMatchingResults ? (Array.isArray(state.currentResults) ? state.currentResults : []) : [];
   const showAside = step === 'results' || canbuResults.length > 0;
-  const canbuWarningCount = batch.subject === 'waisu_butie'
-    ? canbuResults.filter(hasWaisuReviewIssue).length
-    : countCanbuWarnings(canbuResults);
+  const canbuWarningCount = countWorkbenchWarnings(canbuResults, batch.subject);
   if (el.payrollShell) {
     el.payrollShell.classList.toggle('aside-collapsed', showAside);
   }
@@ -1048,18 +1057,18 @@ function renderCanbuStepContent(step, results = []) {
         <div class="dl-panel-head">
           <div>
             <h2 class="dl-panel-title">数据上传</h2>
-            <p class="dl-panel-sub">${escapeHtml(config.uploadDescription)}</p>
+            <p class="dl-panel-sub">${escapeHtml(config.uploadDescription)} 可上传一个含多张Sheet的文件，也可一次上传多个拆分文件。</p>
           </div>
         </div>
         <div class="dl-upload-list">
           <div class="dl-upload-row">
             <strong>日考勤数据</strong>
-            <span>${batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : '东莞餐补逐日计算'}</span>
-            <span class="dl-badge warn">随 Excel 上传</span>
+            <span>${batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : batch?.subject === 'gonglingjiang' ? '工龄奖不依赖日考勤明细' : '东莞餐补逐日计算'}</span>
+            <span class="dl-badge ${batch?.subject === 'gonglingjiang' ? 'ok' : 'warn'}">${batch?.subject === 'gonglingjiang' ? '非必需' : '随 Excel 上传'}</span>
           </div>
           <div class="dl-upload-row">
             <strong>月考勤数据</strong>
-            <span>${batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
+            <span>${batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : batch?.subject === 'gonglingjiang' ? '地区、部门、岗位、入职日期和缺勤字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>
           ${batch?.subject === 'waisu_butie' ? `
@@ -1069,11 +1078,16 @@ function renderCanbuStepContent(step, results = []) {
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>` : ''}
         </div>
+        ${batch?.subject === 'gonglingjiang' ? `
+        <label class="field-label" for="workbenchHrbpList">当月莞深区揽收工龄奖发放名单</label>
+        <textarea class="field-textarea" id="workbenchHrbpList" rows="5" spellcheck="false">${escapeHtml(JSON.stringify(DEFAULT_HRBP_LIST, null, 2))}</textarea>
+        <p class="inline-status">名单按工号填写 JSON 数组；不在名单内的揽收人员按不发放处理，空名单会进入异常复核。</p>` : ''}
         <div class="upload-zone" id="fileUploadZone" role="button" tabindex="0">
-          <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" />
+          <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" multiple />
           <p class="upload-title">${escapeHtml(config.uploadTitle)}</p>
-          <p class="upload-sub" id="payrollFileName">点击选择 · 支持 .xlsx / .xlsm / .xls</p>
+          <p class="upload-sub" id="payrollFileName">点击选择一个或多个文件 · 支持 .xlsx / .xlsm / .xls</p>
         </div>
+        <div class="dl-selected-files" id="selectedPayrollFileList" hidden></div>
         <div class="drawer-footer compact">
           <p id="uploadStatus" class="inline-status">选择文件后开始字段检查。</p>
           <button id="btnSubmitCanbuBatch" class="btn-primary-lg" type="button" disabled>开始字段检查</button>
@@ -1082,6 +1096,7 @@ function renderCanbuStepContent(step, results = []) {
     `;
     refreshUploadRefs();
     bindCanbuUploadEvents();
+    renderSelectedPayrollFiles();
     renderExceptionQueue([]);
     return;
   }
@@ -1101,6 +1116,7 @@ function renderCanbuStepContent(step, results = []) {
   root.innerHTML = '<section class="dl-panel"><div id="resultsTable" class="dl-table-wrap"></div></section>';
   el.resultsTable = document.querySelector('#resultsTable');
   if (batch?.subject === 'waisu_butie') renderWaisuResults(results);
+  else if (batch?.subject === 'gonglingjiang') renderGonglingResults(results);
   else renderCanbuResults(results);
 }
 
@@ -1108,7 +1124,54 @@ function refreshUploadRefs() {
   el.payrollFile = document.querySelector('#payrollFile');
   el.payrollFileName = document.querySelector('#payrollFileName');
   el.fileUploadZone = document.querySelector('#fileUploadZone');
+  el.selectedPayrollFileList = document.querySelector('#selectedPayrollFileList');
   el.uploadStatus = document.querySelector('#uploadStatus');
+}
+
+function payrollFileKey(file) {
+  return `${file.name}::${file.size}::${file.lastModified}`;
+}
+
+function formatFileSize(size) {
+  const bytes = Number(size || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderSelectedPayrollFiles(message = '') {
+  const files = state.payrollFiles || [];
+  const submit = document.querySelector('#btnSubmitCanbuBatch');
+  state.payrollFile = files[0] || null;
+  if (el.payrollFileName) {
+    el.payrollFileName.textContent = files.length
+      ? `已累计选择 ${files.length} 个文件，可继续选择追加`
+      : '点击选择一个或多个文件 · 支持 .xlsx / .xlsm / .xls';
+  }
+  el.fileUploadZone?.classList.toggle('has-file', files.length > 0);
+  if (submit) submit.disabled = files.length === 0;
+  if (el.uploadStatus) {
+    setText(el.uploadStatus, message || (files.length
+      ? '提交后自动识别月考勤、日考勤及住宿名单。'
+      : '选择文件后开始字段检查。'));
+  }
+  if (!el.selectedPayrollFileList) return;
+  el.selectedPayrollFileList.hidden = files.length === 0;
+  el.selectedPayrollFileList.innerHTML = files.map(file => `
+    <div class="dl-selected-file">
+      <span class="dl-selected-file-icon" aria-hidden="true">XLS</span>
+      <span class="dl-selected-file-name">${escapeHtml(file.name)}</span>
+      <span class="dl-selected-file-size">${escapeHtml(formatFileSize(file.size))}</span>
+      <button class="dl-selected-file-remove" data-remove-payroll-file="${escapeHtml(payrollFileKey(file))}" type="button" aria-label="移除${escapeHtml(file.name)}" title="移除文件">×</button>
+    </div>
+  `).join('');
+  el.selectedPayrollFileList.querySelectorAll('[data-remove-payroll-file]').forEach(button => {
+    button.addEventListener('click', () => {
+      const key = button.dataset.removePayrollFile;
+      state.payrollFiles = state.payrollFiles.filter(file => payrollFileKey(file) !== key);
+      renderSelectedPayrollFiles('已更新待上传文件清单。');
+    });
+  });
 }
 
 function bindCanbuUploadEvents() {
@@ -1123,27 +1186,47 @@ function bindCanbuUploadEvents() {
     el.payrollFile?.click();
   });
   el.payrollFile?.addEventListener('change', () => {
-    const file = el.payrollFile.files[0];
-    state.payrollFile = file || null;
-    el.payrollFileName.textContent = file ? file.name : '点击选择 · 支持 .xlsx / .xlsm / .xls';
-    if (file) el.fileUploadZone.classList.add('has-file');
-    if (submit) submit.disabled = !file;
-    setText(el.uploadStatus, file ? `已选择: ${file.name}` : '请选择文件');
+    const selectedFiles = Array.from(el.payrollFile.files || []);
+    const existingKeys = new Set(state.payrollFiles.map(payrollFileKey));
+    const addedFiles = selectedFiles.filter(file => !existingKeys.has(payrollFileKey(file)));
+    state.payrollFiles = [...state.payrollFiles, ...addedFiles];
+    el.payrollFile.value = '';
+    const duplicateCount = selectedFiles.length - addedFiles.length;
+    const message = duplicateCount
+      ? `新增 ${addedFiles.length} 个文件，已跳过 ${duplicateCount} 个重复文件。`
+      : `新增 ${addedFiles.length} 个文件，可继续选择追加。`;
+    renderSelectedPayrollFiles(message);
   });
   submit?.addEventListener('click', submitCanbuBatch);
 }
 
 function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
+  const validationSummary = renderInputValidationSummary();
   if (subject === 'waisu_butie') {
     return `
       <section class="dl-panel">
         <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">字段检查按外宿补贴资格、住宿区间和缺勤折算分组展示。</p></div></div>
+        ${validationSummary}
         <div class="dl-field-groups">
           ${renderFieldGroup('基础员工字段', ['工号', '姓名', '工作地区', '岗位名称', '考勤月份', '入职日期', '最后工作日'])}
           ${renderFieldGroup('住宿名单字段', ['工号', '入住时间/入宿时间', '退宿时间/离宿时间'])}
           ${renderFieldGroup('缺勤折算字段', ['休年假小时', '事假时数', '病假时数', '排休请假时数/天数', '旷工时数/天数'])}
         </div>
         <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看结果。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+      </section>
+    `;
+  }
+  if (subject === 'gonglingjiang') {
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">字段检查按工龄、资格和线下缺勤折算口径分组展示。</p></div></div>
+        ${validationSummary}
+        <div class="dl-field-groups">
+          ${renderFieldGroup('基础员工字段', ['工号', '姓名', '考勤月份', '一级部门名称', '二级部门名称', '岗位名称', '工作地区'])}
+          ${renderFieldGroup('工龄与出勤字段', ['入职日期', '排班天数', '实际在职工作日天数', '正班出勤天数'])}
+          ${renderFieldGroup('缺勤折算字段', ['事假时数', '病假时数', '旷工时数/天数', '排休请假时数/天数'])}
+        </div>
+        <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看工龄、标准、折算过程和异常。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
       </section>
     `;
   }
@@ -1155,6 +1238,7 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
           <p class="dl-panel-sub">字段检查按餐补规则分组展示。文件上传后系统已自动提交餐补核算。</p>
         </div>
       </div>
+      ${validationSummary}
       <div class="dl-field-groups">
         ${renderFieldGroup('基础员工字段', ['工号', '姓名', '一级部门', '二级部门', '岗位名称', '工作地区', '在职状态'])}
         ${renderFieldGroup('东莞日考勤字段', ['日期', '工作状态', '正班时数', '刷卡加班', '异常标记', '异常原因'])}
@@ -1165,6 +1249,20 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
         <button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button>
       </div>
     </section>
+  `;
+}
+
+function renderInputValidationSummary() {
+  const summary = state.currentRun?.inputSummary || state.currentRun?.input_summary;
+  if (!summary) return '';
+  return `
+    <div class="dl-result-summary">
+      <div class="dl-result-stat primary"><span>文件数</span><strong>${Number(summary.file_count || 0)}</strong></div>
+      <div class="dl-result-stat"><span>月考勤</span><strong>${Number(summary.monthly_rows || 0)}</strong></div>
+      <div class="dl-result-stat"><span>日考勤</span><strong>${Number(summary.daily_rows || 0)}</strong></div>
+      <div class="dl-result-stat"><span>住宿记录</span><strong>${Number(summary.housing_rows || 0)}</strong></div>
+      <div class="dl-result-stat"><span>校验</span><strong>通过</strong></div>
+    </div>
   `;
 }
 
@@ -1529,6 +1627,121 @@ function openCanbuExplainDrawer(row) {
   `;
   el.calcModal.classList.add('visible');
   document.body.style.overflow = 'hidden';
+}
+
+function renderGonglingResults(results = []) {
+  const root = document.querySelector('#canbuStepContent');
+  if (!root) return;
+  const rows = Array.isArray(results) ? results : [];
+  const total = sumField(rows, 'gonglingjiang');
+  const positiveCount = rows.filter(row => Number(row.gonglingjiang || 0) > 0).length;
+  const cappedCount = rows.filter(row => {
+    const details = getSubjectDetail(row, 'gonglingjiang')?.details || {};
+    return Number(details['应发'] || 0) > 0 && Number(details['应发']) >= Number(details['上限'] || Infinity);
+  }).length;
+  const warnings = countSubjectWarnings(rows, 'gonglingjiang');
+  root.innerHTML = `
+    <section class="dl-panel">
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">工龄奖核算</h2><p class="dl-panel-sub">按工作地区、部门岗位、入职日期及线下缺勤口径复核应发工龄奖。</p></div></div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
+        <div class="dl-result-stat"><span>员工数</span><strong>${rows.length}</strong></div>
+        <div class="dl-result-stat"><span>享有人数</span><strong>${positiveCount}</strong></div>
+        <div class="dl-result-stat"><span>达到上限</span><strong>${cappedCount}</strong></div>
+        <div class="dl-result-stat warning"><span>需处理</span><strong>${warnings}</strong></div>
+      </div>
+      <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
+        <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门、岗位" aria-label="筛选工龄奖结果">
+        <select class="dl-select" id="reviewStatusFilter" aria-label="筛选异常状态"><option value="all">全部状态</option><option value="review">只看异常</option><option value="pass">只看通过</option></select>
+        <select class="dl-select" id="amountFilter" aria-label="筛选金额状态"><option value="all">全部金额</option><option value="positive">应发大于0</option><option value="zero">应发为0</option></select>
+        <span class="dl-result-count" id="resultCountText">—</span>
+      </div></div>
+      <div id="resultsTable" class="dl-table-wrap"></div><div class="dl-pagination" id="canbuPagination"></div>
+    </section>
+  `;
+  el.resultsTable = document.querySelector('#resultsTable');
+  el.resultSearchInput = document.querySelector('#resultSearchInput');
+  el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
+  el.amountFilter = document.querySelector('#amountFilter');
+  el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
+  if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
+  if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
+  if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
+  bindGonglingResultFilters();
+  renderGonglingResultsTable(rows);
+  renderExceptionQueue(rows);
+}
+
+function hasGonglingReviewIssue(row) {
+  const exceptions = (getSubjectDetail(row, 'gonglingjiang')?.exceptions || [])
+    .filter(item => !isNormalHrbpListExclusionException(item));
+  return exceptions.length > 0 || Boolean(getEffectiveWarningText(row));
+}
+
+function filterGonglingResults(results) {
+  const keyword = state.resultSearch.trim().toLowerCase();
+  return results.filter(row => {
+    if (state.reviewStatusFilter === 'review' && !hasGonglingReviewIssue(row)) return false;
+    if (state.reviewStatusFilter === 'pass' && hasGonglingReviewIssue(row)) return false;
+    const amount = Number(row.gonglingjiang || 0);
+    if (state.amountFilter === 'positive' && amount <= 0) return false;
+    if (state.amountFilter === 'zero' && amount !== 0) return false;
+    if (!keyword) return true;
+    const details = getSubjectDetail(row, 'gonglingjiang')?.details || {};
+    const inputs = details.audit_explanation?.inputs || {};
+    return [row.employee_id, row.employee_name, row.department, details['岗位'], inputs['工作地区'], getEffectiveWarningText(row)]
+      .map(value => String(value || '').toLowerCase()).join(' ').includes(keyword);
+  });
+}
+
+function renderGonglingResultsTable(results) {
+  if (!el.resultsTable) return;
+  const filtered = filterGonglingResults(results);
+  updateResultCount(results.length, filtered.length);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  state.canbuPage = Math.min(Math.max(state.canbuPage, 1), totalPages);
+  const start = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(start, start + state.canbuPageSize);
+  if (!filtered.length) {
+    el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无工龄奖核算结果。</p></div>';
+    renderGonglingPagination(0, 0, 0);
+    return;
+  }
+  el.resultsTable.innerHTML = `
+    <table class="dl-table dl-result-table"><thead><tr>
+      <th class="sticky-col id-col">工号</th><th class="sticky-col name-col">姓名</th><th>工作地区</th><th>部门</th><th>岗位</th>
+      <th class="dl-num">工龄(年)</th><th class="dl-num">标准</th><th class="dl-num">上限</th><th class="dl-num">缺勤时数</th><th class="dl-num">应发工龄奖</th><th>状态</th><th>解释</th>
+    </tr></thead><tbody>${pageRows.map(row => {
+      const details = getSubjectDetail(row, 'gonglingjiang')?.details || {};
+      const inputs = details.audit_explanation?.inputs || {};
+      const issue = hasGonglingReviewIssue(row);
+      const index = results.indexOf(row);
+      return `<tr>
+        <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id)}</td><td class="sticky-col name-col">${escapeHtml(row.employee_name)}</td>
+        <td>${escapeHtml(displayValue(inputs['工作地区'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(row.department, '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(details['岗位'], inputs['岗位名称'], '—'))}</td>
+        <td class="dl-num">${escapeHtml(displayValue(details['工龄(年)'], 0))}</td><td class="dl-num">${formatMoney(details['标准'] || 0)}</td><td class="dl-num">${formatMoney(details['上限'] || 0)}</td><td class="dl-num">${escapeHtml(displayValue(details['事病旷排休时数'], 0))}</td>
+        <td class="dl-num dl-strong">${formatMoney(row.gonglingjiang)}</td><td><span class="dl-badge ${issue ? 'warn' : 'ok'}">${issue ? '需关注' : '通过'}</span></td><td><button class="dl-segment compact" data-gongling-explain-index="${index}" type="button">计算过程</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+  `;
+  el.resultsTable.querySelectorAll('[data-gongling-explain-index]').forEach(button => button.addEventListener('click', () => openExplainDrawer(results[Number(button.dataset.gonglingExplainIndex)])));
+  renderGonglingPagination(filtered.length, start + 1, Math.min(start + pageRows.length, filtered.length));
+}
+
+function bindGonglingResultFilters() {
+  const rerender = () => { state.canbuPage = 1; renderGonglingResultsTable(state.currentResults); };
+  el.resultSearchInput?.addEventListener('input', () => { state.resultSearch = el.resultSearchInput.value.trim(); rerender(); });
+  el.reviewStatusFilter?.addEventListener('change', () => { state.reviewStatusFilter = el.reviewStatusFilter.value; rerender(); });
+  el.amountFilter?.addEventListener('change', () => { state.amountFilter = el.amountFilter.value; rerender(); });
+}
+
+function renderGonglingPagination(total, start, end) {
+  if (!el.canbuPagination) return;
+  if (!total) { el.canbuPagination.innerHTML = ''; return; }
+  const pages = Math.max(1, Math.ceil(total / state.canbuPageSize));
+  el.canbuPagination.innerHTML = `<span>${start}-${end} / ${total}</span><div class="dl-pagination-actions"><button class="dl-segment compact" data-gongling-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button><strong>${state.canbuPage} / ${pages}</strong><button class="dl-segment compact" data-gongling-page="next" type="button" ${state.canbuPage >= pages ? 'disabled' : ''}>下一页</button></div>`;
+  el.canbuPagination.querySelectorAll('[data-gongling-page]').forEach(button => button.addEventListener('click', () => { state.canbuPage += button.dataset.gonglingPage === 'prev' ? -1 : 1; renderGonglingResultsTable(state.currentResults); }));
 }
 
 function renderWaisuResults(results = []) {
@@ -1967,7 +2180,7 @@ async function submitTask() {
 async function submitCanbuBatch() {
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
-  if (!state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
+  if (!state.payrollFiles.length && !state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
   if (!batch) return toast(`暂无${config.name}批次。`);
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
@@ -1980,19 +2193,35 @@ async function submitCanbuBatch() {
   state.currentResultsRunId = '';
 
   try {
+    const files = state.payrollFiles.length ? state.payrollFiles : [state.payrollFile];
+    let hrbpList = null;
+    if (batch.subject === 'gonglingjiang') {
+      const hrbpText = document.querySelector('#workbenchHrbpList')?.value.trim() || '[]';
+      try {
+        hrbpList = JSON.parse(hrbpText);
+      } catch {
+        throw new Error('当月 HRBP 发放名单格式错误，请填写工号 JSON 数组。');
+      }
+      if (!Array.isArray(hrbpList) || hrbpList.some(item => typeof item !== 'string')) {
+        throw new Error('当月 HRBP 发放名单必须是工号字符串组成的 JSON 数组。');
+      }
+      hrbpList = hrbpList.map(item => item.trim()).filter(Boolean);
+    }
+
     const data = await submitDomesticLaborRun({
-      file: state.payrollFile,
+      file: files[0],
+      files,
       engines: [batch.subject],
       attendanceMonth: String(batch.month || '').replace('-', ''),
       password: el.filePassword?.value || '',
-      hrbpList: null,
+      hrbpList,
       statusElement: el.uploadStatus,
     });
     if (data.status === '失败') {
       throw new Error(data.error || `${config.name}核算失败，请检查文件后重试。`);
     }
 
-    state.currentRun = { id: data.run_id, status: data.status };
+    state.currentRun = { id: data.run_id, status: data.status, inputSummary: data.input_summary };
     state.currentResultsRunId = '';
     syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: data.status });
     if (data.status === '已完成') {
@@ -2012,10 +2241,15 @@ async function submitCanbuBatch() {
   }
 }
 
-async function submitDomesticLaborRun({ file, engines, attendanceMonth, password, hrbpList, statusElement }) {
+async function submitDomesticLaborRun({ file, files = [], engines, attendanceMonth, password, hrbpList, statusElement }) {
+  const selectedFiles = files.length ? files : [file].filter(Boolean);
+  if (selectedFiles.length > 1) {
+    setText(statusElement, `正在上传 ${selectedFiles.length} 个文件并核算...`);
+    return submitDomesticLaborRunMultipart({ files: selectedFiles, engines, attendanceMonth, password, hrbpList });
+  }
   try {
     return await submitDomesticLaborRunDirect({
-      file,
+      file: selectedFiles[0],
       engines,
       attendanceMonth,
       password,
@@ -2028,7 +2262,7 @@ async function submitDomesticLaborRun({ file, engines, attendanceMonth, password
       || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
     if (!localHost || !directUnavailable) throw error;
     setText(statusElement, '本地未启用对象存储，改用本地上传并核算...');
-    return submitDomesticLaborRunMultipart({ file, engines, attendanceMonth, password, hrbpList });
+    return submitDomesticLaborRunMultipart({ files: selectedFiles, engines, attendanceMonth, password, hrbpList });
   }
 }
 
@@ -2085,9 +2319,9 @@ function uploadDomesticFileToSignedUrl(upload, file, onProgress) {
   });
 }
 
-function submitDomesticLaborRunMultipart({ file, engines, attendanceMonth, password, hrbpList }) {
+function submitDomesticLaborRunMultipart({ files, engines, attendanceMonth, password, hrbpList }) {
   const form = new FormData();
-  form.append('file', file);
+  files.forEach(file => form.append('files', file));
   form.append('engines', engines.join(','));
   form.append('attendance_month', attendanceMonth);
   form.append('password', password || '');

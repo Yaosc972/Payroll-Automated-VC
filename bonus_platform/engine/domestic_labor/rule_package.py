@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any, Dict
 
 
-_RULE_PACKAGE: Dict[str, Any] = {
+_RULE_PACKAGE_V1_0_0: Dict[str, Any] = {
     "package_id": "DL-PAYROLL",
     "name": "国内劳务薪酬核算规则包",
     "version": "1.0.0",
@@ -157,7 +157,103 @@ _RULE_PACKAGE: Dict[str, Any] = {
 }
 
 
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_0_0)
+_RULE_PACKAGE.update({
+    "version": "1.1.0",
+    "display_version": "DL-PAYROLL.v1.1.0",
+    "effective_from": "2026-02",
+})
+_RULE_PACKAGE["categories"].append({
+    "id": "bonus",
+    "name": "奖金类",
+    "description": "按地区、岗位、工龄及考勤条件核算的奖金科目。",
+    "subject_ids": ["gonglingjiang"],
+})
+_RULE_PACKAGE["subjects"].append({
+    "id": "gonglingjiang",
+    "name": "工龄奖",
+    "english_name": "Seniority Bonus",
+    "category_id": "bonus",
+    "version": "DL-GONGLING.v1.0.0",
+    "status": "已验证",
+    "effective_from": "2026-02",
+    "summary": "按工作地区、部门岗位、月初司龄及缺勤口径核算；莞深区揽收人员需提供当月HRBP发放名单。",
+    "data_sources": [
+        "月考勤：工号、姓名、考勤月份、工作地区、部门、岗位、入职日期及排班出勤字段",
+        "缺勤字段：事假时数、病假时数、旷工时数/天数、排休请假时数/天数",
+        "业务参数：莞深区揽收人员当月HRBP发放工号名单",
+    ],
+    "common_rules": [
+        "以考勤月份首日计算完整司龄；入职日不是当月1日时，对应周年当月尚未满整年，次月开始增加一年。",
+        "基础应发=min(每年标准×完整司龄, 地区及部门上限)。",
+        "事假、病假、旷工和排休请假合计达到56小时后按排班天数折算；旷工、排休请假优先读取小时字段，缺失时按天数×8。",
+        "入离职缺勤按排班天数与实际在职工作日天数之差另行扣减；结果按Excel ROUND保留2位小数。",
+        "正班出勤天数为0且存在事假时按线下工资表结果归零；其他场景不额外设置最低金额。",
+    ],
+    "regions": [
+        {
+            "name": "东莞",
+            "rule": "中国操作部按已验证一线岗位发放；第四纵队揽收人员须命中当月HRBP名单；头程运营部按FBU标准发放。",
+            "formula": "操作/揽收150元×司龄，封顶600元；FBU100元×司龄，封顶500元",
+            "details": [
+                "操作享有岗位：安检员、操作文员、操作员、叉车司机、查验员、监察员。",
+                "保洁、组长、主管及未命中岗位不发放。",
+                "揽收人员不在当月HRBP名单时按0处理；未提供名单时进入异常复核。",
+            ],
+        },
+        {
+            "name": "嘉善 / 义乌",
+            "rule": "按已验证实际工资表，操作条线不发放工龄奖。",
+            "formula": "0元",
+            "details": ["工作地区为嘉善或义乌时直接返回0。"],
+        },
+        {
+            "name": "晋江",
+            "rule": "操作员、门禁员享有，其他操作岗位不发放。",
+            "formula": "50元×司龄，封顶150元，再按缺勤和入离职折算",
+            "details": [
+                "工龄计算、56小时缺勤门槛和入离职扣减与通用规则一致。",
+                "最终金额按Excel ROUND保留2位小数。",
+            ],
+        },
+    ],
+    "verification": [
+        "2026年2月华西华东东南实际工资表287人逐行一致",
+        "2026年3月华西华东东南实际工资表338人逐行一致",
+        "2026年2月莞深广珠FBU实际工资表711人逐行一致",
+        "2026年3月莞深广珠FBU实际工资表756人中755人一致，剩余1人为待确认的重新入职边界",
+        "2026年5月东莞操作考勤798人按线下公式重算逐行一致",
+    ],
+    "pending_confirmations": [
+        "待薪酬确认：员工自离后重新入职是否重置工龄，以及平台应从哪个字段识别。样例OWHN2187戚甲鹏，2026年3月线下工龄奖为0。",
+    ],
+    "change_log": [
+        {
+            "version": "DL-GONGLING.v1.0.0",
+            "released_at": "2026-07-15",
+            "changes": "首次发布：按实际工资表更新地区岗位、小时缺勤字段、56小时门槛、入离职扣减和Excel舍入口径。",
+        }
+    ],
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.0",
+        "display_version": "DL-PAYROLL.v1.1.0",
+        "status": "当前版本",
+        "released_at": "2026-07-15",
+        "effective_from": "2026-02",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "新增经跨月实际工资表验证的工龄奖科目，保留重新入职工龄边界待确认项。",
+    },
+    {
+        **_RULE_PACKAGE_V1_0_0["version_history"][0],
+        "status": "历史版本",
+    },
+]
+
+
 _RULE_PACKAGE_VERSIONS = {
+    _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 
