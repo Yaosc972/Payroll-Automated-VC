@@ -664,7 +664,8 @@ function finishCanbuOperation(runId = '', errorMessage = '') {
 
 function renderCanbuOperationStatus(batch) {
   const operation = state.activeCanbuOperation;
-  if (!batch || !operation || operation.batchId !== batch.id) return '';
+  const batchIsComplete = Boolean(batch && ['已核算', '可导出', '已导出'].includes(batch.status));
+  if (!batch || batchIsComplete || !operation || operation.batchId !== batch.id) return '';
   const failed = operation.phase === 'failed';
   return `
     <section class="dl-operation-status ${failed ? 'failed' : ''}" id="canbuOperationStatus" role="status" aria-live="polite">
@@ -939,6 +940,10 @@ function bindBatchTableActions(root) {
 function renderCanbuWorkbench(step = 'upload') {
   const batch = getActiveCanbuBatch();
   if (!batch || !el.canbuWorkbenchRoot) return;
+  const batchIsComplete = ['已核算', '可导出', '已导出'].includes(batch.status);
+  if (batchIsComplete && state.activeCanbuOperation?.batchId === batch.id) {
+    state.activeCanbuOperation = null;
+  }
   state.activeWorkbenchSubject = batch.subject || 'canbu';
   const config = getWorkbenchConfig(batch.subject);
   syncWorkbenchChrome(batch);
@@ -1137,7 +1142,7 @@ function renderCanbuStepContent(step, results = []) {
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
   const operation = state.activeCanbuOperation;
-  if (step !== 'upload' && operation?.batchId === batch?.id && operation.phase !== 'failed') {
+  if (step !== 'upload' && operation?.batchId === batch?.id && operation.phase !== 'failed' && isCanbuBatchCalculating(batch)) {
     root.innerHTML = renderCanbuCalculatingState(batch);
     renderExceptionQueue([]);
     return;

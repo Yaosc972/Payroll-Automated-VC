@@ -400,6 +400,8 @@ def test_domestic_labor_restores_an_in_progress_batch_run():
 
     completed_loader = js.split("async function loadCompletedRun", 1)[1].split("async function pollStatus", 1)[0]
     assert completed_loader.index("finishCanbuOperation(runId)") < completed_loader.index("renderResults(completedRun)")
+    assert "const batchIsComplete = ['已核算', '可导出', '已导出'].includes(batch.status)" in js
+    assert "operation.phase !== 'failed' && isCanbuBatchCalculating(batch)" in js
 
 
 def test_domestic_labor_meal_workbench_static_labels():
