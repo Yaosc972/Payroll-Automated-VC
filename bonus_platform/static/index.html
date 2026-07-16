@@ -202,78 +202,6 @@
           </div>
         </section>
 
-        <section class="dashboard-lower">
-          <div class="ops-panel">
-            <div class="section-bar compact">
-              <div>
-                <p>Recent Runs</p>
-                <h2>最近批次</h2>
-              </div>
-            </div>
-            <table class="ops-table">
-              <thead>
-                <tr>
-                  <th>模块</th>
-                  <th>批次</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>FBU美洲绩效奖金核算</td>
-                  <td>2026-04</td>
-                  <td><span class="status-pill warning">待复核</span></td>
-                </tr>
-                <tr>
-                  <td>中国区正式工薪酬核算</td>
-                  <td>技术部餐补</td>
-                  <td><span class="status-pill success">已上线</span></td>
-                </tr>
-                <tr>
-                  <td>中国区外包工薪酬核算</td>
-                  <td>2026-02 工龄奖</td>
-                  <td><span class="status-pill warning">开发中</span></td>
-                </tr>
-                <tr>
-                  <td>海外劳务报账核对</td>
-                  <td>UAT 试用批次</td>
-                  <td><span class="status-pill info">UAT试用</span></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="ops-panel">
-            <div class="section-bar compact">
-              <div>
-                <p>Pending Tasks</p>
-                <h2>待处理异常</h2>
-              </div>
-            </div>
-            <div class="task-list">
-              <a href="fbu-performance.html" data-module="fbu_performance">
-                <strong>FBU 异常队列</strong>
-                <span>绩效比例、薪资档案、考勤匹配待复核</span>
-                <b>211 提醒</b>
-              </a>
-              <a href="domestic-labor.html" data-module="domestic_labor">
-                <strong>工龄奖审计解释</strong>
-                <span>已生成结构化依据，可继续抽样核对</span>
-                <b>7 人关注</b>
-              </a>
-              <a href="china-employee-payroll.html" data-module="cn_employee_payroll">
-                <strong>技术部餐补核算</strong>
-                <span>已支持考勤导入、餐补规则核算与结果导出</span>
-                <b>已上线</b>
-              </a>
-              <a href="overseas-labor.html">
-                <strong>海外劳务 UAT 反馈</strong>
-                <span>试用操作已留痕，可导出分析流程卡点与失败原因</span>
-                <b>试用中</b>
-              </a>
-            </div>
-          </div>
-        </section>
       </main>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
@@ -281,7 +209,7 @@
       (() => {
         if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
 
-        gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card, .ops-panel', {
+        gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card', {
           opacity: 0,
           y: 18,
         });
@@ -292,8 +220,7 @@
           .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
           .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
           .to('.welcome-panel', { opacity: 1, y: 0, duration: 0.62 }, '-=0.32')
-          .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28')
-          .to('.ops-panel', { opacity: 1, y: 0, duration: 0.5, stagger: 0.06 }, '-=0.22');
+          .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28');
 
         document.querySelectorAll('.saas-module-card').forEach((card) => {
           card.addEventListener('mouseenter', () => {
