@@ -398,6 +398,9 @@ def test_domestic_labor_restores_an_in_progress_batch_run():
     assert "restoreCanbuRunStatus" in js
     assert "startPolling()" in js
 
+    completed_loader = js.split("async function loadCompletedRun", 1)[1].split("async function pollStatus", 1)[0]
+    assert completed_loader.index("finishCanbuOperation(runId)") < completed_loader.index("renderResults(completedRun)")
+
 
 def test_domestic_labor_meal_workbench_static_labels():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")

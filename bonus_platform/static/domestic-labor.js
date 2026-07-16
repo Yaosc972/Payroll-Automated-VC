@@ -2535,9 +2535,9 @@ async function loadCompletedRun(runId) {
   state.currentRun = completedRun;
   syncCanbuBatchFromRun(completedRun);
   renderTaskStatusCard(completedRun.status || '已完成');
+  finishCanbuOperation(runId);
   renderResults(completedRun);
   if (el.btnExport) el.btnExport.hidden = false;
-  finishCanbuOperation(runId);
   return completedRun;
 }
 
