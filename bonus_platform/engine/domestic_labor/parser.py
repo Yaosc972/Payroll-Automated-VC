@@ -1,7 +1,8 @@
 """Excel file parser for payroll data."""
 import io
+from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 
@@ -111,7 +112,9 @@ class ExcelParser:
             row_dict = {}
             for j, value in enumerate(row):
                 if j < len(headers):
-                    row_dict[headers[j]] = value
+                    header = headers[j]
+                    if header not in row_dict or row_dict[header] in (None, ""):
+                        row_dict[header] = value
             rows.append(row_dict)
 
         return SheetData(
@@ -212,6 +215,10 @@ class PayrollDataLoader:
         """Normalize row data: fill defaults, convert numeric/date fields."""
         normalized = dict(row)
 
+        # 晋江等月报使用“排休请假”表示天数，统一到工龄奖读取的天数字段。
+        if normalized.get("排休请假天数") in (None, "") and normalized.get("排休请假") not in (None, ""):
+            normalized["排休请假天数"] = normalized["排休请假"]
+
         # 补充缺失字段默认值
         defaults = {
             "早退次数": 0,
@@ -225,7 +232,6 @@ class PayrollDataLoader:
             "全勤奖": 0,
             "工龄奖": 0,
             "排休请假天数": 0,
-            "旷工时数": 0,
             "医疗期天数": 0,
         }
         for k, v in defaults.items():
@@ -242,13 +248,16 @@ class PayrollDataLoader:
             "迟到6分钟内", "迟到6-20分钟内(次)", "迟到20-30分钟内(次)",
             "早退6分钟内(次)", "早退6-20分钟内(次)", "早退20-30分钟内(次)",
             "休年假小时", "事假时数", "病假时数", "调休时数",
-            "排休请假天数", "哺乳假小时", "请假时数",
+            "旷工时数", "排休请假时数", "排休请假天数", "哺乳假小时", "请假时数",
             "婚假天数", "陪产假天数", "工伤假天数", "医疗期天数",
             "丧假天数", "产假天数", "多胞胎假天数", "剖腹产假天数",
             "流产假天数", "产检假天数", "女神假天数",
             "出差天数", "公出天数", "工作日产假天数", "年假剩余时数",
         ]
+        optional_hour_alias_fields = {"旷工时数", "排休请假时数"}
         for field in numeric_fields:
+            if field in optional_hour_alias_fields and field not in normalized:
+                continue
             val = normalized.get(field)
             if val is not None and val != "":
                 try:
@@ -467,6 +476,203 @@ class PayrollDataLoader:
                 diff = float(pb) - float(rz)
                 if diff > 0:
                     row["入离职缺勤时数"] = diff * 8
+
+
+class MultiFilePayrollDataLoader(PayrollDataLoader):
+    """Merge monthly, daily and housing sheets across one or more workbooks."""
+
+    def __init__(self, file_paths: Sequence[str], password: str = None):
+        paths = [str(path) for path in file_paths if path]
+        if not paths:
+            raise ValueError("未提供考勤数据文件")
+        self.parsers = [ExcelParser(path) for path in paths]
+        self.parser = self.parsers[0]
+        self._password = password
+        self._monthly = None
+        self._daily = None
+        self._housing = None
+        self._scanned = False
+        self._source_summary: List[Dict[str, Any]] = []
+        self._present_types = set()
+
+    def load(self):
+        for parser in self.parsers:
+            parser.load(password=self._password)
+        return self
+
+    def close(self):
+        for parser in self.parsers:
+            parser.close()
+
+    @staticmethod
+    def _sheet_type(name: str, headers: Sequence[str]) -> Optional[str]:
+        sheet_name = str(name or "").strip()
+        header_set = {str(header or "").strip() for header in headers}
+        if "住宿" in sheet_name or "宿舍" in sheet_name or (
+            "工号" in header_set
+            and header_set.intersection({"入住时间", "入宿时间", "退宿时间", "离宿时间"})
+        ):
+            return "housing"
+        daily_signals = header_set.intersection({"日期", "工作状态", "正班时数", "刷卡加班", "上班一", "下班一"})
+        if "日考勤" in sheet_name or ("工号" in header_set and "日期" in header_set and len(daily_signals) >= 2):
+            return "daily"
+        monthly_signals = header_set.intersection({
+            "考勤月份", "排班天数", "实际在职工作日天数", "正班出勤天数", "入职日期",
+        })
+        if "月考勤" in sheet_name or "月报" in sheet_name or (
+            "工号" in header_set and len(monthly_signals) >= 2
+        ):
+            return "monthly"
+        return None
+
+    @staticmethod
+    def _merge_headers(parts: Sequence[SheetData]) -> List[str]:
+        headers = []
+        seen = set()
+        for part in parts:
+            for header in part.headers:
+                if header not in seen:
+                    headers.append(header)
+                    seen.add(header)
+        return headers
+
+    @staticmethod
+    def _normalize_housing_rows(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized_rows = []
+        for row in rows:
+            normalized = dict(row)
+            emp_id = str(normalized.get("工号", "") or "").strip()
+            if not emp_id or emp_id.lower() in {"none", "nan", "null"} or emp_id == "工号":
+                continue
+            normalized["工号"] = emp_id
+            for canonical, aliases in {
+                "入住时间": ("入住时间", "入宿时间"),
+                "退宿时间": ("退宿时间", "离宿时间"),
+            }.items():
+                value = next(
+                    (normalized.get(alias) for alias in aliases if normalized.get(alias) not in (None, "")),
+                    None,
+                )
+                if isinstance(value, datetime):
+                    value = value.date()
+                normalized[canonical] = value
+            normalized_rows.append(normalized)
+        return normalized_rows
+
+    def _scan(self):
+        if self._scanned:
+            return
+        parts = {"monthly": [], "daily": [], "housing": []}
+        for parser in self.parsers:
+            recognized = []
+            for sheet_name in parser.get_sheet_names():
+                raw = parser.parse_sheet(sheet_name)
+                sheet_type = self._sheet_type(sheet_name, raw.headers)
+                if not sheet_type:
+                    continue
+                parts[sheet_type].append(raw)
+                self._present_types.add(sheet_type)
+                recognized.append({
+                    "sheet": sheet_name,
+                    "type": sheet_type,
+                    "row_count": raw.row_count,
+                })
+            self._source_summary.append({
+                "file_name": parser.file_path.name,
+                "sheets": recognized,
+            })
+
+        monthly_rows = self._normalize_valid_rows([
+            row for part in parts["monthly"] for row in part.rows
+        ])
+        daily_rows = [
+            row for part in parts["daily"] for row in part.rows if self._has_valid_employee_id(row)
+        ]
+        housing_rows = self._normalize_housing_rows([
+            row for part in parts["housing"] for row in part.rows
+        ])
+        self._monthly = SheetData(
+            name="月考勤",
+            headers=self._merge_headers(parts["monthly"]),
+            rows=monthly_rows,
+            row_count=len(monthly_rows),
+        )
+        self._daily = SheetData(
+            name="日考勤",
+            headers=self._merge_headers(parts["daily"]),
+            rows=daily_rows,
+            row_count=len(daily_rows),
+        ) if "daily" in self._present_types else None
+        self._housing = SheetData(
+            name="住宿名单",
+            headers=self._merge_headers(parts["housing"]),
+            rows=housing_rows,
+            row_count=len(housing_rows),
+        ) if "housing" in self._present_types else None
+        self._scanned = True
+        self._fill_absence_from_daily()
+
+    @property
+    def monthly(self) -> SheetData:
+        self._scan()
+        return self._monthly
+
+    @property
+    def daily(self) -> Optional[SheetData]:
+        self._scan()
+        return self._daily
+
+    @property
+    def housing(self) -> Optional[SheetData]:
+        self._scan()
+        return self._housing
+
+    @staticmethod
+    def _month_digits(value: Any) -> str:
+        digits = "".join(char for char in str(value or "") if char.isdigit())
+        return digits[:6]
+
+    def validate_inputs(self, engines: Sequence[str], attendance_month: str = "") -> Dict[str, Any]:
+        self._scan()
+        if not self.monthly.rows:
+            raise ValueError("未识别到月考勤数据，请检查Sheet名称或表头")
+
+        employee_ids = [str(row.get("工号", "")).strip() for row in self.monthly.rows]
+        duplicate_ids = sorted(emp_id for emp_id, count in Counter(employee_ids).items() if count > 1)
+        if duplicate_ids:
+            sample = "、".join(duplicate_ids[:5])
+            raise ValueError(f"月考勤存在重复工号：{sample}，请勿重复上传同一份数据")
+
+        requested_month = self._month_digits(attendance_month)
+        source_months = {
+            self._month_digits(row.get("考勤月份"))
+            for row in self.monthly.rows
+            if self._month_digits(row.get("考勤月份"))
+        }
+        if requested_month and source_months and source_months != {requested_month}:
+            source_text = "、".join(sorted(source_months))
+            raise ValueError(f"月考勤月份为{source_text}，与批次月份{requested_month}不一致")
+
+        engine_set = set(engines)
+        has_daily = self.daily is not None and bool(self.daily.rows)
+        if "canbu" in engine_set:
+            has_dongguan = any("东莞" in str(row.get("工作地区", "")) for row in self.monthly.rows)
+            if has_dongguan and not has_daily:
+                raise ValueError("东莞餐补核算缺少日考勤数据")
+        if "waisu_butie" in engine_set:
+            if not has_daily:
+                raise ValueError("外宿补贴核算缺少日考勤数据")
+            if self.housing is None:
+                raise ValueError("外宿补贴核算缺少住宿名单；即使当月无人住宿，也请上传带表头的空名单")
+
+        return {
+            "file_count": len(self.parsers),
+            "monthly_rows": self.monthly.row_count,
+            "daily_rows": self.daily.row_count if self.daily else 0,
+            "housing_rows": self.housing.row_count if self.housing else 0,
+            "present_types": sorted(self._present_types),
+            "sources": self._source_summary,
+        }
 
 
 class DongguanDataLoader:

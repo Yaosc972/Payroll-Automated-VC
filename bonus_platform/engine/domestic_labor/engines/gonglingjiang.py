@@ -1,5 +1,6 @@
 """工龄奖计算引擎 (Seniority Bonus Engine)."""
 from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List
 from .base import BaseEngine, CalculationResult, safe_float
 from ..models import AuditExplanation, PayrollException
@@ -36,7 +37,7 @@ DONGGUAN_EXCLUDED_POSITIONS = {
     "高级招聘专员", "稽查副主管", "稽查组长", "物流专员",
 }
 
-JINJIANG_OPERATION_POSITIONS = {"操作员"}
+JINJIANG_OPERATION_POSITIONS = {"操作员", "门禁员"}
 
 # 工龄奖上限
 SENIORITY_CAP_GSDG = {
@@ -90,6 +91,11 @@ DEPARTMENT_MAP = DEPARTMENT_MAP_GSDG
 OPERATION_POSITIONS = OPERATION_POSITIONS_GSDG
 SENIORITY_CAP = SENIORITY_CAP_GSDG
 SENIORITY_RATE = SENIORITY_RATE_GSDG
+
+
+def _excel_round(value: float, digits: int = 2) -> float:
+    quantizer = Decimal("1").scaleb(-digits)
+    return float(Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP))
 
 
 def _exception(
@@ -214,10 +220,10 @@ class GongLingJiangEngine(BaseEngine):
                 else:
                     zero_reason = "东莞操作岗位不享有工龄奖"
                     zero_steps = ["工作地区为东莞，部门归属操作", "岗位不在东莞操作享有范围或命中不享有岗位", "工龄奖金额为0"]
-            elif work_area == "嘉善":
-                zero_reason = "嘉善区域无工龄奖"
+            elif work_area in {"嘉善", "义乌"}:
+                zero_reason = f"{work_area}区域无工龄奖"
                 zero_rule_name = "工龄奖工作地区判断"
-                zero_steps = ["工作地区为嘉善", "嘉善区域无工龄奖", "工龄奖金额为0"]
+                zero_steps = [f"工作地区为{work_area}", f"{work_area}区域无工龄奖", "工龄奖金额为0"]
             elif work_area == "晋江":
                 cap = SENIORITY_CAP_WES
                 if position in JINJIANG_OPERATION_POSITIONS:
@@ -420,16 +426,26 @@ class GongLingJiangEngine(BaseEngine):
         # F5: 应发工龄奖
         yingfa = min(standard * years, cap)
 
-        # F6: 事病旷排休时数（小时）= 事假时数 + 病假时数 + 旷工天数×8 + 排休请假天数×8
+        # F6: 线下工资表按小时汇总；不同区域月报可能提供小时或天数字段。
         personal_leave_hours = safe_float(employee_data.get("事假时数", 0))
         sick_leave_hours = safe_float(employee_data.get("病假时数", 0))
         absenteeism_days = safe_float(employee_data.get("旷工天数", 0))
         rest_leave_days = safe_float(employee_data.get("排休请假天数", 0))
-        absenteeism_hours = absenteeism_days * 8
-        rest_leave_hours = rest_leave_days * 8
+        raw_absenteeism_hours = employee_data.get("旷工时数")
+        raw_rest_leave_hours = employee_data.get("排休请假时数")
+        if raw_absenteeism_hours not in (None, ""):
+            absenteeism_hours = safe_float(raw_absenteeism_hours)
+            absenteeism_source = "旷工时数"
+        else:
+            absenteeism_hours = absenteeism_days * 8
+            absenteeism_source = "旷工天数×8"
+        if raw_rest_leave_hours not in (None, ""):
+            rest_leave_hours = safe_float(raw_rest_leave_hours)
+            rest_leave_source = "排休请假时数"
+        else:
+            rest_leave_hours = rest_leave_days * 8
+            rest_leave_source = "排休请假天数×8"
         spk_hours = personal_leave_hours + sick_leave_hours + absenteeism_hours + rest_leave_hours
-        work_injury_days = safe_float(employee_data.get("工伤假天数", 0))
-        work_injury_hours = work_injury_days * 8 if dept_category == "操作" else 0
 
         # F7: 排班天数
         paiban = float(employee_data.get("排班天数", 0) or 0)
@@ -467,8 +483,12 @@ class GongLingJiangEngine(BaseEngine):
         day_rate = yingfa / paiban
         after_spk = day_rate * (paiban - spk_hours / 8) if spk_hours >= 56 else yingfa
         after_ruli = after_spk - day_rate * (ruli_hours / 8)
-        after_work_injury = after_ruli - day_rate * (work_injury_hours / 8)
-        final = round(max(min(after_work_injury, cap), 0), 2)
+        full_month_personal_leave = (
+            regular_attendance_days is not None
+            and safe_float(regular_attendance_days) == 0
+            and personal_leave_hours > 0
+        )
+        final = 0 if full_month_personal_leave else _excel_round(after_ruli)
 
         absence_step = (
             f"事病旷排休合计{spk_hours}小时，达到56小时门槛，按出勤天数比例折算"
@@ -480,12 +500,11 @@ class GongLingJiangEngine(BaseEngine):
             if ruli_hours > 0
             else "入离职缺勤时数为0，不额外扣减"
         )
-        work_injury_step = (
-            f"工伤假天数{work_injury_days}天，折算{work_injury_hours}小时，按天比例扣减"
-            if work_injury_hours > 0
-            else "工伤假天数为0，不额外扣减"
+        final_step = (
+            "正班出勤天数为0且存在事假，按线下工资表人工归零口径处理"
+            if full_month_personal_leave
+            else "按Excel ROUND规则保留2位小数，不额外设置最低金额"
         )
-        floor_step = "折算后金额低于0，最终金额按0兜底" if after_work_injury < 0 else "最终金额按0到上限区间兜底"
 
         return CalculationResult(
             employee_id=employee_id,
@@ -523,16 +542,18 @@ class GongLingJiangEngine(BaseEngine):
                         "事假时数": personal_leave_hours,
                         "病假时数": sick_leave_hours,
                         "旷工天数": absenteeism_days,
+                        "旷工时数": absenteeism_hours,
+                        "旷工字段口径": absenteeism_source,
                         "旷工折算时数": absenteeism_hours,
                         "排休请假天数": rest_leave_days,
+                        "排休请假时数": rest_leave_hours,
+                        "排休字段口径": rest_leave_source,
                         "排休请假折算时数": rest_leave_hours,
                         "事病旷排休时数": spk_hours,
                         "入离职缺勤时数": ruli_hours,
-                        "工伤假天数": work_injury_days,
-                        "工伤折算时数": work_injury_hours,
-                        "请假折算后金额": round(after_spk, 2),
-                        "入离职折算后金额": round(after_ruli, 2),
-                        "工伤折算后金额": round(after_work_injury, 2),
+                        "全月事假未出勤归零": full_month_personal_leave,
+                        "请假折算后金额": _excel_round(after_spk),
+                        "入离职折算后金额": _excel_round(after_ruli),
                         "最终金额": final,
                     },
                     steps=[
@@ -540,11 +561,10 @@ class GongLingJiangEngine(BaseEngine):
                         f"岗位{position}匹配工龄奖资格",
                         f"按{ref_date.isoformat()}计算工龄为{years}年",
                         f"应发金额=min({standard}×{years}, {cap})={yingfa}",
-                        "事病旷排休时数=事假时数+病假时数+旷工天数×8+排休请假天数×8",
+                        "事病旷排休时数=事假时数+病假时数+旷工时数+排休请假时数（天数字段按8小时折算）",
                         absence_step,
                         ruli_step,
-                        work_injury_step,
-                        floor_step,
+                        final_step,
                         f"最终工龄奖为{final}",
                     ],
                 ),

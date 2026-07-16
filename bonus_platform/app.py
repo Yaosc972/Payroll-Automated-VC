@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, SUPPLIER_PROFILES_OUTPUT_DIR, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, ensure_data_files
-from .engine.domestic_labor.parser import PayrollDataLoader
+from .engine.domestic_labor.parser import MultiFilePayrollDataLoader
 from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
 from .engine.domestic_labor.exporter import ExcelExporter
@@ -1387,14 +1387,14 @@ def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> N
     result["exceptions"].extend(subject_detail["exceptions"])
 
 
-def _run_payroll_calculation(run_id: str, file_path: str, attendance_month: str,
+def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
                               hrbp_list: list = None):
     """Background worker: load Excel, run engines, save results."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     try:
         update_payroll_metadata(run_id, {"status": "计算中"})
-        with PayrollDataLoader(file_path, password=password) as loader:
+        with MultiFilePayrollDataLoader(file_paths, password=password) as loader:
             monthly = loader.monthly
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
@@ -1464,12 +1464,16 @@ def list_domestic_labor_runs() -> dict:
 
 
 @app.post("/api/domestic-labor/runs")
-async def create_domestic_labor_run(file: UploadFile = File(...), engines: str = Body(""),
+async def create_domestic_labor_run(files: list[UploadFile] = File(None),
+                                     file: UploadFile = File(None), engines: str = Body(""),
                                      attendance_month: str = Body(""),
                                      password: str = Body(""), hrbp_list: str = Body("")):
-    # Validate file
-    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        raise HTTPException(400, "请上传 Excel 文件（.xlsx / .xlsm / .xls）")
+    uploaded_files = [*(files or []), *([file] if file else [])]
+    if not uploaded_files:
+        raise HTTPException(400, "请至少上传一个 Excel 文件")
+    for uploaded_file in uploaded_files:
+        if not uploaded_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            raise HTTPException(400, f"请上传 Excel 文件（.xlsx / .xlsm / .xls）：{uploaded_file.filename} 格式不支持")
 
     # Parse engines
     engine_list = [e.strip() for e in engines.split(",") if e.strip()]
@@ -1482,20 +1486,22 @@ async def create_domestic_labor_run(file: UploadFile = File(...), engines: str =
 
     # Save uploaded file
     DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    run_id_temp = safe_payroll_filename(file.filename)
-    # We'll create the run first, then save file into its directory
     run = create_payroll_run({
         "engines": engine_list,
         "attendanceMonth": attendance_month,
-        "fileName": file.filename,
+        "fileName": uploaded_files[0].filename,
+        "fileNames": [uploaded_file.filename for uploaded_file in uploaded_files],
     })
     run_id = run["id"]
     run_dir = get_payroll_run_dir(run_id)
 
-    saved_name = safe_payroll_filename(file.filename)
-    file_path = run_dir / saved_name
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    saved_paths = []
+    for uploaded_file in uploaded_files:
+        saved_name = safe_payroll_filename(uploaded_file.filename)
+        file_path = run_dir / saved_name
+        with open(file_path, "wb") as target:
+            target.write(await uploaded_file.read())
+        saved_paths.append(file_path)
 
     # Parse hrbp_list if provided
     hrbp = None
@@ -1505,20 +1511,36 @@ async def create_domestic_labor_run(file: UploadFile = File(...), engines: str =
         except Exception:
             pass
 
+    try:
+        with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None) as loader:
+            input_summary = loader.validate_inputs(engine_list, attendance_month)
+    except Exception as exc:
+        message = f"数据文件校验失败：{exc}"
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(400, message) from exc
+
     update_payroll_metadata(run_id, {
         "status": "已上传",
-        "filePath": str(file_path),
-        "savedFileName": saved_name,
-        "fileSize": file_path.stat().st_size,
+        "filePath": str(saved_paths[0]),
+        "filePaths": [str(path) for path in saved_paths],
+        "savedFileName": saved_paths[0].name,
+        "savedFileNames": [path.name for path in saved_paths],
+        "fileSize": sum(path.stat().st_size for path in saved_paths),
+        "inputSummary": input_summary,
     })
 
     # Launch background calculation
     asyncio.get_event_loop().run_in_executor(
-        None, _run_payroll_calculation, run_id, str(file_path),
+        None, _run_payroll_calculation, run_id, [str(path) for path in saved_paths],
         attendance_month, engine_list, password or None, hrbp,
     )
 
-    return {"run_id": run_id, "status": "已上传", "message": "计算任务已提交"}
+    return {
+        "run_id": run_id,
+        "status": "已上传",
+        "message": "数据文件校验通过，计算任务已提交",
+        "input_summary": input_summary,
+    }
 
 
 @app.get("/api/domestic-labor/runs/{run_id}")
