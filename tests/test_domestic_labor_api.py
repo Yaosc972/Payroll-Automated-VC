@@ -81,6 +81,23 @@ def test_excel_parser_supports_legacy_xls(monkeypatch, tmp_path):
     assert parsed.rows == [{"工号": "OWHN001", "姓名": "张三", "正班出勤天数": 20, "旷工天数": 1}]
 
 
+def test_excel_parser_skips_external_workbook_links(monkeypatch, tmp_path):
+    """核算只读取当前工作簿数据，不应解析可能非常大的历史外链缓存。"""
+    path = tmp_path / "attendance.xlsx"
+    path.write_bytes(b"placeholder")
+    load_calls = []
+
+    def recording_load_workbook(*args, **kwargs):
+        load_calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(domestic_parser.openpyxl, "load_workbook", recording_load_workbook)
+
+    ExcelParser(str(path)).load()
+
+    assert load_calls[0][1]["keep_links"] is False
+
+
 def test_payroll_loader_supports_dormitory_sheet_and_date_aliases(tmp_path):
     """宿舍名单及入宿/离宿字段应统一为外宿引擎使用的标准字段。"""
     path = tmp_path / "dormitory-aliases.xlsx"

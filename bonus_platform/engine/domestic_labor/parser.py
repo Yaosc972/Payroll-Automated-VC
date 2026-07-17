@@ -56,6 +56,8 @@ class ExcelParser:
 
         if openpyxl is None:
             raise ImportError("openpyxl is required: pip install openpyxl")
+        # Payroll uses cached cell values only; preserving external-link metadata can
+        # spend seconds parsing large historical link caches that are never consumed.
         if password and msoffcrypto:
             # Decrypt encrypted file
             output_buffer = io.BytesIO()
@@ -64,9 +66,19 @@ class ExcelParser:
                 ms_file.load_key(password=password)
                 ms_file.decrypt(output_buffer)
             output_buffer.seek(0)
-            self.workbook = openpyxl.load_workbook(output_buffer, data_only=True, read_only=True)
+            self.workbook = openpyxl.load_workbook(
+                output_buffer,
+                data_only=True,
+                read_only=True,
+                keep_links=False,
+            )
         else:
-            self.workbook = openpyxl.load_workbook(self.file_path, data_only=True, read_only=True)
+            self.workbook = openpyxl.load_workbook(
+                self.file_path,
+                data_only=True,
+                read_only=True,
+                keep_links=False,
+            )
         self._engine = "openpyxl"
         return self
 
