@@ -7043,7 +7043,14 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
             run_id,
             monotonic() - running_state_started,
         )
+        workbook_load_started = monotonic()
         with MultiFilePayrollDataLoader(file_paths, password=password) as loader:
+            payroll_logger.info(
+                "Opened %d payroll workbooks for %s in %.2fs",
+                len(file_paths),
+                run_id,
+                monotonic() - workbook_load_started,
+            )
             input_summary = None
             if validate_inputs:
                 validation_started = monotonic()

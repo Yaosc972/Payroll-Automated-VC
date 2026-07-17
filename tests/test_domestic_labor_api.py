@@ -2,6 +2,7 @@
 from datetime import date
 from io import BytesIO
 import re
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -138,6 +139,29 @@ def test_multi_file_loader_identifies_business_fields_after_columns_are_reordere
     assert (housing["工号"], housing["入住时间"], housing["退宿时间"]) == (
         "OWHN001", date(2026, 5, 1), date(2026, 6, 11),
     )
+
+
+def test_multi_file_loader_opens_independent_workbooks_in_parallel(monkeypatch, tmp_path):
+    paths = [tmp_path / "月考勤.xlsx", tmp_path / "日考勤.xlsx"]
+    for path in paths:
+        path.write_bytes(b"placeholder")
+
+    load_barrier = threading.Barrier(len(paths), timeout=1)
+    load_threads = set()
+    load_threads_lock = threading.Lock()
+
+    def synchronized_load(parser, password=None):
+        load_barrier.wait()
+        with load_threads_lock:
+            load_threads.add(threading.get_ident())
+        return parser
+
+    monkeypatch.setattr(domestic_parser.ExcelParser, "load", synchronized_load)
+
+    loader = domestic_parser.MultiFilePayrollDataLoader([str(path) for path in paths])
+    loader.load()
+
+    assert len(load_threads) == len(paths)
 
 
 def _quanqinjiang_data() -> bytes:

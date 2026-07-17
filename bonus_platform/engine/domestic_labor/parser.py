@@ -1,6 +1,7 @@
 """Excel file parser for payroll data."""
 import io
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 from dataclasses import dataclass
@@ -496,8 +497,20 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         self._present_types = set()
 
     def load(self):
-        for parser in self.parsers:
-            parser.load(password=self._password)
+        if len(self.parsers) == 1:
+            self.parsers[0].load(password=self._password)
+            return self
+
+        with ThreadPoolExecutor(
+            max_workers=min(len(self.parsers), 4),
+            thread_name_prefix="domestic-labor-workbook",
+        ) as executor:
+            futures = [
+                executor.submit(parser.load, password=self._password)
+                for parser in self.parsers
+            ]
+            for future in futures:
+                future.result()
         return self
 
     def close(self):
