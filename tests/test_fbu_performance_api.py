@@ -571,6 +571,25 @@ def test_fbu_previous_attendance_can_be_added_through_direct_upload(monkeypatch,
     )
     assert current_response.status_code == 200, current_response.text
 
+    current_path = tmp_path / run_id / "attendance.xlsx"
+    current_content = current_path.read_bytes()
+    current_path.unlink()
+    original_materialize = app_module.fbu_run_manager.materialize_file
+
+    def materialize_from_persistent(target_run_id, relative_path):
+        if relative_path == "attendance.xlsx":
+            restored = tmp_path / target_run_id / relative_path
+            restored.parent.mkdir(parents=True, exist_ok=True)
+            restored.write_bytes(current_content)
+            return restored
+        return original_materialize(target_run_id, relative_path)
+
+    monkeypatch.setattr(
+        app_module.fbu_run_manager,
+        "materialize_file",
+        materialize_from_persistent,
+    )
+
     previous_content = _attendance_bytes_for_rows([
         ("2026-03-29", 8),
         ("2026-03-30", 8),

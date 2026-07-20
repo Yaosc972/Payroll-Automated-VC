@@ -8385,7 +8385,9 @@ async def import_fbu_attendance(
         pending_file_path.write_bytes(await file.read())
         current_attendance_filename = file.filename
     elif not file_path.exists():
-        raise HTTPException(400, "请先上传当月考勤日报表")
+        await asyncio.to_thread(fbu_run_manager.materialize_file, run.run_id, "attendance.xlsx")
+        if not file_path.exists():
+            raise HTTPException(400, "请先上传当月考勤日报表")
     attendance_parse_path = pending_file_path if file else file_path
 
     previous_attendance_filename = run.previous_attendance_file or ""
