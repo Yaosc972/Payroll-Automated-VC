@@ -324,7 +324,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.1.0"
+    assert package["version"] == "1.1.1"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie", "gonglingjiang"}
@@ -333,7 +333,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.1.0"
+    assert package["version_history"][0]["version"] == "1.1.1"
     assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie", "gonglingjiang"]
 
 
@@ -362,6 +362,20 @@ def test_rule_package_supports_immutable_version_lookup():
     assert {subject["id"] for subject in published.json()["subjects"]} == {"canbu", "waisu_butie"}
     assert missing.status_code == 404
     assert missing.json()["detail"] == "规则包版本不存在: 9.9.9"
+
+
+def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
+    client = TestClient(app)
+
+    current = client.get("/api/domestic-labor/rule-package").json()
+    previous = client.get("/api/domestic-labor/rule-package", params={"version": "1.1.0"}).json()
+    current_waisu = next(subject for subject in current["subjects"] if subject["id"] == "waisu_butie")
+    previous_waisu = next(subject for subject in previous["subjects"] if subject["id"] == "waisu_butie")
+
+    assert current_waisu["version"] == "DL-WAISU.v1.0.1"
+    assert "最后工作日在核算月月末或之后" in "".join(current_waisu["common_rules"])
+    assert previous_waisu["version"] == "DL-WAISU.v1.0.0"
+    assert "最后工作日在核算月月末或之后" not in "".join(previous_waisu["common_rules"])
 
 
 @pytest.mark.parametrize(
@@ -1771,6 +1785,32 @@ def test_waisu_butie_dongguan_absence_excludes_annual_leave_hours():
     assert explanation["intermediate_values"]["休年假小时"] == 16
 
 
+def test_waisu_butie_dongguan_next_month_exit_still_prorates_current_month_absence():
+    """次月离职不影响本月全月在职判断，东莞缺勤仍需折算。"""
+    employee = {
+        "工号": "OWHN12750",
+        "姓名": "黄海明",
+        "工作地区": "东莞",
+        "岗位名称": "揽收充电司机",
+        "考勤月份": "202606",
+        "入职日期": date(2025, 8, 22),
+        "最后工作日": date(2026, 7, 7),
+        "事假时数": 8,
+        "排休请假时数": 0,
+        "病假时数": 80,
+        "旷工时数": 0,
+        "入离职缺勤时数": 0,
+    }
+    daily_attendance = [{"工号": "OWHN12750", "上班一": "22:00", "下班一": "06:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 95
+    assert result.details["在职天数"] == 30
+    assert result.details["全月在职"] is True
+    assert result.details["缺勤时数"] == 88
+
+
 def test_waisu_butie_dongguan_slash_standard_does_not_block_rule_calculation():
     """外宿补贴标准为/时不再作为资格依据"""
     employee = {
@@ -1904,9 +1944,9 @@ def test_waisu_butie_jiashan_yiwu_absence_includes_paid_leave_types(work_area):
     assert result.amount == 116.13
 
 
-@pytest.mark.parametrize("position", ["数据专员", "保洁", "操作文员"])
+@pytest.mark.parametrize("position", ["数据专员", "保洁", "操作文员", "设备维养专员"])
 def test_waisu_butie_jiashan_confirmed_positions_are_eligible(position):
-    """薪酬确认的数据专员、保洁、操作文员享有嘉善外宿补贴。"""
+    """薪酬确认的嘉善岗位名称均享有外宿补贴。"""
     employee = {
         "工号": "OWHN001",
         "姓名": "张三",
@@ -1922,6 +1962,79 @@ def test_waisu_butie_jiashan_confirmed_positions_are_eligible(position):
     result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
 
     assert result.amount == 150
+
+
+def test_waisu_butie_jinjiang_confirmed_safety_officer_is_eligible():
+    """薪酬确认晋江安全员享有外宿补贴。"""
+    employee = {
+        "工号": "OWDN0255",
+        "姓名": "李磊",
+        "工作地区": "晋江",
+        "岗位名称": "安全员",
+        "考勤月份": "202606",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+        "排班天数": 22,
+        "实际在职工作日天数": 22,
+    }
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance=[], housing_records=[])
+
+    assert result.amount == 150
+
+
+@pytest.mark.parametrize(
+    ("work_area", "position"),
+    [("东莞", "操作员"), ("嘉善", "操作员"), ("义乌", "操作员"), ("晋江", "操作员")],
+)
+@pytest.mark.parametrize("attendance_days", [0, 1])
+def test_waisu_butie_all_regions_at_most_one_attendance_day_with_absence_gets_zero(
+    work_area, position, attendance_days
+):
+    """各地区正班出勤不超过1天且存在旷工时不发外宿补贴。"""
+    employee = {
+        "工号": "OWHD8098",
+        "姓名": "梁林",
+        "工作地区": work_area,
+        "岗位名称": position,
+        "考勤月份": "202606",
+        "入职日期": date(2026, 6, 27),
+        "最后工作日": None,
+        "正班出勤天数": attendance_days,
+        "旷工天数": 1,
+    }
+    housing_records = [{
+        "工号": "OWHD8098",
+        "入住时间": date(2026, 6, 26),
+        "退宿时间": date(2026, 6, 30),
+    }]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance=[], housing_records=housing_records)
+
+    assert result.amount == 0
+    assert result.details["reason"] == "正班出勤不超过1天且旷工至少1天"
+
+
+@pytest.mark.parametrize(("employee_id", "attendance_days"), [("OWHD8092", 0), ("OWHD8021", 0.38)])
+def test_waisu_butie_half_day_absence_does_not_trigger_low_attendance_zero_rule(
+    employee_id, attendance_days
+):
+    """低出勤但仅旷工0.5天时仍按正常外宿补贴规则计算。"""
+    employee = {
+        "工号": employee_id,
+        "姓名": "测试员工",
+        "工作地区": "嘉善",
+        "岗位名称": "操作员",
+        "考勤月份": "202606",
+        "入职日期": date(2026, 6, 30),
+        "最后工作日": None,
+        "正班出勤天数": attendance_days,
+        "旷工天数": 0.5,
+    }
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance=[], housing_records=[])
+
+    assert result.amount == 5
 
 
 def test_waisu_butie_jiashan_mid_month_exit_still_deducts_absence_over_56_hours():

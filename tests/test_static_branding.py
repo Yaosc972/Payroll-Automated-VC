@@ -459,14 +459,14 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     assert 'id="rulePackageView"' in html
     assert 'id="rulePackageCategoryTabs"' in html
     assert 'id="rulePackageVersionSelect"' in html
-    assert "DL-PAYROLL.v1.1.0" in html
+    assert "DL-PAYROLL.v1.1.1" in html
     assert "已验证科目 3" in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js
     assert "data-rule-category" in js
     assert "data-rule-subject" in js
     assert "核算规则包" in html
-    assert "当前版本 1.1.0" in html
+    assert "当前版本 1.1.1" in html
     assert "RULE PACKAGE · CURRENT" not in html
     assert "position: absolute" in html.split(".dl-rule-package-entry {", 1)[1].split("}", 1)[0]
 

@@ -252,8 +252,53 @@ _RULE_PACKAGE["version_history"] = [
 ]
 
 
+_RULE_PACKAGE_V1_1_0 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_0)
+_RULE_PACKAGE.update({
+    "version": "1.1.1",
+    "display_version": "DL-PAYROLL.v1.1.1",
+    "released_at": "2026-07-20",
+    "effective_from": "2026-06",
+})
+_waisu_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "waisu_butie")
+_waisu_butie["version"] = "DL-WAISU.v1.0.1"
+_waisu_butie["common_rules"].append(
+    "最后工作日在核算月月末或之后时，该月仍按全月在职判断并执行对应缺勤折算。"
+)
+_waisu_butie["common_rules"].append(
+    "所有地区正班出勤不超过1天且旷工天数达到1天时，外宿补贴为0；旷工不足1天不归零。"
+)
+for _region in _waisu_butie["regions"]:
+    if _region["name"] == "嘉善 / 义乌":
+        _region["rule"] = "按嘉善/义乌享有岗位名单判断，设备维养专员等已确认岗位享有，并结合住宿和缺勤核算。"
+    elif _region["name"] == "晋江":
+        _region["rule"] = "操作员、门禁员、操作组长、HRBP专员、安全员按月考勤扣减公式核算。"
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.1",
+    "released_at": "2026-07-20",
+    "changes": "修复跨月离职边界，补充享有岗位，并增加所有地区正班出勤不超过1天且旷工至少1天的归零规则。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.1",
+        "display_version": "DL-PAYROLL.v1.1.1",
+        "status": "当前版本",
+        "released_at": "2026-07-20",
+        "effective_from": "2026-06",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "修复外宿补贴跨月离职边界，补充享有岗位，并增加正班出勤不超过1天且旷工至少1天的归零规则。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_0["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_0["version_history"][1:],
+]
+
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
+    _RULE_PACKAGE_V1_1_0["version"]: _RULE_PACKAGE_V1_1_0,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 

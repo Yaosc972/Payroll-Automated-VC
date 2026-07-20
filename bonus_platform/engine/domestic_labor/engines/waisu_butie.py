@@ -44,6 +44,7 @@ JIASHAN_YIWU_ELIGIBLE_POSITIONS = {
     "操作主管",
     "操作组长",
     "见习组长",
+    "设备维养专员",
     "设备维护专员",
     "设备维护员",
     "安检组长",
@@ -62,6 +63,7 @@ JINJIANG_ELIGIBLE_POSITIONS = {
     "门禁员",
     "操作组长",
     "HRBP专员",
+    "安全员",
 }
 
 
@@ -211,6 +213,33 @@ class WaiSuBuTieEngine(BaseEngine):
         else:
             warnings.append(f"员工{employee_id}无日考勤数据")
 
+        attendance_days_value = employee_data.get("正班出勤天数")
+        attendance_days = safe_float(attendance_days_value)
+        absent_days = safe_float(employee_data.get("旷工天数", 0))
+        if (
+            attendance_days_value not in (None, "")
+            and attendance_days <= 1
+            and absent_days >= 1
+        ):
+            return self._zero_result(
+                employee_id,
+                employee_name,
+                "正班出勤不超过1天且旷工至少1天",
+                "外宿补贴出勤与旷工判断",
+                "正班出勤天数<=1且旷工天数>=1 = 0",
+                input_snapshot,
+                {
+                    "正班出勤天数": attendance_days,
+                    "旷工天数": absent_days,
+                },
+                [
+                    f"工作地区为{work_area}",
+                    f"正班出勤天数为{attendance_days}",
+                    f"旷工天数为{absent_days}",
+                    "外宿补贴金额为0",
+                ],
+            )
+
         if work_area == "晋江":
             return self._calculate_jinjiang(
                 employee_id,
@@ -247,16 +276,18 @@ class WaiSuBuTieEngine(BaseEngine):
         else:
             employment_start = month_start
 
+        covers_month_start = (
+            isinstance(hire_date, (date, datetime))
+            and _to_date(hire_date) <= month_start
+        )
+
         if last_work_day is None or last_work_day == "" or last_work_day == "None":
             employment_end = month_end
-            # 全月在职 = 入职日期 < 月初日期 且 最后工作日为空
-            if isinstance(hire_date, (date, datetime)) and _to_date(hire_date) <= month_start:
-                is_full_month = True
-            else:
-                is_full_month = False
+            is_full_month = covers_month_start
         elif isinstance(last_work_day, (date, datetime)):
-            employment_end = min(_to_date(last_work_day), month_end)
-            is_full_month = False
+            normalized_last_work_day = _to_date(last_work_day)
+            employment_end = min(normalized_last_work_day, month_end)
+            is_full_month = covers_month_start and normalized_last_work_day >= month_end
         else:
             employment_end = month_end
             is_full_month = False
