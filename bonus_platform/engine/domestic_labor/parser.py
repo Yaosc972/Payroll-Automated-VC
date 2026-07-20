@@ -35,6 +35,8 @@ class SheetData:
 class ExcelParser:
     """Excel file parser."""
 
+    OLE_FILE_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
     def __init__(self, file_path: str):
         self.file_path = Path(file_path)
         if not self.file_path.exists():
@@ -45,10 +47,44 @@ class ExcelParser:
     def load(self, password: str = None):
         """Load workbook. Supports encrypted files with password."""
         suffix = self.file_path.suffix.lower()
-        if suffix == ".xls":
+        with self.file_path.open("rb") as file_obj:
+            is_ole_file = file_obj.read(len(self.OLE_FILE_SIGNATURE)) == self.OLE_FILE_SIGNATURE
+
+        encrypted_office_file = None
+        if is_ole_file and msoffcrypto:
+            try:
+                with self.file_path.open("rb") as file_obj:
+                    candidate = msoffcrypto.OfficeFile(file_obj)
+                    if candidate.is_encrypted():
+                        encrypted_office_file = True
+            except Exception:
+                # xlrd will provide the actionable error if this is a malformed legacy workbook.
+                pass
+
+        if encrypted_office_file:
+            if not password:
+                raise ValueError("Excel 文件已加密，请输入文件密码后重新上传。")
+            if openpyxl is None:
+                raise ImportError("openpyxl is required: pip install openpyxl")
+            output_buffer = io.BytesIO()
+            with self.file_path.open("rb") as file_obj:
+                ms_file = msoffcrypto.OfficeFile(file_obj)
+                ms_file.load_key(password=password)
+                ms_file.decrypt(output_buffer)
+            output_buffer.seek(0)
+            self.workbook = openpyxl.load_workbook(
+                output_buffer,
+                data_only=True,
+                read_only=True,
+                keep_links=False,
+            )
+            self._engine = "openpyxl"
+            return self
+
+        if suffix == ".xls" or is_ole_file:
             if xlrd is None:
                 raise ImportError("xlrd is required to read .xls files: pip install xlrd")
-            if password:
+            if password and suffix == ".xls":
                 raise ValueError("老式 .xls 加密文件暂不支持密码解密，请先另存为 .xlsx 后上传。")
             self.workbook = xlrd.open_workbook(str(self.file_path))
             self._engine = "xlrd"

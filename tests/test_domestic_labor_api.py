@@ -98,6 +98,28 @@ def test_excel_parser_skips_external_workbook_links(monkeypatch, tmp_path):
     assert load_calls[0][1]["keep_links"] is False
 
 
+def test_excel_parser_detects_legacy_xls_with_xlsx_extension(monkeypatch, tmp_path):
+    """东宝导出的错后缀文件应按真实文件头走 xlrd。"""
+    class FakeBook:
+        def sheet_names(self):
+            return ["日考勤", "月考勤"]
+
+    mislabeled_path = tmp_path / "东宝系统-7月东南考勤数据.xlsx"
+    mislabeled_path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"legacy workbook")
+    opened_paths = []
+    monkeypatch.setattr(
+        domestic_parser.xlrd,
+        "open_workbook",
+        lambda path: opened_paths.append(path) or FakeBook(),
+    )
+
+    parser = ExcelParser(str(mislabeled_path)).load()
+
+    assert parser._engine == "xlrd"
+    assert parser.get_sheet_names() == ["日考勤", "月考勤"]
+    assert opened_paths == [str(mislabeled_path)]
+
+
 def test_payroll_loader_supports_dormitory_sheet_and_date_aliases(tmp_path):
     """宿舍名单及入宿/离宿字段应统一为外宿引擎使用的标准字段。"""
     path = tmp_path / "dormitory-aliases.xlsx"
@@ -1572,6 +1594,35 @@ def test_canbu_jiashan_uses_monthly_attendance_formula():
     assert explanation["intermediate_values"]["有效餐补天数"] == 17.2
 
 
+def test_canbu_audit_department_fields_are_deduplicated():
+    """计算解释中的部门层级不应按每日考勤重复拼接。"""
+    employee = {
+        "工号": "OWHD2511",
+        "姓名": "周月明",
+        "工作地区": "嘉善",
+        "一级部门名称": "华东区",
+        "二级部门名称": "华东枢纽",
+        "三级部门名称": "后勤保障组",
+        "岗位名称": "设备维修专员",
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+    }
+    daily_attendance = [
+        {
+            "工号": "OWHD2511",
+            "工作地区": "嘉善",
+            "一级部门名称": "华东区",
+            "二级部门名称": "华东枢纽",
+            "三级部门名称": "后勤保障组",
+        }
+        for _ in range(3)
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.details["audit_explanation"]["inputs"]["部门字段"] == "华东区 华东枢纽 后勤保障组"
+
+
 def test_canbu_yiwu_uses_jiashan_monthly_attendance_formula():
     """义乌与嘉善使用同一套餐补月报公式"""
     employee = {
@@ -1596,7 +1647,7 @@ def test_canbu_yiwu_uses_jiashan_monthly_attendance_formula():
 
 
 def test_canbu_jiashan_yiwu_include_cleaner_and_maintenance_alias():
-    """嘉善/义乌保洁享有餐补，设备维护员兼容设备维护专员历史岗位"""
+    """嘉善/义乌保洁享有餐补，设备维护与设备维修岗位名称均兼容。"""
     base_employee = {
         "工号": "OWHN001",
         "姓名": "张三",
@@ -1609,14 +1660,18 @@ def test_canbu_jiashan_yiwu_include_cleaner_and_maintenance_alias():
 
     cleaner = {**base_employee, "工作地区": "嘉善", "岗位名称": "保洁"}
     maintenance = {**base_employee, "工作地区": "义乌", "岗位名称": "设备维护员"}
+    repair_specialist = {**base_employee, "工作地区": "嘉善", "岗位名称": "设备维修专员"}
 
     cleaner_result = CanBuEngine().calculate(cleaner, daily_attendance=[])
     maintenance_result = CanBuEngine().calculate(maintenance, daily_attendance=[])
+    repair_specialist_result = CanBuEngine().calculate(repair_specialist, daily_attendance=[])
 
     assert cleaner_result.amount == 300
     assert cleaner_result.details["地区规则"] == "嘉善"
     assert maintenance_result.amount == 300
     assert maintenance_result.details["地区规则"] == "义乌"
+    assert repair_specialist_result.amount == 300
+    assert repair_specialist_result.details["地区规则"] == "嘉善"
 
 
 def test_canbu_jiashan_unknown_position_is_not_eligible():

@@ -50,6 +50,7 @@ JIASHAN_ELIGIBLE_POSITIONS = {
     "操作文员",
     "设备维护员",
     "设备维护专员",
+    "设备维修专员",
     "数据专员",
     "安全员",
 }
@@ -96,10 +97,6 @@ def _first_non_empty(*values) -> str:
     return ""
 
 
-def _text_from_fields(row: Dict[str, Any], field_names: List[str]) -> str:
-    return " ".join(str(row.get(field, "") or "") for field in field_names)
-
-
 def _department_text(employee_data: Dict[str, Any], daily_attendance: List[Dict[str, Any]]) -> str:
     fields = [
         "一级部门名称",
@@ -109,10 +106,15 @@ def _department_text(employee_data: Dict[str, Any], daily_attendance: List[Dict[
         "部门",
         "部门名称",
     ]
-    parts = [_text_from_fields(employee_data, fields)]
-    for day in daily_attendance or []:
-        parts.append(_text_from_fields(day, fields))
-    return " ".join(parts)
+    departments = []
+    seen = set()
+    for row in [employee_data, *(daily_attendance or [])]:
+        for field in fields:
+            value = str(row.get(field, "") or "").strip()
+            if value and value not in seen:
+                departments.append(value)
+                seen.add(value)
+    return " ".join(departments)
 
 
 def _work_area(employee_data: Dict[str, Any], daily_attendance: List[Dict[str, Any]]) -> str:
