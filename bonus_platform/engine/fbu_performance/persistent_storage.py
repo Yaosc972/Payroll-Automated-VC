@@ -131,6 +131,54 @@ def load_fbu_file_from_persistent(run_id: str, run_dir: Path, relative_path: str
     return target
 
 
+def create_fbu_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:
+    normalized = _normalize_relative_path(relative_path)
+    object_path = _object_path(run_id, normalized)
+    body = _request(
+        "POST",
+        _storage_url(
+            f"object/upload/sign/{fbu_supabase_bucket()}/{_quoted_path(object_path)}"
+        ),
+        headers=_headers({"content-type": "application/json", "x-upsert": "true"}),
+        content=b"{}",
+    )
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Supabase Storage 签名上传地址返回内容异常。") from exc
+    signed_path = str(
+        payload.get("url") or payload.get("signedURL") or payload.get("signedUrl") or ""
+    ).strip()
+    if not signed_path:
+        raise RuntimeError("Supabase Storage 未返回签名上传地址。")
+    if signed_path.startswith(("http://", "https://")):
+        signed_url = signed_path
+    elif signed_path.startswith("/storage/v1/"):
+        signed_url = f"{_supabase_url()}{signed_path}"
+    else:
+        signed_url = _storage_url(signed_path)
+    return {
+        "signedUrl": signed_url,
+        "objectPath": object_path,
+        "relativePath": normalized,
+    }
+
+
+def delete_fbu_files_from_persistent(run_id: str, relative_paths: Iterable[str]) -> None:
+    object_paths = [
+        _object_path(run_id, relative_path)
+        for relative_path in _normalized_paths(relative_paths)
+    ]
+    if not object_paths:
+        return
+    _request(
+        "DELETE",
+        _storage_url(f"object/{fbu_supabase_bucket()}"),
+        headers=_headers({"content-type": "application/json"}),
+        content=json.dumps({"prefixes": object_paths}).encode("utf-8"),
+    )
+
+
 def delete_fbu_run_from_persistent(run_id: str) -> None:
     prefix = f"{_environment_prefix()}/{_safe_run_id(run_id)}"
     object_paths = [f"{prefix}/{entry['name']}" for entry in _list_objects(prefix) if entry.get("name")]

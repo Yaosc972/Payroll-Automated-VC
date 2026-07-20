@@ -11,6 +11,7 @@ import uuid
 from .engines.base import CalculationSegment, EmployeeData, get_calculation_path
 from .exporter import FBUPerformanceExporter
 from .persistent_storage import (
+    delete_fbu_files_from_persistent,
     delete_fbu_run_from_persistent,
     fbu_persistent_storage_enabled,
     list_fbu_run_metadata_from_persistent,
@@ -397,6 +398,10 @@ class FBURunManager:
         if not fbu_persistent_storage_enabled():
             return None
         return load_fbu_file_from_persistent(run_id, self.data_dir / run_id, relative_path)
+
+    def delete_persisted_files(self, run_id: str, relative_paths: list[str]) -> None:
+        if fbu_persistent_storage_enabled():
+            delete_fbu_files_from_persistent(run_id, relative_paths)
 
     def save_results(self, run_id: str, employees: list[EmployeeData]):
         """保存核算结果"""

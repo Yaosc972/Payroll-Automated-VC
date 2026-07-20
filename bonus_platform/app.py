@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from datetime import date, datetime, timedelta
 import json
 import logging
@@ -26,6 +26,7 @@ import httpx
 from openpyxl import Workbook, load_workbook
 
 logger = logging.getLogger("bonus_platform.labor")
+fbu_logger = logging.getLogger("bonus_platform.fbu")
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -110,6 +111,10 @@ from .engine.admin_store import (
     set_module_role_access,
     set_user_roles,
     upsert_feishu_user,
+)
+from .engine.fbu_performance.persistent_storage import (
+    create_fbu_signed_upload,
+    fbu_persistent_storage_enabled,
 )
 
 
@@ -8124,6 +8129,232 @@ def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
         base_override_data=preview,
     )
     return {"success": True, "run_id": run_id, "preview": preview, "rule_lists": saved}
+
+
+_FBU_ATTENDANCE_DIRECT_UPLOAD_KINDS = {"attendance", "previous_attendance"}
+
+
+def _fbu_attendance_direct_upload_max_bytes() -> int:
+    raw = os.environ.get("SIGMA_FBU_MAX_UPLOAD_BYTES", "262144000")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 262144000
+
+
+def _fbu_attendance_direct_upload_specs(payload: dict, plan_id: str) -> list[dict]:
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        raise HTTPException(400, "请至少选择一份考勤文件。")
+    if len(raw_files) > 2:
+        raise HTTPException(400, "单次最多上传当月考勤和上月考勤各一份。")
+
+    specs = []
+    seen_kinds = set()
+    total_size = 0
+    for raw in raw_files:
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "上传文件信息格式不正确。")
+        kind = str(raw.get("kind") or "").strip()
+        if kind not in _FBU_ATTENDANCE_DIRECT_UPLOAD_KINDS:
+            raise HTTPException(400, "考勤文件类型不正确。")
+        if kind in seen_kinds:
+            raise HTTPException(400, "同类考勤文件不能重复上传。")
+        seen_kinds.add(kind)
+
+        original_name = Path(str(raw.get("fileName") or "").replace("\\", "/")).name
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, f"请上传 .xlsx 或 .xls 格式的考勤文件：{original_name or '未知文件'}")
+        try:
+            file_size = int(raw.get("fileSize") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"上传文件大小无效：{original_name}") from exc
+        if file_size <= 0:
+            raise HTTPException(400, f"上传文件不能为空：{original_name}")
+        total_size += file_size
+        specs.append({
+            "kind": kind,
+            "originalFilename": original_name,
+            "relativePath": f"direct_uploads/{plan_id}_{kind}{suffix}",
+            "size": file_size,
+            "contentType": str(raw.get("contentType") or "application/octet-stream"),
+        })
+
+    max_bytes = _fbu_attendance_direct_upload_max_bytes()
+    if total_size > max_bytes:
+        raise HTTPException(413, f"上传文件总大小超过当前上限 {max_bytes} 字节。")
+    return specs
+
+
+def _fbu_attendance_direct_plan_relative_path(plan_id: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{24}", str(plan_id or "")):
+        raise HTTPException(400, "直传计划编号无效。")
+    return f"direct_uploads/{plan_id}.json"
+
+
+def _load_fbu_attendance_direct_plan(run_id: str, plan_id: str) -> tuple[dict, Path]:
+    relative_path = _fbu_attendance_direct_plan_relative_path(plan_id)
+    try:
+        plan_path = fbu_run_manager.materialize_file(run_id, relative_path)
+    except Exception as exc:
+        fbu_logger.exception("Failed to materialize FBU attendance upload plan %s", plan_id)
+        raise HTTPException(503, "读取考勤直传计划失败，请稍后重试。") from exc
+    if not plan_path or not plan_path.is_file():
+        raise HTTPException(404, "考勤直传计划不存在或已过期。")
+    try:
+        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, "考勤直传计划内容异常，请重新上传。") from exc
+    if not isinstance(payload, dict) or payload.get("runId") != run_id or payload.get("planId") != plan_id:
+        raise HTTPException(400, "考勤直传计划与当前活动不匹配。")
+    return payload, plan_path
+
+
+def _fbu_attendance_direct_result(run: FBURun) -> dict:
+    return {
+        "success": True,
+        "run_id": run.run_id,
+        "step": 1,
+        "preview": run.attendance_data,
+        "result_file": _fbu_result_file_payload(run.run_id, "attendance"),
+    }
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/attendance-direct-upload-plan")
+def create_fbu_attendance_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> dict:
+    if not fbu_persistent_storage_enabled():
+        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    plan_id = secrets.token_hex(12)
+    specs = _fbu_attendance_direct_upload_specs(payload, plan_id)
+    try:
+        uploads = [
+            {**create_fbu_signed_upload(run_id, spec["relativePath"]), **spec}
+            for spec in specs
+        ]
+    except Exception as exc:
+        fbu_logger.exception("Failed to create FBU attendance signed upload for %s", run_id)
+        raise HTTPException(503, "生成考勤直传地址失败，请稍后重试。") from exc
+
+    relative_plan_path = _fbu_attendance_direct_plan_relative_path(plan_id)
+    plan_path = FBU_PERFORMANCE_RUNS_DIR / run_id / relative_plan_path
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_payload = {
+        "planId": plan_id,
+        "runId": run_id,
+        "calcMonth": run.calc_month,
+        "status": "pending",
+        "createdAt": datetime.now().isoformat(),
+        "uploads": specs,
+    }
+    plan_path.write_text(
+        json.dumps(plan_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    try:
+        fbu_run_manager.persist_files(run_id, [relative_plan_path])
+    except Exception as exc:
+        plan_path.unlink(missing_ok=True)
+        fbu_logger.exception("Failed to persist FBU attendance upload plan %s", plan_id)
+        raise HTTPException(503, "保存考勤直传计划失败，请稍后重试。") from exc
+    return {"runId": run_id, "planId": plan_id, "uploads": uploads}
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/attendance-direct-upload-complete")
+async def complete_fbu_attendance_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
+    if not fbu_persistent_storage_enabled():
+        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+    run = fbu_run_manager.get_run(run_id)
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    plan_id = str(payload.get("planId") or "").strip()
+    plan, plan_path = _load_fbu_attendance_direct_plan(run_id, plan_id)
+    if plan.get("status") == "completed":
+        refreshed_run = fbu_run_manager.get_run(run_id)
+        if not refreshed_run or not refreshed_run.attendance_data:
+            raise HTTPException(409, "考勤直传已登记，但活动结果尚未就绪，请稍后重试。")
+        return _fbu_attendance_direct_result(refreshed_run)
+
+    uploads = plan.get("uploads")
+    if not isinstance(uploads, list) or not uploads:
+        raise HTTPException(400, "考勤直传计划没有待处理文件。")
+
+    materialized: dict[str, tuple[dict, Path]] = {}
+    try:
+        for item in uploads:
+            if not isinstance(item, dict):
+                raise HTTPException(400, "考勤直传计划内容异常，请重新上传。")
+            kind = str(item.get("kind") or "")
+            relative_path = str(item.get("relativePath") or "")
+            if kind not in _FBU_ATTENDANCE_DIRECT_UPLOAD_KINDS:
+                raise HTTPException(400, "考勤直传计划文件类型异常。")
+            uploaded_path = fbu_run_manager.materialize_file(run_id, relative_path)
+            if not uploaded_path or not uploaded_path.is_file():
+                raise HTTPException(400, f"未找到已上传文件：{item.get('originalFilename') or kind}")
+            expected_size = int(item.get("size") or 0)
+            actual_size = uploaded_path.stat().st_size
+            if expected_size and actual_size != expected_size:
+                uploaded_path.unlink(missing_ok=True)
+                raise HTTPException(
+                    400,
+                    f"上传文件大小不一致（{item.get('originalFilename') or kind}："
+                    f"预期 {expected_size}，实际 {actual_size}），请重新上传。",
+                )
+            materialized[kind] = (item, uploaded_path)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        fbu_logger.exception("Failed to materialize FBU attendance direct upload %s", plan_id)
+        raise HTTPException(503, "读取已上传考勤文件失败，请稍后重试。") from exc
+
+    with ExitStack() as stack:
+        attendance_upload = None
+        previous_upload = None
+        if "attendance" in materialized:
+            item, path = materialized["attendance"]
+            attendance_upload = UploadFile(
+                file=stack.enter_context(path.open("rb")),
+                filename=str(item.get("originalFilename") or path.name),
+            )
+        if "previous_attendance" in materialized:
+            item, path = materialized["previous_attendance"]
+            previous_upload = UploadFile(
+                file=stack.enter_context(path.open("rb")),
+                filename=str(item.get("originalFilename") or path.name),
+            )
+        result = await import_fbu_attendance(
+            file=attendance_upload,
+            previous_attendance=previous_upload,
+            calc_month=run.calc_month,
+            roster=None,
+            run_id=run_id,
+        )
+
+    plan["status"] = "completed"
+    plan["completedAt"] = datetime.now().isoformat()
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    completion_recorded = False
+    relative_plan_path = _fbu_attendance_direct_plan_relative_path(plan_id)
+    try:
+        fbu_run_manager.persist_files(run_id, [relative_plan_path])
+        completion_recorded = True
+    except Exception:
+        fbu_logger.exception("Failed to persist completed FBU attendance upload plan %s", plan_id)
+
+    if completion_recorded:
+        temporary_paths = [str(item["relativePath"]) for item in uploads]
+        try:
+            fbu_run_manager.delete_persisted_files(run_id, temporary_paths)
+        except Exception:
+            fbu_logger.exception("Failed to clean FBU attendance direct upload %s", plan_id)
+        for _, path in materialized.values():
+            path.unlink(missing_ok=True)
+    return result
 
 
 @app.post("/api/fbu-performance/import-attendance")

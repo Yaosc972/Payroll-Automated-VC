@@ -455,6 +455,179 @@ def test_fbu_attendance_upload_reports_missing_previous_context_dates(monkeypatc
     assert "缺少上一月 2026-03-29 至 2026-03-31 考勤" in context["message"]
 
 
+def _enable_fake_fbu_direct_upload(monkeypatch):
+    monkeypatch.setattr(
+        app_module,
+        "fbu_persistent_storage_enabled",
+        lambda: True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "create_fbu_signed_upload",
+        lambda run_id, relative_path: {
+            "signedUrl": f"https://example.supabase.co/storage/v1/object/upload/sign/{relative_path}",
+            "objectPath": f"fbu-performance-runs/production/{run_id}/{relative_path}",
+            "relativePath": relative_path,
+        },
+        raising=False,
+    )
+
+
+def test_fbu_attendance_direct_upload_plan_accepts_file_above_vercel_limit(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-plan",
+        json={
+            "files": [{
+                "kind": "attendance",
+                "fileName": "考勤日报表-20260520.xlsx",
+                "fileSize": 5_799_733,
+                "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["runId"] == run_id
+    assert payload["uploads"][0]["size"] == 5_799_733
+    assert payload["uploads"][0]["kind"] == "attendance"
+    assert payload["uploads"][0]["signedUrl"].startswith("https://example.supabase.co/")
+
+
+def test_fbu_attendance_direct_upload_completion_materializes_and_parses_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    content = _attendance_bytes()
+    plan_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-plan",
+        json={
+            "files": [{
+                "kind": "attendance",
+                "fileName": "attendance-202604.xlsx",
+                "fileSize": len(content),
+                "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }],
+        },
+    )
+    assert plan_response.status_code == 200, plan_response.text
+    plan = plan_response.json()
+    upload = plan["uploads"][0]
+    uploaded_path = tmp_path / run_id / upload["relativePath"]
+    uploaded_path.parent.mkdir(parents=True, exist_ok=True)
+    uploaded_path.write_bytes(content)
+
+    complete_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-complete",
+        json={"planId": plan["planId"]},
+    )
+
+    assert complete_response.status_code == 200, complete_response.text
+    payload = complete_response.json()
+    assert payload["success"] is True
+    assert payload["preview"]["employees"][0]["employee_id"] == "E001"
+    assert (tmp_path / run_id / "attendance.xlsx").read_bytes() == content
+
+    repeated_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-complete",
+        json={"planId": plan["planId"]},
+    )
+    assert repeated_response.status_code == 200, repeated_response.text
+    assert repeated_response.json()["preview"] == payload["preview"]
+
+
+def test_fbu_previous_attendance_can_be_added_through_direct_upload(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    current_response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={
+            "file": (
+                "attendance-202604.xlsx",
+                _attendance_bytes_for_rows([("2026-04-01", 8)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+    assert current_response.status_code == 200, current_response.text
+
+    previous_content = _attendance_bytes_for_rows([
+        ("2026-03-29", 8),
+        ("2026-03-30", 8),
+        ("2026-03-31", 8),
+    ])
+    plan_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-plan",
+        json={
+            "files": [{
+                "kind": "previous_attendance",
+                "fileName": "attendance-202603.xlsx",
+                "fileSize": len(previous_content),
+                "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }],
+        },
+    )
+    assert plan_response.status_code == 200, plan_response.text
+    plan = plan_response.json()
+    upload = plan["uploads"][0]
+    uploaded_path = tmp_path / run_id / upload["relativePath"]
+    uploaded_path.parent.mkdir(parents=True, exist_ok=True)
+    uploaded_path.write_bytes(previous_content)
+
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-complete",
+        json={"planId": plan["planId"]},
+    )
+
+    assert response.status_code == 200, response.text
+    context = response.json()["preview"]["summary"]["attendance_context"]
+    assert context["status"] == "complete"
+    assert context["covered_dates"] == ["2026-03-29", "2026-03-30", "2026-03-31"]
+    assert (tmp_path / run_id / "previous_attendance.xlsx").read_bytes() == previous_content
+
+
+def test_fbu_attendance_direct_upload_plan_rejects_duplicate_kinds(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/attendance-direct-upload-plan",
+        json={
+            "files": [
+                {"kind": "attendance", "fileName": "a.xlsx", "fileSize": 10},
+                {"kind": "attendance", "fileName": "b.xlsx", "fileSize": 10},
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "同类考勤文件不能重复上传。"
+
+
 def test_fbu_performance_supplement_upload_merges_missing_employee_without_overwrite(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)

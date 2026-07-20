@@ -809,7 +809,9 @@ async function apiJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || data.message || `请求失败 (${response.status})`);
+    const error = new Error(data.detail || data.message || `请求失败 (${response.status})`);
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -3320,7 +3322,137 @@ async function uploadWorkbenchRosterFile(file) {
   }
 }
 
+function isLocalFbuHost() {
+  return ['', 'localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+}
+
+function uploadFbuFileToSignedUrl(upload, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('PUT', upload.signedUrl);
+    request.setRequestHeader('x-upsert', 'true');
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    };
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+      const detail = request.responseText ? ` ${request.responseText.slice(0, 160)}` : '';
+      reject(new Error(`直传考勤文件失败（HTTP ${request.status}）${detail}`));
+    };
+    request.onerror = () => reject(new Error('直传考勤文件失败，请检查网络后重试。'));
+    request.ontimeout = () => reject(new Error('直传考勤文件超时，请检查网络后重试。'));
+    const body = new FormData();
+    body.append('cacheControl', '3600');
+    body.append('', file);
+    request.send(body);
+  });
+}
+
+async function uploadWorkbenchAttendanceFilesDirect(attendanceFile, previousAttendanceFile) {
+  if (!state.currentActivity || (!attendanceFile && !previousAttendanceFile)) return;
+  const activityId = state.currentActivity.run_id;
+  const entries = [
+    attendanceFile ? { kind: 'attendance', type: 'attendance', file: attendanceFile } : null,
+    previousAttendanceFile ? { kind: 'previous_attendance', type: 'previousAttendance', file: previousAttendanceFile } : null,
+  ].filter(Boolean);
+
+  entries.forEach(({ type, file }) => startWorkbenchUploadProgress(type, file));
+  try {
+    const plan = await apiJson(`${API_BASE}/runs/${activityId}/attendance-direct-upload-plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: entries.map(({ kind, file }) => ({
+          kind,
+          fileName: file.name,
+          fileSize: file.size,
+          contentType: file.type || 'application/octet-stream',
+        })),
+      }),
+    });
+    const uploads = Array.isArray(plan.uploads) ? plan.uploads : [];
+    if (uploads.length !== entries.length) {
+      throw new Error('考勤上传计划与所选文件数量不一致，请重新选择文件。');
+    }
+    const uploadByKind = new Map(uploads.map(upload => [upload.kind, upload]));
+    await Promise.all(entries.map(async ({ kind, type, file }) => {
+      const upload = uploadByKind.get(kind);
+      if (!upload?.signedUrl) {
+        throw new Error(`未生成${uploadTypeLabels[type] || '考勤'}直传地址。`);
+      }
+      await uploadFbuFileToSignedUrl(upload, file, (progress) => {
+        setWorkbenchUploadState(type, {
+          status: 'uploading',
+          progress,
+          indeterminate: false,
+          message: `直传中 ${progress}%`,
+        });
+      });
+      setWorkbenchUploadState(type, {
+        status: 'uploading',
+        progress: 100,
+        indeterminate: true,
+        message: '已上传，正在解析',
+      });
+    }));
+
+    const data = await apiJson(`${API_BASE}/runs/${activityId}/attendance-direct-upload-complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId: plan.planId }),
+    });
+    if (!data.success) {
+      throw new Error(data.detail || '考勤文件解析失败');
+    }
+
+    state.attendanceData = data.preview;
+    state.workbenchPreviousAttendanceFile = null;
+    const primaryFile = attendanceFile || previousAttendanceFile;
+    state.lastImportResult = {
+      type: attendanceFile ? 'attendance' : 'previousAttendance',
+      hasResultFile: Boolean(data.result_file),
+      filename: primaryFile.name,
+      summary: data.preview?.summary || {},
+      context: data.preview?.summary?.attendance_context || null,
+      at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    };
+    if (attendanceFile) {
+      finishWorkbenchUploadProgress('attendance', attendanceFile.name, '已解析');
+    }
+    if (previousAttendanceFile) {
+      finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入');
+    }
+    const refreshedActivity = await enterActivity(activityId, { preservePage: true, preserveStep: true });
+    if (!refreshedActivity) {
+      throw new Error('文件已解析，但活动详情刷新失败，请重新进入活动后确认');
+    }
+    renderWorkbench();
+  } catch (error) {
+    const directUnavailable = error.status === 409
+      || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
+    if (isLocalFbuHost() && directUnavailable) {
+      if (attendanceFile) {
+        return uploadWorkbenchFileMultipart('attendance', attendanceFile);
+      }
+      return uploadWorkbenchPreviousAttendanceFileMultipart(previousAttendanceFile);
+    }
+    entries.forEach(({ type, file }) => failWorkbenchUploadProgress(type, file.name, error.message));
+  }
+}
+
 async function uploadWorkbenchFile(type, file) {
+  if (type === 'attendance') {
+    return uploadWorkbenchAttendanceFilesDirect(file, state.workbenchPreviousAttendanceFile);
+  }
+  return uploadWorkbenchFileMultipart(type, file);
+}
+
+async function uploadWorkbenchFileMultipart(type, file) {
   if (!file || !state.currentActivity) return;
   if (!/\.(xlsx|xls)$/i.test(file.name)) {
     failWorkbenchUploadProgress(type, file.name, '仅支持 .xlsx / .xls');
@@ -3605,6 +3737,12 @@ async function uploadWorkbenchPreviousAttendanceFile(file) {
     failWorkbenchUploadProgress('previousAttendance', file.name, '仅支持 .xlsx / .xls');
     return;
   }
+
+  return uploadWorkbenchAttendanceFilesDirect(null, file);
+}
+
+async function uploadWorkbenchPreviousAttendanceFileMultipart(file) {
+  if (!file || !state.currentActivity?.attendance_file) return;
 
   const formData = new FormData();
   formData.append('calc_month', state.currentActivity.calc_month);

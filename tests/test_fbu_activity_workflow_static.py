@@ -650,7 +650,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=workflow-speed-v5-20260715" in html
+    assert "fbu-performance.js?v=fbu-attendance-direct-upload-v1-20260720" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():

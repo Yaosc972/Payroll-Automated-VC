@@ -95,6 +95,37 @@ def test_download_does_not_hide_real_supabase_bad_request(monkeypatch):
         fbu_storage._download_bytes("bad-key")
 
 
+def test_create_fbu_signed_upload_uses_run_scoped_object_path(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    monkeypatch.setenv("SIGMA_FBU_SUPABASE_BUCKET", "sigma-runs")
+    captured = {}
+
+    def fake_request(method, url, *, headers, content=None):
+        captured.update(method=method, url=url, headers=headers, content=content)
+        return b'{"url":"/object/upload/sign/sigma-runs/token"}'
+
+    monkeypatch.setattr(fbu_storage, "_request", fake_request)
+
+    upload = fbu_storage.create_fbu_signed_upload(
+        "run_123",
+        "direct_uploads/plan_attendance.xlsx",
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"].endswith(
+        "/storage/v1/object/upload/sign/sigma-runs/"
+        "fbu-performance-runs/production/run_123/direct_uploads/plan_attendance.xlsx"
+    )
+    assert captured["headers"]["x-upsert"] == "true"
+    assert upload == {
+        "signedUrl": "https://example.supabase.co/storage/v1/object/upload/sign/sigma-runs/token",
+        "objectPath": "fbu-performance-runs/production/run_123/direct_uploads/plan_attendance.xlsx",
+        "relativePath": "direct_uploads/plan_attendance.xlsx",
+    }
+
+
 def _install_fake_persistent_backend(monkeypatch):
     metadata: dict[str, dict] = {}
     files: dict[tuple[str, str], bytes] = {}
