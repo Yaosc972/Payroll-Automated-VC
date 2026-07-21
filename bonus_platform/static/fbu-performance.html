@@ -1845,11 +1845,23 @@
       }
 
       .final-result-explanation-modal {
+        display: flex;
+        flex-direction: column;
         width: min(720px, calc(100vw - 40px));
+        max-height: calc(100vh - 32px);
+      }
+
+      .final-result-explanation-modal .modal-header {
+        flex: 0 0 auto;
       }
 
       .final-result-explanation-modal .modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
         padding: 14px 18px 18px;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-gutter: stable;
       }
 
       .result-explanation-head {
@@ -1976,6 +1988,47 @@
         color: var(--text-secondary);
         font-size: 12px;
         line-height: 1.5;
+      }
+
+      .base-calculation-details {
+        display: grid;
+        gap: 10px;
+      }
+
+      .base-calculation-block {
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #F8FAFC;
+      }
+
+      .base-calculation-total {
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .base-calculation-total span,
+      .base-calculation-total strong {
+        color: var(--text-primary);
+        font-weight: 850;
+      }
+
+      .base-calculation-component {
+        padding-top: 8px;
+      }
+
+      .base-calculation-hourly-rate {
+        padding: 8px 0;
+        border-bottom: 1px dashed var(--border);
+      }
+
+      .base-calculation-hourly-rate span {
+        color: var(--text-secondary);
+        font-weight: 700;
+      }
+
+      .base-calculation-note {
+        margin-top: 8px !important;
       }
 
       @media (max-width: 1100px) {

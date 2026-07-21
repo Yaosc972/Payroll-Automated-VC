@@ -775,6 +775,15 @@ def test_final_result_action_is_calculation_process():
     assert ">计算过程</button>" in section
     assert ">查看说明</button>" not in section
     assert '<h3 class="modal-title" id="finalResultExplanationTitle">计算过程</h3>' in html
+    assert "function renderFinalBaseCalculationDetail" in js
+    assert "function renderBonusCalculationFormula" in js
+    assert "绩效基数计算" in js
+    assert "奖金计算过程" in js
+    assert "<span>${escapeHtml(row.reason || '-')}</span>" in js
+    assert "计算时薪" in js
+    assert ".final-result-explanation-modal .modal-body" in html
+    assert "max-height: calc(100vh - 32px)" in html
+    assert "overflow-y: auto" in html
 
 
 def test_workbench_results_are_paginated_not_capped_at_80():

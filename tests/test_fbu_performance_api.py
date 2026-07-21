@@ -1155,6 +1155,11 @@ def test_fbu_results_export_marks_district_manager_fixed_base_path(monkeypatch, 
     values_by_header = dict(zip(headers, row))
     assert values_by_header["岗位"] == "区域经理"
     assert values_by_header["绩效奖金基数"] == 3000
+    assert values_by_header["绩效基数计算过程"].startswith("区长固定基数路径：$3,000.00")
+    assert "$3,000.00 × 1.35 = $4,050.00" in values_by_header["奖金计算过程"]
+    assert "0.0%" not in values_by_header["奖金计算过程"]
+    assert "4月" not in values_by_header["奖金计算过程"]
+    assert sheet.row_dimensions[4].height <= 24
 
 
 def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatch, tmp_path):
@@ -1175,6 +1180,8 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
                 job_type="warehouse",
                 hourly_rate=18,
                 performance_ratio=0.05,
+                base_hours=195.385,
+                base_salary=3516.93,
                 performance_base=3516.93,
                 performance_score=107.3,
                 performance_level="符合预期+",
@@ -1191,6 +1198,8 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
                 job_type="warehouse",
                 hourly_rate=19,
                 performance_ratio=0.05,
+                base_hours=32.14,
+                base_salary=610.66,
                 performance_base=610.66,
                 performance_score=107.3,
                 performance_level="符合预期+",
@@ -1215,6 +1224,11 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
     assert final_results[0]["position"] == "仓库组长"
     assert final_results[0]["performance_base"] == 4127.59
     assert final_results[0]["performance_bonus"] == 257.98
+    assert len(final_results[0]["base_calculation_details"]) == 2
+    assert [
+        detail["display_label"]
+        for detail in final_results[0]["base_calculation_details"]
+    ] == ["白班", "夜班拆行"]
 
     export_response = client.get(f"/api/fbu-performance/runs/{run.run_id}/export-excel?type=results")
 
@@ -1234,12 +1248,19 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
     assert "时薪($)" not in headers
     assert "绩效得分" in headers
     assert "4月绩效基数" in headers
+    assert headers[-2:] == ["绩效基数计算过程", "奖金计算过程"]
     rows = list(sheet.iter_rows(min_row=4, max_row=4, values_only=True))
     values_by_header = dict(zip(headers, rows[0]))
     assert values_by_header["员工工号"] == "zt0020984"
     assert values_by_header["职位"] == "仓库组长"
     assert values_by_header["绩效得分"] == 107.3
     assert values_by_header["4月绩效基数"] == 4127.59
+    assert "计算时薪：$18.0000" in values_by_header["绩效基数计算过程"]
+    assert "计算时薪：$19.0000" in values_by_header["绩效基数计算过程"]
+    assert "$3,516.93 × 5.0% × 1.25 = $219.81" in values_by_header["奖金计算过程"]
+    assert "$610.66 × 5.0% × 1.25 = $38.17" in values_by_header["奖金计算过程"]
+    assert "4月" not in values_by_header["奖金计算过程"]
+    assert sheet.row_dimensions[4].height <= 72
     assert sheet["M4"].value == 257.98
 
 

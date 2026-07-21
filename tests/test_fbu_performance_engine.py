@@ -3,12 +3,12 @@ from datetime import date
 import openpyxl
 from openpyxl import Workbook
 
-from bonus_platform.engine.fbu_performance.engines.base import EmployeeData
+from bonus_platform.engine.fbu_performance.engines.base import CalculationSegment, EmployeeData
 from bonus_platform.engine.fbu_performance.engines.bonus import BonusCalculator
 from bonus_platform.engine.fbu_performance.engines.coefficient import CoefficientCalculator
 from bonus_platform.engine.fbu_performance.engines.salary import SalaryProcessor
 from bonus_platform.engine.fbu_performance.parser import FBUPerformanceParser
-from bonus_platform.engine.fbu_performance.runs import FBURosterStore, FBURunManager
+from bonus_platform.engine.fbu_performance.runs import FBURosterStore, FBURunManager, build_final_result_rows
 
 
 def test_warehouse_coefficient_boundaries():
@@ -276,6 +276,127 @@ def test_save_results_marks_district_manager_fixed_base_path(tmp_path):
     saved = manager.get_run(run.run_id).results[0]
     assert saved["fixed_performance_base"] == 3000
     assert saved["calculation_path"] == "区长固定基数路径"
+    base_detail = saved["base_calculation_details"][0]
+    assert base_detail["path"] == "区长固定基数路径"
+    assert base_detail["components"] == [{
+        "label": "区长固定绩效基数",
+        "amount": 3000.0,
+        "multiplier": 1.0,
+    }]
+
+
+def test_save_results_preserves_standard_base_calculation_components(tmp_path):
+    manager = FBURunManager(str(tmp_path))
+    run = manager.create_run(calc_month="2026-04")
+    emp = EmployeeData(
+        employee_id="zt001",
+        name="员工甲",
+        hourly_rate=20,
+        performance_ratio=0.05,
+        performance_score=95,
+        base_hours=80,
+        ot15_hours=2,
+        sick_hours=1,
+        annual_hours=8,
+        holiday_hours=4,
+    )
+
+    BonusCalculator.calculate(emp)
+    manager.save_results(run.run_id, [emp])
+
+    detail = manager.get_run(run.run_id).results[0]["base_calculation_details"][0]
+    components = {component["label"]: component for component in detail["components"]}
+    assert detail["path"] == "标准绩效基数路径"
+    assert detail["performance_base"] == 1920.0
+    assert components["基础工时"]["hours"] == 80.0
+    assert components["基础工时"]["hourly_rate"] == 20.0
+    assert components["OT 1.5"]["multiplier"] == 1.5
+    assert components["OT 1.5"]["amount"] == 60.0
+    assert components["年假"]["amount"] == 160.0
+    assert components["节日补贴"]["amount"] == 80.0
+
+
+def test_save_results_preserves_96_hour_base_formula(tmp_path):
+    manager = FBURunManager(str(tmp_path))
+    run = manager.create_run(calc_month="2026-04")
+    emp = EmployeeData(
+        employee_id="zt12988",
+        name="员工乙",
+        hourly_rate=29.8481570512821,
+        performance_ratio=0.1,
+        performance_score=95,
+        work_hour_rule="96工时制",
+        work_hour_rule_special_total_hours=201.19,
+        is_night_shift=True,
+    )
+
+    BonusCalculator.calculate(emp)
+    manager.save_results(run.run_id, [emp])
+
+    detail = manager.get_run(run.run_id).results[0]["base_calculation_details"][0]
+    component = detail["components"][0]
+    assert detail["path"] == "96工时制自动基数路径"
+    assert detail["display_label"] == "夜班"
+    assert component["label"] == "96工时制计入工时"
+    assert component["hours"] == 201.19
+    assert component["hourly_rate"] == 28.85
+    assert component["amount"] == 5804.33
+
+
+def test_save_results_preserves_adjustment_split_base_segments(tmp_path):
+    manager = FBURunManager(str(tmp_path))
+    run = manager.create_run(calc_month="2026-04")
+    emp = EmployeeData(
+        employee_id="zt0020155",
+        name="员工丙",
+        performance_ratio=0.05,
+        performance_score=95,
+        calculation_segments=[
+            CalculationSegment("4月1日-25日", "调薪前", 3000, 0, 1),
+            CalculationSegment("4月26日-30日", "调薪后", 700, 0.05, 1),
+        ],
+    )
+
+    BonusCalculator.calculate(emp)
+    manager.save_results(run.run_id, [emp])
+
+    detail = manager.get_run(run.run_id).results[0]["base_calculation_details"][0]
+    assert detail["path"] == "调薪/转正拆分路径"
+    assert detail["performance_base"] == 700.0
+    assert [component["label"] for component in detail["components"]] == ["调薪前", "调薪后"]
+    assert [component["amount"] for component in detail["components"]] == [3000.0, 700.0]
+
+
+def test_final_rows_reconstruct_base_formula_for_historical_runs():
+    rows = [{
+        "employee_id": "zt001",
+        "source_employee_id": "zt001",
+        "name": "历史员工",
+        "calculation_path": "标准绩效基数路径",
+        "hourly_rate": 20,
+        "base_hours": 80,
+        "ot15_hours": 2,
+        "ot20_hours": 0,
+        "sick_hours": 1,
+        "sick_settlement_hours": 0,
+        "annual_hours": 8,
+        "holiday_hours": 4,
+        "performance_base": 1920,
+        "performance_bonus": 115.2,
+    }]
+
+    final_row = build_final_result_rows(rows)[0]
+
+    detail = final_row["base_calculation_details"][0]
+    assert detail["path"] == "标准绩效基数路径"
+    assert [component["label"] for component in detail["components"]] == [
+        "基础工时",
+        "OT 1.5",
+        "病假",
+        "年假",
+        "节日补贴",
+    ]
+    assert detail["note"] == "根据历史批次保存的工时和时薪还原标准基数计算。"
 
 
 def test_save_results_total_bonus_matches_rounded_employee_rows(tmp_path):

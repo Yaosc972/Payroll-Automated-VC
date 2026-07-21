@@ -9569,6 +9569,71 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             notes.append("白夜班拆分行已合并")
         return "；".join(note for note in notes if note)
 
+    def format_process_number(value, decimals: int = 2) -> str:
+        try:
+            return f"{float(value or 0):,.{decimals}f}"
+        except (TypeError, ValueError):
+            return f"{0:.{decimals}f}"
+
+    def format_base_component_formula(component: dict) -> str:
+        amount = format_process_number(component.get("amount"), 2)
+        if component.get("hours") is None or component.get("hourly_rate") is None:
+            return f"${amount}"
+        hours = format_process_number(component.get("hours"), 2)
+        hourly_rate = format_process_number(component.get("hourly_rate"), 4)
+        multiplier = float(component.get("multiplier") or 1)
+        multiplier_text = f" × {multiplier:.1f}" if abs(multiplier - 1) > 0.0001 else ""
+        return f"{hours}h × ${hourly_rate}{multiplier_text} = ${amount}"
+
+    def base_calculation_process(item: dict) -> str:
+        details = item.get("base_calculation_details") or []
+        blocks = []
+        for detail in details:
+            components = detail.get("components") or []
+            heading = " · ".join(
+                str(value) for value in (detail.get("display_label"), detail.get("path")) if value
+            ) or "绩效基数"
+            lines = [f"{heading}：${format_process_number(detail.get('performance_base'), 2)}"]
+            hourly_rates = []
+            for component in components:
+                if component.get("hourly_rate") is None:
+                    continue
+                rate = format_process_number(component.get("hourly_rate"), 4)
+                if rate not in hourly_rates:
+                    hourly_rates.append(rate)
+            if hourly_rates:
+                lines.append(f"计算时薪：{' / '.join('$' + rate for rate in hourly_rates)}")
+            for component in components:
+                label = " · ".join(
+                    str(value) for value in (component.get("period"), component.get("label")) if value
+                ) or "基数组成"
+                lines.append(f"{label}：{format_base_component_formula(component)}")
+            if detail.get("note"):
+                lines.append(str(detail["note"]))
+            blocks.append("\n".join(lines))
+        if blocks:
+            return "\n\n".join(blocks)
+        return f"绩效基数：${format_process_number(item.get('performance_base'), 2)}"
+
+    def bonus_calculation_process(item: dict) -> str:
+        segments = item.get("calculation_segments") or [item]
+        lines = []
+        for segment in segments:
+            reason = segment.get("reason") or result_calculation_path(item)
+            performance_base = format_process_number(segment.get("performance_base"), 2)
+            performance_ratio = float(segment.get("performance_ratio") or 0)
+            coefficient = format_process_number(segment.get("performance_coefficient"), 2)
+            performance_bonus = format_process_number(segment.get("performance_bonus"), 2)
+            if item.get("job_type") == "district_manager":
+                formula = f"${performance_base} × {coefficient} = ${performance_bonus}"
+            else:
+                formula = (
+                    f"${performance_base} × {performance_ratio:.1%} × "
+                    f"{coefficient} = ${performance_bonus}"
+                )
+            lines.append(f"{reason}：{formula}")
+        return "\n".join(lines)
+
     def normalize_shift_employee_id(employee_id: str) -> str:
         text = str(employee_id or "").strip()
         return text[:-2] if text.endswith("-1") else text
@@ -9748,6 +9813,8 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 cell.number_format = "0.0%"
             elif number_type == "number":
                 cell.number_format = "0.00"
+            elif number_type == "process":
+                cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
 
         def write_staff_detail_sheet(sheet, rows: list[dict], sheet_title: str) -> None:
             columns = [
@@ -9765,17 +9832,21 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 ("绩效系数", "performance_coefficient", 12, "number"),
                 ("本月应发绩效工资", "performance_bonus", 15, "money"),
                 ("备注", "note", 34, "text"),
+                ("绩效基数计算过程", "base_calculation_process", 54, "process"),
+                ("奖金计算过程", "bonus_calculation_process", 48, "process"),
             ]
             write_title(sheet, f"新泽西区绩效考核与奖金核算——{sheet_title.split('.', 1)[-1]}", len(columns))
             sheet.merge_cells("A2:I2")
             sheet.merge_cells("J2:L2")
             sheet.merge_cells("M2:M3")
             sheet.merge_cells("N2:N3")
+            sheet.merge_cells("O2:P2")
             group_headers = {
                 "A2": "员工信息",
                 "J2": "本月绩效考核结果(OEHR)",
                 "M2": "本月应发绩效工资",
                 "N2": "备注",
+                "O2": "计算过程",
             }
             for address, value in group_headers.items():
                 style_result_header_cell(sheet[address])
@@ -9806,6 +9877,8 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     "performance_coefficient": item.get("performance_coefficient", 0),
                     "performance_bonus": item.get("performance_bonus", 0),
                     "note": result_note(item),
+                    "base_calculation_process": base_calculation_process(item),
+                    "bonus_calculation_process": bonus_calculation_process(item),
                 }
                 for col_idx, (_, field, _, number_type) in enumerate(columns, 1):
                     cell = sheet.cell(row=row_idx, column=col_idx, value=safe_excel_value(values.get(field, "")))
@@ -9813,9 +9886,13 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     if field == "performance_base" and is_ninety_six_hour_result(item):
                         cell.fill = red_base_fill
                         cell.font = red_base_font
-                sheet.row_dimensions[row_idx].height = 18
+                process_line_count = max(
+                    values["base_calculation_process"].count("\n") + 1,
+                    values["bonus_calculation_process"].count("\n") + 1,
+                )
+                sheet.row_dimensions[row_idx].height = min(80, max(24, process_line_count * 8))
             sheet.freeze_panes = "G6"
-            sheet.auto_filter.ref = f"A3:N{max(3, 3 + len(rows))}"
+            sheet.auto_filter.ref = f"A3:P{max(3, 3 + len(rows))}"
             if sheet.sheet_view.selection:
                 sheet.sheet_view.selection[0].activeCell = "A3"
                 sheet.sheet_view.selection[0].sqref = "A3"
@@ -9834,17 +9911,21 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 ("绩效系数", "performance_coefficient", 12, "number"),
                 ("绩效奖金", "performance_bonus", 12, "money"),
                 ("备注", "note", 26, "text"),
+                ("绩效基数计算过程", "base_calculation_process", 54, "process"),
+                ("奖金计算过程", "bonus_calculation_process", 48, "process"),
             ]
             write_title(sheet, "海外区长-绩效奖金核算", len(columns))
             sheet.merge_cells("A2:D2")
             sheet.merge_cells("E2:H2")
             sheet.merge_cells("I2:K2")
             sheet.merge_cells("L2:L3")
+            sheet.merge_cells("M2:N2")
             group_headers = {
                 "A2": "区长/副区长/商务负责人信息",
                 "E2": "绩效考核结果",
                 "I2": "绩效奖金核算（美元）",
                 "L2": "备注",
+                "M2": "计算过程",
             }
             for address, value in group_headers.items():
                 style_result_header_cell(sheet[address])
@@ -9872,11 +9953,17 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     "performance_coefficient": item.get("performance_coefficient", 0),
                     "performance_bonus": item.get("performance_bonus", 0),
                     "note": result_note(item),
+                    "base_calculation_process": base_calculation_process(item),
+                    "bonus_calculation_process": bonus_calculation_process(item),
                 }
                 for col_idx, (_, field, _, number_type) in enumerate(columns, 1):
                     cell = sheet.cell(row=row_idx, column=col_idx, value=safe_excel_value(values.get(field, "")))
                     apply_body_style(cell, number_type)
-                sheet.row_dimensions[row_idx].height = 22
+                process_line_count = max(
+                    values["base_calculation_process"].count("\n") + 1,
+                    values["bonus_calculation_process"].count("\n") + 1,
+                )
+                sheet.row_dimensions[row_idx].height = min(80, max(24, process_line_count * 8))
             total_row = 4 + len(rows)
             sheet.cell(row=total_row, column=1, value="合计")
             sheet.cell(row=total_row, column=11, value=sum(float(item.get("performance_bonus") or 0) for item in rows))
@@ -9888,7 +9975,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 if col_idx == 11:
                     cell.number_format = '"$"#,##0.00'
             sheet.freeze_panes = "E4"
-            sheet.auto_filter.ref = f"A3:L{max(3, total_row)}"
+            sheet.auto_filter.ref = f"A3:N{max(3, total_row)}"
 
         summary = wb.active
         summary.title = "汇总表"

@@ -121,6 +121,275 @@ def _build_final_calculation_segments(
     return segments
 
 
+def _base_component(
+    label: str,
+    amount: float,
+    *,
+    hours: float | None = None,
+    hourly_rate: float | None = None,
+    multiplier: float = 1.0,
+    period: str = "",
+    note: str = "",
+) -> dict[str, Any]:
+    component = {
+        "label": label,
+        "amount": round(float(amount or 0), 2),
+        "multiplier": float(multiplier or 1),
+    }
+    if hours is not None:
+        component["hours"] = round(float(hours or 0), 4)
+    if hourly_rate is not None:
+        component["hourly_rate"] = round(float(hourly_rate or 0), 4)
+    if period:
+        component["period"] = period
+    if note:
+        component["note"] = note
+    return component
+
+
+def _build_base_calculation_detail(emp: EmployeeData) -> dict[str, Any]:
+    """Build a durable audit trail for the performance-base calculation."""
+    path = get_calculation_path(emp)
+    display_label = "夜班" if emp.is_night_shift else ("白班" if emp.employee_id.endswith("-1") else "")
+    detail: dict[str, Any] = {
+        "employee_id": emp.employee_id,
+        "display_label": display_label,
+        "path": path,
+        "performance_base": round(float(emp.performance_base or 0), 2),
+        "components": [],
+        "note": "",
+    }
+
+    if emp.job_type == "district_manager" and emp.fixed_performance_base:
+        detail["components"] = [_base_component("区长固定绩效基数", emp.fixed_performance_base)]
+        detail["note"] = "按已确认的区长固定绩效基数核算。"
+        return detail
+
+    if emp.base_override_amount:
+        detail["components"] = [_base_component("固定绩效基数覆盖", emp.base_override_amount)]
+        detail["note"] = emp.base_override_reason or emp.base_override_type or "按已确认的固定绩效基数覆盖。"
+        return detail
+
+    if emp.calculation_segments:
+        detail["components"] = [
+            _base_component(
+                segment.reason or "拆分基数",
+                segment.performance_base,
+                period=segment.period,
+                note=f"适用绩效比例 {segment.performance_ratio:.1%}",
+            )
+            for segment in emp.calculation_segments
+        ]
+        detail["note"] = "按调薪或转正生效日拆分；仅适用绩效比例大于 0 的分段计入最终绩效基数。"
+        return detail
+
+    if "96" in str(emp.work_hour_rule or ""):
+        rule_rate = emp.work_hour_rule_rounded_hourly_rate or (
+            max(emp.hourly_rate - 1, 0) if emp.is_night_shift else emp.hourly_rate
+        )
+        if emp.work_hour_rule_special_total_hours:
+            detail["components"] = [
+                _base_component(
+                    "96工时制计入工时",
+                    emp.performance_base,
+                    hours=emp.work_hour_rule_special_total_hours,
+                    hourly_rate=rule_rate,
+                )
+            ]
+            detail["note"] = "按特殊工时汇总的计入工时和规则时薪计算。"
+            return detail
+
+        if emp.work_hour_rule_periods:
+            detail["components"] = [
+                _base_component(
+                    "周期计入工时",
+                    period.get("performance_base", 0),
+                    hours=period.get("included_hours", 0),
+                    hourly_rate=rule_rate,
+                    period=str(period.get("period") or ""),
+                    note=f"周期上限 {float(period.get('cap_hours') or 0):.2f}h",
+                )
+                for period in emp.work_hour_rule_periods
+            ]
+            detail["note"] = "各周期先按 96 工时制上限确认计入工时，再汇总绩效基数。"
+            return detail
+
+        components = []
+        if emp.base_salary or not emp.holiday_pay:
+            included_hours = emp.base_salary / rule_rate if rule_rate else 0
+            components.append(_base_component(
+                "96工时制封顶计入工时",
+                emp.base_salary,
+                hours=included_hours,
+                hourly_rate=rule_rate,
+            ))
+        if emp.holiday_pay:
+            holiday_hours = emp.holiday_pay / rule_rate if rule_rate else 0
+            components.append(_base_component(
+                "封顶外节日工时",
+                emp.holiday_pay,
+                hours=holiday_hours,
+                hourly_rate=rule_rate,
+            ))
+        detail["components"] = components
+        detail["note"] = "按 96 工时制上限和节日工时口径计算。"
+        return detail
+
+    standard_components = [
+        _base_component("基础工时", emp.base_salary, hours=emp.base_hours, hourly_rate=emp.hourly_rate),
+        _base_component("OT 1.5", emp.ot15_salary, hours=emp.ot15_hours, hourly_rate=emp.hourly_rate, multiplier=1.5),
+        _base_component("OT 2.0", emp.ot20_salary, hours=emp.ot20_hours, hourly_rate=emp.hourly_rate, multiplier=2.0),
+        _base_component("病假", emp.sick_pay, hours=emp.sick_hours, hourly_rate=emp.hourly_rate),
+        _base_component("离职病假清算", emp.sick_settlement_pay, hours=emp.sick_settlement_hours, hourly_rate=emp.hourly_rate),
+        _base_component("年假", emp.annual_leave_pay, hours=emp.annual_hours, hourly_rate=emp.hourly_rate),
+        _base_component("节日补贴", emp.holiday_pay, hours=emp.holiday_hours, hourly_rate=emp.hourly_rate),
+    ]
+    visible_components = [component for component in standard_components if component["amount"] or component.get("hours")]
+    component_total = round(
+        emp.base_salary
+        + emp.ot15_salary
+        + emp.ot20_salary
+        + emp.sick_pay
+        + emp.sick_settlement_pay
+        + emp.annual_leave_pay
+        + emp.holiday_pay,
+        2,
+    )
+    if abs(component_total - detail["performance_base"]) > 0.01:
+        visible_components = [_base_component("本月绩效基数", emp.performance_base)]
+        detail["note"] = "结果数据未保存工时组成，展示本月已核算绩效基数。"
+    else:
+        detail["note"] = "标准路径按各类工时工资与补贴相加。"
+    detail["components"] = visible_components or [_base_component("基础工时", 0, hours=0, hourly_rate=emp.hourly_rate)]
+    return detail
+
+
+def _build_saved_base_calculation_detail(row: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruct base audit details for runs saved before the audit field existed."""
+    employee_id = str(row.get("employee_id") or "")
+    path = str(row.get("calculation_path") or "标准绩效基数路径")
+    performance_base = float(row.get("performance_base") or 0)
+    detail: dict[str, Any] = {
+        "employee_id": employee_id,
+        "display_label": "白班" if employee_id.endswith("-1") else "",
+        "path": path,
+        "performance_base": round(performance_base, 2),
+        "components": [],
+        "note": "",
+    }
+
+    if path == "区长固定基数路径":
+        detail["components"] = [_base_component("区长固定绩效基数", performance_base)]
+        detail["note"] = "按已确认的区长固定绩效基数核算。"
+        return detail
+
+    if row.get("base_override_amount"):
+        detail["components"] = [_base_component("固定绩效基数覆盖", performance_base)]
+        detail["note"] = str(
+            row.get("base_override_reason")
+            or row.get("base_override_type")
+            or "按已确认的固定绩效基数覆盖。"
+        )
+        return detail
+
+    segments = row.get("calculation_segments") or []
+    if segments:
+        detail["components"] = [
+            _base_component(
+                str(segment.get("reason") or "拆分基数"),
+                segment.get("performance_base", 0),
+                period=str(segment.get("period") or ""),
+                note=f"适用绩效比例 {float(segment.get('performance_ratio') or 0):.1%}",
+            )
+            for segment in segments
+        ]
+        detail["note"] = "按调薪或转正生效日拆分；仅适用绩效比例大于 0 的分段计入最终绩效基数。"
+        return detail
+
+    if "96" in str(row.get("work_hour_rule") or ""):
+        special_hours = float(row.get("work_hour_rule_special_total_hours") or 0)
+        rounded_rate = float(row.get("work_hour_rule_rounded_hourly_rate") or 0)
+        if special_hours:
+            rule_rate = rounded_rate or (performance_base / special_hours if special_hours else 0)
+            detail["components"] = [_base_component(
+                "96工时制计入工时",
+                performance_base,
+                hours=special_hours,
+                hourly_rate=rule_rate,
+            )]
+            detail["note"] = "按特殊工时汇总的计入工时和规则时薪计算。"
+            return detail
+
+        periods = row.get("work_hour_rule_periods") or []
+        if periods:
+            components = []
+            for period in periods:
+                hours = float(period.get("included_hours") or 0)
+                amount = float(period.get("performance_base") or 0)
+                rule_rate = rounded_rate or (amount / hours if hours else float(row.get("hourly_rate") or 0))
+                components.append(_base_component(
+                    "周期计入工时",
+                    amount,
+                    hours=hours,
+                    hourly_rate=rule_rate,
+                    period=str(period.get("period") or ""),
+                    note=f"周期上限 {float(period.get('cap_hours') or 0):.2f}h",
+                ))
+            detail["components"] = components
+            detail["note"] = "各周期先按 96 工时制上限确认计入工时，再汇总绩效基数。"
+            return detail
+
+        detail["components"] = [_base_component("96工时制绩效基数", performance_base)]
+        detail["note"] = "历史结果未保存完整周期明细，展示已核算的 96 工时制绩效基数。"
+        return detail
+
+    hourly_rate = float(row.get("hourly_rate") or 0)
+    component_specs = [
+        ("基础工时", "base_hours", 1.0),
+        ("OT 1.5", "ot15_hours", 1.5),
+        ("OT 2.0", "ot20_hours", 2.0),
+        ("病假", "sick_hours", 1.0),
+        ("离职病假清算", "sick_settlement_hours", 1.0),
+        ("年假", "annual_hours", 1.0),
+        ("节日补贴", "holiday_hours", 1.0),
+    ]
+    components = []
+    for label, hours_field, multiplier in component_specs:
+        hours = float(row.get(hours_field) or 0)
+        if not hours:
+            continue
+        components.append(_base_component(
+            label,
+            hours * hourly_rate * multiplier,
+            hours=hours,
+            hourly_rate=hourly_rate,
+            multiplier=multiplier,
+        ))
+    reconstructed_total = round(sum(component["amount"] for component in components), 2)
+    if components and abs(reconstructed_total - round(performance_base, 2)) <= 0.02:
+        detail["components"] = components
+        detail["note"] = "根据历史批次保存的工时和时薪还原标准基数计算。"
+    else:
+        detail["components"] = [_base_component("本月绩效基数", performance_base)]
+        detail["note"] = "历史结果未保存完整工时组成，展示已核算的绩效基数。"
+    return detail
+
+
+def _build_final_base_calculation_details(
+    rows: list[dict[str, Any]],
+    source_employee_id: str,
+) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    for row in rows:
+        row_details = row.get("base_calculation_details") or [_build_saved_base_calculation_detail(row)]
+        for raw_detail in row_details:
+            detail = dict(raw_detail)
+            if len(rows) > 1 and not detail.get("display_label"):
+                detail["display_label"] = _split_segment_reason(row, source_employee_id)
+            details.append(detail)
+    return details
+
+
 def build_final_result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge internal split rows into final employee result rows for viewing/export."""
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -171,6 +440,7 @@ def build_final_result_rows(results: list[dict[str, Any]]) -> list[dict[str, Any
             exceptions.extend(row.get("exceptions") or [])
         final_row["exceptions"] = _unique_ordered(exceptions)
         final_row["calculation_segments"] = _build_final_calculation_segments(rows, source_employee_id)
+        final_row["base_calculation_details"] = _build_final_base_calculation_details(rows, source_employee_id)
         final_rows.append(final_row)
 
     return final_rows
@@ -444,6 +714,7 @@ class FBURunManager:
                 "sick_settlement_hours": emp.sick_settlement_hours,
                 "annual_hours": emp.annual_hours,
                 "holiday_hours": emp.holiday_hours,
+                "is_night_shift": emp.is_night_shift,
                 "attendance_daily_rows": emp.attendance_daily_rows,
                 "work_hour_rule_periods": emp.work_hour_rule_periods,
                 "performance_base": emp.performance_base,
@@ -466,6 +737,7 @@ class FBURunManager:
                     }
                     for segment in emp.calculation_segments
                 ],
+                "base_calculation_details": [_build_base_calculation_detail(emp)],
                 "exceptions": emp.exceptions,
             })
             total_key = emp.source_employee_id or emp.employee_id

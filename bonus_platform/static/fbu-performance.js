@@ -5348,8 +5348,8 @@ function renderBonusCalculationDetail(result) {
         <div class="calculation-lines">
           ${detailRows.map(row => `
             <div class="calculation-line">
-              <span>${escapeHtml(row.period || '-')} · ${escapeHtml(row.reason || '-')}</span>
-              <strong>${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}</strong>
+              <span>${escapeHtml(row.reason || '-')}</span>
+              <strong>${escapeHtml(renderBonusCalculationFormula(row, result))}</strong>
             </div>
           `).join('')}
           ${(result.exceptions || []).length ? `<div class="calculation-line"><span>异常提示</span><strong>${escapeHtml(result.exceptions.join('；'))}</strong></div>` : ''}
@@ -6534,6 +6534,74 @@ function getFinalResultDetailRows(result) {
   }];
 }
 
+function getFinalBaseCalculationDetails(result) {
+  const details = Array.isArray(result?.base_calculation_details)
+    ? result.base_calculation_details.filter(Boolean)
+    : [];
+  if (details.length) return details;
+  return [{
+    display_label: '',
+    path: result?.calculation_path || '标准绩效基数路径',
+    performance_base: result?.performance_base,
+    components: [{ label: '本月绩效基数', amount: result?.performance_base }],
+    note: '该历史结果未保存工时组成，展示已核算的绩效基数。',
+  }];
+}
+
+function renderBaseComponentFormula(component) {
+  const hasHours = component?.hours !== undefined && component?.hours !== null;
+  const hasRate = component?.hourly_rate !== undefined && component?.hourly_rate !== null;
+  if (!hasHours || !hasRate) return formatCurrency(component?.amount);
+  const multiplier = toNumber(component?.multiplier, 1) || 1;
+  const multiplierText = Math.abs(multiplier - 1) > 0.0001 ? ` × ${multiplier.toFixed(1)}` : '';
+  return `${formatHours(component.hours)} × ${formatCurrency(component.hourly_rate, 4)}${multiplierText} = ${formatCurrency(component.amount)}`;
+}
+
+function renderFinalBaseCalculationDetail(result) {
+  const details = getFinalBaseCalculationDetails(result);
+  return `
+    <div class="base-calculation-details">
+      ${details.map(detail => {
+        const components = Array.isArray(detail.components) ? detail.components : [];
+        const heading = [detail.display_label, detail.path].filter(Boolean).join(' · ');
+        const hourlyRates = [...new Set(
+          components
+            .filter(component => component?.hourly_rate !== undefined && component?.hourly_rate !== null)
+            .map(component => toNumber(component.hourly_rate).toFixed(4))
+        )];
+        return `
+          <div class="base-calculation-block">
+            <div class="calculation-line base-calculation-total">
+              <span>${escapeHtml(heading || '绩效基数')}</span>
+              <strong>${formatCurrency(detail.performance_base)}</strong>
+            </div>
+            ${hourlyRates.length ? `
+              <div class="calculation-line base-calculation-hourly-rate">
+                <span>计算时薪</span>
+                <strong>${escapeHtml(hourlyRates.map(rate => formatCurrency(rate, 4)).join(' / '))}</strong>
+              </div>
+            ` : ''}
+            ${components.map(component => `
+              <div class="calculation-line base-calculation-component">
+                <span>${escapeHtml([component.period, component.label].filter(Boolean).join(' · ') || '基数组成')}</span>
+                <strong>${escapeHtml(renderBaseComponentFormula(component))}</strong>
+              </div>
+            `).join('')}
+            ${detail.note ? `<p class="base-calculation-note">${escapeHtml(detail.note)}</p>` : ''}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderBonusCalculationFormula(row, result) {
+  if (result?.job_type === 'district_manager') {
+    return `${formatCurrency(row.performance_base)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}`;
+  }
+  return `${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}`;
+}
+
 function renderFinalCalculationDetail(result) {
   const detailRows = getFinalResultDetailRows(result);
 
@@ -6541,8 +6609,8 @@ function renderFinalCalculationDetail(result) {
     <div class="calculation-lines">
       ${detailRows.map(row => `
         <div class="calculation-line">
-          <span>${escapeHtml(row.period || '-')} · ${escapeHtml(row.reason || '-')}</span>
-          <strong>${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}</strong>
+          <span>${escapeHtml(row.reason || '-')}</span>
+          <strong>${escapeHtml(renderBonusCalculationFormula(row, result))}</strong>
         </div>
       `).join('')}
     </div>
@@ -6550,14 +6618,16 @@ function renderFinalCalculationDetail(result) {
 }
 
 function renderFinalResultExplanation(result) {
-  const detailRows = getFinalResultDetailRows(result);
   const isNinetySixHour = isNinetySixHourResult(result);
-  const formulaText = `${formatCurrency(result.performance_base)} × ${formatPercent(result.performance_ratio)} × ${formatCoefficient(result.performance_coefficient)} = ${formatCurrency(result.performance_bonus)}`;
+  const isDistrictManager = result?.job_type === 'district_manager';
+  const formulaText = renderBonusCalculationFormula(result, result);
   const fields = [
     ['绩效基数', '按该员工核算路径得到的本月奖金基数。96工时制员工使用跨周期规则，页面和导出会标红。', formatCurrency(result.performance_base)],
     ['绩效比例', '薪资档案或调薪拆分后适用的月度绩效奖金比例。', formatPercent(result.performance_ratio)],
     ['绩效系数', '由绩效得分或绩效等级换算；有人工补录时以补录值为准。', formatCoefficient(result.performance_coefficient)],
-    ['最终奖金', '绩效基数 × 绩效比例 × 绩效系数，拆分行会先分别计算再合并。', formatCurrency(result.performance_bonus)],
+    ['最终奖金', isDistrictManager
+      ? '区长固定绩效基数 × 绩效系数。'
+      : '绩效基数 × 绩效比例 × 绩效系数，拆分行会先分别计算再合并。', formatCurrency(result.performance_bonus)],
   ];
   return `
     <div class="result-explanation-head">
@@ -6583,7 +6653,11 @@ function renderFinalResultExplanation(result) {
       `).join('')}
     </div>
     <div class="result-explanation-section">
-      <h4>计算过程</h4>
+      <h4>绩效基数计算</h4>
+      ${renderFinalBaseCalculationDetail(result)}
+    </div>
+    <div class="result-explanation-section">
+      <h4>奖金计算过程</h4>
       ${renderFinalCalculationDetail(result)}
     </div>
     ${(result.exceptions || []).length ? `
