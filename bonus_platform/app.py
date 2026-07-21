@@ -9891,7 +9891,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     values["bonus_calculation_process"].count("\n") + 1,
                 )
                 sheet.row_dimensions[row_idx].height = min(80, max(24, process_line_count * 8))
-            sheet.freeze_panes = "G6"
+            sheet.freeze_panes = "A4"
             sheet.auto_filter.ref = f"A3:P{max(3, 3 + len(rows))}"
             if sheet.sheet_view.selection:
                 sheet.sheet_view.selection[0].activeCell = "A3"
@@ -9952,7 +9952,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     "performance_base": item.get("performance_base", 0),
                     "performance_coefficient": item.get("performance_coefficient", 0),
                     "performance_bonus": item.get("performance_bonus", 0),
-                    "note": result_note(item),
+                    "note": "",
                     "base_calculation_process": base_calculation_process(item),
                     "bonus_calculation_process": bonus_calculation_process(item),
                 }
@@ -9974,7 +9974,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 if col_idx == 11:
                     cell.number_format = '"$"#,##0.00'
-            sheet.freeze_panes = "E4"
+            sheet.freeze_panes = "A4"
             sheet.auto_filter.ref = f"A3:N{max(3, total_row)}"
 
         summary = wb.active

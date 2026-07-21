@@ -1136,6 +1136,7 @@ def test_fbu_results_export_marks_district_manager_fixed_base_path(monkeypatch, 
                 fixed_performance_base=3000,
                 performance_base=3000,
                 uploaded_coefficient=1.35,
+                coefficient_override_reason="页面维护",
                 performance_coefficient=1.35,
                 performance_bonus=4050,
             )
@@ -1155,11 +1156,13 @@ def test_fbu_results_export_marks_district_manager_fixed_base_path(monkeypatch, 
     values_by_header = dict(zip(headers, row))
     assert values_by_header["岗位"] == "区域经理"
     assert values_by_header["绩效奖金基数"] == 3000
+    assert sheet["L4"].value is None
     assert values_by_header["绩效基数计算过程"].startswith("区长固定基数路径：$3,000.00")
     assert "$3,000.00 × 1.35 = $4,050.00" in values_by_header["奖金计算过程"]
     assert "0.0%" not in values_by_header["奖金计算过程"]
     assert "4月" not in values_by_header["奖金计算过程"]
     assert sheet.row_dimensions[4].height <= 24
+    assert sheet.freeze_panes == "A4"
 
 
 def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatch, tmp_path):
@@ -1255,6 +1258,8 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
     assert values_by_header["职位"] == "仓库组长"
     assert values_by_header["绩效得分"] == 107.3
     assert values_by_header["4月绩效基数"] == 4127.59
+    assert sheet["N4"].value == "白夜班拆分行已合并"
+    assert sheet.freeze_panes == "A4"
     assert "计算时薪：$18.0000" in values_by_header["绩效基数计算过程"]
     assert "计算时薪：$19.0000" in values_by_header["绩效基数计算过程"]
     assert "$3,516.93 × 5.0% × 1.25 = $219.81" in values_by_header["奖金计算过程"]
