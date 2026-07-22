@@ -650,7 +650,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=fbu-attendance-direct-upload-v1-20260720" in html
+    assert "fbu-performance.js?v=fbu-salary-history-missing-snapshot-v1-20260722" in html
 
 
 def test_activity_list_detail_loading_is_current_page_only_and_limited():
@@ -969,10 +969,11 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
 
     assert "verification_status === 'blocking'" in salary_review
     assert "薪资历史差异确认" in salary_review
-    assert "previous_hourly_rate" in salary_review
-    assert "current_hourly_rate" in salary_review
-    assert "previous_ratio" in salary_review
-    assert "current_ratio" in salary_review
+    assert "薪资字段变化或相邻月份快照缺失" in salary_review
+    assert "snapshotValue(row, 'previous', 'hourly_rate'" in salary_review
+    assert "snapshotValue(row, 'current', 'hourly_rate'" in salary_review
+    assert "snapshotValue(row, 'previous', 'ratio'" in salary_review
+    assert "snapshotValue(row, 'current', 'ratio'" in salary_review
     assert "confirmSalaryVerification" in salary_review
     assert "renderSalaryVerificationReview(activity)" in salary_step
     assert "getSalarySnapshotMonthLabels(activity?.calc_month)" in salary_review
@@ -982,6 +983,11 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
     assert "'按' + monthLabels.current + '值'" in salary_review
     assert 'id="salaryVerificationReview"' in salary_review
     assert 'data-employee-id="${escapeHtml(row.employee_id)}"' in salary_review
+    assert "missing_current_snapshot" in salary_review
+    assert "missing_previous_snapshot" in salary_review
+    assert 'status-badge danger">缺失' in salary_review
+    assert "snapshotMissing(row, 'previous') ? ''" in salary_review
+    assert "snapshotMissing(row, 'current') ? ''" in salary_review
 
 
 def test_salary_snapshot_month_labels_handle_year_boundary():

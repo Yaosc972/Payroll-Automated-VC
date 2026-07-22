@@ -279,14 +279,19 @@ def _daily_96_work_hours(
     *,
     allow_scheduled_floor: bool = False,
     cap_to_scheduled_hours: bool = False,
+    include_ot: bool = True,
 ) -> float:
-    paid_work_hours = (
-        _daily_row_number(row, "base_hours", "计薪出勤")
-        + _daily_row_number(row, "ot15_hours", "OT1.5")
-        + _daily_row_number(row, "ot20_hours", "OT2.0")
-    )
-    raw_work_hours = _daily_row_number(row, "work_hours", "工作时长")
-    work_hours = raw_work_hours if raw_work_hours > 0 else paid_work_hours
+    regular_hours = _daily_row_number(row, "base_hours", "计薪出勤")
+    if include_ot:
+        paid_work_hours = (
+            regular_hours
+            + _daily_row_number(row, "ot15_hours", "OT1.5")
+            + _daily_row_number(row, "ot20_hours", "OT2.0")
+        )
+        raw_work_hours = _daily_row_number(row, "work_hours", "工作时长")
+        work_hours = raw_work_hours if raw_work_hours > 0 else paid_work_hours
+    else:
+        work_hours = regular_hours
     leave_hours = _daily_96_leave_hours(row)
     scheduled_hours = _daily_row_number(row, "scheduled_hours", "应出勤时长")
     if leave_hours > 0 and scheduled_hours > 0 and leave_hours >= scheduled_hours:
@@ -454,12 +459,14 @@ def _build_96_hour_special_periods_from_daily_rows(
         leave_hours = 0.0
         holiday_hours = 0.0
         raw_work_hours = 0.0
+        regular_only_work_hours = 0.0
         scheduled_floor_work_hours = 0.0
         for day in _date_range(overlap_start, overlap_end):
             for row in rows_by_date.get(day, []):
                 leave_hours += _daily_96_leave_hours(row)
                 holiday_hours += _daily_96_holiday_hours(row)
                 raw_work_hours += _daily_96_work_hours(row)
+                regular_only_work_hours += _daily_96_work_hours(row, include_ot=False)
                 scheduled_floor_work_hours += _daily_96_work_hours(row, allow_scheduled_floor=True)
 
         if full_start < month_start:
@@ -480,8 +487,8 @@ def _build_96_hour_special_periods_from_daily_rows(
             regular_hours = min(target_work_hours, remaining_regular_capacity)
             mode = "跨月首段REG-双周96封顶"
         elif full_end > month_end:
-            regular_hours = raw_work_hours
-            mode = "跨月尾段实际工时"
+            regular_hours = regular_only_work_hours
+            mode = "跨月尾段REG（不含OT）"
         else:
             full_period_regular_capacity = max(period["full_period_cap_hours"] - leave_hours, 0.0)
             regular_hours = min(
@@ -510,6 +517,7 @@ def _build_96_hour_special_periods_from_daily_rows(
                 "first_period_work_mode": first_period_work_mode if full_start < month_start else "",
                 "regular_hours": round(regular_hours, 2),
                 "raw_work_hours": round(raw_work_hours, 2),
+                "regular_only_work_hours": round(regular_only_work_hours, 2),
                 "scheduled_floor_work_hours": round(scheduled_floor_work_hours, 2),
                 "leave_hours": round(leave_hours, 2),
                 "holiday_hours": round(holiday_hours, 2),
@@ -669,6 +677,7 @@ DISTRICT_MANAGER_IDS = {"zt15638"}
 FUNCTIONAL_DEPARTMENT_KEYWORDS = (
     "FBU HRBP Dept.",
     "渠道管理部",
+    "新泽西区渠道部",
     "新泽西区行政部",
 )
 DEFAULT_COEFFICIENT_POSITION_KEYWORDS = (
@@ -2024,16 +2033,26 @@ class FBUPerformanceParser:
 
         employees = []
         issues = []
+        ignored_historical_resigned_count = 0
         for employee_id in sorted(set(previous_by_id) | set(current_by_id)):
             previous = previous_by_id.get(employee_id)
             current = current_by_id.get(employee_id)
             if current is None:
+                if str((previous or {}).get("personnel_status") or "").strip() == "离职":
+                    ignored_historical_resigned_count += 1
+                    continue
                 row = dict(previous or {})
+                previous_hourly = value(previous or {}, "hourly_rate")
+                previous_ratio = value(previous or {}, "ratio")
                 row.update({
                     "employee_id": employee_id,
                     "verification_status": "blocking",
                     "resolution": "missing_current_snapshot",
                     "effective_segments": [],
+                    "previous_hourly_rate": previous_hourly,
+                    "previous_ratio": previous_ratio,
+                    "current_hourly_rate": None,
+                    "current_ratio": None,
                 })
                 employees.append(row)
                 issues.append({"employee_id": employee_id, "reason": "当月薪资档案缺少该员工"})
@@ -2047,8 +2066,8 @@ class FBUPerformanceParser:
                         "verification_status": "blocking",
                         "resolution": "missing_previous_snapshot",
                         "effective_segments": [],
-                        "previous_hourly_rate": 0.0,
-                        "previous_ratio": 0.0,
+                        "previous_hourly_rate": None,
+                        "previous_ratio": None,
                         "current_hourly_rate": value(current, "hourly_rate"),
                         "current_ratio": value(current, "ratio"),
                     })
@@ -2156,6 +2175,7 @@ class FBUPerformanceParser:
                 "changed_count": changed_count,
                 "resolved_count": len(employees) - blocking_count,
                 "blocking_count": blocking_count,
+                "ignored_historical_resigned_count": ignored_historical_resigned_count,
             },
         }
 
@@ -3174,7 +3194,7 @@ class FBUPerformanceParser:
                 'confirmation_date': _to_date(emp.get('confirmation_date')),
                 'resignation_date': _to_date(emp.get('resignation_date')),
                 'position': emp.get('position', ''),
-                'job_type': emp.get('job_type', 'warehouse'),
+                'job_type': classify_job_type(emp_id, emp.get('department', '')),
             }
 
         salary_dict = {}

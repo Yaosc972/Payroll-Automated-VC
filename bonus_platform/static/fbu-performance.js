@@ -6105,13 +6105,23 @@ function renderSalaryVerificationReview(activity) {
   );
   if (!rows.length) return '';
   const monthLabels = getSalarySnapshotMonthLabels(activity?.calc_month);
+  const snapshotMissing = (row, prefix) => row?.[`${prefix}_hourly_rate`] === null
+    || row?.[`${prefix}_hourly_rate`] === undefined;
+  const snapshotValue = (row, prefix, field, formatter) => snapshotMissing(row, prefix)
+    ? '<span class="status-badge danger">缺失</span>'
+    : escapeHtml(formatter(row?.[`${prefix}_${field}`]));
+  const verificationResult = row => {
+    if (row.resolution === 'missing_current_snapshot') return `${monthLabels.current}薪资档案缺少该员工`;
+    if (row.resolution === 'missing_previous_snapshot') return `${monthLabels.previous}薪资档案缺少该员工`;
+    return '未匹配已完成调薪流程';
+  };
 
   return `
     <section id="salaryVerificationReview" class="step-section salary-verification-review">
       <div class="section-head compact">
         <div>
           <h3>薪资历史差异确认</h3>
-          <p>以下员工的${monthLabels.previous}与${monthLabels.current}薪资字段发生变化，但未匹配到有效调薪流程。请根据薪酬依据选择核算值。</p>
+          <p>以下员工存在${monthLabels.previous}与${monthLabels.current}薪资字段变化或相邻月份快照缺失。请根据薪酬依据选择核算值。</p>
         </div>
         <span class="status-badge warning">${rows.length}条待确认</span>
       </div>
@@ -6136,15 +6146,15 @@ function renderSalaryVerificationReview(activity) {
               <tr class="row-warning" data-employee-id="${escapeHtml(row.employee_id)}">
                 <td>${escapeHtml(row.employee_id || '-')}</td>
                 <td>${escapeHtml(row.name || '-')}</td>
-                <td>${formatCurrency(row.previous_hourly_rate)}</td>
-                <td>${formatCurrency(row.current_hourly_rate)}</td>
-                <td>${formatPercent(row.previous_ratio)}</td>
-                <td>${formatPercent(row.current_ratio)}</td>
-                <td>未匹配已完成调薪流程</td>
+                <td>${snapshotValue(row, 'previous', 'hourly_rate', formatCurrency)}</td>
+                <td>${snapshotValue(row, 'current', 'hourly_rate', formatCurrency)}</td>
+                <td>${snapshotValue(row, 'previous', 'ratio', formatPercent)}</td>
+                <td>${snapshotValue(row, 'current', 'ratio', formatPercent)}</td>
+                <td>${escapeHtml(verificationResult(row))}</td>
                 <td>
                   <div class="table-actions">
-                    <button class="btn btn-sm btn-secondary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'previous')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.previous + '值'}</button>
-                    <button class="btn btn-sm btn-primary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'current')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.current + '值'}</button>
+                    ${snapshotMissing(row, 'previous') ? '' : `<button class="btn btn-sm btn-secondary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'previous')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.previous + '值'}</button>`}
+                    ${snapshotMissing(row, 'current') ? '' : `<button class="btn btn-sm btn-primary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'current')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.current + '值'}</button>`}
                   </div>
                 </td>
               </tr>

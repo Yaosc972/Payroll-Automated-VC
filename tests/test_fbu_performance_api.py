@@ -1044,6 +1044,47 @@ def test_fbu_salary_verification_batches_multiple_rows_and_is_idempotent(monkeyp
     assert duplicate.json()["employee"]["resolution"] == "manual_use_previous"
 
 
+def test_fbu_salary_verification_rejects_choice_for_missing_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    run = app_module.fbu_run_manager.create_run(calc_month="2026-06")
+    blocked = {
+        "employee_id": "E001",
+        "hourly_rate": 23,
+        "ratio": 0.13,
+        "previous_hourly_rate": 23,
+        "previous_ratio": 0.13,
+        "current_hourly_rate": None,
+        "current_ratio": None,
+        "verification_status": "blocking",
+        "resolution": "missing_current_snapshot",
+    }
+    verification = {
+        "employees": [blocked],
+        "issues": [{"employee_id": "E001", "reason": "当月薪资档案缺少该员工"}],
+        "summary": {"total_employees": 1, "resolved_count": 0, "blocking_count": 1},
+    }
+    app_module.fbu_run_manager.update_run(
+        run.run_id,
+        salary_verification_data=verification,
+        salary_data={"employees": [blocked], "summary": verification["summary"]},
+    )
+
+    client = TestClient(app_module.app)
+    invalid = client.post(
+        f"/api/fbu-performance/runs/{run.run_id}/salary-verification/confirm",
+        json={"employee_id": "E001", "choice": "current"},
+    )
+    assert invalid.status_code == 400
+    assert invalid.json()["detail"] == "当月薪资快照缺失，不能选择该值"
+
+    valid = client.post(
+        f"/api/fbu-performance/runs/{run.run_id}/salary-verification/confirm",
+        json={"employee_id": "E001", "choice": "previous"},
+    )
+    assert valid.status_code == 200
+    assert valid.json()["preview"]["employees"][0]["hourly_rate"] == 23
+
+
 def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path)
 

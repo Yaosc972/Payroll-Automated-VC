@@ -1686,6 +1686,7 @@ def test_roster_loader_finds_shifted_lingse_column_by_header(tmp_path):
         ("E001", "Ana Roster", ("FBU", "Americas"), "蓝领"),
         ("E002", "Ben Roster", ("FBU", "Americas"), "白领"),
         ("E003", "Cara Roster", ("HRAS人力综合条线", "FBU HRBP Dept.", "新泽西区HRBP部"), "蓝领"),
+        ("E004", "Dana Channel", ("FBU仓储事业部", "美洲区", "新泽西区渠道部"), "白领"),
         ("zt15638", "万其鑫", ("FBU仓储事业部", "美洲区", "新泽西区"), "白领"),
     ]:
         row = [""] * 123
@@ -1714,7 +1715,45 @@ def test_roster_loader_finds_shifted_lingse_column_by_header(tmp_path):
     assert roster["E001"]["job_type"] == "warehouse"
     assert roster["E002"]["job_type"] == "warehouse"
     assert roster["E003"]["job_type"] == "functional"
+    assert roster["E004"]["job_type"] == "functional"
     assert roster["zt15638"]["job_type"] == "district_manager"
+
+
+def test_step_calculation_reclassifies_saved_channel_department_as_functional():
+    engine = FBUPerformanceParser().parse_all_from_step_data(
+        attendance_data=[
+            {
+                "employee_id": "E004",
+                "name": "Dana Channel",
+                "department": "FBU仓储事业部-美洲区-新泽西区-新泽西区渠道部",
+                "area": "新泽西区",
+                "personnel_status": "正式",
+                "position": "Channel Maintenance Specialist 渠道维护专员",
+                "job_type": "warehouse",
+                "has_night_shift": False,
+                "day_shift": {"计薪出勤": 8, "OT1.5": 0, "OT2.0": 0, "病假": 0, "年假": 0, "节假日": 0},
+                "night_shift": {"计薪出勤": 0, "OT1.5": 0, "OT2.0": 0, "病假": 0, "年假": 0, "节假日": 0},
+            }
+        ],
+        salary_data=[
+            {
+                "employee_id": "E004",
+                "hourly_rate": 20,
+                "ratio": 0.1,
+                "calculation_method": "固定比例核算",
+                "fixed_performance_base": 0,
+            }
+        ],
+        performance_data=[
+            {"employee_id": "E004", "score": 3.55, "level": "超出预期", "coefficient": 1.4}
+        ],
+        calc_month="2026-06",
+    )
+
+    employee = engine.get_employee("E004")
+    assert employee.job_type == "functional"
+    assert employee.performance_coefficient == 1.4
+    assert round(employee.performance_bonus, 2) == 22.4
 
 
 def test_base_roster_store_saves_metadata_and_copies_snapshot(tmp_path):

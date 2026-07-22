@@ -8751,6 +8751,9 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
             continue
         choice = confirmation["choice"]
         prefix = "previous" if choice == "previous" else "current"
+        if target.get(f"{prefix}_hourly_rate") is None:
+            snapshot_label = "上月" if choice == "previous" else "当月"
+            raise HTTPException(400, f"{snapshot_label}薪资快照缺失，不能选择该值")
         target["hourly_rate"] = target.get(f"{prefix}_hourly_rate", target.get("hourly_rate", 0))
         target["ratio"] = target.get(f"{prefix}_ratio", target.get("ratio", 0))
         target["verification_status"] = "resolved"

@@ -125,6 +125,39 @@ def test_missing_previous_snapshot_is_blocking_without_new_hire_evidence():
     row = result["employees"][0]
     assert row["verification_status"] == "blocking"
     assert row["resolution"] == "missing_previous_snapshot"
+    assert row["previous_hourly_rate"] is None
+    assert result["summary"]["blocking_count"] == 1
+
+
+def test_previous_only_historical_resigned_employee_is_ignored():
+    result = FBUPerformanceParser.reconcile_salary_history(
+        previous_salary=[salary("OLD001", 18, 0.05, personnel_status="离职")],
+        current_salary=[],
+        adjustment_events=[],
+        calc_month="2026-06",
+    )
+
+    assert result["employees"] == []
+    assert result["issues"] == []
+    assert result["summary"]["blocking_count"] == 0
+    assert result["summary"]["ignored_historical_resigned_count"] == 1
+
+
+def test_previous_only_active_employee_keeps_previous_values_and_blocks():
+    result = FBUPerformanceParser.reconcile_salary_history(
+        previous_salary=[salary("ACTIVE001", 23, 0.13, personnel_status="正式")],
+        current_salary=[],
+        adjustment_events=[],
+        calc_month="2026-06",
+    )
+
+    row = result["employees"][0]
+    assert row["verification_status"] == "blocking"
+    assert row["resolution"] == "missing_current_snapshot"
+    assert row["previous_hourly_rate"] == 23
+    assert row["previous_ratio"] == 0.13
+    assert row["current_hourly_rate"] is None
+    assert row["current_ratio"] is None
     assert result["summary"]["blocking_count"] == 1
 
 

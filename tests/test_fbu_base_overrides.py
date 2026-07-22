@@ -414,6 +414,46 @@ def test_blank_96_hour_rule_marker_calculates_special_hours_from_raw_attendance_
     assert employee.work_hour_rule_periods[0]["leave_hours"] == 16
 
 
+def test_96_hour_rule_cross_month_tail_excludes_ot_hours():
+    engine = FBUPerformanceParser().parse_all_from_step_data(
+        attendance_data=[
+            {
+                "employee_id": "zt12988",
+                "name": "陈海冰",
+                "department": "FBU仓储事业部",
+                "area": "新泽西区",
+                "job_type": "warehouse",
+                "day_shift": {"计薪出勤": 56.34, "OT1.5": 9.25, "OT2.0": 0, "病假": 0, "病假清算": 0, "年假": 0, "节假日": 0},
+                "night_shift": {"计薪出勤": 0, "OT1.5": 0, "OT2.0": 0, "病假": 0, "病假清算": 0, "年假": 0, "节假日": 0},
+                "has_night_shift": False,
+                "attendance_daily_rows": [
+                    {"date": "2026-06-21", "shift_type": "白班", "base_hours": 56.34, "ot15_hours": 9.25, "work_hours": 65.59},
+                ],
+            }
+        ],
+        salary_data=[{"employee_id": "zt12988", "name": "陈海冰", "hourly_rate": 20, "ratio": 0.1}],
+        performance_data=[{"employee_id": "zt12988", "name": "陈海冰", "score": 95, "level": None, "coefficient": 1}],
+        calc_month="2026-06",
+        base_override_data={
+            "employees": [
+                {
+                    "employee_id": "zt12988",
+                    "rule_type": "96工时制",
+                    "fixed_performance_base": 0,
+                    "allocation_month": "2026-06",
+                    "include_in_calculation": True,
+                }
+            ]
+        },
+    )
+
+    employee = engine.get_employee("zt12988")
+    assert employee.work_hour_rule_special_total_hours == 56.34
+    assert employee.work_hour_rule_periods[0]["regular_hours"] == 56.34
+    assert employee.work_hour_rule_periods[0]["raw_work_hours"] == 65.59
+    assert employee.work_hour_rule_periods[0]["mode"] == "跨月尾段REG（不含OT）"
+
+
 def test_96_hour_rule_cross_month_first_segment_uses_full_biweekly_cap():
     parser = FBUPerformanceParser()
     engine = parser.parse_all_from_step_data(
