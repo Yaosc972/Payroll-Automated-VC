@@ -4,6 +4,12 @@ let filteredRows = [];
 let activeSourceType = "";
 const API_ORIGIN = window.location.protocol === "file:" ? "http://127.0.0.1:8006" : "";
 const VERCEL_DIRECT_UPLOAD_WARNING_BYTES = 4 * 1024 * 1024;
+const SOURCE_PUNCH_DATETIME_HEADERS = new Set([
+  "首打卡(含补签)",
+  "末打卡(含补签)",
+  "上班 1 打卡时间",
+  "下班 1 打卡时间",
+]);
 
 const elements = {
   periodLabel: document.querySelector("#calcPeriodLabel"),
@@ -152,7 +158,8 @@ const MEAL_RULE = {
   eligibleThirdOrgs: new Set(["ABU技术部", "FBU技术部", "FES技术部", "技术部", "B技术部", "PBU技术部"]),
   specialThirdOrgs: new Set(["HSSC人力共享中心", "战略运营部"]),
   specialFourthOrgs: new Set(["HRAS技术组", "BI组"]),
-  eligibleShifts: ["9:30-18:30", "集团深圳10:00-19:00", "深圳灵活打卡8:30-9:10", "深圳南山灵活打卡8:30-9:30"],
+  additionalOrgPaths: new Set(["LBU速运事业部|战略运营部|BI组"]),
+  eligibleShifts: ["9:30-18:30", "集团深圳10:00-19:00", "深圳正常班", "深圳灵活打卡8:30-9:10", "深圳南山灵活打卡8:30-9:30"],
   excludedEmployeeNames: new Set(["潘江浩", "李显荣"]),
   dailyAmount: 20,
 };
@@ -410,6 +417,7 @@ function localIsEligibleOrg(row) {
   const third = cleanCell(row["三级组织"]);
   const fourth = cleanCell(row["四级组织"]);
   if (MEAL_RULE.eligibleWholeSecondOrgs.has(second)) return true;
+  if (MEAL_RULE.additionalOrgPaths.has(`${second}|${third}|${fourth}`)) return true;
   return (
     MEAL_RULE.eligibleSecondOrgs.has(second) && MEAL_RULE.eligibleThirdOrgs.has(third)
   ) || (
@@ -578,7 +586,16 @@ function exportClientSideResult(result) {
   window.XLSX.utils.book_append_sheet(workbook, resultSheet, "餐补核算结果");
 
   const sourceSheetName = summary.sourceType === "wx" ? "WX技术部考勤源" : "人事系统考勤源";
-  const sourceSheet = window.XLSX.utils.aoa_to_sheet(result.sourceAoA || []);
+  const sourceAoA = result.sourceAoA || [];
+  const sourceSheet = window.XLSX.utils.aoa_to_sheet(sourceAoA);
+  const sourceHeaders = sourceAoA[1] || [];
+  sourceHeaders.forEach((header, column) => {
+    if (!SOURCE_PUNCH_DATETIME_HEADERS.has(String(header || "").trim())) return;
+    for (let row = 2; row < sourceAoA.length; row += 1) {
+      const cell = sourceSheet[window.XLSX.utils.encode_cell({ r: row, c: column })];
+      if (cell && (cell.t === "d" || cell.t === "n")) cell.z = "yyyy/m/d h:mm:ss";
+    }
+  });
   sourceSheet["!cols"] = Array.from({ length: Math.min((result.sourceAoA?.[0] || []).length || 16, 24) }, () => ({ wch: 16 }));
   window.XLSX.utils.book_append_sheet(workbook, sourceSheet, sourceSheetName);
 

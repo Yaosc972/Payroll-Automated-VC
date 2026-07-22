@@ -613,6 +613,12 @@ def test_china_employee_payroll_can_calculate_large_files_without_server_upload(
     assert "exportClientSideResult" in js
     assert "totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES" in js
     assert "生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。" in js
+    assert "SOURCE_PUNCH_DATETIME_HEADERS" in js
+    assert 'cell.z = "yyyy/m/d h:mm:ss"' in js
+    assert "LBU速运事业部|战略运营部|BI组" in js
+    assert "LBU战略运营部BI组纳入" in html
+    assert '"深圳正常班"' in js
+    assert "核算班次包含深圳正常班" in html
 
 
 def test_release_info_marks_integration_branch_as_only_production_source():

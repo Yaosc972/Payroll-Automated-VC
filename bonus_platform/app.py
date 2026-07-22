@@ -6893,6 +6893,26 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
     for column in range(1, min(source_sheet.max_column, 24) + 1):
         source_sheet.column_dimensions[get_column_letter(column)].width = 16
 
+    punch_datetime_headers = {
+        "首打卡(含补签)",
+        "末打卡(含补签)",
+        "上班 1 打卡时间",
+        "下班 1 打卡时间",
+    }
+    source_headers = {
+        str(cell.value).strip(): cell.column
+        for cell in source_sheet[2]
+        if cell.value not in (None, "")
+    }
+    for header in punch_datetime_headers:
+        column = source_headers.get(header)
+        if column is None:
+            continue
+        for row in range(3, source_sheet.max_row + 1):
+            cell = source_sheet.cell(row, column)
+            if isinstance(cell.value, datetime):
+                cell.number_format = "yyyy/m/d h:mm:ss"
+
     filename_month = month_label or datetime.now().strftime("%Y%m")
     export_prefix = "WX技术部餐补核算结果" if source_type == "wx" else "技术部餐补核算结果"
     output_path = run_dir / f"{export_prefix}_{filename_month}_{run_id}.xlsx"

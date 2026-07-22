@@ -58,10 +58,14 @@ class MealAllowanceConfig:
     )
     special_third_orgs: frozenset[str] = frozenset({"HSSC人力共享中心", "战略运营部"})
     special_fourth_orgs: frozenset[str] = frozenset({"HRAS技术组", "BI组"})
+    additional_org_paths: frozenset[tuple[str, str, str]] = frozenset(
+        {("LBU速运事业部", "战略运营部", "BI组")}
+    )
     eligible_shifts: frozenset[str] = frozenset(
         {
             "9:30-18:30",
             "集团深圳10:00-19:00",
+            "深圳正常班",
             "深圳灵活打卡8:30-9:10",
             "深圳南山灵活打卡8:30-9:30",
         }
@@ -331,6 +335,8 @@ def _is_eligible_org(row: dict[str, Any], config: MealAllowanceConfig) -> bool:
     third = _clean(row.get("三级组织"))
     fourth = _clean(row.get("四级组织"))
     if second in config.eligible_whole_second_orgs:
+        return True
+    if (second, third, fourth) in config.additional_org_paths:
         return True
     return (
         second in config.eligible_second_orgs

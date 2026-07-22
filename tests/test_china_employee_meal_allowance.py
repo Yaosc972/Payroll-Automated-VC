@@ -236,6 +236,24 @@ def test_meal_allowance_uses_offline_confirmed_organization_scope(tmp_path):
     assert "组织不在核算对象范围" in rows["zt11004"]["warnings"]
 
 
+def test_meal_allowance_includes_shenzhen_standard_shift(tmp_path):
+    file_path = tmp_path / "attendance.xlsx"
+    _write_attendance(
+        file_path,
+        [
+            _row(员工="深圳正常班员工", 工号="zt12001", 当前班次="深圳正常班"),
+            _row(员工="其他班次员工", 工号="zt12002", 当前班次="广州正常班"),
+        ],
+    )
+
+    result = calculate_meal_allowance(parse_attendance_workbooks([file_path]))
+    rows = {row["employeeId"]: row for row in result["results"]}
+
+    assert rows["zt12001"]["amount"] == 20
+    assert rows["zt12002"]["amount"] == 0
+    assert "当前班次不在餐补班次范围" in rows["zt12002"]["warnings"]
+
+
 def test_meal_allowance_handles_next_day_early_clock_out_and_exclusions(tmp_path):
     file_path = tmp_path / "attendance.xlsx"
     _write_attendance(
@@ -297,7 +315,7 @@ def test_meal_allowance_business_trip_remark_after_21_counts_without_late_punch(
     assert rows["zt31002"]["amount"] == 0
 
 
-def test_meal_allowance_does_not_include_non_hras_strategy_bi_group(tmp_path):
+def test_meal_allowance_includes_lbu_strategy_bi_group_only(tmp_path):
     file_path = tmp_path / "attendance.xlsx"
     _write_attendance(
         file_path,
@@ -316,15 +334,32 @@ def test_meal_allowance_does_not_include_non_hras_strategy_bi_group(tmp_path):
                 三级组织="战略运营部",
                 四级组织="BI组",
             ),
+            _row(
+                员工="LBU战略非BI",
+                工号="zt32003",
+                二级组织="LBU速运事业部",
+                三级组织="战略运营部",
+                四级组织="经营分析组",
+            ),
+            _row(
+                员工="ABU战略BI",
+                工号="zt32004",
+                二级组织="ABU航空事业部",
+                三级组织="战略运营部",
+                四级组织="BI组",
+            ),
         ],
     )
 
     result = calculate_meal_allowance(parse_attendance_workbooks([file_path]))
     rows = {row["employeeId"]: row for row in result["results"]}
 
-    assert rows["zt32001"]["amount"] == 0
-    assert "组织不在核算对象范围" in rows["zt32001"]["warnings"]
+    assert rows["zt32001"]["amount"] == 20
     assert rows["zt32002"]["amount"] == 20
+    assert rows["zt32003"]["amount"] == 0
+    assert "组织不在核算对象范围" in rows["zt32003"]["warnings"]
+    assert rows["zt32004"]["amount"] == 0
+    assert "组织不在核算对象范围" in rows["zt32004"]["warnings"]
 
 
 def test_parse_multiple_attendance_exports_without_duplicate_employee_dates(tmp_path):
@@ -430,6 +465,14 @@ def test_meal_allowance_export_xlsx_filters_payable_rows_and_keeps_source_sheet(
             _row(员工="未命中员工", 工号="zt51002", 考勤日期=datetime(2026, 5, 2), **{"末打卡(含补签)": datetime(2026, 5, 2, 20, 30)}),
         ],
     )
+    source_workbook = load_workbook(file_path)
+    source_worksheet = source_workbook.active
+    for header in ("首打卡(含补签)", "末打卡(含补签)"):
+        column = HEADERS.index(header) + 1
+        for row in range(3, source_worksheet.max_row + 1):
+            source_worksheet.cell(row, column).number_format = "yyyy/m/d"
+    source_workbook.save(file_path)
+    source_workbook.close()
 
     client = TestClient(app)
     with file_path.open("rb") as upload:
@@ -472,6 +515,13 @@ def test_meal_allowance_export_xlsx_filters_payable_rows_and_keeps_source_sheet(
     source_names = [cell.value for cell in source_sheet["A"][2:]]
     assert "应发员工" in source_names
     assert "未命中员工" in source_names
+    source_headers = {
+        cell.value: cell.column for cell in source_sheet[2] if cell.value
+    }
+    for header in ("首打卡(含补签)", "末打卡(含补签)"):
+        punch_cell = source_sheet.cell(3, source_headers[header])
+        assert isinstance(punch_cell.value, datetime)
+        assert punch_cell.number_format == "yyyy/m/d h:mm:ss"
 
 
 def test_meal_allowance_runs_can_be_listed_and_reopened(tmp_path):
