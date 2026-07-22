@@ -8919,18 +8919,23 @@ async def import_fbu_supplemental_leave(
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     file_path = run_dir / "supplemental_leave.xlsx"
-    with open(file_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    pending_file_path = run_dir / f".supplemental-leave-upload-{secrets.token_hex(8)}.xlsx"
+    pending_file_path.write_bytes(await file.read())
 
     try:
         parser = FBUPerformanceParser()
         _load_fbu_roster_for_run(parser, run_id)
-        preview = parser.parse_supplemental_leave_preview(str(file_path), run.calc_month)
+        preview = parser.parse_supplemental_leave_preview(str(pending_file_path), run.calc_month)
+        if not preview.get("rows"):
+            raise HTTPException(
+                400,
+                "未识别到补充假勤记录，请上传包含工号、姓名、总时长和假期类型的病假年假汇总文件",
+            )
         preview = parser.validate_supplemental_leave_against_attendance(
             preview,
             run.attendance_data,
         )
+        pending_file_path.replace(file_path)
         fbu_run_manager.update_run(
             run_id,
             supplemental_leave_file=file.filename,
@@ -8942,9 +8947,13 @@ async def import_fbu_supplemental_leave(
             "run_id": run_id,
             "preview": preview,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
         raise HTTPException(500, f"补充假勤解析失败: {str(e)}")
+    finally:
+        pending_file_path.unlink(missing_ok=True)
 
 
 @app.post("/api/fbu-performance/import-base-overrides")
@@ -9000,6 +9009,14 @@ def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
     row_ids = body.get("row_ids") or []
     if not row_ids and not apply_suggestions:
         raise HTTPException(400, "请选择需要处理的行")
+    if row_ids:
+        current_row_ids = {
+            row.get("row_id")
+            for row in run.supplemental_leave_data.get("rows", [])
+            if row.get("row_id")
+        }
+        if any(row_id not in current_row_ids for row_id in row_ids):
+            raise HTTPException(409, "补充假勤页面数据已更新，请刷新后重试")
 
     parser = FBUPerformanceParser()
     if apply_suggestions:

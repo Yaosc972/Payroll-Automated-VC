@@ -61,6 +61,17 @@ def _split_flow_leave_workbook_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def _unrecognized_supplemental_workbook_bytes() -> bytes:
+    buffer = BytesIO()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "绩效报表"
+    sheet.append(["工号", "姓名", "绩效等级", "绩效系数"])
+    sheet.append(["zt001", "员工甲", "A", 1.1])
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def _parser_with_roster() -> FBUPerformanceParser:
     parser = FBUPerformanceParser()
     parser.employee_roster = {
@@ -627,6 +638,78 @@ def test_supplemental_leave_import_and_batch_api_updates_run():
     assert updated.json()["preview"]["rows"][1]["included_hours"] == 4
     detail = client.get(f"/api/fbu-performance/runs/{created['run_id']}").json()
     assert detail["supplemental_leave_data"]["summary"]["excluded_count"] == 2
+
+
+def test_supplemental_leave_import_rejects_unrecognized_workbook_without_overwriting_existing_data():
+    client = TestClient(app)
+    created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
+    run_id = created["run_id"]
+
+    imported = client.post(
+        "/api/fbu-performance/import-supplemental-leave",
+        data={"run_id": run_id},
+        files={
+            "file": (
+                "病假年假汇总.xlsx",
+                _leave_workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert imported.status_code == 200
+    original_preview = imported.json()["preview"]
+    canonical_path = app_module.FBU_PERFORMANCE_RUNS_DIR / run_id / "supplemental_leave.xlsx"
+    original_file = canonical_path.read_bytes()
+
+    rejected = client.post(
+        "/api/fbu-performance/import-supplemental-leave",
+        data={"run_id": run_id},
+        files={
+            "file": (
+                "绩效报表.xlsx",
+                _unrecognized_supplemental_workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert "未识别到补充假勤记录" in rejected.json()["detail"]
+    detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
+    assert detail["supplemental_leave_file"] == "病假年假汇总.xlsx"
+    assert detail["supplemental_leave_data"] == original_preview
+    assert canonical_path.read_bytes() == original_file
+
+
+def test_supplemental_leave_batch_rejects_stale_row_ids_without_changing_preview():
+    client = TestClient(app)
+    created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
+    run_id = created["run_id"]
+    imported = client.post(
+        "/api/fbu-performance/import-supplemental-leave",
+        data={"run_id": run_id},
+        files={
+            "file": (
+                "病假年假汇总.xlsx",
+                _leave_workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    original_preview = imported.json()["preview"]
+
+    rejected = client.post(
+        f"/api/fbu-performance/runs/{run_id}/supplemental-leave/batch",
+        json={
+            "row_ids": ["旧预览:999"],
+            "included_hours": 8,
+        },
+    )
+
+    assert rejected.status_code == 409
+    assert "页面数据已更新" in rejected.json()["detail"]
+    detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
+    assert detail["supplemental_leave_data"] == original_preview
 
 
 def test_supplemental_leave_api_infers_status_when_saving_included_hours_only():
