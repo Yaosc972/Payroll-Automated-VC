@@ -33,6 +33,128 @@ create table if not exists public.labor_runs (
     constraint labor_runs_currency_not_blank check (btrim(currency) <> '')
 );
 
+-- Upgrade the earlier P0 run table in place. CREATE TABLE IF NOT EXISTS does
+-- not add P1 columns when a legacy table is already present, so add and
+-- backfill them before creating owner-scoped indexes or foreign keys.
+alter table public.labor_runs
+    add column if not exists owner_user_id text;
+alter table public.labor_runs
+    add column if not exists revision bigint;
+alter table public.labor_runs
+    add column if not exists idempotency_key text;
+alter table public.labor_runs
+    add column if not exists metadata_snapshot jsonb;
+alter table public.labor_runs
+    add column if not exists deleted_at timestamptz;
+
+do $$
+declare
+    has_created_by boolean;
+    has_organization_id boolean;
+begin
+    select exists (
+        select 1 from information_schema.columns
+        where table_schema='public' and table_name='labor_runs' and column_name='created_by'
+    ) into has_created_by;
+    select exists (
+        select 1 from information_schema.columns
+        where table_schema='public' and table_name='labor_runs' and column_name='organization_id'
+    ) into has_organization_id;
+
+    if has_created_by and has_organization_id then
+        execute $sql$
+            update public.labor_runs
+            set owner_user_id=coalesce(
+                nullif(btrim(owner_user_id), ''),
+                nullif(btrim(created_by), ''),
+                nullif(btrim(organization_id), ''),
+                'legacy:' || id
+            )
+            where owner_user_id is null or btrim(owner_user_id)=''
+        $sql$;
+    elsif has_created_by then
+        execute $sql$
+            update public.labor_runs
+            set owner_user_id=coalesce(
+                nullif(btrim(owner_user_id), ''),
+                nullif(btrim(created_by), ''),
+                'legacy:' || id
+            )
+            where owner_user_id is null or btrim(owner_user_id)=''
+        $sql$;
+    elsif has_organization_id then
+        execute $sql$
+            update public.labor_runs
+            set owner_user_id=coalesce(
+                nullif(btrim(owner_user_id), ''),
+                nullif(btrim(organization_id), ''),
+                'legacy:' || id
+            )
+            where owner_user_id is null or btrim(owner_user_id)=''
+        $sql$;
+    else
+        update public.labor_runs
+        set owner_user_id='legacy:' || id
+        where owner_user_id is null or btrim(owner_user_id)='';
+    end if;
+end $$;
+
+update public.labor_runs
+set revision=coalesce(revision, 1),
+    metadata_snapshot=coalesce(
+        metadata_snapshot,
+        jsonb_strip_nulls(jsonb_build_object(
+            'id', id,
+            'ownerUserId', owner_user_id,
+            'status', status,
+            'supplierName', supplier_name,
+            'periodStart', period_start,
+            'periodEnd', period_end,
+            'currency', currency,
+            'createdAt', created_at,
+            'updatedAt', updated_at
+        ))
+    );
+
+alter table public.labor_runs
+    alter column owner_user_id set not null,
+    alter column revision set default 1,
+    alter column revision set not null,
+    alter column metadata_snapshot set default '{}'::jsonb,
+    alter column metadata_snapshot set not null;
+
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid='public.labor_runs'::regclass and conname='labor_runs_owner_not_blank'
+    ) then
+        alter table public.labor_runs
+            add constraint labor_runs_owner_not_blank
+            check (btrim(owner_user_id) <> '') not valid;
+    end if;
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid='public.labor_runs'::regclass and conname='labor_runs_revision_positive'
+    ) then
+        alter table public.labor_runs
+            add constraint labor_runs_revision_positive
+            check (revision >= 1) not valid;
+    end if;
+    if not exists (
+        select 1 from pg_constraint
+        where conrelid='public.labor_runs'::regclass and conname='labor_runs_currency_not_blank'
+    ) then
+        alter table public.labor_runs
+            add constraint labor_runs_currency_not_blank
+            check (btrim(currency) <> '') not valid;
+    end if;
+end $$;
+
+alter table public.labor_runs validate constraint labor_runs_owner_not_blank;
+alter table public.labor_runs validate constraint labor_runs_revision_positive;
+alter table public.labor_runs validate constraint labor_runs_currency_not_blank;
+
 create unique index if not exists labor_runs_owner_idempotency_idx
     on public.labor_runs (owner_user_id, idempotency_key)
     where idempotency_key is not null;
@@ -203,6 +325,22 @@ create table if not exists public.labor_jobs (
 -- Upgrade the earlier P0 queue in place when it already exists.
 alter table public.labor_jobs
     add column if not exists job_type text not null default 'reconcile';
+
+-- Legacy queue rows predate owner-scoped Worker credentials. Bind every
+-- existing job to the authoritative run owner before generating/indexing the
+-- owner column. Orphaned jobs deliberately remain invalid and make the final
+-- constraint validation roll back the entire migration.
+update public.labor_jobs as jobs
+set metadata_snapshot=jsonb_set(
+    coalesce(jobs.metadata_snapshot, '{}'::jsonb),
+    '{ownerUserId}',
+    to_jsonb(runs.owner_user_id),
+    true
+)
+from public.labor_runs as runs
+where jobs.run_id=runs.id
+  and coalesce(jobs.metadata_snapshot ->> 'ownerUserId', '')='';
+
 alter table public.labor_jobs
     add column if not exists owner_user_id text generated always as (metadata_snapshot ->> 'ownerUserId') stored;
 alter table public.labor_jobs

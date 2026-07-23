@@ -97,6 +97,25 @@ def test_p1_sql_declares_authoritative_tables_constraints_and_private_access():
     assert "enable row level security" in sql
 
 
+def test_p1_sql_upgrades_legacy_run_and_job_owners_before_owner_scoped_indexes():
+    sql = Path("docs/sql/labor_p1_state.sql").read_text(encoding="utf-8").lower()
+
+    add_run_owner = sql.index("add column if not exists owner_user_id text;")
+    backfill_run_owner = sql.index("set owner_user_id=coalesce(")
+    run_owner_index = sql.index("create unique index if not exists labor_runs_owner_idempotency_idx")
+    backfill_job_owner = sql.index("set metadata_snapshot=jsonb_set(")
+    add_generated_job_owner = sql.index(
+        "add column if not exists owner_user_id text generated always as "
+        "(metadata_snapshot ->> 'owneruserid') stored;"
+    )
+
+    assert add_run_owner < backfill_run_owner < run_owner_index
+    assert backfill_job_owner < add_generated_job_owner
+    assert "'legacy:' || id" in sql
+    assert "alter table public.labor_runs validate constraint labor_runs_owner_not_blank" in sql
+    assert "alter table public.labor_jobs validate constraint labor_jobs_owner_not_blank" in sql
+
+
 def test_p1_state_health_requires_every_authoritative_table():
     connection = FakeConnection(
         [
