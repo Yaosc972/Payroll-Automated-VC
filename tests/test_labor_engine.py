@@ -9065,7 +9065,7 @@ def test_labor_production_readiness_endpoint_returns_sanitized_gate(monkeypatch)
     monkeypatch.setattr(app_module, "labor_persistent_storage_info", lambda: {"enabled": True, "backend": "blob"})
     monkeypatch.setattr(
         app_module,
-        "labor_worker_job_store_health",
+        "labor_p1_worker_job_store_health",
         lambda: {"backend": "postgres", "configured": True, "ready": True},
     )
 
