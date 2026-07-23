@@ -9117,6 +9117,44 @@ def test_labor_production_readiness_rejects_malformed_worker_update_manifest():
     assert "signed_update_manifest_invalid" in {issue["code"] for issue in result["warnings"]}
 
 
+def test_labor_production_readiness_accepts_private_multiplatform_worker_release_catalog():
+    from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
+
+    digest = "a" * 64
+    result = evaluate_labor_production_readiness(
+        env={
+            "SIGMA_LABOR_EXECUTION_MODE": "personal-worker",
+            "SIGMA_LABOR_WORKER_TOKENS": '{"opaque":{"userId":"u1","deviceId":"d1"}}',
+            "SIGMA_LABOR_OPERATIONS_TOKEN": "ops-token",
+            "SIGMA_LABOR_WORKER_UPDATE_MANIFEST": json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "releases": {
+                        platform: {
+                            "version": "0.3.11",
+                            "minimumVersion": "0.3.11",
+                            "sha256": digest,
+                            "signature": f"sha256:{digest}",
+                            "objectKey": f"labor-runs/production/worker-releases/{platform}/worker",
+                        }
+                        for platform in ("macos-arm64", "windows-x64")
+                    },
+                }
+            ),
+        },
+        storage_info={"enabled": True, "backend": "supabase", "environment": "production"},
+        queue_health={"backend": "postgres", "configured": True, "ready": True},
+        build_info={
+            "status": "current",
+            "buildId": "test-build",
+            "apiContractVersion": 2,
+            "requiredWorkerVersion": "0.3.11",
+        },
+    )
+
+    assert "signed_update_manifest_invalid" not in {issue["code"] for issue in result["warnings"]}
+
+
 def test_labor_external_ai_requires_labor_specific_opt_in():
     config = _ready_ai_config()
     config["external_ai_enabled"] = False

@@ -151,15 +151,38 @@ def _valid_update_manifest(raw: str, required_worker_version: str) -> bool:
         return False
     if not isinstance(manifest, dict):
         return False
-    if not all(str(manifest.get(key) or "").strip() for key in ("version", "minimumVersion", "url", "sha256", "signature")):
+
+    releases = manifest.get("releases")
+    if releases is not None:
+        if not isinstance(releases, dict) or not releases:
+            return False
+        return all(
+            platform in {"macos-arm64", "windows-x64"}
+            and isinstance(release, dict)
+            and _valid_worker_release(release, required_worker_version)
+            for platform, release in releases.items()
+        )
+    return _valid_worker_release(manifest, required_worker_version)
+
+
+def _valid_worker_release(release: Mapping[str, Any], required_worker_version: str) -> bool:
+    if not all(
+        str(release.get(key) or "").strip()
+        for key in ("version", "minimumVersion", "sha256", "signature")
+    ):
         return False
-    if not str(manifest["url"]).strip().startswith("https://"):
+    has_private_object = bool(
+        str(release.get("objectKey") or "").strip()
+        or str(release.get("blobPathname") or "").strip()
+    )
+    has_https_url = str(release.get("url") or "").strip().startswith("https://")
+    if not (has_private_object or has_https_url):
         return False
-    if not re.fullmatch(r"[A-Fa-f0-9]{64}", str(manifest["sha256"]).strip()):
+    if not re.fullmatch(r"[A-Fa-f0-9]{64}", str(release["sha256"]).strip()):
         return False
     try:
-        version = parse_stable_worker_version(manifest["version"])
-        minimum = parse_stable_worker_version(manifest["minimumVersion"])
+        version = parse_stable_worker_version(release["version"])
+        minimum = parse_stable_worker_version(release["minimumVersion"])
         required = parse_stable_worker_version(required_worker_version)
     except ValueError:
         return False
