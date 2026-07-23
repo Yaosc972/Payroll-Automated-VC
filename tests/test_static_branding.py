@@ -1094,6 +1094,19 @@ def test_overseas_labor_page_exposes_worker_download_and_update_status():
     assert "text-overflow: ellipsis" not in release_action_css
 
 
+def test_overseas_labor_worker_status_opens_immediately_without_holding_header_button():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'labor.btnWorkerStatus.addEventListener("click", openLaborWorkerPanel);' in js
+    assert 'withButtonLoading(labor.btnWorkerStatus, "正在读取"' not in js
+    worker_panel = js[
+        js.index("function openLaborWorkerPanel()"):
+        js.index("function workerDeviceIsOnline")
+    ]
+    assert "void openLaborGovernance();" in worker_panel
+    assert "await openLaborGovernance();" not in worker_panel
+
+
 def test_overseas_labor_polling_uses_backend_heartbeat_instead_of_fixed_ten_minute_limit():
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 

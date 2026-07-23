@@ -474,7 +474,7 @@ function bindLaborEvents() {
     labor.btnOpenGovernance.addEventListener("click", () => withButtonLoading(labor.btnOpenGovernance, "", openLaborGovernance));
   }
   if (labor.btnWorkerStatus) {
-    labor.btnWorkerStatus.addEventListener("click", () => withButtonLoading(labor.btnWorkerStatus, "正在读取", openLaborWorkerPanel));
+    labor.btnWorkerStatus.addEventListener("click", openLaborWorkerPanel);
   }
   if (labor.activateWorker) labor.activateWorker.addEventListener("click", activateLaborWorker);
   if (labor.refreshWorker) {
@@ -536,8 +536,8 @@ async function openLaborGovernance() {
   }
 }
 
-async function openLaborWorkerPanel() {
-  await openLaborGovernance();
+function openLaborWorkerPanel() {
+  void openLaborGovernance();
   labor.workerSection?.scrollIntoView({ block: "start", behavior: "smooth" });
 }
 
