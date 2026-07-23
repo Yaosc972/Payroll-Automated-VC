@@ -80,10 +80,10 @@
           <div class="dashboard-user">
             <span>
               <b>当前用户</b>
-              <strong>Payroll Admin</strong>
+              <strong id="dashboardCurrentUser">Payroll Admin</strong>
             </span>
-            <em>管理员</em>
-            <button type="button">退出登录</button>
+            <em id="dashboardCurrentRole">管理员</em>
+            <button id="dashboardLogout" type="button">退出登录</button>
           </div>
         </header>
 
@@ -186,12 +186,12 @@
             <a class="saas-module-card overseas-module pilot-card" href="overseas-labor.html" data-module="overseas_labor">
               <div class="module-card-top">
                 <span class="module-status uat">UAT Trial · 试用版</span>
-                <span class="module-version">V0.4-UAT</span>
+                <span class="module-version">V0.5-UAT</span>
               </div>
               <div class="module-copy">
                 <p>Overseas Invoice Audit</p>
                 <h2>海外劳务报账核对</h2>
-                <span>PDF 发票、Excel 映射、AI 抽取、差异报告与试用数据留痕。</span>
+                <span>PDF 发票、Excel 映射、本机 OCR 与确定性解析、员工级差异报告及 UAT 留痕。</span>
               </div>
               <dl>
                 <div><dt>权限</dt><dd>薪酬 UAT</dd></div>
@@ -204,32 +204,31 @@
 
       </main>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
     <script>
       (() => {
-        if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-        gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card', {
-          opacity: 0,
-          y: 18,
-        });
-        gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
-
-        const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
-        timeline
-          .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
-          .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
-          .to('.welcome-panel', { opacity: 1, y: 0, duration: 0.62 }, '-=0.32')
-          .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28');
-
-        document.querySelectorAll('.saas-module-card').forEach((card) => {
-          card.addEventListener('mouseenter', () => {
-            gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
+        if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card', {
+            opacity: 0,
+            y: 18,
           });
-          card.addEventListener('mouseleave', () => {
-            gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
+          gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
+
+          const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
+          timeline
+            .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
+            .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
+            .to('.welcome-panel', { opacity: 1, y: 0, duration: 0.62 }, '-=0.32')
+            .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28');
+
+          document.querySelectorAll('.saas-module-card').forEach((card) => {
+            card.addEventListener('mouseenter', () => {
+              gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
+            });
+            card.addEventListener('mouseleave', () => {
+              gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
+            });
           });
-        });
+        }
 
         const search = document.getElementById('dashboardSearch');
         const hint = document.getElementById('searchHint');
@@ -241,6 +240,49 @@
           { module: 'overseas_labor', keys: ['海外', '报账', 'pdf', 'invoice'], href: 'overseas-labor.html', label: '海外劳务报账核对' },
         ];
         const blockedShortcutModules = new Set();
+        const hydrateAuthenticatedUser = async () => {
+          let authRequired = false;
+          try {
+            const accessResponse = await fetch('/api/workbench/access', { cache: 'no-store' });
+            if (accessResponse.ok) {
+              authRequired = Boolean((await accessResponse.json()).authRequired);
+            }
+          } catch {
+            // The local static preview keeps its placeholder user when no API is present.
+          }
+          try {
+            const response = await fetch('/api/me', {
+              credentials: 'same-origin',
+              cache: 'no-store',
+            });
+            if (response.status === 401 && authRequired) {
+              window.location.replace(`login.html?next=${encodeURIComponent(window.location.pathname || '/')}`);
+              return;
+            }
+            if (!response.ok) return;
+            const current = await response.json();
+            const user = current.user || {};
+            const roleNames = (current.roles || []).map(role => role.name).filter(Boolean);
+            const userNode = document.getElementById('dashboardCurrentUser');
+            const roleNode = document.getElementById('dashboardCurrentRole');
+            if (userNode) userNode.textContent = user.name || user.email || user.id || '已登录用户';
+            if (roleNode) roleNode.textContent = roleNames.join('、') || '待授权';
+            sessionStorage.setItem('sigma-auth-context-v2', JSON.stringify({ createdAt: Date.now(), me: current }));
+          } catch {
+            // A network failure does not invent an authenticated identity.
+          }
+        };
+        const logoutButton = document.getElementById('dashboardLogout');
+        logoutButton?.addEventListener('click', async () => {
+          logoutButton.disabled = true;
+          logoutButton.textContent = '退出中';
+          try {
+            await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+          } finally {
+            sessionStorage.removeItem('sigma-auth-context-v2');
+            window.location.href = 'login.html?next=%2F';
+          }
+        });
         const applyWorkbenchAccess = async () => {
           try {
             const response = await fetch('/api/workbench/access');
@@ -263,6 +305,7 @@
             // 首页权限信息读取失败时，不阻断页面加载。
           }
         };
+        hydrateAuthenticatedUser();
         applyWorkbenchAccess();
         search?.addEventListener('input', () => {
           const value = search.value.trim().toLowerCase();

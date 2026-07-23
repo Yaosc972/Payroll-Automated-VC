@@ -13,10 +13,27 @@ def parse_number(value: Any) -> float:
     text = str(value).strip()
     if text in {"-", "$", "-$", "$-", "—"}:
         return 0.0
-    negative = text.startswith("(") and text.endswith(")")
-    cleaned = re.sub(r"[^0-9.\-]", "", text)
-    if cleaned in {"", "-", "."}:
+    negative = (text.startswith("(") and text.endswith(")")) or "-" in text
+    cleaned = re.sub(r"[^0-9.,]", "", text)
+    if cleaned in {"", ".", ","}:
         return 0.0
+    if "," in cleaned and "." in cleaned:
+        decimal_separator = "," if cleaned.rfind(",") > cleaned.rfind(".") else "."
+        thousands_separator = "." if decimal_separator == "," else ","
+        cleaned = cleaned.replace(thousands_separator, "")
+        cleaned = cleaned.replace(decimal_separator, ".")
+    elif "," in cleaned:
+        groups = cleaned.split(",")
+        if len(groups[-1]) in {1, 2}:
+            cleaned = "".join(groups[:-1]) + "." + groups[-1]
+        else:
+            cleaned = "".join(groups)
+    elif cleaned.count(".") > 1:
+        groups = cleaned.split(".")
+        if len(groups[-1]) in {1, 2}:
+            cleaned = "".join(groups[:-1]) + "." + groups[-1]
+        else:
+            cleaned = "".join(groups)
     try:
         number = float(cleaned)
     except ValueError:

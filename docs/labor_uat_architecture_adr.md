@@ -1,8 +1,12 @@
 # 海外劳务工报账核对 UAT/准上线架构 ADR
 
-状态：Proposed  
-日期：2026-06-20  
+状态：Superseded
+日期：2026-06-20
 适用范围：海外劳务工报账核对模块，不扩展到 FBU、招聘奖金、国内劳务或其他共享模块。
+
+> 本文保留为历史决策记录。2026-07-15 起由
+> `docs/labor_controlled_uat_architecture_adr_v2.md` 取代。模式 C 不再是当前上线目标，
+> 新决策采用 Vercel 控制面 + Postgres + 私有对象存储 + Personal Worker。
 
 ## 背景
 

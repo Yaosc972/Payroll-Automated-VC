@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 import json
 import logging
 import re
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,16 @@ class SupplierExtractionProfile:
     key: str
     aliases: List[str] = field(default_factory=list)
     prompt_notes: List[str] = field(default_factory=list)
+    authoritative_total_methods: List[str] = field(default_factory=list)
+    line_item_aliases: Dict[str, str] = field(default_factory=dict)
     image_page_policy: str = "first_page_only"
     version: int = 1
     failure_count: int = 0
     deprecated: bool = False
+    status: str = "builtin"
+    approved_by: str = ""
+    approved_at: str = ""
+    created_from: str = "builtin"
 
 
 DEFAULT_PROFILE = SupplierExtractionProfile(key="default", image_page_policy="all")
@@ -111,10 +118,47 @@ BUILTIN_PROFILES = [
 
 def resolve_supplier_profile(supplier: str, profiles_path: str | Path | None = None) -> SupplierExtractionProfile:
     normalized = _normalize_supplier(supplier)
+    matches: list[tuple[tuple[int, int], SupplierExtractionProfile]] = []
     for profile in _profiles_for_resolution(profiles_path):
-        if any(alias in normalized for alias in profile.aliases):
-            return profile
+        for raw_alias in profile.aliases:
+            alias = _normalize_supplier(raw_alias)
+            score = supplier_alias_match_score(normalized, alias)
+            if score is None:
+                continue
+            matches.append((score, profile))
+    if matches:
+        best_score = max(score for score, _profile in matches)
+        best_matches = [profile for score, profile in matches if score == best_score]
+        external_matches = [profile for profile in best_matches if profile.status != "builtin"]
+        best_profiles = {profile.key: profile for profile in (external_matches or best_matches)}
+        if len(best_profiles) == 1:
+            return next(iter(best_profiles.values()))
+        logger.warning(
+            "供应商 Profile 匹配冲突，已回退默认 Profile: supplier=%s, profiles=%s",
+            supplier,
+            sorted(best_profiles),
+        )
     return DEFAULT_PROFILE
+
+
+def _supplier_alias_matches(normalized_supplier: str, normalized_alias: str) -> bool:
+    supplier_tokens = normalized_supplier.split()
+    alias_tokens = normalized_alias.split()
+    if not supplier_tokens or not alias_tokens or len(alias_tokens) > len(supplier_tokens):
+        return False
+    width = len(alias_tokens)
+    return any(
+        supplier_tokens[index : index + width] == alias_tokens
+        for index in range(len(supplier_tokens) - width + 1)
+    )
+
+
+def supplier_alias_match_score(supplier: str, alias: str) -> tuple[int, int] | None:
+    normalized_supplier = _normalize_supplier(supplier)
+    normalized_alias = _normalize_supplier(alias)
+    if not normalized_alias or not _supplier_alias_matches(normalized_supplier, normalized_alias):
+        return None
+    return len(normalized_alias.split()), len(normalized_alias)
 
 
 def _profiles_for_resolution(profiles_path: str | Path | None) -> List[SupplierExtractionProfile]:
@@ -137,8 +181,9 @@ def _profiles_for_resolution(profiles_path: str | Path | None) -> List[SupplierE
                 logger.warning(f"供应商 Profile 路径不存在，使用内置 Profile: {profiles_path}")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             logger.warning(f"供应商 Profile 加载失败，使用内置 Profile: {profiles_path}, error={exc}")
-    # 过滤掉已标记废弃的 Profile
-    profiles = [p for p in profiles if not p.deprecated]
+    # External Profiles are runtime configuration. Missing or incomplete
+    # approval metadata must fail closed instead of silently becoming active.
+    profiles = [profile for profile in profiles if is_runtime_approved_profile(profile)]
     profiles.extend(BUILTIN_PROFILES)
     return profiles
 
@@ -161,13 +206,51 @@ def load_supplier_profiles(path: str | Path) -> List[SupplierExtractionProfile]:
                 key=key,
                 aliases=[str(alias) for alias in item.get("aliases", []) if str(alias).strip()],
                 prompt_notes=[str(note) for note in item.get("prompt_notes", []) if str(note).strip()],
+                authoritative_total_methods=[str(method) for method in item.get("authoritative_total_methods", []) if str(method).strip()],
+                line_item_aliases={
+                    str(label).strip().lower(): str(item_type).strip()
+                    for label, item_type in (item.get("line_item_aliases") or {}).items()
+                    if str(label).strip() and str(item_type).strip()
+                },
                 image_page_policy=str(item.get("image_page_policy") or "all"),
-                version=int(item.get("version") or 1),
+                version=_profile_version(item.get("version")),
                 failure_count=int(item.get("failure_count") or 0),
                 deprecated=bool(item.get("deprecated", False)),
+                status=str(item.get("status") or "draft").strip().lower(),
+                approved_by=str(item.get("approvedBy") or item.get("approved_by") or "").strip(),
+                approved_at=str(item.get("approvedAt") or item.get("approved_at") or "").strip(),
+                created_from=str(item.get("created_from") or "").strip(),
             )
         )
     return profiles
+
+
+def _profile_version(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def is_runtime_approved_profile(profile: SupplierExtractionProfile) -> bool:
+    return bool(
+        not profile.deprecated
+        and profile.status == "approved"
+        and profile.version > 0
+        and profile.approved_by
+        and _is_timezone_aware_iso_timestamp(profile.approved_at)
+    )
+
+
+def _is_timezone_aware_iso_timestamp(value: str) -> bool:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return False
+    try:
+        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def _normalize_supplier(value: str) -> str:
@@ -235,9 +318,12 @@ def generate_profile_from_extraction(
         "key": key,
         "aliases": [supplier.lower().strip()] if supplier else [],
         "prompt_notes": prompt_notes,
+        "authoritative_total_methods": [],
+        "line_item_aliases": _line_item_aliases(pdf_rows),
         "image_page_policy": image_page_policy,
         "version": 1,
         "created_from": "auto_generation",
+        "status": "draft",
         "extraction_quality_level": extraction_quality_level,
     }
 
@@ -248,6 +334,24 @@ def generate_profile_from_extraction(
             profile["column_mapping"] = column_mapping
 
     return profile
+
+
+def _line_item_aliases(pdf_rows: list) -> Dict[str, str]:
+    """Build a reviewable label map; callers still govern whether it becomes active."""
+    aliases: Dict[str, str] = {}
+    conflicts: set[str] = set()
+    for row in pdf_rows or []:
+        description = " ".join(str(getattr(row, "description", "") or "").lower().split())
+        item_type = str(getattr(row, "item_type", "") or "").strip()
+        if not description or item_type in {"", "unknown"}:
+            continue
+        if description in aliases and aliases[description] != item_type:
+            conflicts.add(description)
+            continue
+        aliases[description] = item_type
+    for description in conflicts:
+        aliases.pop(description, None)
+    return dict(sorted(aliases.items()))
 
 
 def save_supplier_profile(profile: dict, output_dir: Path) -> Path:

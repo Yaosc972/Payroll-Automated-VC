@@ -14,10 +14,10 @@ def _is_xls(path: Path) -> bool:
     return path.suffix.lower() == ".xls"
 
 
-NAME_KEYWORDS = ("姓名", "员工姓名", "name", "employee", "associate")
+NAME_KEYWORDS = ("姓名", "员工姓名", "员工名称", "name", "employee", "associate")
 ID_KEYWORDS = ("工号", "员工id", "employee id", "employee number", "employee_id", "id")
 HOURS_KEYWORDS = ("时长", "工时", "hours", "hour", "time", "accounting time")
-AMOUNT_KEYWORDS = ("费用", "金额", "合计", "amount", "total", "pay", "cost")
+AMOUNT_KEYWORDS = ("费用", "金额", "合计", "总额", "薪资", "工资", "amount", "total", "pay", "cost")
 AMOUNT_PREFERRED_KEYWORDS = ("费用总计(含税)", "含税", "total", "amount")
 CURRENCY_KEYWORDS = ("币种", "currency")
 REOCR_NAME_KEYWORDS = ("姓名", "员工", "employee", "name", "associate")
@@ -38,7 +38,10 @@ def list_workbook_sheets(path: Path) -> List[str]:
         return workbook.sheet_names()
     from openpyxl import load_workbook
     workbook = load_workbook(path, data_only=True, read_only=True)
-    return workbook.sheetnames
+    try:
+        return list(workbook.sheetnames)
+    finally:
+        workbook.close()
 
 
 def suggest_mapping(path: Path, sheet_name: str) -> Dict[str, Any]:
@@ -58,11 +61,12 @@ def suggest_mapping(path: Path, sheet_name: str) -> Dict[str, Any]:
             "amount": _amount_header(headers),
             "currency": _first_header(headers, CURRENCY_KEYWORDS),
         },
+        "amountColumnCandidates": _amount_component_headers(headers),
         "previewRows": [row for row in preview if any(value not in (None, "") for value in row.values())][:20],
     }
 
 
-def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> List[LaborLineItem]:
+def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, Any]) -> List[LaborLineItem]:
     _validate_mapping(mapping)
     sheet, rows = _sheet_rows(path, sheet_name, max_rows=None)
     if not rows:
@@ -73,9 +77,18 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
     for required in ("name", "hours", "amount"):
         if mapping[required] not in index:
             raise ValueError(f"字段映射无效：找不到 {mapping[required]}")
+    amount_columns = _mapped_amount_columns(mapping)
+    for header in amount_columns:
+        if header not in index:
+            raise ValueError(f"字段映射无效：找不到 {header}")
+    amount_breakdown_headers = _amount_breakdown_headers(headers, amount_columns)
+    amount_context_headers = _amount_context_headers(headers)
     # 收集所有列名（用于表头检测）
     header_names = set()
     for col_name in mapping.values():
+        if isinstance(col_name, list):
+            header_names.update(str(item).strip().lower() for item in col_name if str(item).strip())
+            continue
         if col_name:
             header_names.add(str(col_name).strip().lower())
 
@@ -86,10 +99,28 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
         name_str = str(name).strip() if name is not None else ""
         if name_str and name_str.lower() in header_names:
             continue
+        if _is_summary_name(name_str):
+            continue
         if name in (None, ""):
             continue
         hours = parse_number(_value(row, index[mapping["hours"]]))
-        amount = parse_number(_value(row, index[mapping["amount"]]))
+        amount_components = {
+            header: parse_number(_value(row, index[header]))
+            for header in amount_columns
+        }
+        amount = round(sum(amount_components.values()), 2)
+        amount_breakdown = {
+            header: parse_number(_value(row, index[header]))
+            for header in amount_breakdown_headers
+            if abs(parse_number(_value(row, index[header]))) > 0.0005
+        }
+        amount_context = {
+            header: display_name(_value(row, index[header]))
+            for header in amount_context_headers
+            if display_name(_value(row, index[header]))
+        }
+        if hours == 0 and amount == 0:
+            continue
         currency = ""
         employee_id = ""
         if mapping.get("employeeId") and mapping["employeeId"] in index:
@@ -115,6 +146,9 @@ def read_workbook_rows(path: Path, sheet_name: str, mapping: Dict[str, str]) -> 
                 confidence=1.0,
                 evidence_text="",
                 warehouse_id=warehouse_id,
+                amount_components=amount_components,
+                amount_breakdown=amount_breakdown,
+                amount_context=amount_context,
             )
         )
     return result
@@ -245,14 +279,17 @@ def _sheet_rows(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any,
 def _sheet_rows_xlsx(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any, List[tuple[Any, ...]]]:
     from openpyxl import load_workbook
     workbook = load_workbook(path, data_only=True, read_only=True)
-    if sheet_name not in workbook.sheetnames:
-        raise ValueError(f"找不到工作表：{sheet_name}")
-    sheet = workbook[sheet_name]
-    if hasattr(sheet, "reset_dimensions"):
-        sheet.reset_dimensions()
-    iterator = sheet.iter_rows(values_only=True, max_row=max_rows)
-    rows = [row for row in iterator if any(value not in (None, "") for value in row)]
-    return sheet, rows
+    try:
+        if sheet_name not in workbook.sheetnames:
+            raise ValueError(f"找不到工作表：{sheet_name}")
+        sheet = workbook[sheet_name]
+        if hasattr(sheet, "reset_dimensions"):
+            sheet.reset_dimensions()
+        iterator = sheet.iter_rows(values_only=True, max_row=max_rows)
+        rows = [row for row in iterator if any(value not in (None, "") for value in row)]
+        return sheet, rows
+    finally:
+        workbook.close()
 
 
 def _sheet_rows_xls(path: Path, sheet_name: str, max_rows: int | None) -> tuple[Any, List[tuple[Any, ...]]]:
@@ -302,7 +339,7 @@ def _detect_header_row(rows: List[tuple[Any, ...]]) -> int:
 
 
 def _name_header(headers: List[str]) -> str:
-    exact = {"姓名", "员工姓名", "employee name", "employee_name", "associate name", "worker name"}
+    exact = {"姓名", "员工姓名", "name", "employee name", "employee_name", "associate name", "worker name"}
     for header in headers:
         if header.lower() in exact:
             return header
@@ -326,6 +363,8 @@ def _hours_header(headers: List[str]) -> str:
         for header in headers:
             if header.lower() == target:
                 return header
+    if any(header.strip() == "总计" for header in headers) and any(_is_rate_header(header) for header in headers):
+        return next(header for header in headers if header.strip() == "总计")
     return _first_header(headers, HOURS_KEYWORDS)
 
 
@@ -334,6 +373,9 @@ def _preferred_amount_header(headers: List[str]) -> str:
         for header in headers:
             if header == target:
                 return header
+    for header in headers:
+        if header.strip() == "总额":
+            return header
     for header in headers:
         if "不含税" in header:
             return header
@@ -350,6 +392,46 @@ def _amount_header(headers: List[str]) -> str:
     return _first_header([header for header in headers if not _is_hours_measure_header(header)], AMOUNT_KEYWORDS)
 
 
+def _amount_component_headers(headers: List[str]) -> List[str]:
+    monetary_signal = re.compile(
+        r"(?:金额|费用|薪资|工资|餐补|补贴|奖金|交通|合计|总额|amount|total|salary|pay|cost|fee|bonus|allowance|meal|transport|expense)",
+        re.IGNORECASE,
+    )
+    rate_signal = re.compile(r"(?:时薪|单价|费率|hourly\s+rate|bill\s+rate|pay\s+rate|unit\s+price)", re.IGNORECASE)
+    return [
+        header
+        for header in headers
+        if monetary_signal.search(header)
+        and not rate_signal.search(header)
+        and not _is_hours_measure_header(header)
+    ]
+
+
+def _amount_breakdown_headers(headers: List[str], mapped_amount_columns: List[str]) -> List[str]:
+    mapped = {str(header or "").strip() for header in mapped_amount_columns}
+    return [
+        header
+        for header in _amount_component_headers(headers)
+        if header not in mapped and not _is_aggregate_amount_header(header)
+    ]
+
+
+def _is_aggregate_amount_header(header: str) -> bool:
+    text = str(header or "").strip()
+    return bool(
+        re.search(
+            r"(?:费用总计|非固费用总计|总费用|总金额|金额合计|成本总计|总成本|grand\s+total|total\s+(?:cost|amount|pay)|(?:cost|amount|pay)\s+total)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _amount_context_headers(headers: List[str]) -> List[str]:
+    signal = re.compile(r"(?:备注|说明|描述|摘要|note|remark|memo|comment|description)", re.IGNORECASE)
+    return [header for header in headers if signal.search(str(header or ""))]
+
+
 def _is_hours_measure_header(header: str) -> bool:
     lowered = header.lower()
     if "时长" in header or "工时" in header:
@@ -357,6 +439,16 @@ def _is_hours_measure_header(header: str) -> bool:
     if "accounting time" in lowered or "total time" in lowered:
         return True
     return bool(re.search(r"\bhours?\b", lowered))
+
+
+def _is_rate_header(header: str) -> bool:
+    return bool(
+        re.search(
+            r"(?:时薪|单价|费率|hourly\s+rate|bill\s+rate|pay\s+rate|unit\s+price)",
+            str(header or ""),
+            re.IGNORECASE,
+        )
+    )
 
 
 def _employee_id_header(headers: List[str]) -> str:
@@ -500,6 +592,12 @@ def _is_total_row(row: Dict[str, Any]) -> bool:
     return False
 
 
+def _is_summary_name(value: Any) -> bool:
+    text = display_name(value).strip().casefold()
+    text = re.sub(r"[\s:：]+$", "", text)
+    return text in {"total", "totals", "subtotal", "sub total", "grand total", "合计", "总计", "小计"}
+
+
 def _has_identity_value(row: Dict[str, Any]) -> bool:
     for header, value in row.items():
         lowered = header.lower()
@@ -519,7 +617,20 @@ def _value(row: tuple[Any, ...], index: int) -> Any:
     return row[index]
 
 
-def _validate_mapping(mapping: Dict[str, str]) -> None:
+def _validate_mapping(mapping: Dict[str, Any]) -> None:
     missing = [field for field in ("name", "hours", "amount") if not mapping.get(field)]
     if missing:
         raise ValueError("字段映射缺少姓名、工时或金额，无法比对。")
+
+
+def _mapped_amount_columns(mapping: Dict[str, Any]) -> List[str]:
+    configured = mapping.get("amountColumns") or mapping.get("amount_columns") or []
+    if isinstance(configured, str):
+        configured = [configured]
+    primary = str(mapping.get("amount") or "").strip()
+    result: List[str] = []
+    for value in [primary, *configured]:
+        header = str(value or "").strip()
+        if header and header not in result:
+            result.append(header)
+    return result

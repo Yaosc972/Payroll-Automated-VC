@@ -11,6 +11,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .models import LaborLineItem
+from .presentation import build_labor_presentation, validate_labor_presentation
 
 
 REPORT_SHEETS = ["核对结论", "识别完整度", "核对摘要", "全员对账明细", "仓库金额汇总", "金额差异员工", "工时待确认", "不在本批发票", "姓名格式差异", "明细识别待确认", "PDF发票明细", "Excel账单明细", "上传字段对应关系"]
@@ -26,19 +27,45 @@ def build_labor_report(
     extraction_quality: Dict[str, Any] | None = None,
     reconciliation_diagnostics: Dict[str, Any] | None = None,
     ai_cache_audit: Dict[str, Any] | None = None,
+    presentation: Dict[str, Any] | None = None,
 ) -> None:
+    presentation = presentation or build_labor_presentation(
+        comparison,
+        excel_record_count=len(excel_rows),
+    )
+    presentation_errors = validate_labor_presentation(presentation)
+    if presentation_errors:
+        raise ValueError("核对展示口径校验失败: " + "；".join(presentation_errors))
+    presentation_summary = presentation["summary"]
+    rows = presentation["employeeRows"]
+    candidate_matches = presentation["candidateMatches"]
+    report_summary = {
+        **(comparison.get("summary", {}) or {}),
+        "displayEmployeeCount": presentation_summary["employeeCount"],
+        "differenceEmployeeCount": presentation_summary["differenceEmployeeCount"],
+        "passedEmployeeCount": presentation_summary["passedEmployeeCount"],
+        "candidateMatchCount": presentation_summary["candidateMatchCount"],
+        "reviewItemCount": presentation_summary["reviewItemCount"],
+        "amountImpact": presentation_summary["amountImpact"],
+        "hoursImpact": presentation_summary["hoursImpact"],
+        "excelRecordCount": presentation_summary["excelRecordCount"],
+    }
     workbook = Workbook()
     workbook.remove(workbook.active)
 
     # 写入核对结论（第一个sheet）
-    _write_conclusion(workbook, comparison.get("summary", {}), warehouse_comparison)
+    _write_conclusion(
+        workbook,
+        comparison.get("summary", {}),
+        warehouse_comparison,
+        presentation_summary=presentation_summary,
+    )
 
     # 写入质量评分（第二个sheet）
     if extraction_quality:
         _write_quality(workbook, extraction_quality)
 
-    _write_summary(workbook, comparison.get("summary", {}))
-    rows = comparison.get("rows", [])
+    _write_summary(workbook, report_summary)
     _write_reconciliation_detail(workbook, rows)
     if warehouse_comparison:
         _write_warehouse_summary(workbook, warehouse_comparison)
@@ -49,7 +76,7 @@ def build_labor_report(
     _write_rows(workbook, "金额差异员工", _filter(rows, "金额差异"))
     _write_rows(workbook, "工时待确认", [row for row in rows if row.get("matchStatus") == "工时不一致" or "工时需复核" in row.get("riskFlags", [])])
     _write_rows(workbook, "不在本批发票", [row for row in rows if row.get("matchStatus") in {"PDF有Excel无", "Excel有PDF无", "疑似姓名匹配"}])
-    _write_candidate_matches(workbook, comparison.get("candidateMatches", []))
+    _write_candidate_matches(workbook, candidate_matches)
     _write_rows(workbook, "明细识别待确认", [row for row in rows if row.get("matchStatus") == "低置信度抽取" or "低置信度抽取" in row.get("riskFlags", [])])
     _write_detail(workbook, "PDF发票明细", pdf_rows)
     _write_detail(workbook, "Excel账单明细", excel_rows)
@@ -68,11 +95,21 @@ def build_labor_business_html_report(
     invoice_scope: str = "",
     warehouse_comparison: Dict[str, Any] | None = None,
     excel_record_count: int | None = None,
+    detail_coverage_complete: bool | None = None,
+    presentation: Dict[str, Any] | None = None,
 ) -> None:
+    presentation = presentation or build_labor_presentation(
+        comparison,
+        excel_record_count=excel_record_count,
+    )
+    presentation_errors = validate_labor_presentation(presentation)
+    if presentation_errors:
+        raise ValueError("核对展示口径校验失败: " + "；".join(presentation_errors))
+    presentation_summary = presentation["summary"]
     summary = comparison.get("summary", {}) or {}
     warehouse_summary = (warehouse_comparison or {}).get("summary", {}) or {}
     batch_summary = warehouse_summary or summary
-    rows = comparison.get("rows", []) or []
+    rows = presentation["employeeRows"]
     conclusion = _business_conclusion(summary, rows)
     warehouse_needs_review = bool(
         warehouse_summary
@@ -90,27 +127,31 @@ def build_labor_business_html_report(
     detail_pdf_total = _num(summary.get("pdfAmountTotal"))
     detail_excel_total = _num(summary.get("excelAmountTotal"))
     pdf_employee_count = int(_num(summary.get("pdfEmployeeCount")))
-    excel_employee_count = int(_num(summary.get("excelEmployeeCount")))
-    matched_count = int(_num(summary.get("passedCount")))
-    diff_count = max(
-        int(_num(summary.get("amountDiffCount"))),
-        sum(1 for row in rows if _business_row_status(row) != "一致"),
-    )
+    excel_employee_count = int(_num(presentation_summary.get("employeeCount")))
+    matched_count = int(_num(presentation_summary.get("passedEmployeeCount")))
+    diff_count = int(_num(presentation_summary.get("differenceEmployeeCount")))
     diff_warehouses = [str(item) for item in (warehouse_summary.get("diffWarehouses") or []) if str(item)]
     warehouse_label = f"仓库 {'、'.join(diff_warehouses)}" if diff_warehouses else "需要确认的仓库"
-    displayed_employee_count = excel_employee_count or len(rows)
-    detail_rows_incomplete = not rows and bool(pdf_employee_count or excel_employee_count or pdf_total or excel_total)
+    displayed_employee_count = int(_num(presentation_summary.get("employeeCount")))
+    detail_rows_incomplete = detail_coverage_complete is False or pdf_employee_count == 0 or (
+        not rows and bool(pdf_employee_count or excel_employee_count or pdf_total or excel_total)
+    )
+    if detail_rows_incomplete and conclusion == "总账通过":
+        conclusion = "总账通过，但员工明细待确认"
     full_excel_scope_note = (
         f"整批账单已读取 {excel_record_count} 行，当前展示的是需要确认的 {displayed_employee_count} 名员工明细，不代表账单只有这些员工。"
         if excel_record_count and excel_record_count > displayed_employee_count
         else ""
     )
     detail_scope_title = "待确认员工明细" if warehouse_needs_review else "员工对账明细"
-    detail_scope_note = (
-        f"{full_excel_scope_note or '只展示需要确认的仓库员工明细，不代表账单只有这些员工。'}当前范围：{warehouse_label}，账单金额 {_money(detail_excel_total)}。"
-        if warehouse_needs_review
-        else "员工明细用于确认每位员工的发票金额和账单金额是否一致。"
-    )
+    if detail_rows_incomplete:
+        detail_scope_note = "当前 PDF 未记录完整员工明细，页面不能证明账单中的每位员工均已与发票逐一核对。"
+    elif warehouse_needs_review:
+        detail_scope_note = (
+            f"{full_excel_scope_note or '只展示需要确认的仓库员工明细，不代表账单只有这些员工。'}当前范围：{warehouse_label}，账单金额 {_money(detail_excel_total)}。"
+        )
+    else:
+        detail_scope_note = "员工明细用于确认每位员工的发票金额和账单金额是否一致。"
     auto_fix_html = _business_auto_fix_section(rows)
     amount_layers_html = _business_amount_layers_section(
         pdf_total=pdf_total,
@@ -127,7 +168,7 @@ def build_labor_business_html_report(
         details_incomplete=detail_rows_incomplete,
         warehouse_needs_review=warehouse_needs_review,
     )
-    suspected_match_html = _business_suspected_match_section(comparison.get("candidateMatches", []) or [])
+    suspected_match_html = _business_suspected_match_section(presentation["candidateMatches"])
     pending_exception_html = _business_pending_exception_section(rows)
     download_section_html = _business_download_section()
     decision_panel_html = _business_decision_panel(
@@ -646,28 +687,102 @@ def _write_projection_manual_review(workbook: Workbook, rows: List[Dict[str, Any
     _format(sheet)
 
 
-def _write_conclusion(workbook: Workbook, summary: Dict[str, Any], warehouse_comparison: Dict[str, Any] | None = None) -> None:
+def _write_conclusion(
+    workbook: Workbook,
+    summary: Dict[str, Any],
+    warehouse_comparison: Dict[str, Any] | None = None,
+    *,
+    presentation_summary: Dict[str, Any] | None = None,
+) -> None:
     """Write the conclusion sheet as the first sheet."""
     sheet = workbook.create_sheet("核对结论", 0)
 
     # 核对结论
+    wc_summary = (warehouse_comparison or {}).get("summary", {})
+    warehouse_rows = (warehouse_comparison or {}).get("rows", []) or []
+    blocking_statuses = {"amount_difference", "missing_pdf_invoice", "extra_pdf_invoice", "needs_review"}
+    blocking_count = sum(
+        1 for row in warehouse_rows if str(row.get("reconciliationStatus") or "") in blocking_statuses
+    )
+    blocking_count = max(blocking_count, int(_num(wc_summary.get("exceptionCount"))))
     conclusion_level = summary.get("conclusionLevel", "pass")
     conclusion_message = summary.get("conclusionMessage", "")
+    if wc_summary.get("totalPassed") is False or blocking_count:
+        blocking_count = max(blocking_count, 1)
+        conclusion_level = "critical"
+        conclusion_message = f"仓库核对存在 {blocking_count} 项异常，不能直接放行。"
+    elif _num(wc_summary.get("allocationIssueCount")) > 0 and conclusion_level == "pass":
+        conclusion_level = "warning"
+        conclusion_message = "存在跨仓归属问题，需业务确认后再放行。"
     level_display = {"pass": "通过", "warning": "需关注", "critical": "需人工复核"}.get(conclusion_level, conclusion_level)
     sheet.append(["核对结论", f"{level_display} - {conclusion_message}"])
     sheet.append([])
 
     # 总金额差异
-    wc_summary = (warehouse_comparison or {}).get("summary", {})
     amount_delta_total = wc_summary.get("amountDeltaTotal", summary.get("amountDeltaTotal", 0))
     amount_delta_pct = abs(amount_delta_total) / max(abs(wc_summary.get("pdfAmountTotal", 0)), abs(wc_summary.get("excelAmountTotal", 0)), 1.0) * 100
     sheet.append(["总金额差异", f"${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"])
     sheet.append([])
 
+    if warehouse_comparison:
+        warehouse_rows = warehouse_comparison.get("rows", []) or []
+        full_excel_amount = _num(
+            wc_summary["excelAmountTotal"]
+            if wc_summary.get("excelAmountTotal") is not None
+            else summary.get("excelAmountTotal")
+        )
+        full_amount_delta = _num(
+            wc_summary["amountDeltaTotal"]
+            if wc_summary.get("amountDeltaTotal") is not None
+            else summary.get("amountDeltaTotal")
+        )
+        comparable_excel_amount = _num(
+            wc_summary["comparableExcelAmountTotal"]
+            if wc_summary.get("comparableExcelAmountTotal") is not None
+            else full_excel_amount
+        )
+        comparable_amount_delta = _num(
+            wc_summary["comparableAmountDeltaTotal"]
+            if wc_summary.get("comparableAmountDeltaTotal") is not None
+            else full_amount_delta
+        )
+        missing_pdf_metric_available = wc_summary.get("missingPdfAmountTotal") is not None
+        warehouse_status_available = bool(warehouse_rows) and all(
+            "reconciliationStatus" in row for row in warehouse_rows
+        )
+        missing_pdf_warehouses = [
+            str(row.get("warehouseId") or "未识别仓库")
+            for row in warehouse_rows
+            if row.get("reconciliationStatus") == "missing_pdf_invoice"
+        ]
+        sheet.append(["仓库核对金额口径"])
+        sheet.append(["已上传权威PDF总额", _money(_num(wc_summary.get("pdfAmountTotal")))])
+        sheet.append(["整批Excel总额", _money(full_excel_amount)])
+        sheet.append(["整批金额差异", _signed_money(full_amount_delta)])
+        sheet.append(["可比仓库Excel总额", _money(comparable_excel_amount)])
+        sheet.append(["可比仓库金额差异", _signed_money(comparable_amount_delta)])
+        sheet.append([
+            "缺少PDF发票金额",
+            _money(_num(wc_summary.get("missingPdfAmountTotal")))
+            if missing_pdf_metric_available
+            else "历史结果未记录",
+        ])
+        sheet.append([
+            "缺少PDF发票仓库",
+            "、".join(missing_pdf_warehouses) or "无"
+            if warehouse_status_available
+            else "历史结果未记录",
+        ])
+        sheet.append([])
+
     # 人数覆盖
     pdf_count = summary.get("pdfEmployeeCount", 0)
-    excel_count = summary.get("excelEmployeeCount", 0)
-    not_in_invoice = summary.get("notInInvoiceCount", 0)
+    presentation_summary = presentation_summary or {}
+    excel_count = presentation_summary.get("employeeCount", summary.get("excelEmployeeCount", 0))
+    not_in_invoice = presentation_summary.get(
+        "notInInvoiceEmployeeCount",
+        summary.get("notInInvoiceCount", 0),
+    )
     sheet.append(["PDF覆盖人数", pdf_count])
     sheet.append(["账单总人数", excel_count])
     sheet.append(["不在本批发票", f"{not_in_invoice}人"])
@@ -761,6 +876,17 @@ def _write_quality(workbook: Workbook, extraction_quality: Dict[str, Any]) -> No
             sheet.append(["", issue])
         sheet.append([])
 
+    warehouse_evidence = metrics.get("warehouseEvidence", {})
+    if warehouse_evidence:
+        sheet.append(["仓库证据状态"])
+        sheet.append(["证据待复核仓库数", warehouse_evidence.get("unresolvedEvidenceCount", 0)])
+        sheet.append(["待复核仓库", "、".join(warehouse_evidence.get("unresolvedEvidenceWarehouses", [])) or "无"])
+        sheet.append(["缺少PDF发票仓库数", warehouse_evidence.get("missingPdfInvoiceCount", 0)])
+        sheet.append(["缺少PDF发票仓库", "、".join(warehouse_evidence.get("missingPdfInvoiceWarehouses", [])) or "无"])
+        sheet.append(["多余PDF发票仓库数", warehouse_evidence.get("extraPdfInvoiceCount", 0)])
+        sheet.append(["多余PDF发票仓库", "、".join(warehouse_evidence.get("extraPdfInvoiceWarehouses", [])) or "无"])
+        sheet.append([])
+
     # 名称模式
     name_patterns = metrics.get("namePatterns", {})
     if name_patterns:
@@ -782,7 +908,7 @@ def _write_summary(workbook: Workbook, summary: Dict[str, Any]) -> None:
 
 def _write_reconciliation_detail(workbook: Workbook, rows: List[Dict[str, Any]]) -> None:
     sheet = workbook.create_sheet("全员对账明细")
-    headers = ["员工", "状态", "PDF工时", "Excel工时", "工时差异", "PDF金额", "Excel金额", "金额差异", "风险标记", "来源"]
+    headers = ["员工", "状态", "PDF工时", "Excel工时", "工时差异", "PDF金额", "Excel金额", "金额差异", "差异解释", "风险标记", "来源"]
     sheet.append(headers)
     for row in rows:
         risk_flags = row.get("riskFlags", [])
@@ -795,6 +921,7 @@ def _write_reconciliation_detail(workbook: Workbook, rows: List[Dict[str, Any]])
             row.get("pdfAmountTotal", 0),
             row.get("excelAmountTotal", 0),
             row.get("amountDelta", 0),
+            row.get("amountDifferenceExplanation", ""),
             "；".join(_sanitize_business_text(item) for item in risk_flags) if isinstance(risk_flags, list) else _sanitize_business_text(risk_flags),
             row.get("sourceRefs", ""),
         ])
@@ -804,7 +931,11 @@ def _write_reconciliation_detail(workbook: Workbook, rows: List[Dict[str, Any]])
 
 def _write_warehouse_summary(workbook: Workbook, warehouse_comparison: Dict[str, Any]) -> None:
     sheet = workbook.create_sheet("仓库金额汇总")
-    sheet.append(["仓库", "状态", "PDF人数/发票数", "Excel人数", "PDF工时", "Excel工时", "PDF金额", "Excel金额", "金额差异", "主要差异来源"])
+    sheet.append([
+        "仓库", "核对状态", "PDF人数/发票数", "Excel人数", "PDF工时", "Excel工时",
+        "PDF金额", "Excel金额", "金额差异", "PDF证据文件", "PDF证据页", "证据状态",
+        "排除附件页", "主要差异来源",
+    ])
     for row in warehouse_comparison.get("rows", []):
         attribution = row.get("attribution", [])
         attr_summary = "；".join(
@@ -821,6 +952,10 @@ def _write_warehouse_summary(workbook: Workbook, warehouse_comparison: Dict[str,
             row.get("pdfAmountTotal", 0),
             row.get("excelAmountTotal", 0),
             row.get("amountDelta", 0),
+            row.get("pdfEvidenceFile", ""),
+            row.get("pdfEvidencePage", "") or "",
+            row.get("evidenceStatus", ""),
+            ", ".join(str(page) for page in row.get("excludedPdfPages", []) or []),
             attr_summary,
         ])
     _format(sheet)
@@ -982,6 +1117,7 @@ def _write_rows(workbook: Workbook, title: str, rows: List[Dict[str, Any]]) -> N
         ("pdfAmountTotal", "PDF金额"),
         ("excelAmountTotal", "Excel金额"),
         ("amountDelta", "金额差异"),
+        ("amountDifferenceExplanation", "差异解释"),
         ("riskFlags", "提示"),
         ("sourceRefs", "来源"),
     ]
@@ -1008,8 +1144,15 @@ def _write_detail(workbook: Workbook, title: str, rows: List[LaborLineItem]) -> 
         ("employee_id", "工号"),
         ("employee_name_raw", "原始员工姓名"),
         ("employee_name_normalized", "标准员工姓名"),
+        ("description", "项目原文"),
+        ("item_type", "项目类型"),
+        ("quantity", "数量"),
+        ("unit", "数量单位"),
         ("hours", "工时"),
         ("amount", "金额"),
+        ("amount_components", "金额组成"),
+        ("amount_breakdown", "金额明细"),
+        ("amount_context", "金额备注"),
         ("currency", "币种"),
         ("confidence", "识别程度"),
         ("evidence_text", "原文证据"),
@@ -1022,11 +1165,12 @@ def _write_detail(workbook: Workbook, title: str, rows: List[LaborLineItem]) -> 
     _format(sheet)
 
 
-def _write_mapping(workbook: Workbook, mapping: Dict[str, str]) -> None:
+def _write_mapping(workbook: Workbook, mapping: Dict[str, Any]) -> None:
     sheet = workbook.create_sheet("上传字段对应关系")
     sheet.append(["字段", "Excel列"])
     for key, label in mapping.items():
-        sheet.append([_business_mapping_key(key), label])
+        display_label = " + ".join(str(value) for value in label) if isinstance(label, (list, tuple)) else label
+        sheet.append([_business_mapping_key(key), display_label])
     _format(sheet)
 
 
@@ -1114,10 +1258,16 @@ def _business_employee_recognition_section(
     record_text = f"整批账单已读取 {excel_record_count} 行。" if excel_record_count else "整批账单已完成读取。"
     if details_incomplete:
         status = "员工明细未完整展开"
-        explanation = (
-            f"{record_text}当前还没有可逐项展示的员工明细。"
-            "这不影响总账金额判断，但不能直接作为最终员工明细结论。"
-        )
+        if pdf_employee_count == 0:
+            explanation = (
+                f"{record_text}当前 PDF 未记录员工明细，账单中的员工尚不能视为已与发票逐一核对。"
+                "这不影响总账金额判断，但不能直接作为最终员工明细结论。"
+            )
+        else:
+            explanation = (
+                f"{record_text}当前还没有可逐项展示的员工明细。"
+                "这不影响总账金额判断，但不能直接作为最终员工明细结论。"
+            )
     elif warehouse_needs_review:
         status = "只展开需要确认的员工明细"
         explanation = (
@@ -1433,6 +1583,9 @@ def _business_note(row: Dict[str, Any]) -> str:
     flags = row.get("riskFlags") if isinstance(row.get("riskFlags"), list) else []
     amount_delta = abs(_num(row.get("amountDelta")))
     hours_delta = abs(_num(row.get("hoursDelta")))
+    amount_explanation = str(row.get("amountDifferenceExplanation") or "").strip()
+    if amount_explanation:
+        return amount_explanation.rstrip("。")
     notes: List[str] = []
     if any("合并" in str(flag) for flag in flags):
         notes.append("同一员工可能存在多行账单，需要确认是否应合并")
@@ -1460,6 +1613,8 @@ def _business_action_suggestion(row: Dict[str, Any]) -> str:
     flags = row.get("riskFlags") if isinstance(row.get("riskFlags"), list) else []
     amount_delta = abs(_num(row.get("amountDelta")))
     hours_delta = abs(_num(row.get("hoursDelta")))
+    if row.get("amountDifferenceReasonCode") == "excel_amount_component_delta":
+        return "确认 Excel 额外费用项是否应包含在本批发票中"
     if status == "Excel有PDF无":
         return "确认本员工是否属于本批发票"
     if status == "PDF有Excel无":
@@ -1505,6 +1660,19 @@ def _business_detail_value(key: str, value: Any) -> Any:
         }.get(str(value), _sanitize_business_text(value))
     if key in {"employee_name_raw", "employee_name_normalized", "evidence_text"}:
         return _sanitize_business_text(value)
+    if key == "item_type":
+        return {
+            "worked_hours": "工作工时",
+            "meal_allowance": "餐补/餐券",
+            "transport_allowance": "交通补贴",
+            "bonus": "奖金/津贴",
+            "allowance": "补贴",
+            "expense": "费用",
+            "other": "其他项目",
+            "unknown": "未分类",
+        }.get(str(value), _sanitize_business_text(value))
+    if key in {"amount_components", "amount_breakdown", "amount_context"} and isinstance(value, dict):
+        return " + ".join(f"{label}: {amount}" for label, amount in value.items())
     return value
 
 
@@ -1513,6 +1681,8 @@ def _business_mapping_key(value: Any) -> str:
         "name": "姓名",
         "hours": "工时",
         "amount": "金额",
+        "amountColumns": "金额组成列",
+        "amountScope": "金额口径",
         "employee_id": "工号",
         "employeeId": "工号",
         "currency": "币种",
@@ -1610,10 +1780,10 @@ def _apply_status_fills(sheet, status_column: int, delta_column: int) -> None:
             delta = float(sheet.cell(row=row, column=delta_column).value or 0)
         except (TypeError, ValueError):
             delta = 0.0
-        if "差异" in status or "不一致" in status or abs(delta) >= 0.1:
-            fill = diff_fill
-        elif "确认" in status or "疑似" in status or "识别不完整" in status:
+        if any(marker in status for marker in ("待复核", "缺少PDF发票", "多余PDF发票", "确认", "疑似", "识别不完整")):
             fill = warn_fill
+        elif "差异" in status or "不一致" in status or abs(delta) >= 0.1:
+            fill = diff_fill
         elif "通过" in status or "一致" in status:
             fill = ok_fill
         else:

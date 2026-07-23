@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "Armz KW25 德文文本发票",
+      "materialGroup": "KW25 Armz GmbH",
+      "runId": "labor_20260712_001326_083645_2de6b66a",
+      "evidenceLevel": "独立金额闭合与员工/仓库结构复核，尚未业务签字",
+      "expected": {
+        "pdfAmountTotal": 248930.05,
+        "excelAmountTotal": 248491.82,
+        "amountDeltaTotal": 438.23,
+        "batchGuardStatus": "ok",
+        "detailCoverageRatio": 1.0
+      }
+    },
+    {
+      "name": "Prompt 缺报账仓库图片发票",
+      "materialGroup": "prompt缺2仓和9仓未报账",
+      "runId": "labor_20260711_005852_391551_9211baef",
+      "evidenceLevel": "整批总额与仓库差异人工复核；员工明细仅部分覆盖",
+      "expected": {
+        "pdfAmountTotal": 92549.15,
+        "excelAmountTotal": 104780.55,
+        "amountDeltaTotal": -12231.4,
+        "batchGuardStatus": "ok",
+        "detailCoverageRatio": 0.17
+      }
+    }
+  ]
+}

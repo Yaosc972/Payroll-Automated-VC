@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1280" />
+    <title>登录 · 西格玛工作台</title>
+    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="stylesheet" href="styles.css?v=login-2" />
+  </head>
+  <body class="portal-shell dashboard-shell login-shell">
+    <canvas id="loginSmokeyCanvas" class="login-smokey-canvas" aria-hidden="true"></canvas>
+    <div class="portal-mesh" aria-hidden="true">
+      <span class="mesh-orb cyan"></span>
+      <span class="mesh-orb violet"></span>
+      <span class="mesh-orb blue"></span>
+      <span class="mesh-grid"></span>
+    </div>
+
+    <main class="login-panel" aria-labelledby="loginTitle">
+      <a class="dashboard-logo" href="/" aria-label="西格玛工作台首页">
+        <img src="assets/bonus-logo-header-transparent.png" alt="" />
+        <span>
+          <strong>Σ Workbench</strong>
+          <small>Feishu SSO Ready</small>
+        </span>
+      </a>
+      <div>
+        <p class="portal-kicker">Authentication</p>
+        <h1 id="loginTitle">登录西格玛工作台</h1>
+      </div>
+      <div class="feishu-login-block">
+        <a id="feishuLoginLink" href="/api/auth/feishu/login" aria-disabled="true">
+          <span class="login-provider-icon" aria-hidden="true">飞</span>
+          <strong>使用飞书登录</strong>
+          <i aria-hidden="true">→</i>
+        </a>
+        <p id="feishuLoginStatus" class="login-status">正在检查飞书登录配置...</p>
+      </div>
+      <details class="mock-login-panel" id="mockLoginPanel" hidden>
+        <summary>开发调试：模拟用户登录</summary>
+        <div class="login-user-list" id="loginUserList" aria-label="模拟登录用户"></div>
+        <p id="loginStatus" class="login-status">请选择一个本地测试账号。</p>
+      </details>
+    </main>
+
+    <script src="login.js?v=1"></script>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Σ海外报账核对助手</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="worker-shell">
+      <header class="app-header">
+        <img src="../assets/overseas-labor-worker.png" alt="" class="app-icon" />
+        <div>
+          <p class="eyebrow">SIGMA PERSONAL WORKER</p>
+          <h1>Σ海外报账核对助手</h1>
+        </div>
+      </header>
+
+      <section class="status-region" aria-live="polite">
+        <div class="status-line">
+          <span id="statusDot" class="status-dot"></span>
+          <div>
+            <p class="status-label">当前状态</p>
+            <h2 id="statusTitle">正在读取状态</h2>
+          </div>
+        </div>
+        <p id="statusMessage" class="status-message">请稍候。</p>
+      </section>
+
+      <dl class="metadata">
+        <div><dt>当前任务</dt><dd id="runId">-</dd></div>
+        <div><dt>设备</dt><dd id="deviceId">未激活</dd></div>
+        <div><dt>版本</dt><dd id="workerVersion">-</dd></div>
+        <div><dt>最近更新</dt><dd id="updatedAt">-</dd></div>
+      </dl>
+
+      <section class="update-region" aria-labelledby="updateTitle">
+        <div>
+          <p class="update-label" id="updateTitle">版本更新</p>
+          <p class="update-status" id="updateStatus">自动检查更新已开启</p>
+        </div>
+        <button id="updateButton" type="button">打开更新页</button>
+      </section>
+
+      <div class="actions">
+        <button id="reconnectButton" class="primary-action" type="button">重新连接</button>
+        <button id="logsButton" type="button">打开日志目录</button>
+        <button id="quitButton" class="quiet-action" type="button">退出助手</button>
+      </div>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

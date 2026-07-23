@@ -52,6 +52,12 @@ LABOR_RUNS_DIR = OUTPUT_DIR / "labor_runs"
 DOMESTIC_LABOR_RUNS_DIR = OUTPUT_DIR / "domestic_labor_runs"
 FBU_PERFORMANCE_RUNS_DIR = OUTPUT_DIR / "fbu_performance_runs"
 DATABASE_PATH = OUTPUT_DIR / "sigma_workbench.db"
+ADMIN_DATABASE_URL = os.environ.get("ADMIN_DATABASE_URL", "") or os.environ.get("DATABASE_URL", "")
+ADMIN_BOOTSTRAP_IDENTIFIERS = [
+    item.strip()
+    for item in os.environ.get("ADMIN_BOOTSTRAP_IDENTIFIERS", "").split(",")
+    if item.strip()
+]
 
 MAX_PREVIEW_ROWS = 50
 
@@ -83,8 +89,34 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_int_list(name: str, default: list[int]) -> list[int]:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return list(default)
+    result = []
+    for item in value.split(","):
+        try:
+            result.append(max(int(item.strip()), 0))
+        except ValueError:
+            return list(default)
+    return result
+
+
+AUTH_CONFIG: dict[str, Any] = {
+    "session_cookie_secure": _env_bool("SESSION_COOKIE_SECURE", False),
+    "feishu_app_id": os.environ.get("FEISHU_APP_ID", ""),
+    "feishu_app_secret": os.environ.get("FEISHU_APP_SECRET", ""),
+    "feishu_redirect_uri": os.environ.get("FEISHU_REDIRECT_URI", ""),
+    "feishu_auth_url": os.environ.get(
+        "FEISHU_AUTH_URL",
+        "https://open.feishu.cn/open-apis/authen/v1/index",
+    ),
+}
+
+
 AI_CONFIG: dict[str, Any] = {
     "enabled": _env_bool("AI_ENABLED", False),
+    "external_ai_enabled": _env_bool("SIGMA_LABOR_EXTERNAL_AI_ENABLED", False),
     "provider": os.environ.get("AI_PROVIDER", ""),
     "api_key": os.environ.get("AI_API_KEY", "") or os.environ.get("MIMO_API_KEY", ""),
     "base_url": os.environ.get("AI_BASE_URL", ""),
@@ -94,7 +126,7 @@ AI_CONFIG: dict[str, Any] = {
     "default_confidence": _env_float("AI_DEFAULT_CONFIDENCE", 0.7),
     "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.10),
     "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
-    "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
+    "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 1),
     "max_completion_tokens": _env_int("AI_MAX_COMPLETION_TOKENS", 8192),
     "render_scale": _env_float("AI_RENDER_SCALE", 1.5),
     "document_toolchain": os.environ.get("AI_DOCUMENT_TOOLCHAIN", "pypdfium2,mimo"),
@@ -105,6 +137,9 @@ AI_CONFIG: dict[str, Any] = {
     "parallel_extraction_enabled": _env_bool("PARALLEL_EXTRACTION_ENABLED", True),
     "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 1),
     "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 1),
+    # Retry a transient failed page once; successful pages remain cached.
+    "image_retry_delays": _env_int_list("AI_IMAGE_RETRY_DELAYS", [2]),
+    "retry_empty_page_cache": _env_bool("AI_RETRY_EMPTY_PAGE_CACHE", True),
 }
 
 # 自动生成的供应商 Profile 存储目录

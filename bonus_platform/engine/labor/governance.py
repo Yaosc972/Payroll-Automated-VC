@@ -375,6 +375,14 @@ def replay_reocr_candidate_result(
         hours_tolerance=hours_tolerance,
         confidence_threshold=confidence_threshold,
     )
+    from .ocr_name_gate import build_ocr_name_gate
+
+    name_gate = build_ocr_name_gate(
+        candidate_items,
+        scoped_excel_rows,
+        amount_tolerance=amount_tolerance,
+        hours_tolerance=hours_tolerance,
+    )
     summary = comparison["summary"]
     expected_amount = round(float(task.get("expectedExcelAmount") or summary.get("excelAmountTotal") or 0), 2)
     candidate_amount = round(float(summary.get("pdfAmountTotal") or 0), 2)
@@ -382,7 +390,8 @@ def replay_reocr_candidate_result(
     amount_passed = abs(amount_delta) <= amount_tolerance
     exception_count = int(summary.get("exceptionCount") or 0)
     low_confidence_count = int(summary.get("lowConfidenceCount") or 0)
-    ready = amount_passed and exception_count == 0 and low_confidence_count == 0
+    strict_name_pending = int(name_gate["summary"].get("review") or 0) + int(name_gate["summary"].get("unmatched") or 0)
+    ready = amount_passed and exception_count == 0 and low_confidence_count == 0 and strict_name_pending == 0
     blockers = []
     if not amount_passed:
         blockers.append("candidate_amount_mismatch")
@@ -390,6 +399,8 @@ def replay_reocr_candidate_result(
         blockers.append("employee_level_exceptions")
     if low_confidence_count:
         blockers.append("low_confidence_candidates")
+    if strict_name_pending and exception_count == 0:
+        blockers.append("strict_name_review_required")
     decision = "ready_for_user_confirmation" if ready else "blocked_by_replay"
     exception_rows = [row for row in comparison["rows"] if row.get("matchStatus") != "通过"]
     return {
@@ -415,6 +426,7 @@ def replay_reocr_candidate_result(
         "previewRows": comparison["rows"][:50],
         "exceptionRows": exception_rows[:20],
         "candidateMatches": comparison.get("candidateMatches", [])[:20],
+        "nameGate": name_gate,
         "diagnostics": task.get("diagnostics", {}),
         "confirmationGate": task.get("confirmationGate", ""),
     }
