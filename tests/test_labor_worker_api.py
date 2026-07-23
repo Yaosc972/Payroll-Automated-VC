@@ -669,6 +669,27 @@ def test_operations_endpoint_requires_admin_token(monkeypatch, tmp_path):
     assert {"alerts", "metrics", "recentJobs", "storage"}.issubset(response.json())
 
 
+def test_operations_endpoint_does_not_treat_server_cache_as_supabase_capacity(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIGMA_LABOR_OPERATIONS_TOKEN", "admin-secret")
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "supabase")
+    monkeypatch.setattr(
+        app_module.shutil,
+        "disk_usage",
+        lambda _path: type("DiskUsage", (), {"free": 100, "total": 1000})(),
+    )
+    monkeypatch.setattr(app_module, "list_labor_worker_jobs", lambda: [])
+
+    response = client.get("/api/labor/operations", headers={"x-admin-token": "admin-secret"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["storage"]["backend"] == "supabase"
+    assert payload["storage"]["minimumFreeBytes"] == 0
+    assert payload["storage"]["capacityScope"] == "server_cache_only"
+    assert not any(alert["code"] == "STORAGE_CAPACITY_LOW" for alert in payload["alerts"])
+
+
 def test_personal_worker_status_is_visible_in_run_polling(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")

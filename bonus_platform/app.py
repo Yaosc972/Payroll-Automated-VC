@@ -2938,15 +2938,22 @@ def get_labor_operations(x_admin_token: str = Header(default="")) -> dict:
     expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
     if not expected or x_admin_token != expected:
         raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
+    storage_backend = labor_storage_backend() or "local"
     disk = shutil.disk_usage(LABOR_RUNS_DIR.parent)
+    local_capacity_relevant = storage_backend == "local"
     snapshot = build_labor_operations_snapshot(
         list_labor_worker_jobs(),
         _labor_operations_events(),
         storage={
-            "backend": labor_storage_backend() or "local",
+            "backend": storage_backend,
             "freeBytes": disk.free,
             "totalBytes": disk.total,
-            "minimumFreeBytes": int(os.environ.get("LABOR_MINIMUM_FREE_BYTES", 2 * 1024**3)),
+            "minimumFreeBytes": (
+                int(os.environ.get("LABOR_MINIMUM_FREE_BYTES", 2 * 1024**3))
+                if local_capacity_relevant
+                else 0
+            ),
+            "capacityScope": "persistent_storage" if local_capacity_relevant else "server_cache_only",
         },
     )
     snapshot["recentJobs"] = [_public_labor_worker_job(job) for job in snapshot["recentJobs"]]
