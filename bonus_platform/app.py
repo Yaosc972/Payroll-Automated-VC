@@ -3393,16 +3393,35 @@ def _worker_result_acceptance_evidence(run_dir: Path) -> tuple[str, int, str]:
         or not re.fullmatch(r"[0-9a-f]{64}", report_sha256)
         or not re.fullmatch(r"[0-9a-f]{64}", result_input_fingerprint)
         or result_input_fingerprint != _labor_result_input_fingerprint(metadata)
-        or not report_path.is_file()
-        or report_path.stat().st_size != report_size
     ):
         return "", 0, ""
-    digest = hashlib.sha256()
-    with report_path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    if digest.hexdigest() != report_sha256:
-        return "", 0, ""
+    if report_path.is_file():
+        if report_path.stat().st_size != report_size:
+            return "", 0, ""
+        digest = hashlib.sha256()
+        with report_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != report_sha256:
+            return "", 0, ""
+    else:
+        object_key = str(diff_report.get("objectKey") or "").strip()
+        run_id = str(metadata.get("id") or run_dir.name).strip()
+        try:
+            verified_size = int(diff_report.get("storageVerifiedSizeBytes") or 0)
+        except (TypeError, ValueError):
+            verified_size = 0
+        durable_private_report = (
+            str(diff_report.get("storageBackend") or "").strip().lower() == "supabase"
+            and diff_report.get("storagePrivate") is True
+            and diff_report.get("storageVerified") is True
+            and bool(str(diff_report.get("storageVerifiedAt") or "").strip())
+            and object_key.startswith("labor-runs/")
+            and f"/runs/{run_id}/outputs/" in object_key
+            and verified_size == report_size
+        )
+        if not durable_private_report:
+            return "", 0, ""
     return (
         report_sha256,
         report_size,

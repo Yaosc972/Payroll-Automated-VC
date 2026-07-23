@@ -1202,6 +1202,86 @@ def test_complete_requires_full_integrity_checked_result_for_same_generation(mon
     assert stored_job["status"] == "succeeded"
 
 
+def test_completion_accepts_verified_private_report_after_serverless_instance_switch(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    run_dir = _generation_run(tmp_path, "generation-current")
+    monkeypatch.setattr(app_module, "get_labor_run_dir", lambda _run_id: run_dir)
+    monkeypatch.setattr(labor_runs, "get_labor_run_dir", lambda _run_id: run_dir)
+    current = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    incoming = _complete_result_metadata(current)
+    diff_report = incoming["files"]["diffReport"]
+    diff_report.update(
+        {
+            "objectKey": "labor-runs/uat/owners/user-1/runs/labor_own/outputs/diff_report/result.xlsx",
+            "storageBackend": "supabase",
+            "storagePrivate": True,
+            "storageVerified": True,
+            "storageVerifiedAt": "2026-07-23T10:29:50Z",
+            "storageVerifiedSizeBytes": diff_report["sizeBytes"],
+        }
+    )
+    merged = {
+        **current,
+        **incoming,
+        "files": {
+            **current["files"],
+            **incoming["files"],
+        },
+    }
+    (run_dir / "metadata.json").write_text(json.dumps(merged), encoding="utf-8")
+
+    assert not (run_dir / "result.xlsx").exists()
+    assert app_module._worker_result_acceptance_evidence(run_dir) == (
+        diff_report["sha256"],
+        diff_report["sizeBytes"],
+        incoming["resultInputFingerprint"],
+    )
+    job = jobs.enqueue_labor_worker_job(
+        "labor_own",
+        owner_user_id="user-1",
+        task_generation_id="generation-current",
+    )
+    jobs.claim_labor_worker_job(
+        owner_user_id="user-1",
+        device_id="device-a",
+        worker_version=CURRENT_WORKER_VERSION,
+    )
+    jobs.mark_labor_worker_result_accepted(
+        job["id"],
+        owner_user_id="user-1",
+        device_id="device-a",
+        expected_task_generation_id="generation-current",
+        result_report_sha256=diff_report["sha256"],
+        result_report_size_bytes=diff_report["sizeBytes"],
+        result_input_fingerprint=incoming["resultInputFingerprint"],
+    )
+
+    completed = client.post(
+        f"/api/labor/worker/jobs/{job['id']}/complete",
+        headers={"authorization": "Bearer token-user-1", "x-worker-version": CURRENT_WORKER_VERSION},
+    )
+
+    assert completed.status_code == 200
+    assert completed.json()["job"]["status"] == "succeeded"
+
+
+def test_completion_rejects_missing_local_report_without_verified_private_storage(tmp_path):
+    run_dir = _generation_run(tmp_path, "generation-current")
+    current = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    incoming = _complete_result_metadata(current)
+    merged = {
+        **current,
+        **incoming,
+        "files": {
+            **current["files"],
+            **incoming["files"],
+        },
+    }
+    (run_dir / "metadata.json").write_text(json.dumps(merged), encoding="utf-8")
+
+    assert app_module._worker_result_acceptance_evidence(run_dir) == ("", 0, "")
+
+
 @pytest.mark.parametrize("bad_result_kind", ["missing", "empty-report"])
 def test_new_bad_result_upload_revokes_prior_acceptance_and_cannot_complete(
     monkeypatch,
