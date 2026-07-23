@@ -322,6 +322,34 @@ create table if not exists public.labor_jobs (
     constraint labor_jobs_owner_not_blank check (btrim(owner_user_id) <> '')
 );
 
+-- Preserve legacy queue rows that cannot satisfy the new run foreign key.
+-- They are removed from the active queue only after their complete original
+-- row has been archived as JSON in the same transaction.
+create table if not exists public.labor_legacy_job_orphans (
+    job_id text primary key,
+    archive_reason text not null,
+    row_snapshot jsonb not null,
+    archived_at timestamptz not null default now()
+);
+
+insert into public.labor_legacy_job_orphans (
+    job_id, archive_reason, row_snapshot, archived_at
+)
+select jobs.id, 'missing_labor_run', to_jsonb(jobs), now()
+from public.labor_jobs as jobs
+where not exists (
+    select 1 from public.labor_runs as runs where runs.id=jobs.run_id
+)
+on conflict (job_id) do update
+set archive_reason=excluded.archive_reason,
+    row_snapshot=excluded.row_snapshot,
+    archived_at=excluded.archived_at;
+
+delete from public.labor_jobs as jobs
+where not exists (
+    select 1 from public.labor_runs as runs where runs.id=jobs.run_id
+);
+
 -- Upgrade the earlier P0 queue in place when it already exists.
 alter table public.labor_jobs
     add column if not exists job_type text not null default 'reconcile';
@@ -408,6 +436,7 @@ alter table public.labor_worker_devices enable row level security;
 alter table public.labor_worker_tokens enable row level security;
 alter table public.labor_audit_events enable row level security;
 alter table public.labor_jobs enable row level security;
+alter table public.labor_legacy_job_orphans enable row level security;
 alter table public.labor_schema_versions enable row level security;
 
 revoke all on public.labor_runs from public;
@@ -418,6 +447,7 @@ revoke all on public.labor_worker_devices from public;
 revoke all on public.labor_worker_tokens from public;
 revoke all on public.labor_audit_events from public;
 revoke all on public.labor_jobs from public;
+revoke all on public.labor_legacy_job_orphans from public;
 revoke all on public.labor_schema_versions from public;
 
 do $$
@@ -431,7 +461,7 @@ begin
                 'labor_runs', 'labor_run_files', 'labor_workbook_mappings',
                 'labor_business_reviews', 'labor_worker_devices',
                 'labor_worker_tokens', 'labor_audit_events', 'labor_jobs',
-                'labor_schema_versions'
+                'labor_legacy_job_orphans', 'labor_schema_versions'
             ] loop
                 execute format('revoke all on table public.%I from %I', table_name, role_name);
             end loop;

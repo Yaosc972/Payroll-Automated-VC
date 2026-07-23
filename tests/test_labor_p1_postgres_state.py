@@ -116,6 +116,22 @@ def test_p1_sql_upgrades_legacy_run_and_job_owners_before_owner_scoped_indexes()
     assert "alter table public.labor_jobs validate constraint labor_jobs_owner_not_blank" in sql
 
 
+def test_p1_sql_archives_orphaned_legacy_jobs_before_foreign_key_validation():
+    sql = Path("docs/sql/labor_p1_state.sql").read_text(encoding="utf-8").lower()
+
+    create_archive = sql.index("create table if not exists public.labor_legacy_job_orphans")
+    archive_rows = sql.index("insert into public.labor_legacy_job_orphans")
+    remove_from_queue = sql.index("delete from public.labor_jobs as jobs")
+    validate_run_fk = sql.index("alter table public.labor_jobs validate constraint labor_jobs_run_fk")
+
+    assert create_archive < archive_rows < remove_from_queue < validate_run_fk
+    assert "row_snapshot jsonb not null" in sql
+    assert "to_jsonb(jobs)" in sql
+    assert "missing_labor_run" in sql
+    assert "alter table public.labor_legacy_job_orphans enable row level security" in sql
+    assert "revoke all on public.labor_legacy_job_orphans from public" in sql
+
+
 def test_p1_state_health_requires_every_authoritative_table():
     connection = FakeConnection(
         [
