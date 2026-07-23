@@ -110,7 +110,7 @@ from .engine.labor.worker_jobs import (
     heartbeat_labor_worker_job,
     list_labor_worker_jobs,
     enqueue_labor_worker_job,
-    labor_worker_job_store_health,
+    labor_worker_job_store_health as labor_p1_worker_job_store_health,
     mark_labor_worker_result_accepted,
 )
 from .engine.labor.operations import build_labor_operations_snapshot
@@ -709,7 +709,11 @@ from .engine.labor.runs import (
     update_labor_metadata_for_mapping_preflight,
     update_labor_metadata_for_task,
 )
-from .engine.labor.jobs import enqueue_labor_reconciliation_job, labor_worker_job_store_health, labor_worker_jobs_enabled
+from .engine.labor.jobs import (
+    enqueue_labor_reconciliation_job,
+    labor_worker_job_store_health as legacy_labor_worker_job_store_health,
+    labor_worker_jobs_enabled,
+)
 from .engine.labor.blob_storage import (
     canonicalize_labor_metadata_for_blob,
     create_labor_blob_presigned_url,
@@ -1636,7 +1640,7 @@ def _labor_p1_required() -> bool:
 
 def _labor_p1_readiness_snapshot() -> dict:
     try:
-        queue_health = labor_worker_job_store_health()
+        queue_health = labor_p1_worker_job_store_health()
     except Exception as exc:  # noqa: BLE001 - readiness must return a sanitized blocker.
         queue_health = {"backend": "postgres", "configured": False, "ready": False, "error": str(exc)[:240]}
     storage_info = labor_persistent_storage_info()
@@ -2233,7 +2237,7 @@ def labor_storage_health(probe: bool = False) -> dict:
 
 @app.get("/api/labor/worker-health")
 def labor_worker_health(probe: bool = False) -> dict:
-    return labor_worker_job_store_health(probe=probe)
+    return legacy_labor_worker_job_store_health(probe=probe)
 
 
 @app.get("/api/labor/storage-info")
@@ -3228,7 +3232,7 @@ def get_personal_labor_worker_health(x_admin_token: str = Header(default="")) ->
     expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
     if not expected or x_admin_token != expected:
         raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
-    return labor_worker_job_store_health()
+    return labor_p1_worker_job_store_health()
 
 
 @app.get("/api/labor/production-readiness")

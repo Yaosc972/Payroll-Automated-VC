@@ -22,6 +22,29 @@ def _build_info():
     return {"status": "current", "buildId": "p1-build", "apiContractVersion": 2}
 
 
+def test_p1_snapshot_uses_authoritative_worker_queue_health(monkeypatch):
+    expected_queue_health = {"backend": "postgres", "configured": True, "ready": True}
+    monkeypatch.setattr(
+        app_module,
+        "labor_p1_worker_job_store_health",
+        lambda: expected_queue_health,
+        raising=False,
+    )
+    monkeypatch.setattr(app_module, "labor_persistent_storage_info", lambda: {})
+    monkeypatch.setattr(app_module, "labor_persistent_storage_health", lambda **_kwargs: {})
+    monkeypatch.setattr(app_module, "labor_worker_identity_health", lambda: {})
+    monkeypatch.setattr(app_module, "_labor_build_snapshot", lambda: {})
+    monkeypatch.setattr(app_module, "labor_auth_health", lambda: {})
+    monkeypatch.setattr(app_module, "labor_postgres_state_health", lambda: {})
+    monkeypatch.setattr(
+        app_module,
+        "evaluate_labor_production_readiness",
+        lambda **kwargs: kwargs["queue_health"],
+    )
+
+    assert app_module._labor_p1_readiness_snapshot() == expected_queue_health
+
+
 def test_p1_readiness_blocks_missing_auth_and_authoritative_state():
     result = evaluate_labor_production_readiness(
         env=_p1_env(),
