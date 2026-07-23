@@ -590,6 +590,15 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert ".dashboard-role-tags" in STYLES_CSS.read_text(encoding="utf-8")
 
 
+def test_portal_auth_bootstrap_does_not_depend_on_optional_gsap():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    auth_bootstrap = html.index("fetch('/api/me'")
+    script_before_auth = html[html.index("<script>", html.index("</main>")):auth_bootstrap]
+
+    assert "if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;" not in script_before_auth
+    assert "if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches)" in script_before_auth
+
+
 def test_vercel_config_does_not_override_runtime_labor_access_mode():
     config = json.loads(VERCEL_JSON.read_text(encoding="utf-8"))
 

@@ -208,28 +208,14 @@
     </div>
     <script>
       (async () => {
-        if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-
-        gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card', {
-          opacity: 0,
-          y: 18,
-        });
-        gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
-
-        const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
-        timeline
-          .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
-          .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
-          .to('.welcome-panel', { opacity: 1, y: 0, duration: 0.62 }, '-=0.32')
-          .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28');
-
-        document.querySelectorAll('.saas-module-card').forEach((card) => {
-          card.addEventListener('mouseenter', () => {
-            gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
+        if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          window.gsap.set('.dashboard-sidebar, .dashboard-topbar, .welcome-panel, .saas-module-card', {
+            opacity: 0,
+            y: 18,
           });
-          gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
+          window.gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
 
-          const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
+          const timeline = window.gsap.timeline({ defaults: { ease: 'power3.out' } });
           timeline
             .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
             .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
@@ -238,10 +224,10 @@
 
           document.querySelectorAll('.saas-module-card').forEach((card) => {
             card.addEventListener('mouseenter', () => {
-              gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
+              window.gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
             });
             card.addEventListener('mouseleave', () => {
-              gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
+              window.gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
             });
           });
         }
