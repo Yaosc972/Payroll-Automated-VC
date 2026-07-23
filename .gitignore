@@ -33,5 +33,20 @@ desktop/backend-build/
 desktop/backend-dist/
 desktop/release/
 desktop/dist/
+
+# Local browser, agent, and rendered test artifacts
+.playwright-cli/
+.superpowers/
+output/
+tmp/
+
+# Standalone overseas labor Worker generated artifacts
+labor-worker-desktop/node_modules/
+labor-worker-desktop/worker-build/
+labor-worker-desktop/worker-dist/
+labor-worker-desktop/release/
+labor-worker-desktop/dist/
+labor-worker-desktop/release-gate-materials/
 .vercel
 .env*
+!.env.example

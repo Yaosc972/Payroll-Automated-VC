@@ -3,11 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>海外劳务工报账核对 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <title>海外劳务工报账核对</title>
+    <link rel="icon" type="image/png" href="assets/overseas-labor-logo-2026.png" />
     <link rel="stylesheet" href="styles.css?v=notion-31" />
     <script src="permission-guard.js?v=9"></script>
     <style>
@@ -66,10 +63,18 @@
       .overseas-labor-shell .portal-logo-mark {
         display: inline-flex;
         align-items: center;
-        gap: 13px;
-        min-width: 222px;
+        flex: 0 0 auto;
+        min-width: 0;
+        margin: 0;
         color: #111827;
         text-decoration: none;
+      }
+
+      .overseas-labor-shell .module-brand-lockup {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
       }
 
       .overseas-labor-shell .brand-mark-frame {
@@ -78,44 +83,23 @@
         justify-content: center;
         width: 52px;
         height: 52px;
-        border: 1px solid rgba(255, 255, 255, 0.82);
-        border-radius: 16px;
-        background: rgba(255, 255, 255, 0.58);
-        box-shadow: 0 18px 30px rgba(37, 99, 235, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.88);
+        border: 0;
+        border-radius: 14px;
+        background: transparent;
+        box-shadow: none;
       }
 
       .overseas-labor-shell .brand-mark-frame img {
-        width: 42px;
-        height: 42px;
+        width: 46px;
+        height: 46px;
+        border-radius: 0;
+        mix-blend-mode: normal;
         object-fit: contain;
       }
 
-      .overseas-labor-shell .brand-copy,
       .overseas-labor-shell .chrome-context {
         display: grid;
         gap: 3px;
-      }
-
-      .overseas-labor-shell .brand-name {
-        color: #64748b;
-        font-size: 13px;
-        font-weight: 900;
-        letter-spacing: 0;
-        line-height: 1;
-      }
-
-      .overseas-labor-shell .brand-note {
-        color: #0f172a;
-        font-size: 24px;
-        font-weight: 900;
-        letter-spacing: 0;
-        line-height: 1.08;
-      }
-
-      .overseas-labor-shell .chrome-divider {
-        width: 1px;
-        height: 48px;
-        background: rgba(148, 163, 184, 0.32);
       }
 
       .overseas-labor-shell .chrome-label {
@@ -157,6 +141,19 @@
         border-color: rgba(239, 68, 68, 0.22);
         background: rgba(254, 226, 226, 0.86);
         color: #b91c1c;
+      }
+
+      .overseas-labor-shell .release-meta {
+        width: fit-content;
+        color: #64748b;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1.25;
+        letter-spacing: 0.02em;
+      }
+
+      .overseas-labor-shell .release-meta.blocked {
+        color: #b42318;
       }
 
       .overseas-labor-shell .chrome-run-badge,
@@ -1200,9 +1197,304 @@
         background: rgba(255, 255, 255, 0.78);
       }
 
+      .overseas-labor-shell .labor-progress-card {
+        padding: 22px;
+        color: #0f172a;
+      }
+
+      .overseas-labor-shell .labor-progress-top {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: start;
+        margin-bottom: 18px;
+      }
+
+      .overseas-labor-shell .labor-progress-eyebrow {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        margin-bottom: 8px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.1);
+        color: #2563eb;
+        font-size: 11px;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .labor-progress-title {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      .overseas-labor-shell .labor-progress-message {
+        margin: 6px 0 0;
+        color: #64748b;
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.55;
+      }
+
+      .overseas-labor-shell .labor-progress-time {
+        min-width: 150px;
+        padding: 12px 14px;
+        border: 1px solid rgba(226, 232, 240, 0.9);
+        border-radius: 14px;
+        background: rgba(248, 250, 252, 0.86);
+        color: #475569;
+        font-size: 12px;
+        font-weight: 750;
+        text-align: right;
+      }
+
+      .overseas-labor-shell .labor-progress-time strong {
+        display: block;
+        margin-top: 2px;
+        color: #0f172a;
+        font-size: 18px;
+        font-weight: 900;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .overseas-labor-shell .labor-progress-track {
+        height: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgba(226, 232, 240, 0.86);
+      }
+
+      .overseas-labor-shell .labor-progress-track span {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #2563eb, #22d3ee);
+        transition: width 220ms ease;
+      }
+
+      .overseas-labor-shell .labor-progress-meta {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin: 14px 0 18px;
+      }
+
+      .overseas-labor-shell .labor-progress-meta div {
+        padding: 12px;
+        border: 1px solid rgba(226, 232, 240, 0.86);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .overseas-labor-shell .labor-progress-meta span {
+        display: block;
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .labor-progress-meta strong {
+        display: block;
+        margin-top: 4px;
+        color: #0f172a;
+        font-size: 14px;
+        font-weight: 900;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .overseas-labor-shell .labor-progress-steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .overseas-labor-shell .labor-progress-steps li {
+        padding: 12px;
+        border: 1px solid rgba(226, 232, 240, 0.9);
+        border-radius: 14px;
+        background: rgba(248, 250, 252, 0.78);
+        color: #64748b;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .labor-progress-steps li.is-active {
+        border-color: rgba(37, 99, 235, 0.34);
+        background: rgba(37, 99, 235, 0.08);
+        color: #1d4ed8;
+      }
+
+      .overseas-labor-shell .labor-progress-steps li.is-done {
+        border-color: rgba(15, 118, 110, 0.22);
+        background: rgba(15, 118, 110, 0.08);
+        color: #0f766e;
+      }
+
+      .overseas-labor-shell .labor-progress-warning {
+        margin: 14px 0 0;
+        padding: 11px 12px;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        border-radius: 14px;
+        background: rgba(255, 251, 235, 0.88);
+        color: #92400e;
+        font-size: 12px;
+        font-weight: 750;
+        line-height: 1.55;
+      }
+
       .overseas-labor-shell .workspace-section > .audit-table {
         margin: 0;
       }
+
+      .overseas-labor-shell .btn-governance {
+        width: 40px;
+        height: 40px;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #344054;
+        cursor: pointer;
+      }
+
+      .overseas-labor-shell .btn-worker-status {
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 10px;
+        padding: 0 12px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #344054;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+
+      .overseas-labor-shell .worker-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #d97706;
+        box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.12);
+      }
+
+      .overseas-labor-shell .btn-worker-status.online .worker-status-dot {
+        background: #16a34a;
+        box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.12);
+      }
+
+      .overseas-labor-shell .worker-panel {
+        display: grid;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid #dbe4f0;
+        border-radius: 10px;
+        background: #fff;
+      }
+
+      .overseas-labor-shell .worker-panel-copy {
+        margin: 0;
+        color: #667085;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .overseas-labor-shell .worker-device-list { display: grid; gap: 8px; }
+      .overseas-labor-shell .worker-device-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        padding: 9px 10px;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        background: #f8fafc;
+      }
+      .overseas-labor-shell .worker-device-item strong,
+      .overseas-labor-shell .worker-device-item span { display: block; }
+      .overseas-labor-shell .worker-device-item span { margin-top: 3px; color: #667085; font-size: 11px; }
+      .overseas-labor-shell .worker-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .overseas-labor-shell .worker-panel-actions button {
+        min-height: 34px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        padding: 0 11px;
+        background: #fff;
+        color: #344054;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .overseas-labor-shell .worker-panel-actions .worker-activate {
+        border-color: #2563eb;
+        background: #2563eb;
+        color: #fff;
+      }
+      .overseas-labor-shell .worker-release-admin {
+        display: grid;
+        gap: 10px;
+        margin-top: 4px;
+        padding-top: 12px;
+        border-top: 1px solid #e2e8f0;
+      }
+      .overseas-labor-shell .worker-release-admin[hidden] { display: none !important; }
+
+      .overseas-labor-shell .governance-dialog {
+        width: min(620px, calc(100vw - 32px));
+        max-height: min(760px, calc(100vh - 32px));
+        padding: 0;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 16px;
+        background: #f8fafc;
+        color: #101828;
+        box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+      }
+
+      .overseas-labor-shell .governance-dialog::backdrop {
+        background: rgba(15, 23, 42, 0.42);
+        backdrop-filter: blur(4px);
+      }
+
+      .overseas-labor-shell .governance-head,
+      .overseas-labor-shell .governance-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 18px 20px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+      }
+
+      .overseas-labor-shell .governance-actions {
+        justify-content: flex-end;
+        border-top: 1px solid rgba(226, 232, 240, 0.9);
+        border-bottom: 0;
+      }
+
+      .overseas-labor-shell .governance-body { padding: 18px 20px; overflow: auto; }
+      .overseas-labor-shell .governance-title { margin: 0; font-size: 18px; }
+      .overseas-labor-shell .governance-section + .governance-section { margin-top: 20px; }
+      .overseas-labor-shell .governance-section h3 { margin: 0 0 8px; font-size: 13px; }
+      .overseas-labor-shell .storage-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .overseas-labor-shell .storage-item { padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+      .overseas-labor-shell .storage-item span { display: block; color: #667085; font-size: 11px; }
+      .overseas-labor-shell .storage-item strong { display: block; margin-top: 3px; font-size: 13px; }
+      .overseas-labor-shell .audit-list { margin: 0; padding: 0; list-style: none; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; }
+      .overseas-labor-shell .audit-list li { display: grid; grid-template-columns: 142px 1fr auto; gap: 10px; padding: 9px 11px; border-bottom: 1px solid #eef2f6; font-size: 12px; }
+      .overseas-labor-shell .audit-list li:last-child { border-bottom: 0; }
+      .overseas-labor-shell .audit-empty { color: #667085; }
+      .overseas-labor-shell .btn-danger { border: 1px solid #fda29b; border-radius: 8px; padding: 9px 12px; background: #fff; color: #b42318; font-weight: 700; cursor: pointer; }
+      .overseas-labor-shell .btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }
 
       .overseas-labor-shell .audit-table th,
       .overseas-labor-shell .group-content th,
@@ -1296,11 +1588,10 @@
       }
 
       .overseas-labor-shell .conclusion-section {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 16px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+        gap: 14px;
         margin-bottom: 20px;
         padding: 18px 20px;
       }
@@ -1317,6 +1608,9 @@
       }
 
       .overseas-labor-shell .conclusion-main {
+        display: flex;
+        align-items: center;
+        gap: 10px;
         margin: 0;
       }
 
@@ -1327,9 +1621,52 @@
       }
 
       .overseas-labor-shell .conclusion-details {
-        justify-content: flex-end;
+        display: grid;
+        gap: 9px;
+        min-width: 0;
         color: #475569;
         font-weight: 750;
+      }
+
+      .overseas-labor-shell .conclusion-detail {
+        margin: 0;
+        line-height: 1.65;
+        overflow-wrap: anywhere;
+      }
+
+      .overseas-labor-shell .conclusion-detail--summary {
+        color: #334155;
+        font-size: 14px;
+        font-weight: 850;
+      }
+
+      .overseas-labor-shell .conclusion-detail--metric {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px;
+        color: #475569;
+      }
+
+      .overseas-labor-shell .conclusion-detail--explanation {
+        padding: 12px 14px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.58);
+        color: #475569;
+        font-size: 13px;
+      }
+
+      .overseas-labor-shell .conclusion-report-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px 18px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(148, 163, 184, 0.28);
+        color: #475569;
+        line-height: 1.55;
       }
 
       .overseas-labor-shell .readiness-gate {
@@ -1437,6 +1774,129 @@
         -webkit-backdrop-filter: blur(36px) saturate(1.36);
       }
 
+      .overseas-labor-shell .batch-toolbench {
+        position: relative;
+        top: auto;
+        right: auto;
+        bottom: auto;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+        width: min(1180px, calc(100% - 48px));
+        min-height: 620px;
+        margin: 24px auto 56px;
+        overflow: hidden;
+        transform: none;
+        border: 1px solid rgba(255, 255, 255, 0.78);
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.76);
+        box-shadow: 0 24px 64px rgba(15, 23, 42, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(30px) saturate(1.25);
+        -webkit-backdrop-filter: blur(30px) saturate(1.25);
+        scroll-margin-top: 104px;
+      }
+
+      .overseas-labor-shell .labor-results-view {
+        scroll-margin-top: 96px;
+      }
+
+      .overseas-labor-shell .batch-toolbench[hidden],
+      .overseas-labor-shell .labor-results-view[hidden] {
+        display: none !important;
+      }
+
+      .overseas-labor-shell .batch-toolbench .drawer-chrome {
+        padding: 24px 28px 0;
+      }
+
+      .overseas-labor-shell .batch-toolbench .drawer-header {
+        margin-bottom: 18px;
+      }
+
+      .overseas-labor-shell .batch-toolbench-intro {
+        max-width: 640px;
+        margin: 6px 0 0;
+        color: #64748b;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .overseas-labor-shell .batch-toolbench .drawer-body {
+        min-height: 0;
+        overflow: visible;
+      }
+
+      .overseas-labor-shell .batch-toolbench .wz-panel {
+        padding: 28px;
+      }
+
+      .overseas-labor-shell .batch-toolbench .field-section {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px 20px;
+      }
+
+      .overseas-labor-shell .batch-toolbench .field-help {
+        grid-column: 1 / -1;
+      }
+
+      .overseas-labor-shell .batch-toolbench .upload-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .overseas-labor-shell .batch-toolbench .upload-zone {
+        min-height: 210px;
+        margin-bottom: 0;
+      }
+
+      .overseas-labor-shell .batch-toolbench .mapping-smart-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .overseas-labor-shell .toolbench-footer-actions,
+      .overseas-labor-shell .worker-release-action {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .overseas-labor-shell .btn-clear-files {
+        min-height: 44px;
+        padding: 0 16px;
+        border: 1px solid rgba(148, 163, 184, 0.42);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.86);
+        color: #475569;
+        font-weight: 850;
+        cursor: pointer;
+      }
+
+      .overseas-labor-shell .worker-release-action {
+        display: grid;
+        flex: 0 0 auto;
+        width: 220px;
+        gap: 4px;
+      }
+
+      .overseas-labor-shell .worker-release-action .btn-download {
+        justify-content: center;
+        white-space: nowrap;
+      }
+
+      .overseas-labor-shell .worker-release-status {
+        width: 100%;
+        min-height: 2.7em;
+        color: #64748b;
+        font-size: 10px;
+        font-weight: 750;
+        line-height: 1.35;
+        text-align: center;
+        overflow-wrap: anywhere;
+        white-space: normal;
+      }
+
       .overseas-labor-shell .drawer-chrome,
       .overseas-labor-shell .drawer-footer {
         border-color: rgba(226, 232, 240, 0.82);
@@ -1467,6 +1927,343 @@
         box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
       }
 
+      .overseas-labor-shell .amount-component-options {
+        display: grid;
+        gap: 6px;
+        margin-top: 10px;
+      }
+
+      .overseas-labor-shell .amount-component-options[hidden] {
+        display: none;
+      }
+
+      .overseas-labor-shell .amount-component-options-label {
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .amount-component-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .overseas-labor-shell .amount-component-option {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 30px;
+        padding: 5px 9px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 8px;
+        background: rgba(248, 250, 252, 0.86);
+        color: #475569;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 750;
+      }
+
+      .overseas-labor-shell .amount-component-option:has(input:checked) {
+        border-color: rgba(37, 99, 235, 0.5);
+        background: rgba(239, 246, 255, 0.92);
+        color: #1d4ed8;
+      }
+
+      .overseas-labor-shell .period-range-field {
+        position: relative;
+      }
+
+      .overseas-labor-shell .period-range-control {
+        position: relative;
+      }
+
+      .overseas-labor-shell .period-range-trigger {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        min-height: 48px;
+        padding: 10px 14px;
+        border: 1px solid rgba(148, 163, 184, 0.36);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #94a3b8;
+        cursor: pointer;
+        font: inherit;
+        font-size: 14px;
+        text-align: left;
+        transition: border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+      }
+
+      .overseas-labor-shell .period-range-trigger:hover,
+      .overseas-labor-shell .period-range-trigger:focus-visible,
+      .overseas-labor-shell .period-range-trigger[aria-expanded="true"] {
+        border-color: rgba(37, 99, 235, 0.62);
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+        outline: none;
+      }
+
+      .overseas-labor-shell .period-range-trigger.is-set {
+        color: #0f172a;
+        font-variant-numeric: tabular-nums;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .period-range-icon {
+        flex: 0 0 auto;
+        color: #2563eb;
+      }
+
+      .overseas-labor-shell .period-calendar[hidden] {
+        display: none;
+      }
+
+      .overseas-labor-shell .period-calendar {
+        position: absolute;
+        z-index: 40;
+        top: calc(100% + 8px);
+        left: 0;
+        width: min(100%, 420px);
+        padding: 16px;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 22px 54px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(24px);
+        -webkit-backdrop-filter: blur(24px);
+      }
+
+      .overseas-labor-shell .period-calendar-head {
+        display: grid;
+        grid-template-columns: 36px 1fr 36px;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .overseas-labor-shell .period-calendar-title {
+        color: #0f172a;
+        font-size: 16px;
+        font-weight: 900;
+        text-align: center;
+      }
+
+      .overseas-labor-shell .period-calendar-nav {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        padding: 0;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: #64748b;
+        cursor: pointer;
+      }
+
+      .overseas-labor-shell .period-calendar-nav:hover,
+      .overseas-labor-shell .period-calendar-nav:focus-visible {
+        background: #eff6ff;
+        color: #1d4ed8;
+        outline: none;
+      }
+
+      .overseas-labor-shell .period-calendar-weekdays,
+      .overseas-labor-shell .period-calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, minmax(0, 1fr));
+      }
+
+      .overseas-labor-shell .period-calendar-weekdays {
+        margin-bottom: 4px;
+        color: #94a3b8;
+        font-size: 11px;
+        font-weight: 850;
+        text-align: center;
+      }
+
+      .overseas-labor-shell .period-calendar-weekdays span {
+        padding: 6px 0;
+      }
+
+      .overseas-labor-shell .period-calendar-grid {
+        row-gap: 4px;
+      }
+
+      .overseas-labor-shell .period-day {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 0;
+        height: 38px;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: #0f172a;
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 750;
+      }
+
+      .overseas-labor-shell .period-day.outside-month {
+        color: #cbd5e1;
+      }
+
+      .overseas-labor-shell .period-day.in-range {
+        background: #dbeafe;
+        color: #1e3a8a;
+      }
+
+      .overseas-labor-shell .period-day.range-start,
+      .overseas-labor-shell .period-day.range-end {
+        z-index: 1;
+        background: #1e3a8a;
+        color: #ffffff;
+        font-weight: 900;
+      }
+
+      .overseas-labor-shell .period-day.range-start {
+        border-radius: 12px 0 0 12px;
+      }
+
+      .overseas-labor-shell .period-day.range-end {
+        border-radius: 0 12px 12px 0;
+      }
+
+      .overseas-labor-shell .period-day.range-start.range-end {
+        border-radius: 12px;
+      }
+
+      .overseas-labor-shell .period-day:not(.range-start):not(.range-end):hover,
+      .overseas-labor-shell .period-day:focus-visible {
+        z-index: 2;
+        border-radius: 10px;
+        box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.58);
+        outline: none;
+      }
+
+      .overseas-labor-shell .period-day.is-today::after {
+        position: absolute;
+        bottom: 4px;
+        width: 3px;
+        height: 3px;
+        border-radius: 999px;
+        background: currentColor;
+        content: "";
+      }
+
+      .overseas-labor-shell .period-calendar-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(226, 232, 240, 0.9);
+      }
+
+      .overseas-labor-shell .period-calendar-hint {
+        color: #64748b;
+        font-size: 11px;
+        font-weight: 750;
+        line-height: 1.4;
+        text-align: right;
+      }
+
+      .overseas-labor-shell .period-clear {
+        flex: 0 0 auto;
+        min-height: 32px;
+        padding: 6px 10px;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 9px;
+        background: #ffffff;
+        color: #475569;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .overseas-labor-shell .period-clear:hover,
+      .overseas-labor-shell .period-clear:focus-visible {
+        border-color: rgba(37, 99, 235, 0.5);
+        color: #1d4ed8;
+        outline: none;
+      }
+
+      .overseas-labor-shell button.is-loading {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: wait;
+      }
+
+      .overseas-labor-shell .button-loading-original {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: inherit;
+        opacity: 0;
+        visibility: hidden;
+      }
+
+      .overseas-labor-shell .button-loading-indicator {
+        position: absolute;
+        inset: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: inherit;
+        color: inherit;
+        pointer-events: none;
+        white-space: nowrap;
+        animation: labor-button-loading-in 0.16s ease-out both;
+      }
+
+      .overseas-labor-shell .button-loading-spinner {
+        width: 14px;
+        height: 14px;
+        flex: 0 0 14px;
+        border: 2px solid currentColor;
+        border-right-color: transparent;
+        border-radius: 999px;
+        opacity: 0.92;
+        animation: labor-button-spin 0.72s linear infinite;
+      }
+
+      .overseas-labor-shell .button-loading-label {
+        font: inherit;
+        letter-spacing: inherit;
+      }
+
+      @keyframes labor-button-spin {
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes labor-button-loading-in {
+        from { opacity: 0; transform: translateY(2px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .overseas-labor-shell .button-loading-spinner {
+          animation-duration: 1.8s;
+        }
+
+        .overseas-labor-shell .button-loading-indicator {
+          animation: none;
+        }
+      }
+
       @media (max-width: 980px) {
         .overseas-labor-shell .app-chrome {
           align-items: flex-start;
@@ -1479,6 +2276,11 @@
         }
 
         .overseas-labor-shell .kpi-banner {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .overseas-labor-shell .labor-progress-steps,
+        .overseas-labor-shell .labor-progress-meta {
           grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
@@ -1531,6 +2333,28 @@
           max-width: none;
         }
 
+        .overseas-labor-shell .batch-toolbench {
+          width: min(100% - 24px, 1180px);
+          min-height: 0;
+          margin-top: 12px;
+        }
+
+        .overseas-labor-shell .batch-toolbench .field-section,
+        .overseas-labor-shell .batch-toolbench .upload-grid,
+        .overseas-labor-shell .batch-toolbench .mapping-smart-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .labor-progress-top,
+        .overseas-labor-shell .labor-progress-meta,
+        .overseas-labor-shell .labor-progress-steps {
+          grid-template-columns: 1fr;
+        }
+
+        .overseas-labor-shell .labor-progress-time {
+          text-align: left;
+        }
+
         .overseas-labor-shell .governance-command {
           align-items: flex-start;
           flex-direction: column;
@@ -1565,21 +2389,19 @@
     <!-- ═══ TOP CHROME ═══ -->
     <header class="app-chrome">
       <div class="chrome-left">
-        <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
-          <span class="brand-mark-frame">
-            <img src="assets/bonus-logo-header-blue.png" alt="" />
-          </span>
-          <span class="brand-copy">
-            <span class="brand-name">Σ-WORKBENCH</span>
-            <span class="brand-note">西格玛工作台</span>
-          </span>
-        </a>
-        <div class="chrome-divider"></div>
-        <div class="chrome-context">
-          <span class="chrome-label">Overseas Labor Invoice Audit</span>
-          <span class="chrome-title">海外劳务工报账核对</span>
-          <span class="chrome-desc">上传供应商发票和账单，AI 抽取供应商发票，自动核对总金额与员工明细</span>
-          <span class="uat-badge" id="moduleStageBadge">UAT试用版 · 结果需业务确认</span>
+        <div class="module-brand-lockup">
+          <a class="portal-logo-mark compact-back" href="/" aria-label="返回平台首页">
+            <span class="brand-mark-frame">
+              <img src="assets/overseas-labor-logo-2026.png" alt="海外劳务工报账核对" />
+            </span>
+          </a>
+          <div class="chrome-context">
+            <span class="chrome-label">Overseas Labor Invoice Audit</span>
+            <span class="chrome-title">海外劳务工报账核对</span>
+            <span class="chrome-desc">上传供应商发票和账单，本地解析/OCR 提取证据，核对总金额与员工明细</span>
+            <span class="uat-badge" id="moduleStageBadge">UAT试用版 · 结果需业务确认</span>
+            <span class="release-meta" id="moduleReleaseMeta" role="status" aria-live="polite" hidden></span>
+          </div>
         </div>
       </div>
       <div class="chrome-right">
@@ -1591,6 +2413,20 @@
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           新建核对批次
         </button>
+        <button class="btn-worker-status" id="btnWorkerStatus" type="button" hidden>
+          <span class="worker-status-dot" aria-hidden="true"></span>
+          <span id="workerStatusLabel">核对助手未连接</span>
+        </button>
+        <div class="worker-release-action">
+          <a class="btn-download disabled" id="downloadLaborWorker" href="#" aria-disabled="true">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            下载核对助手
+          </a>
+          <span class="worker-release-status" id="laborWorkerReleaseStatus" role="status" aria-live="polite">正在检查最新版本</span>
+        </div>
+        <button class="btn-governance" id="btnOpenGovernance" type="button" title="批次管理" aria-label="批次管理">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
         <a id="laborReportLink" class="btn-download disabled" href="#" aria-disabled="true">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           下载报告
@@ -1598,6 +2434,58 @@
       </div>
     </header>
 
+    <dialog class="governance-dialog" id="laborGovernanceDialog" aria-labelledby="laborGovernanceTitle">
+      <div class="governance-head">
+        <div>
+          <span class="chrome-label">DATA GOVERNANCE</span>
+          <h2 class="governance-title" id="laborGovernanceTitle">批次与数据管理</h2>
+        </div>
+        <button class="btn-governance" id="closeLaborGovernance" type="button" title="关闭" aria-label="关闭">×</button>
+      </div>
+      <div class="governance-body">
+        <section class="governance-section" id="laborWorkerSection" hidden>
+          <h3>本人核对助手</h3>
+          <div class="worker-panel">
+            <p class="worker-panel-copy" id="laborWorkerMessage">核对助手负责在你的电脑读取私有发票和 Excel，平台不会在 Vercel 执行长时间 OCR。</p>
+            <div class="worker-device-list" id="laborWorkerDevices"><span class="audit-empty">正在读取...</span></div>
+            <div class="worker-panel-actions">
+              <button class="worker-activate" id="activateLaborWorker" type="button">激活 / 重新连接</button>
+              <button id="refreshLaborWorker" type="button">刷新状态</button>
+            </div>
+            <div class="worker-release-admin" id="laborWorkerReleaseAdmin" hidden>
+              <label class="field-group">
+                <span class="field-label">安装包平台</span>
+                <select id="laborWorkerReleasePlatform" class="field-input">
+                  <option value="macos-arm64">macOS（Apple 芯片）</option>
+                  <option value="windows-x64">Windows 10/11（x64）</option>
+                </select>
+              </label>
+              <label class="field-group">
+                <span class="field-label">管理员更新安装包</span>
+                <input id="laborWorkerReleasePackage" class="field-input" type="file" accept=".dmg,application/x-apple-diskimage" />
+              </label>
+              <div class="worker-panel-actions">
+                <button id="uploadLaborWorkerRelease" type="button">上传当前要求版本</button>
+                <span class="inline-status" id="laborWorkerReleaseUploadStatus">选择对应版本 DMG 后上传到 UAT 私有存储。</span>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="governance-section">
+          <h3>数据存储与保留</h3>
+          <div class="storage-summary" id="laborStorageSummary"><span class="audit-empty">正在读取...</span></div>
+        </section>
+        <section class="governance-section">
+          <h3>当前批次审计记录</h3>
+          <ul class="audit-list" id="laborAuditList"><li class="audit-empty">当前尚未选择批次。</li></ul>
+        </section>
+      </div>
+      <div class="governance-actions">
+        <button class="btn-danger" id="deleteCurrentLaborRun" type="button" disabled>删除当前批次</button>
+      </div>
+    </dialog>
+
+    <div class="labor-results-view" id="laborResultsView" hidden>
     <!-- ═══ KPI SUMMARY BANNER ═══ -->
     <div class="kpi-banner" id="kpiBanner">
       <button class="kpi-card kpi-neutral active-filter" data-filter="all" id="kpiTotal" type="button">
@@ -1624,6 +2512,17 @@
 
     <!-- ═══ MAIN WORKSPACE ═══ -->
     <main class="workspace">
+      <!-- Employee reconciliation detail -->
+      <section class="workspace-section" id="employeeReconSection" hidden>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">完整员工明细</h2>
+            <p class="section-sub">用于留档和逐项确认；有差异的员工会排在前面</p>
+          </div>
+        </div>
+        <div id="employeeReconTable" class="audit-table premium-grid"></div>
+      </section>
+
       <!-- Conclusion section -->
       <div id="conclusionSection" class="conclusion-section" hidden>
         <h3>核对结论</h3>
@@ -1739,17 +2638,6 @@
         </div>
       </section>
 
-      <!-- Employee reconciliation detail -->
-      <section class="workspace-section" id="employeeReconSection" hidden>
-        <div class="section-header">
-          <div>
-            <h2 class="section-title">完整员工明细</h2>
-            <p class="section-sub">用于留档和逐项确认；有差异的员工会排在前面</p>
-          </div>
-        </div>
-        <div id="employeeReconTable" class="audit-table premium-grid"></div>
-      </section>
-
       <section class="workspace-section" id="materialReplaySection">
         <div class="section-header">
           <div>
@@ -1767,19 +2655,17 @@
       </section>
 
     </main>
+    </div>
 
-    <!-- ═══ WIZARD DRAWER (slides in from right) ═══ -->
-    <div class="drawer-overlay" id="drawerOverlay"></div>
-    <aside class="wizard-drawer" id="wizardDrawer" aria-label="新建核对批次">
+    <!-- ═══ INLINE AUDIT TOOLBENCH ═══ -->
+    <section class="batch-toolbench" id="laborToolbench" aria-label="新建核对批次">
       <div class="drawer-chrome">
         <div class="drawer-header">
           <div>
             <p class="drawer-eyebrow">New Audit Batch</p>
             <h2 class="drawer-title">新建核对批次</h2>
+            <p class="batch-toolbench-intro">按步骤创建账期、累加选择本批全部 PDF 与 Excel，并确认字段映射。点击开始核对后，页面会切换到结果工作区。</p>
           </div>
-          <button class="btn-close-drawer" id="btnCloseDrawer" type="button" aria-label="关闭">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          </button>
         </div>
         <!-- Step pills -->
         <div class="wizard-steps">
@@ -1801,21 +2687,50 @@
               <input id="supplierName" class="field-input" name="supplierName" autocomplete="organization" list="supplierOptions" placeholder="选择或输入供应商名称…" />
               <datalist id="supplierOptions"></datalist>
             </label>
-            <div class="field-row">
-              <label class="field-group">
-                <span class="field-label">账期开始</span>
-                <input id="periodStart" class="field-input" name="periodStart" type="date" autocomplete="off" />
-              </label>
-              <label class="field-group">
-                <span class="field-label">账期结束</span>
-                <input id="periodEnd" class="field-input" name="periodEnd" type="date" autocomplete="off" />
-              </label>
+            <div class="field-group period-range-field">
+              <span class="field-label" id="periodRangeLabel">账期范围</span>
+              <div class="period-range-control">
+                <input id="periodStart" name="periodStart" type="hidden" />
+                <input id="periodEnd" name="periodEnd" type="hidden" />
+                <button
+                  id="periodRange"
+                  class="period-range-trigger"
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-expanded="false"
+                  aria-controls="periodCalendar"
+                  aria-labelledby="periodRangeLabel periodRangeValue"
+                >
+                  <span id="periodRangeValue">选择开始日期和结束日期</span>
+                  <svg class="period-range-icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="2.5" y="3.5" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 2v3M12.5 2v3M2.5 7h13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </button>
+                <div id="periodCalendar" class="period-calendar" role="dialog" aria-modal="false" aria-labelledby="periodCalendarTitle" hidden>
+                  <div class="period-calendar-head">
+                    <button id="periodCalendarPrev" class="period-calendar-nav" type="button" aria-label="上个月">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3L5 8l5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                    <strong id="periodCalendarTitle" class="period-calendar-title" aria-live="polite"></strong>
+                    <button id="periodCalendarNext" class="period-calendar-nav" type="button" aria-label="下个月">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                  </div>
+                  <div class="period-calendar-weekdays" role="row" aria-label="星期">
+                    <span role="columnheader">一</span><span role="columnheader">二</span><span role="columnheader">三</span><span role="columnheader">四</span><span role="columnheader">五</span><span role="columnheader">六</span><span role="columnheader">日</span>
+                  </div>
+                  <div id="periodCalendarGrid" class="period-calendar-grid" role="grid" aria-label="账期日期"></div>
+                  <div class="period-calendar-footer">
+                    <button id="clearPeriodRange" class="period-clear" type="button">清空</button>
+                    <span id="periodCalendarHint" class="period-calendar-hint">选择开始日期，系统自动选中 7 天</span>
+                  </div>
+                </div>
+              </div>
             </div>
             <p class="field-help">账期用于告诉系统本批发票/账单对应的结算周期，会写入报告并辅助识别和解释异常；不会单独替你过滤账单行。</p>
             <label class="field-group">
               <span class="field-label">结算币种</span>
               <input id="currency" class="field-input" name="currency" autocomplete="off" placeholder="USD / CNY / EUR…" />
             </label>
+            <p class="field-help">正式批次固定执行员工级明细核对；即使整批总额一致，也会继续检查员工金额、工时和归属。</p>
           </div>
           <div class="drawer-footer">
             <p id="createStatus" class="inline-status">填写批次信息后创建。</p>
@@ -1825,13 +2740,14 @@
 
         <!-- ── STEP 2: Upload ── -->
         <div class="wz-panel" data-panel="2">
+          <div class="upload-grid">
           <div class="upload-zone" id="pdfUploadZone">
             <input id="pdfFiles" type="file" accept="application/pdf" multiple />
             <div class="upload-icon">
               <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 18V8M9 13l5-5 5 5" stroke="#0071E3" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="19" width="22" height="6" rx="2" stroke="#D2D2D7" stroke-width="1.5"/></svg>
             </div>
             <p class="upload-title">供应商 PDF 发票</p>
-            <p class="upload-sub" id="pdfFileName">点击选择 · 支持多选</p>
+            <p class="upload-sub" id="pdfFileName">点击选择 · 支持分次累加</p>
           </div>
           <div class="upload-zone" id="xlsxUploadZone">
             <input id="workbookFile" type="file" accept=".xlsx,.xlsm,.xls" multiple />
@@ -1839,11 +2755,15 @@
               <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="4" y="3" width="20" height="22" rx="3" stroke="#34C759" stroke-width="1.5"/><path d="M9 10h10M9 14h10M9 18h6" stroke="#34C759" stroke-width="1.5" stroke-linecap="round"/></svg>
             </div>
             <p class="upload-title">线下账单 Excel</p>
-            <p class="upload-sub" id="workbookFileName">点击选择 · 支持多选 · .xlsx / .xlsm / .xls</p>
+            <p class="upload-sub" id="workbookFileName">点击选择 · 支持分次累加 · .xlsx / .xlsm / .xls</p>
+          </div>
           </div>
           <div class="drawer-footer">
             <p id="uploadStatus" class="inline-status">创建批次后可上传文件。</p>
-            <button id="uploadLaborFiles" class="btn-primary-lg" type="button">上传文件 →</button>
+            <div class="toolbench-footer-actions">
+              <button id="clearLaborFiles" class="btn-clear-files" type="button">清空文件</button>
+              <button id="uploadLaborFiles" class="btn-primary-lg" type="button">上传文件 →</button>
+            </div>
           </div>
         </div>
 
@@ -1890,6 +2810,25 @@
               <div class="mf-preview" id="amountColumnPreview">
                 <span class="preview-chip">—</span>
               </div>
+              <div id="amountComponentColumns" class="amount-component-options" hidden>
+                <span class="amount-component-options-label">叠加金额列（可选）</span>
+                <div class="amount-component-list" data-amount-component-list></div>
+              </div>
+            </div>
+            <!-- Column: 金额口径 -->
+            <div class="mapping-field-card required">
+              <div class="mf-header">
+                <span class="mf-target">金额口径 <em>Basis</em></span>
+                <span class="mf-required">必填</span>
+              </div>
+              <select id="amountScope" class="field-input">
+                <option value="auto">自动判断（字段需写明含税/不含税）</option>
+                <option value="net">不含税净额</option>
+                <option value="gross">含税总额</option>
+              </select>
+              <div class="mf-preview">
+                <span class="preview-chip">无法判断时会阻止放行</span>
+              </div>
             </div>
             <!-- Column: 工号 (optional) -->
             <div class="mapping-field-card">
@@ -1921,39 +2860,18 @@
           </div>
 
           <div class="drawer-footer">
-            <button id="saveMapping" class="btn-primary-lg full-width" type="button">确认字段映射 · 完成配置</button>
+            <button id="saveMapping" class="btn-primary-lg full-width" type="button">确认字段映射并开始核对 →</button>
           </div>
         </div>
 
       </div><!-- /drawer-body -->
-    </aside>
+    </section>
 
     <!-- ═══ TOAST ═══ -->
     <div id="laborToast" class="labor-toast" role="status" aria-live="polite"></div>
 
-    <script src="overseas-labor.js?v=9"></script>
+    <script src="overseas-labor.js?v=32"></script>
     <script>
-      // ── Drawer open/close ──
-      const drawer = document.getElementById('wizardDrawer');
-      const overlay = document.getElementById('drawerOverlay');
-      const btnOpen = document.getElementById('btnOpenDrawer');
-      const btnClose = document.getElementById('btnCloseDrawer');
-
-      function openDrawer() {
-        drawer.classList.add('open');
-        overlay.classList.add('visible');
-        document.body.style.overflow = 'hidden';
-      }
-      function closeDrawer() {
-        drawer.classList.remove('open');
-        overlay.classList.remove('visible');
-        document.body.style.overflow = '';
-      }
-
-      btnOpen.addEventListener('click', openDrawer);
-      btnClose.addEventListener('click', closeDrawer);
-      overlay.addEventListener('click', closeDrawer);
-
       // ── Wizard step pills ──
       document.querySelectorAll('.wz-step').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1964,8 +2882,6 @@
           document.querySelector(`.wz-panel[data-panel="${step}"]`).classList.add('active');
         });
       });
-
-      window.closeDrawer = closeDrawer;
 
       // ── KPI filter buttons ──
       document.querySelectorAll('.kpi-card').forEach(card => {
@@ -1989,17 +2905,6 @@
         }
       });
 
-      // ── File name display ──
-      document.getElementById('pdfFiles').addEventListener('change', function() {
-        const count = this.files.length;
-        document.getElementById('pdfFileName').textContent = count > 0 ? `${count} 个 PDF 文件已选择` : '点击选择 · 支持多选';
-        if (count > 0) document.getElementById('pdfUploadZone').classList.add('has-file');
-      });
-      document.getElementById('workbookFile').addEventListener('change', function() {
-        const count = this.files.length;
-        document.getElementById('workbookFileName').textContent = count > 0 ? `${count} 个 Excel 文件已选择` : '点击选择 · 支持多选 · .xlsx / .xlsm / .xls';
-        if (count > 0) document.getElementById('xlsxUploadZone').classList.add('has-file');
-      });
     </script>
   </body>
 </html>

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "minimumRatio": 0.9,
+  "cases": [
+    {
+      "name": "Prompt 图片发票",
+      "materialGroup": "prompt缺2仓和9仓未报账",
+      "runId": "labor_20260711_005852_391551_9211baef"
+    },
+    {
+      "name": "脱敏合成图片发票家族",
+      "materialGroup": "synthetic-image-family",
+      "artifactFile": "docs/labor_image_regression_fixtures/synthetic_image_family_page1_extraction.json",
+      "expectedTotals": {
+        "image-family-a": 600.0,
+        "image-family-b": 420.5,
+        "image-family-c": 199.99,
+        "image-family-d": 850.25,
+        "image-family-e": 75.0,
+        "image-family-f": 1234.56,
+        "image-family-g": 999.01
+      }
+    },
+    {
+      "name": "29 仓主发票与图片附件",
+      "materialGroup": "29仓",
+      "runId": "labor_20260712_002905_225391_783e05a4"
+    },
+    {
+      "name": "Armz 文本发票回归",
+      "materialGroup": "KW25 Armz GmbH",
+      "runId": "labor_20260712_001326_083645_2de6b66a"
+    }
+  ]
+}

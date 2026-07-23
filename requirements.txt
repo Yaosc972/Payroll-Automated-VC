@@ -4,8 +4,10 @@ python-multipart
 openpyxl
 pypdf
 pypdfium2
-httpx
+pdfplumber
+pymupdf4llm
+httpx[socks]
+psycopg[binary]>=3.2,<4
 msoffcrypto-tool
 xlrd
 Pillow
-psycopg[binary]

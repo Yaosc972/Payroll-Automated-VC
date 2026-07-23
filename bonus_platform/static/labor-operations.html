@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>海外劳务运维看板 · 西格玛工作台</title>
+    <link rel="icon" href="assets/workbench-sigma-mark.png" />
+    <link rel="stylesheet" href="labor-operations.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">OVERSEAS LABOR OPERATIONS</span>
+        <h1>海外劳务运维看板</h1>
+      </div>
+      <div class="actions">
+        <span id="updatedAt" class="updated">尚未刷新</span>
+        <button id="refreshButton" class="icon-button" type="button" title="刷新" aria-label="刷新">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8"/><path d="M20 4v4h-4"/></svg>
+        </button>
+        <a class="icon-button" href="/overseas-labor.html" title="返回核对页面" aria-label="返回核对页面">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/><path d="M9 12h10"/></svg>
+        </a>
+      </div>
+    </header>
+
+    <main>
+      <form id="accessBand" class="access-band">
+        <label for="adminToken">运维访问令牌</label>
+        <input id="adminToken" type="password" autocomplete="off" />
+        <button id="connectButton" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"/><path d="m9 12 2 2 4-4"/></svg>
+          连接
+        </button>
+        <span id="accessStatus" role="status"></span>
+      </form>
+
+      <section class="metric-grid" aria-label="运行指标">
+        <article><span>任务失败率</span><strong id="failureRate">-</strong></article>
+        <article><span>平均耗时</span><strong id="averageDuration">-</strong></article>
+        <article><span>OCR 缓存命中率</span><strong id="cacheHitRate">-</strong></article>
+        <article><span>模型调用失败率</span><strong id="modelFailureRate">-</strong></article>
+      </section>
+
+      <section class="workspace-band">
+        <div class="section-heading"><div><span class="eyebrow">ACTIVE ALERTS</span><h2>当前告警</h2></div><span id="alertCount" class="count">0</span></div>
+        <div id="alerts" class="alert-list"><p class="empty">等待连接运维服务。</p></div>
+      </section>
+
+      <section class="workspace-band">
+        <div class="section-heading"><div><span class="eyebrow">RECENT JOBS</span><h2>最近任务</h2></div><span id="jobCount" class="count">0</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>任务</th><th>批次</th><th>状态</th><th>尝试</th><th>心跳</th><th>错误</th></tr></thead>
+            <tbody id="jobs"><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="storage-band">
+        <div><span>存储后端</span><strong id="storageBackend">-</strong></div>
+        <div><span>可用容量</span><strong id="storageFree">-</strong></div>
+        <div><span>安全阈值</span><strong id="storageMinimum">-</strong></div>
+      </section>
+    </main>
+    <script src="labor-operations.js"></script>
+  </body>
+</html>

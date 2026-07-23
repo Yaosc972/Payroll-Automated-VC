@@ -816,9 +816,13 @@ def _build_amount_rate_review_rows(exception_rows: List[Dict[str, Any]], *, hour
         review_type = "hours_amount_mismatch" if hours_delta > tolerance else "amount_basis_mismatch"
         review_label = "工时和金额都不同" if review_type == "hours_amount_mismatch" else "工时一致，仅金额不同"
         review_focus = "先核工时口径" if review_type == "hours_amount_mismatch" else "先核金额口径"
+        component_explanation = str(row.get("amountDifferenceExplanation") or "").strip()
+        if component_explanation and review_type == "amount_basis_mismatch":
+            review_label = "工时一致，Excel 含额外费用项"
+            review_focus = "先核 Excel 额外费用项"
         amount_direction_label = _build_amount_direction_label(amount_delta)
         hours_direction_label = _build_hours_direction_label(raw_hours_delta, tolerance)
-        business_question = _build_amount_rate_row_question(
+        business_question = component_explanation or _build_amount_rate_row_question(
             amount_delta=amount_delta,
             hours_delta=raw_hours_delta,
             review_type=review_type,
@@ -826,6 +830,8 @@ def _build_amount_rate_review_rows(exception_rows: List[Dict[str, Any]], *, hour
         recommendation = (
             "先核对 PDF 与 Excel 的账期范围、日期行、加班行是否一致；确认前不能自动清账。"
             if review_type == "hours_amount_mismatch"
+            else "确认 Excel 额外费用项是否应包含在本批发票中；确认前不能自动清账。"
+            if component_explanation
             else "先核对 PDF 发票费率、加班/差额行、服务费倍率与 Excel 成本口径；确认前不能自动清账。"
         )
         cannot_auto_resolve_reason = (
@@ -853,6 +859,10 @@ def _build_amount_rate_review_rows(exception_rows: List[Dict[str, Any]], *, hour
                 "businessQuestion": business_question,
                 "cannotAutoResolveReason": cannot_auto_resolve_reason,
                 "recommendation": recommendation,
+                "amountDifferenceReasonCode": row.get("amountDifferenceReasonCode", ""),
+                "amountDifferenceExplanation": component_explanation,
+                "amountDifferenceComponents": list(row.get("amountDifferenceComponents") or []),
+                "amountDifferenceResidual": round(float(row.get("amountDifferenceResidual") or 0), 2),
             }
         )
     return sorted(rows, key=lambda item: abs(float(item.get("amountDelta") or 0)), reverse=True)
@@ -1706,13 +1716,20 @@ def _workbook_mapping_candidate(path: Path, relative_path: str) -> Dict[str, Any
         if not sheets:
             payload["error"] = "Workbook 无工作表。"
             return payload
-        preferred = _choose_sheet_for_mapping(sheets)
-        suggestion = suggest_mapping(path, preferred)
+        suggestion = _best_workbook_mapping_suggestion(path, sheets)
+        preferred = suggestion.get("sheetName") or _choose_sheet_for_mapping(sheets)
+        suggested_mapping = dict(suggestion.get("suggestedMapping") or {})
+        amount_candidates = list(suggestion.get("amountColumnCandidates") or [])
+        selected_amount = str(suggested_mapping.get("amount") or "").strip()
+        aggregate_amount = re.search(r"(?:总额|总计|合计|total|amount|cost|含税|不含税)", selected_amount, re.IGNORECASE)
+        if selected_amount and not aggregate_amount:
+            if len(amount_candidates) > 1:
+                suggested_mapping["amountColumns"] = amount_candidates
         payload.update(
             {
                 "sheetName": suggestion.get("sheetName") or preferred,
                 "headers": suggestion.get("headers") or [],
-                "suggestedMapping": suggestion.get("suggestedMapping") or {},
+                "suggestedMapping": suggested_mapping,
                 "periodHint": _period_hint_from_preview_rows(suggestion.get("previewRows") or []),
                 "supplierHint": _supplier_hint_from_preview_rows(suggestion.get("previewRows") or []),
                 "warehouseIds": _infer_warehouse_ids(path.name),
@@ -1725,6 +1742,20 @@ def _workbook_mapping_candidate(path: Path, relative_path: str) -> Dict[str, Any
     except Exception as exc:  # noqa: BLE001 - 计划生成不能因单个 workbook 中断。
         payload["error"] = str(exc)
     return payload
+
+
+def _best_workbook_mapping_suggestion(path: Path, sheets: List[str]) -> Dict[str, Any]:
+    """Choose the sheet that most closely resembles a readable labor bill."""
+    suggestions = [suggest_mapping(path, sheet) for sheet in sheets]
+
+    def score(item: Dict[str, Any]) -> tuple[int, int, int]:
+        mapping = item.get("suggestedMapping") or {}
+        required_count = sum(bool(mapping.get(key)) for key in ("name", "hours", "amount"))
+        amount_is_total = int(str(mapping.get("amount") or "").strip().lower() in {"总额", "total", "amount"})
+        preview_count = len(item.get("previewRows") or [])
+        return required_count, amount_is_total, preview_count
+
+    return max(suggestions, key=score)
 
 
 def _is_multi_warehouse_workbook_set(mapping_candidates: List[Dict[str, Any]], invoice_files: List[Dict[str, Any]]) -> bool:
@@ -1817,6 +1848,8 @@ def _choose_period(rows: List[Dict[str, Any]]) -> str:
 def _infer_supplier(text: str) -> str:
     normalized = text.lower()
     checks = [
+        ("adequat", ("adequat",)),
+        ("sovitrat groupe", ("sovitrat",)),
         ("workforce", ("workforce", "work force")),
         ("fairway", ("fairway",)),
         ("osi", ("osi", "one source", "onesource")),

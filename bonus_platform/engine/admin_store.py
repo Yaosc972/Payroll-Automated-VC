@@ -329,6 +329,37 @@ def init_admin_store(db_path: Path | None = None) -> Path | str:
     return get_admin_database_url() if backend == "postgres" else _sqlite_db_path(db_path)
 
 
+def admin_store_health() -> dict[str, Any]:
+    backend = _database_backend()
+    configured = backend == "postgres" and bool(get_admin_database_url().strip())
+    if not configured:
+        return {"backend": backend, "configured": False, "ready": False}
+    try:
+        with _connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                  to_regclass('public.admin_users') IS NOT NULL AS users_ready,
+                  to_regclass('public.admin_roles') IS NOT NULL AS roles_ready,
+                  to_regclass('public.admin_user_roles') IS NOT NULL AS user_roles_ready,
+                  to_regclass('public.admin_sessions') IS NOT NULL AS sessions_ready
+                """
+            ).fetchone()
+        values = dict(row or {})
+        ready = all(
+            bool(values.get(key))
+            for key in ("users_ready", "roles_ready", "user_roles_ready", "sessions_ready")
+        )
+        return {"backend": "postgres", "configured": True, "ready": ready}
+    except Exception as exc:  # noqa: BLE001 - health output must stay sanitized.
+        return {
+            "backend": "postgres",
+            "configured": True,
+            "ready": False,
+            "error": str(exc).replace("\n", " ")[:240],
+        }
+
+
 def _column_exists(connection: _AdminConnection, table: str, column: str) -> bool:
     if connection.backend == "postgres":
         row = connection.execute(

@@ -187,13 +187,13 @@
 
             <a class="saas-module-card overseas-module pilot-card" href="overseas-labor.html" data-module-id="overseas">
               <div class="module-card-top">
-                <span class="module-status uat">UAT · 试点</span>
-                <span class="module-version">V0.3</span>
+                <span class="module-status uat">UAT Trial · 试用版</span>
+                <span class="module-version">V0.5-UAT</span>
               </div>
               <div class="module-copy">
                 <p>Overseas Invoice Audit</p>
                 <h2>海外劳务报账核对</h2>
-                <span>PDF 发票、Excel 映射、AI 抽取与差异报告。</span>
+                <span>PDF 发票、Excel 映射、本机 OCR 与确定性解析、员工级差异报告及 UAT 留痕。</span>
               </div>
               <dl>
                 <div><dt>校验</dt><dd>PDF 前置</dd></div>
@@ -206,7 +206,6 @@
 
       </main>
     </div>
-    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
     <script>
       (async () => {
         if (!window.gsap || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -228,10 +227,24 @@
           card.addEventListener('mouseenter', () => {
             gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
           });
-          card.addEventListener('mouseleave', () => {
-            gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
+          gsap.set('.dashboard-sidebar', { x: -18, y: 0 });
+
+          const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } });
+          timeline
+            .to('.dashboard-sidebar', { opacity: 1, x: 0, duration: 0.7 })
+            .to('.dashboard-topbar', { opacity: 1, y: 0, duration: 0.55 }, '-=0.42')
+            .to('.welcome-panel', { opacity: 1, y: 0, duration: 0.62 }, '-=0.32')
+            .to('.saas-module-card', { opacity: 1, y: 0, duration: 0.56, stagger: 0.07 }, '-=0.28');
+
+          document.querySelectorAll('.saas-module-card').forEach((card) => {
+            card.addEventListener('mouseenter', () => {
+              gsap.to(card, { y: -5, scale: 1.006, duration: 0.28, ease: 'power2.out' });
+            });
+            card.addEventListener('mouseleave', () => {
+              gsap.to(card, { y: 0, scale: 1, duration: 0.32, ease: 'power2.out' });
+            });
           });
-        });
+        }
 
         const storageKey = 'sigma-admin-console-draft-v3';
         const permissionDefaults = {

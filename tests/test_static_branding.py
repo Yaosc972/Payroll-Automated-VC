@@ -22,6 +22,7 @@ EMPLOYEE_PAYROLL_JS = ROOT / "bonus_platform" / "static" / "china-employee-payro
 LEGACY_EMPLOYEE_PAYROLL_HTML = ROOT / "bonus_platform" / "static" / "employee-payroll.html"
 RELEASE_INFO_JSON = ROOT / "bonus_platform" / "static" / "release-info.json"
 VERCEL_JSON = ROOT / "vercel.json"
+LOGIN_HTML = ROOT / "bonus_platform" / "static" / "login.html"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
 APP_PY = ROOT / "bonus_platform" / "app.py"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
@@ -29,10 +30,380 @@ STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
 HEADER_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-blue.png"
 LOGIN_SIGMA_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-transparent.png"
 FEISHU_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "feishu-logo.png"
+OVERSEAS_LABOR_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "overseas-labor-logo-2026.png"
 DESKTOP_PACKAGE = ROOT / "desktop" / "package.json"
 DESKTOP_ICON_PNG = ROOT / "desktop" / "assets" / "icon.png"
 DESKTOP_ICON_ICO = ROOT / "desktop" / "assets" / "icon.ico"
 DESKTOP_ICON_ICNS = ROOT / "desktop" / "assets" / "icon.icns"
+
+
+def test_login_smokey_canvas_is_viewport_layer_not_grid_content():
+    html = LOGIN_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    assert 'class="login-smokey-canvas"' in html
+    canvas_css = css.split(".login-smokey-canvas {", 1)[1].split("}", 1)[0]
+    assert "position: fixed" in canvas_css
+    assert "inset: 0" in canvas_css
+    assert "width: 100%" in canvas_css
+    assert "height: 100%" in canvas_css
+    assert "pointer-events: auto" in canvas_css
+
+
+def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="moduleReleaseMeta"' in html
+    assert "正式批次固定执行员工级明细核对" in html
+    assert 'const LABOR_UI_MODULE_VERSION = "0.5-uat"' in script
+    assert "const LABOR_UI_API_CONTRACT_VERSION = 2" in script
+    assert "laborReleaseCompatibility" in script
+    assert "setLaborActionAvailability" in script
+    assert "runtimeGate?.runtimeSourceCurrent" in script
+    assert "access?.build?.schemaVersion === 1" in script
+    assert 'access?.build?.status === "current"' in script
+    assert '"X-Sigma-Labor-API-Contract"' in script
+    assert '"X-Sigma-Labor-UI-Version"' in script
+    assert '"X-Sigma-Labor-UI-Build"' in script
+    assert "前后端版本不一致" in script
+    assert "require_employee_detail: true" in script
+    assert "usesP1DirectUpload" in script
+    assert "sha256File" in script
+    assert "upload-intents" in script
+    assert "intent.signedUrl" in script
+    assert "upload-intents/${intent.fileId}/finalize" in script
+    assert 'overseas-labor.js?v=32' in html
+
+
+def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="periodRange"' in html
+    assert 'id="periodCalendar"' in html
+    assert 'id="periodCalendarGrid"' in html
+    assert 'id="periodStart"' in html and 'name="periodStart" type="hidden"' in html
+    assert 'id="periodEnd"' in html and 'name="periodEnd" type="hidden"' in html
+    assert 'id="clearPeriodRange"' in html
+    assert 'data-period-preset="this-week"' not in html
+    assert 'data-period-preset="last-week"' not in html
+    assert 'data-period-preset="last-7-days"' not in html
+    assert "最近7天" not in html
+    assert "function renderPeriodCalendar()" in script
+    assert "function selectPeriodDate(value)" in script
+    assert "addDays(picked, 6)" in script
+    assert "periodPickerState.selectingEnd" in script
+    assert 'overseas-labor.js?v=32' in html
+
+
+def test_overseas_labor_async_actions_share_button_loading_transitions():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "@keyframes labor-button-spin" in html
+    assert ".button-loading-indicator" in html
+    assert ".is-loading" in html
+    assert "const buttonLoadingState = new WeakMap()" in script
+    assert "function beginButtonLoading(button, label" in script
+    assert "function endButtonLoading(button" in script
+    assert 'beginButtonLoading(labor.createLaborRun, "正在创建")' in script
+    assert 'beginButtonLoading(labor.uploadLaborFiles, "正在上传")' in script
+    assert 'beginButtonLoading(labor.loadSheets, "正在读取")' in script
+    assert 'beginButtonLoading(labor.saveMapping, "正在保存")' in script
+    assert 'beginButtonLoading(labor.extractCompare, "正在生成")' in script
+    assert 'beginButtonLoading(labor.loadMaterialBatches, "正在加载")' in script
+    assert 'beginButtonLoading(labor.runMaterialDryRun, "正在验证")' in script
+    assert 'beginButtonLoading(labor.activateWorker, "正在连接")' in script
+    assert 'beginButtonLoading(labor.deleteCurrentRun, "正在删除")' in script
+    assert 'beginButtonLoading(button, "正在撤销")' in script
+    assert 'overseas-labor.js?v=32' in html
+
+
+def test_overseas_labor_uses_server_formal_task_gate_instead_of_hostname_guessing():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    gate_block = script[
+        script.index("function isFormalLaborTaskBlocked"):
+        script.index("function showFormalLaborTaskBlocked")
+    ]
+    extract_block = script[
+        script.index("async function extractAndCompare"):
+        script.index("async function pollCompareResult")
+    ]
+
+    assert "formalTaskGate?.canQueue" in gate_block
+    assert "window.location.hostname" not in gate_block
+    assert "isVercelLaborLightUat" not in script
+    assert "showVercelLightUatExtractBlocked" not in script
+    assert "isFormalLaborTaskBlocked()" in extract_block
+    assert "showFormalLaborTaskBlocked()" in extract_block
+
+
+def test_overseas_labor_page_exposes_batch_governance_controls():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="btnOpenGovernance"' in html
+    assert 'id="laborGovernanceDialog"' in html
+    assert 'id="deleteCurrentLaborRun"' in html
+    assert 'id="laborStorageSummary"' in html
+    assert 'id="laborAuditList"' in html
+    assert 'requestJson("/api/labor/storage-info")' in script
+    assert 'requestJson(`/api/labor/audit?run_id=${encodeURIComponent(runId)}&limit=20`)' in script
+
+
+def test_overseas_labor_can_restore_an_owned_batch_from_the_run_query():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    restore_block = script[
+        script.index("async function restoreLaborRunFromUrl"):
+        script.index("function laborReleaseCompatibility")
+    ]
+
+    assert 'new URLSearchParams(window.location.search).get("run")' in restore_block
+    assert 'requestJson(`/api/labor/runs/${encodeURIComponent(runId)}`)' in restore_block
+    assert 'advanceWizardStep(hasUploadedFiles ? "3" : "2")' in restore_block
+    assert 'run.mappingPreflight?.status === "completed"' in restore_block
+    assert "await loadSheets();" in restore_block
+    assert "已恢复批次" in restore_block
+
+
+def test_overseas_labor_restore_shows_completed_result_or_resumes_polling():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    restore_block = script[
+        script.index("async function restoreLaborRunFromUrl"):
+        script.index("function laborReleaseCompatibility")
+    ]
+
+    assert "function restoreLaborRunOutput" in restore_block
+    assert 'run.status === "已生成差异报告"' in restore_block
+    assert "renderResult(run);" in restore_block
+    assert "setDownload(preferredLaborReportDownloadUrl(run));" in restore_block
+    assert '["queued", "waiting_for_personal_worker", "running", "retry_wait"].includes(taskStatus)' in restore_block
+    assert "renderLaborProgress(run);" in restore_block
+    assert "window.setInterval(pollCompareResult, 3000)" in restore_block
+
+
+def test_overseas_labor_waits_for_worker_completion_before_accepting_report():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "function laborRunHasSettledResult" in script
+    helper_block = script[
+        script.index("function laborRunHasSettledResult"):
+        script.index("function restoreLaborRunOutput")
+    ]
+    restore_block = script[
+        script.index("function restoreLaborRunOutput"):
+        script.index("function laborReleaseCompatibility")
+    ]
+    poll_block = script[
+        script.index("async function pollCompareResult"):
+        script.index("function formatLaborFailureMessage")
+    ]
+
+    assert 'run.status === "已生成差异报告"' in helper_block
+    assert 'taskStatus === "completed"' in helper_block
+    assert 'taskStatus === "succeeded"' in helper_block
+    assert "laborRunHasSettledResult(run)" in restore_block
+    assert "laborRunHasSettledResult(run)" in poll_block
+
+
+def test_overseas_labor_new_batch_resets_restored_run_and_tracks_new_run_url():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    reset_block = script[
+        script.index("function beginNewLaborBatch"):
+        script.index("async function createRun")
+    ]
+    create_block = script[
+        script.index("async function createRun"):
+        script.index("async function uploadFiles")
+    ]
+
+    assert 'labor.btnOpenDrawer.addEventListener("click", beginNewLaborBatch)' in script
+    assert "stopComparePolling()" in reset_block
+    assert "clearResults()" in reset_block
+    assert "laborState.run = null" in reset_block
+    assert 'setLaborRunQuery("")' in reset_block
+    assert 'advanceWizardStep("1")' in reset_block
+    assert 'labor.pdfFiles.value = ""' in reset_block
+    assert 'labor.workbookFile.value = ""' in reset_block
+    assert "setLaborRunQuery(run.id)" in create_block
+
+
+def test_overseas_labor_new_batch_clears_all_prior_result_labels_and_ignores_stale_poll():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    clear_block = script[
+        script.index("function clearResults"):
+        script.index("async function extractAndCompare")
+    ]
+    poll_block = script[
+        script.index("async function pollCompareResult"):
+        script.index("function formatLaborFailureMessage")
+    ]
+    extract_block = script[
+        script.index("async function extractAndCompare"):
+        script.index("async function pollCompareResult")
+    ]
+
+    assert 'setText(labor.compareStatus, "新批次尚未生成核对结果。")' in clear_block
+    assert 'totalCard.textContent = "尚未核对"' in clear_block
+    assert 'matchedCard.textContent = "尚未核对"' in clear_block
+    assert 'unmatchedCard.textContent = "待确认项目"' in clear_block
+    assert "const requestedRunId = laborState.run?.id" in poll_block
+    assert "laborState.run?.id !== requestedRunId" in poll_block
+    assert "const requestedRunId = laborState.run?.id" in extract_block
+    assert "laborState.run?.id !== requestedRunId" in extract_block
+
+
+def test_overseas_labor_preserves_structured_api_conflict_message():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    formatter_block = script[
+        script.index("function formatLaborRequestError"):
+        script.index("function setDownload")
+    ]
+
+    assert 'const errorCode = String(message?.errorCode || "").trim();' in formatter_block
+    assert "if (errorCode && typeof message === \"object\") return text" in formatter_block
+
+
+def test_overseas_labor_revalidates_completed_mapping_preflight_before_reuse():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    preflight_block = script[
+        script.index("async function ensureP1MappingPreflight"):
+        script.index("async function loadFieldSuggestions")
+    ]
+
+    assert 'requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight`' in preflight_block
+    assert 'if (current.status === "completed") return;' not in preflight_block
+    assert 'response.mappingPreflight' in preflight_block
+
+
+def test_overseas_labor_exposes_personal_worker_activation_without_persisting_token_in_dom():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="btnWorkerStatus"' in html
+    assert 'id="activateLaborWorker"' in html
+    assert "/api/labor/worker/devices" in script
+    assert "sigma-overseas-labor-worker://activate?" in script
+    assert "workerVersion: laborState.moduleAccess" not in script
+    activation_block = script[
+        script.index("async function activateLaborWorker"):
+        script.index("async function handleLaborWorkerDeviceAction")
+    ]
+    assert "activationUrl" in activation_block
+    assert "localStorage" not in activation_block
+    assert 'method: "DELETE"' in script
+
+
+def test_overseas_labor_mapping_supports_optional_amount_components():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="amountComponentColumns"' in html
+    assert "叠加金额列" in html
+    assert "renderAmountComponentOptions" in script
+    assert "amountColumns: selectedAmountColumns()" in script
+    assert 'id="amountScope"' in html
+    assert "金额口径" in html
+    assert "amountScope: labor.amountScope.value" in script
+
+
+def test_overseas_labor_conclusion_uses_stacked_readable_layout_and_filters_blank_warehouses():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    conclusion_css = html.split(".overseas-labor-shell .conclusion-section {", 2)[-1].split("}", 1)[0]
+    details_css = html.split(".overseas-labor-shell .conclusion-details {", 2)[-1].split("}", 1)[0]
+    assert "display: grid" in conclusion_css
+    assert "display: grid" in details_css
+    assert 'class="conclusion-detail conclusion-detail--summary"' in script
+    assert 'class="conclusion-detail conclusion-detail--explanation"' in script
+    assert 'class="conclusion-report-actions"' in script
+    assert "normalizeReviewWarehouses" in script
+    assert ".map((warehouse) => String(warehouse || \"\").trim())" in script
+    assert ".filter(Boolean)" in script
+
+
+def test_overseas_labor_employee_summary_counts_people_without_zero_rows_or_name_candidates():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    helper_block = script[
+        script.index("function laborPresentationContract"):
+        script.index("function renderEmployeeReconTable")
+    ]
+    result_block = script[
+        script.index("function renderResult"):
+        script.index("function normalizeReviewWarehouses")
+    ]
+    render_block = script[
+        script.index("function renderEmployeeReconTable"):
+        script.index("function laborBusinessStatusLabel")
+    ]
+    conclusion_block = script[
+        script.index("function renderConclusion"):
+        script.index("function buildBusinessConclusion")
+    ]
+
+    assert "run?.presentation" in helper_block
+    assert "schemaVersion === 1" in helper_block
+    assert "laborEmployeeComparisonRows(run?.comparisonRows)" in helper_block
+    assert "const presentation = laborPresentationContract(run);" in result_block
+    assert "const rows = presentation.employeeRows;" in result_block
+    assert "const candidateMatches = presentation.candidateMatches;" in result_block
+    assert "const employeeRows = Array.isArray(rows) ? rows : [];" in render_block
+    assert "employeeRows.forEach" in render_block
+    assert "candidateMatches.forEach" not in render_block
+    assert 'presentationSummary?.employeeCount ?? allRows.length' in render_block
+    assert "laborPresentationContract(run)" in conclusion_block
+
+
+def test_overseas_labor_employee_detail_is_first_workspace_section_below_kpis():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+
+    kpi_index = html.index('id="kpiBanner"')
+    workspace_index = html.index('<main class="workspace">')
+    employee_index = html.index('id="employeeReconSection"')
+    conclusion_index = html.index('id="conclusionSection"')
+
+    assert kpi_index < workspace_index < employee_index < conclusion_index
+
+
+def test_overseas_labor_page_uses_dedicated_latest_logo_for_header_and_favicon():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+
+    assert OVERSEAS_LABOR_LOGO.exists()
+    assert 'href="assets/overseas-labor-logo-2026.png"' in html
+    assert 'src="assets/overseas-labor-logo-2026.png"' in html
+    with Image.open(OVERSEAS_LABOR_LOGO) as logo:
+        assert logo.size == (1254, 1254)
+        assert logo.mode == "RGBA"
+        assert logo.getpixel((0, 0))[3] == 0
+
+
+def test_overseas_labor_header_keeps_logo_compact_and_hides_build_metadata():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+
+    logo_rule = html.split(".overseas-labor-shell .portal-logo-mark {", 1)[1].split("}", 1)[0]
+    assert "min-width: 0" in logo_rule
+    assert 'id="moduleReleaseMeta" role="status" aria-live="polite" hidden' in html
+    assert "界面 0.5-uat · API v2" not in html
+
+
+def test_overseas_labor_surfaces_component_backed_amount_difference():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    status_block = script[
+        script.index("function laborBusinessStatusLabel"):
+        script.index("function renderPassEvidence")
+    ]
+    pending_block = script[
+        script.index("function normalizeFormalAmountRateRows"):
+        script.index("function _renderHoursDiffTable")
+    ]
+
+    assert 'amountDifferenceReasonCode === "excel_amount_component_delta"' in status_block
+    assert 'return "Excel含额外费用项"' in status_block
+    assert "amountDifferenceExplanation" in pending_block
+    assert "amountDifferenceComponents" in pending_block
 
 
 def test_header_uses_blue_brand_asset_and_favicon_keeps_dark_asset():
@@ -183,8 +554,11 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert 'href="overseas-labor.html"' in html
     assert 'href="china-employee-payroll.html"' in html
     assert 'href="admin.html"' in html
+    assert "V0.5-UAT" in html
+    assert "本机 OCR" in html
+    assert "AI 抽取、差异报告" not in html
     assert "Available · 已上线" in html
-    assert "UAT · 试点" in html
+    assert "UAT Trial · 试用版" in html
     assert "UAT试点" in html
     assert "{ id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true }" in html
     assert "app.js" not in html
@@ -226,10 +600,10 @@ def test_vercel_config_does_not_override_runtime_labor_access_mode():
 def test_overseas_labor_uses_direct_storage_upload_for_large_files():
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 
-    assert "direct-upload-plan" in js
-    assert "direct-upload-complete" in js
-    assert "uploadOneFileToSignedUrl" in js
-    assert "LABOR_DIRECT_UPLOAD_UNAVAILABLE" in js
+    assert "/upload-intents" in js
+    assert "/finalize" in js
+    assert "uploadFilesDirectlyToPrivateStorage" in js
+    assert "signedUrl" in js
 
 
 def test_admin_console_is_static_permission_management_shell():
@@ -479,13 +853,15 @@ def test_overseas_labor_page_is_separate_audit_workbench():
     assert "海外劳务工报账核对" in html
     assert 'data-module-id="overseas"' in html
     assert "permission-guard.js" in html
-    assert "自动核对总金额与员工明细" in html
+    assert "核对总金额与员工明细" in html
     assert "测试材料验证" in html
+    assert "本地解析/OCR 提取证据" in html
+    assert "AI 抽取供应商发票" not in html
     assert "overseas-labor.js" in html
     assert "/api/labor/runs" in js
-    assert "applyVercelLightUatState" in js
-    assert "正式核对未启用" in js
-    assert "UAT 页面试用" in js
+    assert "runtimeGate" in js
+    assert "formalTaskGate" in js
+    assert "服务版本无法确认，正式操作已锁定" in js
     assert "字段映射" in html
     assert "结论" in html
     assert "仓库核对总览" in html
@@ -638,6 +1014,118 @@ def test_release_info_marks_integration_branch_as_only_production_source():
         "overseas",
         "admin",
     }
+
+
+def test_overseas_labor_upload_shows_and_prevalidates_configured_workbook_limit():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "workbookUploadHint(0)" in js
+    assert 'overseas-labor.js?v=32' in html
+    assert "access.uploadLimits?.maxWorkbookFiles" in js
+    assert "existing.workbook + pendingWorkbookCount > maxWorkbookFiles" in js
+    assert "最多选择 ${maxWorkbookFiles} 个 Excel 文件" in js
+
+
+def test_overseas_labor_uses_inline_toolbench_and_module_only_branding():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'class="module-brand-lockup"' in html
+    assert "Σ-WORKBENCH" not in html
+    assert "西格玛工作台" not in html
+    assert 'id="laborToolbench"' in html
+    assert 'id="laborResultsView"' in html
+    assert 'class="drawer-overlay"' not in html
+    assert 'class="wizard-drawer"' not in html
+    assert "function showLaborToolbench()" in js
+    assert "function showLaborResultsView()" in js
+    assert "showLaborResultsView();" in js[js.index("async function extractAndCompare"):js.index("async function pollCompareResult")]
+
+
+def test_overseas_labor_file_picker_accumulates_and_can_clear_files():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="clearLaborFiles"' in html
+    assert "selectedPdfFiles: []" in js
+    assert "selectedWorkbookFiles: []" in js
+    assert "function mergeSelectedLaborFiles" in js
+    assert 'labor.pdfFiles.addEventListener("change", handlePdfFilesSelected)' in js
+    assert 'labor.workbookFile.addEventListener("change", handleWorkbookFilesSelected)' in js
+    assert "laborState.selectedPdfFiles" in js
+    assert "laborState.selectedWorkbookFiles" in js
+    assert "function clearSelectedLaborFiles" in js
+
+
+def test_overseas_labor_page_exposes_worker_download_and_update_status():
+    html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'id="downloadLaborWorker"' in html
+    assert 'id="laborWorkerReleaseStatus"' in html
+    assert 'id="laborWorkerReleasePackage"' in html
+    assert 'id="laborWorkerReleasePlatform"' in html
+    assert 'id="uploadLaborWorkerRelease"' in html
+    assert "/api/labor/worker/release" in js
+    assert "/api/labor/worker/release/upload-intent" in js
+    assert "function detectLaborWorkerPlatform" in js
+    assert "platform=${encodeURIComponent(laborState.workerPlatform)}" in js
+    assert "platform: releasePlatform" in js
+    assert "updateAvailable" in js
+    assert "有新版本" in js
+
+    release_action_css = html[
+        html.index(".overseas-labor-shell .worker-release-action {"):
+        html.index(".overseas-labor-shell .drawer-chrome,")
+    ]
+    assert "width: 220px" in release_action_css
+    assert "white-space: normal" in release_action_css
+    assert "overflow-wrap: anywhere" in release_action_css
+    assert "text-overflow: ellipsis" not in release_action_css
+
+
+def test_overseas_labor_polling_uses_backend_heartbeat_instead_of_fixed_ten_minute_limit():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "pollMaxRetries" not in js
+    assert "pollMaxIdleSeconds: 600" in js
+    assert "secondsSince(run?.progress?.lastUpdatedAt)" in js
+    assert "后台超过10分钟没有更新进度" in js
+    assert "生成核对报告超时（10分钟）" not in js
+
+
+def test_overseas_labor_parses_timezone_less_backend_timestamps_as_utc():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    parser_block = js[
+        js.index("function parseIsoTime"):
+        js.index("function formatDuration")
+    ]
+
+    assert 'const text = String(value || "").trim();' in parser_block
+    assert '/^\\d{4}-\\d{2}-\\d{2}T/' in parser_block
+    assert '`${text}Z`' in parser_block
+    assert "Date.parse(normalized)" in parser_block
+
+
+def test_overseas_labor_renders_structure_guard_statuses_before_business_difference():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "run?.batchGuard" in js
+    assert 'guard.status === "pdf_recognition_incomplete"' in js
+    assert 'guard.status === "partial_review"' in js
+    assert 'guard.status === "currency_review"' in js
+    assert "本次属于识别异常，不是业务差异" in js
+    assert "张发票待确认" in js
+
+
+def test_overseas_labor_uses_detected_currency_instead_of_hardcoded_dollars():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "function laborCurrencySymbol" in js
+    assert 'EUR: "€"' in js
+    assert "const currencySymbol = laborCurrencySymbol(run);" in js
+    assert 'labor.kpiTotal.textContent = `${currencySymbol}${formatMoney(pdfAmount)}`' in js
 
 
 def test_desktop_builder_uses_platform_logo_icons():

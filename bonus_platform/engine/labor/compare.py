@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from difflib import SequenceMatcher
+from itertools import combinations
 from typing import Any, Dict, Iterable, List
 
 from .extract import _warehouse_id_from_filename
@@ -46,14 +48,55 @@ def compare_labor_items(
     manual_name_mapping: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Employee-level comparison between PDF and Excel rows."""
+    warehouse_scoped = _can_compare_within_warehouses(pdf_rows, excel_rows)
+    if warehouse_scoped:
+        pdf_partitions = _partition_items_by_warehouse(pdf_rows)
+        excel_partitions = _partition_items_by_warehouse(excel_rows)
+        rows: List[Dict[str, Any]] = []
+        candidate_matches: List[Dict[str, Any]] = []
+        for warehouse_id in sorted(set(pdf_partitions) | set(excel_partitions)):
+            partition_rows, partition_candidates = _compare_employee_partition(
+                pdf_partitions.get(warehouse_id, []),
+                excel_partitions.get(warehouse_id, []),
+                amount_tolerance=amount_tolerance,
+                hours_tolerance=hours_tolerance,
+                confidence_threshold=confidence_threshold,
+                manual_name_mapping=manual_name_mapping,
+            )
+            rows.extend(_scope_comparison_rows(partition_rows, warehouse_id))
+            candidate_matches.extend(_scope_candidate_matches(partition_candidates, warehouse_id))
+    else:
+        rows, candidate_matches = _compare_employee_partition(
+            pdf_rows,
+            excel_rows,
+            amount_tolerance=amount_tolerance,
+            hours_tolerance=hours_tolerance,
+            confidence_threshold=confidence_threshold,
+            manual_name_mapping=manual_name_mapping,
+        )
+    summary = _build_summary(rows, pdf_rows, excel_rows, candidate_matches)
+    return {"summary": summary, "rows": rows, "candidateMatches": candidate_matches}
+
+
+def _compare_employee_partition(
+    pdf_rows: List[LaborLineItem],
+    excel_rows: List[LaborLineItem],
+    *,
+    amount_tolerance: float,
+    hours_tolerance: float,
+    confidence_threshold: float,
+    manual_name_mapping: Dict[str, str] | None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     pdf = _aggregate(pdf_rows)
     excel = _aggregate(excel_rows)
-    rows = _match_employee_groups(pdf, excel,
-                                  amount_tolerance=amount_tolerance,
-                                  hours_tolerance=hours_tolerance,
-                                  confidence_threshold=confidence_threshold,
-                                  manual_name_mapping=manual_name_mapping)
-
+    rows = _match_employee_groups(
+        pdf,
+        excel,
+        amount_tolerance=amount_tolerance,
+        hours_tolerance=hours_tolerance,
+        confidence_threshold=confidence_threshold,
+        manual_name_mapping=manual_name_mapping,
+    )
     candidate_matches, promoted_pdf, promoted_excel = _suggest_unmatched_candidates(
         rows,
         pdf,
@@ -66,8 +109,54 @@ def compare_labor_items(
     if offset_candidates:
         rows = _apply_residual_offset_flags(rows, offset_candidates)
         candidate_matches.extend(offset_candidates)
-    summary = _build_summary(rows, pdf_rows, excel_rows, candidate_matches)
-    return {"summary": summary, "rows": rows, "candidateMatches": candidate_matches}
+    return rows, candidate_matches
+
+
+def _item_warehouse_id(item: LaborLineItem) -> str:
+    return str(item.warehouse_id or _warehouse_id_from_filename(item.source_file) or "").strip()
+
+
+def _can_compare_within_warehouses(
+    pdf_rows: List[LaborLineItem],
+    excel_rows: List[LaborLineItem],
+) -> bool:
+    all_rows = [*pdf_rows, *excel_rows]
+    if not pdf_rows or not excel_rows or any(not _item_warehouse_id(item) for item in all_rows):
+        return False
+    return len({_item_warehouse_id(item) for item in all_rows}) > 1
+
+
+def _partition_items_by_warehouse(items: List[LaborLineItem]) -> Dict[str, List[LaborLineItem]]:
+    partitions: Dict[str, List[LaborLineItem]] = defaultdict(list)
+    for item in items:
+        partitions[_item_warehouse_id(item)].append(item)
+    return dict(partitions)
+
+
+def _scoped_employee_key(warehouse_id: str, employee_key: str) -> str:
+    return f"warehouse:{warehouse_id}|{employee_key}"
+
+
+def _scope_comparison_rows(rows: List[Dict[str, Any]], warehouse_id: str) -> List[Dict[str, Any]]:
+    scoped = []
+    for row in rows:
+        item = dict(row)
+        item["employeeKey"] = _scoped_employee_key(warehouse_id, str(item.get("employeeKey") or ""))
+        item["warehouseId"] = warehouse_id
+        scoped.append(item)
+    return scoped
+
+
+def _scope_candidate_matches(candidates: List[Dict[str, Any]], warehouse_id: str) -> List[Dict[str, Any]]:
+    scoped = []
+    for candidate in candidates:
+        item = dict(candidate)
+        for field in ("pdfEmployeeKey", "excelEmployeeKey"):
+            if item.get(field):
+                item[field] = _scoped_employee_key(warehouse_id, str(item[field]))
+        item["warehouseId"] = warehouse_id
+        scoped.append(item)
+    return scoped
 
 
 def compare_by_warehouse(
@@ -90,93 +179,159 @@ def compare_by_warehouse(
     """
     errors: List[str] = []
 
-    # Tier 1: total amount comparison
-    if pdf_totals:
-        pdf_total = round(sum(float(t.get("total_amount") or 0) for t in pdf_totals), 2)
-    elif pdf_rows:
-        pdf_total = round(sum(r.amount for r in pdf_rows), 2)
-    else:
-        pdf_total = 0.0
+    raw_pdf_totals = list(pdf_totals or [])
+    pdf_totals = [total for total in raw_pdf_totals if not _is_explicit_non_payable_pdf_total(total)]
+    pdf_rows = list(pdf_rows or [])
+
+    # Tier 1: payable totals come only from authoritative invoice evidence.
+    payable_pdf_totals = [total for total in pdf_totals if _is_payable_pdf_total(total)]
+    unresolved_pdf_totals = [total for total in pdf_totals if not _is_payable_pdf_total(total)]
+    pdf_total = round(sum(float(t.get("total_amount") or 0) for t in payable_pdf_totals), 2)
     excel_total = round(sum(float(r.get("amount") or 0) for r in excel_rows_with_warehouse), 2)
     total_delta = round(pdf_total - excel_total, 2)
-    effective_total_tolerance = _adaptive_tolerance(max(abs(pdf_total), abs(excel_total)), amount_tolerance)
-    total_passed = amount_within_tolerance(total_delta, effective_total_tolerance)
 
     summary = {
         "pdfAmountTotal": pdf_total,
         "excelAmountTotal": excel_total,
         "amountDeltaTotal": total_delta,
-        "totalPassed": total_passed,
+        "totalPassed": False,
         "warehouseCount": 0,
         "passedCount": 0,
         "exceptionCount": 0,
     }
-
     excel_by_wh, excel_errors = _group_excel_by_warehouse(excel_rows_with_warehouse)
     errors.extend(excel_errors)
-    fallback_warehouse_id = next(iter(excel_by_wh), "") if len(excel_by_wh) == 1 else ""
-
-    inferred_pdf_warehouses: Dict[str, str] = {}
-    if pdf_totals:
-        pdf_totals, inferred_pdf_warehouses = _infer_pdf_warehouses_from_excel_totals(
-            pdf_totals,
-            excel_by_wh,
-            amount_tolerance=amount_tolerance,
-        )
 
     # Tier 2: per-warehouse comparison
-    if pdf_totals:
-        pdf_by_wh: Dict[str, Dict[str, float]] = defaultdict(lambda: {"amount": 0.0, "count": 0})
-        for t in pdf_totals:
-            conflict = t.get("warehouse_conflict")
-            if conflict:
-                errors.append(
-                    "仓库号冲突: "
-                    f"{t.get('source_file', '')} 文件名={conflict.get('filename_warehouse_id', '')}, "
-                    f"内容={conflict.get('text_warehouse_id', '')}"
-                )
-            wh = str(t.get("warehouse_id") or "")
-            if not wh:
-                if fallback_warehouse_id and len(pdf_totals) == 1:
-                    wh = fallback_warehouse_id
-                else:
-                    errors.append(f"无法提取仓库号: {t.get('source_file', '')}")
-                    continue
-            pdf_by_wh[wh]["amount"] = round(pdf_by_wh[wh]["amount"] + float(t.get("total_amount") or 0), 2)
+    pdf_by_wh: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"amount": 0.0, "count": 0, "totals": []})
+    unresolved_by_wh: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    unassigned_pdf_totals: List[Dict[str, Any]] = []
+    for total in pdf_totals:
+        conflict = total.get("warehouse_conflict")
+        if conflict:
+            errors.append(
+                "仓库号冲突: "
+                f"{total.get('source_file', '')} 文件名={conflict.get('filename_warehouse_id', '')}, "
+                f"内容={conflict.get('text_warehouse_id', '')}"
+            )
+        wh = str(total.get("warehouse_id") or "")
+        if not wh:
+            errors.append(f"无法提取仓库号: {total.get('source_file', '')}")
+            unassigned_pdf_totals.append(total)
+            continue
+        if _is_payable_pdf_total(total):
+            pdf_by_wh[wh]["amount"] = round(pdf_by_wh[wh]["amount"] + float(total.get("total_amount") or 0), 2)
             pdf_by_wh[wh]["count"] += 1
-        pdf_wh_amounts = dict(pdf_by_wh)
-    else:
-        pdf_wh_amounts = {}
-
+            pdf_by_wh[wh]["totals"].append(total)
+        else:
+            unresolved_by_wh[wh].append(total)
+    if unassigned_pdf_totals:
+        unresolved_by_wh[""].extend(unassigned_pdf_totals)
     pdf_row_by_wh: Dict[str, List[LaborLineItem]] = {}
     if pdf_rows:
-        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(
-            pdf_rows,
-            fallback_warehouse_id=fallback_warehouse_id,
-            source_file_warehouse_map=inferred_pdf_warehouses,
-        )
+        pdf_row_by_wh, pdf_errors = _group_pdf_by_warehouse(pdf_rows)
         errors.extend(pdf_errors)
 
-    all_wh = sorted(set(pdf_wh_amounts) | set(pdf_row_by_wh) | set(excel_by_wh))
+    # A single invoice may cover several warehouses without printing a
+    # warehouse id. When every employee row has a warehouse assignment and the
+    # allocated row sum closes to the authoritative invoice total, use those
+    # rows as the warehouse allocation while retaining the invoice total for
+    # the batch-level conclusion.
+    rows_by_source: Dict[str, List[LaborLineItem]] = defaultdict(list)
+    for item in pdf_rows:
+        rows_by_source[str(item.source_file or "")].append(item)
+    allocated_sources: set[str] = set()
+    for total in payable_pdf_totals:
+        if str(total.get("warehouse_id") or "").strip():
+            continue
+        source_file = str(total.get("source_file") or "")
+        source_rows = rows_by_source.get(source_file, [])
+        if not source_rows or any(not str(item.warehouse_id or "").strip() for item in source_rows):
+            continue
+        row_total = round(sum(float(item.amount or 0) for item in source_rows), 2)
+        invoice_total = round(float(total.get("total_amount") or 0), 2)
+        if not amount_within_tolerance(row_total - invoice_total, amount_tolerance):
+            continue
+        allocated_sources.add(source_file)
+        for warehouse_id in sorted({str(item.warehouse_id or "").strip() for item in source_rows}):
+            allocated_amount = round(
+                sum(float(item.amount or 0) for item in source_rows if str(item.warehouse_id or "").strip() == warehouse_id),
+                2,
+            )
+            allocated_total = dict(total)
+            allocated_total.update(
+                {
+                    "warehouse_id": warehouse_id,
+                    "total_amount": allocated_amount,
+                    "allocation_method": "employee_detail_allocation",
+                }
+            )
+            pdf_by_wh[warehouse_id]["amount"] = round(pdf_by_wh[warehouse_id]["amount"] + allocated_amount, 2)
+            pdf_by_wh[warehouse_id]["count"] += 1
+            pdf_by_wh[warehouse_id]["totals"].append(allocated_total)
+
+    if allocated_sources:
+        retained_unassigned: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for warehouse_id, totals in unresolved_by_wh.items():
+            retained = [
+                total
+                for total in totals
+                if str(total.get("source_file") or "") not in allocated_sources
+            ]
+            if retained:
+                retained_unassigned[warehouse_id].extend(retained)
+        unresolved_by_wh = retained_unassigned
+        unassigned_pdf_totals = [
+            total
+            for total in unassigned_pdf_totals
+            if str(total.get("source_file") or "") not in allocated_sources
+        ]
+        errors = [
+            error
+            for error in errors
+            if not any(source_file and source_file in error for source_file in allocated_sources)
+        ]
+
+    pdf_wh_amounts = dict(pdf_by_wh)
+    all_wh = sorted(set(pdf_wh_amounts) | set(unresolved_by_wh) | set(excel_by_wh))
     warehouse_rows = []
     for wh in all_wh:
-        # PDF amounts: prefer totals, fallback to rows
-        if wh in pdf_wh_amounts:
-            pdf_amount = pdf_wh_amounts[wh]["amount"]
-            pdf_count = len(pdf_row_by_wh[wh]) if wh in pdf_row_by_wh else pdf_wh_amounts[wh]["count"]
-        elif wh in pdf_row_by_wh:
-            items = pdf_row_by_wh[wh]
-            pdf_amount = round(sum(i.amount for i in items), 2)
-            pdf_count = len(items)
-        else:
-            pdf_amount = 0.0
-            pdf_count = 0
-
+        authoritative_totals = pdf_wh_amounts.get(wh, {}).get("totals", [])
+        unresolved_totals = unresolved_by_wh.get(wh, [])
+        pdf_amount = float(pdf_wh_amounts.get(wh, {}).get("amount", 0.0))
+        if wh == "":
+            pdf_amount = round(
+                sum(float(total.get("total_amount") or 0) for total in unresolved_totals if _is_payable_pdf_total(total)),
+                2,
+            )
+        evidence_totals = authoritative_totals + unresolved_totals
+        pdf_count = (
+            len(pdf_row_by_wh[wh])
+            if wh in pdf_row_by_wh
+            else len(authoritative_totals) + len(unresolved_totals)
+        )
         excel_items = excel_by_wh.get(wh, [])
         excel_amount = round(sum(float(r.get("amount") or 0) for r in excel_items), 2)
         amount_delta = round(pdf_amount - excel_amount, 2)
         effective_wh_tolerance = _adaptive_tolerance(max(abs(pdf_amount), abs(excel_amount)), amount_tolerance)
-        wh_passed = amount_within_tolerance(amount_delta, effective_wh_tolerance)
+        if unresolved_totals:
+            reconciliation_status = "needs_review"
+        elif authoritative_totals and wh in excel_by_wh:
+            reconciliation_status = (
+                "passed"
+                if amount_within_tolerance(amount_delta, effective_wh_tolerance)
+                else "amount_difference"
+            )
+        elif authoritative_totals:
+            reconciliation_status = "extra_pdf_invoice"
+        else:
+            reconciliation_status = "missing_pdf_invoice"
+        evidence_fields = _warehouse_evidence_fields(evidence_totals, reconciliation_status)
+        if authoritative_totals and all(
+            str(total.get("allocation_method") or "") == "employee_detail_allocation"
+            for total in authoritative_totals
+        ):
+            evidence_fields["evidenceStatus"] = "allocated_employee_detail"
 
         row = {
             "warehouseId": wh,
@@ -187,13 +342,15 @@ def compare_by_warehouse(
             "pdfAmountTotal": pdf_amount,
             "excelAmountTotal": excel_amount,
             "amountDelta": amount_delta,
-            "matchStatus": "通过" if wh_passed else "金额差异",
+            "reconciliationStatus": reconciliation_status,
+            "matchStatus": _warehouse_match_status(reconciliation_status),
+            **evidence_fields,
             "employeeRows": [],
             "attribution": [],
         }
 
-        # Tier 3: employee detail only for warehouses with differences AND available rows
-        if not wh_passed and wh in pdf_row_by_wh:
+        # Tier 3 diagnoses differences and unresolved evidence; it never sets payable amounts.
+        if reconciliation_status in {"amount_difference", "needs_review"} and wh in pdf_row_by_wh:
             pdf_items = pdf_row_by_wh[wh]
             excel_line_items = line_items_from_dicts(excel_items)
             pdf_agg = _aggregate(pdf_items)
@@ -207,25 +364,111 @@ def compare_by_warehouse(
             )
             # Build attribution for warehouses with diff >= $1
             if abs(amount_delta) >= 1.0:
-                row["attribution"] = _build_attribution(row["employeeRows"])
+                row["attribution"] = _build_attribution(
+                    row["employeeRows"],
+                    expected_delta=amount_delta,
+                )
 
         warehouse_rows.append(row)
 
-    passed = sum(1 for r in warehouse_rows if r["matchStatus"] == "通过")
-    diff_warehouses = [r["warehouseId"] for r in warehouse_rows if r["matchStatus"] != "通过"]
+    passed = sum(1 for r in warehouse_rows if r["reconciliationStatus"] == "passed")
+    diff_warehouses = [r["warehouseId"] for r in warehouse_rows if r["reconciliationStatus"] != "passed"]
+    comparable_rows = [
+        row
+        for row in warehouse_rows
+        if row["reconciliationStatus"] in {"passed", "amount_difference"}
+    ]
+    comparable_excel_total = round(sum(row["excelAmountTotal"] for row in comparable_rows), 2)
+    comparable_delta_total = round(sum(row["amountDelta"] for row in comparable_rows), 2)
+    missing_pdf_total = round(
+        sum(
+            row["excelAmountTotal"]
+            for row in warehouse_rows
+            if row["reconciliationStatus"] == "missing_pdf_invoice"
+        ),
+        2,
+    )
     allocation_issues = _build_cross_warehouse_allocation_issues(
         warehouse_rows,
         amount_tolerance=amount_tolerance,
     )
-    # 总账结论只看 PDF 与 Excel 总金额；仓库或员工分摊差异保留为待确认事项。
+    total_passed = (
+        not errors
+        and not unresolved_pdf_totals
+        and not unassigned_pdf_totals
+        and all(row["reconciliationStatus"] == "passed" for row in warehouse_rows)
+    )
     summary.update({
+        "totalPassed": total_passed,
         "warehouseCount": len(warehouse_rows),
         "passedCount": passed,
         "exceptionCount": len(warehouse_rows) - passed,
         "diffWarehouses": diff_warehouses,
         "allocationIssueCount": len(allocation_issues),
+        "comparableExcelAmountTotal": comparable_excel_total,
+        "comparableAmountDeltaTotal": comparable_delta_total,
+        "missingPdfAmountTotal": missing_pdf_total,
     })
     return {"summary": summary, "rows": warehouse_rows, "errors": errors, "allocationIssues": allocation_issues}
+
+
+def _is_payable_pdf_total(total: Dict[str, Any]) -> bool:
+    return (
+        total.get("authoritative") is not False
+        and not total.get("warehouse_conflict")
+        and float(total.get("total_amount") or 0) > 0
+    )
+
+
+def _is_explicit_non_payable_pdf_total(total: Dict[str, Any]) -> bool:
+    evidence_status = str(total.get("evidence_status") or "").strip().lower()
+    pdf_type = str(total.get("pdf_type") or "").strip().lower()
+    return (
+        total.get("non_payable") is True
+        or evidence_status in {"supporting", "non_payable", "excluded"}
+        or pdf_type in {"supporting", "attachment"}
+    )
+
+
+def _warehouse_match_status(reconciliation_status: str) -> str:
+    return {
+        "passed": "通过",
+        "amount_difference": "金额差异",
+        "missing_pdf_invoice": "缺少PDF发票",
+        "extra_pdf_invoice": "多余PDF发票",
+        "needs_review": "待复核",
+    }[reconciliation_status]
+
+
+def _warehouse_evidence_fields(
+    totals: List[Dict[str, Any]],
+    reconciliation_status: str,
+) -> Dict[str, Any]:
+    if reconciliation_status == "missing_pdf_invoice":
+        return {
+            "evidenceStatus": "missing",
+            "pdfEvidenceFile": "",
+            "pdfEvidencePage": None,
+            "excludedPdfPages": [],
+        }
+
+    files = list(dict.fromkeys(str(total.get("source_file") or "") for total in totals if total.get("source_file")))
+    pages = list(dict.fromkeys(total.get("total_page") for total in totals if total.get("total_page") is not None))
+    statuses = list(dict.fromkeys(
+        str(total.get("evidence_status") or "authoritative")
+        for total in totals
+    ))
+    excluded_pages = sorted({
+        int(page)
+        for total in totals
+        for page in (total.get("excluded_pages") or [])
+    })
+    return {
+        "evidenceStatus": "needs_review" if reconciliation_status == "needs_review" else "; ".join(statuses),
+        "pdfEvidenceFile": "; ".join(files),
+        "pdfEvidencePage": pages[0] if len(pages) == 1 else ", ".join(str(page) for page in pages) or None,
+        "excludedPdfPages": excluded_pages,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +543,16 @@ def _match_employee_groups(
             fuzzy_matched=fuzzy_matched,
             de_minimis_unmatched=de_minimis_unmatched,
         )
+        amount_difference_details = _amount_difference_details(
+            pdf_group=pdf_group,
+            excel_group=excel_group,
+            amount_delta=amount_delta,
+            hours_delta=hours_delta,
+            amount_tolerance=amount_tolerance,
+            hours_tolerance=hours_tolerance,
+        )
+        if amount_difference_details:
+            risk_flags.append("Excel金额组成可解释差异")
         rows.append({
             "employeeKey": key,
             "employeeName": _matched_name(pdf_group, excel_group, fuzzy_matched or safe_name_format_auto_merged) or key,
@@ -312,6 +565,7 @@ def _match_employee_groups(
             "matchStatus": status,
             "riskFlags": risk_flags,
             "sourceRefs": "; ".join(pdf_group["refs"] + excel_group["refs"]),
+            **amount_difference_details,
         })
     return rows
 
@@ -322,77 +576,18 @@ def _match_employee_groups(
 
 def _group_pdf_by_warehouse(
     pdf_rows: List[LaborLineItem],
-    fallback_warehouse_id: str = "",
-    source_file_warehouse_map: Dict[str, str] | None = None,
 ) -> tuple[Dict[str, List[LaborLineItem]], List[str]]:
     grouped: Dict[str, List[LaborLineItem]] = defaultdict(list)
     errors: List[str] = []
-    source_file_warehouse_map = source_file_warehouse_map or {}
     for item in pdf_rows:
         wh = _warehouse_id_from_filename(item.source_file)
         if not wh:
             wh = str(item.warehouse_id or "")
         if not wh:
-            wh = source_file_warehouse_map.get(item.source_file, "")
-        if not wh:
-            if fallback_warehouse_id:
-                wh = fallback_warehouse_id
-            else:
-                errors.append(f"无法从文件名提取仓库号: {item.source_file}")
-                continue
+            errors.append(f"无法从文件名提取仓库号: {item.source_file}")
+            continue
         grouped[wh].append(item)
     return dict(grouped), errors
-
-
-def _infer_pdf_warehouses_from_excel_totals(
-    pdf_totals: List[Dict[str, Any]],
-    excel_by_wh: Dict[str, List[Dict[str, Any]]],
-    amount_tolerance: float,
-) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Infer missing PDF warehouse ids when totals uniquely match Excel warehouses."""
-    if not pdf_totals or not excel_by_wh:
-        return pdf_totals, {}
-
-    excel_amounts = {
-        wh: round(sum(float(row.get("amount") or 0) for row in rows), 2)
-        for wh, rows in excel_by_wh.items()
-    }
-    used_warehouses: set[str] = {
-        str(total.get("warehouse_id") or "")
-        for total in pdf_totals
-        if str(total.get("warehouse_id") or "")
-    }
-    used_sources: set[str] = set()
-    source_map: Dict[str, str] = {}
-    enriched: List[Dict[str, Any]] = []
-
-    for total in pdf_totals:
-        current_wh = str(total.get("warehouse_id") or "")
-        if current_wh:
-            enriched.append(total)
-            continue
-
-        amount = round(float(total.get("total_amount") or 0), 2)
-        candidates = [
-            wh
-            for wh, excel_amount in excel_amounts.items()
-            if wh not in used_warehouses and abs(round(amount - excel_amount, 2)) <= amount_tolerance
-        ]
-        if len(candidates) == 1:
-            wh = candidates[0]
-            updated = dict(total)
-            updated["warehouse_id"] = wh
-            updated["warehouse_inferred_from"] = "excel_total_amount"
-            source = str(total.get("source_file") or "")
-            if source and source not in used_sources:
-                source_map[source] = wh
-                used_sources.add(source)
-            used_warehouses.add(wh)
-            enriched.append(updated)
-        else:
-            enriched.append(total)
-
-    return enriched, source_map
 
 
 def _group_excel_by_warehouse(
@@ -426,11 +621,142 @@ def _aggregate(items: Iterable[LaborLineItem]) -> Dict[str, Dict[str, Any]]:
         group["min_confidence"] = min(group["min_confidence"], item.confidence)
         group["items"].append(item)
         group["refs"].append(_source_ref(item))
+        explanatory_breakdown = dict(item.amount_breakdown)
+        for label, value in item.amount_components.items():
+            if _EXPLANATORY_AMOUNT_COMPONENT.search(str(label or "")):
+                explanatory_breakdown.setdefault(label, value)
+        for label, value in explanatory_breakdown.items():
+            group["amount_breakdown"][label] = round(
+                group["amount_breakdown"].get(label, 0.0) + float(value or 0),
+                2,
+            )
+        for label, value in item.amount_context.items():
+            text = str(value or "").strip()
+            if not text:
+                continue
+            existing = str(group["amount_context"].get(label) or "").strip()
+            parts = [part for part in existing.split("；") if part]
+            if text not in parts:
+                parts.append(text)
+            group["amount_context"][label] = "；".join(parts)
     return dict(grouped)
 
 
 def _empty_group() -> Dict[str, Any]:
-    return {"name": "", "hours": 0.0, "amount": 0.0, "min_confidence": 1.0, "items": [], "refs": []}
+    return {
+        "name": "",
+        "hours": 0.0,
+        "amount": 0.0,
+        "min_confidence": 1.0,
+        "items": [],
+        "refs": [],
+        "amount_breakdown": {},
+        "amount_context": {},
+    }
+
+
+_EXPLANATORY_AMOUNT_COMPONENT = re.compile(
+    r"(?:奖金|补贴|餐补|车补|津贴|加班|服务费|管理费|手续费|其他|差异|税|保险|补偿|扣款|调账|补发|非固|"
+    r"bonus|allowance|meal|transport|overtime|\bot\b|service\s*fee|handling\s*fee|management\s*fee|other|"
+    r"difference|tax|insurance|compensation|deduction|adjustment)",
+    re.IGNORECASE,
+)
+
+
+def _amount_difference_details(
+    *,
+    pdf_group: Dict[str, Any],
+    excel_group: Dict[str, Any],
+    amount_delta: float,
+    hours_delta: float,
+    amount_tolerance: float,
+    hours_tolerance: float,
+) -> Dict[str, Any]:
+    if not pdf_group.get("items") or not excel_group.get("items"):
+        return {}
+    if abs(float(hours_delta or 0)) > max(float(hours_tolerance), 0.05):
+        return {}
+    target = round(-float(amount_delta or 0), 2)
+    if abs(target) <= float(amount_tolerance):
+        return {}
+
+    candidates = [
+        (str(label), round(float(value or 0), 2))
+        for label, value in (excel_group.get("amount_breakdown") or {}).items()
+        if abs(float(value or 0)) > 0.005 and _EXPLANATORY_AMOUNT_COMPONENT.search(str(label or ""))
+    ]
+    matched = _match_amount_difference_components(
+        candidates,
+        target=target,
+        tolerance=max(float(amount_tolerance), 0.10),
+    )
+    if not matched:
+        return {}
+
+    contexts = excel_group.get("amount_context") or {}
+    components = [
+        {
+            "side": "excel",
+            "label": label,
+            "amount": amount,
+            "note": _amount_component_note(label, contexts),
+        }
+        for label, amount in matched
+    ]
+    component_total = round(sum(amount for _label, amount in matched), 2)
+    residual = round(target - component_total, 2)
+    component_text = "、".join(
+        f"「{component['label']}」${abs(float(component['amount'])):,.2f}"
+        + (f"（备注：{component['note']}）" if component["note"] else "")
+        for component in components
+    )
+    direction = "多" if target > 0 else "少"
+    explanation = f"Excel 比 PDF {direction} ${abs(target):,.2f}；其中可由 Excel 金额组成 {component_text} 解释"
+    if abs(residual) > 0.005:
+        explanation += f"，剩余 ${abs(residual):,.2f} 为逐行四舍五入或其他小额差"
+    explanation += "。请确认该费用项是否应包含在本批发票中。"
+    return {
+        "amountDifferenceReasonCode": "excel_amount_component_delta",
+        "amountDifferenceExplanation": explanation,
+        "amountDifferenceComponents": components,
+        "amountDifferenceResidual": residual,
+    }
+
+
+def _match_amount_difference_components(
+    candidates: List[tuple[str, float]],
+    *,
+    target: float,
+    tolerance: float,
+) -> List[tuple[str, float]]:
+    best: tuple[tuple[int, float], List[tuple[str, float]]] | None = None
+    for size in range(1, min(len(candidates), 3) + 1):
+        for selected in combinations(candidates, size):
+            residual = abs(round(target - sum(value for _label, value in selected), 2))
+            if residual > tolerance:
+                continue
+            score = (size, residual)
+            if best is None or score < best[0]:
+                best = (score, list(selected))
+        if best is not None and best[0][0] == size:
+            break
+    return best[1] if best else []
+
+
+def _amount_component_note(label: str, contexts: Dict[str, Any]) -> str:
+    values = [str(value or "").strip() for value in contexts.values() if str(value or "").strip()]
+    if not values:
+        return ""
+    keywords = re.findall(
+        r"奖金|补贴|餐补|车补|津贴|加班|服务费|税|保险|其他|非固|bonus|allowance|overtime|tax|insurance|other",
+        str(label or ""),
+        re.IGNORECASE,
+    )
+    for value in values:
+        lowered = value.casefold()
+        if any(keyword.casefold() in lowered for keyword in keywords):
+            return value
+    return values[0] if len(values) == 1 else ""
 
 
 def _item_key(item: LaborLineItem) -> str:
@@ -886,33 +1212,51 @@ def _source_ref(item: LaborLineItem) -> str:
     return f"{item.source_file} {item.source_page_or_row}".strip()
 
 
-def _build_attribution(employee_rows: List[Dict[str, Any]], max_items: int = 5) -> List[Dict[str, Any]]:
+def _build_attribution(
+    employee_rows: List[Dict[str, Any]],
+    max_items: int = 5,
+    expected_delta: float | None = None,
+) -> List[Dict[str, Any]]:
     """Build attribution list for warehouses with significant differences.
 
     Returns top contributors sorted by absolute amount delta, with an "other" entry for the rest.
     """
-    # Filter rows with amount difference
-    diff_rows = [row for row in employee_rows if abs(row.get("amountDelta", 0)) >= 0.01]
-    # Sort by absolute amount delta descending
-    diff_rows.sort(key=lambda r: abs(r.get("amountDelta", 0)), reverse=True)
-
-    attribution = []
-    for row in diff_rows[:max_items]:
-        attribution.append({
+    contributors = [
+        {
             "employeeKey": row.get("employeeKey", ""),
             "employeeName": row.get("employeeName", ""),
             "pdfAmount": row.get("pdfAmountTotal", 0),
             "excelAmount": row.get("excelAmountTotal", 0),
             "delta": row.get("amountDelta", 0),
             "sourceRefs": row.get("sourceRefs", ""),
-        })
+        }
+        for row in employee_rows
+        if abs(row.get("amountDelta", 0)) >= 0.01
+    ]
+    if expected_delta is not None:
+        employee_delta = round(sum(float(row.get("amountDelta") or 0) for row in employee_rows), 2)
+        unattributed_delta = round(float(expected_delta) - employee_delta, 2)
+        if abs(unattributed_delta) >= 0.01:
+            contributors.append(
+                {
+                    "employeeKey": "system:unattributed_invoice_amount",
+                    "employeeName": "未归因发票金额",
+                    "pdfAmount": None,
+                    "excelAmount": None,
+                    "delta": unattributed_delta,
+                    "sourceRefs": "权威发票总额与已识别员工明细差额",
+                }
+            )
+
+    contributors.sort(key=lambda item: abs(float(item.get("delta") or 0)), reverse=True)
+    attribution = list(contributors[:max_items])
 
     # Add "other" entry if there are more rows
-    if len(diff_rows) > max_items:
-        other_delta = sum(r.get("amountDelta", 0) for r in diff_rows[max_items:])
+    if len(contributors) > max_items:
+        other_delta = sum(float(item.get("delta") or 0) for item in contributors[max_items:])
         attribution.append({
             "employeeKey": "",
-            "employeeName": f"其他{len(diff_rows) - max_items}人",
+            "employeeName": f"其他{len(contributors) - max_items}项",
             "pdfAmount": None,
             "excelAmount": None,
             "delta": round(other_delta, 2),
@@ -941,7 +1285,11 @@ def _build_cross_warehouse_allocation_issues(
             continue
         for item in warehouse.get("attribution", []) or []:
             employee_name = str(item.get("employeeName") or "").strip()
-            if not employee_name or employee_name.startswith("其他"):
+            if (
+                not employee_name
+                or employee_name.startswith("其他")
+                or item.get("employeeKey") == "system:unattributed_invoice_amount"
+            ):
                 continue
             delta = round(float(item.get("delta") or 0), 2)
             if abs(delta) <= amount_tolerance:

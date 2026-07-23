@@ -1,0 +1,74 @@
+{
+  "name": "sigma-overseas-reconciliation-worker",
+  "version": "0.3.12",
+  "private": true,
+  "description": "Personal desktop worker for Sigma overseas reimbursement reconciliation.",
+  "main": "main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "check": "node --check main.js && node --check preload.js && node --check renderer/app.js && node --check lib/activation.js && node --check lib/activation-dispatcher.js && node --check lib/status.js && node --check lib/worker-command.js && node --check lib/worker-pid.js && node --check scripts/build-worker.js && node --check scripts/run-release-gate.js && node --check scripts/ad-hoc-sign-mac.js",
+    "test": "node --test tests/*.test.js",
+    "release:gate": "node scripts/run-release-gate.js",
+    "build:worker": "node scripts/build-worker.js",
+    "dist:mac": "npm run release:gate && npm run build:worker && electron-builder --mac dmg",
+    "dist:win": "npm run release:gate && npm run build:worker && electron-builder --win nsis --x64"
+  },
+  "build": {
+    "appId": "com.sigmaworkbench.overseaslaborworker",
+    "productName": "Σ海外报账核对助手",
+    "protocols": [
+      {
+        "name": "Σ海外报账核对助手激活",
+        "schemes": [
+          "sigma-overseas-labor-worker"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "afterPack": "scripts/ad-hoc-sign-mac.js",
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "renderer/**",
+      "assets/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "worker-dist/sigma-labor-worker",
+        "to": "worker/sigma-labor-worker"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "assets/overseas-labor-worker.icns",
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "icon": "assets/overseas-labor-worker.ico",
+      "artifactName": "${productName}-${version}-windows-x64.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  }
+}

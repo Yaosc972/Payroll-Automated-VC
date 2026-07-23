@@ -1,2 +1,1 @@
-"""Background worker entrypoints for Sigma Workbench."""
-
+"""Background worker entrypoints, including the overseas labor personal worker."""

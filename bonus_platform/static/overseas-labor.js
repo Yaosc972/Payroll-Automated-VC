@@ -1,17 +1,42 @@
+const LABOR_UI_MODULE_VERSION = "0.5-uat";
+const LABOR_UI_API_CONTRACT_VERSION = 2;
+
+function detectLaborWorkerPlatform() {
+  const platform = String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || "");
+  return /win/i.test(platform) ? "windows-x64" : "macos-arm64";
+}
+
+function laborWorkerPlatformLabel(platform) {
+  return platform === "windows-x64" ? "Windows x64" : "macOS Apple 芯片";
+}
+
 const laborState = {
   run: null,
   headers: [],
   comparePollTimer: null,
   pollRetryCount: 0,
-  pollMaxRetries: 1200,  // 1200 × 3s = 60 分钟，后台 Worker 长任务可持续轮询
+  pollMaxIdleSeconds: 600,
   extractStartedAt: null,
   currentStep: 1,
   materialIndex: null,
   materialDryRun: null,
   moduleAccess: null,
+  releaseCompatible: false,
+  workerDevices: [],
+  workerRelease: null,
+  workerPlatform: detectLaborWorkerPlatform(),
+  selectedPdfFiles: [],
+  selectedWorkbookFiles: [],
 };
 
 const LABOR_TOTAL_AMOUNT_TOLERANCE = 0.1;
+
+const periodPickerState = {
+  cursorMonth: null,
+  selectingEnd: false,
+};
+
+const buttonLoadingState = new WeakMap();
 
 // ── Element references ──
 const labor = {
@@ -25,12 +50,47 @@ const labor = {
   chromeRunBadge: document.querySelector("#chromeRunBadge"),
   chromeRunLabel: document.querySelector("#chromeRunLabel"),
   moduleStageBadge: document.querySelector("#moduleStageBadge"),
+  moduleReleaseMeta: document.querySelector("#moduleReleaseMeta"),
+  btnOpenDrawer: document.querySelector("#btnOpenDrawer"),
+  btnOpenGovernance: document.querySelector("#btnOpenGovernance"),
+  governanceDialog: document.querySelector("#laborGovernanceDialog"),
+  closeGovernance: document.querySelector("#closeLaborGovernance"),
+  deleteCurrentRun: document.querySelector("#deleteCurrentLaborRun"),
+  storageSummary: document.querySelector("#laborStorageSummary"),
+  auditList: document.querySelector("#laborAuditList"),
+  btnWorkerStatus: document.querySelector("#btnWorkerStatus"),
+  workerStatusLabel: document.querySelector("#workerStatusLabel"),
+  workerSection: document.querySelector("#laborWorkerSection"),
+  workerMessage: document.querySelector("#laborWorkerMessage"),
+  workerDevices: document.querySelector("#laborWorkerDevices"),
+  activateWorker: document.querySelector("#activateLaborWorker"),
+  refreshWorker: document.querySelector("#refreshLaborWorker"),
+  downloadWorker: document.querySelector("#downloadLaborWorker"),
+  workerReleaseStatus: document.querySelector("#laborWorkerReleaseStatus"),
+  workerReleaseAdmin: document.querySelector("#laborWorkerReleaseAdmin"),
+  workerReleasePlatform: document.querySelector("#laborWorkerReleasePlatform"),
+  workerReleasePackage: document.querySelector("#laborWorkerReleasePackage"),
+  uploadWorkerRelease: document.querySelector("#uploadLaborWorkerRelease"),
+  workerReleaseUploadStatus: document.querySelector("#laborWorkerReleaseUploadStatus"),
+
+  // Page views
+  toolbench: document.querySelector("#laborToolbench"),
+  resultsView: document.querySelector("#laborResultsView"),
 
   // Form elements
   supplierName: document.querySelector("#supplierName"),
   supplierOptions: document.querySelector("#supplierOptions"),
   periodStart: document.querySelector("#periodStart"),
   periodEnd: document.querySelector("#periodEnd"),
+  periodRange: document.querySelector("#periodRange"),
+  periodRangeValue: document.querySelector("#periodRangeValue"),
+  periodCalendar: document.querySelector("#periodCalendar"),
+  periodCalendarTitle: document.querySelector("#periodCalendarTitle"),
+  periodCalendarGrid: document.querySelector("#periodCalendarGrid"),
+  periodCalendarHint: document.querySelector("#periodCalendarHint"),
+  periodCalendarPrev: document.querySelector("#periodCalendarPrev"),
+  periodCalendarNext: document.querySelector("#periodCalendarNext"),
+  clearPeriodRange: document.querySelector("#clearPeriodRange"),
   currency: document.querySelector("#currency"),
   createLaborRun: document.querySelector("#createLaborRun"),
   createStatus: document.querySelector("#createStatus"),
@@ -41,6 +101,7 @@ const labor = {
   workbookFile: document.querySelector("#workbookFile"),
   workbookFileName: document.querySelector("#workbookFileName"),
   uploadLaborFiles: document.querySelector("#uploadLaborFiles"),
+  clearLaborFiles: document.querySelector("#clearLaborFiles"),
   uploadStatus: document.querySelector("#uploadStatus"),
 
   // Field mapping
@@ -51,6 +112,8 @@ const labor = {
   nameColumn: document.querySelector("#nameColumn"),
   hoursColumn: document.querySelector("#hoursColumn"),
   amountColumn: document.querySelector("#amountColumn"),
+  amountComponentColumns: document.querySelector("#amountComponentColumns"),
+  amountScope: document.querySelector("#amountScope"),
   currencyColumn: document.querySelector("#currencyColumn"),
   mappingPreview: document.querySelector("#mappingPreview"),
 
@@ -86,9 +149,280 @@ const labor = {
 
 // ── Initialize ──
 bindLaborEvents();
+bindPeriodPicker();
 listenKpiFilters();
-loadModuleAccess();
+showLaborToolbench();
+setLaborActionAvailability(false);
+loadModuleAccess().then(async () => {
+  await Promise.all([restoreLaborRunFromUrl(), loadLaborWorkerRelease()]);
+});
 loadSupplierOptions();
+
+function bindPeriodPicker() {
+  if (!labor.periodRange || !labor.periodCalendar || !labor.periodCalendarGrid) return;
+
+  labor.periodRange.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (labor.periodCalendar.hidden) openPeriodRangePicker();
+    else closePeriodRangePicker();
+  });
+  labor.periodCalendar.addEventListener("click", (event) => event.stopPropagation());
+  labor.periodCalendarPrev?.addEventListener("click", () => movePeriodCalendarMonth(-1));
+  labor.periodCalendarNext?.addEventListener("click", () => movePeriodCalendarMonth(1));
+  labor.clearPeriodRange?.addEventListener("click", clearPeriodRange);
+  labor.periodCalendarGrid.addEventListener("click", (event) => {
+    const target = event.target instanceof Element ? event.target.closest("[data-period-date]") : null;
+    if (!target) return;
+    selectPeriodDate(target.dataset.periodDate || "");
+  });
+  labor.periodCalendarGrid.addEventListener("keydown", handlePeriodCalendarKeydown);
+  document.addEventListener("click", () => closePeriodRangePicker());
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || labor.periodCalendar.hidden) return;
+    closePeriodRangePicker({ restoreFocus: true });
+  });
+  syncPeriodRangePicker();
+}
+
+function openPeriodRangePicker() {
+  if (!labor.periodRange || !labor.periodCalendar || labor.periodRange.disabled) return;
+  const selectedStart = parseInputDate(labor.periodStart?.value || "");
+  const base = selectedStart || new Date();
+  periodPickerState.cursorMonth = new Date(base.getFullYear(), base.getMonth(), 1);
+  periodPickerState.selectingEnd = false;
+  labor.periodCalendar.hidden = false;
+  labor.periodRange.setAttribute("aria-expanded", "true");
+  renderPeriodCalendar();
+  window.requestAnimationFrame(() => {
+    const preferredValue = labor.periodStart?.value || formatInputDate(new Date());
+    const preferred = labor.periodCalendarGrid.querySelector(`[data-period-date="${preferredValue}"]`)
+      || labor.periodCalendarGrid.querySelector("[data-period-date]");
+    preferred?.focus();
+  });
+}
+
+function closePeriodRangePicker({ restoreFocus = false } = {}) {
+  if (!labor.periodCalendar || labor.periodCalendar.hidden) return;
+  labor.periodCalendar.hidden = true;
+  labor.periodRange?.setAttribute("aria-expanded", "false");
+  periodPickerState.selectingEnd = false;
+  if (restoreFocus) labor.periodRange?.focus();
+}
+
+function movePeriodCalendarMonth(offset) {
+  const base = periodPickerState.cursorMonth || new Date();
+  periodPickerState.cursorMonth = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+  renderPeriodCalendar();
+}
+
+function handlePeriodCalendarKeydown(event) {
+  const target = event.target instanceof Element ? event.target.closest("[data-period-date]") : null;
+  if (!target) return;
+  const offsets = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+  const offset = offsets[event.key];
+  if (!offset) return;
+  const current = parseInputDate(target.dataset.periodDate || "");
+  if (!current) return;
+  event.preventDefault();
+  const next = addDays(current, offset);
+  periodPickerState.cursorMonth = new Date(next.getFullYear(), next.getMonth(), 1);
+  renderPeriodCalendar();
+  labor.periodCalendarGrid.querySelector(`[data-period-date="${formatInputDate(next)}"]`)?.focus();
+}
+
+function selectPeriodDate(value) {
+  const picked = parseInputDate(value);
+  if (!picked) return;
+  const start = parseInputDate(labor.periodStart?.value || "");
+
+  if (!periodPickerState.selectingEnd || !start || picked < start) {
+    const automaticEnd = addDays(picked, 6);
+    setPeriodRangeValues(formatInputDate(picked), formatInputDate(automaticEnd));
+    periodPickerState.cursorMonth = new Date(picked.getFullYear(), picked.getMonth(), 1);
+    periodPickerState.selectingEnd = true;
+    setText(
+      labor.createStatus,
+      `已按 7 天选择账期：${formatInputDate(picked)} 至 ${formatInputDate(automaticEnd)}；可再点日期修改结束日。`
+    );
+    renderPeriodCalendar();
+    return;
+  }
+
+  setPeriodRangeValues(formatInputDate(start), formatInputDate(picked));
+  periodPickerState.cursorMonth = new Date(picked.getFullYear(), picked.getMonth(), 1);
+  periodPickerState.selectingEnd = false;
+  setText(labor.createStatus, `已选择账期：${formatInputDate(start)} 至 ${formatInputDate(picked)}`);
+  renderPeriodCalendar();
+  window.setTimeout(() => closePeriodRangePicker({ restoreFocus: true }), 140);
+}
+
+function clearPeriodRange() {
+  setPeriodRangeValues("", "");
+  periodPickerState.selectingEnd = false;
+  const now = new Date();
+  periodPickerState.cursorMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  setText(labor.createStatus, "已清空账期，可重新选择。");
+  renderPeriodCalendar();
+}
+
+function setPeriodRangeValues(startValue, endValue) {
+  if (labor.periodStart) labor.periodStart.value = startValue;
+  if (labor.periodEnd) labor.periodEnd.value = endValue;
+  syncPeriodRangePicker();
+}
+
+function syncPeriodRangePicker() {
+  if (!labor.periodRange || !labor.periodRangeValue) return;
+  const start = parseInputDate(labor.periodStart?.value || "");
+  const end = parseInputDate(labor.periodEnd?.value || "");
+  const complete = Boolean(start && end);
+  labor.periodRangeValue.textContent = complete
+    ? `${formatPeriodDisplayDate(start)} — ${formatPeriodDisplayDate(end)}`
+    : "选择开始日期和结束日期";
+  labor.periodRange.classList.toggle("is-set", complete);
+  labor.periodRange.setAttribute(
+    "aria-label",
+    complete ? `账期范围，${formatChineseDate(start)}至${formatChineseDate(end)}` : "选择账期范围"
+  );
+  if (labor.periodCalendar && !labor.periodCalendar.hidden) renderPeriodCalendar();
+}
+
+function renderPeriodCalendar() {
+  if (!labor.periodCalendarGrid || !labor.periodCalendarTitle) return;
+  const base = periodPickerState.cursorMonth || new Date();
+  const monthStart = new Date(base.getFullYear(), base.getMonth(), 1);
+  const leadingDays = (monthStart.getDay() + 6) % 7;
+  const gridStart = addDays(monthStart, -leadingDays);
+  const start = parseInputDate(labor.periodStart?.value || "");
+  const end = parseInputDate(labor.periodEnd?.value || "");
+  const todayValue = formatInputDate(new Date());
+  labor.periodCalendarTitle.textContent = `${monthStart.getFullYear()}年${monthStart.getMonth() + 1}月`;
+
+  labor.periodCalendarGrid.innerHTML = Array.from({ length: 42 }, (_, index) => {
+    const date = addDays(gridStart, index);
+    const value = formatInputDate(date);
+    const outsideMonth = date.getMonth() !== monthStart.getMonth();
+    const rangeStart = Boolean(start && value === formatInputDate(start));
+    const rangeEnd = Boolean(end && value === formatInputDate(end));
+    const inRange = Boolean(start && end && date >= start && date <= end);
+    const classes = [
+      "period-day",
+      outsideMonth ? "outside-month" : "",
+      inRange ? "in-range" : "",
+      rangeStart ? "range-start" : "",
+      rangeEnd ? "range-end" : "",
+      value === todayValue ? "is-today" : "",
+    ].filter(Boolean).join(" ");
+    const selectionText = rangeStart ? "，开始日期" : rangeEnd ? "，结束日期" : inRange ? "，账期内" : "";
+    const tabbable = rangeStart || (!start && value === todayValue) || (!start && index === leadingDays);
+    return `<button class="${classes}" type="button" role="gridcell" data-period-date="${value}" aria-label="${formatChineseDate(date)}${selectionText}" aria-selected="${inRange}" tabindex="${tabbable ? "0" : "-1"}"><span>${date.getDate()}</span></button>`;
+  }).join("");
+
+  if (labor.periodCalendarHint) {
+    labor.periodCalendarHint.textContent = periodPickerState.selectingEnd
+      ? "已按 7 天选好，可点任意日期修改结束日"
+      : start && end
+        ? "点击新的开始日期，自动重新选中 7 天"
+        : "选择开始日期，系统自动选中 7 天";
+  }
+}
+
+function addDays(date, days) {
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function parseInputDate(value) {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+}
+
+function formatInputDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatPeriodDisplayDate(date) {
+  return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function formatChineseDate(date) {
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function beginButtonLoading(button, label = "处理中") {
+  if (!button) return;
+  const existing = buttonLoadingState.get(button);
+  if (existing) {
+    existing.label.textContent = label;
+    button.setAttribute("aria-label", label || "正在处理");
+    return;
+  }
+
+  const bounds = button.getBoundingClientRect();
+  const original = document.createElement("span");
+  original.className = "button-loading-original";
+  while (button.firstChild) original.appendChild(button.firstChild);
+
+  const indicator = document.createElement("span");
+  indicator.className = "button-loading-indicator";
+  indicator.setAttribute("aria-hidden", "true");
+  const spinner = document.createElement("span");
+  spinner.className = "button-loading-spinner";
+  const loadingLabel = document.createElement("span");
+  loadingLabel.className = "button-loading-label";
+  loadingLabel.textContent = label;
+  indicator.append(spinner, loadingLabel);
+  button.append(original, indicator);
+
+  buttonLoadingState.set(button, {
+    original,
+    indicator,
+    label: loadingLabel,
+    wasDisabled: button.disabled,
+    inlineMinWidth: button.style.minWidth,
+    ariaLabel: button.getAttribute("aria-label"),
+  });
+  if (bounds.width > 0) button.style.minWidth = `${Math.ceil(bounds.width)}px`;
+  button.classList.add("is-loading");
+  button.setAttribute("aria-busy", "true");
+  button.setAttribute("aria-label", label || "正在处理");
+  button.disabled = true;
+}
+
+function endButtonLoading(button, { disabled } = {}) {
+  if (!button) return;
+  const state = buttonLoadingState.get(button);
+  if (!state) {
+    if (typeof disabled === "boolean") button.disabled = disabled;
+    return;
+  }
+
+  while (state.original.firstChild) button.insertBefore(state.original.firstChild, state.original);
+  state.original.remove();
+  state.indicator.remove();
+  button.classList.remove("is-loading");
+  button.removeAttribute("aria-busy");
+  button.style.minWidth = state.inlineMinWidth;
+  if (state.ariaLabel === null) button.removeAttribute("aria-label");
+  else button.setAttribute("aria-label", state.ariaLabel);
+  button.disabled = typeof disabled === "boolean" ? disabled : state.wasDisabled;
+  buttonLoadingState.delete(button);
+}
+
+async function withButtonLoading(button, label, task) {
+  beginButtonLoading(button, label);
+  try {
+    return await task();
+  } finally {
+    endButtonLoading(button);
+  }
+}
 
 function listenKpiFilters() {
   document.addEventListener('kpi-filter', (e) => {
@@ -122,15 +456,51 @@ function filterPendingItems(filter) {
 }
 
 function bindLaborEvents() {
+  if (labor.btnOpenDrawer) labor.btnOpenDrawer.addEventListener("click", beginNewLaborBatch);
   labor.createLaborRun.addEventListener("click", createRun);
+  labor.pdfFiles.addEventListener("change", handlePdfFilesSelected);
+  labor.workbookFile.addEventListener("change", handleWorkbookFilesSelected);
+  if (labor.clearLaborFiles) labor.clearLaborFiles.addEventListener("click", clearSelectedLaborFiles);
   labor.uploadLaborFiles.addEventListener("click", uploadFiles);
   labor.loadSheets.addEventListener("click", loadSheets);
   labor.sheetSelect.addEventListener("change", loadFieldSuggestions);
+  labor.amountColumn.addEventListener("change", () => renderAmountComponentOptions());
   labor.saveMapping.addEventListener("click", saveMapping);
   labor.extractCompare.addEventListener("click", extractAndCompare);
   if (labor.loadMaterialBatches) labor.loadMaterialBatches.addEventListener("click", loadMaterialBatches);
   if (labor.runMaterialDryRun) labor.runMaterialDryRun.addEventListener("click", runMaterialDryRun);
   if (labor.materialReplayBody) labor.materialReplayBody.addEventListener("click", handleMaterialReplayAction);
+  if (labor.btnOpenGovernance) {
+    labor.btnOpenGovernance.addEventListener("click", () => withButtonLoading(labor.btnOpenGovernance, "", openLaborGovernance));
+  }
+  if (labor.btnWorkerStatus) {
+    labor.btnWorkerStatus.addEventListener("click", () => withButtonLoading(labor.btnWorkerStatus, "正在读取", openLaborWorkerPanel));
+  }
+  if (labor.activateWorker) labor.activateWorker.addEventListener("click", activateLaborWorker);
+  if (labor.refreshWorker) {
+    labor.refreshWorker.addEventListener("click", () => withButtonLoading(labor.refreshWorker, "正在刷新", loadLaborWorkerDevices));
+  }
+  if (labor.workerDevices) labor.workerDevices.addEventListener("click", handleLaborWorkerDeviceAction);
+  if (labor.downloadWorker) {
+    labor.downloadWorker.addEventListener("click", (event) => {
+      if (labor.downloadWorker.classList.contains("disabled")) {
+        event.preventDefault();
+        return;
+      }
+      recordLaborTelemetry("labor.worker.download_clicked", {
+        step: "worker_download",
+        status: "clicked",
+        context: { version: laborState.workerRelease?.version || "" },
+      });
+    });
+  }
+  if (labor.workerReleasePlatform) {
+    labor.workerReleasePlatform.addEventListener("change", syncLaborWorkerReleaseUploadControls);
+    syncLaborWorkerReleaseUploadControls();
+  }
+  if (labor.uploadWorkerRelease) labor.uploadWorkerRelease.addEventListener("click", uploadLaborWorkerRelease);
+  if (labor.closeGovernance) labor.closeGovernance.addEventListener("click", () => labor.governanceDialog?.close());
+  if (labor.deleteCurrentRun) labor.deleteCurrentRun.addEventListener("click", deleteCurrentLaborRun);
   if (labor.reportLink) {
     labor.reportLink.addEventListener("click", () => {
       if (labor.reportLink.classList.contains("disabled")) return;
@@ -140,6 +510,307 @@ function bindLaborEvents() {
         context: { path: labor.reportLink.getAttribute("href") || "" },
       });
     });
+  }
+}
+
+async function openLaborGovernance() {
+  if (!labor.governanceDialog) return;
+  labor.governanceDialog.showModal();
+  labor.deleteCurrentRun.disabled = !laborState.run?.id;
+  const runId = laborState.run?.id || "";
+  labor.storageSummary.innerHTML = '<span class="audit-empty">正在读取...</span>';
+  labor.auditList.innerHTML = `<li class="audit-empty">${runId ? "正在读取..." : "当前尚未选择批次。"}</li>`;
+  if (laborState.moduleAccess?.p1?.required === true) await loadLaborWorkerDevices();
+  try {
+    const storage = await requestJson("/api/labor/storage-info");
+    renderLaborStorageSummary(storage);
+  } catch (error) {
+    labor.storageSummary.innerHTML = `<span class="audit-empty">${escapeHtml(error.message)}</span>`;
+  }
+  if (!runId) return;
+  try {
+    const audit = await requestJson(`/api/labor/audit?run_id=${encodeURIComponent(runId)}&limit=20`);
+    renderLaborAuditEvents(audit.events || []);
+  } catch (error) {
+    labor.auditList.innerHTML = `<li class="audit-empty">${escapeHtml(error.message)}</li>`;
+  }
+}
+
+async function openLaborWorkerPanel() {
+  await openLaborGovernance();
+  labor.workerSection?.scrollIntoView({ block: "start", behavior: "smooth" });
+}
+
+function workerDeviceIsOnline(device) {
+  if (!device?.lastSeenAt || device?.revokedAt) return false;
+  const seenAt = Date.parse(device.lastSeenAt);
+  return Number.isFinite(seenAt) && Date.now() - seenAt < 3 * 60 * 1000;
+}
+
+function updateLaborWorkerHeader(devices) {
+  const active = devices.filter((device) => !device.revokedAt);
+  const online = active.some(workerDeviceIsOnline);
+  if (labor.btnWorkerStatus) {
+    labor.btnWorkerStatus.hidden = laborState.moduleAccess?.p1?.required !== true;
+    labor.btnWorkerStatus.classList.toggle("online", online);
+  }
+  if (labor.workerStatusLabel) {
+    labor.workerStatusLabel.textContent = online ? "核对助手在线" : active.length ? "核对助手待连接" : "核对助手未激活";
+  }
+}
+
+async function loadLaborWorkerDevices() {
+  if (laborState.moduleAccess?.p1?.required !== true) return;
+  if (labor.workerSection) labor.workerSection.hidden = false;
+  if (labor.workerDevices) labor.workerDevices.innerHTML = '<span class="audit-empty">正在读取...</span>';
+  try {
+    const data = await requestJson("/api/labor/worker/devices");
+    laborState.workerDevices = Array.isArray(data.devices) ? data.devices : [];
+    renderLaborWorkerDevices();
+    renderLaborWorkerRelease();
+  } catch (error) {
+    if (labor.workerDevices) labor.workerDevices.innerHTML = `<span class="audit-empty">${escapeHtml(error.message)}</span>`;
+    if (labor.workerMessage) labor.workerMessage.textContent = "核对助手身份服务尚未就绪，当前不能开始私有材料处理。";
+    updateLaborWorkerHeader([]);
+  }
+}
+
+async function loadLaborWorkerRelease() {
+  if (!labor.downloadWorker || !labor.workerReleaseStatus) return;
+  try {
+    laborState.workerRelease = await requestJson(`/api/labor/worker/release?platform=${encodeURIComponent(laborState.workerPlatform)}`);
+    renderLaborWorkerRelease();
+  } catch (error) {
+    laborState.workerRelease = null;
+    labor.downloadWorker.classList.add("disabled");
+    labor.downloadWorker.setAttribute("aria-disabled", "true");
+    labor.downloadWorker.href = "#";
+    labor.workerReleaseStatus.textContent = "安装包暂不可用";
+  }
+}
+
+function compareStableVersions(left, right) {
+  const parse = (value) => String(value || "").split(".").map((part) => Number(part));
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) - (b[index] || 0);
+  }
+  return 0;
+}
+
+function renderLaborWorkerRelease() {
+  const release = laborState.workerRelease;
+  if (!release || !labor.downloadWorker || !labor.workerReleaseStatus) return;
+  if (labor.workerReleaseAdmin) labor.workerReleaseAdmin.hidden = release.canUpload !== true;
+  const version = String(release.version || "");
+  const downloadUrl = String(release.downloadUrl || "");
+  const platformLabel = laborWorkerPlatformLabel(release.platform || laborState.workerPlatform);
+  if (release.available !== true || !version || !downloadUrl) {
+    labor.downloadWorker.classList.add("disabled");
+    labor.downloadWorker.setAttribute("aria-disabled", "true");
+    labor.downloadWorker.href = "#";
+    labor.workerReleaseStatus.textContent = `${platformLabel} 版待发布`;
+    return;
+  }
+  labor.downloadWorker.href = downloadUrl;
+  labor.downloadWorker.classList.remove("disabled");
+  labor.downloadWorker.removeAttribute("aria-disabled");
+  const installedVersions = laborState.workerDevices
+    .filter((device) => !device.revokedAt && device.workerVersion)
+    .map((device) => String(device.workerVersion));
+  const updateAvailable = installedVersions.some((installed) => compareStableVersions(version, installed) > 0);
+  labor.workerReleaseStatus.textContent = updateAvailable
+    ? `${platformLabel} 有新版本 ${version}，请下载更新`
+    : installedVersions.length
+      ? `${platformLabel} 已是最新版本 ${version}`
+      : `${platformLabel} 最新版本 ${version}`;
+}
+
+function syncLaborWorkerReleaseUploadControls() {
+  const releasePlatform = labor.workerReleasePlatform?.value || "macos-arm64";
+  const isWindows = releasePlatform === "windows-x64";
+  if (labor.workerReleasePackage) {
+    labor.workerReleasePackage.value = "";
+    labor.workerReleasePackage.accept = isWindows
+      ? ".exe,application/x-msdownload,application/vnd.microsoft.portable-executable"
+      : ".dmg,application/x-apple-diskimage";
+  }
+  setText(
+    labor.workerReleaseUploadStatus,
+    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 后上传到 UAT 私有存储。`,
+  );
+}
+
+async function uploadLaborWorkerRelease() {
+  const file = labor.workerReleasePackage?.files?.[0];
+  const requiredVersion = String(laborState.workerRelease?.requiredWorkerVersion || "");
+  const releasePlatform = labor.workerReleasePlatform?.value || laborState.workerPlatform;
+  const expectedFilename = releasePlatform === "windows-x64"
+    ? `Σ海外报账核对助手-${requiredVersion}-windows-x64.exe`
+    : `Σ海外报账核对助手-${requiredVersion}-arm64.dmg`;
+  if (!file) return toast(`请先选择核对助手 ${releasePlatform === "windows-x64" ? "EXE" : "DMG"} 安装包。`);
+  if (!requiredVersion || file.name !== expectedFilename) {
+    const message = `请选择当前要求版本安装包：${expectedFilename}`;
+    setText(labor.workerReleaseUploadStatus, message, true);
+    return toast(message);
+  }
+  beginButtonLoading(labor.uploadWorkerRelease, "正在校验");
+  try {
+    const sha256 = await sha256File(file);
+    const intent = await requestJson("/api/labor/worker/release/upload-intent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        platform: releasePlatform,
+        version: requiredVersion,
+        filename: file.name,
+        sizeBytes: file.size,
+        sha256,
+      }),
+    });
+    beginButtonLoading(labor.uploadWorkerRelease, "正在上传");
+    const uploaded = await fetch(intent.signedUrl, {
+      method: "PUT",
+      headers: intent.headers || {
+        "content-type": releasePlatform === "windows-x64" ? "application/x-msdownload" : "application/x-apple-diskimage",
+      },
+      body: file,
+    });
+    if (!uploaded.ok) throw new Error(`私有存储未接收安装包（HTTP ${uploaded.status}）。`);
+    const platformLabel = laborWorkerPlatformLabel(releasePlatform);
+    setText(labor.workerReleaseUploadStatus, `${platformLabel} ${requiredVersion} 已上传到 UAT 私有存储；更新清单生效后用户会收到提示。`);
+    toast(`${platformLabel} 核对助手 ${requiredVersion} 安装包上传完成。`);
+  } catch (error) {
+    setText(labor.workerReleaseUploadStatus, error.message, true);
+    toast(error.message);
+  } finally {
+    endButtonLoading(labor.uploadWorkerRelease);
+  }
+}
+
+function renderLaborWorkerDevices() {
+  const active = laborState.workerDevices.filter((device) => !device.revokedAt);
+  updateLaborWorkerHeader(laborState.workerDevices);
+  if (!labor.workerDevices) return;
+  if (!active.length) {
+    labor.workerDevices.innerHTML = '<span class="audit-empty">尚未激活。点击下方按钮后，浏览器会请求打开“Σ海外报账核对助手”。</span>';
+    return;
+  }
+  labor.workerDevices.innerHTML = active.map((device) => {
+    const online = workerDeviceIsOnline(device);
+    const seen = device.lastSeenAt ? String(device.lastSeenAt).replace("T", " ").slice(0, 19) : "尚未连接";
+    return `<div class="worker-device-item"><div><strong>${escapeHtml(device.displayName || "个人核对助手")} · ${online ? "在线" : "待连接"}</strong><span>版本 ${escapeHtml(device.workerVersion || "待上报")} · 最近连接 ${escapeHtml(seen)}</span></div><button type="button" data-worker-revoke="${escapeHtml(device.id)}">撤销</button></div>`;
+  }).join("");
+}
+
+async function activateLaborWorker() {
+  if (!labor.activateWorker) return;
+  beginButtonLoading(labor.activateWorker, "正在连接");
+  try {
+    const active = laborState.workerDevices.find((device) => !device.revokedAt);
+    const endpoint = active
+      ? `/api/labor/worker/devices/${encodeURIComponent(active.id)}/rotate`
+      : "/api/labor/worker/devices";
+    const issued = await requestJson(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Σ海外报账核对助手",
+        platform: navigator.userAgentData?.platform || navigator.platform || "macos-arm64",
+      }),
+    });
+    const activationUrl = String(issued.activationUrl || "");
+    if (!activationUrl.startsWith("sigma-overseas-labor-worker://activate?")) {
+      throw new Error("服务端未返回安全的核对助手激活地址。");
+    }
+    if (labor.workerMessage) labor.workerMessage.textContent = `激活请求有效至 ${String(issued.expiresAt || "").replace("T", " ").slice(0, 19)}。请在系统提示中允许打开核对助手。`;
+    const link = document.createElement("a");
+    link.href = activationUrl;
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(loadLaborWorkerDevices, 1800);
+  } catch (error) {
+    if (labor.workerMessage) labor.workerMessage.textContent = error.message;
+    toast(error.message);
+  } finally {
+    endButtonLoading(labor.activateWorker);
+  }
+}
+
+async function handleLaborWorkerDeviceAction(event) {
+  const button = event.target.closest("[data-worker-revoke]");
+  if (!button) return;
+  const deviceId = button.dataset.workerRevoke || "";
+  if (!deviceId || !window.confirm("确认撤销这台核对助手？撤销后它将立即失去任务访问权限。")) return;
+  beginButtonLoading(button, "正在撤销");
+  try {
+    await requestJson(`/api/labor/worker/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+    await loadLaborWorkerDevices();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    endButtonLoading(button);
+  }
+}
+
+function renderLaborStorageSummary(storage) {
+  const retention = storage?.retention || {};
+  const backendLabels = { local: "当前电脑", blob: "云端对象存储", supabase: "云端持久化存储" };
+  const backend = backendLabels[storage?.storageBackend] || storage?.storageBackend || "未配置";
+  const persistent = storage?.persistentStorageEnabled ? "已启用" : "未启用";
+  labor.storageSummary.innerHTML = [
+    ["存储位置", backend],
+    ["运行环境", storage?.storageEnvironment || "本地"],
+    ["持久化", persistent],
+    ["批次保留", `${Number(retention.runDays || 0)} 天`],
+    ["OCR 缓存保留", `${Number(retention.ocrCacheDays || 0)} 天`],
+  ].map(([label, value]) => `<div class="storage-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+}
+
+function renderLaborAuditEvents(events) {
+  const actionLabels = {
+    run_created: "创建批次",
+    files_uploaded: "上传材料",
+    extraction_started: "开始核对",
+    extraction_completed: "完成核对",
+    extraction_failed: "核对失败",
+    report_downloaded: "下载报告",
+    resource_limit_rejected: "资源限制拦截",
+    run_deleted: "删除批次",
+  };
+  if (!events.length) {
+    labor.auditList.innerHTML = '<li class="audit-empty">当前批次暂无审计记录。</li>';
+    return;
+  }
+  labor.auditList.innerHTML = events.map((event) => {
+    const timestamp = String(event.timestamp || event.createdAt || "").replace("T", " ").slice(0, 19);
+    const action = actionLabels[event.action] || event.action || "系统操作";
+    const outcome = event.outcome === "failed" || event.outcome === "rejected" ? "异常" : "完成";
+    return `<li><span>${escapeHtml(timestamp || "—")}</span><strong>${escapeHtml(action)}</strong><span>${escapeHtml(outcome)}</span></li>`;
+  }).join("");
+}
+
+async function deleteCurrentLaborRun() {
+  const runId = laborState.run?.id;
+  if (!runId) return;
+  if (!window.confirm(`确认删除批次 ${runId}？该批次的 PDF、Excel、报告和识别结果将一并删除，且无法恢复。`)) return;
+  beginButtonLoading(labor.deleteCurrentRun, "正在删除");
+  try {
+    await requestJson(`/api/labor/runs/${encodeURIComponent(runId)}`, { method: "DELETE" });
+    laborState.run = null;
+    labor.chromeRunBadge.hidden = true;
+    labor.reportLink.href = "#";
+    labor.reportLink.classList.add("disabled");
+    labor.reportLink.setAttribute("aria-disabled", "true");
+    labor.governanceDialog.close();
+    toast("当前批次已删除。");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    endButtonLoading(labor.deleteCurrentRun, { disabled: !laborState.run?.id });
   }
 }
 
@@ -165,65 +836,289 @@ async function loadModuleAccess() {
   try {
     const access = await requestJson("/api/labor/access");
     laborState.moduleAccess = access;
+    renderLaborUploadLimits(access);
+    if (labor.workerSection) labor.workerSection.hidden = access.p1?.required !== true;
+    if (labor.btnWorkerStatus) labor.btnWorkerStatus.hidden = access.p1?.required !== true;
+    if (access.p1?.required === true) loadLaborWorkerDevices();
+    const compatibility = laborReleaseCompatibility(access);
+    laborState.releaseCompatible = access.canUse !== false && compatibility.compatible;
     if (labor.moduleStageBadge) {
       labor.moduleStageBadge.textContent = `${access.stage || "UAT试用版"} · ${access.message || "结果需业务确认"}`;
-      labor.moduleStageBadge.classList.toggle("blocked", access.canUse === false);
+      labor.moduleStageBadge.classList.toggle("blocked", access.canUse === false || !compatibility.compatible);
+    }
+    if (labor.moduleReleaseMeta) {
+      labor.moduleReleaseMeta.textContent = compatibility.message;
+      labor.moduleReleaseMeta.classList.toggle("blocked", !compatibility.compatible);
+    }
+    setLaborActionAvailability(laborState.releaseCompatible);
+    if (!compatibility.compatible) {
+      toast(compatibility.message);
+      return;
     }
     if (access.canUse === false) {
-      [labor.createLaborRun, labor.uploadLaborFiles, labor.saveMapping, labor.extractCompare, labor.runMaterialDryRun].forEach((button) => {
-        if (button) button.disabled = true;
-      });
       toast(access.message || "当前账号无权使用海外劳务报账核对。");
     }
-    applyVercelLightUatState();
   } catch (error) {
     if (labor.moduleStageBadge) {
       labor.moduleStageBadge.textContent = "UAT试用版 · 权限状态读取失败";
       labor.moduleStageBadge.classList.add("blocked");
     }
+    if (labor.moduleReleaseMeta) {
+      labor.moduleReleaseMeta.textContent = "服务版本读取失败，正式操作已锁定。";
+      labor.moduleReleaseMeta.classList.add("blocked");
+    }
     laborState.moduleAccess = null;
+    laborState.releaseCompatible = false;
+    setLaborActionAvailability(false);
   }
 }
 
-function isVercelLaborLightUat() {
-  const access = String(laborState.moduleAccess?.access || "").toLowerCase();
-  return Boolean(window.location.hostname && window.location.hostname.endsWith("vercel.app")) && ["uat_trial", "uat", "trial"].includes(access);
+function configuredWorkbookFileLimit() {
+  return Math.max(1, Number(laborState.moduleAccess?.uploadLimits?.maxWorkbookFiles || 10));
 }
 
-function showVercelLightUatExtractBlocked() {
-  const message = "当前 Vercel UAT 仅支持页面试用和测试材料验证，不启动正式在线核对任务。请在本地/内网持久化环境生成正式核对结果。";
+function workbookUploadHint(count = 0) {
+  const maxWorkbookFiles = configuredWorkbookFileLimit();
+  return count > 0
+    ? `${count} 个 Excel 文件已选择 · 最多 ${maxWorkbookFiles} 个`
+    : `点击选择 · 支持多选 · 最多 ${maxWorkbookFiles} 个 · .xlsx / .xlsm / .xls`;
+}
+
+function laborFileKey(file) {
+  return [file?.name || "", Number(file?.size || 0), Number(file?.lastModified || 0)].join("::");
+}
+
+function mergeSelectedLaborFiles(existing, additions) {
+  const merged = [];
+  const seen = new Set();
+  [...existing, ...Array.from(additions || [])].forEach((file) => {
+    const key = laborFileKey(file);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(file);
+  });
+  return merged;
+}
+
+function uploadedLaborFileCounts() {
+  const files = laborState.run?.files || {};
+  return {
+    pdf: Array.isArray(files.pdfInvoices) ? files.pdfInvoices.length : 0,
+    workbook: Array.isArray(files.workbooks) ? files.workbooks.length : 0,
+  };
+}
+
+function renderSelectedLaborFiles() {
+  const uploaded = uploadedLaborFileCounts();
+  const pdfCount = laborState.selectedPdfFiles.length;
+  const workbookCount = laborState.selectedWorkbookFiles.length;
+  if (labor.pdfFileName) {
+    labor.pdfFileName.textContent = pdfCount
+      ? `${pdfCount} 个 PDF 待上传${uploaded.pdf ? ` · 已上传 ${uploaded.pdf} 个` : ""}`
+      : uploaded.pdf
+        ? `已上传 ${uploaded.pdf} 个 · 可继续选择补充文件`
+        : "点击选择 · 支持分次累加";
+  }
+  if (labor.workbookFileName) {
+    labor.workbookFileName.textContent = workbookCount
+      ? `${workbookCount} 个 Excel 待上传 · 最多 ${configuredWorkbookFileLimit()} 个${uploaded.workbook ? ` · 已上传 ${uploaded.workbook} 个` : ""}`
+      : uploaded.workbook
+        ? `已上传 ${uploaded.workbook} 个 · 可继续选择补充文件`
+        : workbookUploadHint(0);
+  }
+  document.querySelector("#pdfUploadZone")?.classList.toggle("has-file", pdfCount + uploaded.pdf > 0);
+  document.querySelector("#xlsxUploadZone")?.classList.toggle("has-file", workbookCount + uploaded.workbook > 0);
+}
+
+function handlePdfFilesSelected() {
+  laborState.selectedPdfFiles = mergeSelectedLaborFiles(laborState.selectedPdfFiles, labor.pdfFiles.files);
+  labor.pdfFiles.value = "";
+  renderSelectedLaborFiles();
+}
+
+function handleWorkbookFilesSelected() {
+  const maxWorkbookFiles = configuredWorkbookFileLimit();
+  const uploaded = uploadedLaborFileCounts().workbook;
+  const merged = mergeSelectedLaborFiles(laborState.selectedWorkbookFiles, labor.workbookFile.files);
+  const available = Math.max(0, maxWorkbookFiles - uploaded);
+  laborState.selectedWorkbookFiles = merged.slice(0, available);
+  labor.workbookFile.value = "";
+  renderSelectedLaborFiles();
+  if (merged.length > available) {
+    toast(`每个批次最多上传 ${maxWorkbookFiles} 个 Excel 文件，超出部分未加入。`);
+  }
+}
+
+function clearSelectedLaborFiles() {
+  laborState.selectedPdfFiles = [];
+  laborState.selectedWorkbookFiles = [];
+  labor.pdfFiles.value = "";
+  labor.workbookFile.value = "";
+  renderSelectedLaborFiles();
+  setText(labor.uploadStatus, "已清空本轮待上传文件；已上传到当前批次的文件不会被删除。");
+}
+
+function renderLaborUploadLimits(access) {
+  const maxWorkbookFiles = Math.max(1, Number(access.uploadLimits?.maxWorkbookFiles || 10));
+  if (!labor.workbookFileName) return;
+  const count = laborState.selectedWorkbookFiles.length;
+  labor.workbookFileName.textContent = count > 0
+    ? `${count} 个 Excel 文件已选择 · 最多 ${maxWorkbookFiles} 个`
+    : `点击选择 · 支持多选 · 最多 ${maxWorkbookFiles} 个 · .xlsx / .xlsm / .xls`;
+}
+
+function showLaborToolbench() {
+  if (labor.toolbench) labor.toolbench.hidden = false;
+  if (labor.resultsView) labor.resultsView.hidden = true;
+  document.body.style.overflow = "";
+  window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+}
+
+function showLaborResultsView() {
+  if (labor.toolbench) labor.toolbench.hidden = true;
+  if (labor.resultsView) labor.resultsView.hidden = false;
+  document.body.style.overflow = "";
+  window.requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "smooth" }));
+}
+
+async function restoreLaborRunFromUrl() {
+  const runId = new URLSearchParams(window.location.search).get("run");
+  if (!runId || !laborState.releaseCompatible) {
+    showLaborToolbench();
+    return;
+  }
+  if (!/^[0-9A-Za-z_-]+$/.test(runId)) {
+    toast("批次编号格式无效，未恢复历史批次。");
+    return;
+  }
+  try {
+    const run = await requestJson(`/api/labor/runs/${encodeURIComponent(runId)}`);
+    laborState.run = run;
+    if (labor.chromeRunBadge) {
+      labor.chromeRunBadge.hidden = false;
+      labor.chromeRunLabel.textContent = `批次 #${run.id.slice(0, 8)}`;
+    }
+    if (labor.supplierName) labor.supplierName.value = run.supplierName || "";
+    if (labor.periodStart) labor.periodStart.value = run.periodStart || "";
+    if (labor.periodEnd) labor.periodEnd.value = run.periodEnd || "";
+    syncPeriodRangePicker();
+    if (labor.currency) labor.currency.value = run.currency || "";
+
+    const files = run.files && typeof run.files === "object" ? run.files : {};
+    const hasUploadedFiles = Array.isArray(files.pdfInvoices) && files.pdfInvoices.length > 0
+      && Array.isArray(files.workbooks) && files.workbooks.length > 0;
+    const restoredOutput = restoreLaborRunOutput(run);
+    if (restoredOutput) {
+      showLaborResultsView();
+      advanceWizardStep("3");
+      toast(restoredOutput === "completed" ? `已恢复批次 ${run.id} 的核对结果。` : `已恢复批次 ${run.id} 的处理进度。`);
+      return;
+    }
+    advanceWizardStep(hasUploadedFiles ? "3" : "2");
+    showLaborToolbench();
+    if (labor.uploadStatus && hasUploadedFiles) {
+      setText(labor.uploadStatus, "已恢复批次，文件仍保存在 UAT 私有存储中。");
+    }
+    toast(`已恢复批次 ${run.id}。`);
+    if (hasUploadedFiles && run.mappingPreflight?.status === "completed") {
+      await loadSheets();
+    }
+  } catch (error) {
+    toast(`恢复批次失败：${error.message}`);
+  }
+}
+
+function laborRunHasSettledResult(run) {
+  const reportUrl = preferredLaborReportDownloadUrl(run);
+  const hasCompletedResult = run.status === "已生成差异报告" || Boolean(run.diffDownloadUrl) || Boolean(reportUrl);
+  if (!hasCompletedResult) return false;
+  const taskStatus = String(run?.asyncTask?.status || "").trim().toLowerCase();
+  return !taskStatus || taskStatus === "completed" || taskStatus === "succeeded";
+}
+
+function restoreLaborRunOutput(run) {
+  const taskStatus = String(run?.asyncTask?.status || "");
+  const hasCompletedResult = laborRunHasSettledResult(run);
+  if (hasCompletedResult) {
+    stopComparePolling();
+    endButtonLoading(labor.extractCompare, { disabled: false });
+    renderResult(run);
+    setDownload(preferredLaborReportDownloadUrl(run));
+    setText(labor.compareStatus, "完成：核对报告已生成。识别不完整的明细已进入待确认清单。");
+    return "completed";
+  }
+  const isProcessing = run.status === "抽取中"
+    || ["queued", "waiting_for_personal_worker", "running", "retry_wait"].includes(taskStatus);
+  if (!isProcessing) return "";
+  stopComparePolling();
+  laborState.pollRetryCount = 0;
+  laborState.extractStartedAt = null;
+  beginButtonLoading(labor.extractCompare, "正在生成");
+  renderLaborProgress(run);
+  setText(labor.compareStatus, formatLaborTaskStatus(run, "处理中：正在恢复后台核对进度。"));
+  laborState.comparePollTimer = window.setInterval(pollCompareResult, 3000);
+  return "processing";
+}
+
+function laborReleaseCompatibility(access) {
+  const backendVersion = String(access?.version || "未提供");
+  const backendContractVersion = Number(access?.apiContractVersion);
+  const contractCompatible = backendVersion === LABOR_UI_MODULE_VERSION
+    && backendContractVersion === LABOR_UI_API_CONTRACT_VERSION;
+  const runtimeCurrent = access?.runtimeGate?.runtimeSourceCurrent === true;
+  const buildId = String(access?.build?.buildId || access?.buildId || "unknown").slice(0, 16);
+  const buildSchemaValid = access?.build?.schemaVersion === 1
+    && access?.build?.status === "current"
+    && String(access?.build?.buildId || "").trim().length > 0
+    && access?.build?.moduleVersion === LABOR_UI_MODULE_VERSION
+    && Number(access?.build?.apiContractVersion) === LABOR_UI_API_CONTRACT_VERSION;
+  if (!contractCompatible) {
+    return {
+      compatible: false,
+      message: `前后端版本不一致：界面 ${LABOR_UI_MODULE_VERSION}/API v${LABOR_UI_API_CONTRACT_VERSION}，服务 ${backendVersion}/API v${Number.isFinite(backendContractVersion) ? backendContractVersion : "未提供"}。请重启或重新部署服务。`,
+    };
+  }
+  if (!runtimeCurrent) {
+    return {
+      compatible: false,
+      message: access?.runtimeGate?.message || "服务版本无法确认，正式操作已锁定。",
+    };
+  }
+  if (!buildSchemaValid) {
+    return {
+      compatible: false,
+      message: "服务 build 信息缺失或不完整，正式操作已锁定。请重启或重新部署服务。",
+    };
+  }
+  return {
+    compatible: true,
+    message: `界面 ${LABOR_UI_MODULE_VERSION} · API v${LABOR_UI_API_CONTRACT_VERSION} · build ${buildId}`,
+  };
+}
+
+function setLaborActionAvailability(enabled) {
+  [
+    labor.btnOpenDrawer,
+    labor.createLaborRun,
+    labor.uploadLaborFiles,
+    labor.loadSheets,
+    labor.saveMapping,
+    labor.extractCompare,
+    labor.runMaterialDryRun,
+  ].forEach((button) => {
+    if (button) button.disabled = !enabled;
+  });
+}
+
+function isFormalLaborTaskBlocked() {
+  return laborState.moduleAccess?.formalTaskGate?.canQueue !== true;
+}
+
+function showFormalLaborTaskBlocked() {
+  const message = laborState.moduleAccess?.formalTaskGate?.message
+    || "当前环境暂未开放正式核对任务。";
   setText(labor.compareStatus, message, true);
-  toast("当前环境不支持正式在线核对。");
-}
-
-function applyVercelLightUatState() {
-  if (!isVercelLaborLightUat()) return;
-  if (labor.extractCompare) {
-    labor.extractCompare.disabled = true;
-    labor.extractCompare.setAttribute("aria-disabled", "true");
-    labor.extractCompare.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 7h8M7 3v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-      正式核对未启用
-    `;
-  }
-  if (labor.compareStatus) {
-    setText(labor.compareStatus, "当前生产环境为 UAT 页面试用，只验证流程与测试材料，不生成正式核对报告。", false);
-  }
-  if (labor.extractPreviewTable && !laborState.run) {
-    labor.extractPreviewTable.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-icon">
-          <svg width="40" height="40" viewBox="0 0 40 40" fill="none"><rect x="6" y="8" width="28" height="24" rx="4" stroke="#D2D2D7" stroke-width="1.5"/><path d="M12 16h16M12 20h10M12 24h7" stroke="#D2D2D7" stroke-width="1.5" stroke-linecap="round"/></svg>
-        </div>
-        <p class="empty-title">UAT 页面试用</p>
-        <p class="empty-desc">正式核对报告未在 Vercel 生产环境启用；请使用测试材料验证页面流程。</p>
-      </div>
-    `;
-  }
-  if (labor.kpiTotal) labor.kpiTotal.textContent = "UAT";
-  if (labor.kpiMatched) labor.kpiMatched.textContent = "试用";
-  if (labor.kpiVariance) labor.kpiVariance.textContent = "未启用";
-  if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = "人工复核";
+  toast(message);
 }
 
 function laborTelemetrySummary(run = laborState.run) {
@@ -296,6 +1191,48 @@ function recordLaborTelemetry(event, details = {}) {
   }
 }
 
+function setLaborRunQuery(runId) {
+  const url = new URL(window.location.href);
+  if (runId) url.searchParams.set("run", runId);
+  else url.searchParams.delete("run");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function beginNewLaborBatch() {
+  stopComparePolling();
+  endButtonLoading(labor.extractCompare, { disabled: false });
+  laborState.run = null;
+  laborState.headers = [];
+  laborState.amountColumnCandidates = [];
+  laborState.pollRetryCount = 0;
+  laborState.extractStartedAt = null;
+  laborState.currentStep = 1;
+  laborState.selectedPdfFiles = [];
+  laborState.selectedWorkbookFiles = [];
+  [labor.supplierName, labor.periodStart, labor.periodEnd, labor.currency].forEach((input) => {
+    if (input) input.value = "";
+  });
+  syncPeriodRangePicker();
+  labor.pdfFiles.value = "";
+  labor.workbookFile.value = "";
+  renderSelectedLaborFiles();
+  labor.sheetSelect.innerHTML = "";
+  if (labor.mappingPreview) labor.mappingPreview.innerHTML = '<p class="empty-state-text">读取工作表后显示字段样例。</p>';
+  if (labor.amountComponentColumns) {
+    labor.amountComponentColumns.hidden = true;
+    const list = labor.amountComponentColumns.querySelector("[data-amount-component-list]");
+    if (list) list.innerHTML = "";
+  }
+  setText(labor.createStatus, "填写批次信息后创建。");
+  setText(labor.uploadStatus, "创建批次后可上传文件。");
+  if (labor.chromeRunBadge) labor.chromeRunBadge.hidden = true;
+  if (labor.chromeRunLabel) labor.chromeRunLabel.textContent = "";
+  setLaborRunQuery("");
+  clearResults();
+  advanceWizardStep("1");
+  showLaborToolbench();
+}
+
 async function createRun() {
   const supplierName = labor.supplierName.value.trim();
   const periodStart = labor.periodStart.value;
@@ -309,12 +1246,12 @@ async function createRun() {
   }
   if (!periodStart || !periodEnd) {
     setText(labor.createStatus, "请先选择完整账期。", true);
-    (periodStart ? labor.periodEnd : labor.periodStart).focus();
+    openPeriodRangePicker();
     return;
   }
   if (periodEnd < periodStart) {
     setText(labor.createStatus, "账期结束日期不能早于开始日期。", true);
-    labor.periodEnd.focus();
+    openPeriodRangePicker();
     return;
   }
   if (!currency) {
@@ -324,7 +1261,7 @@ async function createRun() {
   }
 
   setText(labor.createStatus, "正在创建批次...");
-  labor.createLaborRun.disabled = true;
+  beginButtonLoading(labor.createLaborRun, "正在创建");
   const startedAt = performance.now();
   recordLaborTelemetry("labor.create.started", {
     step: "create",
@@ -341,9 +1278,12 @@ async function createRun() {
         period_start: periodStart,
         period_end: periodEnd,
         currency,
+        require_employee_detail: true,
       }),
     });
     laborState.run = run;
+    setLaborRunQuery(run.id);
+    clearResults();
     setText(labor.createStatus, `批次已创建：${run.id}`);
 
     // Update run badge
@@ -373,27 +1313,32 @@ async function createRun() {
     setText(labor.createStatus, error.message, true);
     toast(error.message);
   } finally {
-    labor.createLaborRun.disabled = false;
+    endButtonLoading(labor.createLaborRun);
   }
 }
 
 async function uploadFiles() {
   if (!laborState.run) return toast("请先创建批次。");
-  if (!labor.pdfFiles.files.length || !labor.workbookFile.files.length)
-    return toast("请上传 PDF 发票和 Excel 账单。");
-
-  const form = new FormData();
-  Array.from(labor.pdfFiles.files).forEach((file) => form.append("pdf_files", file));
-  Array.from(labor.workbookFile.files).forEach((file) => form.append("workbook_files", file));
+  const existing = uploadedLaborFileCounts();
+  const pendingPdfCount = laborState.selectedPdfFiles.length;
+  const pendingWorkbookCount = laborState.selectedWorkbookFiles.length;
+  if (!pendingPdfCount && !pendingWorkbookCount) return toast("请先选择本轮要上传的文件。");
+  if (!(existing.pdf + pendingPdfCount) || !(existing.workbook + pendingWorkbookCount))
+    return toast("当前批次需同时包含 PDF 发票和 Excel 账单；可分次补充上传。");
+  const maxWorkbookFiles = configuredWorkbookFileLimit();
+  if (existing.workbook + pendingWorkbookCount > maxWorkbookFiles) {
+    const message = `每个批次最多选择 ${maxWorkbookFiles} 个 Excel 文件。`;
+    setText(labor.uploadStatus, message, true);
+    return toast(message);
+  }
 
   setText(labor.uploadStatus, "正在上传文件...");
-  labor.uploadLaborFiles.disabled = true;
+  beginButtonLoading(labor.uploadLaborFiles, "正在上传");
   const startedAt = performance.now();
   const uploadContext = {
-    pdfCount: labor.pdfFiles.files.length,
-    workbookCount: labor.workbookFile.files.length,
-    fileCount: labor.pdfFiles.files.length + labor.workbookFile.files.length,
-    totalBytes: selectedLaborUploadFiles().reduce((sum, file) => sum + Number(file.size || 0), 0),
+    pdfCount: pendingPdfCount,
+    workbookCount: pendingWorkbookCount,
+    fileCount: pendingPdfCount + pendingWorkbookCount,
   };
   recordLaborTelemetry("labor.upload.started", {
     step: "upload",
@@ -401,7 +1346,22 @@ async function uploadFiles() {
     context: uploadContext,
   });
   try {
-    laborState.run = await uploadFilesWithDirectStorageFallback(form, uploadContext);
+    if (usesP1DirectUpload()) {
+      laborState.run = await uploadFilesDirectlyToPrivateStorage();
+    } else {
+      const form = new FormData();
+      laborState.selectedPdfFiles.forEach((file) => form.append("pdf_files", file));
+      laborState.selectedWorkbookFiles.forEach((file) => form.append("workbook_files", file));
+      laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/files`, {
+        method: "POST",
+        body: form,
+      });
+    }
+    laborState.selectedPdfFiles = [];
+    laborState.selectedWorkbookFiles = [];
+    labor.pdfFiles.value = "";
+    labor.workbookFile.value = "";
+    renderSelectedLaborFiles();
     setText(labor.uploadStatus, "文件已上传，可以读取工作表。");
     recordLaborTelemetry("labor.upload.succeeded", {
       step: "upload",
@@ -422,99 +1382,84 @@ async function uploadFiles() {
     setText(labor.uploadStatus, error.message, true);
     toast(error.message);
   } finally {
-    labor.uploadLaborFiles.disabled = false;
+    endButtonLoading(labor.uploadLaborFiles);
   }
 }
 
-function selectedLaborUploadFiles() {
-  return [...Array.from(labor.pdfFiles.files || []), ...Array.from(labor.workbookFile.files || [])];
+function usesP1DirectUpload() {
+  return laborState.moduleAccess?.p1?.required === true
+    && laborState.moduleAccess?.p1?.uploadMode === "signed_private_direct";
 }
 
-async function uploadFilesWithDirectStorageFallback(form, uploadContext) {
-  try {
-    return await uploadFilesDirectToSupabase(uploadContext);
-  } catch (error) {
-    if (window.location.hostname && window.location.hostname.endsWith("vercel.app")) {
-      throw error;
+async function sha256File(file) {
+  if (!window.crypto?.subtle || typeof file?.arrayBuffer !== "function") {
+    throw new Error("当前浏览器不支持 P1 文件完整性校验，请升级浏览器后重试。");
+  }
+  const digest = await window.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function uploadFilesDirectlyToPrivateStorage() {
+  const runId = laborState.run.id;
+  const selected = [
+    ...laborState.selectedPdfFiles.map((file) => ({ file, fileKind: "pdf_invoice" })),
+    ...laborState.selectedWorkbookFiles.map((file) => ({ file, fileKind: "workbook" })),
+  ];
+  const fileSpecs = [];
+  for (let index = 0; index < selected.length; index += 1) {
+    const item = selected[index];
+    setText(labor.uploadStatus, `正在校验文件 ${index + 1}/${selected.length}：${item.file.name}`);
+    fileSpecs.push({
+      filename: item.file.name,
+      fileKind: item.fileKind,
+      contentType: item.file.type || "application/octet-stream",
+      sizeBytes: item.file.size,
+      sha256: await sha256File(item.file),
+    });
+  }
+  const response = await requestJson(`/api/labor/runs/${runId}/upload-intents`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ files: fileSpecs }),
+  });
+  const intents = Array.isArray(response.intents) ? response.intents : [];
+  if (intents.length !== selected.length) {
+    throw new Error("服务端返回的私有上传清单不完整，请重新上传本批文件。");
+  }
+  for (let index = 0; index < intents.length; index += 1) {
+    const intent = intents[index];
+    const item = selected[index];
+    const uploadUrl = new URL(String(intent.signedUrl || ""), window.location.href);
+    const secureUrl = uploadUrl.protocol === "https:"
+      || (uploadUrl.protocol === "http:" && ["localhost", "127.0.0.1"].includes(uploadUrl.hostname));
+    if (!secureUrl || String(intent.method || "").toUpperCase() !== "PUT") {
+      throw new Error("服务端返回了不安全的私有上传地址，请联系管理员。");
     }
-    if (!/LABOR_DIRECT_UPLOAD_UNAVAILABLE|未启用 Supabase 直传|当前环境未启用/i.test(error.message || "")) {
-      throw error;
+    setText(labor.uploadStatus, `正在直传文件 ${index + 1}/${intents.length}：${item.file.name}`);
+    const uploaded = await fetch(intent.signedUrl, {
+      method: "PUT",
+      headers: intent.headers || { "content-type": item.file.type || "application/octet-stream" },
+      body: item.file,
+    });
+    if (!uploaded.ok) {
+      throw new Error(`私有存储未接收文件 ${item.file.name}（HTTP ${uploaded.status}）。`);
     }
-    return requestJson(`/api/labor/runs/${laborState.run.id}/files`, {
+    await requestJson(`/api/labor/runs/${runId}/upload-intents/${intent.fileId}/finalize`, {
       method: "POST",
-      body: form,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sha256: fileSpecs[index].sha256 }),
     });
   }
-}
-
-async function uploadFilesDirectToSupabase(uploadContext) {
-  const pdfFiles = Array.from(labor.pdfFiles.files || []);
-  const workbookFiles = Array.from(labor.workbookFile.files || []);
-  setText(labor.uploadStatus, "正在生成直传地址...");
-  const plan = await requestJson(`/api/labor/runs/${laborState.run.id}/direct-upload-plan`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      pdfFiles: pdfFiles.map(fileToUploadDescriptor),
-      workbookFiles: workbookFiles.map(fileToUploadDescriptor),
-    }),
-  });
-  const filesByKey = new Map();
-  pdfFiles.forEach((file) => filesByKey.set(`pdfInvoices:${file.name}:${file.size}`, file));
-  workbookFiles.forEach((file) => filesByKey.set(`workbooks:${file.name}:${file.size}`, file));
-  const completedUploads = [];
-  for (const [index, upload] of (plan.uploads || []).entries()) {
-    const file = filesByKey.get(`${upload.group}:${upload.originalFilename}:${upload.size}`);
-    if (!file) throw new Error(`找不到待上传文件：${upload.originalFilename || upload.filename}`);
-    setText(labor.uploadStatus, `正在直传文件 ${index + 1}/${plan.uploads.length}：${upload.originalFilename || file.name}`);
-    await uploadOneFileToSignedUrl(upload, file);
-    completedUploads.push({
-      group: upload.group,
-      filename: upload.filename,
-      originalFilename: upload.originalFilename,
-      relativePath: upload.relativePath,
-      size: upload.size,
-    });
-  }
-  setText(labor.uploadStatus, "文件已直传，正在登记批次...");
-  recordLaborTelemetry("labor.upload.direct_completed", {
-    step: "upload",
-    status: "completed",
-    context: { ...uploadContext, directUpload: true },
-  });
-  return requestJson(`/api/labor/runs/${laborState.run.id}/direct-upload-complete`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ uploads: completedUploads }),
-  });
-}
-
-function fileToUploadDescriptor(file) {
-  return {
-    name: file.name,
-    size: file.size,
-    type: file.type || "application/octet-stream",
-  };
-}
-
-async function uploadOneFileToSignedUrl(upload, file) {
-  const body = new FormData();
-  body.append("cacheControl", "3600");
-  body.append("", file);
-  const response = await fetch(upload.signedUrl, {
-    method: "PUT",
-    headers: { "x-upsert": "true" },
-    body,
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`直传文件失败：${upload.originalFilename || file.name}（HTTP ${response.status}）${text ? ` ${text.slice(0, 160)}` : ""}`);
-  }
+  return requestJson(`/api/labor/runs/${runId}`);
 }
 
 async function loadSheets() {
   if (!laborState.run) return toast("请先创建并上传文件。");
+  beginButtonLoading(labor.loadSheets, "正在读取");
   try {
+    if (usesP1DirectUpload()) {
+      await ensureP1MappingPreflight();
+    }
     const data = await requestJson(`/api/labor/runs/${laborState.run.id}/workbook-sheets`);
     labor.sheetSelect.innerHTML = data.sheets
       .map((sheet) => `<option value="${escapeHtml(sheet)}">${escapeHtml(sheet)}</option>`)
@@ -522,7 +1467,33 @@ async function loadSheets() {
     if (data.sheets.length) await loadFieldSuggestions();
   } catch (error) {
     toast(error.message);
+  } finally {
+    endButtonLoading(labor.loadSheets);
   }
+}
+
+async function ensureP1MappingPreflight() {
+  const response = await requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const submittedPreflight = response.mappingPreflight || {};
+  laborState.run = { ...laborState.run, mappingPreflight: submittedPreflight };
+  if (submittedPreflight.status === "completed") return;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
+    laborState.run = run;
+    const preflight = run.mappingPreflight || {};
+    if (preflight.status === "completed") return;
+    if (preflight.status === "failed") {
+      throw new Error(preflight.errorMessage || "本人核对助手读取 Excel 失败，请检查助手状态后重试。");
+    }
+    const message = preflight.message || "等待本人核对助手读取 Excel 工作表和列名…";
+    labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(message)}</p>`;
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+  }
+  throw new Error("字段预检等待超过 10 分钟，请确认本人核对助手已激活并在线后重试。");
 }
 
 async function loadFieldSuggestions() {
@@ -539,6 +1510,8 @@ async function loadFieldSuggestions() {
     fillColumnSelect(labor.nameColumn, data.suggestedMapping?.name);
     fillColumnSelect(labor.hoursColumn, data.suggestedMapping?.hours);
     fillColumnSelect(labor.amountColumn, data.suggestedMapping?.amount);
+    laborState.amountColumnCandidates = data.amountColumnCandidates || [];
+    renderAmountComponentOptions();
     fillColumnSelect(labor.currencyColumn, data.suggestedMapping?.currency, true);
     renderMappingPreview(data.previewRows || []);
   } catch (error) {
@@ -548,6 +1521,7 @@ async function loadFieldSuggestions() {
 
 async function saveMapping() {
   if (!laborState.run) return toast("请先创建批次。");
+  beginButtonLoading(labor.saveMapping, "正在保存");
   const startedAt = performance.now();
   const context = {
     sheetName: labor.sheetSelect.value,
@@ -570,6 +1544,8 @@ async function saveMapping() {
           employeeId: labor.employeeIdColumn.value,
           hours: labor.hoursColumn.value,
           amount: labor.amountColumn.value,
+          amountColumns: selectedAmountColumns(),
+          amountScope: labor.amountScope.value,
           currency: labor.currencyColumn.value,
         },
       }),
@@ -580,8 +1556,8 @@ async function saveMapping() {
       durationMs: elapsedMs(startedAt),
       context,
     });
-    toast("字段映射已确认，可以生成核对报告。");
-    if (typeof window.closeDrawer === "function") window.closeDrawer();
+    toast("字段映射已确认，开始生成核对报告。");
+    await extractAndCompare();
   } catch (error) {
     recordLaborTelemetry("labor.mapping.failed", {
       step: "mapping",
@@ -591,13 +1567,15 @@ async function saveMapping() {
       context,
     });
     toast(error.message);
+  } finally {
+    endButtonLoading(labor.saveMapping);
   }
 }
 
 async function loadMaterialBatches() {
   if (!labor.materialBatchSelect || !labor.materialReplayBody) return;
   setText(labor.materialReplayStatus, "正在加载测试材料...");
-  labor.loadMaterialBatches.disabled = true;
+  beginButtonLoading(labor.loadMaterialBatches, "正在加载");
   try {
     const index = await requestJson("/api/labor/material-index");
     laborState.materialIndex = index;
@@ -616,7 +1594,7 @@ async function loadMaterialBatches() {
     setText(labor.materialReplayStatus, error.message, true);
     toast(error.message);
   } finally {
-    labor.loadMaterialBatches.disabled = false;
+    endButtonLoading(labor.loadMaterialBatches);
   }
 }
 
@@ -624,7 +1602,7 @@ async function runMaterialDryRun() {
   const batchKey = labor.materialBatchSelect?.value || "";
   if (!batchKey) return toast("请先选择材料批次。");
   setText(labor.materialReplayStatus, "正在执行测试验证...");
-  labor.runMaterialDryRun.disabled = true;
+  beginButtonLoading(labor.runMaterialDryRun, "正在验证");
   const startedAt = performance.now();
   recordLaborTelemetry("labor.material.validation.started", {
     step: "material_validation",
@@ -665,7 +1643,7 @@ async function runMaterialDryRun() {
     setText(labor.materialReplayStatus, error.message, true);
     toast(error.message);
   } finally {
-    labor.runMaterialDryRun.disabled = false;
+    endButtonLoading(labor.runMaterialDryRun);
   }
 }
 
@@ -1216,10 +2194,7 @@ async function handleMaterialReplayAction(event) {
   if (action !== "create-run") return;
   if (!laborState.materialDryRun) return toast("请先执行测试材料验证。");
   const feedback = document.querySelector("#materialActionFeedback");
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.setAttribute("aria-busy", "true");
-  button.textContent = "正在生成测试报告...";
+  beginButtonLoading(button, "正在生成");
   setMaterialActionFeedback("处理中", "正在根据测试材料生成测试报告；完成后会提示下一步。");
   const startedAt = performance.now();
   const batchKey = laborState.materialDryRun?.batchKey || "";
@@ -1249,6 +2224,7 @@ async function handleMaterialReplayAction(event) {
     if (labor.supplierName) labor.supplierName.value = run.supplierName || "";
     if (labor.periodStart) labor.periodStart.value = run.periodStart || "";
     if (labor.periodEnd) labor.periodEnd.value = run.periodEnd || "";
+    syncPeriodRangePicker();
     if (labor.currency) labor.currency.value = run.currency || "USD";
     const nextStep = run.materialReplayNextStep || {};
     setText(labor.materialReplayStatus, `测试报告已生成：${run.id}`);
@@ -1280,9 +2256,7 @@ async function handleMaterialReplayAction(event) {
     setMaterialActionFeedback("创建失败", error.message, true);
     toast(error.message);
   } finally {
-    button.disabled = false;
-    button.removeAttribute("aria-busy");
-    button.textContent = originalText;
+    endButtonLoading(button);
   }
 }
 
@@ -1348,19 +2322,30 @@ function clearResults() {
   if (labor.kpiMatched) labor.kpiMatched.textContent = "—";
   if (labor.kpiVariance) labor.kpiVariance.textContent = "—";
   if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = "—";
+  const totalCard = document.querySelector("#kpiTotal .kpi-sub");
+  const matchedCard = document.querySelector("#kpiMatched .kpi-sub");
+  const varianceCard = document.querySelector("#kpiVariance .kpi-sub");
+  const unmatchedCard = document.querySelector("#kpiUnmatched .kpi-sub");
+  if (totalCard) totalCard.textContent = "尚未核对";
+  if (matchedCard) matchedCard.textContent = "尚未核对";
+  if (varianceCard) varianceCard.textContent = "容差 $0.10";
+  if (unmatchedCard) unmatchedCard.textContent = "待确认项目";
+  setText(labor.compareStatus, "新批次尚未生成核对结果。");
 }
 
 async function extractAndCompare() {
-  if (isVercelLaborLightUat()) {
-    showVercelLightUatExtractBlocked();
+  if (isFormalLaborTaskBlocked()) {
+    showFormalLaborTaskBlocked();
     return;
   }
-  if (!laborState.run) return toast("请先创建批次。");
+  const requestedRunId = laborState.run?.id;
+  if (!requestedRunId) return toast("请先创建批次。");
+  showLaborResultsView();
   stopComparePolling();
   clearResults();
 
   setText(labor.compareStatus, "已提交核对任务，正在等待结果…");
-  labor.extractCompare.disabled = true;
+  beginButtonLoading(labor.extractCompare, "正在生成");
   laborState.pollRetryCount = 0;
   laborState.extractStartedAt = performance.now();
   recordLaborTelemetry("labor.extract.started", {
@@ -1370,9 +2355,12 @@ async function extractAndCompare() {
   });
 
   try {
-    laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/extract-and-compare`, {
+    const submittedRun = await requestJson(`/api/labor/runs/${requestedRunId}/extract-and-compare`, {
       method: "POST",
     });
+    if (laborState.run?.id !== requestedRunId) return;
+    laborState.run = submittedRun;
+    renderLaborProgress(laborState.run);
     setText(labor.compareStatus, formatLaborTaskStatus(laborState.run, "待处理：核对任务已提交，等待后台开始处理。"));
     recordLaborTelemetry("labor.extract.submitted", {
       step: "extract_compare",
@@ -1382,6 +2370,7 @@ async function extractAndCompare() {
     await pollCompareResult();
     laborState.comparePollTimer = window.setInterval(pollCompareResult, 3000);
   } catch (error) {
+    if (laborState.run?.id !== requestedRunId) return;
     recordLaborTelemetry("labor.extract.failed", {
       step: "extract_compare",
       status: "failed",
@@ -1389,34 +2378,24 @@ async function extractAndCompare() {
       errorMessage: error.message,
     });
     laborState.extractStartedAt = null;
-    labor.extractCompare.disabled = false;
+    endButtonLoading(labor.extractCompare, { disabled: false });
     setText(labor.compareStatus, error.message, true);
     toast(error.message);
   }
 }
 
 async function pollCompareResult() {
-  if (!laborState.run) return;
+  const requestedRunId = laborState.run?.id;
+  if (!requestedRunId) return;
   laborState.pollRetryCount++;
-  if (laborState.pollRetryCount > laborState.pollMaxRetries) {
-    stopComparePolling();
-    labor.extractCompare.disabled = false;
-    setText(labor.compareStatus, "后台核对等待超时（60分钟）。任务可能仍在后台，请稍后刷新批次状态；若持续无结果，请联系管理员查看 Worker 日志。", true);
-    recordLaborTelemetry("labor.extract.timeout", {
-      step: "extract_compare",
-      status: "timeout",
-      durationMs: elapsedMs(laborState.extractStartedAt),
-    });
-    laborState.extractStartedAt = null;
-    toast("后台核对等待超时。");
-    return;
-  }
   try {
-    const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
+    const run = await requestJson(`/api/labor/runs/${requestedRunId}`);
+    if (laborState.run?.id !== requestedRunId) return;
     laborState.run = run;
+    renderLaborProgress(run);
     if (run.status === "抽取失败") {
       stopComparePolling();
-      labor.extractCompare.disabled = false;
+      endButtonLoading(labor.extractCompare, { disabled: false });
       const message = formatLaborFailureMessage(run);
       setText(labor.compareStatus, message, true);
       recordLaborTelemetry("labor.extract.failed", {
@@ -1431,9 +2410,9 @@ async function pollCompareResult() {
       toast(run.retryable ? "核对任务中断，可直接重试。" : "核对报告生成失败。");
       return;
     }
-    if (run.diffDownloadUrl || run.status === "已生成差异报告") {
+    if (laborRunHasSettledResult(run)) {
       stopComparePolling();
-      labor.extractCompare.disabled = false;
+      endButtonLoading(labor.extractCompare, { disabled: false });
       renderResult(run);
       setText(labor.compareStatus, "完成：核对报告已生成。识别不完整的明细已进入待确认清单。");
       setDownload(preferredLaborReportDownloadUrl(run));
@@ -1447,12 +2426,30 @@ async function pollCompareResult() {
       toast("差异报告已生成。");
       return;
     }
+    const idleSeconds = secondsSince(run?.progress?.lastUpdatedAt);
+    if (Number.isFinite(idleSeconds) && idleSeconds > laborState.pollMaxIdleSeconds) {
+      stopComparePolling();
+      endButtonLoading(labor.extractCompare, { disabled: false });
+      const message = "后台超过10分钟没有更新进度，任务可能已中断。请检查服务后再重试。";
+      setText(labor.compareStatus, message, true);
+      recordLaborTelemetry("labor.extract.stalled", {
+        run,
+        step: "extract_compare",
+        status: "stalled",
+        durationMs: elapsedMs(laborState.extractStartedAt),
+        context: { idleSeconds },
+      });
+      laborState.extractStartedAt = null;
+      toast("后台任务长时间没有更新。");
+      return;
+    }
     // 显示实时进度（stage 字段）
     const elapsed = laborState.pollRetryCount * 3;
     setText(labor.compareStatus, formatLaborTaskStatus(run, `处理中：${businessStageLabel(run.stage || "生成核对报告")}... (${elapsed}s)`));
   } catch (error) {
+    if (laborState.run?.id !== requestedRunId) return;
     stopComparePolling();
-    labor.extractCompare.disabled = false;
+    endButtonLoading(labor.extractCompare, { disabled: false });
     setText(labor.compareStatus, error.message, true);
     recordLaborTelemetry("labor.extract.failed", {
       step: "extract_compare",
@@ -1486,11 +2483,13 @@ function businessStageLabel(value) {
 
 function formatLaborTaskStatus(run, fallback) {
   const task = run?.asyncTask || {};
+  const progress = formatLaborProgressInline(run);
   const label = task.statusLabel || "";
   const message = task.message || "";
   if (!label) return fallback;
   if (label === "待处理") return message ? `待处理：${message}` : "待处理：核对任务已提交，等待后台开始处理。";
   if (label === "处理中") {
+    if (progress) return progress;
     const stage = businessStageLabel(run?.stage || "");
     const detail = message || stage || "后台正在生成核对结果。";
     return `处理中：${detail}`;
@@ -1498,6 +2497,115 @@ function formatLaborTaskStatus(run, fallback) {
   if (label === "完成") return message ? `完成：${message}` : "完成：核对报告已生成。";
   if (label === "失败") return message ? `失败：${message}` : "失败：核对报告生成失败。";
   return `${label}：${message || fallback}`;
+}
+
+function renderLaborProgress(run) {
+  const progress = run?.progress || {};
+  const taskStatus = run?.asyncTask?.status || "";
+  const isProcessing = run?.status === "抽取中" || ["queued", "running"].includes(taskStatus);
+  if (!isProcessing || !labor.extractPreviewTable) return;
+
+  const phase = progress.phase || "queued";
+  const totalPages = Number(progress.totalPages || 0);
+  const processedPages = Number(progress.processedPages || 0);
+  const totalFiles = Number(progress.totalFiles || 0);
+  const processedFiles = Number(progress.processedFiles || 0);
+  const percent = totalPages > 0
+    ? Math.max(0, Math.min(100, Math.round((processedPages / totalPages) * 100)))
+    : processedFiles > 0 && totalFiles > 0
+      ? Math.max(0, Math.min(100, Math.round((processedFiles / totalFiles) * 100)))
+      : 8;
+  const elapsed = formatElapsedFrom(progress.startedAt) || formatElapsedFrom(run?.asyncTask?.startedAt) || "刚开始";
+  const idleSeconds = secondsSince(progress.lastUpdatedAt);
+  const isIdle = Number.isFinite(idleSeconds) && idleSeconds >= 180;
+  const currentFile = progress.currentFile || "等待后台更新";
+  const currentPage = progress.currentPage ? `第 ${progress.currentPage} 页` : "待确认";
+  const pageText = totalPages > 0 ? `${processedPages} / ${totalPages} 页` : "准备中";
+  const fileText = totalFiles > 0 ? `${processedFiles || 0} / ${totalFiles} 个文件` : "准备中";
+  const message = progress.message || run?.asyncTask?.message || "后台正在读取已上传文件并生成核对结果。";
+  const warning = isIdle
+    ? "后台超过 3 分钟没有更新进度，可能正在等待 AI 识别服务响应；如果长时间不变化，可以重新点击生成报告。"
+    : "图片型发票需要逐页识别，页数多时会比较慢。页面可以保持打开，系统会自动刷新结果。";
+
+  labor.extractPreviewTable.innerHTML = `
+    <div class="labor-progress-card">
+      <div class="labor-progress-top">
+        <div>
+          <span class="labor-progress-eyebrow">${escapeHtml(progress.phaseLabel || "正在生成核对报告")}</span>
+          <h3 class="labor-progress-title">正在生成核对报告</h3>
+          <p class="labor-progress-message">${escapeHtml(message)}</p>
+        </div>
+        <div class="labor-progress-time">
+          已用时
+          <strong>${escapeHtml(elapsed)}</strong>
+        </div>
+      </div>
+      <div class="labor-progress-track" aria-label="核对进度"><span style="width:${percent}%"></span></div>
+      <div class="labor-progress-meta">
+        <div><span>PDF 识别页数</span><strong>${escapeHtml(pageText)}</strong></div>
+        <div><span>当前文件</span><strong>${escapeHtml(currentFile)}</strong></div>
+        <div><span>当前位置</span><strong>${escapeHtml(currentPage)}</strong></div>
+      </div>
+      <ol class="labor-progress-steps">
+        ${renderLaborProgressStep("excel", "读取账单", phase)}
+        ${renderLaborProgressStep("pdf_total", "核对总金额", phase)}
+        ${renderLaborProgressStep("pdf_detail", "识别发票明细", phase)}
+        ${renderLaborProgressStep("report", "生成报告", phase)}
+      </ol>
+      <p class="labor-progress-warning">${escapeHtml(warning)}</p>
+    </div>
+  `;
+}
+
+function renderLaborProgressStep(step, label, phase) {
+  const order = { queued: 0, excel: 1, pdf_total: 2, pdf_detail: 3, matching: 4, report: 5, completed: 6 };
+  const stepOrder = { excel: 1, pdf_total: 2, pdf_detail: 3, report: 5 };
+  const current = order[phase] ?? 0;
+  const target = stepOrder[step] ?? 0;
+  const className = current === target ? "is-active" : current > target ? "is-done" : "";
+  const state = current === target ? "进行中" : current > target ? "已完成" : "等待中";
+  return `<li class="${className}">${escapeHtml(label)}<br><span>${escapeHtml(state)}</span></li>`;
+}
+
+function formatLaborProgressInline(run) {
+  const progress = run?.progress || {};
+  if (!progress.phaseLabel && !progress.message) return "";
+  const totalPages = Number(progress.totalPages || 0);
+  const processedPages = Number(progress.processedPages || 0);
+  if (totalPages > 0) {
+    return `处理中：${progress.phaseLabel || "生成核对报告"}，${processedPages} / ${totalPages} 页`;
+  }
+  return `处理中：${progress.message || progress.phaseLabel || "后台正在生成核对结果。"}`;
+}
+
+function formatElapsedFrom(isoValue) {
+  const startedAt = parseIsoTime(isoValue);
+  if (!Number.isFinite(startedAt)) return "";
+  return formatDuration(Math.max(0, Date.now() - startedAt));
+}
+
+function secondsSince(isoValue) {
+  const time = parseIsoTime(isoValue);
+  if (!Number.isFinite(time)) return NaN;
+  return Math.floor((Date.now() - time) / 1000);
+}
+
+function parseIsoTime(value) {
+  const text = String(value || "").trim();
+  if (!text) return NaN;
+  const isIsoDateTime = /^\d{4}-\d{2}-\d{2}T/.test(text);
+  const hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
+  const normalized = isIsoDateTime && !hasExplicitTimezone ? `${text}Z` : text;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
 }
 
 function stopComparePolling() {
@@ -1514,6 +2622,35 @@ function fillColumnSelect(select, selected = "", optional = false) {
       .map((header) => `<option value="${escapeHtml(header)}">${escapeHtml(header)}</option>`)
       .join("");
   select.value = selected || "";
+}
+
+function renderAmountComponentOptions() {
+  if (!labor.amountComponentColumns) return;
+  const primary = labor.amountColumn.value;
+  const selected = new Set(selectedAdditionalAmountColumns());
+  const candidates = (laborState.amountColumnCandidates || []).filter((header) => header && header !== primary);
+  const list = labor.amountComponentColumns.querySelector("[data-amount-component-list]");
+  labor.amountComponentColumns.hidden = candidates.length === 0;
+  if (!list) return;
+  list.innerHTML = candidates
+    .map((header) => `
+      <label class="amount-component-option">
+        <input type="checkbox" value="${escapeHtml(header)}" ${selected.has(header) ? "checked" : ""} />
+        <span>${escapeHtml(header)}</span>
+      </label>
+    `)
+    .join("");
+}
+
+function selectedAdditionalAmountColumns() {
+  if (!labor.amountComponentColumns) return [];
+  return Array.from(labor.amountComponentColumns.querySelectorAll('input[type="checkbox"]:checked'))
+    .map((input) => input.value)
+    .filter(Boolean);
+}
+
+function selectedAmountColumns() {
+  return Array.from(new Set([labor.amountColumn.value, ...selectedAdditionalAmountColumns()].filter(Boolean)));
 }
 
 function renderMappingPreview(rows) {
@@ -1547,70 +2684,82 @@ function renderResult(run) {
   const wc = run.warehouseComparison;
   const wcSummary = wc && wc.summary;
   const totalPassed = isLaborTotalAmountPassed(summary, wcSummary);
-  const rows = run.comparisonRows || [];
+  const presentation = laborPresentationContract(run);
+  const rows = presentation.employeeRows;
+  const candidateMatches = presentation.candidateMatches;
+  const presentationSummary = presentation.summary;
 
   // Update KPI cards
-  updateKpiCards(summary, rows, wcSummary, run.candidateMatches || [], run);
+  updateKpiCards(summary, rows, wcSummary, candidateMatches, run, presentationSummary);
 
-  // 1. 结论 — 用户第一眼看到
-  renderConclusion(summary, wcSummary, run.extractionQuality, run);
+  // 1. 顶部卡片下方优先展示完整员工明细
+  renderEmployeeReconTable(rows, summary, totalPassed, wcSummary, presentationSummary);
+
+  // 2. 结论和放行提示
+  renderConclusion(summary, wcSummary, run.extractionQuality, run, presentation);
   renderReadinessGate(run.readinessGate);
 
-  // 2. 总金额、员工识别和仓库概览 — 先给业务判断依据
-  renderQualityAlert(run.extractionQuality, run.reconciliationDiagnostics);
+  // 3. 总金额、员工识别和仓库概览
+  renderQualityAlert(run.extractionQuality, run.reconciliationDiagnostics, run);
   renderWarehouseTable(wc);
   const hasDiagnostics = (labor.qualityAlert && !labor.qualityAlert.hidden) || (wc && wc.rows && wc.rows.length > 0);
   if (labor.diagnosticsFold) {
     labor.diagnosticsFold.hidden = !hasDiagnostics;
   }
 
-  // 3. 已识别员工明细 / 总账通过证据
+  // 4. 已识别员工明细 / 总账通过证据
   if (totalPassed) {
     renderPassEvidence(labor.extractPreviewTable, summary, wcSummary);
   } else {
     renderExtractRows(labor.extractPreviewTable, run.pdfExtractedRows || []);
   }
 
-  // 4. 系统已安全自动修正的姓名格式差异
+  // 5. 系统已安全自动修正的姓名格式差异
   renderAutoFixSummary(rows);
 
-  // 5. 待确认异常和疑似同一员工
-  renderPendingItems(rows, run.candidateMatches || [], summary, run.reviewQueues || {});
-
-  // 6. 完整员工明细 — 放在报告后半段，避免干扰主结论
-  renderEmployeeReconTable(rows, run.candidateMatches || [], summary, totalPassed, wcSummary);
+  // 6. 待确认异常和疑似同一员工
+  renderPendingItems(rows, candidateMatches, summary, run.reviewQueues || {});
 }
 
-function updateKpiCards(summary, rows, wcSummary, candidateMatches = [], run = {}) {
+function normalizeReviewWarehouses(values) {
+  return (Array.isArray(values) ? values : [])
+    .map((warehouse) => String(warehouse || "").trim())
+    .filter(Boolean);
+}
+
+function updateKpiCards(summary, rows, wcSummary, candidateMatches = [], run = {}, presentationSummary = {}) {
+  const currencySymbol = laborCurrencySymbol(run);
+  const employeeRows = Array.isArray(rows) ? rows : [];
   const pdfCount = summary.pdfEmployeeCount || 0;
   const excelCount = summary.excelEmployeeCount || 0;
-  const skippedEmployeeDrilldown = isLaborTotalAmountPassed(summary, wcSummary) && !rows.length;
+  const skippedEmployeeDrilldown = isLaborTotalAmountPassed(summary, wcSummary) && !employeeRows.length;
   const amountDiffCount = summary.amountDiffCount || 0;
   const notInInvoiceCount = summary.notInInvoiceCount || 0;
   const pdfAmount = wcSummary ? wcSummary.pdfAmountTotal || 0 : summary.pdfAmountTotal || 0;
   const excelAmount = wcSummary ? wcSummary.excelAmountTotal || 0 : summary.excelAmountTotal || 0;
   const amountDelta = wcSummary ? wcSummary.amountDeltaTotal || 0 : summary.amountDeltaTotal || 0;
   const pdfInvoiceCount = Array.isArray(run?.files?.pdfInvoices) ? run.files.pdfInvoices.length : 0;
-  const excelRecordCount = Array.isArray(run?.excelRows)
-    ? run.excelRows.length
-    : Array.isArray(run?.warehouseComparison?.rows)
-      ? run.warehouseComparison.rows.reduce((sum, row) => sum + Number(row.excelEmployeeCount || 0), 0)
-      : excelCount;
-  const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
+  const excelRecordCount = Number(presentationSummary?.excelRecordCount ?? 0) || (
+    Array.isArray(run?.excelRows)
+      ? run.excelRows.length
+      : Array.isArray(run?.warehouseComparison?.rows)
+        ? run.warehouseComparison.rows.reduce((sum, row) => sum + Number(row.excelEmployeeCount || 0), 0)
+        : excelCount
+  );
+  const reviewWarehouses = normalizeReviewWarehouses(wcSummary?.diffWarehouses);
 
   // Calculate cleared matches
-  const clearedCount = rows.filter(
+  const clearedCount = Number(presentationSummary?.passedEmployeeCount ?? employeeRows.filter(
     (r) => r.matchStatus === "通过" || r.matchStatus === "金额一致"
-  ).length;
-  const reviewCount =
-    amountDiffCount +
-    notInInvoiceCount +
-    (summary.hoursDiffCount || 0) +
-    (candidateMatches ? candidateMatches.length : 0);
+  ).length);
+  const reviewCount = Number(
+    presentationSummary?.reviewItemCount
+      ?? (amountDiffCount + notInInvoiceCount + (summary.hoursDiffCount || 0) + (candidateMatches ? candidateMatches.length : 0))
+  );
 
-  if (labor.kpiTotal) labor.kpiTotal.textContent = `$${formatMoney(pdfAmount)}`;
-  if (labor.kpiMatched) labor.kpiMatched.textContent = `$${formatMoney(excelAmount)}`;
-  if (labor.kpiVariance) labor.kpiVariance.textContent = `${amountDelta >= 0 ? "+" : "-"}$${formatMoney(Math.abs(amountDelta))}`;
+  if (labor.kpiTotal) labor.kpiTotal.textContent = `${currencySymbol}${formatMoney(pdfAmount)}`;
+  if (labor.kpiMatched) labor.kpiMatched.textContent = `${currencySymbol}${formatMoney(excelAmount)}`;
+  if (labor.kpiVariance) labor.kpiVariance.textContent = `${amountDelta >= 0 ? "+" : "-"}${currencySymbol}${formatMoney(Math.abs(amountDelta))}`;
   if (labor.kpiUnmatched) labor.kpiUnmatched.textContent = `${reviewCount} 项`;
 
   const totalCard = document.querySelector("#kpiTotal .kpi-sub");
@@ -1619,11 +2768,11 @@ function updateKpiCards(summary, rows, wcSummary, candidateMatches = [], run = {
   const unmatchedCard = document.querySelector("#kpiUnmatched .kpi-sub");
   if (totalCard) totalCard.textContent = pdfInvoiceCount ? `${pdfInvoiceCount} 张发票` : (skippedEmployeeDrilldown ? "总额已核对" : `PDF ${pdfCount} 人`);
   if (matchedCard) matchedCard.textContent = excelRecordCount ? `整批账单 ${excelRecordCount} 行` : (skippedEmployeeDrilldown ? "无需查看员工明细" : `Excel ${excelCount} 人`);
-  if (varianceCard) varianceCard.textContent = `容差 $0.10`;
+  if (varianceCard) varianceCard.textContent = `容差 ${currencySymbol}0.10`;
   if (unmatchedCard) unmatchedCard.textContent = reviewWarehouses.length ? `待确认仓库 ${reviewWarehouses.join("、")}` : (clearedCount ? `${clearedCount} 人已清账` : "待确认项目");
 }
 
-function renderConclusion(summary, wcSummary, extractionQuality, run = {}) {
+function renderConclusion(summary, wcSummary, extractionQuality, run = {}, presentationContract = null) {
   const section = labor.conclusionSection;
   if (!section) return;
 
@@ -1637,14 +2786,11 @@ function renderConclusion(summary, wcSummary, extractionQuality, run = {}) {
   const maxAmount = Math.max(pdfAmountTotal, excelAmountTotal, 1);
   const amountDeltaPct = ((Math.abs(amountDeltaTotal) / maxAmount) * 100).toFixed(2);
 
-  const reviewEmployeeCount = summary.excelEmployeeCount || 0;
-  const excelRecordCount = Array.isArray(run?.excelRows)
-    ? run.excelRows.length
-    : Array.isArray(run?.warehouseComparison?.rows)
-      ? run.warehouseComparison.rows.reduce((sum, row) => sum + Number(row.excelEmployeeCount || 0), 0)
-      : reviewEmployeeCount;
-  const notInInvoice = summary.notInInvoiceCount || 0;
-  const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
+  const presentation = presentationContract || laborPresentationContract(run);
+  const reviewEmployeeCount = Number(presentation.summary?.employeeCount || 0);
+  const excelRecordCount = Number(presentation.summary?.excelRecordCount || reviewEmployeeCount);
+  const notInInvoice = Number(presentation.summary?.notInInvoiceEmployeeCount || 0);
+  const reviewWarehouses = normalizeReviewWarehouses(wcSummary?.diffWarehouses);
   const scopeText = reviewWarehouses.length
     ? `待确认仓库：${reviewWarehouses.join("、")}；当前展示待确认员工明细 ${reviewEmployeeCount} 人，不是整批账单人数。`
     : `账单员工/记录数 ${reviewEmployeeCount}${notInInvoice > 0 ? `，${notInInvoice} 人不在本批发票` : ""}`;
@@ -1657,29 +2803,60 @@ function renderConclusion(summary, wcSummary, extractionQuality, run = {}) {
       <span class="conclusion-text">${escapeHtml(conclusion.title)}</span>
     </div>
     <div class="conclusion-details">
-      <span>${escapeHtml(conclusion.message)}</span>
-      <span>总金额差异: <strong>${formatSignedMoney(amountDeltaTotal)} (${amountDeltaPct}%)</strong></span>
-      <span>${escapeHtml(scopeText)}</span>
-      <span>${escapeHtml(conclusion.detailMessage)}</span>
-      <span><strong>总金额核对：</strong>总账结论优先看整批 PDF 与整批 Excel 的差额。整批 PDF ${formatMoney(pdfAmountTotal)}，整批 Excel ${formatMoney(excelAmountTotal)}；已识别员工明细金额 PDF ${formatMoney(detailPdfAmountTotal)}，Excel ${formatMoney(detailExcelAmountTotal)}。员工明细金额用于定位差异，不等同于整批总账金额；如果员工明细金额小于整批总额，不代表账单少读了，只代表当前页面只展开了用于确认的明细范围。</span>
+      <p class="conclusion-detail conclusion-detail--summary">${escapeHtml(conclusion.message)}</p>
+      <p class="conclusion-detail conclusion-detail--metric"><span>总金额差异</span><strong>${formatSignedMoney(amountDeltaTotal)} (${amountDeltaPct}%)</strong></p>
+      <p class="conclusion-detail">${escapeHtml(scopeText)}</p>
+      <p class="conclusion-detail">${escapeHtml(conclusion.detailMessage)}</p>
+      <p class="conclusion-detail conclusion-detail--explanation"><strong>总金额核对：</strong>总账结论优先看整批 PDF 与整批 Excel 的差额。整批 PDF ${formatMoney(pdfAmountTotal)}，整批 Excel ${formatMoney(excelAmountTotal)}；已识别员工明细金额 PDF ${formatMoney(detailPdfAmountTotal)}，Excel ${formatMoney(detailExcelAmountTotal)}。员工明细金额用于定位差异，不等同于整批总账金额；如果员工明细金额小于整批总额，不代表账单少读了，只代表当前页面只展开了用于确认的明细范围。</p>
     </div>
     ${buildBusinessReportPrompt(run)}
   `;
 }
 
 function buildBusinessConclusion(summary, wcSummary, run) {
+  const guard = run?.batchGuard || {};
+  const unresolvedFiles = Array.isArray(guard.unresolvedFiles) ? guard.unresolvedFiles : [];
+  if (guard.status === "pdf_recognition_incomplete") {
+    return {
+      level: "critical",
+      title: "PDF 识别未完成",
+      message: guard.message || "PDF 已检测到员工或金额证据，但正式金额未生成。",
+      detailMessage: "本次属于识别异常，不是业务差异。请修复识别结果后重新生成核对报告。",
+    };
+  }
+  if (guard.status === "currency_review") {
+    return {
+      level: "warning",
+      title: "发票币种待确认",
+      message: guard.message || "批次币种与发票识别币种不一致。",
+      detailMessage: "已核对结果可以查看，但币种确认前不能直接放行。",
+    };
+  }
+  if (guard.status === "partial_review") {
+    return {
+      level: "warning",
+      title: "部分核对完成",
+      message: `已完成可确认发票的核对；仍有 ${unresolvedFiles.length} 张发票待确认。`,
+      detailMessage: "已核对仓库结果可以查看，但本批次不能直接放行。",
+    };
+  }
+  if (guard.status === "amount_scope_review") {
+    return {
+      level: "warning",
+      title: "金额口径待确认",
+      message: guard.message || "Excel 金额字段未明确含税或不含税口径。",
+      detailMessage: "确认核对口径前，本批次不能直接放行。",
+    };
+  }
   const amountDeltaTotal = Number(wcSummary?.amountDeltaTotal ?? summary?.amountDeltaTotal ?? 0);
   const totalPassed = isLaborTotalAmountPassed(summary, wcSummary);
-  const rows = Array.isArray(run?.comparisonRows) ? run.comparisonRows : [];
+  const presentation = laborPresentationContract(run);
+  const rows = presentation.employeeRows;
+  const presentationSummary = presentation.summary;
   const reviewQueues = run?.reviewQueues || {};
-  const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
-  const candidateCount = Array.isArray(run?.candidateMatches) ? run.candidateMatches.length : Number(summary?.candidateMatchCount || 0);
+  const reviewWarehouses = normalizeReviewWarehouses(wcSummary?.diffWarehouses);
   const detailIssueCount =
-    Number(summary?.exceptionCount || 0) +
-    Number(summary?.amountDiffCount || 0) +
-    Number(summary?.hoursDiffCount || 0) +
-    Number(summary?.notInInvoiceCount || 0) +
-    candidateCount +
+    Number(presentationSummary?.reviewItemCount || 0) +
     reviewWarehouses.length +
     Number(reviewQueues?.employeeExceptions?.count || 0) +
     Number(reviewQueues?.nameMapping?.count || 0) +
@@ -1693,8 +2870,8 @@ function buildBusinessConclusion(summary, wcSummary, run) {
   const detailNeedsConfirmation = detailRowsIncomplete || detailIssueCount > 0 || (reviewQueues?.primary && reviewQueues.primary !== "cleared");
   const direction = amountDeltaTotal >= 0 ? "PDF 比 Excel 多" : "PDF 比 Excel 少";
   const amountText = `${direction} ${formatMoney(Math.abs(amountDeltaTotal))}`;
-  const employeeCount = Number(summary?.excelEmployeeCount || 0);
-  const excelRecordCount = Array.isArray(run?.excelRows) ? run.excelRows.length : employeeCount;
+  const employeeCount = Number(presentationSummary?.employeeCount || 0);
+  const excelRecordCount = Number(presentationSummary?.excelRecordCount || employeeCount);
   const detailScope = `整批账单已读取 ${excelRecordCount || employeeCount} 行；下面只展示需要确认的员工明细，不代表账单只有这些人。`;
   const detailConfirmationMessage = detailRowsIncomplete
     ? "系统已确认本批总金额一致，但部分员工明细未完整识别，员工级差异仅供确认，不能直接作为最终员工明细结论。"
@@ -1738,7 +2915,7 @@ function buildBusinessReportPrompt(run) {
     ? `<a href="${escapeHtml(internalExcelUrl)}" download>下载 Excel 明细</a>`
     : "";
   return `
-    <div class="conclusion-details">
+    <div class="conclusion-report-actions">
       <span><strong>业务报告已生成，可下载留档或转发给业务确认。</strong></span>
       <span><a href="${escapeHtml(businessUrl)}" download>下载业务报告</a>${excelLink ? ` · ${excelLink}` : ""}</span>
     </div>
@@ -1829,26 +3006,84 @@ function splitMatchedName(name) {
   return { left: raw.trim(), right: "" };
 }
 
-function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, wcSummary) {
+function laborEmployeeComparisonRows(rows) {
+  const valueFields = ["pdfAmountTotal", "excelAmountTotal", "pdfHoursTotal", "excelHoursTotal"];
+  return (Array.isArray(rows) ? rows : []).filter((row) =>
+    valueFields.some((field) => Math.abs(Number(row?.[field] || 0)) > 0.005)
+  );
+}
+
+function laborPresentationContract(run = {}) {
+  const presentation = run?.presentation;
+  if (
+    presentation?.schemaVersion === 1
+    && Array.isArray(presentation.employeeRows)
+    && Array.isArray(presentation.candidateMatches)
+    && presentation.summary
+  ) {
+    return presentation;
+  }
+
+  const employeeRows = laborEmployeeComparisonRows(run?.comparisonRows);
+  const candidateMatches = Array.isArray(run?.candidateMatches) ? run.candidateMatches : [];
+  const differenceRows = employeeRows.filter(
+    (row) => row.matchStatus !== "通过" && row.matchStatus !== "金额一致"
+  );
+  const passedEmployeeCount = employeeRows.length - differenceRows.length;
+  const excelRecordCount = Array.isArray(run?.excelRows)
+    ? run.excelRows.length
+    : Number(run?.comparisonSummary?.excelEmployeeCount || employeeRows.length);
+  return {
+    schemaVersion: 0,
+    employeeRows,
+    candidateMatches,
+    summary: {
+      employeeCount: employeeRows.length,
+      differenceEmployeeCount: differenceRows.length,
+      passedEmployeeCount,
+      amountDiffEmployeeCount: differenceRows.filter((row) => row.matchStatus === "金额差异").length,
+      hoursDiffEmployeeCount: differenceRows.filter((row) =>
+        row.matchStatus === "工时不一致" || (row.riskFlags || []).includes("工时需复核")
+      ).length,
+      notInInvoiceEmployeeCount: differenceRows.filter((row) =>
+        row.matchStatus === "PDF有Excel无" || row.matchStatus === "Excel有PDF无"
+      ).length,
+      candidateMatchCount: candidateMatches.length,
+      reviewItemCount: differenceRows.length + candidateMatches.length,
+      amountImpact: differenceRows.reduce((sum, row) => sum + Math.abs(Number(row.amountDelta || 0)), 0),
+      hoursImpact: differenceRows.reduce((sum, row) => sum + Math.abs(Number(row.hoursDelta || 0)), 0),
+      excelRecordCount,
+      sourceComparisonRowCount: Array.isArray(run?.comparisonRows) ? run.comparisonRows.length : 0,
+      excludedNonEmployeeRowCount: Math.max(
+        (Array.isArray(run?.comparisonRows) ? run.comparisonRows.length : 0) - employeeRows.length,
+        0
+      ),
+    },
+  };
+}
+
+function renderEmployeeReconTable(rows, summary, totalPassed, wcSummary, presentationSummary = {}) {
   const section = labor.employeeReconSection;
   const container = labor.employeeReconTable;
+  const currencySymbol = laborCurrencySymbol();
+  const employeeRows = Array.isArray(rows) ? rows : [];
   if (!section || !container) return;
 
   // 总额通过且无员工明细时，显示通过证据
-  if (totalPassed && !rows.length) {
+  if (totalPassed && !employeeRows.length) {
     section.hidden = false;
     renderPassEvidence(container, summary, wcSummary);
     return;
   }
 
-  if (!rows.length && !candidateMatches.length) {
+  if (!employeeRows.length) {
     section.hidden = true;
     return;
   }
   section.hidden = false;
   const title = section.querySelector(".section-title");
   const subtitle = section.querySelector(".section-sub");
-  const reviewWarehouses = Array.isArray(wcSummary?.diffWarehouses) ? wcSummary.diffWarehouses : [];
+  const reviewWarehouses = normalizeReviewWarehouses(wcSummary?.diffWarehouses);
   if (title) title.textContent = reviewWarehouses.length ? "待确认员工明细" : "员工对账明细";
   if (subtitle) {
     subtitle.textContent = reviewWarehouses.length
@@ -1856,9 +3091,9 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
       : "金额或工时有差异的排在前面";
   }
 
-  // 合并：精确匹配行 + 模糊匹配候选
+  // 员工核对表只展示真实核对行；姓名候选在上方待确认区单独展示。
   const allRows = [];
-  rows.forEach(r => {
+  employeeRows.forEach(r => {
     const delta = Math.abs(r.amountDelta || 0);
     const hasVariance = r.matchStatus !== "通过" && r.matchStatus !== "金额一致";
     allRows.push({
@@ -1872,25 +3107,6 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
       hoursDelta: r.hoursDelta || 0,
       hasVariance,
       sortWeight: hasVariance ? delta : -1,
-      isCandidate: false,
-    });
-  });
-  candidateMatches.forEach(c => {
-    const delta = Math.abs(c.amountDelta || 0);
-    const status = c.issueType === "combined_pdf_row" ? "疑似一行包含多名员工" : "疑似同一员工";
-    allRows.push({
-      name: `${c.pdfEmployeeName || ""} → ${c.excelEmployeeName || ""}`,
-      status: laborBusinessStatusLabel(status, c),
-      pdfAmount: c.pdfAmountTotal || 0,
-      excelAmount: c.excelAmountTotal || 0,
-      amountDelta: c.amountDelta || 0,
-      pdfHours: 0,
-      excelHours: 0,
-      hoursDelta: 0,
-      hasVariance: true,
-      sortWeight: delta,
-      isCandidate: true,
-      similarity: c.nameSimilarity,
     });
   });
 
@@ -1898,11 +3114,17 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
   allRows.sort((a, b) => b.sortWeight - a.sortWeight);
 
   const varianceRows = allRows.filter(r => r.hasVariance);
-  const varianceCount = varianceRows.length;
-  const totalCount = allRows.length;
-  const passedCount = totalCount - varianceCount;
-  const amountImpact = varianceRows.reduce((sum, row) => sum + Math.abs(Number(row.amountDelta || 0)), 0);
-  const hoursImpact = varianceRows.reduce((sum, row) => sum + Math.abs(Number(row.hoursDelta || 0)), 0);
+  const varianceCount = Number(presentationSummary?.differenceEmployeeCount ?? varianceRows.length);
+  const totalCount = Number(presentationSummary?.employeeCount ?? allRows.length);
+  const passedCount = Number(presentationSummary?.passedEmployeeCount ?? (totalCount - varianceCount));
+  const amountImpact = Number(
+    presentationSummary?.amountImpact
+      ?? varianceRows.reduce((sum, row) => sum + Math.abs(Number(row.amountDelta || 0)), 0)
+  );
+  const hoursImpact = Number(
+    presentationSummary?.hoursImpact
+      ?? varianceRows.reduce((sum, row) => sum + Math.abs(Number(row.hoursDelta || 0)), 0)
+  );
 
   const headers = ["员工", "状态", "PDF金额", "Excel金额", "差异", "PDF工时", "Excel工时", "工时差异"];
   const thead = `<thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>`;
@@ -1914,13 +3136,12 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
     const deltaStyle = Math.abs(r.amountDelta) > 0.01
       ? (r.amountDelta > 0 ? "color:#FF9500" : "color:#FF3B30")
       : "color:#8E8E93";
-    const similarityTag = r.similarity != null ? ` <small>(${formatPercent(r.similarity)})</small>` : "";
     return `<tr class="${rowClass}">
-      <td>${escapeHtml(r.name)}${similarityTag}</td>
+      <td>${escapeHtml(r.name)}</td>
       <td style="${statusStyle}">${escapeHtml(r.status)}</td>
-      <td>$${formatMoney(r.pdfAmount)}</td>
-      <td>$${formatMoney(r.excelAmount)}</td>
-      <td style="${deltaStyle}">${r.amountDelta >= 0 ? "+" : ""}$${formatMoney(Math.abs(r.amountDelta))}</td>
+      <td>${currencySymbol}${formatMoney(r.pdfAmount)}</td>
+      <td>${currencySymbol}${formatMoney(r.excelAmount)}</td>
+      <td style="${deltaStyle}">${r.amountDelta >= 0 ? "+" : ""}${currencySymbol}${formatMoney(Math.abs(r.amountDelta))}</td>
       <td>${formatHours(r.pdfHours)}</td>
       <td>${formatHours(r.excelHours)}</td>
       <td>${formatHours(r.hoursDelta)}</td>
@@ -1946,6 +3167,9 @@ function renderEmployeeReconTable(rows, candidateMatches, summary, totalPassed, 
 function laborBusinessStatusLabel(status, row = {}) {
   const raw = String(status || "").trim();
   const flags = Array.isArray(row?.riskFlags) ? row.riskFlags.map(String) : [];
+  if (raw === "金额差异" && row?.amountDifferenceReasonCode === "excel_amount_component_delta") {
+    return "Excel含额外费用项";
+  }
   if ((raw === "通过" || raw === "金额一致") && flags.some((flag) => flag.includes("姓名格式差异自动合并"))) {
     return "系统已自动修正";
   }
@@ -1967,6 +3191,7 @@ function laborBusinessStatusLabel(status, row = {}) {
 }
 
 function renderPassEvidence(container, summary, wcSummary) {
+  const currencySymbol = laborCurrencySymbol();
   const amountDelta = wcSummary ? wcSummary.amountDeltaTotal || 0 : 0;
   const pdfAmount = wcSummary ? wcSummary.pdfAmountTotal || 0 : 0;
   const excelAmount = wcSummary ? wcSummary.excelAmountTotal || 0 : 0;
@@ -1977,23 +3202,23 @@ function renderPassEvidence(container, summary, wcSummary) {
       <div class="pass-evidence-copy">
         <span class="decision-badge">总额核对通过</span>
         <h3>本批发票与账单金额在容差内一致</h3>
-        <p>系统已先核对 PDF 发票总额与 Excel 账单总额。差额未超过 $0.10，因此无需进入员工级逐项追差；如需留档，可下载完整报告。</p>
+        <p>系统已先核对 PDF 发票总额与 Excel 账单总额。差额未超过 ${currencySymbol}0.10，因此无需进入员工级逐项追差；如需留档，可下载完整报告。</p>
       </div>
       <div class="pass-evidence-grid">
         <div>
           <span>PDF 发票总额</span>
-          <strong>$${formatMoney(pdfAmount)}</strong>
+          <strong>${currencySymbol}${formatMoney(pdfAmount)}</strong>
           <small>${pdfCount} 人</small>
         </div>
         <div>
           <span>Excel 账单总额</span>
-          <strong>$${formatMoney(excelAmount)}</strong>
+          <strong>${currencySymbol}${formatMoney(excelAmount)}</strong>
           <small>${excelCount} 人</small>
         </div>
         <div>
           <span>金额差额</span>
-          <strong>${amountDelta >= 0 ? "+" : "-"}$${formatMoney(Math.abs(amountDelta))}</strong>
-          <small>容差 $0.10</small>
+          <strong>${amountDelta >= 0 ? "+" : "-"}${currencySymbol}${formatMoney(Math.abs(amountDelta))}</strong>
+          <small>容差 ${currencySymbol}0.10</small>
         </div>
       </div>
     </div>
@@ -2004,6 +3229,7 @@ function renderWarehouseTable(wc) {
   const section = labor.warehouseSection;
   const heading = labor.warehouseHeading;
   const table = labor.warehouseTable;
+  const currencySymbol = laborCurrencySymbol();
   if (!heading || !table || !section) return;
   if (!wc || !wc.rows || wc.rows.length === 0) {
     section.hidden = true;
@@ -2031,9 +3257,9 @@ function renderWarehouseTable(wc) {
         hasAttribution || r.matchStatus !== "通过" ? `data-idx="${idx}" style="cursor:pointer"` : ""
       }>
       <td>${expandIcon} 仓库${escapeHtml(r.warehouseId)}</td>
-      <td>$${r.pdfAmountTotal.toFixed(2)}</td>
-      <td>$${r.excelAmountTotal.toFixed(2)}</td>
-      <td>${r.amountDelta >= 0 ? "+" : ""}$${r.amountDelta.toFixed(2)}</td>
+      <td>${currencySymbol}${r.pdfAmountTotal.toFixed(2)}</td>
+      <td>${currencySymbol}${r.excelAmountTotal.toFixed(2)}</td>
+      <td>${r.amountDelta >= 0 ? "+" : ""}${currencySymbol}${r.amountDelta.toFixed(2)}</td>
       <td style="color:${
         r.matchStatus === "通过" ? "#34C759" : "#FF3B30"
       };font-weight:600">${escapeHtml(r.matchStatus)}</td>
@@ -2171,15 +3397,19 @@ function normalizeFormalAmountRateRows(queueRows, comparisonRows) {
       const hoursDelta = Number(row.hoursDelta || 0);
       const amountDelta = Number(row.amountDelta || 0);
       const hoursAligned = Math.abs(hoursDelta) <= 0.1;
+      const componentExplained = row.amountDifferenceReasonCode === "excel_amount_component_delta"
+        && Boolean(row.amountDifferenceExplanation);
       return {
         ...row,
-        reviewFocus: hoursAligned ? "先核金额计算方式" : "先核工时范围",
+        reviewFocus: componentExplained ? "先核 Excel 额外费用项" : hoursAligned ? "先核金额计算方式" : "先核工时范围",
         amountDirectionLabel: amountDelta > 0 ? "PDF 高于 Excel" : amountDelta < 0 ? "PDF 少于 Excel" : "金额一致",
         hoursDirectionLabel: hoursAligned ? "工时一致" : hoursDelta > 0 ? "PDF 工时多于 Excel" : "PDF 工时少于 Excel",
-        businessQuestion: hoursAligned
+        businessQuestion: row.amountDifferenceExplanation || (hoursAligned
           ? `PDF 与 Excel 工时一致，金额差 ${formatSignedMoney(amountDelta)}；请确认费率、加班、服务费或税费是否同一口径。`
-          : `PDF 与 Excel 工时差 ${formatSignedNumber(hoursDelta)}，金额差 ${formatSignedMoney(amountDelta)}；请先确认账期、日期行和加班工时。`,
-        recommendation: hoursAligned
+          : `PDF 与 Excel 工时差 ${formatSignedNumber(hoursDelta)}，金额差 ${formatSignedMoney(amountDelta)}；请先确认账期、日期行和加班工时。`),
+        recommendation: componentExplained
+          ? "确认 Excel 额外费用项是否应包含在本批发票中；确认前不能自动清账。"
+          : hoursAligned
           ? "先核对 PDF 发票费率、加班/差额行、服务费倍率与 Excel 成本口径；确认前不能自动清账。"
           : "先核对 PDF 与 Excel 的账期范围、日期行、加班行是否一致；确认前不能自动清账。",
       };
@@ -2208,10 +3438,14 @@ function _renderPendingOverview({ amountRateRows, hoursDiffRows, candidateMatche
   const excelOnlyAmount = notInInvoiceRows.reduce((sum, row) => sum + Math.abs(Number(row.excelAmountTotal || 0)), 0);
   const amountRateImpact = amountRateRows.reduce((sum, row) => sum + Math.abs(Number(row.amountDelta || 0)), 0);
   const hoursImpact = hoursDiffRows.reduce((sum, row) => sum + Math.abs(Number(row.hoursDelta || 0)), 0);
+  const componentExplainedCount = amountRateRows.filter(
+    (row) => row.amountDifferenceReasonCode === "excel_amount_component_delta"
+  ).length;
+  const allAmountRowsComponentExplained = amountRateRows.length > 0 && componentExplainedCount === amountRateRows.length;
   const primary = reviewQueues?.primary || "";
   const primaryLabel =
     primary === "amount_rate_review" || amountRateRows.length >= Math.max(hoursDiffRows.length, candidateMatches.length, notInInvoiceRows.length)
-      ? "先确认金额计算口径"
+      ? allAmountRowsComponentExplained ? "先确认 Excel 额外费用项是否应开票" : "先确认金额计算口径"
       : notInInvoiceRows.length >= Math.max(hoursDiffRows.length, candidateMatches.length)
       ? "先确认是否属于本批发票"
       : hoursDiffRows.length
@@ -2224,7 +3458,7 @@ function _renderPendingOverview({ amountRateRows, hoursDiffRows, candidateMatche
       <p>${escapeHtml(primaryLabel)}</p>
     </div>
     <div>
-      <span>金额计算待确认</span>
+      <span>${allAmountRowsComponentExplained ? "额外费用项待确认" : "金额计算待确认"}</span>
       <strong>${escapeHtml(amountRateRows.length)} 人</strong>
       <p>影响 ${formatMoney(amountRateImpact)}</p>
     </div>
@@ -2304,12 +3538,19 @@ function _renderPendingPreview(items, type) {
     0
   );
   const totalHours = items.reduce((sum, row) => sum + Math.abs(Number(row.excelHoursTotal ?? row.hoursDelta ?? 0)), 0);
+  const amountDifferenceComponents = type === "amountRate"
+    ? items.flatMap((row) => Array.isArray(row.amountDifferenceComponents) ? row.amountDifferenceComponents : [])
+    : [];
+  const componentNotes = [...new Set(amountDifferenceComponents.map((item) => item.note).filter(Boolean))];
+  const componentTotal = amountDifferenceComponents.reduce((sum, item) => sum + Math.abs(Number(item.amount || 0)), 0);
   const stats =
     type === "candidate"
       ? [
           `建议 ${items.length} 条`,
           `平均相似度 ${formatPercent(items.reduce((sum, row) => sum + Number(row.nameSimilarity || 0), 0) / items.length)}`,
         ]
+      : type === "amountRate" && amountDifferenceComponents.length
+      ? [`Excel额外费用 ${formatMoney(componentTotal)}`, `${componentNotes[0] || "金额组成"} · ${items.length}人`]
       : type === "amountRate"
       ? [`金额差 ${formatMoney(totalAmount)}`, `涉及 ${items.length} 人`]
       : type === "hours"
@@ -2390,12 +3631,19 @@ function renderPendingLimitNote(total, visible) {
   return total > visible ? `<p class="table-note">这里只展示前 ${visible} 条，完整名单请下载报告。</p>` : "";
 }
 
-function renderQualityAlert(quality, diagnostics) {
+function renderQualityAlert(quality, diagnostics, run = {}) {
   if (!labor.qualityAlert) return;
   quality = quality || {};
   const hasQualityIssue = quality && quality.level && quality.level !== "ok";
   const hasDiagnosticIssue = diagnostics && diagnostics.level && diagnostics.level !== "ok";
-  if (!hasQualityIssue && !hasDiagnosticIssue) {
+  const pageAuditSummary = run.pdfPageAuditSummary || {};
+  const pageAudit = Array.isArray(run.pdfPageAudit) ? run.pdfPageAudit : [];
+  const hasPageAuditIssue = Boolean(
+    Number(pageAuditSummary.zeroRowPageCount || 0) ||
+      Number(pageAuditSummary.failedPageCount || 0) ||
+      Number(pageAuditSummary.highResolutionRetryPageCount || 0)
+  );
+  if (!hasQualityIssue && !hasDiagnosticIssue && !hasPageAuditIssue) {
     labor.qualityAlert.hidden = true;
     labor.qualityAlert.innerHTML = "";
     return;
@@ -2409,7 +3657,7 @@ function renderQualityAlert(quality, diagnostics) {
   const employeeCounts = metrics.employeeCounts || {};
   const totals = metrics.totals || {};
   const warehouseIssues = metrics.warehouseIssues || [];
-  const alertLevel = _higherSeverity(quality.level, diagnostics && diagnostics.level);
+  const alertLevel = _higherSeverity(_higherSeverity(quality.level, diagnostics && diagnostics.level), hasPageAuditIssue ? "warning" : "");
   const severityLabel = alertLevel === "critical" ? "必须确认" : "建议确认";
   const severityTitle =
     (hasDiagnosticIssue && diagnostics && diagnostics.message) ||
@@ -2488,6 +3736,33 @@ function renderQualityAlert(quality, diagnostics) {
           <span><em>文本增强</em><strong>${methods.ai_text || 0}</strong></span>
           <span><em>图片增强</em><strong>${methods.ai_image || 0}</strong></span>
         </div>
+      </div>
+    `;
+  }
+
+  if (pageAuditSummary.pageCount) {
+    const problemPages = pageAudit
+      .filter((row) => {
+        const status = String(row.status || "");
+        return Number(row.rowCount || 0) === 0 || status.includes("failed") || status.startsWith("high_res_retry");
+      })
+      .slice(0, 8);
+    detailsHtml += `
+      <div class="quality-detail-section">
+        <h4>页面识别检查</h4>
+        <div class="quality-metrics">
+          <span><em>已检查页面</em><strong>${Number(pageAuditSummary.pageCount || 0)} 页</strong></span>
+          <span><em>空结果页面</em><strong>${Number(pageAuditSummary.zeroRowPageCount || 0)} 页</strong></span>
+          <span><em>高清补识别</em><strong>${Number(pageAuditSummary.highResolutionRetryPageCount || 0)} 页</strong></span>
+          <span><em>识别失败</em><strong>${Number(pageAuditSummary.failedPageCount || 0)} 页</strong></span>
+        </div>
+        ${
+          problemPages.length
+            ? `<ul>${problemPages
+                .map((row) => `<li>${escapeHtml(_pdfPageAuditText(row))}</li>`)
+                .join("")}</ul>`
+            : ""
+        }
       </div>
     `;
   }
@@ -2571,6 +3846,19 @@ function renderQualityAlert(quality, diagnostics) {
     </div>
     ${detailsHtml ? `<details class="quality-diagnostics"><summary>识别情况明细</summary><div class="quality-details">${detailsHtml}</div></details>` : ""}
   `;
+}
+
+function _pdfPageAuditText(row) {
+  const file = row.sourceFile || "PDF";
+  const page = row.page ? `第 ${row.page} 页` : "页码未知";
+  const status = String(row.status || "");
+  const rowCount = Number(row.rowCount || 0);
+  let statusText = "已识别";
+  if (status === "high_res_retry_applied") statusText = "低清未识别，已用高清补识别";
+  else if (status === "high_res_retry_no_rows") statusText = "高清补识别后仍未识别到员工明细";
+  else if (status.includes("failed")) statusText = "识别失败";
+  else if (rowCount === 0) statusText = "未识别到员工明细";
+  return `${file} ${page}：${statusText}${rowCount ? `，识别 ${rowCount} 条` : ""}`;
 }
 
 function _qualityNextStepText(quality, warehouseIssues, totals, diagnostics) {
@@ -2657,6 +3945,15 @@ function uniqueRowsByEvidence(rows) {
 
 // ── Utility functions ──
 async function requestJson(url, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  const mutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  if (mutation) {
+    const headers = new Headers(options.headers || {});
+    headers.set("X-Sigma-Labor-API-Contract", String(LABOR_UI_API_CONTRACT_VERSION));
+    headers.set("X-Sigma-Labor-UI-Version", LABOR_UI_MODULE_VERSION);
+    headers.set("X-Sigma-Labor-UI-Build", String(laborState.moduleAccess?.build?.buildId || ""));
+    options = { ...options, headers };
+  }
   let response;
   try {
     response = await fetch(url, options);
@@ -2672,7 +3969,9 @@ async function requestJson(url, options = {}) {
 function formatLaborRequestError(message) {
   const detailMessage = message?.message || message;
   const nextAction = message?.nextAction || "";
+  const errorCode = String(message?.errorCode || "").trim();
   const text = [detailMessage, nextAction].filter(Boolean).join(" ").trim();
+  if (errorCode && typeof message === "object") return text || "请求失败，请按提示重试。";
   if (/No such file|ENOENT|FileNotFoundError|\/tmp\/sigma-workbench|\/labor_runs\/|文件不存在|文件已被清理/i.test(text)) {
     return "系统找不到本批次文件。请重新上传 PDF 发票和 Excel 账单后再生成核对报告；如果在 UAT/Vercel 环境，请改用本地或内网持久化环境。";
   }
@@ -2681,9 +3980,6 @@ function formatLaborRequestError(message) {
   }
   if (/JSON|Unexpected token|返回内容异常|invalid response/i.test(text)) {
     return "服务返回内容异常。请刷新页面后重试；若仍失败，请联系管理员查看本批次日志。";
-  }
-  if (/InvalidKey|Invalid key|直传文件失败|signed/i.test(text)) {
-    return "Supabase Storage 直传失败。请重新选择文件上传；若仍失败，请联系管理员检查 Storage bucket、签名上传权限和对象路径配置。";
   }
   if (/上传|upload|文件|file|持久化|保存/.test(text)) {
     return "上传文件未保存成功。请重新上传 PDF 发票和 Excel 账单；若仍失败，请改用本地/内网持久化环境处理。";
@@ -2726,10 +4022,20 @@ function formatMoney(value) {
   });
 }
 
+function laborCurrencySymbol(run = laborState.run) {
+  const detected = Array.isArray(run?.batchGuard?.detectedCurrencies)
+    ? run.batchGuard.detectedCurrencies.filter(Boolean)
+    : [];
+  const code = String(detected.length === 1 ? detected[0] : run?.currency || "USD").trim().toUpperCase();
+  const symbols = { USD: "$", EUR: "€", CNY: "¥", GBP: "£" };
+  return symbols[code] || `${code} `;
+}
+
 function formatSignedMoney(value) {
   const number = Number(value || 0);
-  if (number === 0) return "$0.00";
-  return `${number > 0 ? "+" : "-"}$${formatMoney(Math.abs(number))}`;
+  const currencySymbol = laborCurrencySymbol();
+  if (number === 0) return `${currencySymbol}0.00`;
+  return `${number > 0 ? "+" : "-"}${currencySymbol}${formatMoney(Math.abs(number))}`;
 }
 
 function formatReocrPreflightSummary(preflight) {

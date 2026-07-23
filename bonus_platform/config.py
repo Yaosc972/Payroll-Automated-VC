@@ -91,8 +91,22 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_int_list(name: str, default: list[int]) -> list[int]:
+    value = os.environ.get(name)
+    if value in (None, ""):
+        return list(default)
+    result = []
+    for item in value.split(","):
+        try:
+            result.append(max(int(item.strip()), 0))
+        except ValueError:
+            return list(default)
+    return result
+
+
 AI_CONFIG: dict[str, Any] = {
     "enabled": _env_bool("AI_ENABLED", False),
+    "external_ai_enabled": _env_bool("SIGMA_LABOR_EXTERNAL_AI_ENABLED", False),
     "provider": os.environ.get("AI_PROVIDER", ""),
     "api_key": os.environ.get("AI_API_KEY", "") or os.environ.get("MIMO_API_KEY", ""),
     "base_url": os.environ.get("AI_BASE_URL", ""),
@@ -102,7 +116,7 @@ AI_CONFIG: dict[str, Any] = {
     "default_confidence": _env_float("AI_DEFAULT_CONFIDENCE", 0.7),
     "amount_tolerance": _env_float("AI_AMOUNT_TOLERANCE", 0.10),
     "hours_tolerance": _env_float("LABOR_HOURS_TOLERANCE", 0.1),
-    "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 5),
+    "max_pages_per_request": _env_int("AI_MAX_PAGES_PER_REQUEST", 1),
     "max_completion_tokens": _env_int("AI_MAX_COMPLETION_TOKENS", 8192),
     "render_scale": _env_float("AI_RENDER_SCALE", 1.5),
     "document_toolchain": os.environ.get("AI_DOCUMENT_TOOLCHAIN", "pypdfium2,mimo"),
@@ -113,6 +127,9 @@ AI_CONFIG: dict[str, Any] = {
     "parallel_extraction_enabled": _env_bool("PARALLEL_EXTRACTION_ENABLED", True),
     "parallel_max_workers": _env_int("PARALLEL_MAX_WORKERS", 1),
     "parallel_image_render_workers": _env_int("PARALLEL_IMAGE_RENDER_WORKERS", 1),
+    # Retry a transient failed page once; successful pages remain cached.
+    "image_retry_delays": _env_int_list("AI_IMAGE_RETRY_DELAYS", [2]),
+    "retry_empty_page_cache": _env_bool("AI_RETRY_EMPTY_PAGE_CACHE", True),
 }
 
 AUTH_CONFIG: dict[str, Any] = {

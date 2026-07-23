@@ -18,6 +18,7 @@ from .models import LaborLineItem
 def build_reconciliation_diagnostics(
     *,
     pdf_totals: List[Dict[str, Any]] | None,
+    pdf_rows: List[LaborLineItem] | None = None,
     comparison_summary: Dict[str, Any],
     warehouse_comparison: Dict[str, Any] | None,
     cost_summaries: List[Dict[str, Any]] | None = None,
@@ -33,6 +34,10 @@ def build_reconciliation_diagnostics(
     cost_summaries = cost_summaries or []
     wc_summary = (warehouse_comparison or {}).get("summary", {})
     wc_errors = (warehouse_comparison or {}).get("errors", []) or []
+    mixed_total_sources = (
+        wc_summary.get("totalSourceDecision")
+        == "employee_detail_pdfs_excluded_from_payable_total"
+    )
 
     fast_pdf_total = round(sum(float(t.get("total_amount") or 0) for t in pdf_totals), 2)
     employee_pdf_total = round(float(comparison_summary.get("pdfAmountTotal") or 0), 2)
@@ -49,6 +54,7 @@ def build_reconciliation_diagnostics(
             if t.get("source_file") and not str(t.get("warehouse_id") or "").strip()
         }
     )
+    warehouse_comparison_skipped = bool(wc_summary.get("warehouseComparisonSkipped"))
     safely_attributed_single_warehouse = (
         len(pdf_totals) == 1
         and len(missing_warehouse) == 1
@@ -62,8 +68,14 @@ def build_reconciliation_diagnostics(
             if t.get("source_file") and float(t.get("total_amount") or 0) == 0
         }
     )
+    pdf_detail_coverage = _build_pdf_detail_coverage(pdf_totals, pdf_rows) if pdf_rows is not None else {}
+    invoice_detail_file_count = int(pdf_detail_coverage.get("invoiceFileCount") or 0)
+    covered_detail_file_count = int(pdf_detail_coverage.get("detailFileCount") or 0)
+    partial_detail_coverage = bool(
+        pdf_detail_coverage and covered_detail_file_count < invoice_detail_file_count
+    )
 
-    if missing_warehouse and not safely_attributed_single_warehouse:
+    if missing_warehouse and not safely_attributed_single_warehouse and not warehouse_comparison_skipped:
         issues.append(
             {
                 "code": "missing_warehouse_id",
@@ -73,6 +85,55 @@ def build_reconciliation_diagnostics(
                 "items": missing_warehouse[:12],
             }
         )
+
+    if (
+        pdf_detail_coverage
+        and int(pdf_detail_coverage.get("invoiceFileCount") or 0) > 1
+        and int(pdf_detail_coverage.get("detailFileCount") or 0) < int(pdf_detail_coverage.get("invoiceFileCount") or 0)
+    ):
+        invoice_count = int(pdf_detail_coverage.get("invoiceFileCount") or 0)
+        detail_count = int(pdf_detail_coverage.get("detailFileCount") or 0)
+        missing_files = list(pdf_detail_coverage.get("missingSourceFiles") or [])
+        if detail_count == 0:
+            title = "PDF 未抽出员工明细"
+            message = f"系统已读取 {invoice_count} 张发票总额，但没有展开员工明细。当前页面不能代表整批员工。"
+        else:
+            title = "员工明细只展开了部分发票"
+            message = f"系统已读取 {invoice_count} 张发票总额，但员工明细只来自 {detail_count} 张发票。当前页面不能代表整批员工。"
+        issues.append(
+            {
+                "code": "pdf_employee_detail_partial_coverage",
+                "level": "warning",
+                "title": title,
+                "message": message,
+                "items": [f"未展开员工明细：{source_file}" for source_file in missing_files[:12]],
+            }
+        )
+
+    if mixed_total_sources:
+        selected_pdf_total = round(
+            float(wc_summary.get("selectedPdfAmountTotal") or wc_summary.get("pdfAmountTotal") or 0),
+            2,
+        )
+        excluded_pdf_total = round(float(wc_summary.get("excludedPdfAmountTotal") or 0), 2)
+        selected_count = int(wc_summary.get("selectedPdfTotalCount") or 0)
+        excluded_count = int(wc_summary.get("excludedPdfTotalCount") or 0)
+        selected_delta = round(selected_pdf_total - excel_total, 2)
+        if abs(selected_delta) > amount_tolerance:
+            issues.append(
+                {
+                    "code": "payable_pdf_total_mismatch",
+                    "level": "critical",
+                    "title": "汇总发票与 Excel 总额不一致",
+                    "message": (
+                        f"本批同时包含汇总发票和员工明细附件。系统已按 {selected_count} 份汇总发票 "
+                        f"${selected_pdf_total:,.2f} 与 Excel ${excel_total:,.2f} 核对，"
+                        f"未把 {excluded_count} 份员工明细附件 ${excluded_pdf_total:,.2f} 重复计入；"
+                        f"当前仍差 ${abs(selected_delta):,.2f}。"
+                    ),
+                    "items": ["先确认本批 Excel 是否只对应这些汇总发票，再看员工明细附件是否属于同一账期。"],
+                }
+            )
 
     if zero_total_files:
         issues.append(
@@ -85,21 +146,58 @@ def build_reconciliation_diagnostics(
             }
         )
 
-    if fast_pdf_total > 0 and employee_pdf_total > 0:
-        delta = round(fast_pdf_total - employee_pdf_total, 2)
+    if (
+        partial_detail_coverage
+        and covered_detail_file_count > 0
+        and employee_pdf_total > 0
+        and not mixed_total_sources
+    ):
+        covered_invoice_total = round(float(pdf_detail_coverage.get("detailAmountTotal") or 0), 2)
+        delta = round(covered_invoice_total - employee_pdf_total, 2)
         if abs(delta) > amount_tolerance:
             issues.append(
                 {
-                    "code": "pdf_total_conflict",
+                    "code": "pdf_employee_detail_total_conflict",
                     "level": "critical",
-                    "title": "PDF 总额信号互相冲突",
+                    "title": "已展开 PDF 的员工明细金额不闭合",
                     "message": (
-                        f"快速总额为 ${fast_pdf_total:,.2f}，员工明细求和为 "
+                        f"已展开发票权威总额为 ${covered_invoice_total:,.2f}，员工明细求和为 "
                         f"${employee_pdf_total:,.2f}，差异 ${abs(delta):,.2f}。"
                     ),
-                    "items": ["优先复核 Totals/GRAND TOTAL 是否被误读，尤其是逾期付款金额。"],
+                    "items": ["对不闭合的发票执行高清重识别；仍不闭合时，员工归因只能作为待复核证据。"],
                 }
             )
+    elif fast_pdf_total > 0 and employee_pdf_total > 0 and not mixed_total_sources:
+        delta = round(fast_pdf_total - employee_pdf_total, 2)
+        if abs(delta) > amount_tolerance:
+            employee_detail_matches_excel = _amount_within_tolerance(employee_pdf_total - excel_total, amount_tolerance)
+            if fast_pdf_total > employee_pdf_total and employee_detail_matches_excel:
+                issues.append(
+                    {
+                        "code": "pdf_total_includes_tax_or_fee",
+                        "level": "warning",
+                        "title": "PDF 总额包含税费或附加费用",
+                        "message": (
+                            f"PDF 应付总额为 ${fast_pdf_total:,.2f}，员工明细合计为 "
+                            f"${employee_pdf_total:,.2f}，Excel 当前金额为 ${excel_total:,.2f}。"
+                            "系统已按员工费用口径核对。"
+                        ),
+                        "items": ["如果业务要核对含税应付金额，请在账单中提供对应税费或附加费用列。"],
+                    }
+                )
+            else:
+                issues.append(
+                    {
+                        "code": "pdf_total_conflict",
+                        "level": "critical",
+                        "title": "PDF 总额信号互相冲突",
+                        "message": (
+                            f"快速总额为 ${fast_pdf_total:,.2f}，员工明细求和为 "
+                            f"${employee_pdf_total:,.2f}，差异 ${abs(delta):,.2f}。"
+                        ),
+                        "items": ["优先复核 Totals/GRAND TOTAL 是否被误读，尤其是逾期付款金额。"],
+                    }
+                )
 
     if wc_errors:
         sample_errors = [str(err) for err in wc_errors[:8]]
@@ -223,6 +321,9 @@ def build_reconciliation_diagnostics(
             "employeePdfTotal": employee_pdf_total,
             "excelTotal": excel_total,
             "warehouseTotal": round(float(wc_summary.get("pdfAmountTotal") or 0), 2),
+            "selectedPayablePdfTotal": round(float(wc_summary.get("selectedPdfAmountTotal") or 0), 2),
+            "excludedEmployeeDetailPdfTotal": round(float(wc_summary.get("excludedPdfAmountTotal") or 0), 2),
+            "pdfDetailCoverage": pdf_detail_coverage,
             "amountBasis": amount_basis,
             "offsettingWarehouseDeltas": offsetting_warehouse_deltas,
             "employeeAttribution": employee_attribution,
@@ -230,6 +331,52 @@ def build_reconciliation_diagnostics(
         },
         "issues": issues,
     }
+
+
+def _build_pdf_detail_coverage(
+    pdf_totals: List[Dict[str, Any]],
+    pdf_rows: List[LaborLineItem] | None,
+) -> Dict[str, Any]:
+    totals_by_source: Dict[str, float] = defaultdict(float)
+    employee_detail_sources: set[str] = set()
+    for item in pdf_totals:
+        source_file = str(item.get("source_file") or "").strip()
+        if not source_file:
+            continue
+        totals_by_source[source_file] += float(item.get("total_amount") or 0)
+        if item.get("has_employee_detail"):
+            employee_detail_sources.add(source_file)
+
+    invoice_sources = sorted(employee_detail_sources or totals_by_source)
+    if not invoice_sources:
+        return {}
+
+    detail_sources = {
+        str(row.source_file or "").strip()
+        for row in (pdf_rows or [])
+        if str(row.source_file or "").strip()
+    }
+    covered_sources = sorted(source for source in detail_sources if source in totals_by_source)
+    missing_sources = sorted(set(invoice_sources) - set(covered_sources))
+    invoice_total = round(sum(totals_by_source.values()), 2)
+    covered_invoice_total = round(sum(totals_by_source[source] for source in covered_sources), 2)
+    coverage_basis = "employee_detail_attachments" if employee_detail_sources else "invoice_totals"
+
+    return {
+        "coverageBasis": coverage_basis,
+        "invoiceFileCount": len(invoice_sources),
+        "detailFileCount": len(covered_sources),
+        "missingFileCount": len(missing_sources),
+        "coverageRatio": round(len(covered_sources) / len(invoice_sources), 2),
+        "invoiceAmountTotal": invoice_total,
+        "detailAmountTotal": covered_invoice_total,
+        "amountCoverageRatio": round(covered_invoice_total / invoice_total, 2) if invoice_total else 0.0,
+        "missingSourceFiles": missing_sources,
+    }
+
+
+def _amount_within_tolerance(delta: float, tolerance: float) -> bool:
+    return round(abs(float(delta or 0)), 2) <= round(abs(float(tolerance or 0)), 2)
 
 
 def _build_employee_attribution_signals(
@@ -361,6 +508,7 @@ def calculate_extraction_quality(
     """
     issues: List[str] = []
     metrics: Dict[str, Any] = {}
+    has_extraction_risk = False
 
     # === Confidence Distribution ===
     # 收集低置信度行明细，供局部重试使用
@@ -379,8 +527,10 @@ def calculate_extraction_quality(
         }
 
         if very_low_confidence_count > 0:
+            has_extraction_risk = True
             issues.append(f"{very_low_confidence_count} 条记录置信度极低 (<0.5)，建议重点复核。")
         elif low_confidence_count > len(pdf_rows) * 0.2:
+            has_extraction_risk = True
             issues.append(f"{low_confidence_count} 条记录置信度较低 (<0.85)，占比 {low_confidence_count/len(pdf_rows)*100:.0f}%。")
 
         # 收集低置信度行明细（confidence < 0.85），用于局部重试
@@ -411,6 +561,7 @@ def calculate_extraction_quality(
         # If too many items came from low-confidence methods
         ai_image_count = method_counts.get("ai_image", 0)
         if ai_image_count > len(pdf_rows) * 0.3:
+            has_extraction_risk = True
             issues.append(f"{ai_image_count} 条记录来自图片抽取（低置信度），建议检查 PDF 质量。")
 
     # === Employee Count Comparison ===
@@ -463,13 +614,55 @@ def calculate_extraction_quality(
     # === Per-Warehouse Quality ===
     if warehouse_comparison and "rows" in warehouse_comparison:
         warehouse_issues = []
+        warehouse_evidence = {
+            "unresolvedEvidenceCount": 0,
+            "unresolvedEvidenceWarehouses": [],
+            "missingPdfInvoiceCount": 0,
+            "missingPdfInvoiceWarehouses": [],
+            "extraPdfInvoiceCount": 0,
+            "extraPdfInvoiceWarehouses": [],
+        }
         for wh_row in warehouse_comparison["rows"]:
             wh_id = wh_row.get("warehouseId", "")
-            wh_status = wh_row.get("matchStatus", "")
             wh_delta = abs(float(wh_row.get("amountDelta") or 0))
+            reconciliation_status = wh_row.get("reconciliationStatus", "")
 
-            if wh_status != "通过" and wh_delta > 100:
-                warehouse_issues.append(f"仓库 {wh_id}: 金额差异 ${wh_delta:.2f}")
+            if reconciliation_status == "needs_review":
+                warehouse_evidence["unresolvedEvidenceCount"] += 1
+                warehouse_evidence["unresolvedEvidenceWarehouses"].append(str(wh_id))
+            elif reconciliation_status == "missing_pdf_invoice":
+                warehouse_evidence["missingPdfInvoiceCount"] += 1
+                warehouse_evidence["missingPdfInvoiceWarehouses"].append(str(wh_id))
+            elif reconciliation_status == "extra_pdf_invoice":
+                warehouse_evidence["extraPdfInvoiceCount"] += 1
+                warehouse_evidence["extraPdfInvoiceWarehouses"].append(str(wh_id))
+
+            warehouse_issue = ""
+            if reconciliation_status == "amount_difference" and wh_delta > 100:
+                warehouse_issue = f"仓库 {wh_id}: 金额差异 ${wh_delta:.2f}"
+            elif reconciliation_status == "missing_pdf_invoice":
+                warehouse_issue = (
+                    f"仓库 {wh_id}: 缺少PDF发票，Excel金额 ${abs(float(wh_row.get('excelAmountTotal') or 0)):.2f} "
+                    "未找到对应发票。"
+                )
+            elif reconciliation_status == "extra_pdf_invoice":
+                warehouse_issue = (
+                    f"仓库 {wh_id}: 多余PDF发票，PDF金额 ${abs(float(wh_row.get('pdfAmountTotal') or 0)):.2f} "
+                    "未找到对应账单。"
+                )
+            elif reconciliation_status == "needs_review":
+                warehouse_issue = f"仓库 {wh_id}: 待复核，PDF证据未确认，当前金额不能直接作为核对结论。"
+
+            if warehouse_issue:
+                warehouse_issues.append(warehouse_issue)
+
+        metrics["warehouseEvidence"] = warehouse_evidence
+        issues.extend(warehouse_issues)
+        if warehouse_evidence["unresolvedEvidenceCount"]:
+            issues.append(
+                f"{warehouse_evidence['unresolvedEvidenceCount']} 个仓库证据待复核："
+                f"{'、'.join(warehouse_evidence['unresolvedEvidenceWarehouses'])}。"
+            )
 
         if warehouse_issues:
             metrics["warehouseIssues"] = warehouse_issues
@@ -499,10 +692,18 @@ def calculate_extraction_quality(
         message = "抽取质量检查通过。"
     elif any("极低" in issue or "复核" in issue for issue in issues):
         level = "critical"
-        message = "抽取质量存在严重问题，必须人工复核。"
+        message = (
+            "抽取质量存在严重问题，必须人工复核。"
+            if has_extraction_risk
+            else "核对证据存在严重问题，必须人工复核。"
+        )
     else:
         level = "warning"
-        message = "抽取质量存在风险，请复核 PDF 抽取明细后再使用差异报告。"
+        message = (
+            "抽取质量存在风险，请复核 PDF 抽取明细后再使用差异报告。"
+            if has_extraction_risk
+            else "核对发现业务差异，请查看员工与仓库明细。"
+        )
 
     return {
         "level": level,

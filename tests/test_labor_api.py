@@ -1,6 +1,7 @@
 from io import BytesIO
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -8,12 +9,15 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
 import bonus_platform.app as app_module
+import bonus_platform.engine.labor.runs as labor_runs
+import bonus_platform.engine.labor.structure as labor_structure
 from bonus_platform.app import app
 from bonus_platform.engine.labor.models import LaborLineItem
 
 
-OVERSEAS_LABOR_ACCESS_RESPONSE = app_module._overseas_labor_access_response
-pytestmark = pytest.mark.usefixtures("bypass_overseas_labor_access_gate")
+def test_runtime_suppresses_full_http_client_request_urls():
+    assert logging.getLogger("httpx").level >= logging.WARNING
+    assert logging.getLogger("httpcore").level >= logging.WARNING
 
 
 def _excel_bytes() -> bytes:
@@ -50,11 +54,811 @@ def _excel_bytes_with_two_warehouses() -> bytes:
     return buffer.getvalue()
 
 
+def _excel_bytes_for_structure_fallback() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单"
+    sheet.append(["工号", "姓名", "时长总计(H)", "费用总计(含税)", "币种", "物理仓"])
+    for index, name in enumerate(["A One", "B Two", "C Three", "D Four", "E Five"], start=1):
+        sheet.append([f"DE{index:06d}", name, 8, 20, "EUR", "15号仓"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def _prepare_labor_orchestration_run(
+    monkeypatch,
+    *,
+    pdf_names: list[str],
+    workbook_bytes: bytes,
+) -> tuple[TestClient, dict]:
+    monkeypatch.setattr(app_module, "_labor_cost_summaries", lambda *args, **kwargs: [])
+    monkeypatch.setattr(app_module, "audit_ai_page_cache_candidates", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        app_module,
+        "build_ai_cache_reconciliation_preview",
+        lambda *args, **kwargs: {"fileQuality": []},
+    )
+    monkeypatch.setattr(
+        app_module,
+        "build_reocr_candidate_plan",
+        lambda *args, **kwargs: {"summary": {}, "tasks": [], "reviewableCandidates": []},
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_summarize_pdf_text_coverage",
+        lambda paths: {
+            "summary": {
+                "fileCount": len(paths),
+                "textReadableFileCount": len(paths),
+                "imageOnlyFileCount": 0,
+                "textReadablePageCount": len(paths),
+                "emptyTextPageCount": 0,
+                "imageOnlyPdfFiles": [],
+            },
+            "files": [],
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "calculate_extraction_quality",
+        lambda *args, **kwargs: {
+            "level": "ok",
+            "message": "",
+            "issues": [],
+            "retryAttempted": False,
+            "retryApplied": False,
+        },
+    )
+
+    def fake_report(path, *args, **kwargs):
+        Path(path).write_bytes(b"report")
+
+    def fake_business_report(path, *args, **kwargs):
+        Path(path).write_text("<html></html>", encoding="utf-8")
+
+    monkeypatch.setattr(app_module, "build_labor_report", fake_report)
+    monkeypatch.setattr(app_module, "build_labor_business_html_report", fake_business_report)
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "Task 4 Supplier",
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-07",
+            "currency": "USD",
+        },
+    ).json()
+    files = [
+        ("pdf_files", (name, b"%PDF-1.4\n", "application/pdf"))
+        for name in pdf_names
+    ]
+    files.append(
+        (
+            "workbook_files",
+            (
+                "bill.xlsx",
+                workbook_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+    )
+    response = client.post(f"/api/labor/runs/{run['id']}/files", files=files)
+    assert response.status_code == 200
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={
+            "sheet_name": "员工账单",
+            "mapping": {
+                "employeeId": "工号",
+                "name": "姓名",
+                "hours": "时长总计(H)",
+                "amount": "费用总计(含税)",
+                "currency": "币种",
+                "warehouse": "物理仓",
+            },
+        },
+    )
+    assert response.status_code == 200
+    return client, run
+
+
+def _unresolved_quick_totals(paths) -> list[dict]:
+    return [
+        {
+            "source_file": Path(path).name,
+            "total_amount": 0.0,
+            "warehouse_id": "",
+            "authoritative": False,
+            "evidence_status": "needs_review",
+            "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+        }
+        for path in paths
+    ]
+
+
+def test_labor_legacy_upload_can_append_files_in_separate_rounds(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
+    monkeypatch.setenv("SIGMA_LABOR_P1_REQUIRED", "0")
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", tmp_path / "runs")
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "Separate upload rounds",
+            "period_start": "2026-07-20",
+            "period_end": "2026-07-26",
+            "currency": "USD",
+        },
+    ).json()
+
+    first = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("first.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    second = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[("pdf_files", ("second.pdf", b"%PDF-1.4\n", "application/pdf"))],
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [item["originalFilename"] for item in second.json()["files"]["pdfInvoices"]] == ["first.pdf", "second.pdf"]
+    assert [item["originalFilename"] for item in second.json()["files"]["workbooks"]] == ["bill.xlsx"]
+
+
 def _reocr_csv_bytes() -> bytes:
     return (
         "Employee,Hours,Amount,Page,Confidence,Evidence\n"
         "Alice Worker,8,100,p1,96%,Alice Worker 8 $100\n"
     ).encode("utf-8")
+
+
+def test_labor_delete_run_removes_files_and_keeps_redacted_audit(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    audit_path = tmp_path / "audit" / "events.jsonl"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(audit_path))
+    monkeypatch.setattr(
+        app_module,
+        "delete_labor_run_from_persistent",
+        lambda _run_id, _owner_user_id: None,
+    )
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Sensitive Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+    run_dir = runs_dir / run["id"]
+    (run_dir / "invoice.pdf").write_text("Sensitive Person $123.45", encoding="utf-8")
+    app_module.update_labor_metadata(run["id"], {"status": "已生成差异报告", "ownerUserId": "user-1"})
+
+    response = client.delete(f"/api/labor/runs/{run['id']}")
+
+    assert response.status_code == 200
+    assert not run_dir.exists()
+    raw_audit = audit_path.read_text(encoding="utf-8")
+    assert '"action":"run_deleted"' in raw_audit
+    assert "Sensitive Person" not in raw_audit
+    assert "123.45" not in raw_audit
+
+
+def test_labor_audit_endpoint_returns_recent_redacted_events_for_run(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.audit import append_labor_audit_event
+
+    audit_path = tmp_path / "audit" / "labor.jsonl"
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(audit_path))
+    append_labor_audit_event(
+        audit_path,
+        action="run_created",
+        run_id="labor_1",
+        owner_user_id="user-1",
+        outcome="success",
+        details={"pdfFileCount": 2, "employeeName": "Sensitive Person", "amount": 123.45},
+    )
+    append_labor_audit_event(
+        audit_path,
+        action="files_uploaded",
+        run_id="labor_1",
+        owner_user_id="user-1",
+        outcome="success",
+        details={"pdfPageCount": 8},
+    )
+    append_labor_audit_event(
+        audit_path,
+        action="run_created",
+        run_id="labor_2",
+        owner_user_id="user-2",
+        outcome="success",
+    )
+
+    response = TestClient(app).get("/api/labor/audit", params={"run_id": "labor_1", "limit": 10})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["action"] for event in body["events"]] == ["files_uploaded", "run_created"]
+    assert body["events"][0]["details"] == {"pdfPageCount": 8}
+    assert "Sensitive Person" not in response.text
+    assert "123.45" not in response.text
+
+
+def test_labor_delete_run_blocks_active_task(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+    app_module.update_labor_metadata(
+        run["id"],
+        {"status": "抽取中", "asyncTask": {"status": "running"}},
+    )
+
+    response = client.delete(f"/api/labor/runs/{run['id']}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["errorCode"] == "LABOR_ACTIVE_RUN_DELETE_BLOCKED"
+    assert (runs_dir / run["id"]).exists()
+
+
+def test_labor_upload_rejects_pdf_count_limit_before_saving(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setenv("LABOR_MAX_PDF_FILES", "1")
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("a.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("b.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["errorCode"] == "LABOR_PDF_FILE_COUNT_LIMIT_EXCEEDED"
+    assert list((runs_dir / run["id"]).glob("*.pdf")) == []
+
+
+def test_labor_upload_accepts_four_workbooks_with_default_limit(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.delenv("LABOR_MAX_WORKBOOK_FILES", raising=False)
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+    files = [("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf"))]
+    files.extend(
+        (
+            "workbook_files",
+            (
+                f"bill-{index}.xlsx",
+                _excel_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        )
+        for index in range(1, 5)
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/files", files=files)
+
+    assert response.status_code == 200
+    assert len(response.json()["files"]["workbooks"]) == 4
+
+
+def test_labor_upload_rolls_back_partial_files_when_byte_limit_exceeded(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setenv("LABOR_MAX_PDF_BYTES", "12")
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("small.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("large.pdf", b"%PDF-1.4\nTOO-LARGE", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["errorCode"] == "LABOR_PDF_SIZE_LIMIT_EXCEEDED"
+    assert list((runs_dir / run["id"]).glob("*.pdf")) == []
+    metadata = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert metadata["files"] == {}
+
+
+def test_labor_upload_rejects_total_pdf_page_limit(monkeypatch, tmp_path):
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setenv("LABOR_MAX_PDF_PAGES", "3")
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(app_module, "_labor_pdf_page_count", lambda _path: 4)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["errorCode"] == "LABOR_PDF_PAGE_LIMIT_EXCEEDED"
+    assert list((runs_dir / run["id"]).glob("*.pdf")) == []
+
+
+def test_labor_extract_endpoint_enforces_owner_concurrency_limit(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.hardening import LaborTaskLimiter
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "_LABOR_TASK_LIMITER", LaborTaskLimiter())
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("LABOR_MAX_ACTIVE_TASKS_PER_OWNER", "1")
+    monkeypatch.setenv("LABOR_MAX_ACTIVE_TASKS_GLOBAL", "2")
+    monkeypatch.setattr(app_module, "_uses_request_scoped_labor_runtime", lambda: False)
+
+    class FakeLoop:
+        def run_in_executor(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(app_module.asyncio, "get_event_loop", lambda: FakeLoop())
+    client = TestClient(app)
+
+    def ready_run(supplier: str) -> dict:
+        run = client.post(
+            "/api/labor/runs",
+            json={"supplier_name": supplier, "period_start": "2026-07-01", "period_end": "2026-07-07"},
+        ).json()
+        response = client.post(
+            f"/api/labor/runs/{run['id']}/files",
+            files=[
+                ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+                ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+            ],
+        )
+        assert response.status_code == 200
+        response = client.post(
+            f"/api/labor/runs/{run['id']}/mapping",
+            json={
+                "sheet_name": "员工账单",
+                "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"},
+            },
+        )
+        assert response.status_code == 200
+        return run
+
+    first = ready_run("Supplier A")
+    second = ready_run("Supplier B")
+
+    first_response = client.post(f"/api/labor/runs/{first['id']}/extract-and-compare")
+    second_response = client.post(f"/api/labor/runs/{second['id']}/extract-and-compare")
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 429
+    assert second_response.json()["detail"]["errorCode"] == "LABOR_OWNER_CONCURRENCY_LIMIT_EXCEEDED"
+    assert client.get(f"/api/labor/runs/{second['id']}").json()["status"] == "已确认字段"
+
+
+def test_labor_extract_request_scoped_runtime_never_reserves_local_runner_slot(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.hardening import LaborTaskLimiter
+    import bonus_platform.engine.labor.runs as labor_runs
+
+    runs_dir = tmp_path / "labor_runs"
+    limiter = LaborTaskLimiter()
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(app_module, "_LABOR_TASK_LIMITER", limiter)
+    monkeypatch.setenv("LABOR_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat_full")
+    monkeypatch.setattr(app_module, "_uses_request_scoped_labor_runtime", lambda: True)
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda _run_id: None)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Supplier", "period_start": "2026-07-01", "period_end": "2026-07-07"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={
+            "sheet_name": "员工账单",
+            "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"},
+        },
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["errorCode"] == "LABOR_UAT_EXTRACT_DISABLED"
+    assert limiter.snapshot()["activeGlobalTasks"] == 0
+
+
+def test_labor_safe_early_ocr_candidate_skips_legacy_detail_extraction(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    app_module.update_labor_metadata(run["id"], {"requireEmployeeDetail": True})
+    monkeypatch.setitem(app_module.AI_CONFIG, "ocr_command", "python worker.py")
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": Path(paths[0]).name,
+                "total_amount": 100.0,
+                "warehouse_id": "1",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+                "page_evidence": [{"page": 1, "role": "invoice_total", "total_amount": 100.0}],
+            }
+        ],
+    )
+    monkeypatch.setattr(app_module, "extract_structured_invoice_rows", lambda *args, **kwargs: [])
+
+    def safe_candidate(_run_id, pdf_paths, *_args, **_kwargs):
+        return {
+            "decision": "auto_accept",
+            "safeToUse": True,
+            "runtimeStatus": "completed",
+            "runtimeFiles": [{"sourceFile": pdf_paths[0].name, "cacheHit": True}],
+            "rows": [
+                {
+                    "source_type": "pdf_invoice_candidate",
+                    "source_file": pdf_paths[0].name,
+                    "source_page_or_row": "p1",
+                    "employee_name_raw": "Alice Worker",
+                    "hours": 8,
+                    "amount": 100,
+                    "currency": "USD",
+                    "confidence": 0.99,
+                    "warehouse_id": "1",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(app_module, "_run_labor_auto_ocr_candidate", safe_candidate)
+    monkeypatch.setattr(
+        app_module,
+        "extract_invoice_items",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("legacy extraction should be skipped")),
+    )
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert saved["autoOcrCandidate"]["safeToUse"] is True
+    assert saved["autoOcrCandidate"]["runtimeFiles"][0]["cacheHit"] is True
+    assert saved["pdfExtractedRows"][0]["employee_name_raw"] == "Alice Worker"
+
+
+def test_labor_ocr_expected_totals_uses_unique_excel_warehouse_for_unresolved_invoice():
+    excel_rows = [
+        LaborLineItem(
+            source_type="excel_bill",
+            source_file="bill.xlsx",
+            source_page_or_row="row 2",
+            employee_id="1",
+            employee_name_raw="Alice Worker",
+            hours=8,
+            amount=100,
+            currency="USD",
+            confidence=1,
+            warehouse_id="20",
+        ),
+        LaborLineItem(
+            source_type="excel_bill",
+            source_file="bill.xlsx",
+            source_page_or_row="row 3",
+            employee_id="2",
+            employee_name_raw="Bob Worker",
+            hours=8,
+            amount=120,
+            currency="USD",
+            confidence=1,
+            warehouse_id="20",
+        ),
+    ]
+    totals = [
+        {
+            "source_file": "elog20-4_20260520204256.pdf",
+            "total_amount": 0,
+            "warehouse_id": "20",
+            "authoritative": False,
+        }
+    ]
+
+    expected = app_module._labor_ocr_expected_totals(
+        totals,
+        {"elog20-4_20260520204256.pdf"},
+        excel_rows=excel_rows,
+    )
+
+    assert expected == {"elog20-4_20260520204256.pdf": 220.0}
+
+
+def test_labor_review_early_ocr_candidate_falls_back_to_legacy_once(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    app_module.update_labor_metadata(run["id"], {"requireEmployeeDetail": True})
+    monkeypatch.setitem(app_module.AI_CONFIG, "ocr_command", "python worker.py")
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": Path(paths[0]).name,
+                "total_amount": 100.0,
+                "warehouse_id": "1",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+                "page_evidence": [{"page": 1, "role": "invoice_total", "total_amount": 100.0}],
+            }
+        ],
+    )
+    monkeypatch.setattr(app_module, "extract_structured_invoice_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        app_module,
+        "_run_labor_auto_ocr_candidate",
+        lambda *args, **kwargs: {
+            "decision": "needs_review",
+            "safeToUse": False,
+            "blockers": ["strict_name_review_required"],
+            "runtimeStatus": "completed",
+            "runtimeFiles": [{"cacheHit": True}],
+            "rows": [],
+        },
+    )
+    calls = {"legacy": 0}
+
+    def legacy_rows(pdf_paths, *args, **kwargs):
+        calls["legacy"] += 1
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(pdf_paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=100,
+                currency="USD",
+                confidence=0.99,
+                warehouse_id="1",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", legacy_rows)
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert calls["legacy"] == 1
+    assert saved["autoOcrCandidate"]["safeToUse"] is False
+    assert saved["pdfExtractedRows"][0]["employee_name_raw"] == "Alice Worker"
+
+
+def test_labor_review_ocr_candidate_with_explicit_pdf_total_skips_empty_legacy_fallback(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    app_module.update_labor_metadata(run["id"], {"requireEmployeeDetail": True})
+    monkeypatch.setitem(app_module.AI_CONFIG, "ocr_command", "python worker.py")
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": Path(paths[0]).name,
+                "total_amount": 0.0,
+                "warehouse_id": "1",
+                "authoritative": False,
+                "evidence_status": "needs_review",
+            }
+        ],
+    )
+    monkeypatch.setattr(app_module, "extract_structured_invoice_rows", lambda *args, **kwargs: [])
+
+    def review_candidate(_run_id, pdf_paths, *_args, **_kwargs):
+        source_file = pdf_paths[0].name
+        return {
+            "decision": "needs_review",
+            "safeToUse": False,
+            "blockers": ["strict_name_review_required"],
+            "runtimeStatus": "completed",
+            "runtimeFiles": [
+                {
+                    "sourceFile": source_file,
+                    "pageCount": 1,
+                    "successfulPageCount": 1,
+                    "failedPageCount": 0,
+                    "explicitTotalAmount": 100.0,
+                    "explicitTotalEvidence": {
+                        "page": 1,
+                        "evidenceText": "TOTAL: $ 100.00",
+                    },
+                }
+            ],
+            "pdfTotalEvidence": {
+                source_file: {
+                    "amount": 100.0,
+                    "page": 1,
+                    "evidenceText": "TOTAL: $ 100.00",
+                }
+            },
+            "rows": [
+                {
+                    "source_type": "pdf_invoice_candidate",
+                    "source_file": source_file,
+                    "source_page_or_row": "p1",
+                    "employee_name_raw": "Alic Worker",
+                    "hours": 8,
+                    "amount": 100,
+                    "currency": "USD",
+                    "confidence": 0.9,
+                    "warehouse_id": "1",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(app_module, "_run_labor_auto_ocr_candidate", review_candidate)
+    monkeypatch.setattr(
+        app_module,
+        "extract_invoice_items",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("page-complete OCR review rows should be retained")
+        ),
+    )
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert saved["autoOcrCandidate"]["reviewRowsApplied"] is True
+    assert saved["pdfExtractedRows"][0]["employee_name_raw"] == "Alic Worker"
+    assert saved["batchGuard"]["status"] == "ocr_candidate_review"
+    assert saved["batchGuard"]["allowReleasableReport"] is False
+    assert saved["warehouseComparison"]["summary"]["pdfAmountTotal"] == 100.0
+
+
+def test_labor_review_candidate_retries_only_the_review_page(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    app_module.update_labor_metadata(run["id"], {"requireEmployeeDetail": True})
+    monkeypatch.setitem(app_module.AI_CONFIG, "ocr_command", "python worker.py")
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": Path(paths[0]).name,
+                "total_amount": 100.0,
+                "warehouse_id": "1",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+                "page_evidence": [{"page": 4, "role": "invoice_total", "total_amount": 100.0}],
+            }
+        ],
+    )
+    monkeypatch.setattr(app_module, "extract_structured_invoice_rows", lambda *args, **kwargs: [])
+    def review_candidate(_run_id, pdf_paths, *_args, **_kwargs):
+        source_file = pdf_paths[0].name
+        return {
+            "decision": "needs_review",
+            "safeToUse": False,
+            "blockers": ["strict_name_review_required"],
+            "runtimeStatus": "completed",
+            "runtimeFiles": [{"cacheHit": True}],
+            "fileClosure": [{"sourceFile": source_file, "expectedAmount": 100, "closed": True}],
+            "nameGate": {
+                "matches": [
+                    {"candidateName": "Alic Worker", "excelName": "Alice Worker", "status": "review"}
+                ]
+            },
+            "rows": [
+                {
+                    "source_type": "pdf_invoice_candidate",
+                    "source_file": source_file,
+                    "source_page_or_row": "p4",
+                    "employee_name_raw": "Alic Worker",
+                    "hours": 8,
+                    "amount": 100,
+                    "currency": "USD",
+                    "confidence": 0.9,
+                    "warehouse_id": "1",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(app_module, "_run_labor_auto_ocr_candidate", review_candidate)
+    captured = {}
+
+    def targeted_rows(pdf_paths, *args, **kwargs):
+        captured["paths"] = [Path(path).name for path in pdf_paths]
+        captured["pages"] = kwargs.get("allowed_pages_by_source")
+        source_file = Path(pdf_paths[0]).name
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=source_file,
+                source_page_or_row="p4",
+                employee_id="",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=100,
+                currency="USD",
+                confidence=0.99,
+                warehouse_id="1",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", targeted_rows)
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    source_file = captured["paths"][0]
+    assert captured["pages"] == {source_file: [4]}
+    assert saved["pdfExtractedRows"][0]["employee_name_raw"] == "Alice Worker"
+    assert saved["autoOcrCandidate"]["targetedRetry"]["applied"] is True
 
 
 def _reocr_batch_csv_bytes() -> bytes:
@@ -126,247 +930,147 @@ def test_labor_access_endpoint_marks_uat_trial(monkeypatch):
     assert body["access"] == "uat_trial"
     assert body["canUse"] is True
     assert "Payroll Admin" in body["allowedRoles"]
+    assert body["uploadLimits"]["maxWorkbookFiles"] == 10
 
 
-def test_labor_access_endpoint_can_enable_production_async_mode(monkeypatch):
-    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "production")
+def test_labor_access_endpoint_exposes_release_contract(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_BUILD_ID", "build-20260715-p0")
+    monkeypatch.setenv("SIGMA_LABOR_SOURCE_REF", "codex/overseas-labor-p0")
     client = TestClient(app)
 
     response = client.get("/api/labor/access")
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-sigma-labor-build"] == "build-20260715-p0"
     body = response.json()
-    assert body["stage"] == "生产试运行"
-    assert body["access"] == "production"
-    assert body["canUse"] is True
-    assert "持久化上传" in body["message"]
+    assert body["version"] == "0.5-uat"
+    assert body["apiContractVersion"] == 2
+    assert body["buildId"] == "build-20260715-p0"
+    assert "sourceRef" not in body
+    assert "runtimeStartedAt" not in body
+    assert body["build"]["schemaVersion"] == 1
+    assert body["build"]["status"] == "current"
+    assert "startupFingerprint" not in json.dumps(body)
+    assert "currentFingerprint" not in json.dumps(body)
+    assert body["runtimeGate"]["canStartFormalTask"] is True
+    assert body["runtimeGate"]["runtimeSourceCurrent"] is True
+    assert body["reconciliationScope"] == "employee_detail_required"
+    assert body["manualReviewRequired"] is True
+    assert body["directPaymentAllowed"] is False
 
 
-def test_labor_storage_health_reports_missing_supabase_secret_without_exposing_values(monkeypatch):
-    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "supabase")
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
-    monkeypatch.delenv("SUPABASE_STORAGE_SERVICE_ROLE_KEY", raising=False)
-    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
-    client = TestClient(app)
-
-    response = client.get("/api/labor/storage-health?probe=1")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["backend"] == "supabase"
-    assert body["supabaseUrlConfigured"] is True
-    assert body["serviceRoleConfigured"] is False
-    assert body["ok"] is False
-    assert "example.supabase.co" not in json.dumps(body)
-
-
-def test_labor_worker_health_reports_missing_durable_queue_on_vercel(monkeypatch):
-    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+def test_labor_access_allows_formal_uat_queue_only_through_personal_worker(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
-    monkeypatch.delenv("SIGMA_LABOR_JOB_DATABASE_URL", raising=False)
-    monkeypatch.delenv("LABOR_DATABASE_URL", raising=False)
-    monkeypatch.delenv("ADMIN_DATABASE_URL", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
     client = TestClient(app)
 
-    response = client.get("/api/labor/worker-health")
+    response = client.get("/api/labor/access")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["enabled"] is True
-    assert body["serverless"] is True
-    assert body["databaseUrlConfigured"] is False
-    assert body["ok"] is False
-    assert body["errorCode"] == "LABOR_WORKER_QUEUE_UNAVAILABLE"
+    gate = response.json()["formalTaskGate"]
+    assert gate["canQueue"] is True
+    assert gate["executionMode"] == "personal_worker"
+    assert gate["reasonCode"] == ""
 
 
-def test_labor_worker_health_reports_configured_database_without_exposing_url(monkeypatch):
-    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
+def test_labor_access_blocks_request_scoped_formal_task_without_personal_worker(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
-    monkeypatch.setenv("ADMIN_DATABASE_URL", "postgresql://secret-user:secret-pass@example.supabase.co/postgres")
+    monkeypatch.delenv("SIGMA_LABOR_EXECUTION_MODE", raising=False)
     client = TestClient(app)
 
-    response = client.get("/api/labor/worker-health")
+    response = client.get("/api/labor/access")
 
     assert response.status_code == 200
-    body = response.json()
-    serialized = json.dumps(body)
-    assert body["enabled"] is True
-    assert body["databaseUrlConfigured"] is True
-    assert body["backend"] == "postgres"
-    assert body["ok"] is True
-    assert "secret-pass" not in serialized
-    assert "example.supabase.co" not in serialized
+    gate = response.json()["formalTaskGate"]
+    assert gate["canQueue"] is False
+    assert gate["executionMode"] == "blocked"
+    assert gate["reasonCode"] == "LABOR_PERSONAL_WORKER_REQUIRED"
 
 
-def test_labor_worker_health_rejects_explicit_postgres_backend_without_database_url(monkeypatch):
-    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
-    monkeypatch.setenv("SIGMA_LABOR_JOB_BACKEND", "postgres")
-    monkeypatch.delenv("VERCEL", raising=False)
-    monkeypatch.delenv("SIGMA_LABOR_JOB_DATABASE_URL", raising=False)
-    monkeypatch.delenv("LABOR_DATABASE_URL", raising=False)
-    monkeypatch.delenv("ADMIN_DATABASE_URL", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+def test_labor_runtime_gate_blocks_new_formal_batch_when_service_source_changed(monkeypatch):
+    stale_build = {
+        "status": "restart_required",
+        "buildId": "startup-build",
+        "sourceRef": "local-worktree",
+        "processStartedAt": "2026-07-15T08:00:00Z",
+    }
+    monkeypatch.setattr(app_module, "_labor_build_snapshot", lambda: stale_build)
     client = TestClient(app)
 
-    response = client.get("/api/labor/worker-health")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["enabled"] is True
-    assert body["backend"] == "postgres"
-    assert body["databaseUrlConfigured"] is False
-    assert body["ok"] is False
-    assert body["errorCode"] == "LABOR_WORKER_QUEUE_UNAVAILABLE"
-
-
-def test_labor_create_returns_structured_storage_error(monkeypatch):
-    def fail_create_labor_run(metadata):
-        raise RuntimeError("storage write failed")
-
-    monkeypatch.setattr(app_module, "create_labor_run", fail_create_labor_run)
-    client = TestClient(app)
-
+    access = client.get("/api/labor/access")
     response = client.post(
         "/api/labor/runs",
         json={
-            "supplier_name": "OSI",
-            "period_start": "2026-06-08",
-            "period_end": "2026-06-14",
+            "supplier_name": "Synthetic Supplier",
+            "period_start": "2026-07-01",
+            "period_end": "2026-07-07",
             "currency": "USD",
         },
     )
 
-    assert response.status_code == 503
-    detail = response.json()["detail"]
-    assert detail["message"] == "海外劳务批次创建失败，持久化存储暂不可用。"
-    assert detail["errorType"] == "RuntimeError"
-    assert "service_role key" in detail["nextAction"]
+    assert access.status_code == 200
+    assert access.json()["canUse"] is True
+    assert access.json()["runtimeGate"]["canStartFormalTask"] is False
+    assert response.status_code == 409
+    assert response.json()["detail"]["errorCode"] == "LABOR_SERVICE_RESTART_REQUIRED"
 
 
-def test_labor_direct_upload_plan_returns_signed_urls(monkeypatch):
-    monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
-    monkeypatch.setattr(
-        app_module,
-        "create_labor_supabase_signed_upload",
-        lambda run_id, relative_path: {
-            "signedUrl": f"https://storage.example/upload/{relative_path}?token=signed-upload-token",
-            "token": "signed-upload-token",
-            "objectPath": f"labor-runs/test/{run_id}/{relative_path}",
-            "relativePath": relative_path,
-        },
-    )
+def test_labor_formal_mutation_rejects_missing_or_stale_ui_contract_when_enforced(monkeypatch):
+    monkeypatch.setenv("SIGMA_TEST_NO_LABOR_CONTRACT_HEADERS", "1")
+    monkeypatch.setenv("SIGMA_LABOR_REQUIRE_CLIENT_CONTRACT", "true")
+    monkeypatch.setenv("SIGMA_LABOR_BUILD_ID", "build-contract-p0")
     client = TestClient(app)
-    run = client.post(
-        "/api/labor/runs",
-        json={"supplier_name": "OSI", "period_start": "2026-06-08", "period_end": "2026-06-14"},
-    ).json()
+    payload = {
+        "supplier_name": "Synthetic Supplier",
+        "period_start": "2026-07-01",
+        "period_end": "2026-07-07",
+        "currency": "USD",
+    }
 
-    response = client.post(
-        f"/api/labor/runs/{run['id']}/direct-upload-plan",
-        json={
-            "pdfFiles": [{"name": "invoice.pdf", "size": 6_000_000, "type": "application/pdf"}],
-            "workbookFiles": [{"name": "bill.xlsx", "size": 10_000, "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}],
+    missing = client.post("/api/labor/runs", json=payload)
+    stale = client.post(
+        "/api/labor/runs",
+        headers={
+            "x-sigma-labor-api-contract": "2",
+            "x-sigma-labor-ui-version": "0.5-uat",
+            "x-sigma-labor-ui-build": "old-build",
         },
+        json=payload,
+    )
+    current = client.post(
+        "/api/labor/runs",
+        headers={
+            "x-sigma-labor-api-contract": "2",
+            "x-sigma-labor-ui-version": "0.5-uat",
+            "x-sigma-labor-ui-build": "build-contract-p0",
+        },
+        json=payload,
+    )
+
+    assert missing.status_code == 409
+    assert missing.json()["detail"]["errorCode"] == "LABOR_CLIENT_UPGRADE_REQUIRED"
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["errorCode"] == "LABOR_CLIENT_UPGRADE_REQUIRED"
+    assert current.status_code == 200
+
+
+def test_labor_cleanup_requires_operations_token(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_OPERATIONS_TOKEN", "admin-secret")
+    monkeypatch.setattr(app_module, "_cleanup_expired_labor_data", lambda: {"deleted": 0})
+    client = TestClient(app)
+
+    assert client.post("/api/labor/maintenance/cleanup").status_code == 401
+    response = client.post(
+        "/api/labor/maintenance/cleanup",
+        headers={"x-admin-token": "admin-secret"},
     )
 
     assert response.status_code == 200
-    uploads = response.json()["uploads"]
-    assert [item["group"] for item in uploads] == ["pdfInvoices", "workbooks"]
-    assert uploads[0]["signedUrl"].startswith("https://storage.example/upload/invoice_direct_")
-    assert uploads[0]["originalFilename"] == "invoice.pdf"
-    assert "service_role" not in json.dumps(response.json())
-
-
-def test_labor_direct_upload_plan_uses_ascii_storage_keys_for_chinese_filenames(monkeypatch):
-    captured_paths = []
-    monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
-
-    def fake_signed_upload(run_id, relative_path):
-        captured_paths.append(relative_path)
-        return {
-            "signedUrl": f"https://storage.example/upload/{relative_path}?token=signed-upload-token",
-            "token": "signed-upload-token",
-            "objectPath": f"labor-runs/test/{run_id}/{relative_path}",
-            "relativePath": relative_path,
-        }
-
-    monkeypatch.setattr(app_module, "create_labor_supabase_signed_upload", fake_signed_upload)
-    client = TestClient(app)
-    run = client.post(
-        "/api/labor/runs",
-        json={"supplier_name": "OSI", "period_start": "2026-06-08", "period_end": "2026-06-14"},
-    ).json()
-
-    response = client.post(
-        f"/api/labor/runs/{run['id']}/direct-upload-plan",
-        json={
-            "pdfFiles": [{"name": "供应商发票 01.pdf", "size": 6_000_000, "type": "application/pdf"}],
-            "workbookFiles": [{"name": "员工账单明细 - 2026-06-23T105500.333.xlsx", "size": 10_000, "type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}],
-        },
-    )
-
-    assert response.status_code == 200
-    uploads = response.json()["uploads"]
-    assert uploads[0]["originalFilename"] == "供应商发票 01.pdf"
-    assert uploads[1]["originalFilename"] == "员工账单明细 - 2026-06-23T105500.333.xlsx"
-    assert all(path.isascii() for path in captured_paths)
-    assert captured_paths[0].startswith("01_direct_")
-    assert captured_paths[1].startswith("2026-06-23T105500_333_direct_")
-    assert not any("供应商" in path or "员工账单" in path for path in captured_paths)
-
-
-def test_labor_direct_upload_complete_registers_synced_files(monkeypatch):
-    monkeypatch.setattr(app_module, "labor_supabase_storage_enabled", lambda: True)
-    client = TestClient(app)
-    run = client.post(
-        "/api/labor/runs",
-        json={"supplier_name": "OSI", "period_start": "2026-06-08", "period_end": "2026-06-14"},
-    ).json()
-
-    def fake_sync(run_id, run_dir):
-        run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-        workbook = Workbook()
-        workbook.active.append(["员工", "金额"])
-        workbook.save(run_dir / "bill.xlsx")
-        return True
-
-    monkeypatch.setattr(app_module, "sync_labor_run_from_persistent", fake_sync)
-
-    response = client.post(
-        f"/api/labor/runs/{run['id']}/direct-upload-complete",
-        json={
-            "uploads": [
-                {
-                    "group": "pdfInvoices",
-                    "filename": "invoice.pdf",
-                    "originalFilename": "invoice.pdf",
-                    "relativePath": "invoice.pdf",
-                    "size": 6_000_000,
-                },
-                {
-                    "group": "workbooks",
-                    "filename": "bill.xlsx",
-                    "originalFilename": "bill.xlsx",
-                    "relativePath": "bill.xlsx",
-                    "size": 10_000,
-                },
-            ]
-        },
-    )
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "已上传文件"
-    assert body["files"]["pdfInvoices"][0]["originalFilename"] == "invoice.pdf"
-    assert body["files"]["workbooks"][0]["filename"] == "bill.xlsx"
-    assert body["files"]["workbook"]["filename"] == "bill.xlsx"
+    assert response.json() == {"deleted": 0}
 
 
 def test_labor_access_gate_can_disable_uat_module(monkeypatch):
-    monkeypatch.setattr(app_module, "_overseas_labor_access_response", OVERSEAS_LABOR_ACCESS_RESPONSE)
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "disabled")
     client = TestClient(app)
 
@@ -381,6 +1085,7 @@ def test_labor_access_gate_can_disable_uat_module(monkeypatch):
 
 def test_labor_extract_is_blocked_in_vercel_uat_light_mode(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat")
     monkeypatch.setenv("SIGMA_WORKBENCH_HOME", "/tmp/sigma-workbench")
     monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "blob")
@@ -403,6 +1108,7 @@ def test_labor_extract_is_blocked_in_vercel_uat_light_mode(monkeypatch):
 
 def test_labor_extract_vercel_uat_light_mode_returns_structured_next_action(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat")
     monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "blob")
     monkeypatch.setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_qqD75P7a2QuwEh0S_abcd1234")
@@ -416,6 +1122,87 @@ def test_labor_extract_vercel_uat_light_mode_returns_structured_next_action(monk
     assert detail["retryable"] is False
     assert "Vercel UAT" in detail["message"]
     assert "测试材料验证" in detail["nextAction"]
+
+
+def test_labor_extract_never_runs_synchronously_on_vercel_full_uat(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
+    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat_full")
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "OneSource UAT",
+            "period_start": "2026-06-17",
+            "period_end": "2026-06-17",
+            "currency": "USD",
+        },
+    ).json()
+    app_module.update_labor_metadata(
+        run["id"],
+        {
+            "files": {
+                "pdfInvoices": [{"path": "/tmp/invoice.pdf"}],
+                "workbooks": [{"path": "/tmp/bill.xlsx"}],
+            },
+            "workbookSheet": "员工账单",
+            "excelMapping": {"name": "姓名", "hours": "工时", "amount": "金额"},
+        },
+    )
+
+    called = []
+
+    def fake_extract(run_id):
+        called.append(run_id)
+
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", fake_extract)
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["errorCode"] == "LABOR_UAT_EXTRACT_DISABLED"
+    assert called == []
+
+
+def test_labor_extract_never_runs_synchronously_when_only_vercel_env_is_present(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setenv("VERCEL_ENV", "production")
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
+    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat_full")
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "OneSource UAT",
+            "period_start": "2026-06-17",
+            "period_end": "2026-06-17",
+            "currency": "USD",
+        },
+    ).json()
+    app_module.update_labor_metadata(
+        run["id"],
+        {
+            "files": {
+                "pdfInvoices": [{"path": "/tmp/invoice.pdf"}],
+                "workbooks": [{"path": "/tmp/bill.xlsx"}],
+            },
+            "workbookSheet": "员工账单",
+            "excelMapping": {"name": "姓名", "hours": "工时", "amount": "金额"},
+        },
+    )
+
+    called = []
+
+    def fake_extract(run_id):
+        called.append(run_id)
+
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", fake_extract)
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["errorCode"] == "LABOR_UAT_EXTRACT_DISABLED"
+    assert called == []
 
 
 def test_labor_upload_missing_run_returns_structured_next_action():
@@ -631,6 +1418,68 @@ def test_labor_runs_list_uses_bounded_recent_metadata(monkeypatch):
         }
     ]
     assert observed["limit"] == 50
+
+
+def test_labor_run_api_accepts_explicit_employee_detail_audit_mode():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "Unknown Synthetic Supplier",
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-07",
+            "currency": "USD",
+            "require_employee_detail": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["requireEmployeeDetail"] is True
+
+
+def test_labor_run_api_requires_employee_detail_for_formal_batches_even_when_client_disables_it():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/labor/runs",
+        json={
+            "supplier_name": "Unknown Synthetic Supplier",
+            "period_start": "2026-06-01",
+            "period_end": "2026-06-07",
+            "currency": "USD",
+            "require_employee_detail": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["requireEmployeeDetail"] is True
+    assert response.json()["reconciliationScope"] == "employee_detail_required"
+
+
+def test_labor_employee_detail_scope_defaults_to_formal_and_requires_explicit_diagnostic_marker():
+    assert app_module._labor_requires_employee_detail({}) is True
+    assert app_module._labor_requires_employee_detail({"requireEmployeeDetail": False}) is True
+    assert app_module._labor_requires_employee_detail({"reconciliationScope": "total_only_diagnostic"}) is True
+    assert app_module._labor_requires_employee_detail(
+        {"reconciliationScope": "total_only_diagnostic", "diagnosticOnly": True}
+    ) is False
+
+
+def test_labor_uat_result_always_waits_for_business_review_even_when_machine_passes():
+    passed = app_module._labor_uat_review_state({"canRelease": True, "conclusionLevel": "pass"})
+    blocked = app_module._labor_uat_review_state({"canRelease": False, "conclusionLevel": "critical"})
+
+    assert passed == {
+        "machineCheckStatus": "passed",
+        "businessReviewStatus": "pending",
+        "manualReviewRequired": True,
+        "directPaymentAllowed": False,
+        "requiresHumanReview": True,
+    }
+    assert blocked["machineCheckStatus"] == "blocked"
+    assert blocked["businessReviewStatus"] == "pending"
+    assert blocked["requiresHumanReview"] is True
 
 
 def test_labor_run_api_creates_batch_uploads_files_and_suggests_mapping():
@@ -867,6 +1716,47 @@ def test_labor_material_run_api_copies_reference_files_and_prefills_mapping(tmp_
     assert "Alice Worker" in copied_cache.read_text(encoding="utf-8")
 
 
+def test_labor_material_run_preserves_mapping_for_each_workbook(tmp_path):
+    batch = tmp_path / "Sovitrat groupe"
+    batch.mkdir()
+    (batch / "invoice.pdf").write_bytes(b"%PDF-1.4\n")
+
+    with_total = Workbook()
+    sheet = with_total.active
+    sheet.title = "Sheet2"
+    sheet.append(["员工名称", "总计", "时薪", "本周薪资", "本周餐补", "周日补贴", "总额"])
+    sheet.append(["Alice One", 8, 12.5, 100, 10, 0, 110])
+    with_total.save(batch / "巴黎1号仓.xlsx")
+
+    components = Workbook()
+    sheet = components.active
+    sheet.title = "Sheet2"
+    sheet.append(["员工名称", "总计", "时薪", "本周薪资", "本周餐补", "周日补贴"])
+    sheet.append(["Alice Two", 8, 12.5, 100, 10, 5])
+    components.save(batch / "巴黎2号仓.xlsx")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/labor/material-runs",
+        json={
+            "root": str(tmp_path),
+            "batchKey": "Sovitrat_groupe",
+            "periodStart": "2026-05-25",
+            "periodEnd": "2026-05-31",
+            "currency": "EUR",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["workbookMappings"]) == 2
+    rows = app_module._labor_excel_rows_from_metadata(body)
+    assert {row.employee_name_raw: row.amount for row in rows} == {
+        "Alice One": 110.0,
+        "Alice Two": 115.0,
+    }
+
+
 def test_labor_material_run_extracts_and_replays_name_mapping_candidate(monkeypatch, tmp_path):
     import bonus_platform.app as app_module
 
@@ -947,7 +1837,8 @@ def test_labor_material_run_extracts_and_replays_name_mapping_candidate(monkeypa
     assert confirmed.status_code == 200
     confirmed_body = confirmed.json()
     assert confirmed_body["manualNameMapping"] == {"Rozo Panche, Deisy V": "Deisi Pozo"}
-    assert confirmed_body["recalculatedRun"]["status"] == "已生成差异报告"
+    assert confirmed_body["recalculatedRun"]["status"] == "部分核对完成"
+    assert confirmed_body["recalculatedRun"]["comparisonSummary"]["canRelease"] is False
     assert confirmed_body["recalculatedRun"]["comparisonSummary"]["exceptionCount"] == 0
     assert confirmed_body["recalculatedRun"]["diffDownloadUrl"]
     refreshed = client.get(f"/api/labor/runs/{run['id']}").json()
@@ -1176,10 +2067,10 @@ def test_labor_material_run_surfaces_amount_rate_review_queue(monkeypatch, tmp_p
     assert refreshed["reviewQueues"]["primary"] == "amount_rate_review"
     assert refreshed["readinessGate"]["status"] == "blocked"
     assert refreshed["readinessGate"]["summary"]["exceptionCount"] == 1
-    assert refreshed["readinessGate"]["issues"][0]["code"] == "comparison_exceptions"
+    assert any(issue["code"] == "comparison_exceptions" for issue in refreshed["readinessGate"]["issues"])
 
 
-def test_labor_material_run_degrades_to_reocr_review_when_ai_extraction_unavailable(monkeypatch, tmp_path):
+def test_labor_material_run_blocks_when_employee_detail_recognition_is_incomplete(monkeypatch, tmp_path):
     import bonus_platform.app as app_module
 
     batch = tmp_path / "oss"
@@ -1275,7 +2166,7 @@ def test_labor_material_run_degrades_to_reocr_review_when_ai_extraction_unavaila
 
     updated = app_module._perform_labor_extract_compare(run["id"])
 
-    assert updated["status"] == "待图片识别复核"
+    assert updated["status"] == "PDF识别未完成"
     assert updated["files"]["diffReport"]["filename"].endswith(".xlsx")
     assert updated["comparisonSummary"]["exceptionCount"] == 1
     assert updated["extractionQuality"]["level"] == "critical"
@@ -1291,15 +2182,209 @@ def test_labor_material_run_degrades_to_reocr_review_when_ai_extraction_unavaila
     assert updated["diffDownloadUrl"] == updated["files"]["diffReport"]["downloadUrl"]
 
 
-def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_rows(monkeypatch):
+def test_labor_compare_keeps_otws_warehouse_result_when_employee_amount_rows_are_unavailable(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["NJ13 Invoice Report WE 051726 JF.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_labor_cost_summaries",
+        lambda paths: [
+            {
+                "sourceFile": paths[0].name,
+                "warehouseId": "1",
+                "supplier": "Strategic Staffing Solutions Corp.",
+                "employeeCount": 1,
+                "summary": {
+                    "reportedTotal": 105.0,
+                    "componentTotal": 105.0,
+                    "componentDelta": 0.0,
+                    "evidence": "Warehouse-information!2",
+                },
+                "details": {
+                    "employeeExpenses": {"amount": 100.0, "hours": 4.0},
+                    "employeeBenefits": {"amount": 5.0, "hours": 0.0},
+                    "detailTotal": 105.0,
+                    "summaryDelta": 0.0,
+                },
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": paths[0].name,
+                "total_amount": 110.0,
+                "warehouse_id": "1",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+                "page_evidence": [
+                    {"page": 1, "role": "invoice_total", "evidence_text": "Total $110.00"}
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "extract_invoice_items",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("AI 抽取失败：AI 图片抽取返回 0 条员工明细")
+        ),
+    )
+
+    updated = app_module._perform_labor_extract_compare(run["id"])
+
+    assert updated["status"] == "部分核对完成"
+    assert updated["pdfExtractedRows"] == []
+    assert updated["warehouseComparison"]["summary"]["pdfAmountTotal"] == 110.0
+    assert updated["warehouseComparison"]["summary"]["excelAmountTotal"] == 105.0
+    assert updated["warehouseComparison"]["rows"][0]["excelAmountTotal"] == 105.0
+    assert updated["warehouseComparison"]["rows"][0]["amountDelta"] == 5.0
+    assert updated["extractionQuality"]["level"] == "warning"
+    assert any("班组汇总" in issue for issue in updated["extractionQuality"]["issues"])
+    assert updated["requiresHumanReview"] is True
+    assert updated["files"]["diffReport"]["filename"].endswith(".xlsx")
+
+
+def test_labor_compare_keeps_runtime_profile_config_immutable_when_pdf_extraction_returns_no_rows(monkeypatch):
     import bonus_platform.app as app_module
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    def _unexpected_profile_mutation(*args, **kwargs):
+        raise AssertionError("正式核对不得在运行时改写全局供应商 Profile 配置")
+
+    monkeypatch.setattr(app_module, "record_profile_failure", _unexpected_profile_mutation, raising=False)
+    monkeypatch.setattr(app_module, "reset_profile_failure", _unexpected_profile_mutation, raising=False)
+
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": paths[0].name,
+                "total_amount": 100.0,
+                "warehouse_id": "",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+            }
+        ],
+    )
     monkeypatch.setattr(app_module, "extract_invoice_items", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        app_module,
+        "_summarize_pdf_text_coverage",
+        lambda paths: {
+            "summary": {
+                "fileCount": len(paths),
+                "textReadableFileCount": len(paths),
+                "imageOnlyFileCount": 0,
+                "textReadablePageCount": len(paths),
+                "emptyTextPageCount": 0,
+                "imageOnlyPdfFiles": [],
+            },
+            "files": [
+                {
+                    "sourceFile": path.name,
+                    "pageCount": 1,
+                    "readablePageCount": 1,
+                    "emptyTextPageCount": 0,
+                    "hasTextLayer": True,
+                    "needsOcr": False,
+                    "diagnostic": "text_readable_pdf",
+                }
+                for path in paths
+            ],
+        },
+    )
     client = TestClient(app)
     run = client.post(
         "/api/labor/runs",
         json={"supplier_name": "ONESOURCE", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+    upload = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    assert upload.status_code == 200
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+    app_module.update_labor_metadata(run["id"], {"errorMessage": "上一次抽取失败", "errorCode": "OLD_ERROR", "nextAction": "请重试"})
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "抽取中"
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert body["status"] == "抽取失败"
+    assert "PDF 未抽取出员工明细" in body["errorMessage"]
+
+
+def test_labor_compare_blocks_uploaded_image_only_pdfs_without_employee_detail(monkeypatch):
+    import bonus_platform.app as app_module
+
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": path.name,
+                "total_amount": 0.0,
+                "warehouse_id": str(index),
+                "authoritative": False,
+                "evidence_status": "needs_review",
+                "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+            }
+            for index, path in enumerate(paths, start=1)
+        ],
+    )
+    monkeypatch.setattr(app_module, "extract_invoice_items", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        app_module,
+        "_summarize_pdf_text_coverage",
+        lambda paths: {
+            "summary": {
+                "fileCount": len(paths),
+                "textReadableFileCount": 0,
+                "imageOnlyFileCount": len(paths),
+                "textReadablePageCount": 0,
+                "emptyTextPageCount": len(paths),
+                "imageOnlyPdfFiles": [path.name for path in paths],
+            },
+            "files": [
+                {
+                    "sourceFile": path.name,
+                    "pageCount": 1,
+                    "readablePageCount": 0,
+                    "emptyTextPageCount": 1,
+                    "hasTextLayer": False,
+                    "needsOcr": True,
+                    "diagnostic": "image_only_pdf",
+                }
+                for path in paths
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "build_reocr_candidate_plan",
+        lambda *args, **kwargs: {
+            "summary": {"taskCount": 1, "reviewableCandidateCount": 0},
+            "tasks": [{"sourceFile": "scan.pdf", "warehouseId": "1", "amountDelta": -100, "expectedExcelAmount": 100}],
+            "reviewableCandidates": [],
+        },
+    )
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "OSS", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
     ).json()
     upload = client.post(
         f"/api/labor/runs/{run['id']}/files",
@@ -1319,8 +2404,268 @@ def test_labor_compare_records_failure_when_pdf_extraction_returns_no_employee_r
     assert response.status_code == 200
     assert response.json()["status"] == "抽取中"
     body = client.get(f"/api/labor/runs/{run['id']}").json()
-    assert body["status"] == "抽取失败"
-    assert "PDF 未抽取出员工明细" in body["errorMessage"]
+    assert body["status"] == "PDF识别未完成"
+    assert body["stage"] == "生成报告"
+    assert body["errorMessage"] == ""
+    assert body["errorCode"] == ""
+    assert body["nextAction"] == ""
+    assert body["reviewQueues"]["primary"] == "reocr"
+    assert body["files"]["diffReport"]["label"] == "PDF识别诊断报告"
+    assert any("未连接图片识别服务" in issue for issue in body["extractionQuality"]["issues"])
+
+
+def test_labor_compare_attempts_auto_image_extraction_before_reocr_fallback(monkeypatch):
+    import bonus_platform.app as app_module
+
+    extracted_paths: list[str] = []
+
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": path.name,
+                "total_amount": 0.0,
+                "warehouse_id": str(index),
+                "authoritative": False,
+                "evidence_status": "needs_review",
+                "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+            }
+            for index, path in enumerate(paths, start=1)
+        ],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_summarize_pdf_text_coverage",
+        lambda paths: {
+            "summary": {
+                "fileCount": len(paths),
+                "textReadableFileCount": 0,
+                "imageOnlyFileCount": len(paths),
+                "textReadablePageCount": 0,
+                "emptyTextPageCount": len(paths),
+                "imageOnlyPdfFiles": [path.name for path in paths],
+            },
+            "files": [
+                {
+                    "sourceFile": path.name,
+                    "pageCount": 1,
+                    "readablePageCount": 0,
+                    "emptyTextPageCount": 1,
+                    "hasTextLayer": False,
+                    "needsOcr": True,
+                    "diagnostic": "image_only_pdf",
+                }
+                for path in paths
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "build_reocr_candidate_plan",
+        lambda *args, **kwargs: {
+            "summary": {"taskCount": 2, "reviewableCandidateCount": 0},
+            "tasks": [
+                {"sourceFile": "scan-a.pdf", "warehouseId": "1", "amountDelta": -701.90, "expectedExcelAmount": 701.90},
+                {"sourceFile": "scan-b.pdf", "warehouseId": "2", "amountDelta": 0, "expectedExcelAmount": 0},
+            ],
+            "reviewableCandidates": [],
+        },
+    )
+
+    def fake_extract(pdf_paths, *args, **kwargs):
+        extracted_paths.extend(Path(path).name for path in pdf_paths)
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(pdf_paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="WUS042586",
+                employee_name_raw="Rosa Alvarez Minchaca",
+                hours=31.19,
+                amount=701.90,
+                currency="USD",
+                confidence=0.96,
+                evidence_text="Rosa Alvarez Minchaca 31.19 $701.90",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "OSS", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+    upload = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("scan-a.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("pdf_files", ("scan-b.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    assert upload.status_code == 200
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "抽取中"
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert any(name.startswith("scan-a_") for name in extracted_paths)
+    assert any(name.startswith("scan-b_") for name in extracted_paths)
+    assert body["status"] == "PDF识别未完成"
+    assert body["batchGuard"]["status"] == "pdf_recognition_incomplete"
+    assert body["reviewQueues"]["primary"] == "employee_exceptions"
+    assert body["comparisonSummary"]["exceptionCount"] == 0
+    assert body["comparisonSummary"]["pdfEmployeeCount"] == 1
+    assert body["files"]["diffReport"]["label"] == "PDF识别诊断报告"
+
+
+def test_labor_retry_keeps_original_rows_when_retry_is_less_complete(monkeypatch, tmp_path):
+    retry_pdf = tmp_path / "scan.pdf"
+    retry_pdf.write_bytes(b"%PDF-1.4\n")
+
+    def line(name: str, amount: float) -> LaborLineItem:
+        return LaborLineItem(
+            source_type="pdf_invoice",
+            source_file=retry_pdf.name,
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw=name,
+            hours=8,
+            amount=amount,
+            currency="USD",
+            confidence=0.95,
+            evidence_text=f"{name} 8 ${amount}",
+        )
+
+    original_rows = [line(f"Worker {index}", 100 + index) for index in range(10)]
+    retry_rows = [line(f"Worker {index}", 100 + index) for index in range(6)]
+    original_quality = {"level": "warning", "issues": ["总金额差异较大"], "retryAttempted": False, "retryApplied": False}
+    original_comparison = {"summary": {"exceptionCount": 10, "amountDeltaTotal": 1000}, "rows": []}
+    retry_comparison = {"summary": {"exceptionCount": 1, "amountDeltaTotal": 10}, "rows": []}
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", lambda *args, **kwargs: retry_rows)
+    monkeypatch.setattr(app_module, "compare_labor_items", lambda *args, **kwargs: retry_comparison)
+    monkeypatch.setattr(app_module, "calculate_extraction_quality", lambda *args, **kwargs: {"level": "ok", "issues": []})
+
+    rows, comparison, quality = app_module._retry_if_better(
+        [retry_pdf],
+        original_rows,
+        [],
+        original_quality,
+        original_comparison,
+    )
+
+    assert rows == original_rows
+    assert comparison == original_comparison
+    assert quality["retryAttempted"] is True
+    assert quality["retryApplied"] is False
+
+
+def test_labor_compare_skips_quality_retry_for_uploaded_image_only_pdfs(monkeypatch):
+    import bonus_platform.app as app_module
+
+    calls = {"extract": 0}
+
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {"source_file": Path(path).name, "total_amount": 700.00, "warehouse_id": ""}
+            for path in paths
+        ],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_summarize_pdf_text_coverage",
+        lambda paths: {
+            "summary": {
+                "fileCount": len(paths),
+                "textReadableFileCount": 0,
+                "imageOnlyFileCount": len(paths),
+                "textReadablePageCount": 0,
+                "emptyTextPageCount": len(paths),
+                "imageOnlyPdfFiles": [path.name for path in paths],
+            },
+            "files": [
+                {
+                    "sourceFile": path.name,
+                    "pageCount": 1,
+                    "readablePageCount": 0,
+                    "emptyTextPageCount": 1,
+                    "hasTextLayer": False,
+                    "needsOcr": True,
+                    "diagnostic": "image_only_pdf",
+                }
+                for path in paths
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "build_reocr_candidate_plan",
+        lambda *args, **kwargs: {"summary": {"taskCount": 1}, "tasks": [], "reviewableCandidates": []},
+    )
+
+    def fake_extract(pdf_paths, *args, **kwargs):
+        calls["extract"] += 1
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(pdf_paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="WUS042586",
+                employee_name_raw="Rosa Alvarez Minchaca",
+                hours=31.19,
+                amount=701.90,
+                currency="USD",
+                confidence=0.96,
+                evidence_text="Rosa Alvarez Minchaca 31.19 $701.90",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    monkeypatch.setattr(
+        app_module,
+        "calculate_extraction_quality",
+        lambda *args, **kwargs: {
+            "level": "warning",
+            "message": "需要业务确认。",
+            "issues": ["图片识别结果需要确认。"],
+            "metrics": {},
+            "lowConfidenceRows": [],
+        },
+    )
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "OSS", "period_start": "2026-05-11", "period_end": "2026-05-17", "currency": "USD"},
+    ).json()
+    upload = client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("scan.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("账单.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    assert upload.status_code == 200
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    body = client.get(f"/api/labor/runs/{run['id']}").json()
+    assert calls["extract"] == 1
+    assert body["extractionQuality"]["retryAttempted"] is False
+    assert body["extractionQuality"]["retryApplied"] is False
 
 
 def test_labor_recover_stuck_run_marks_retryable_system_interruption(monkeypatch):
@@ -1343,28 +2688,44 @@ def test_labor_recover_stuck_run_marks_retryable_system_interruption(monkeypatch
     assert updates["errorCode"] == "LABOR_EXTRACT_INTERRUPTED"
     assert updates["retryable"] is True
     assert updates["requiresReupload"] is False
-    assert updates["requiresHumanReview"] is False
+    assert updates["businessReviewStatus"] == "pending"
+    assert updates["manualReviewRequired"] is True
+    assert updates["directPaymentAllowed"] is False
+    assert updates["requiresHumanReview"] is True
     assert "重新点击" in updates["nextAction"]
     assert "服务器已重启" in updates["errorMessage"]
 
 
-def test_labor_recover_stuck_run_does_not_block_startup_when_storage_fails(monkeypatch):
+def test_labor_recover_stuck_run_does_not_interrupt_personal_worker(monkeypatch):
     import bonus_platform.app as app_module
 
-    def fail_listing():
-        raise RuntimeError("supabase storage unavailable")
-
-    monkeypatch.setattr(app_module, "list_labor_metadata", fail_listing)
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+    monkeypatch.setattr(app_module, "list_labor_metadata", lambda: [{"id": "labor_active", "status": "抽取中"}])
+    updates: list[tuple[str, dict]] = []
     monkeypatch.setattr(
         app_module,
         "update_labor_metadata",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no rows should be updated")),
+        lambda run_id, payload: updates.append((run_id, payload)),
     )
 
     app_module._recover_stuck_labor_runs()
 
+    assert updates == []
 
-def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(monkeypatch):
+
+def test_labor_stale_extracting_check_accepts_timezone_aware_postgres_timestamp():
+    from datetime import datetime, timezone
+
+    metadata = {
+        "id": "labor_timezone_aware",
+        "status": "抽取中",
+        "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+    assert app_module._check_stale_extracting(metadata) is metadata
+
+
+def test_labor_compare_formal_scope_extracts_every_payable_pdf_when_warehouse_cannot_map(monkeypatch):
     import bonus_platform.app as app_module
 
     captured_paths = []
@@ -1372,7 +2733,7 @@ def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(mon
     monkeypatch.setattr(
         app_module,
         "quick_extract_totals",
-        lambda *args, **kwargs: [{"source_file": "Invoice-5058871.pdf", "total_amount": 50, "warehouse_id": ""}],
+        lambda paths, *args, **kwargs: [{"source_file": paths[0].name, "total_amount": 50, "warehouse_id": ""}],
     )
     monkeypatch.setattr(app_module, "_warehouse_id_from_text_path", lambda *args, **kwargs: False)
 
@@ -1381,7 +2742,7 @@ def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(mon
         return [
             LaborLineItem(
                 source_type="pdf_invoice",
-                source_file="Invoice-5058871.pdf",
+                source_file=Path(pdf_paths[0]).name,
                 source_page_or_row="p1",
                 employee_id="",
                 employee_name_raw="Alice Worker",
@@ -1416,10 +2777,10 @@ def test_labor_compare_falls_back_to_all_pdfs_when_diff_warehouse_cannot_map(mon
 
     assert response.status_code == 200
     body = client.get(f"/api/labor/runs/{run['id']}").json()
-    assert body["status"] == "已生成差异报告"
-    assert len(captured_paths) == 2
-    assert all(name.startswith(("Invoice-5058871_", "Invoice-5058872_")) for name in captured_paths)
-    assert any("无法将异常仓库映射到具体 PDF" in issue for issue in body["extractionQuality"]["issues"])
+    assert body["status"] == "部分核对完成"
+    assert body["batchGuard"]["status"] == "partial_review"
+    assert any(name.startswith("Invoice-5058871_") for name in captured_paths)
+    assert any(name.startswith("Invoice-5058872_") for name in captured_paths)
 
 
 def test_labor_rule_extraction_reads_wage_code_invoice_rows():
@@ -1503,10 +2864,84 @@ $32.84
     assert round(sum(row.amount for row in rows), 2) == 936.04
 
 
+def test_labor_vertical_invoice_rows_include_ca_penalty_payable_lines():
+    from bonus_platform.engine.labor.extract import _extract_vertical_invoice_rows
+
+    rows = _extract_vertical_invoice_rows(
+        {
+            "source_file": "US_ELogistics_Service_Corp__35362.pdf",
+            "page": 1,
+            "text": """
+6/14/2026
+Duenas, Oscar
+1.00
+CAPenalty
+REG
+$20.00
+26.00
+$26.00
+6/14/2026
+Duenas, Oscar
+40.00
+Reg
+REG
+$20.00
+26.00
+$1,040.00
+6/14/2026
+Duenas, Oscar
+6.46
+OT
+OT
+$30.00
+39.00
+$251.94
+6/14/2026
+Duenas, Oscar
+1.72
+Reg
+DT
+$40.00
+52.00
+$89.44
+6/14/2026
+Duenas, Oscar
+0.50
+Meal Premium
+REG
+$20.00
+26.00
+$13.00
+""",
+        },
+        supplier="OSI",
+        period_start="2026-06-08",
+        period_end="2026-06-14",
+        currency="USD",
+    )
+
+    assert len(rows) == 5
+    assert [row.amount for row in rows] == [26.00, 1040.00, 251.94, 89.44, 13.00]
+    assert round(sum(row.amount for row in rows), 2) == 1420.38
+    assert round(sum(row.hours for row in rows), 2) == 49.68
+
+
 def test_labor_compare_response_includes_candidate_matches(monkeypatch):
     import bonus_platform.app as app_module
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": paths[0].name,
+                "total_amount": 50.0,
+                "warehouse_id": "",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+            }
+        ],
+    )
     monkeypatch.setattr(
         app_module,
         "extract_invoice_items",
@@ -1585,12 +3020,36 @@ def test_labor_compare_persists_diagnostics_and_ai_cache_audit_in_report_flow(mo
     monkeypatch.setattr(
         app_module,
         "quick_extract_totals",
-        lambda *args, **kwargs: [{"source_file": "invoice.pdf", "total_amount": 100, "warehouse_id": "1"}],
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": Path(paths[0]).name,
+                "total_amount": 100,
+                "warehouse_id": "1",
+            }
+        ],
     )
     monkeypatch.setattr(app_module, "_labor_cost_summaries", lambda *args, **kwargs: cost_summaries)
     monkeypatch.setattr(app_module, "audit_ai_page_cache_candidates", lambda *args, **kwargs: ai_cache_audit)
     monkeypatch.setattr(app_module, "build_ai_cache_reconciliation_preview", lambda *args, **kwargs: ai_cache_preview)
     monkeypatch.setattr(app_module, "build_reocr_candidate_plan", lambda *args, **kwargs: reocr_plan)
+    monkeypatch.setattr(
+        app_module,
+        "extract_invoice_items",
+        lambda paths, *args, **kwargs: [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="WUS000001",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=100,
+                currency="USD",
+                confidence=0.99,
+                warehouse_id="1",
+            )
+        ],
+    )
 
     def fake_build_labor_report(*args, **kwargs):
         report_path = Path(args[0])
@@ -1619,6 +3078,18 @@ def test_labor_compare_persists_diagnostics_and_ai_cache_audit_in_report_flow(mo
     updated = app_module._perform_labor_extract_compare(run["id"])
 
     assert updated["status"] == "已生成差异报告"
+    assert updated["presentation"]["schemaVersion"] == 1
+    assert updated["presentation"]["summary"]["employeeCount"] == 1
+    assert updated["presentation"]["summary"]["differenceEmployeeCount"] == 0
+    assert updated["presentation"]["summary"]["reviewItemCount"] == 0
+    assert updated["presentation"]["summary"]["excelRecordCount"] == 1
+    assert captured_report_kwargs["presentation"] == updated["presentation"]
+    assert updated["batchGuard"]["status"] == "ok"
+    assert updated["machineCheckStatus"] == "passed"
+    assert updated["businessReviewStatus"] == "pending"
+    assert updated["requiresHumanReview"] is True
+    assert updated["directPaymentAllowed"] is False
+    assert updated["resultInputFingerprint"] == app_module._labor_result_input_fingerprint(updated)
     business_report = updated["files"]["businessReport"]
     assert business_report["filename"].endswith(".html")
     assert business_report["label"] == "业务核对报告"
@@ -1644,7 +3115,7 @@ def test_labor_compare_persists_diagnostics_and_ai_cache_audit_in_report_flow(mo
 def test_labor_compare_creates_profile_candidate_without_saving_profile(monkeypatch):
     import bonus_platform.app as app_module
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda paths, *args, **kwargs: _unresolved_quick_totals(paths))
     monkeypatch.setattr(
         app_module,
         "extract_invoice_items",
@@ -1691,6 +3162,52 @@ def test_labor_compare_creates_profile_candidate_without_saving_profile(monkeypa
     assert candidates[0]["evidence"][0]["sourcePageOrRow"] == "p1"
 
 
+def test_labor_profile_candidate_confirm_rejects_auto_generated_draft():
+    import bonus_platform.app as app_module
+
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "Draft Workforce", "period_start": "2026-05-18", "period_end": "2026-05-24", "currency": "USD"},
+    ).json()
+    candidate = app_module._build_profile_candidate(
+        run["id"],
+        "Draft Workforce",
+        {
+            "key": "draft-workforce",
+            "aliases": ["draft workforce"],
+            "version": 1,
+            "status": "draft",
+            "created_from": "auto_generation",
+        },
+        [],
+    )
+    app_module.update_labor_metadata(
+        run["id"],
+        {
+            "profileGovernance": {
+                "candidates": [candidate],
+                "replaySummaries": {
+                    candidate["candidateId"]: {
+                        "decision": "ready_for_user_confirmation",
+                        "summary": {"compatibleCount": 1, "regressionCount": 0},
+                    }
+                },
+                "activeProfiles": [],
+                "rolledBackProfiles": [],
+            }
+        },
+    )
+
+    response = client.post(
+        f"/api/labor/runs/{run['id']}/profile-candidates/{candidate['candidateId']}/confirm",
+        json={"confirmedBy": "ops-user", "reason": "metadata replay only"},
+    )
+
+    assert response.status_code == 400
+    assert "draft" in response.json()["detail"].lower()
+
+
 def test_labor_profile_candidate_api_confirms_and_rolls_back():
     import bonus_platform.app as app_module
 
@@ -1708,6 +3225,10 @@ def test_labor_profile_candidate_api_confirms_and_rolls_back():
             "prompt_notes": ["Extract wage code rows."],
             "image_page_policy": "first_page_only",
             "version": 1,
+            "status": "approved",
+            "approvedBy": "payroll-admin@example.com",
+            "approvedAt": "2026-07-15T09:30:00+08:00",
+            "created_from": "manual_review",
         },
         [
             LaborLineItem(source_type="pdf_invoice", source_file="Invoice-5058871.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=0.95, evidence_text="Alice Worker 8 $100")
@@ -1741,7 +3262,16 @@ def test_labor_profile_candidate_api_confirms_and_rolls_back():
             "periodEnd": "2026-05-24",
             "reconciliationDiagnostics": {"level": "ok", "issues": []},
             "extractionQuality": {"level": "ok", "issues": []},
-            "comparisonSummary": {"exceptionCount": 0},
+            "comparisonSummary": {
+                "exceptionCount": 0,
+                "conclusionLevel": "pass",
+                "canRelease": True,
+                "machineCheckStatus": "passed",
+            },
+            "machineCheckStatus": "passed",
+            "batchGuard": {"status": "ok", "allowReleasableReport": True},
+            "reconciliationDiagnostics": {"level": "ok", "issues": []},
+            "extractionQuality": {"level": "ok", "issues": []},
         }
     ]
     original_list = app_module.list_labor_metadata
@@ -1909,7 +3439,7 @@ def test_labor_excel_aggregation_preserves_cross_warehouse_employee_rows():
     assert by_warehouse["28"].hours == 40.0
 
 
-def test_labor_allocation_candidate_confirm_and_rollback_updates_readiness():
+def test_labor_allocation_candidate_confirm_and_rollback_updates_readiness(tmp_path):
     import bonus_platform.app as app_module
 
     client = TestClient(app)
@@ -1934,19 +3464,36 @@ def test_labor_allocation_candidate_confirm_and_rollback_updates_readiness():
         "recommendation": "员工总额可抵消，但仓库归属金额不一致，需按仓库复核发票与账单归属。",
         "auditTrail": [{"action": "created", "actor": "system", "reason": "cross_warehouse_employee_allocation_detected"}],
     }
-    app_module.update_labor_metadata(
-        run["id"],
-        {
+    report_path = tmp_path / "report.xlsx"
+    report_path.write_bytes(b"allocation-report")
+    report = app_module.attach_labor_file(run["id"], report_path, "差异报告")
+    baseline = {
             "status": "已生成差异报告",
-            "comparisonSummary": {"exceptionCount": 0},
-            "diffDownloadUrl": "/api/labor/runs/sample/download/report.xlsx",
+            "comparisonSummary": {
+                "exceptionCount": 0,
+                "conclusionLevel": "pass",
+                "canRelease": True,
+                "machineCheckStatus": "passed",
+                "pdfEmployeeCount": 1,
+                "excelEmployeeCount": 1,
+            },
+            "comparisonRows": [{"employeeName": "Synthetic Worker", "matchStatus": "通过"}],
+            "machineCheckStatus": "passed",
+            "batchGuard": {"status": "ok", "allowReleasableReport": True},
+            "reconciliationDiagnostics": {"level": "ok", "issues": []},
+            "extractionQuality": {"level": "ok", "issues": []},
+            "files": {"diffReport": report},
+            "diffDownloadUrl": report["downloadUrl"],
             "allocationGovernance": {
                 "candidates": [candidate],
                 "activeAllocations": [],
                 "rolledBackAllocations": [],
             },
-        },
+        }
+    baseline["resultInputFingerprint"] = app_module._labor_result_input_fingerprint(
+        {**run, **baseline}
     )
+    app_module.update_labor_metadata(run["id"], baseline)
 
     before = client.get(f"/api/labor/runs/{run['id']}").json()
     assert before["readinessGate"]["summary"]["pendingGovernanceCount"] == 1
@@ -1962,6 +3509,8 @@ def test_labor_allocation_candidate_confirm_and_rollback_updates_readiness():
     assert confirmed_body["decision"] == "confirmed"
     assert confirmed_body["requiresConfirmation"] is False
     assert confirmed_body["readinessGate"]["summary"]["pendingGovernanceCount"] == 0
+    assert confirmed_body["readinessGate"]["status"] == "blocked"
+    assert any(issue["code"] == "stale_result_inputs" for issue in confirmed_body["readinessGate"]["issues"])
     after_confirm = client.get(f"/api/labor/runs/{run['id']}").json()
     assert after_confirm["allocationGovernance"]["activeAllocations"][0]["confirmedBy"] == "ops-user"
     assert after_confirm["allocationGovernance"]["candidates"][0]["status"] == "confirmed"
@@ -2256,7 +3805,7 @@ def test_labor_compare_uses_active_profile_from_current_run(monkeypatch):
     import bonus_platform.app as app_module
 
     captured_profiles = []
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda paths, *args, **kwargs: _unresolved_quick_totals(paths))
 
     def fake_extract(*args, **kwargs):
         captured_profiles.append(kwargs.get("supplier_profile_override"))
@@ -2290,6 +3839,10 @@ def test_labor_compare_uses_active_profile_from_current_run(monkeypatch):
                             "prompt_notes": ["Active run profile guidance."],
                             "image_page_policy": "first_page_only",
                             "version": 2,
+                            "status": "approved",
+                            "approvedBy": "payroll-admin@example.com",
+                            "approvedAt": "2026-07-15T09:30:00+08:00",
+                            "created_from": "manual_review",
                         },
                     }
                 ],
@@ -2311,7 +3864,8 @@ def test_labor_compare_uses_active_profile_from_current_run(monkeypatch):
 
     updated = app_module._perform_labor_extract_compare(run["id"])
 
-    assert updated["status"] == "已生成差异报告"
+    assert updated["status"] == "PDF识别未完成"
+    assert updated["batchGuard"]["status"] == "pdf_recognition_incomplete"
     assert captured_profiles
     assert captured_profiles[0].key == "workforce"
     assert captured_profiles[0].version == 2
@@ -2321,7 +3875,7 @@ def test_labor_compare_uses_active_profile_from_current_run(monkeypatch):
 def test_labor_low_confidence_rows_create_correction_candidates(monkeypatch):
     import bonus_platform.app as app_module
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda paths, *args, **kwargs: _unresolved_quick_totals(paths))
     monkeypatch.setattr(
         app_module,
         "extract_invoice_items",
@@ -2891,14 +4445,26 @@ def test_labor_reocr_candidate_replay_api_returns_ready_for_confirmation():
     assert applied_body["preflight"]["projected"]["exceptionCount"] == 0
     assert applied_body["preflight"]["affectedScopeCount"] == 1
     assert applied_body["preflight"]["affectedEmployeeCount"] == 1
-    assert applied_body["preflight"]["blockingAfterApply"] is False
-    assert applied_body["preflight"]["postApplyWarnings"] == []
+    assert applied_body["preflight"]["blockingAfterApply"] is True
+    assert any("完整核对" in warning for warning in applied_body["preflight"]["postApplyWarnings"])
+    assert applied_body["comparisonSummary"]["canRelease"] is False
+    assert applied_body["comparisonSummary"]["machineCheckStatus"] == "needs_review"
+    assert applied_body["readinessGate"]["status"] == "blocked"
     assert client.get(applied_body["reportFile"]["downloadUrl"]).status_code == 200
     after_apply = client.get(f"/api/labor/runs/{run['id']}").json()
-    assert after_apply["status"] == "已生成差异报告"
+    assert after_apply["status"] == "部分核对完成"
     assert after_apply["comparisonSummary"]["pdfAmountTotal"] == 100
     assert after_apply["comparisonSummary"]["exceptionCount"] == 0
+    assert after_apply["comparisonSummary"]["conclusionLevel"] == "warning"
+    assert after_apply["comparisonSummary"]["canRelease"] is False
+    assert after_apply["machineCheckStatus"] == "needs_review"
+    assert after_apply["businessReviewStatus"] == "pending"
+    assert after_apply["directPaymentAllowed"] is False
+    assert after_apply["batchGuard"]["status"] == "reocr_revalidation_required"
+    assert after_apply["batchGuard"]["allowReleasableReport"] is False
     assert after_apply["comparisonRows"][0]["matchStatus"] == "通过"
+    assert after_apply["presentation"]["summary"]["employeeCount"] == 1
+    assert after_apply["presentation"]["summary"]["reviewItemCount"] == 0
     assert after_apply["reocrReplayGovernance"]["activeCandidates"][0]["status"] == "applied"
     assert after_apply["files"]["diffReport"]["filename"].endswith(".xlsx")
     assert after_apply["diffDownloadUrl"] == after_apply["files"]["diffReport"]["downloadUrl"]
@@ -2917,13 +4483,14 @@ def test_labor_reocr_candidate_replay_api_returns_ready_for_confirmation():
     assert rolled_back_body["auditTrail"][-1]["action"] == "rolled_back"
     after_rollback = client.get(f"/api/labor/runs/{run['id']}").json()
     assert (after_rollback.get("comparisonSummary") or {}) == before_summary
+    assert after_rollback.get("presentation") == {}
     assert "diffReport" not in after_rollback.get("files", {})
     assert after_rollback.get("diffDownloadUrl", "") == ""
     assert after_rollback["reocrReplayGovernance"]["activeCandidates"] == []
     assert after_rollback["reocrReplayGovernance"]["rolledBackCandidates"][0]["candidateId"] == candidate_id
 
 
-def test_labor_material_reocr_plan_short_circuits_expensive_formal_extraction(monkeypatch):
+def test_labor_material_replay_blocks_incomplete_employee_detail_and_preserves_pdf_provenance(monkeypatch):
     import bonus_platform.app as app_module
 
     client = TestClient(app)
@@ -2948,10 +4515,24 @@ def test_labor_material_reocr_plan_short_circuits_expensive_formal_extraction(mo
     )
     app_module.update_labor_metadata(run["id"], {"materialReplaySource": {"batchKey": "prompt"}})
 
-    def fail_if_quick_extract_runs(*args, **kwargs):
-        raise AssertionError("quick_extract_totals should not run when material re-OCR tasks are already required")
+    quick_calls: list[list[str]] = []
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", fail_if_quick_extract_runs)
+    def fake_quick_extract(paths, *args, **kwargs):
+        quick_calls.append([Path(path).name for path in paths])
+        return [
+            {
+                "source_file": Path(path).name,
+                "warehouse_id": str(index),
+                "total_amount": 0.0,
+                "authoritative": False,
+                "evidence_status": "needs_review",
+                "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+            }
+            for index, path in enumerate(paths, start=1)
+        ]
+
+    monkeypatch.setattr(app_module, "quick_extract_totals", fake_quick_extract)
+    monkeypatch.setattr(app_module, "extract_invoice_items", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         app_module,
         "_summarize_pdf_text_coverage",
@@ -2990,13 +4571,19 @@ def test_labor_material_reocr_plan_short_circuits_expensive_formal_extraction(mo
 
     updated = app_module._perform_labor_extract_compare(run["id"])
 
-    assert updated["status"] == "待图片识别复核"
-    assert updated["stage"] == "待图片识别复核"
+    assert len(quick_calls) == 1
+    assert len(quick_calls[0]) == 2
+    assert updated["status"] == "PDF识别未完成"
+    assert updated["stage"] == "生成报告"
     assert updated["reviewQueues"]["primary"] == "reocr"
     assert updated["reviewQueues"]["reocr"]["taskCount"] == 1
     assert updated["extractionQuality"]["level"] == "critical"
     assert updated["pdfExtractedRows"] == []
-    assert updated["files"]["diffReport"]["label"] == "待图片识别复核报告"
+    assert updated["files"]["diffReport"]["label"] == "PDF识别诊断报告"
+    assert len(updated["invoiceEvidenceAudit"]) == 2
+    assert {row["reconciliationStatus"] for row in updated["warehouseComparison"]["rows"]} == {"needs_review"}
+    assert all(row["pdfEvidenceFile"] for row in updated["warehouseComparison"]["rows"])
+    assert not any(row["reconciliationStatus"] == "missing_pdf_invoice" for row in updated["warehouseComparison"]["rows"])
 
 
 def test_labor_reocr_batch_preview_and_apply_updates_official_report():
@@ -3094,7 +4681,7 @@ def test_labor_reocr_batch_preview_and_apply_updates_official_report():
                 ],
                 "rolledBackCandidates": [],
             },
-        },
+        }
     )
 
     preview = client.post(f"/api/labor/runs/{run['id']}/reocr-candidates/batch-preview", json={})
@@ -3116,7 +4703,10 @@ def test_labor_reocr_batch_preview_and_apply_updates_official_report():
     assert preview_body["preflight"]["affectedEmployeeCount"] == 2
     assert preview_body["preflight"]["coverageCompleteAfterApply"] is False
     assert preview_body["preflight"]["blockingAfterApply"] is True
-    assert preview_body["preflight"]["postApplyWarnings"] == ["仍有 1 个图片识别复核任务未采纳，交付状态将保持阻断。"]
+    assert preview_body["preflight"]["postApplyWarnings"] == [
+        "仍有 1 个图片识别复核任务未采纳，交付状态将保持阻断。",
+        "采纳后必须重新执行整批完整核对，重新生成员工明细覆盖、金额闭合和诊断门禁。",
+    ]
 
     applied = client.post(
         f"/api/labor/runs/{run['id']}/reocr-candidates/batch-apply",
@@ -3132,10 +4722,16 @@ def test_labor_reocr_batch_preview_and_apply_updates_official_report():
     assert body["reportFile"]["label"] == "差异报告"
     assert client.get(body["reportFile"]["downloadUrl"]).status_code == 200
     refreshed = client.get(f"/api/labor/runs/{run['id']}").json()
-    assert refreshed["status"] == "已生成差异报告"
+    assert refreshed["status"] == "部分核对完成"
     assert refreshed["comparisonSummary"]["pdfAmountTotal"] == 300
     assert refreshed["comparisonSummary"]["exceptionCount"] == 0
+    assert refreshed["comparisonSummary"]["conclusionLevel"] == "warning"
+    assert refreshed["comparisonSummary"]["canRelease"] is False
+    assert refreshed["machineCheckStatus"] == "needs_review"
+    assert refreshed["batchGuard"]["status"] == "reocr_revalidation_required"
     assert len(refreshed["comparisonRows"]) == 2
+    assert refreshed["presentation"]["summary"]["employeeCount"] == 2
+    assert refreshed["presentation"]["summary"]["reviewItemCount"] == 0
     assert {item["status"] for item in refreshed["reocrReplayGovernance"]["activeCandidates"]} == {"applied"}
     assert refreshed["diffDownloadUrl"] == refreshed["files"]["diffReport"]["downloadUrl"]
     assert refreshed["reocrAdoption"]["preflight"] == preview_body["preflight"]
@@ -3212,18 +4808,22 @@ def test_labor_readiness_gate_blocks_until_reocr_plan_is_fully_applied():
     ).json()
     report_url = f"/api/labor/runs/{run['id']}/download/report.xlsx"
     (app_module.get_labor_run_dir(run["id"]) / "report.xlsx").write_bytes(b"report")
-    app_module.update_labor_metadata(
-        run["id"],
-        {
+    baseline = {
             "status": "已生成差异报告",
             "comparisonSummary": {
                 "conclusionLevel": "pass",
                 "conclusionMessage": "核对通过",
+                "canRelease": True,
+                "machineCheckStatus": "passed",
                 "exceptionCount": 0,
                 "pdfAmountTotal": 300,
                 "excelAmountTotal": 300,
                 "amountDeltaTotal": 0,
             },
+            "machineCheckStatus": "passed",
+            "batchGuard": {"status": "ok", "allowReleasableReport": True},
+            "reconciliationDiagnostics": {"level": "ok", "issues": []},
+            "extractionQuality": {"level": "ok", "issues": []},
             "files": {"diffReport": {"filename": "report.xlsx", "downloadUrl": report_url}},
             "diffDownloadUrl": report_url,
             "reocrPlan": {
@@ -3240,8 +4840,11 @@ def test_labor_readiness_gate_blocks_until_reocr_plan_is_fully_applied():
                 "replays": [],
                 "rolledBackCandidates": [],
             },
-        },
+        }
+    baseline["resultInputFingerprint"] = app_module._labor_result_input_fingerprint(
+        {**run, **baseline}
     )
+    app_module.update_labor_metadata(run["id"], baseline)
 
     blocked = client.get(f"/api/labor/runs/{run['id']}").json()["readinessGate"]
     assert blocked["status"] == "blocked"
@@ -3264,11 +4867,13 @@ def test_labor_readiness_gate_blocks_until_reocr_plan_is_fully_applied():
         },
     )
 
-    ready = client.get(f"/api/labor/runs/{run['id']}").json()["readinessGate"]
-    assert ready["status"] == "ready"
-    assert ready["ready"] is True
-    assert ready["summary"]["blockedCount"] == 0
-    assert ready["summary"]["pendingGovernanceCount"] == 0
+    stale = client.get(f"/api/labor/runs/{run['id']}").json()["readinessGate"]
+    assert stale["status"] == "blocked"
+    assert stale["ready"] is False
+    assert stale["businessReviewRequired"] is True
+    assert stale["directPaymentAllowed"] is False
+    assert stale["summary"]["pendingGovernanceCount"] == 0
+    assert any(issue["code"] == "stale_result_inputs" for issue in stale["issues"])
 
 
 def test_labor_readiness_gate_blocks_confirmed_reocr_when_no_plan_requires_apply_or_rollback():
@@ -3450,8 +5055,11 @@ def test_labor_reocr_candidate_replay_api_blocks_employee_level_exceptions():
     assert body["summary"]["exceptionCount"] > 0
     assert body["blockers"] == ["employee_level_exceptions"]
     assert body["exceptionRows"]
+    assert body["nameGate"]["summary"]["confirmed"] == 0
+    assert body["nameGate"]["matches"][0]["status"] in {"review", "unmatched"}
     refreshed = client.get(f"/api/labor/runs/{run['id']}").json()
     assert refreshed["reocrReplayGovernance"]["replays"][0]["decision"] == "blocked_by_replay"
+    assert refreshed["reocrReplayGovernance"]["replays"][0]["nameGate"]["summary"]["confirmed"] == 0
 
     confirmed = client.post(
         f"/api/labor/runs/{run['id']}/reocr-candidates/confirm",
@@ -3586,7 +5194,7 @@ def test_labor_reocr_candidate_replay_cache_uses_local_ai_cache_without_applying
     assert body["cacheFiles"] == [cache_path.name]
     refreshed = client.get(f"/api/labor/runs/{run['id']}").json()
     assert refreshed["reocrReplayGovernance"]["replays"][0]["mode"] == "ai_cache_candidate_replay"
-    assert "comparisonSummary" not in refreshed
+    assert refreshed["comparisonSummary"] == {}
 
 
 def test_labor_reocr_candidate_batch_replay_cache_records_each_candidate_without_confirming():
@@ -3669,7 +5277,7 @@ def test_labor_reocr_candidate_batch_replay_cache_records_each_candidate_without
     refreshed = client.get(f"/api/labor/runs/{run['id']}").json()
     assert [item["mode"] for item in refreshed["reocrReplayGovernance"]["replays"]] == ["ai_cache_candidate_replay", "ai_cache_candidate_replay"]
     assert refreshed["reocrReplayGovernance"].get("activeCandidates", []) == []
-    assert "comparisonSummary" not in refreshed
+    assert refreshed["comparisonSummary"] == {}
 
 
 def test_labor_reocr_candidate_template_api_generates_downloadable_csv_from_excel_rows():
@@ -3843,7 +5451,7 @@ def test_labor_reocr_candidate_batch_upload_replays_each_source_scope_without_co
     assert {item["decision"] for item in refreshed["reocrReplayGovernance"]["replays"]} == {"ready_for_user_confirmation", "blocked_by_replay"}
     assert refreshed["reocrReplayGovernance"].get("activeCandidates", []) == []
     assert refreshed["files"]["reocrCandidateFiles"][0]["label"] == "图片识别批量结果文件"
-    assert "comparisonSummary" not in refreshed
+    assert refreshed["comparisonSummary"] == {}
 
 
 def test_labor_reocr_candidate_batch_upload_reports_missing_planned_tasks():
@@ -4045,12 +5653,24 @@ def test_labor_rule_candidate_auto_replay_uses_historical_run_metadata(monkeypat
 def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(monkeypatch):
     import bonus_platform.app as app_module
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        app_module,
+        "quick_extract_totals",
+        lambda paths, *args, **kwargs: [
+            {
+                "source_file": paths[0].name,
+                "total_amount": 50.0,
+                "warehouse_id": "",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+            }
+        ],
+    )
     monkeypatch.setattr(
         app_module,
         "extract_invoice_items",
         lambda *args, **kwargs: [
-            LaborLineItem(source_type="pdf_invoice", source_file="scan.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alvarez Mitrache, Rosa", hours=10, amount=100, currency="USD", confidence=0.95, evidence_text="Total $100")
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(args[0][0]).name, source_page_or_row="p1", employee_id="", employee_name_raw="Alvarez Mitrache, Rosa", hours=10, amount=100, currency="USD", confidence=0.95, evidence_text="Total $100")
         ],
     )
     client = TestClient(app)
@@ -4074,16 +5694,18 @@ def test_labor_compare_records_extraction_quality_warning_for_misaligned_totals(
 
     assert response.status_code == 200
     body = client.get(f"/api/labor/runs/{run['id']}").json()
-    assert body["status"] == "已生成差异报告"
-    assert body["extractionQuality"]["level"] == "warning"
+    assert body["status"] == "部分核对完成"
+    assert body["batchGuard"]["status"] == "partial_review"
+    assert body["extractionQuality"]["level"] == "critical"
+    assert body["warehouseComparison"]["rows"][0]["reconciliationStatus"] == "needs_review"
     assert any("总金额差异" in issue for issue in body["extractionQuality"]["issues"])
-    assert "请复核 PDF 抽取明细" in body["extractionQuality"]["message"]
+    assert "必须人工复核" in body["extractionQuality"]["message"]
 
 
 def test_labor_compare_uses_excel_candidates_on_initial_extract(monkeypatch):
     import bonus_platform.app as app_module
 
-    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: [])
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda paths, *args, **kwargs: _unresolved_quick_totals(paths))
 
     calls = []
 
@@ -4117,7 +5739,8 @@ def test_labor_compare_uses_excel_candidates_on_initial_extract(monkeypatch):
     body = client.get(f"/api/labor/runs/{run['id']}").json()
     assert len(calls) == 1
     assert calls[0]["expected_rows"][0]["employee_name"] == "Rosa Alvarez Minchaca"
-    assert body["extractionQuality"]["level"] == "ok"
+    assert body["extractionQuality"]["level"] == "critical"
+    assert body["warehouseComparison"]["rows"][0]["reconciliationStatus"] == "needs_review"
     assert body["extractionQuality"].get("retryApplied") is not True
     assert body["comparisonSummary"]["exceptionCount"] == 0
 
@@ -4198,15 +5821,7 @@ def test_labor_upload_syncs_files_to_supabase_storage(monkeypatch, tmp_path):
     def fake_sync(run_id, run_dir):
         synced.append((run_id, sorted(path.name for path in run_dir.iterdir() if path.is_file())))
 
-    def fake_sync_files(run_id, run_dir, relative_paths):
-        synced.append((run_id, sorted(Path(path).name for path in relative_paths)))
-
-    def fake_sync_metadata(run_id, run_dir, metadata):
-        synced.append((run_id, ["metadata.json"]))
-
     monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync)
-    monkeypatch.setattr(labor_runs, "sync_labor_files_to_persistent", fake_sync_files)
-    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
 
     client = TestClient(app)
     run = client.post(
@@ -4224,7 +5839,7 @@ def test_labor_upload_syncs_files_to_supabase_storage(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json()["storage"]["backend"] == "supabase"
-    assert any(any(name.endswith(".pdf") for name in names) and any(name.endswith(".xlsx") for name in names) for _, names in synced)
+    assert any("metadata.json" in names and any(name.endswith(".pdf") for name in names) for _, names in synced)
 
 
 def test_labor_extract_task_restores_persistent_files_before_processing(monkeypatch, tmp_path):
@@ -4253,19 +5868,7 @@ def test_labor_extract_task_restores_persistent_files_before_processing(monkeypa
             target.write_bytes(content)
         return bool(snapshots.get(run_id))
 
-    def fake_sync_files(run_id, run_dir, relative_paths):
-        snapshot = snapshots.setdefault(run_id, {})
-        for relative in relative_paths:
-            path = run_dir / relative
-            if path.is_file():
-                snapshot[Path(relative).as_posix()] = path.read_bytes()
-
-    def fake_sync_metadata(run_id, run_dir, metadata):
-        snapshots.setdefault(run_id, {})["metadata.json"] = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
-
     monkeypatch.setattr(labor_runs, "sync_labor_run_to_persistent", fake_sync_to)
-    monkeypatch.setattr(labor_runs, "sync_labor_files_to_persistent", fake_sync_files)
-    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
     monkeypatch.setattr(app_module, "sync_labor_run_from_persistent", fake_sync_from)
 
     client = TestClient(app)
@@ -4339,6 +5942,66 @@ def test_labor_extract_endpoint_returns_queued_task_status(monkeypatch):
     body = response.json()
     assert body["asyncTask"]["status"] == "queued"
     assert body["asyncTask"]["statusLabel"] == "待处理"
+    assert body["businessReviewStatus"] == "pending"
+    assert body["manualReviewRequired"] is True
+    assert body["directPaymentAllowed"] is False
+    assert body["requiresHumanReview"] is True
+
+
+def test_labor_personal_worker_job_carries_required_worker_version(monkeypatch):
+    captured = {}
+    monkeypatch.setenv("SIGMA_LABOR_REQUIRED_WORKER_VERSION", "0.3.0")
+    monkeypatch.setattr(app_module, "_uses_personal_labor_worker", lambda: True)
+
+    def fake_enqueue(
+        run_id,
+        *,
+        owner_user_id,
+        required_worker_version="",
+        max_attempts=3,
+        task_generation_id="",
+    ):
+        captured.update(
+            {
+                "runId": run_id,
+                "ownerUserId": owner_user_id,
+                "requiredWorkerVersion": required_worker_version,
+                "taskGenerationId": task_generation_id,
+            }
+        )
+        return {
+            "id": "labor_job_test",
+            "runId": run_id,
+            "ownerUserId": owner_user_id,
+            "status": "queued",
+            "requiredWorkerVersion": required_worker_version,
+            "taskGenerationId": task_generation_id,
+        }
+
+    monkeypatch.setattr(app_module, "enqueue_labor_worker_job", fake_enqueue)
+    client = TestClient(app)
+    run = client.post(
+        "/api/labor/runs",
+        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
+    ).json()
+    client.post(
+        f"/api/labor/runs/{run['id']}/files",
+        files=[
+            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
+            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        ],
+    )
+    client.post(
+        f"/api/labor/runs/{run['id']}/mapping",
+        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    )
+
+    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+
+    assert response.status_code == 200
+    assert captured["requiredWorkerVersion"] == app_module.OVERSEAS_LABOR_REQUIRED_WORKER_VERSION
+    assert captured["taskGenerationId"]
+    assert response.json()["workerTask"]["requiredWorkerVersion"] == app_module.OVERSEAS_LABOR_REQUIRED_WORKER_VERSION
 
 
 def test_labor_extract_endpoint_reuses_running_task(monkeypatch):
@@ -4383,72 +6046,704 @@ def test_labor_extract_endpoint_reuses_running_task(monkeypatch):
     assert body["asyncTask"]["status"] == "running"
 
 
-def test_labor_extract_endpoint_enqueues_worker_job_in_worker_mode(monkeypatch):
-    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
-    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "production")
-    monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda run_id: (_ for _ in ()).throw(AssertionError("inline worker must not run")))
-
-    def fail_executor(*args, **kwargs):
-        raise AssertionError("Vercel executor must not run in worker mode")
-
-    monkeypatch.setattr(asyncio.get_event_loop(), "run_in_executor", fail_executor)
-    client = TestClient(app)
-    run = client.post(
-        "/api/labor/runs",
-        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
-    ).json()
-    client.post(
-        f"/api/labor/runs/{run['id']}/files",
-        files=[
-            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
-            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
-        ],
+def test_labor_extract_endpoint_clears_stale_invoice_evidence_audit_when_queued(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
     )
-    client.post(
-        f"/api/labor/runs/{run['id']}/mapping",
-        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+    app_module.update_labor_metadata(
+        run["id"],
+        {
+            "status": "已生成差异报告",
+            "invoiceEvidenceAudit": [{"source_file": "stale.pdf", "authoritative": True}],
+        },
     )
+    monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda run_id: None)
 
     response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
 
-    assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "抽取中"
-    assert body["asyncTask"]["status"] == "queued"
-    assert body["asyncTask"]["jobId"].startswith("labor_job_")
+    assert response.status_code == 200
+    assert response.json()["invoiceEvidenceAudit"] == []
+    assert client.get(f"/api/labor/runs/{run['id']}").json()["invoiceEvidenceAudit"] == []
 
 
-def test_labor_extract_endpoint_requires_durable_worker_queue_on_vercel(monkeypatch):
-    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "worker")
-    monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "production")
-    monkeypatch.setenv("VERCEL", "1")
-    monkeypatch.delenv("SIGMA_LABOR_JOB_DATABASE_URL", raising=False)
-    monkeypatch.delenv("LABOR_DATABASE_URL", raising=False)
-    monkeypatch.delenv("ADMIN_DATABASE_URL", raising=False)
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    client = TestClient(app)
-    run = client.post(
-        "/api/labor/runs",
-        json={"supplier_name": "ONESOURCE", "period_start": "2026-06-17", "period_end": "2026-06-17", "currency": "USD"},
-    ).json()
-    client.post(
-        f"/api/labor/runs/{run['id']}/files",
-        files=[
-            ("pdf_files", ("invoice.pdf", b"%PDF-1.4\n", "application/pdf")),
-            ("workbook_files", ("bill.xlsx", _excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+def test_labor_run_retains_fresh_invoice_evidence_audit_when_later_stage_fails(monkeypatch):
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    app_module.update_labor_metadata(
+        run["id"],
+        {"invoiceEvidenceAudit": [{"source_file": "stale.pdf", "authoritative": True}]},
+    )
+    fresh_audit: list[dict] = []
+
+    def fake_quick_extract(paths, *args, **kwargs):
+        fresh_audit.extend(
+            [
+                {
+                    "source_file": Path(paths[0]).name,
+                    "warehouse_id": "1",
+                    "total_amount": 100.0,
+                    "authoritative": True,
+                    "evidence_status": "authoritative",
+                    "page_evidence": [{"page": 1, "role": "invoice_total"}],
+                }
+            ]
+        )
+        return list(fresh_audit)
+
+    def fail_after_stage1(*args, **kwargs):
+        persisted = client.get(f"/api/labor/runs/{run['id']}").json()
+        assert persisted["invoiceEvidenceAudit"] == fresh_audit
+        raise RuntimeError("comparison failed after invoice evidence")
+
+    monkeypatch.setattr(app_module, "quick_extract_totals", fake_quick_extract)
+    monkeypatch.setattr(app_module, "compare_by_warehouse", fail_after_stage1)
+
+    result = app_module._run_labor_extract_compare(run["id"])
+    saved = client.get(f"/api/labor/runs/{run['id']}").json()
+
+    assert result is False
+    assert saved["status"] == "抽取失败"
+    assert saved["invoiceEvidenceAudit"] == fresh_audit
+    assert "comparison failed after invoice evidence" in saved["errorMessage"]
+
+
+def test_labor_structure_fallback_promotes_unknown_language_invoice(monkeypatch):
+    totals = [
+        {
+            "source_file": "invoice.pdf",
+            "warehouse_id": "",
+            "total_amount": 0.0,
+            "authoritative": False,
+            "pdf_type": "unknown",
+            "evidence_status": "needs_review",
+            "page_evidence": [{"page": 1, "role": "unknown"}],
+        }
+    ]
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+    monkeypatch.setattr(
+        labor_structure,
+        "extract_page_texts",
+        lambda _: [
+            "1 A One 8 Unit10,000 20,00\n"
+            "2 B Two 8 Unit10,000 20,00\n"
+            "3 C Three 8 Unit10,000 20,00\n"
+            "4 D Four 8 Unit10,000 20,00\n"
+            "5 E Five 8 Unit10,000 20,00\n"
+            "100,00 19,00 119,00"
         ],
     )
-    client.post(
-        f"/api/labor/runs/{run['id']}/mapping",
-        json={"sheet_name": "员工账单", "mapping": {"employeeId": "工号", "name": "姓名", "hours": "时长总计(H)", "amount": "费用总计(含税)", "currency": "币种"}},
+
+    expected_row_counts = []
+    ai_extract_calls = []
+
+    def fake_extract(paths, *args, **kwargs):
+        ai_extract_calls.append([Path(path).name for path in paths])
+        expected_row_counts.append(len(kwargs.get("expected_rows") or []))
+        source_file = Path(paths[0]).name
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=source_file,
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw=name,
+                hours=8,
+                amount=20,
+                currency="EUR",
+                confidence=0.95,
+                evidence_text=name,
+                warehouse_id="",
+            )
+            for name in ["A One", "B Two", "C Three", "D Four", "E Five"]
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf"],
+        workbook_bytes=_excel_bytes_for_structure_fallback(),
     )
+    stored_name = Path(client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"][0]["path"]).name
+    totals[0]["source_file"] = stored_name
 
-    response = client.post(f"/api/labor/runs/{run['id']}/extract-and-compare")
+    saved = app_module._perform_labor_extract_compare(run["id"])
 
-    assert response.status_code == 503
-    detail = response.json()["detail"]
-    assert detail["errorCode"] == "LABOR_WORKER_QUEUE_UNAVAILABLE"
-    assert "ADMIN_DATABASE_URL" in detail["nextAction"]
+    promoted = saved["invoiceEvidenceAudit"][0]
+    assert promoted["total_amount"] == 100.0
+    assert promoted["warehouse_id"] == "15"
+    assert promoted["authoritative"] is True
+    assert len(saved["pdfExtractedRows"]) == 5
+    assert saved["structureReconciliation"]["reconciledFiles"] == [stored_name]
+    assert saved["warehouseComparison"]["summary"]["totalPassed"] is True
+    assert ai_extract_calls == []
+    assert expected_row_counts == []
+    assert saved["status"] == "待币种确认"
+    assert saved["files"]["diffReport"]["label"] == "币种待确认报告"
+    assert "businessReport" not in saved["files"]
+    assert saved["businessReportDownloadUrl"] == ""
+
+
+def test_labor_run_keeps_page_role_support_pdf_audit_only_in_mixed_batch(monkeypatch):
+    totals = [
+        {
+            "source_file": "invoice.pdf",
+            "warehouse_id": "1",
+            "total_amount": 150.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+        },
+        {
+            "source_file": "support.pdf",
+            "warehouse_id": "2",
+            "total_amount": 0.0,
+            "authoritative": False,
+            "pdf_type": "unknown",
+            "evidence_status": "needs_review",
+            "page_evidence": [
+                {"page": 1, "role": "email_cover"},
+                {"page": 2, "role": "timecard_summary"},
+            ],
+        },
+    ]
+    extracted_files: list[str] = []
+    diagnostics_totals: list[dict] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+    original_diagnostics = app_module.build_reconciliation_diagnostics
+
+    def capture_diagnostics(*args, **kwargs):
+        diagnostics_totals.extend(kwargs.get("pdf_totals") or [])
+        return original_diagnostics(*args, **kwargs)
+
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="WUS000001",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=150,
+                currency="USD",
+                warehouse_id="1",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "build_reconciliation_diagnostics", capture_diagnostics)
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf", "support.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    stored_names = [
+        Path(row["path"]).name
+        for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]
+    ]
+    totals[0]["source_file"], totals[1]["source_file"] = stored_names
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert extracted_files == [stored_names[0]]
+    assert [row["warehouseId"] for row in saved["warehouseComparison"]["rows"]] == ["1"]
+    assert [row["source_file"] for row in diagnostics_totals] == [stored_names[0]]
+    assert [row["source_file"] for row in saved["invoiceEvidenceAudit"]] == stored_names
+
+
+def test_labor_run_keeps_legacy_detail_pdf_out_of_reconciliation_and_ocr(monkeypatch):
+    totals = [
+        {
+            "source_file": "invoice.pdf",
+            "warehouse_id": "1",
+            "total_amount": 150.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+        },
+        {
+            "source_file": "legacy_detail.pdf",
+            "warehouse_id": "2",
+            "total_amount": 0.0,
+            "authoritative": False,
+            "pdf_type": "unknown",
+            "evidence_status": "needs_review",
+            "page_evidence": [{"page": 1, "role": "unknown"}],
+        },
+    ]
+    extracted_files: list[str] = []
+    diagnostics_totals: list[dict] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+    original_diagnostics = app_module.build_reconciliation_diagnostics
+
+    def capture_diagnostics(*args, **kwargs):
+        diagnostics_totals.extend(kwargs.get("pdf_totals") or [])
+        return original_diagnostics(*args, **kwargs)
+
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="WUS000001",
+                employee_name_raw="Alice Worker",
+                hours=8,
+                amount=150,
+                currency="USD",
+                warehouse_id="1",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "build_reconciliation_diagnostics", capture_diagnostics)
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["invoice.pdf", "legacy_detail.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    stored_names = [
+        Path(row["path"]).name
+        for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]
+    ]
+    totals[0]["source_file"], totals[1]["source_file"] = stored_names
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert extracted_files == [stored_names[0]]
+    assert [row["warehouseId"] for row in saved["warehouseComparison"]["rows"]] == ["1"]
+    assert [row["source_file"] for row in diagnostics_totals] == [stored_names[0]]
+    assert [row["source_file"] for row in saved["invoiceEvidenceAudit"]] == stored_names
+
+
+def test_labor_run_does_not_treat_partial_zero_totals_as_valid(monkeypatch):
+    totals = [
+        {
+            "source_file": "DEPT_1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [{"page": 1, "role": "invoice_total"}],
+        },
+        {
+            "source_file": "mystery.pdf",
+            "warehouse_id": "",
+            "total_amount": 0.0,
+            "authoritative": False,
+            "evidence_status": "needs_review",
+            "total_page": None,
+            "page_evidence": [{"page": 1, "role": "unknown"}],
+        },
+    ]
+    extracted_files: list[str] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw="Review Worker",
+                hours=1,
+                amount=1,
+                currency="USD",
+                warehouse_id="",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf", "mystery.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    stored_names = [Path(row["path"]).name for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]]
+    totals[0]["source_file"], totals[1]["source_file"] = stored_names
+
+    app_module._perform_labor_extract_compare(run["id"])
+    saved = client.get(f"/api/labor/runs/{run['id']}").json()
+
+    assert saved["warehouseComparison"]["summary"]["totalPassed"] is False
+    assert stored_names[0] in extracted_files
+    assert stored_names[1] in extracted_files
+    unresolved = next(row for row in saved["warehouseComparison"]["rows"] if row["warehouseId"] == "")
+    assert unresolved["reconciliationStatus"] == "needs_review"
+    assert unresolved["pdfEvidenceFile"] == stored_names[1]
+    assert saved["status"] == "部分核对完成"
+    assert saved["batchGuard"]["status"] == "employee_detail_incomplete"
+    assert saved["comparisonSummary"]["canRelease"] is False
+
+
+def test_labor_run_preserves_all_unresolved_totals_as_review_evidence(monkeypatch):
+    totals = [
+        {
+            "source_file": f"DEPT_{warehouse}.pdf",
+            "warehouse_id": warehouse,
+            "total_amount": 0.0,
+            "authoritative": False,
+            "evidence_status": "needs_review",
+            "total_page": None,
+            "page_evidence": [{"page": 1, "role": "invoice_primary"}],
+        }
+        for warehouse in ("1", "2")
+    ]
+    extracted_files: list[str] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(path).name,
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw=f"Review Worker {index}",
+                hours=1,
+                amount=1,
+                currency="USD",
+                warehouse_id=str(index),
+            )
+            for index, path in enumerate(paths, start=1)
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf", "DEPT_2.pdf"],
+        workbook_bytes=_excel_bytes_with_two_warehouses(),
+    )
+    stored_names = [Path(row["path"]).name for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]]
+    for total, source_file in zip(totals, stored_names):
+        total["source_file"] = source_file
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert extracted_files == stored_names
+    assert [row["reconciliationStatus"] for row in saved["warehouseComparison"]["rows"]] == [
+        "needs_review",
+        "needs_review",
+    ]
+    assert [row["pdfEvidenceFile"] for row in saved["warehouseComparison"]["rows"]] == [
+        *stored_names,
+    ]
+    assert saved["status"] == "PDF识别未完成"
+    assert saved["batchGuard"]["status"] == "pdf_recognition_incomplete"
+    assert saved["comparisonSummary"]["canRelease"] is False
+    assert saved["businessReportDownloadUrl"] == ""
+    assert "businessReport" not in saved["files"]
+
+
+def test_labor_run_formal_scope_extracts_employee_rows_for_all_payable_warehouses(monkeypatch):
+    totals = [
+        {
+            "source_file": "DEPT_1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [{"page": 1, "role": "invoice_total"}],
+        },
+        {
+            "source_file": "DEPT_2.pdf",
+            "warehouse_id": "2",
+            "total_amount": 250.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [
+                {"page": 1, "role": "invoice_total"},
+                {"page": 2, "role": "email_cover"},
+                {"page": 3, "role": "timecard_summary"},
+                {"page": 4, "role": "invoice_total"},
+            ],
+            "excluded_pages": [2, 3, 4],
+        },
+    ]
+    extracted_files: list[str] = []
+    allowed_pages: list[dict[str, set[int]]] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        allowed_pages.append(kwargs.get("allowed_pages_by_source") or {})
+        return [
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[0]).name, source_page_or_row="p1", employee_id="WUS000001", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", warehouse_id="1"),
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[1]).name, source_page_or_row="p1", employee_id="WUS000002", employee_name_raw="Bob Worker", hours=10, amount=250, currency="USD", warehouse_id="2"),
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf", "DEPT_2.pdf"],
+        workbook_bytes=_excel_bytes_with_two_warehouses(),
+    )
+    stored_names = [Path(row["path"]).name for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]]
+    for total, source_file in zip(totals, stored_names):
+        total["source_file"] = source_file
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert extracted_files == stored_names
+    assert allowed_pages == [{stored_names[0]: {1}, stored_names[1]: {1}}]
+    rows = {row["warehouseId"]: row for row in saved["warehouseComparison"]["rows"]}
+    assert rows["1"]["reconciliationStatus"] == "passed"
+    assert {row["warehouse_id"] for row in saved["pdfExtractedRows"]} == {"1", "2"}
+    assert rows["2"]["reconciliationStatus"] == "amount_difference"
+    assert rows["2"]["employeeRows"]
+
+
+def test_labor_run_extracts_all_payable_pdfs_when_batch_is_image_only(monkeypatch):
+    totals = [
+        {"source_file": "DEPT_1.pdf", "warehouse_id": "1", "total_amount": 100.0, "authoritative": True, "evidence_status": "authoritative", "page_evidence": [{"page": 1, "role": "invoice_total"}]},
+        {"source_file": "DEPT_2.pdf", "warehouse_id": "2", "total_amount": 200.0, "authoritative": True, "evidence_status": "authoritative", "page_evidence": [{"page": 1, "role": "invoice_total"}]},
+    ]
+    extracted_files: list[str] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        return [
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[0]).name, source_page_or_row="p1", employee_id="WUS000001", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", warehouse_id="1"),
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[1]).name, source_page_or_row="p1", employee_id="WUS000002", employee_name_raw="Bob Worker", hours=10, amount=200, currency="USD", warehouse_id="2"),
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf", "DEPT_2.pdf"],
+        workbook_bytes=_excel_bytes_with_two_warehouses(),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_summarize_pdf_text_coverage",
+        lambda paths: {
+            "summary": {"fileCount": len(paths), "textReadableFileCount": 0, "imageOnlyFileCount": len(paths)},
+            "files": [{"sourceFile": path.name, "hasTextLayer": False, "needsOcr": True} for path in paths],
+        },
+    )
+    stored_names = [Path(row["path"]).name for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]]
+    for total, source_file in zip(totals, stored_names):
+        total["source_file"] = source_file
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert extracted_files == stored_names
+    assert saved["reconciliationDiagnostics"]["signals"]["pdfDetailCoverage"]["coverageRatio"] == 1.0
+
+
+def test_labor_run_retries_only_employee_detail_pdf_whose_rows_do_not_close(monkeypatch):
+    totals = [
+        {
+            "source_file": "DEPT_1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [{"page": 1, "role": "invoice_total"}],
+        },
+        {
+            "source_file": "DEPT_2.pdf",
+            "warehouse_id": "2",
+            "total_amount": 250.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [{"page": 1, "role": "invoice_total"}],
+        },
+    ]
+    calls: list[dict] = []
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+
+    def fake_extract(paths, config, *args, **kwargs):
+        calls.append(
+            {
+                "files": [Path(path).name for path in paths],
+                "config": dict(config),
+                "allowed_pages": kwargs.get("allowed_pages_by_source") or {},
+                "has_progress_callback": callable(kwargs.get("progress_callback")),
+            }
+        )
+        if len(paths) > 1:
+            return [
+                LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[0]).name, source_page_or_row="p1", employee_id="WUS000001", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", confidence=0.99, warehouse_id="1"),
+                LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[1]).name, source_page_or_row="p1", employee_id="WUS000002", employee_name_raw="Bob Worker", hours=10, amount=50, currency="USD", confidence=0.99, warehouse_id="2"),
+            ]
+        return [
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[0]).name, source_page_or_row="p1", employee_id="WUS000002", employee_name_raw="Bob Worker", hours=10, amount=250, currency="USD", confidence=0.99, warehouse_id="2")
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf", "DEPT_2.pdf"],
+        workbook_bytes=_excel_bytes_with_two_warehouses(),
+    )
+    stored_names = [
+        Path(row["path"]).name
+        for row in client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"]
+    ]
+    for total, source_file in zip(totals, stored_names):
+        total["source_file"] = source_file
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert [call["files"] for call in calls] == [stored_names, [stored_names[1]]]
+    assert calls[1]["config"]["cache_enabled"] is False
+    assert calls[1]["config"]["render_scale"] >= 2.4
+    assert calls[1]["allowed_pages"] == {stored_names[1]: {1}}
+    assert calls[1]["has_progress_callback"] is True
+    assert saved["comparisonSummary"]["pdfAmountTotal"] == 350.0
+    assert saved["extractionQuality"]["retryAttempted"] is True
+    assert saved["extractionQuality"]["retryApplied"] is True
+
+
+def test_labor_run_keeps_better_original_rows_when_detail_total_retry_is_worse(monkeypatch):
+    totals = [
+        {
+            "source_file": "DEPT_2.pdf",
+            "warehouse_id": "2",
+            "total_amount": 250.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [{"page": 1, "role": "invoice_total"}],
+        }
+    ]
+    calls = 0
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+
+    def fake_extract(paths, config, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return [
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=Path(paths[0]).name,
+                source_page_or_row="p1",
+                employee_id="WUS000002",
+                employee_name_raw="Bob Worker",
+                hours=10,
+                amount=50.0 if calls == 1 else 25.0,
+                currency="USD",
+                confidence=0.99,
+                warehouse_id="2",
+            )
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_2.pdf"],
+        workbook_bytes=_excel_bytes_with_two_warehouses(),
+    )
+    stored_name = Path(
+        client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"][0]["path"]
+    ).name
+    totals[0]["source_file"] = stored_name
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert calls == 2
+    assert saved["comparisonSummary"]["pdfAmountTotal"] == 50.0
+    assert saved["extractionQuality"]["retryAttempted"] is True
+    assert saved["extractionQuality"]["retryApplied"] is False
+    assert saved["extractionQuality"]["level"] == "critical"
+    assert saved["requiresHumanReview"] is True
+    assert saved["comparisonSummary"]["canRelease"] is False
+    assert any("员工归因不可直接采信" in issue for issue in saved["extractionQuality"]["issues"])
+
+
+def test_labor_run_keeps_missing_pdf_warehouse_out_of_pdf_ocr(monkeypatch):
+    totals = [
+        {
+            "source_file": "DEPT_1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+            "page_evidence": [{"page": 1, "role": "invoice_total"}],
+        }
+    ]
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+    extracted_files: list[str] = []
+
+    def fake_extract(paths, *args, **kwargs):
+        extracted_files.extend(Path(path).name for path in paths)
+        return [
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[0]).name, source_page_or_row="p1", employee_id="WUS000001", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", warehouse_id="1")
+        ]
+
+    monkeypatch.setattr(app_module, "extract_invoice_items", fake_extract)
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf"],
+        workbook_bytes=_excel_bytes_with_two_warehouses(),
+    )
+    totals[0]["source_file"] = Path(
+        client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"][0]["path"]
+    ).name
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    rows = {row["warehouseId"]: row for row in saved["warehouseComparison"]["rows"]}
+    assert extracted_files == [totals[0]["source_file"]]
+    assert rows["1"]["reconciliationStatus"] == "passed"
+    assert rows["2"]["reconciliationStatus"] == "missing_pdf_invoice"
+    assert saved["warehouseComparison"]["summary"]["totalPassed"] is False
+
+
+def test_labor_run_persists_invoice_evidence_audit(monkeypatch):
+    totals = [
+        {
+            "source_file": "DEPT_1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 2,
+            "total_label": "TOTAL",
+            "page_evidence": [
+                {"page": 1, "role": "invoice_primary"},
+                {"page": 2, "role": "invoice_total"},
+            ],
+            "excluded_pages": [],
+        }
+    ]
+    monkeypatch.setattr(app_module, "quick_extract_totals", lambda *args, **kwargs: totals)
+    monkeypatch.setattr(
+        app_module,
+        "extract_invoice_items",
+        lambda paths, *args, **kwargs: [
+            LaborLineItem(source_type="pdf_invoice", source_file=Path(paths[0]).name, source_page_or_row="p1", employee_id="WUS000001", employee_name_raw="Alice Worker", hours=8, amount=100, currency="USD", warehouse_id="1")
+        ],
+    )
+    client, run = _prepare_labor_orchestration_run(
+        monkeypatch,
+        pdf_names=["DEPT_1.pdf"],
+        workbook_bytes=_excel_bytes_with_warehouse(),
+    )
+    totals[0]["source_file"] = Path(
+        client.get(f"/api/labor/runs/{run['id']}").json()["files"]["pdfInvoices"][0]["path"]
+    ).name
+
+    saved = app_module._perform_labor_extract_compare(run["id"])
+
+    assert saved["invoiceEvidenceAudit"] == totals
 
 
 def test_adaptive_tolerance_for_large_amounts():

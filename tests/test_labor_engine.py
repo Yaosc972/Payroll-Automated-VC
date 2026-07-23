@@ -1,25 +1,29 @@
 from io import BytesIO
-from datetime import datetime, timedelta
+from dataclasses import replace
 import json
 from pathlib import Path
 import time
 
 import pytest
+import openpyxl
 from openpyxl import Workbook, load_workbook
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 
+import bonus_platform.app as app_module
+import bonus_platform.engine.labor.structure as labor_structure
 from bonus_platform.engine.labor.compare import compare_labor_items, compare_by_warehouse
-from bonus_platform.engine.labor.extract import MiMoTimeoutException, _anthropic_messages_url, _effective_max_pages_per_request, _effective_render_scale, _extract_invoice_total_from_text, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
-from bonus_platform.engine.labor.extract import _ai_instruction, _extract_pdf_pages, _safe_error_message
+from bonus_platform.engine.labor.evidence import LaborPageEvidence
+from bonus_platform.engine.labor.extract import AI_PAGE_CACHE_VERSION, MiMoTimeoutException, _anthropic_messages_url, _candidate_is_confident, _effective_max_pages_per_request, _effective_render_scale, _extract_invoice_total_from_text, _http_post_json, extract_invoice_items, _extract_with_ai_images, _extract_with_rules, _request_headers
+from bonus_platform.engine.labor.extract import _ai_instruction, _ai_ready, _extract_pdf_pages, _safe_error_message
 from bonus_platform.engine.labor.extract import _analyze_layout_with_ai
 from bonus_platform.engine.labor.extract import _filter_ai_rows_by_page_text
 from bonus_platform.engine.labor.extract import _filter_ai_rows_by_expected_employees
+from bonus_platform.engine.labor.extract import _drop_closed_employee_subtotals, _normalize_ai_rows
 from bonus_platform.engine.labor.extract import _warehouse_id_from_filename as extract_warehouse_id_from_filename
 from bonus_platform.engine.labor.extract import _warehouse_id_conflict
 from bonus_platform.engine.labor.extract import _classify_pdf
 from bonus_platform.engine.labor.extract import _warehouse_id_from_text
 from bonus_platform.engine.labor import runs as labor_runs
-from bonus_platform.engine.labor import persistent_storage as labor_storage
 from bonus_platform.engine.labor.governance import audit_ai_page_cache_candidates, build_ai_cache_reconciliation_preview, build_reocr_candidate_plan, build_rule_change_candidate, confirm_rule_candidate, replay_reocr_candidate_result, rollback_rule_version, summarize_rule_auto_replay, summarize_rule_replay
 from bonus_platform.engine.labor.materials import build_material_dry_run, build_material_index, build_material_replay_plan
 from bonus_platform.engine.labor.models import LaborLineItem, line_items_from_dicts
@@ -35,9 +39,10 @@ from bonus_platform.engine.labor.profiles import (
     _profiles_for_resolution,
     DEFAULT_PROFILE,
 )
-from bonus_platform.app import _non_payable_pdf_names, _normalize_labor_total_decision
+from bonus_platform.app import _build_conclusion, _labor_total_is_explicitly_non_payable, _non_payable_pdf_names, _normalize_labor_total_decision
 from bonus_platform.engine.labor.report import build_labor_business_html_report, build_labor_report
-from bonus_platform.engine.labor.workbook import parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
+from bonus_platform.engine.labor.structure import evaluate_batch_guards, extract_structured_invoice_rows, find_amount_closure, infer_warehouse_from_rows, parse_localized_number, prefer_closed_structured_rows, promote_structured_invoice_evidence, resolve_amount_scope
+from bonus_platform.engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 
 
 def _workbook_bytes() -> bytes:
@@ -50,6 +55,148 @@ def _workbook_bytes() -> bytes:
     buffer = BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
+
+
+def _ready_ai_config() -> dict:
+    return {
+        "enabled": True,
+        "provider": "mimo",
+        "api_key": "token",
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "model": "mimo-v2.5",
+    }
+
+
+def test_auto_ocr_runs_when_invoice_total_is_unresolved_even_with_existing_rows():
+    assert app_module._labor_should_run_auto_ocr(
+        command="python worker.py",
+        pdf_rows=[object()],
+        target_pdf_names={"In291943.pdf"},
+        reconciliation_pdf_totals=[
+            {
+                "source_file": "In291943.pdf",
+                "total_amount": 0.0,
+                "authoritative": False,
+            }
+        ],
+    ) is True
+
+
+def test_ocr_expected_totals_use_high_confidence_invoice_total_page():
+    assert app_module._labor_ocr_expected_totals(
+        [
+            {
+                "source_file": "In291943.pdf",
+                "total_amount": 0.0,
+                "authoritative": False,
+                "page_evidence": [
+                    {
+                        "role": "invoice_total",
+                        "role_confidence": 0.98,
+                        "total_amount": 13836.28,
+                    },
+                    {
+                        "role": "invoice_continuation",
+                        "role_confidence": 0.95,
+                        "total_amount": None,
+                    },
+                ],
+            }
+        ],
+        {"In291943.pdf"},
+    ) == {"In291943.pdf": 13836.28}
+
+
+def test_detail_total_retry_is_skipped_after_auto_ocr_candidate_run():
+    assert app_module._labor_should_retry_detail_totals(
+        pdf_rows=[object()],
+        mismatches={"invoice.pdf": {"delta": 10.0}},
+        auto_ocr_candidate={"decision": "needs_review", "runtimeStatus": "completed"},
+    ) is False
+
+
+def test_labor_ocr_progress_callback_maps_worker_snapshot(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(app_module, "_update_labor_progress", lambda run_id, **payload: captured.update(run_id=run_id, **payload))
+
+    callback = app_module._labor_ocr_progress_callback("labor_test")
+    callback(
+        {
+            "status": "running",
+            "currentFile": "invoice.pdf",
+            "totalFiles": 3,
+            "processedFiles": 1,
+            "totalPages": 10,
+            "processedPages": 4,
+            "cacheHitCount": 1,
+            "message": "正在识别 invoice.pdf：4 / 10 页。",
+        }
+    )
+
+    assert captured == {
+        "run_id": "labor_test",
+        "phase": "auto_ocr",
+        "phase_label": "本地 OCR 识别",
+        "message": "正在识别 invoice.pdf：4 / 10 页。",
+        "status": "running",
+        "total_files": 3,
+        "processed_files": 1,
+        "total_pages": 10,
+        "processed_pages": 4,
+        "current_file": "invoice.pdf",
+        "cache_hit_count": 1,
+    }
+
+
+def test_run_labor_auto_ocr_candidate_returns_safe_evaluated_rows(monkeypatch, tmp_path):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"pdf")
+    excel_rows = [
+        LaborLineItem(
+            source_type="offline_workbook",
+            source_file="bill.xlsx",
+            source_page_or_row="r1",
+            employee_id="",
+            employee_name_raw="Jane Doe",
+            hours=8,
+            amount=80,
+        )
+    ]
+    monkeypatch.setattr(
+        app_module,
+        "run_ocr_candidate_command",
+        lambda *args, **kwargs: {
+            "status": "completed",
+            "rows": [
+                {
+                    "source_file": "invoice.pdf",
+                    "employee_name_raw": "Jane Doe",
+                    "hours": 8,
+                    "amount": 80,
+                }
+            ],
+            "files": [{"sourceFile": "invoice.pdf", "failedPageCount": 0}],
+        },
+    )
+
+    candidate = app_module._run_labor_auto_ocr_candidate(
+        "labor_test",
+        [pdf_path],
+        excel_rows,
+        [{"source_file": "invoice.pdf", "total_amount": 80, "authoritative": True}],
+        supplier="Unknown",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        currency="USD",
+        command="python worker.py",
+        timeout_seconds=30,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+    )
+
+    assert candidate["safeToUse"] is True
+    assert candidate["runtimeStatus"] == "completed"
+    assert candidate["rows"][0]["employee_name_raw"] == "Jane Doe"
 
 
 def test_list_labor_metadata_supports_recent_limit(monkeypatch, tmp_path):
@@ -77,99 +224,6 @@ def test_list_labor_metadata_supports_recent_limit(monkeypatch, tmp_path):
     assert [row["id"] for row in rows] == ["labor_2", "labor_1"]
 
 
-def test_list_labor_metadata_from_supabase_reads_metadata_under_run_directories(monkeypatch):
-    metadata_by_path = {
-        "labor-runs/production/labor_old/metadata.json": {
-            "id": "labor_old",
-            "updatedAt": "2026-06-20T10:00:00",
-        },
-        "labor-runs/production/labor_new/metadata.json": {
-            "id": "labor_new",
-            "updatedAt": "2026-06-20T11:00:00",
-        },
-    }
-
-    monkeypatch.setattr(labor_storage, "labor_supabase_storage_enabled", lambda: True)
-    monkeypatch.setattr(labor_storage, "labor_persistent_environment", lambda: "production")
-    monkeypatch.setattr(
-        labor_storage,
-        "_supabase_list_objects",
-        lambda prefix: [{"name": "labor_old"}, {"name": "labor_new"}] if prefix == "labor-runs/production" else [],
-    )
-    monkeypatch.setattr(
-        labor_storage,
-        "_supabase_download_bytes",
-        lambda object_path: json.dumps(metadata_by_path[object_path]).encode("utf-8"),
-    )
-
-    rows = labor_storage.list_labor_metadata_from_supabase()
-
-    assert [row["id"] for row in rows] == ["labor_new", "labor_old"]
-
-
-def test_safe_labor_storage_filename_removes_non_ascii_suffix():
-    filename = labor_runs.safe_labor_storage_filename("海外劳务工报账核对报告.xlsx", "差异报告")
-
-    assert filename.isascii()
-    assert filename.endswith(".xlsx")
-    assert "差异报告" not in filename
-
-
-def test_load_labor_metadata_refreshes_stale_persistent_metadata(monkeypatch, tmp_path):
-    run_dir = tmp_path / "labor_runs" / "labor_refresh"
-    run_dir.mkdir(parents=True)
-    (run_dir / "metadata.json").write_text(
-        json.dumps({"id": "labor_refresh", "status": "抽取中", "updatedAt": "2026-06-20T10:00:00"}),
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
-
-    def fake_sync_metadata(run_id, run_dir_arg):
-        assert run_id == "labor_refresh"
-        (run_dir_arg / "metadata.json").write_text(
-            json.dumps({"id": "labor_refresh", "status": "已生成差异报告", "updatedAt": "2026-06-20T11:00:00"}),
-            encoding="utf-8",
-        )
-        return True
-
-    monkeypatch.setattr(labor_runs, "sync_labor_metadata_from_persistent", fake_sync_metadata)
-    monkeypatch.setattr(
-        labor_runs,
-        "sync_labor_run_from_persistent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("metadata refresh should avoid full file sync")),
-    )
-
-    metadata = labor_runs.load_labor_metadata(run_dir)
-
-    assert metadata["status"] == "已生成差异报告"
-
-
-def test_load_labor_metadata_keeps_local_copy_when_metadata_refresh_fails(monkeypatch, tmp_path):
-    run_dir = tmp_path / "labor_runs" / "labor_local"
-    run_dir.mkdir(parents=True)
-    (run_dir / "metadata.json").write_text(
-        json.dumps({"id": "labor_local", "status": "已生成差异报告", "updatedAt": "2026-06-20T11:00:00"}),
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
-    monkeypatch.setattr(
-        labor_runs,
-        "sync_labor_metadata_from_persistent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(URLError("temporary storage outage")),
-    )
-    monkeypatch.setattr(
-        labor_runs,
-        "sync_labor_run_from_persistent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local metadata should be enough")),
-    )
-
-    metadata = labor_runs.load_labor_metadata(run_dir)
-
-    assert metadata["status"] == "已生成差异报告"
-
-
 def test_save_labor_metadata_uses_atomic_writes_for_persistent_backend(monkeypatch, tmp_path):
     run_dir = tmp_path / "labor_runs" / "labor_atomic"
     run_dir.mkdir(parents=True)
@@ -192,311 +246,35 @@ def test_save_labor_metadata_uses_atomic_writes_for_persistent_backend(monkeypat
     assert json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))["id"] == "labor_atomic"
 
 
-def test_update_labor_metadata_record_only_does_not_resync_uploaded_files(monkeypatch, tmp_path):
-    run_root = tmp_path / "labor_runs"
-    run_dir = run_root / "labor_direct"
+def test_save_labor_metadata_retries_transient_windows_replace_conflict(monkeypatch, tmp_path):
+    run_dir = tmp_path / "labor_runs" / "labor_windows_replace_retry"
     run_dir.mkdir(parents=True)
-    (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-    (run_dir / "bill.xlsx").write_bytes(_workbook_bytes())
-    (run_dir / "metadata.json").write_text(
-        json.dumps(
-            {
-                "id": "labor_direct",
-                "status": "已创建",
-                "files": {
-                    "pdfInvoices": [{"filename": "invoice.pdf", "path": str(run_dir / "invoice.pdf")}],
-                    "workbook": {"filename": "bill.xlsx", "path": str(run_dir / "bill.xlsx")},
-                },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    uploaded_metadata = {}
+    real_replace = labor_runs.os.replace
+    attempts = 0
 
-    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", run_root)
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
-    monkeypatch.setattr(
-        labor_runs,
-        "sync_labor_run_to_persistent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("large files should not be resynced")),
+    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: False)
+    monkeypatch.setattr(labor_runs, "labor_postgres_state_enabled", lambda: False)
+
+    def replace_with_one_windows_conflict(source, destination):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            error = PermissionError(13, "The process cannot access the file")
+            error.winerror = 5
+            raise error
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(labor_runs.os, "replace", replace_with_one_windows_conflict)
+
+    metadata = labor_runs.save_labor_metadata(
+        run_dir,
+        {"id": run_dir.name, "status": "抽取中"},
     )
 
-    def fake_sync_metadata(run_id, run_dir_arg, metadata):
-        uploaded_metadata["runId"] = run_id
-        uploaded_metadata["runDir"] = run_dir_arg
-        uploaded_metadata["metadata"] = metadata
-
-    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
-
-    metadata = labor_runs.update_labor_metadata_record_only("labor_direct", {"status": "已上传文件"})
-
-    assert metadata["status"] == "已上传文件"
-    assert uploaded_metadata["runId"] == "labor_direct"
-    assert uploaded_metadata["metadata"]["files"]["pdfInvoices"][0]["path"] == "invoice.pdf"
-    assert uploaded_metadata["metadata"]["files"]["workbook"]["path"] == "bill.xlsx"
-    local_metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
-    assert local_metadata["files"]["workbook"]["path"] == str(run_dir / "bill.xlsx")
-
-
-def test_update_labor_metadata_stage_only_does_not_resync_uploaded_files(monkeypatch, tmp_path):
-    run_root = tmp_path / "labor_runs"
-    run_dir = run_root / "labor_stage"
-    run_dir.mkdir(parents=True)
-    (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-    (run_dir / "metadata.json").write_text(
-        json.dumps(
-            {
-                "id": "labor_stage",
-                "status": "已上传文件",
-                "files": {
-                    "pdfInvoices": [{"filename": "invoice.pdf", "path": str(run_dir / "invoice.pdf")}],
-                },
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    uploaded_metadata = {}
-
-    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", run_root)
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
-    monkeypatch.setattr(
-        labor_runs,
-        "sync_labor_run_to_persistent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("stage updates should not resync files")),
-    )
-
-    def fake_sync_metadata(run_id, run_dir_arg, metadata):
-        uploaded_metadata["runId"] = run_id
-        uploaded_metadata["metadata"] = metadata
-
-    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
-
-    metadata = labor_runs.update_labor_metadata("labor_stage", {"stage": "Stage 1: 快速抽取总金额"})
-
-    assert metadata["stage"] == "Stage 1: 快速抽取总金额"
-    assert uploaded_metadata["runId"] == "labor_stage"
-    assert uploaded_metadata["metadata"]["files"]["pdfInvoices"][0]["path"] == "invoice.pdf"
-
-
-def test_update_labor_metadata_files_update_syncs_only_new_files(monkeypatch, tmp_path):
-    run_root = tmp_path / "labor_runs"
-    run_dir = run_root / "labor_report"
-    run_dir.mkdir(parents=True)
-    (run_dir / "invoice.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
-    (run_dir / "bill.xlsx").write_bytes(_workbook_bytes())
-    (run_dir / "report.xlsx").write_bytes(_workbook_bytes())
-    initial_files = {
-        "pdfInvoices": [{"filename": "invoice.pdf", "path": str(run_dir / "invoice.pdf")}],
-        "workbooks": [{"filename": "bill.xlsx", "path": str(run_dir / "bill.xlsx")}],
-        "workbook": {"filename": "bill.xlsx", "path": str(run_dir / "bill.xlsx")},
-    }
-    (run_dir / "metadata.json").write_text(
-        json.dumps({"id": "labor_report", "status": "已上传文件", "files": initial_files}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    synced_files = []
-    uploaded_metadata = {}
-
-    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", run_root)
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_enabled", lambda: True)
-    monkeypatch.setattr(labor_runs, "labor_persistent_storage_info", lambda: {"backend": "supabase"})
-    monkeypatch.setattr(
-        labor_runs,
-        "sync_labor_run_to_persistent",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("files update should use delta sync")),
-    )
-    monkeypatch.setattr(labor_runs, "sync_labor_files_to_persistent", lambda run_id, run_dir_arg, paths: synced_files.extend(paths))
-
-    def fake_sync_metadata(run_id, run_dir_arg, metadata):
-        uploaded_metadata["metadata"] = metadata
-
-    monkeypatch.setattr(labor_runs, "sync_labor_metadata_to_persistent", fake_sync_metadata)
-    next_files = dict(initial_files)
-    next_files["diffReport"] = {"filename": "report.xlsx", "path": str(run_dir / "report.xlsx")}
-
-    metadata = labor_runs.update_labor_metadata("labor_report", {"status": "已生成差异报告", "files": next_files})
-
-    assert metadata["status"] == "已生成差异报告"
-    assert synced_files == ["report.xlsx"]
-    assert uploaded_metadata["metadata"]["files"]["diffReport"]["path"] == "report.xlsx"
-
-
-def test_enqueue_labor_reconciliation_job_creates_queued_job(monkeypatch, tmp_path):
-    from bonus_platform.engine.labor import jobs as labor_jobs
-
-    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
-
-    job = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {"supplierName": "OSI"})
-
-    assert job["runId"] == "labor_demo"
-    assert job["status"] == "queued"
-    assert job["jobType"] == "reconcile"
-    assert job["attempt"] == 0
-
-
-def test_claim_next_labor_job_marks_running(monkeypatch, tmp_path):
-    from bonus_platform.engine.labor import jobs as labor_jobs
-
-    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
-    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
-
-    claimed = labor_jobs.claim_next_labor_job("worker-1")
-
-    assert claimed["id"] == created["id"]
-    assert claimed["status"] == "running"
-    assert claimed["workerId"] == "worker-1"
-    assert claimed["attempt"] == 1
-
-
-def test_claim_next_labor_job_reclaims_expired_running_job(monkeypatch, tmp_path):
-    from bonus_platform.engine.labor import jobs as labor_jobs
-
-    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
-    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
-    first_claim = labor_jobs.claim_next_labor_job("worker-1")
-    first_claim["leaseExpiresAt"] = (datetime.utcnow() - timedelta(seconds=1)).isoformat(timespec="seconds")
-    labor_jobs.fail_labor_job(created["id"], "temporary marker", retryable=True)
-    expired_retry = labor_jobs.get_labor_job(created["id"])
-    expired_retry["status"] = "running"
-    expired_retry["workerId"] = "worker-1"
-    expired_retry["leaseExpiresAt"] = first_claim["leaseExpiresAt"]
-    labor_jobs._write_job(expired_retry)
-
-    reclaimed = labor_jobs.claim_next_labor_job("worker-2")
-
-    assert reclaimed["id"] == created["id"]
-    assert reclaimed["status"] == "running"
-    assert reclaimed["workerId"] == "worker-2"
-    assert reclaimed["attempt"] == 2
-
-
-def test_heartbeat_labor_job_extends_running_lease(monkeypatch, tmp_path):
-    from bonus_platform.engine.labor import jobs as labor_jobs
-
-    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
-    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
-    claimed = labor_jobs.claim_next_labor_job("worker-1")
-
-    heartbeat = labor_jobs.heartbeat_labor_job(created["id"], "worker-1")
-
-    assert heartbeat["status"] == "running"
-    assert heartbeat["workerId"] == "worker-1"
-    assert heartbeat["heartbeatAt"] >= claimed["heartbeatAt"]
-    assert heartbeat["leaseExpiresAt"] >= claimed["leaseExpiresAt"]
-
-
-def test_worker_processes_claimed_labor_job(monkeypatch, tmp_path):
-    from bonus_platform.engine.labor import jobs as labor_jobs
-    from bonus_platform.worker import labor as labor_worker
-
-    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
-    labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
-    processed = {}
-    monkeypatch.setattr(labor_worker, "_run_labor_extract_compare", lambda run_id: processed.setdefault("runId", run_id))
-
-    result = labor_worker.process_one_labor_job(worker_id="worker-test")
-
-    assert result["status"] == "succeeded"
-    assert processed["runId"] == "labor_demo"
-
-
-def test_worker_marks_job_failed_when_processor_reports_failure(monkeypatch, tmp_path):
-    from bonus_platform.engine.labor import jobs as labor_jobs
-    from bonus_platform.worker import labor as labor_worker
-
-    monkeypatch.setattr(labor_jobs, "LABOR_JOBS_DIR", tmp_path / "labor_jobs")
-    created = labor_jobs.enqueue_labor_reconciliation_job("labor_demo", {})
-    monkeypatch.setattr(labor_worker, "_run_labor_extract_compare", lambda run_id: False)
-    monkeypatch.setattr(labor_worker, "_labor_run_failure_message", lambda run_id: "ssl connection interrupted")
-
-    result = labor_worker.process_one_labor_job(worker_id="worker-test")
-
-    assert result["id"] == created["id"]
-    assert result["status"] == "retry_wait"
-    assert result["retryable"] is True
-    assert "ssl connection interrupted" in result["errorDetail"]
-
-
-def test_worker_preflight_reports_missing_storage_without_secret_values(monkeypatch):
-    from bonus_platform.worker import main as worker_main
-
-    monkeypatch.setattr(
-        worker_main,
-        "labor_persistent_storage_health",
-        lambda probe=False: {
-            "backend": "supabase",
-            "enabled": False,
-            "probe": probe,
-            "supabaseUrlConfigured": True,
-            "serviceRoleConfigured": False,
-        },
-    )
-    monkeypatch.setattr(
-        worker_main,
-        "labor_worker_job_store_health",
-        lambda probe=False: {
-            "enabled": True,
-            "backend": "postgres",
-            "databaseUrlConfigured": True,
-            "probe": probe,
-            "ok": True,
-        },
-    )
-    monkeypatch.setitem(worker_main.AI_CONFIG, "enabled", False)
-
-    health = worker_main.worker_preflight(probe=True)
-
-    assert health["ok"] is False
-    assert health["probe"] is True
-    assert health["problems"][0]["code"] == "LABOR_STORAGE_DISABLED"
-    serialized = json.dumps(health, ensure_ascii=False)
-    assert "SUPABASE_SERVICE_ROLE_KEY" not in serialized
-    assert "postgresql://" not in serialized
-
-
-def test_worker_cli_check_exits_nonzero_when_preflight_fails(monkeypatch, capsys):
-    from bonus_platform.worker import main as worker_main
-
-    monkeypatch.setattr(
-        worker_main,
-        "worker_preflight",
-        lambda probe=False: {"ok": False, "probe": probe, "problems": [{"code": "BROKEN"}]},
-    )
-
-    with pytest.raises(SystemExit) as exc_info:
-        worker_main.main(["--check", "--probe"])
-
-    assert exc_info.value.code == 1
-    output = capsys.readouterr().out
-    assert '"ok": false' in output
-    assert '"probe": true' in output
-
-
-def test_worker_require_ready_runs_preflight_before_processing(monkeypatch, capsys):
-    from bonus_platform.worker import main as worker_main
-
-    monkeypatch.setattr(worker_main, "worker_preflight", lambda probe=False: {"ok": True, "probe": probe})
-    called = {}
-    monkeypatch.setattr(worker_main, "_process_one_labor_job", lambda worker_id=None: called.setdefault("workerId", worker_id))
-
-    worker_main.main(["--require-ready", "--once", "--worker-id", "worker-a"])
-
-    assert called["workerId"] == "worker-a"
-    assert '"ok": true' in capsys.readouterr().out
-
-
-def test_labor_worker_schema_declares_required_tables():
-    sql = Path("supabase/migrations/20260624_labor_worker_schema.sql").read_text(encoding="utf-8")
-
-    for table in ("labor_runs", "labor_files", "labor_jobs", "labor_job_attempts"):
-        assert f"create table if not exists {table}" in sql
-    assert "create table if not exists labor_runs (\n    id text primary key" in sql
-    assert "create table if not exists labor_jobs (\n    id text primary key" in sql
-    assert "run_id text not null" in sql
+    assert metadata["status"] == "抽取中"
+    assert attempts == 2
+    assert json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))["status"] == "抽取中"
+    assert list(run_dir.glob(".metadata.json.*.tmp")) == []
 
 
 def _workbook_with_tax_columns_bytes() -> bytes:
@@ -746,6 +524,8 @@ def test_normalize_employee_name_handles_invoice_and_workbook_variants():
     [
         ("$1,032.00", 1032.0),
         ("1,032.00$", 1032.0),
+        ("218,40", 218.4),
+        ("1.032,00 EUR", 1032.0),
         ("-$", 0.0),
         ("", 0.0),
         (None, 0.0),
@@ -753,6 +533,90 @@ def test_normalize_employee_name_handles_invoice_and_workbook_variants():
 )
 def test_parse_number_handles_invoice_money_formats(raw, expected):
     assert parse_number(raw) == expected
+
+
+def test_normalize_ai_rows_accepts_comma_decimal_amounts():
+    rows = _normalize_ai_rows(
+        [{"employee_name": "DUPONT Marie", "hours": "10,50", "amount": "218,40"}],
+        supplier="Adequat",
+        period_start="2026-05-25",
+        period_end="2026-05-31",
+        currency="EUR",
+    )
+
+    assert len(rows) == 1
+    assert line_items_from_dicts(rows)[0].hours == 10.5
+    assert line_items_from_dicts(rows)[0].amount == 218.4
+
+
+def test_drop_closed_employee_subtotal_across_adjacent_pages():
+    rows = [
+        {
+            "employee_name_raw": "FOFANA DRAME Sekou",
+            "hours": 35.0,
+            "amount": 706.65,
+            "description": "HEURES NORMALES",
+            "evidence_text": "FOFANA DRAME Sekou HEURES NORMALES 35,00 706,65",
+            "source_file": "invoice.pdf",
+            "source_page_or_row": "p1",
+        },
+        {
+            "employee_name_raw": "FOFANA DRAME Sekou",
+            "hours": 3.75,
+            "amount": 94.69,
+            "description": "HEURES SUPPLEMENTAIRES T1",
+            "evidence_text": "FOFANA DRAME Sekou HEURES SUPPLEMENTAIRES T1 3,75 94,69",
+            "source_file": "invoice.pdf",
+            "source_page_or_row": "p1",
+        },
+        {
+            "employee_name_raw": "FOFANA DRAME Sekou",
+            "hours": 38.75,
+            "amount": 801.34,
+            "description": "Interimaire : FOFANA DRAME Sekou",
+            "evidence_text": "S/Total Interimaire : FOFANA DRAME Sekou 38,75 801,34",
+            "source_file": "invoice.pdf",
+            "source_page_or_row": "p2",
+        },
+    ]
+
+    kept = _drop_closed_employee_subtotals(rows)
+
+    assert [row["amount"] for row in kept] == [706.65, 94.69]
+
+
+def test_drop_closed_employee_subtotal_keeps_unclosed_and_single_charge_rows():
+    rows = [
+        {
+            "employee_name_raw": "Worker One",
+            "hours": 10.0,
+            "amount": 200.0,
+            "description": "HEURES NORMALES",
+            "evidence_text": "Worker One 10,00 200,00",
+            "source_file": "invoice.pdf",
+            "source_page_or_row": "p1",
+        },
+        {
+            "employee_name_raw": "Worker One",
+            "hours": 12.0,
+            "amount": 250.0,
+            "description": "Interimaire : Worker One",
+            "evidence_text": "S/Total Interimaire : Worker One 12,00 250,00",
+            "source_file": "invoice.pdf",
+            "source_page_or_row": "p2",
+        },
+        {
+            "employee_name_raw": "Worker Two",
+            "hours": 8.0,
+            "amount": 160.0,
+            "description": "Interimaire : Worker Two",
+            "evidence_text": "S/Total Interimaire : Worker Two 8,00 160,00",
+            "source_file": "invoice.pdf",
+            "source_page_or_row": "p2",
+        },
+    ]
+
+    assert _drop_closed_employee_subtotals(rows) == rows
 
 
 def test_fairway_warehouse_id_parses_from_filename_and_text():
@@ -772,6 +636,27 @@ def test_warehouse_id_patterns_cover_common_filename_and_text_variants():
     assert _warehouse_id_from_text("Warehouse: WH 28") == "28"
     assert _warehouse_id_from_text("LOC #21") == "21"
     assert _warehouse_id_from_text("Purchase Order Number\nFlanders Location NJ 8") == "8"
+
+
+def test_warehouse_id_from_filename_accepts_explicit_chinese_warehouse_but_not_generic_name():
+    assert extract_warehouse_id_from_filename("巴黎1号仓 05.25-05.31.xlsx") == "1"
+    assert extract_warehouse_id_from_filename("ADEQUAT 05.25-05.31.xlsx") == ""
+
+
+def test_workbook_filename_fallback_only_fills_blank_warehouse_rows():
+    rows = [
+        _structure_row("Blank Worker", source_type="offline_workbook", warehouse_id=""),
+        _structure_row("Explicit Worker", source_type="offline_workbook", warehouse_id="9"),
+    ]
+
+    assigned = app_module._labor_apply_workbook_warehouse_fallback(
+        rows,
+        "巴黎1号仓 05.25-05.31.xlsx",
+    )
+
+    assert [row.warehouse_id for row in assigned] == ["1", "9"]
+    unchanged = app_module._labor_apply_workbook_warehouse_fallback(rows, "ADEQUAT May.xlsx")
+    assert [row.warehouse_id for row in unchanged] == ["", "9"]
 
 
 def test_warehouse_id_from_text_does_not_treat_invoice_period_as_location():
@@ -805,6 +690,11 @@ def test_warehouse_comparison_reports_pdf_warehouse_conflict_errors():
     )
 
     assert result["errors"] == ["仓库号冲突: CHINA_EXPRESS__3_INVOICE.pdf 文件名=3, 内容=30"]
+    assert result["summary"]["pdfAmountTotal"] == 0.0
+    assert result["summary"]["totalPassed"] is False
+    assert result["rows"][0]["reconciliationStatus"] == "needs_review"
+    assert result["rows"][0]["pdfAmountTotal"] == 0.0
+    assert result["rows"][0]["pdfEvidenceFile"] == "CHINA_EXPRESS__3_INVOICE.pdf"
 
 
 def test_warehouse_total_difference_equal_to_ten_cents_passes():
@@ -822,7 +712,365 @@ def test_warehouse_total_difference_equal_to_ten_cents_passes():
     assert result["summary"]["totalPassed"] is True
 
 
-def test_saved_labor_run_total_decision_is_normalized_at_ten_cents():
+def test_warehouse_comparison_excel_grouping_error_forces_total_failed():
+    result = compare_by_warehouse(
+        pdf_totals=[{
+            "source_file": "warehouse-1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+        }],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Mapped Worker", "warehouse_id": "1", "amount": 100.0, "hours": 4},
+            {"employee_name": "Unmapped Worker", "warehouse_id": "", "amount": 0.0, "hours": 0},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["errors"] == ["Excel 行缺少物理仓: Unmapped Worker"]
+    assert result["rows"][0]["reconciliationStatus"] == "passed"
+    assert result["summary"]["pdfAmountTotal"] == 100.0
+    assert result["summary"]["excelAmountTotal"] == 100.0
+    assert result["summary"]["amountDeltaTotal"] == 0.0
+    assert result["summary"]["passedCount"] == 1
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_pdf_row_grouping_error_forces_total_failed():
+    result = compare_by_warehouse(
+        pdf_totals=[{
+            "source_file": "warehouse-1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 100.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+        }],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Unassigned Detail", hours=1.0, amount=25.0, currency="USD", confidence=0.95, evidence_text=""),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Mapped Worker", "warehouse_id": "1", "amount": 100.0, "hours": 4},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["errors"] == ["无法从文件名提取仓库号: invoice.pdf"]
+    assert result["rows"][0]["reconciliationStatus"] == "passed"
+    assert result["summary"]["pdfAmountTotal"] == 100.0
+    assert result["summary"]["excelAmountTotal"] == 100.0
+    assert result["summary"]["amountDeltaTotal"] == 0.0
+    assert result["summary"]["passedCount"] == 1
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_does_not_double_count_employee_detail_attachments():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "ELGA_041026-15.pdf", "warehouse_id": "", "total_amount": 2237.67, "authoritative": False, "evidence_status": "supporting", "pdf_type": "supporting"},
+            {"source_file": "ELGA_Adriana.pdf", "warehouse_id": "", "total_amount": 905.92, "authoritative": False, "evidence_status": "supporting", "pdf_type": "supporting"},
+            {"source_file": "Inv_04102615_from_Tru_Staffing_33680.pdf", "warehouse_id": "2", "total_amount": 2685.20, "authoritative": True, "evidence_status": "authoritative"},
+            {"source_file": "Inv_04242617_from_Tru_Staffing_32284.pdf", "warehouse_id": "3", "total_amount": 3081.98, "authoritative": True, "evidence_status": "authoritative"},
+        ],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="ELGA_041026-15.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Stephie Arujo", hours=44.18, amount=740.32, currency="USD", confidence=0.96, evidence_text="", warehouse_id="2"),
+            LaborLineItem(source_type="pdf_invoice", source_file="ELGA_Adriana.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Adriana Bermudez Cuenu", hours=51.08, amount=905.92, currency="USD", confidence=0.96, evidence_text="", warehouse_id="3"),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Stephie Araujo Hernandez", "warehouse_id": "2", "amount": 2685.20, "hours": 40},
+            {"employee_name": "Adriana Bermudez Cuenu", "warehouse_id": "3", "amount": 3081.98, "hours": 40},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["summary"]["pdfAmountTotal"] == 5767.18
+    assert result["summary"]["totalPassed"] is True
+    assert result["summary"]["diffWarehouses"] == []
+    assert {row["warehouseId"]: row["matchStatus"] for row in result["rows"]} == {"2": "通过", "3": "通过"}
+
+
+def test_warehouse_comparison_keeps_authoritative_total_with_employee_detail_signal():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "warehouse-1.pdf", "warehouse_id": "1", "total_amount": 100.0, "authoritative": True, "evidence_status": "authoritative", "has_employee_detail": True},
+            {"source_file": "warehouse-2.pdf", "warehouse_id": "2", "total_amount": 200.0, "authoritative": True, "evidence_status": "authoritative"},
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "A", "warehouse_id": "1", "amount": 100.0, "hours": 1},
+            {"employee_name": "B", "warehouse_id": "2", "amount": 200.0, "hours": 1},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["summary"]["pdfAmountTotal"] == 300.0
+    assert result["summary"]["totalPassed"] is True
+    assert {row["warehouseId"]: row["reconciliationStatus"] for row in result["rows"]} == {
+        "1": "passed",
+        "2": "passed",
+    }
+
+
+def test_warehouse_attribution_closes_with_unattributed_invoice_amount():
+    result = compare_by_warehouse(
+        pdf_totals=[{
+            "source_file": "warehouse-9.pdf",
+            "warehouse_id": "9",
+            "total_amount": 11837.79,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+        }],
+        pdf_rows=[
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file="warehouse-9.pdf",
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw="Employee A",
+                hours=1,
+                amount=11470.52,
+                currency="USD",
+                confidence=0.95,
+                evidence_text="",
+                warehouse_id="9",
+            )
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Employee A", "warehouse_id": "9", "hours": 1, "amount": 11611.03}
+        ],
+        amount_tolerance=0.1,
+    )
+
+    row = result["rows"][0]
+    attribution = {item["employeeName"]: item["delta"] for item in row["attribution"]}
+
+    assert row["amountDelta"] == 226.76
+    assert attribution["Employee A"] == -140.51
+    assert attribution["未归因发票金额"] == 367.27
+    assert round(sum(item["delta"] for item in row["attribution"]), 2) == row["amountDelta"]
+
+
+def test_warehouse_comparison_marks_excel_only_warehouse_missing_pdf_invoice():
+    result = compare_by_warehouse(
+        pdf_totals=[{
+            "source_file": "warehouse-10.pdf",
+            "warehouse_id": "10",
+            "total_amount": 50000.0,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 2,
+            "excluded_pages": [1],
+        }],
+        excel_rows_with_warehouse=[
+            {"employee_name": "A", "warehouse_id": "10", "amount": 50000.0, "hours": 10},
+            {"employee_name": "B", "warehouse_id": "3", "amount": 12459.22, "hours": 10},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    rows = {row["warehouseId"]: row for row in result["rows"]}
+    assert rows["3"] == {
+        "warehouseId": "3",
+        "pdfEmployeeCount": 0,
+        "excelEmployeeCount": 1,
+        "pdfHoursTotal": 0,
+        "excelHoursTotal": 10.0,
+        "pdfAmountTotal": 0.0,
+        "excelAmountTotal": 12459.22,
+        "amountDelta": -12459.22,
+        "reconciliationStatus": "missing_pdf_invoice",
+        "matchStatus": "缺少PDF发票",
+        "evidenceStatus": "missing",
+        "pdfEvidenceFile": "",
+        "pdfEvidencePage": None,
+        "excludedPdfPages": [],
+        "employeeRows": [],
+        "attribution": [],
+    }
+    assert result["summary"]["missingPdfAmountTotal"] == 12459.22
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_marks_pdf_only_warehouse_extra_pdf_invoice():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "warehouse-10.pdf", "warehouse_id": "10", "total_amount": 50000.0},
+            {
+                "source_file": "warehouse-99.pdf",
+                "warehouse_id": "99",
+                "total_amount": 275.5,
+                "authoritative": True,
+                "evidence_status": "authoritative",
+                "total_page": 3,
+                "excluded_pages": [1, 2],
+            },
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "A", "warehouse_id": "10", "amount": 50000.0, "hours": 10},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    row = next(row for row in result["rows"] if row["warehouseId"] == "99")
+    assert row["reconciliationStatus"] == "extra_pdf_invoice"
+    assert row["matchStatus"] == "多余PDF发票"
+    assert row["evidenceStatus"] == "authoritative"
+    assert row["pdfEvidenceFile"] == "warehouse-99.pdf"
+    assert row["pdfEvidencePage"] == 3
+    assert row["excludedPdfPages"] == [1, 2]
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_marks_unresolved_pdf_total_needs_review():
+    result = compare_by_warehouse(
+        pdf_totals=[{
+            "source_file": "warehouse-7.pdf",
+            "warehouse_id": "7",
+            "total_amount": 4105.15,
+            "authoritative": False,
+            "evidence_status": "needs_review",
+            "total_page": None,
+            "excluded_pages": [2, 3],
+        }],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="warehouse-7.pdf", source_page_or_row="p2", employee_id="", employee_name_raw="Worker One", hours=40, amount=4105.15, currency="USD", confidence=0.95, evidence_text="", warehouse_id="7"),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Worker One", "warehouse_id": "7", "amount": 4105.15, "hours": 40},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    row = result["rows"][0]
+    assert row["reconciliationStatus"] == "needs_review"
+    assert row["matchStatus"] == "待复核"
+    assert row["evidenceStatus"] == "needs_review"
+    assert row["pdfAmountTotal"] == 0.0
+    assert row["pdfEvidenceFile"] == "warehouse-7.pdf"
+    assert row["pdfEvidencePage"] is None
+    assert row["excludedPdfPages"] == [2, 3]
+    assert row["employeeRows"]
+    assert result["summary"]["pdfAmountTotal"] == 0.0
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_never_replaces_invoice_total_with_excel_closest_detail_sum():
+    result = compare_by_warehouse(
+        pdf_totals=[{
+            "source_file": "warehouse-1.pdf",
+            "warehouse_id": "1",
+            "total_amount": 1711.22,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 2,
+            "excluded_pages": [3],
+        }],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="warehouse-1.pdf", source_page_or_row="p3", employee_id="", employee_name_raw="Worker One", hours=79.65, amount=1513.35, currency="CAD", confidence=0.97, evidence_text="", warehouse_id="1"),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Worker One", "warehouse_id": "1", "amount": 1513.35, "hours": 79.65},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    row = result["rows"][0]
+    assert result["summary"]["pdfAmountTotal"] == 1711.22
+    assert result["summary"]["amountDeltaTotal"] == 197.87
+    assert result["summary"]["totalPassed"] is False
+    assert row["pdfAmountTotal"] == 1711.22
+    assert row["reconciliationStatus"] == "amount_difference"
+    assert row["pdfEvidenceFile"] == "warehouse-1.pdf"
+    assert row["pdfEvidencePage"] == 2
+    assert row["excludedPdfPages"] == [3]
+
+
+def test_warehouse_comparison_reports_comparable_and_full_batch_deltas():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "warehouse-10.pdf", "warehouse_id": "10", "total_amount": 50000.0, "authoritative": True},
+            {"source_file": "warehouse-2.pdf", "warehouse_id": "2", "total_amount": 42549.15, "authoritative": True},
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "A", "warehouse_id": "10", "amount": 50000.0, "hours": 10},
+            {"employee_name": "B", "warehouse_id": "2", "amount": 42321.33, "hours": 10},
+            {"employee_name": "C", "warehouse_id": "3", "amount": 12459.22, "hours": 10},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    expected_summary = {
+        "pdfAmountTotal": 92549.15,
+        "excelAmountTotal": 104780.55,
+        "amountDeltaTotal": -12231.4,
+        "comparableExcelAmountTotal": 92321.33,
+        "comparableAmountDeltaTotal": 227.82,
+        "missingPdfAmountTotal": 12459.22,
+        "totalPassed": False,
+    }
+    assert {key: result["summary"][key] for key in expected_summary} == expected_summary
+    assert {row["warehouseId"]: row["reconciliationStatus"] for row in result["rows"]} == {
+        "10": "passed",
+        "2": "amount_difference",
+        "3": "missing_pdf_invoice",
+    }
+
+
+def test_warehouse_comparison_does_not_fall_back_to_detail_amount_when_pdf_total_is_zero():
+    result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "DEPT_1_20260709_133853_115071.pdf", "warehouse_id": "1", "total_amount": 0},
+        ],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="DEPT_1_20260709_133853_115071.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Reyes, Kaylee", hours=42.11, amount=974.64, currency="USD", confidence=0.95, evidence_text=""),
+            LaborLineItem(source_type="pdf_invoice", source_file="DEPT_1_20260709_133853_115071.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Rodriguez, Jennifer", hours=40.05, amount=906.02, currency="USD", confidence=0.95, evidence_text=""),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Kaylee Reyes", "warehouse_id": "1", "amount": 974.64, "hours": 42.11},
+            {"employee_name": "Jennifer Rodriguez", "warehouse_id": "1", "amount": 906.02, "hours": 40.05},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["rows"][0]["pdfAmountTotal"] == 0.0
+    assert result["rows"][0]["reconciliationStatus"] == "needs_review"
+    assert result["rows"][0]["matchStatus"] == "待复核"
+    assert result["summary"]["totalPassed"] is False
+
+
+def test_later_page_invoice_rows_remain_in_employee_and_warehouse_diagnostics():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="DEPT_2_20260709_133853_115595.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alex Chavez", hours=4.0, amount=100.0, currency="USD", confidence=0.95, evidence_text="Alex Chavez invoice charge 100.00", warehouse_id="2"),
+        LaborLineItem(source_type="pdf_invoice", source_file="DEPT_2_20260709_133853_115595.pdf", source_page_or_row="p3", employee_id="", employee_name_raw="Jordan Lee", hours=2.0, amount=50.0, currency="USD", confidence=0.95, evidence_text="Jordan Lee 2026-06-08 invoice charge 50.00", warehouse_id="2"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="excel_bill", source_file="员工账单明细.xlsx", source_page_or_row="r1", employee_id="", employee_name_raw="Alex Chavez", hours=4.0, amount=100.0, currency="USD", confidence=1.0, evidence_text="", warehouse_id="2"),
+        LaborLineItem(source_type="excel_bill", source_file="员工账单明细.xlsx", source_page_or_row="r2", employee_id="", employee_name_raw="Jordan Lee", hours=2.0, amount=50.0, currency="USD", confidence=1.0, evidence_text="", warehouse_id="2"),
+    ]
+
+    employee_result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.1, hours_tolerance=0.1)
+    warehouse_result = compare_by_warehouse(
+        pdf_totals=[
+            {"source_file": "DEPT_2_20260709_133853_115595.pdf", "warehouse_id": "2", "total_amount": 175.0, "authoritative": True, "evidence_status": "authoritative"},
+        ],
+        pdf_rows=pdf_rows,
+        excel_rows_with_warehouse=[
+            {"employee_name": "Alex Chavez", "warehouse_id": "2", "amount": 100.0, "hours": 4.0},
+            {"employee_name": "Jordan Lee", "warehouse_id": "2", "amount": 50.0, "hours": 2.0},
+        ],
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+    )
+
+    assert employee_result["summary"]["pdfAmountTotal"] == 150.0
+    assert employee_result["summary"]["excelAmountTotal"] == 150.0
+    assert {row["employeeName"] for row in employee_result["rows"]} == {"Alex Chavez", "Jordan Lee"}
+    assert warehouse_result["rows"][0]["reconciliationStatus"] == "amount_difference"
+    assert {row["employeeName"] for row in warehouse_result["rows"][0]["employeeRows"]} == {"Alex Chavez", "Jordan Lee"}
+
+
+def test_saved_labor_run_preserves_explicit_evidence_aware_total_decision():
     metadata = {
         "id": "labor_saved_old_result",
         "warehouseComparison": {
@@ -839,19 +1087,268 @@ def test_saved_labor_run_total_decision_is_normalized_at_ten_cents():
     normalized = _normalize_labor_total_decision(metadata)
 
     assert normalized["warehouseComparison"]["summary"]["amountDeltaTotal"] == -0.1
-    assert normalized["warehouseComparison"]["summary"]["totalPassed"] is True
+    assert normalized["warehouseComparison"]["summary"]["totalPassed"] is False
     assert metadata["warehouseComparison"]["summary"]["totalPassed"] is False
 
 
-def test_warehouse_comparison_infers_missing_pdf_warehouse_from_unique_excel_total():
+def test_saved_legacy_labor_run_normalizes_total_decision_when_no_decision_or_status_exists():
+    metadata = {
+        "warehouseComparison": {
+            "summary": {
+                "pdfAmountTotal": 144714.83,
+                "excelAmountTotal": 144714.93,
+                "amountDeltaTotal": -0.1,
+            },
+            "rows": [{"warehouseId": "1", "matchStatus": "通过"}],
+        }
+    }
+
+    normalized = _normalize_labor_total_decision(metadata)
+
+    assert normalized["warehouseComparison"]["summary"]["totalPassed"] is True
+
+
+def test_saved_labor_run_uses_explicit_reconciliation_status_before_amount_closeness():
+    metadata = {
+        "warehouseComparison": {
+            "summary": {"amountDeltaTotal": 0.0},
+            "rows": [{"warehouseId": "", "reconciliationStatus": "needs_review"}],
+        }
+    }
+
+    normalized = _normalize_labor_total_decision(metadata)
+
+    assert normalized["warehouseComparison"]["summary"]["totalPassed"] is False
+
+
+def test_build_conclusion_does_not_allow_amount_closeness_to_override_failed_total():
+    conclusion = _build_conclusion(
+        {
+            "summary": {
+                "totalPassed": False,
+                "pdfAmountTotal": 100.0,
+                "excelAmountTotal": 100.0,
+                "amountDeltaTotal": 0.0,
+            }
+        },
+        {
+            "summary": {
+                "pdfEmployeeCount": 1,
+                "excelEmployeeCount": 1,
+                "amountDiffCount": 0,
+                "exceptionCount": 0,
+                "lowConfidenceCount": 0,
+            },
+            "rows": [],
+        },
+        {"level": "ok"},
+        amount_tolerance=0.1,
+    )
+
+    assert conclusion["conclusionLevel"] == "warning"
+    assert "差异" in conclusion["conclusionMessage"]
+
+
+def test_build_conclusion_does_not_call_business_difference_low_confidence():
+    conclusion = _build_conclusion(
+        {
+            "summary": {
+                "totalPassed": False,
+                "pdfAmountTotal": 1000.0,
+                "excelAmountTotal": 1150.0,
+                "amountDeltaTotal": -150.0,
+            }
+        },
+        {
+            "summary": {
+                "pdfEmployeeCount": 1,
+                "excelEmployeeCount": 1,
+                "amountDiffCount": 1,
+                "exceptionCount": 1,
+                "lowConfidenceCount": 0,
+            },
+            "rows": [],
+        },
+        {
+            "level": "warning",
+            "metrics": {"confidence": {"lowCount": 0, "veryLowCount": 0}},
+        },
+        amount_tolerance=0.1,
+    )
+
+    assert conclusion["conclusionLevel"] == "warning"
+    assert conclusion["conclusionMessage"] == "1项员工/金额差异需关注"
+    assert "低置信度" not in conclusion["conclusionMessage"]
+
+
+def test_stage2_target_files_include_unassigned_review_evidence_but_not_missing_or_extra():
+    warehouse_rows = [
+        {"warehouseId": "", "reconciliationStatus": "needs_review", "pdfEvidenceFile": "mystery.pdf"},
+        {"warehouseId": "1", "reconciliationStatus": "amount_difference", "pdfEvidenceFile": "DEPT_1.pdf"},
+        {"warehouseId": "2", "reconciliationStatus": "missing_pdf_invoice", "pdfEvidenceFile": ""},
+        {"warehouseId": "3", "reconciliationStatus": "extra_pdf_invoice", "pdfEvidenceFile": "DEPT_3.pdf"},
+    ]
+
+    assert app_module._labor_stage2_target_pdf_names(warehouse_rows) == {"mystery.pdf", "DEPT_1.pdf"}
+
+
+def test_page_evidence_only_supporting_roles_make_unknown_pdf_audit_only():
+    total = {
+        "source_file": "support.pdf",
+        "pdf_type": "unknown",
+        "evidence_status": "needs_review",
+        "page_evidence": [
+            {"page": 1, "role": "email_cover"},
+            {"page": 2, "role": "timecard_summary"},
+            {"page": 3, "role": "daily_detail"},
+            {"page": 4, "role": "supporting_attachment"},
+        ],
+    }
+
+    assert _labor_total_is_explicitly_non_payable(total) is True
+
+
+def test_mixed_invoice_and_supporting_page_evidence_remains_reconcilable():
+    total = {
+        "source_file": "invoice-with-support.pdf",
+        "pdf_type": "supporting",
+        "authoritative": True,
+        "evidence_status": "authoritative",
+        "page_evidence": [
+            {"page": 1, "role": "invoice_primary"},
+            {"page": 2, "role": "timecard_summary"},
+        ],
+    }
+
+    assert _labor_total_is_explicitly_non_payable(total) is False
+
+
+def test_employee_rows_are_filtered_to_invoice_evidence_pages_before_comparison():
+    rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Primary Worker", hours=8, amount=100),
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p2", employee_id="", employee_name_raw="Continuation Worker", hours=8, amount=100),
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p3", employee_id="", employee_name_raw="Total Worker", hours=0, amount=0),
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p4", employee_id="", employee_name_raw="Timecard Worker", hours=8, amount=100),
+        LaborLineItem(source_type="pdf_invoice", source_file="legacy.pdf", source_page_or_row="p5", employee_id="", employee_name_raw="Legacy Worker", hours=8, amount=100),
+    ]
+    totals = [
+        {
+            "source_file": "invoice.pdf",
+            "page_evidence": [
+                {"page": 1, "role": "invoice_primary"},
+                {"page": 2, "role": "invoice_continuation"},
+                {"page": 3, "role": "invoice_total"},
+                {"page": 4, "role": "timecard_summary"},
+            ],
+        },
+        {"source_file": "legacy.pdf"},
+    ]
+
+    filtered = app_module._filter_labor_rows_to_invoice_evidence_pages(rows, totals)
+
+    assert [row.employee_name_raw for row in filtered] == [
+        "Primary Worker",
+        "Continuation Worker",
+        "Total Worker",
+        "Legacy Worker",
+    ]
+
+
+def test_unknown_image_invoice_pages_keep_successfully_extracted_employee_rows():
+    rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="image-invoice.pdf",
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw="Lautric Patrick",
+            hours=28,
+            amount=635.04,
+            confidence=0.95,
+            evidence_text="LAUTRIC PATRICK 28,00 635,04",
+        )
+    ]
+    totals = [
+        {
+            "source_file": "image-invoice.pdf",
+            "pdf_type": "unknown",
+            "authoritative": False,
+            "evidence_status": "needs_review",
+            "excluded_pages": [1],
+            "page_evidence": [{"page": 1, "role": "unknown", "role_confidence": 0.5}],
+        }
+    ]
+
+    filtered = app_module._filter_labor_rows_to_invoice_evidence_pages(rows, totals)
+
+    assert filtered == rows
+
+
+def test_employee_rows_never_extend_past_authoritative_total_page():
+    rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Invoice Worker", hours=8, amount=100),
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p2", employee_id="", employee_name_raw="Email Worker", hours=8, amount=100),
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p3", employee_id="", employee_name_raw="Timecard Worker", hours=8, amount=100),
+    ]
+    totals = [
+        {
+            "source_file": "invoice.pdf",
+            "authoritative": True,
+            "total_page": 1,
+            "page_evidence": [
+                {"page": 1, "role": "invoice_primary", "total_amount": 100},
+                {"page": 2, "role": "invoice_primary", "total_amount": None},
+                {"page": 3, "role": "invoice_total", "total_amount": None},
+            ],
+        }
+    ]
+
+    filtered = app_module._filter_labor_rows_to_invoice_evidence_pages(rows, totals)
+
+    assert [row.employee_name_raw for row in filtered] == ["Invoice Worker"]
+
+
+def test_unscanned_invoice_continuation_pages_remain_available_for_employee_detail():
+    rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="NJ13 Invoice Report.pdf",
+            source_page_or_row="p8",
+            employee_id="20132",
+            employee_name_raw="Contreras, Kristel",
+            hours=48,
+            amount=1122.68,
+        )
+    ]
+    totals = [
+        {
+            "source_file": "NJ13 Invoice Report.pdf",
+            "authoritative": True,
+            "total_page": 1,
+            "excluded_pages": [8],
+            "page_evidence": [
+                {"page": 1, "role": "invoice_total", "total_amount": 1122.68},
+                {"page": 2, "role": "invoice_continuation", "total_amount": None},
+                {
+                    "page": 8,
+                    "role": "unknown",
+                    "role_confidence": 0,
+                    "extraction_method": "not_scanned_after_authoritative_total",
+                },
+            ],
+        }
+    ]
+
+    filtered = app_module._filter_labor_rows_to_invoice_evidence_pages(rows, totals)
+
+    assert [row.employee_name_raw for row in filtered] == ["Contreras, Kristel"]
+
+
+def test_warehouse_comparison_never_infers_missing_pdf_warehouse_from_excel_total():
     result = compare_by_warehouse(
         pdf_totals=[
-            {"source_file": "Invoice-5058871.pdf", "warehouse_id": "", "total_amount": 8500.67},
-            {"source_file": "Invoice-5058872.pdf", "warehouse_id": "", "total_amount": 3223.94},
-        ],
-        pdf_rows=[
-            LaborLineItem(source_type="pdf_invoice", source_file="Invoice-5058871.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Worker One", hours=10, amount=8500.67, currency="USD", confidence=0.98, evidence_text=""),
-            LaborLineItem(source_type="pdf_invoice", source_file="Invoice-5058872.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Worker Two", hours=8, amount=3223.94, currency="USD", confidence=0.98, evidence_text=""),
+            {"source_file": "Invoice-5058871.pdf", "warehouse_id": "", "total_amount": 8500.67, "authoritative": True, "evidence_status": "authoritative", "total_page": 2},
+            {"source_file": "Invoice-5058872.pdf", "warehouse_id": "", "total_amount": 3223.94, "authoritative": True, "evidence_status": "authoritative", "total_page": 1},
         ],
         excel_rows_with_warehouse=[
             {"employee_name": "Worker One", "warehouse_id": "19", "hours": 10, "amount": 8500.67},
@@ -860,13 +1357,22 @@ def test_warehouse_comparison_infers_missing_pdf_warehouse_from_unique_excel_tot
         amount_tolerance=0.1,
     )
 
-    assert result["errors"] == []
-    assert result["summary"]["totalPassed"] is True
-    assert result["summary"]["passedCount"] == 2
+    assert result["errors"] == [
+        "无法提取仓库号: Invoice-5058871.pdf",
+        "无法提取仓库号: Invoice-5058872.pdf",
+    ]
+    assert result["summary"]["pdfAmountTotal"] == 11724.61
+    assert result["summary"]["totalPassed"] is False
+    assert result["summary"]["passedCount"] == 0
+    assert result["summary"]["missingPdfAmountTotal"] == 11724.61
     rows_by_wh = {row["warehouseId"]: row for row in result["rows"]}
-    assert set(rows_by_wh) == {"18", "19"}
-    assert rows_by_wh["19"]["pdfEmployeeCount"] == 1
-    assert rows_by_wh["18"]["pdfEmployeeCount"] == 1
+    assert set(rows_by_wh) == {"", "18", "19"}
+    assert rows_by_wh[""]["reconciliationStatus"] == "needs_review"
+    assert rows_by_wh[""]["pdfAmountTotal"] == 11724.61
+    assert rows_by_wh[""]["pdfEvidenceFile"] == "Invoice-5058871.pdf; Invoice-5058872.pdf"
+    assert rows_by_wh[""]["pdfEvidencePage"] == "2, 1"
+    assert rows_by_wh["18"]["reconciliationStatus"] == "missing_pdf_invoice"
+    assert rows_by_wh["19"]["reconciliationStatus"] == "missing_pdf_invoice"
 
 
 def test_classify_pdf_distinguishes_invoice_support_and_attachments():
@@ -874,6 +1380,11 @@ def test_classify_pdf_distinguishes_invoice_support_and_attachments():
     assert _classify_pdf("Supplement1.pdf", "Timecard Detail\nDaily Log\nEmployee hours only") == "supporting"
     assert _classify_pdf("COI_certificate.pdf", "Certificate of Insurance") == "attachment"
     assert _classify_pdf("scan.pdf", "") == "unknown"
+    assert _classify_pdf(
+        "invoice_then_timecard.pdf",
+        "INVOICE\nASSOCIATE HOURS AMOUNT\nWorker One 40.00 $1,000.00\nNET TOTAL $1,000.00\n"
+        "WEEKLY TIMECARD\nDaily hours only",
+    ) == "primary"
 
 
 def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment():
@@ -904,6 +1415,415 @@ def test_sss_invoice_total_reads_billable_total_row():
         48,293.06$
         """
     ) == 48293.06
+
+
+@pytest.mark.parametrize(
+    ("label", "amount"),
+    [
+        ("NET TOTAL", 2682.75),
+        ("TOTAL NETO", 2320.25),
+        ("NETTOSUMME", 2640.50),
+        ("GESAMT", 2580.00),
+    ],
+)
+def test_unknown_supplier_total_reads_common_cross_language_labels(label, amount):
+    assert _extract_invoice_total_from_text(f"INVOICE\nEmployee table\n{label}: ${amount:,.2f}") == amount
+
+
+def test_unknown_supplier_standalone_total_overrides_earlier_net_total():
+    assert _extract_invoice_total_from_text(
+        "INVOICE\nNET TOTAL: $1,790.00\nTOTAL: $1,900.00"
+    ) == 1900.0
+
+
+def test_unknown_supplier_total_reads_header_labels_with_footer_values():
+    assert _extract_invoice_total_from_text(
+        "\n".join(
+            [
+                "Invoice",
+                "Total",
+                "Balance Due",
+                "Payments/Credits",
+                "Description Qty Rate Amount",
+                "Worker One US Elogistics - Packing Team $16 Reg Time",
+                "40 19.20 768.00",
+                "Page 4",
+                "$22,122.83",
+                "$22,122.83",
+                "$0.00",
+            ]
+        )
+    ) == 22122.83
+
+
+def test_unknown_supplier_multiline_description_rows_close_footer_total():
+    page = {
+        "source_file": "Inv_061918_from_Coastline_Resources_LLC.pdf",
+        "page": 2,
+        "text": "\n".join(
+            [
+                "Invoice",
+                "Description Qty Rate Amount",
+                "Pay Period: 06-08 through 06-14-2026 Julian Espindola US",
+                "Elogistics - Packing Team $16 Reg Time",
+                "8.15 19.20 156.48",
+                "Pay Period: 06-08 through 06-14-2026 Benjamin Reyes US",
+                "Elogistics - Inbound Team $16hr Reg Time",
+                "39.39 19.1998 756.28",
+                "Pay Period: 06-08 through 06-14-2026- Elba Galvan- US E logistics",
+                "$15 hr Reg Time- Packing Team",
+                "38.99 18.00 701.82",
+                "Pay Period: 06-08 through 06-14-2026 Martin Valencia-US",
+                "E-logisitics- Inbound Team $16 Reg Time",
+                "40 19.20 768.00",
+                "Victor Hernandez - Missing 3.5hrs Reg Time $16 3.5 19.20 67.20",
+                "Page 2",
+            ]
+        ),
+    }
+
+    rows = _extract_with_rules(
+        [page],
+        supplier="coastline",
+        period_start="2026-06-08",
+        period_end="2026-06-14",
+        currency="USD",
+    )
+
+    assert [(row.employee_name_raw, row.hours, row.amount) for row in rows] == [
+        ("Julian Espindola", 8.15, 156.48),
+        ("Benjamin Reyes", 39.39, 756.28),
+        ("Elba Galvan", 38.99, 701.82),
+        ("Martin Valencia", 40.0, 768.0),
+        ("Victor Hernandez", 3.5, 67.2),
+    ]
+
+
+def test_candidate_with_authoritative_total_requires_amount_closure_even_when_employee_coverage_is_high():
+    rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="invoice.pdf",
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw="Worker One",
+            hours=40.0,
+            amount=90.0,
+            confidence=0.98,
+        )
+    ]
+    pages = [{"source_file": "invoice.pdf", "page": 1, "text": "INVOICE TOTAL: $100.00"}]
+    expected_rows = [{"employee_name_raw": "Worker One", "amount": 90.0}]
+
+    assert _candidate_is_confident(rows, pages, expected_rows=expected_rows) is False
+
+
+def test_unknown_supplier_rows_are_assigned_to_unique_excel_warehouses():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alexis Alfonso", hours=0.0, amount=100.0),
+        LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Shane Evans", hours=0.0, amount=200.0),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="excel_bill", source_file="bill.xlsx", source_page_or_row="2", employee_id="", employee_name_raw="Alexis Alfonso Lopez", hours=0.0, amount=100.0, warehouse_id="1"),
+        LaborLineItem(source_type="excel_bill", source_file="bill.xlsx", source_page_or_row="3", employee_id="", employee_name_raw="Shane Evan", hours=0.0, amount=200.0, warehouse_id="2"),
+    ]
+
+    assigned, audit = labor_structure.assign_pdf_rows_to_excel_warehouses(pdf_rows, excel_rows)
+
+    assert [row.warehouse_id for row in assigned] == ["1", "2"]
+    assert audit["assignedRowCount"] == 2
+    assert audit["unresolvedRowCount"] == 0
+
+
+def test_warehouse_comparison_allocates_unassigned_invoice_when_employee_rows_close_total():
+    comparison = compare_by_warehouse(
+        pdf_totals=[
+            {
+                "source_file": "invoice.pdf",
+                "total_amount": 300.0,
+                "warehouse_id": "",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+                "total_page": 4,
+            }
+        ],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alexis Alfonso", hours=0.0, amount=100.0, warehouse_id="1"),
+            LaborLineItem(source_type="pdf_invoice", source_file="invoice.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Shane Evans", hours=0.0, amount=200.0, warehouse_id="2"),
+        ],
+        excel_rows_with_warehouse=[
+            {"employee_name": "Alexis Alfonso Lopez", "amount": 100.0, "hours": 0.0, "warehouse_id": "1"},
+            {"employee_name": "Shane Evan", "amount": 200.0, "hours": 0.0, "warehouse_id": "2"},
+        ],
+        amount_tolerance=0.10,
+    )
+
+    assert comparison["summary"]["pdfAmountTotal"] == 300.0
+    assert comparison["summary"]["excelAmountTotal"] == 300.0
+    assert comparison["summary"]["totalPassed"] is True
+    assert [(row["warehouseId"], row["pdfAmountTotal"], row["matchStatus"]) for row in comparison["rows"]] == [
+        ("1", 100.0, "通过"),
+        ("2", 200.0, "通过"),
+    ]
+    assert all(row["evidenceStatus"] == "allocated_employee_detail" for row in comparison["rows"])
+
+
+def test_dcgcb_rate_amount_table_extracts_all_employee_rows_without_counting_rate_as_hours():
+    text = "\n".join(
+        [
+            "INVOICE",
+            "DCGCB-26326",
+            "BALANCE $39,966.14",
+            "Location: BRAMPTON",
+            "Billing Period- WE MAY 30, 2026 ; WE JUN 6, 2026",
+            "NAME REGULAR HRS O/T HRS RATE AMOUNT",
+            "AKRAN WASIM 7.9 19 150.10",
+            "BHUPINDER SINGH 71.75 19 1,363.25",
+            "GURDEEP 74 20 1,480.00",
+            "GURJOT SINGH 64.33 20 1,286.60",
+            "GURSIMRAN SINGH 73.9 20 1,478.00",
+            "HARMANPREET SINGH 46.26 19 878.94",
+            "JAGJEET SINGH 82 20 1,640.00",
+            "KARMAN SINGH 81.73 20 1,634.60",
+            "PARAMVIR SINGH 88 6 19 1,843.00",
+            "SOORAJ SURENDRANATHAN 70 19 1,330.00",
+            "SUKHJEET 88 8.9 20 2,027.00",
+            "TARANVIR SINGH 88 6.23 20 1,946.90",
+            "AMRITPAL KAUR 40.5 18 729.00",
+            "GURMEET SINGH 72.68 19 1,380.92",
+            "GURPAIR SINGH 75.64 19 1,437.16",
+            "JATIN 72 19 1,368.00",
+            "NIRMAL ANDREWS RODRIGUES 81.55 20 1,631.00",
+            "RAMNDEEP SINGH 47.9 20 958.00",
+            "RAVINDER SINGH 8 19 152.00",
+            "UTHANAM RAO 29.2 19 554.80",
+            "HARPREET SINGH 37.91 19 720.29",
+            "KANWARJEET SINGH 31.67 19 601.73",
+            "HARISH KUMAR 88 8.89 19 1,925.37",
+            "HARMANJOT SINGH 50.13 19 952.47",
+            "KANWARDEEP SINGH 73.12 19 1,389.28",
+            "MANPREET KAUR 81.37 18 1,464.66",
+            "SONAM EUDEN 88 6.99 20 1,969.70",
+            "TANVEER KAUR 59.75 18 1,075.50",
+            "3 5,368.27",
+        ]
+    )
+
+    rows = _extract_with_rules(
+        [{"source_file": "DCGCB-26326.pdf", "page": 1, "text": text}],
+        supplier="DCGCB",
+        period_start="2026-05-30",
+        period_end="2026-06-06",
+        currency="CAD",
+    )
+
+    assert len(rows) == 28
+    assert round(sum(row.amount for row in rows), 2) == 35368.27
+    by_name = {row.employee_name_raw: row for row in rows}
+    assert by_name["AKRAN WASIM"].hours == 7.9
+    assert by_name["PARAMVIR SINGH"].hours == 94.0
+    assert by_name["HARISH KUMAR"].hours == 96.89
+    assert by_name["HARISH KUMAR"].amount == 1925.37
+
+
+def test_extract_invoice_items_prefers_dcgcb_rate_amount_rows_before_ai(monkeypatch, tmp_path):
+    pdf = tmp_path / "DCGCV-26324.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    page = {
+        "source_file": pdf.name,
+        "page": 1,
+        "text": "\n".join(
+            [
+                "INVOICE DCGCV-26324",
+                "Billing Period- WE MAY 30, 2026 ; WE JUN 7, 2026",
+                "NAME REGULAR HRS O/T HRS RATE AMOUNT",
+                "GURKIRAT SINGH 53.15 20 1,063.00",
+                "HAROLD KUMAR 39.93 20 798.60",
+                "HARMAN SINGH SANDHU 88 16.05 20 2,241.50",
+                "ISHPREET SINGH 25.3 19 480.70",
+                "18,996.93",
+            ]
+        ),
+    }
+    import bonus_platform.engine.labor.extract as extract_module
+
+    monkeypatch.setattr(extract_module, "_extract_pdf_pages", lambda paths: [page])
+    monkeypatch.setattr(
+        extract_module,
+        "_post_chat_completion",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("AI should not run when rules extract rows")),
+    )
+
+    rows = extract_invoice_items(
+        [pdf],
+        {
+            "enabled": True,
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "parallel_extraction_enabled": False,
+        },
+        supplier="DCGCB",
+        period_start="2026-06-01",
+        period_end="2026-06-07",
+        currency="CAD",
+    )
+
+    assert [row.employee_name_raw for row in rows] == [
+        "GURKIRAT SINGH",
+        "HAROLD KUMAR",
+        "HARMAN SINGH SANDHU",
+        "ISHPREET SINGH",
+    ]
+    assert round(sum(row.hours for row in rows), 2) == 222.43
+    assert round(sum(row.amount for row in rows), 2) == 4583.80
+    assert all(row.confidence == 0.97 for row in rows)
+
+
+def test_extract_invoice_items_uses_best_candidate_when_rule_rows_are_incomplete(monkeypatch, tmp_path):
+    pdf = tmp_path / "unknown_rate_amount.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    page = {
+        "source_file": pdf.name,
+        "page": 1,
+        "text": "\n".join(
+            [
+                "INVOICE",
+                "BALANCE $300.00",
+                "NAME REGULAR HRS O/T HRS RATE AMOUNT",
+                "ALICE SMITH 5 20 100.00",
+                "BOB JONES row present but amount shifted in image table",
+                "CAROL LEE row present but amount shifted in image table",
+            ]
+        ),
+    }
+    import bonus_platform.engine.labor.extract as extract_module
+
+    monkeypatch.setattr(extract_module, "_extract_pdf_pages", lambda paths: [page])
+    monkeypatch.setattr(
+        extract_module,
+        "_extract_with_ai_text",
+        lambda *args, **kwargs: [
+            {
+                "source_file": pdf.name,
+                "source_page_or_row": "p1",
+                "employee_name_raw": "ALICE SMITH",
+                "hours": 5,
+                "amount": 100,
+                "confidence": 0.9,
+                "evidence_text": "ALICE SMITH",
+            },
+            {
+                "source_file": pdf.name,
+                "source_page_or_row": "p1",
+                "employee_name_raw": "BOB JONES",
+                "hours": 5,
+                "amount": 100,
+                "confidence": 0.9,
+                "evidence_text": "BOB JONES",
+            },
+            {
+                "source_file": pdf.name,
+                "source_page_or_row": "p1",
+                "employee_name_raw": "CAROL LEE",
+                "hours": 5,
+                "amount": 100,
+                "confidence": 0.9,
+                "evidence_text": "CAROL LEE",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        extract_module,
+        "_extract_with_ai_images",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("image AI should not run when text candidate wins")),
+    )
+
+    rows = extract_invoice_items(
+        [pdf],
+        {
+            "enabled": True,
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "parallel_extraction_enabled": False,
+        },
+        supplier="Unknown",
+        currency="USD",
+    )
+
+    assert [row.employee_name_raw for row in rows] == ["ALICE SMITH", "BOB JONES", "CAROL LEE"]
+    assert round(sum(row.amount for row in rows), 2) == 300.0
+
+
+def test_elga_invoice_detail_rows_merge_regular_and_overtime_lines():
+    page = {
+        "source_file": "ELGA 041026-15.pdf",
+        "page": 1,
+        "text": "\n".join(
+            [
+                "Invoice Number: ELGA 041026-15",
+                "Job Site/Warehouse  Name Pay Type   Rate  Hours",
+                "Paid  Amount  Paid",
+                "1",
+                "1950 Oak lawn ave Atlanta",
+                "Ga Arnaldo Ibarra Hourly-Reg 17.00 40.00 680.00",
+                "Overtime (Hourly) 25.50 21.70 553.35",
+                "2 The Bluffs Austell GA Stephie Arujo Hourly-Reg 16.00 40.00 640.00",
+                "Overtime (Hourly) 24.00 4.18 100.32",
+                "3 Fulton Adriana Bermudez",
+                "Cuenu Hourly-Reg 16.00 16.50 264.00",
+                "Overtime (Hourly) 24.00 -",
+                "Total 122.38 2,237.67",
+                "INVOICE DETAIL",
+            ]
+        ),
+    }
+
+    rows = _extract_with_rules([page], "Tru Staffing", "2026-05-01", "2026-06-30", "USD")
+
+    assert [(row.employee_name_raw, row.hours, row.amount) for row in rows] == [
+        ("Arnaldo Ibarra", 61.7, 1233.35),
+        ("Stephie Arujo", 44.18, 740.32),
+        ("Adriana Bermudez Cuenu", 16.5, 264.0),
+    ]
+
+
+def test_warehouse_id_from_text_does_not_read_accounting_dept_phone_as_dept():
+    text = "\n".join(
+        [
+            "Att.: Accounting Dept",
+            "562.631.6301 sofia@trustaffing.com",
+            "Gross Wages Billable Rate Job Site Description Billable Earnings",
+        ]
+    )
+
+    assert _warehouse_id_from_text(text) == ""
+
+
+def test_labor_text_detail_signal_distinguishes_elga_detail_from_tru_summary():
+    from bonus_platform import app as app_module
+
+    elga_text = "\n".join(
+        [
+            "Job Site/Warehouse  Name Pay Type   Rate  Hours",
+            "Ga Arnaldo Ibarra Hourly-Reg 17.00 40.00 680.00",
+            "Overtime (Hourly) 25.50 21.70 553.35",
+            "INVOICE DETAIL",
+        ]
+    )
+    tru_summary_text = "\n".join(
+        [
+            "Gross Wages Billable RateJob Site Description Billable Earnings",
+            "1,289.56 1.20Staffing Service Staffing Services Provided for check date 5/1/26 1,547.47",
+            "Balance Due",
+        ]
+    )
+
+    assert app_module._labor_text_has_employee_detail_signal(elga_text) is True
+    assert app_module._labor_text_has_employee_detail_signal(tru_summary_text) is False
 
 
 def test_grande_solutions_simple_table_extracts_all_employee_rows():
@@ -1144,14 +2064,44 @@ def test_ai_rows_without_supporting_page_text_are_filtered():
     assert filtered[0]["source_page_or_row"] == "p1"
 
 
-def test_single_pdf_total_maps_to_only_excel_warehouse_when_pdf_has_no_warehouse_id():
-    pdf_rows = [
-        LaborLineItem(source_type="pdf_invoice", source_file="GS_invoice-ELOG-466-FL.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alberto Núñez", hours=35.08, amount=739.49, currency="USD", confidence=0.95, evidence_text=""),
-        LaborLineItem(source_type="pdf_invoice", source_file="GS_invoice-ELOG-466-FL.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Ivis Martinez", hours=6.55, amount=138.07, currency="USD", confidence=0.95, evidence_text=""),
+def test_ai_page_text_support_accepts_minor_ocr_spelling_variants():
+    pages = [
+        {
+            "source_file": "FACJS11000105.pdf",
+            "page": 1,
+            "text": "BATSIMBA GLOIRE RONNELE MANUTENTIONNAIRE S/Total 45,76 1143,37",
+        }
     ]
+    rows = [
+        {
+            "employee_name_raw": "BANTSIMBA GLOIRE RONLELE",
+            "hours": 45.76,
+            "amount": 1143.37,
+            "evidence_text": "BANTSIMBA GLOIRE RONLELE S/Total 45,76 1143,37",
+        }
+    ]
+
+    filtered = _filter_ai_rows_by_page_text(rows, pages)
+
+    assert filtered == [
+        {
+            **rows[0],
+            "source_file": "FACJS11000105.pdf",
+            "source_page_or_row": "p1",
+        }
+    ]
+
+
+def test_single_pdf_total_without_warehouse_stays_unassigned_when_excel_has_one_warehouse():
     result = compare_by_warehouse(
-        pdf_totals=[{"source_file": "GS_invoice-ELOG-466-FL.pdf", "warehouse_id": "", "total_amount": 25487.5}],
-        pdf_rows=pdf_rows,
+        pdf_totals=[{
+            "source_file": "GS_invoice-ELOG-466-FL.pdf",
+            "warehouse_id": "",
+            "total_amount": 25487.5,
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 1,
+        }],
         excel_rows_with_warehouse=[
             {"employee_name": "Alberto Núñez", "warehouse_id": "1", "amount": 10000.0, "hours": 400},
             {"employee_name": "Ivis Martinez", "warehouse_id": "1", "amount": 15975.47, "hours": 800},
@@ -1159,11 +2109,48 @@ def test_single_pdf_total_maps_to_only_excel_warehouse_when_pdf_has_no_warehouse
         amount_tolerance=0.1,
     )
 
-    assert result["errors"] == []
-    assert result["rows"][0]["warehouseId"] == "1"
-    assert result["rows"][0]["pdfEmployeeCount"] == 2
-    assert result["rows"][0]["pdfAmountTotal"] == 25487.5
+    assert result["errors"] == ["无法提取仓库号: GS_invoice-ELOG-466-FL.pdf"]
+    rows = {row["warehouseId"]: row for row in result["rows"]}
+    assert rows[""]["reconciliationStatus"] == "needs_review"
+    assert rows[""]["pdfAmountTotal"] == 25487.5
+    assert rows[""]["pdfEvidenceFile"] == "GS_invoice-ELOG-466-FL.pdf"
+    assert rows["1"]["reconciliationStatus"] == "missing_pdf_invoice"
     assert result["summary"]["totalPassed"] is False
+
+
+def test_warehouse_comparison_keeps_invoice_total_when_employee_detail_matches_excel_without_warehouse_split():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="DCGCB-26326.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="AKRAN WASIM", hours=7.9, amount=150.10, currency="CAD", confidence=0.97, evidence_text=""),
+        LaborLineItem(source_type="pdf_invoice", source_file="DCGCB-26326.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="BHUPINDER SINGH", hours=71.75, amount=1363.25, currency="CAD", confidence=0.97, evidence_text=""),
+    ]
+
+    result = compare_by_warehouse(
+        pdf_totals=[{"source_file": "DCGCB-26326.pdf", "warehouse_id": "", "total_amount": 1711.22}],
+        pdf_rows=pdf_rows,
+        excel_rows_with_warehouse=[
+            {"employee_name": "AKRAN WASIM", "warehouse_id": "1", "amount": 150.10, "hours": 7.9},
+            {"employee_name": "BHUPINDER SINGH", "warehouse_id": "5", "amount": 1363.25, "hours": 71.75},
+        ],
+        amount_tolerance=0.1,
+    )
+
+    assert result["errors"] == [
+        "无法提取仓库号: DCGCB-26326.pdf",
+        "无法从文件名提取仓库号: DCGCB-26326.pdf",
+        "无法从文件名提取仓库号: DCGCB-26326.pdf",
+    ]
+    assert result["summary"]["totalPassed"] is False
+    assert result["summary"]["pdfAmountTotal"] == 1711.22
+    assert result["summary"]["excelAmountTotal"] == 1513.35
+    assert result["summary"]["amountDeltaTotal"] == 197.87
+    assert {row["warehouseId"]: row["reconciliationStatus"] for row in result["rows"]} == {
+        "": "needs_review",
+        "1": "missing_pdf_invoice",
+        "5": "missing_pdf_invoice",
+    }
+    unassigned = next(row for row in result["rows"] if row["warehouseId"] == "")
+    assert unassigned["pdfAmountTotal"] == 1711.22
+    assert unassigned["pdfEvidenceFile"] == "DCGCB-26326.pdf"
 
 
 def test_warehouse_comparison_still_runs_when_totals_offset_between_warehouses():
@@ -1180,7 +2167,7 @@ def test_warehouse_comparison_still_runs_when_totals_offset_between_warehouses()
     )
 
     assert result["summary"]["amountDeltaTotal"] == 0.0
-    assert result["summary"]["totalPassed"] is True
+    assert result["summary"]["totalPassed"] is False
     assert result["summary"]["diffWarehouses"] == ["3", "5"]
     assert {row["warehouseId"]: row["amountDelta"] for row in result["rows"]} == {"3": 1000.0, "5": -1000.0}
 
@@ -1208,7 +2195,7 @@ def test_warehouse_comparison_flags_employee_allocation_offsets_across_warehouse
     )
 
     assert result["summary"]["amountDeltaTotal"] == -0.01
-    assert result["summary"]["totalPassed"] is True
+    assert result["summary"]["totalPassed"] is False
     assert result["summary"]["allocationIssueCount"] == 2
     assert result["summary"]["diffWarehouses"] == ["25", "28"]
     issues_by_employee = {issue["employeeName"]: issue for issue in result["allocationIssues"]}
@@ -1255,6 +2242,165 @@ def test_reconciliation_diagnostics_flags_conflicting_pdf_signals():
     assert "missing_warehouse_id" in issue_codes
     assert "zero_pdf_total" in issue_codes
     assert "warehouse_mapping_errors" in issue_codes
+
+
+def test_reconciliation_diagnostics_flags_partial_pdf_employee_detail_coverage():
+    pdf_totals = [
+        {"source_file": "US_ELogistics_Service_Corp__35354.pdf", "warehouse_id": "18", "total_amount": 885.43},
+        {"source_file": "US_ELogistics_Service_Corp__35355.pdf", "warehouse_id": "19", "total_amount": 59874.61},
+        {"source_file": "US_ELogistics_Service_Corp__35361.pdf", "warehouse_id": "25", "total_amount": 50174.35},
+        {"source_file": "US_ELogistics_Service_Corp__35362.pdf", "warehouse_id": "28", "total_amount": 26582.95},
+        {"source_file": "US_ELogistics_Service_Corp__35363.pdf", "warehouse_id": "7", "total_amount": 7259.24},
+    ]
+    pdf_rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="US_ELogistics_Service_Corp__35361.pdf",
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw="Dueñas, Oscar",
+            hours=48.18,
+            amount=1407.38,
+            currency="USD",
+            confidence=0.9,
+            evidence_text="Dueñas, Oscar 48.18 $1,407.38",
+            warehouse_id="25",
+        )
+    ]
+
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=pdf_totals,
+        pdf_rows=pdf_rows,
+        comparison_summary={"pdfAmountTotal": 50174.35, "excelAmountTotal": 144731.22},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 144776.58, "excelAmountTotal": 144731.22},
+            "errors": [],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "warning"
+    assert "pdf_employee_detail_partial_coverage" in issue_codes
+    assert "pdf_total_conflict" not in issue_codes
+    assert diagnostics["signals"]["pdfDetailCoverage"] == {
+        "coverageBasis": "invoice_totals",
+        "invoiceFileCount": 5,
+        "detailFileCount": 1,
+        "missingFileCount": 4,
+        "coverageRatio": 0.2,
+        "invoiceAmountTotal": 144776.58,
+        "detailAmountTotal": 50174.35,
+        "amountCoverageRatio": 0.35,
+        "missingSourceFiles": [
+            "US_ELogistics_Service_Corp__35354.pdf",
+            "US_ELogistics_Service_Corp__35355.pdf",
+            "US_ELogistics_Service_Corp__35362.pdf",
+            "US_ELogistics_Service_Corp__35363.pdf",
+        ],
+    }
+    issue = next(issue for issue in diagnostics["issues"] if issue["code"] == "pdf_employee_detail_partial_coverage")
+    assert "员工明细只展开了部分发票" == issue["title"]
+    assert "5 张发票" in issue["message"]
+    assert "1 张发票" in issue["message"]
+
+
+def test_reconciliation_diagnostics_compares_partial_detail_to_covered_invoice_total():
+    pdf_totals = [
+        {"source_file": "warehouse-2.pdf", "warehouse_id": "2", "total_amount": 4105.15},
+        {"source_file": "warehouse-9.pdf", "warehouse_id": "9", "total_amount": 11837.79},
+        {"source_file": "warehouse-1.pdf", "warehouse_id": "1", "total_amount": 1880.67},
+    ]
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="warehouse-2.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alex Chavez", hours=32.3, amount=3341.31, currency="USD", confidence=0.95, evidence_text="", warehouse_id="2"),
+        LaborLineItem(source_type="pdf_invoice", source_file="warehouse-9.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Erick Canales", hours=24.35, amount=11837.79, currency="USD", confidence=0.95, evidence_text="", warehouse_id="9"),
+    ]
+
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=pdf_totals,
+        pdf_rows=pdf_rows,
+        comparison_summary={"pdfAmountTotal": 15179.10, "excelAmountTotal": 15715.12},
+        warehouse_comparison={
+            "summary": {"pdfAmountTotal": 17823.61, "excelAmountTotal": 17595.79},
+            "errors": [],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issues = {issue["code"]: issue for issue in diagnostics["issues"]}
+
+    assert "pdf_total_conflict" not in issues
+    assert "pdf_employee_detail_total_conflict" in issues
+    assert "$15,942.94" in issues["pdf_employee_detail_total_conflict"]["message"]
+    assert "$15,179.10" in issues["pdf_employee_detail_total_conflict"]["message"]
+    assert "$763.84" in issues["pdf_employee_detail_total_conflict"]["message"]
+
+
+def test_reconciliation_diagnostics_excludes_employee_detail_attachments_from_payable_conflict():
+    pdf_totals = [
+        {"source_file": "ELGA_041026-15.pdf", "warehouse_id": "", "total_amount": 2237.67, "has_employee_detail": True},
+        {"source_file": "ELGA_Adriana.pdf", "warehouse_id": "", "total_amount": 905.92, "has_employee_detail": True},
+        {"source_file": "Inv_04102615_from_Tru_Staffing_33680.pdf", "warehouse_id": "", "total_amount": 2685.20, "has_employee_detail": False},
+        {"source_file": "Inv_04242617_from_Tru_Staffing_32284.pdf", "warehouse_id": "", "total_amount": 3081.98, "has_employee_detail": False},
+    ]
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="ELGA_041026-15.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Stephie Arujo", hours=44.18, amount=2237.67, currency="USD", confidence=0.96, evidence_text=""),
+        LaborLineItem(source_type="pdf_invoice", source_file="ELGA_Adriana.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Adriana Bermudez Cuenu", hours=51.08, amount=905.92, currency="USD", confidence=0.96, evidence_text=""),
+    ]
+
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=pdf_totals,
+        pdf_rows=pdf_rows,
+        comparison_summary={"pdfAmountTotal": 3143.59, "excelAmountTotal": 5900.0},
+        warehouse_comparison={
+            "summary": {
+                "pdfAmountTotal": 5767.18,
+                "excelAmountTotal": 5900.0,
+                "selectedPdfAmountTotal": 5767.18,
+                "excludedPdfAmountTotal": 3143.59,
+                "selectedPdfTotalCount": 2,
+                "excludedPdfTotalCount": 2,
+                "totalSourceDecision": "employee_detail_pdfs_excluded_from_payable_total",
+            },
+            "errors": [],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "critical"
+    assert "payable_pdf_total_mismatch" in issue_codes
+    assert "pdf_total_conflict" not in issue_codes
+    assert "pdf_employee_detail_partial_coverage" not in issue_codes
+    assert diagnostics["signals"]["selectedPayablePdfTotal"] == 5767.18
+    assert diagnostics["signals"]["excludedEmployeeDetailPdfTotal"] == 3143.59
+    assert diagnostics["signals"]["pdfDetailCoverage"]["coverageBasis"] == "employee_detail_attachments"
+
+
+def test_reconciliation_diagnostics_explains_tax_inclusive_pdf_total_when_employee_detail_matches_excel():
+    diagnostics = build_reconciliation_diagnostics(
+        pdf_totals=[{"source_file": "DCGCB-26326.pdf", "warehouse_id": "", "total_amount": 39966.14}],
+        pdf_rows=[
+            LaborLineItem(source_type="pdf_invoice", source_file="DCGCB-26326.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="AKRAN WASIM", hours=7.9, amount=150.10, currency="CAD", confidence=0.97, evidence_text=""),
+            LaborLineItem(source_type="pdf_invoice", source_file="DCGCB-26326.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="BHUPINDER SINGH", hours=71.75, amount=1363.25, currency="CAD", confidence=0.97, evidence_text=""),
+        ],
+        comparison_summary={"pdfAmountTotal": 1513.35, "excelAmountTotal": 1513.35},
+        warehouse_comparison={
+            "summary": {
+                "pdfAmountTotal": 1513.35,
+                "excelAmountTotal": 1513.35,
+                "amountBasis": "pdf_employee_detail_total",
+                "warehouseComparisonSkipped": True,
+            },
+            "errors": [],
+        },
+        amount_tolerance=0.1,
+    )
+
+    issue_codes = {issue["code"] for issue in diagnostics["issues"]}
+    assert diagnostics["level"] == "warning"
+    assert "pdf_total_includes_tax_or_fee" in issue_codes
+    assert "pdf_total_conflict" not in issue_codes
 
 
 def test_reconciliation_diagnostics_passes_when_totals_align():
@@ -1475,6 +2621,333 @@ def test_suggest_mapping_and_read_workbook_rows_extract_required_fields(tmp_path
     assert rows[0].source_page_or_row == "账单!2"
 
 
+def test_xlsx_mapping_preflight_closes_workbook_handles(monkeypatch, tmp_path):
+    opened = []
+
+    class FakeSheet:
+        title = "账单"
+
+        def reset_dimensions(self):
+            return None
+
+        def iter_rows(self, *, values_only, max_row):
+            assert values_only is True
+            assert max_row == 21
+            return iter([
+                ("姓名", "工时", "金额"),
+                ("Alice", 8, 100),
+            ])
+
+    class FakeWorkbook:
+        sheetnames = ["账单"]
+
+        def __init__(self):
+            self.closed = False
+            self.sheet = FakeSheet()
+
+        def __getitem__(self, name):
+            assert name == "账单"
+            return self.sheet
+
+        def close(self):
+            self.closed = True
+
+    def fake_load_workbook(*_args, **_kwargs):
+        workbook = FakeWorkbook()
+        opened.append(workbook)
+        return workbook
+
+    monkeypatch.setattr(openpyxl, "load_workbook", fake_load_workbook)
+    path = tmp_path / "账单.xlsx"
+
+    assert list_workbook_sheets(path) == ["账单"]
+    assert opened[-1].closed is True
+
+    suggestion = suggest_mapping(path, "账单")
+    assert suggestion["suggestedMapping"]["name"] == "姓名"
+    assert opened[-1].closed is True
+
+
+def test_read_workbook_rows_sums_optional_amount_component_columns(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "账单"
+    sheet.append(["员工名称", "总计", "本周薪资", "本周餐补", "周日补贴", "时薪"])
+    sheet.append(["Unknown Worker", 27.92, 563.70, 19.44, 12.00, 20.19])
+    sheet.append(["总计", 27.92, 563.70, 19.44, 12.00, None])
+    path = tmp_path / "unknown-supplier.xlsx"
+    workbook.save(path)
+
+    suggestion = suggest_mapping(path, "账单")
+
+    assert suggestion["amountColumnCandidates"] == ["本周薪资", "本周餐补", "周日补贴"]
+    assert suggestion["suggestedMapping"]["name"] == "员工名称"
+    assert suggestion["suggestedMapping"]["hours"] == "总计"
+    assert suggestion["suggestedMapping"]["amount"] == "本周薪资"
+
+    rows = read_workbook_rows(
+        path,
+        "账单",
+        {
+            "name": "员工名称",
+            "hours": "总计",
+            "amount": "本周薪资",
+            "amountColumns": ["本周薪资", "本周餐补", "周日补贴"],
+        },
+    )
+
+    assert len(rows) == 1
+    assert rows[0].hours == 27.92
+    assert rows[0].amount == 595.14
+    assert rows[0].amount_components == {
+        "本周薪资": 563.70,
+        "本周餐补": 19.44,
+        "周日补贴": 12.00,
+    }
+
+
+def test_read_workbook_rows_captures_amount_breakdown_without_double_counting(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单明细"
+    sheet.append([
+        "姓名",
+        "时长总计(H)",
+        "费用总计(不含税)",
+        "白班工作费用",
+        "奖金-非固",
+        "非固费用总计",
+        "备注-非固",
+    ])
+    sheet.append(["Carolay Hincapie", 47.82, 1101.33, 1026.33, 75, 75, "4月奖金"])
+    path = tmp_path / "amount-breakdown.xlsx"
+    workbook.save(path)
+
+    rows = read_workbook_rows(
+        path,
+        "员工账单明细",
+        {
+            "name": "姓名",
+            "hours": "时长总计(H)",
+            "amount": "费用总计(不含税)",
+        },
+    )
+
+    assert len(rows) == 1
+    assert rows[0].amount == 1101.33
+    assert rows[0].amount_components == {"费用总计(不含税)": 1101.33}
+    assert rows[0].amount_breakdown == {
+        "白班工作费用": 1026.33,
+        "奖金-非固": 75.0,
+    }
+    assert rows[0].amount_context == {"备注-非固": "4月奖金"}
+
+
+def test_compare_labor_items_explains_excel_amount_component_delta():
+    pdf_rows = [
+        LaborLineItem(
+            source_type="pdf",
+            source_file="invoice.pdf",
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw="Carolay Hincapie",
+            hours=47.82,
+            amount=1026.32,
+        )
+    ]
+    excel_rows = [
+        LaborLineItem(
+            source_type="offline_workbook",
+            source_file="bill.xlsx",
+            source_page_or_row="员工账单明细!3",
+            employee_id="",
+            employee_name_raw="Carolay Hincapie",
+            hours=47.82,
+            amount=1101.33,
+            amount_breakdown={"白班工作费用": 1026.33, "奖金-非固": 75.0},
+            amount_context={"备注-非固": "4月奖金"},
+        )
+    ]
+
+    comparison = compare_labor_items(
+        pdf_rows,
+        excel_rows,
+        amount_tolerance=0.10,
+        hours_tolerance=0.10,
+    )
+
+    row = comparison["rows"][0]
+    assert row["matchStatus"] == "金额差异"
+    assert row["amountDifferenceReasonCode"] == "excel_amount_component_delta"
+    assert row["amountDifferenceComponents"] == [
+        {
+            "side": "excel",
+            "label": "奖金-非固",
+            "amount": 75.0,
+            "note": "4月奖金",
+        }
+    ]
+    assert row["amountDifferenceResidual"] == 0.01
+    assert "4月奖金" in row["amountDifferenceExplanation"]
+    assert "Excel 比 PDF 多 $75.01" in row["amountDifferenceExplanation"]
+
+
+def test_amount_rate_review_uses_component_explanation():
+    from bonus_platform.engine.labor.materials import _build_amount_rate_review_rows
+
+    explanation = (
+        "Excel 比 PDF 多 $75.01；其中可由 Excel 金额组成「奖金-非固」$75.00"
+        "（备注：4月奖金）解释。请确认该费用项是否应包含在本批发票中。"
+    )
+    rows = _build_amount_rate_review_rows(
+        [
+            {
+                "employeeKey": "name:CAROLAY HINCAPIE",
+                "employeeName": "Carolay Hincapie",
+                "matchStatus": "金额差异",
+                "pdfHoursTotal": 47.82,
+                "excelHoursTotal": 47.82,
+                "hoursDelta": 0.0,
+                "pdfAmountTotal": 1026.32,
+                "excelAmountTotal": 1101.33,
+                "amountDelta": -75.01,
+                "amountDifferenceReasonCode": "excel_amount_component_delta",
+                "amountDifferenceExplanation": explanation,
+                "amountDifferenceComponents": [
+                    {
+                        "side": "excel",
+                        "label": "奖金-非固",
+                        "amount": 75.0,
+                        "note": "4月奖金",
+                    }
+                ],
+                "amountDifferenceResidual": 0.01,
+            }
+        ],
+        hours_tolerance=0.1,
+    )
+
+    assert rows[0]["reviewLabel"] == "工时一致，Excel 含额外费用项"
+    assert rows[0]["reviewFocus"] == "先核 Excel 额外费用项"
+    assert rows[0]["businessQuestion"] == explanation
+    assert rows[0]["amountDifferenceComponents"][0]["note"] == "4月奖金"
+
+
+def test_read_workbook_rows_skips_explicit_total_summary_name(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Bill"
+    sheet.append(["Name", "Hours", "Amount", "Currency"])
+    sheet.append(["Alice Example", 8, 80, "USD"])
+    sheet.append(["Total Worker", 1, 10, "USD"])
+    sheet.append(["TOTAL", 9, 90, "USD"])
+    path = tmp_path / "summary-row.xlsx"
+    workbook.save(path)
+
+    rows = read_workbook_rows(
+        path,
+        "Bill",
+        {"name": "Name", "hours": "Hours", "amount": "Amount", "currency": "Currency"},
+    )
+
+    assert [row.employee_name_raw for row in rows] == ["Alice Example", "Total Worker"]
+    assert sum(row.hours for row in rows) == 9
+    assert sum(row.amount for row in rows) == 90
+
+
+def test_read_workbook_rows_skips_zero_value_footer_labels(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet2"
+    sheet.append(["员工名称", "总计", "总额"])
+    sheet.append(["Alice Example", 8, 80])
+    sheet.append(["site", 0, 0])
+    sheet.append(["Gonesse", None, None])
+    path = tmp_path / "footer-labels.xlsx"
+    workbook.save(path)
+
+    rows = read_workbook_rows(
+        path,
+        "Sheet2",
+        {"name": "员工名称", "hours": "总计", "amount": "总额"},
+    )
+
+    assert [row.employee_name_raw for row in rows] == ["Alice Example"]
+
+
+def test_line_items_keep_non_time_quantity_out_of_worked_hours():
+    rows = line_items_from_dicts(
+        [
+            {
+                "source_type": "pdf_invoice",
+                "source_file": "unknown.pdf",
+                "source_page_or_row": "p1",
+                "employee_name_raw": "Unknown Worker",
+                "hours": 4,
+                "amount": 19.44,
+                "quantity": 4,
+                "unit": "meal",
+                "item_type": "meal_allowance",
+                "description": "TICKET RESTAURANT",
+                "evidence_text": "Unknown Worker TICKET RESTAURANT 4,00 4,86 19,44",
+            }
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0].hours == 0
+    assert rows[0].quantity == 4
+    assert rows[0].unit == "meal"
+    assert rows[0].item_type == "meal_allowance"
+    assert rows[0].description == "TICKET RESTAURANT"
+
+
+def test_line_items_infer_non_time_quantity_from_visible_evidence():
+    rows = line_items_from_dicts(
+        [
+            {
+                "source_type": "pdf_invoice",
+                "source_file": "unknown.pdf",
+                "source_page_or_row": "p1",
+                "employee_name_raw": "Unknown Worker",
+                "hours": 4,
+                "amount": 19.44,
+                "evidence_text": "Unknown Worker TICKET RESTAURANT PAT 4,00 4,86 19,44",
+            },
+            {
+                "source_type": "pdf_invoice",
+                "source_file": "unknown.pdf",
+                "source_page_or_row": "p1",
+                "employee_name_raw": "Unknown Worker",
+                "hours": 27.92,
+                "amount": 563.70,
+                "evidence_text": "Unknown Worker HEURES NORMALES 27,92 20,19 563,70",
+            },
+        ]
+    )
+
+    assert [row.hours for row in rows] == [0, 27.92]
+    assert rows[0].quantity == 4
+    assert rows[0].item_type == "meal_allowance"
+    assert rows[1].item_type == "worked_hours"
+
+
+def test_suggest_mapping_prefers_plain_name_over_employee_id(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Employee Billing"
+    sheet.append(["Employee ID", "Name", "Hours", "Amount (Net)", "Currency", "Physical Warehouse"])
+    sheet.append(["SYN0001", "Jordan Hale", 38.5, 924.0, "USD", "101"])
+    path = tmp_path / "unknown-supplier.xlsx"
+    workbook.save(path)
+
+    suggestion = suggest_mapping(path, "Employee Billing")
+
+    assert suggestion["suggestedMapping"]["employeeId"] == "Employee ID"
+    assert suggestion["suggestedMapping"]["name"] == "Name"
+    assert suggestion["suggestedMapping"]["amount"] == "Amount (Net)"
+
+
 def test_suggest_mapping_prefers_amount_excluding_tax_when_available(tmp_path):
     path = tmp_path / "账单.xlsx"
     path.write_bytes(_workbook_with_tax_columns_bytes())
@@ -1566,6 +3039,43 @@ def test_compare_labor_items_flags_amount_delta_and_ignores_one_cent():
     assert any(row["matchStatus"] == "金额差异" and row["employeeName"] == "MARTINEZ, WILFREDO" for row in result["rows"])
     assert any(row["matchStatus"] == "低置信度抽取" for row in result["rows"])
     assert all(not (row["employeeName"] == "PEREZ, JOSE" and row["matchStatus"] == "金额差异") for row in result["rows"])
+
+
+def test_compare_labor_items_keeps_same_employee_separate_across_warehouses():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="wh12.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Serhii Hizhdevan", hours=10.27, amount=271.94, currency="EUR", confidence=1, evidence_text="invoice row", warehouse_id="12"),
+        LaborLineItem(source_type="pdf_invoice", source_file="wh9.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Hizhdevan Serhii", hours=11.99, amount=317.48, currency="EUR", confidence=1, evidence_text="invoice row", warehouse_id="9"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Sheet1!2", employee_id="DE-WH12", employee_name_raw="Serhii Hizhdevan", hours=10.27, amount=271.95, currency="EUR", confidence=1, evidence_text="", warehouse_id="12"),
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Sheet1!3", employee_id="DE-WH9", employee_name_raw="Hizhdevan Serhii", hours=11.99, amount=317.50, currency="EUR", confidence=1, evidence_text="", warehouse_id="9"),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.05, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 0
+    assert result["summary"]["unmatchedPdfCount"] == 0
+    assert result["summary"]["unmatchedExcelCount"] == 0
+    assert len(result["rows"]) == 2
+    assert {row["warehouseId"] for row in result["rows"]} == {"9", "12"}
+    assert all(row["matchStatus"] == "通过" for row in result["rows"])
+
+
+def test_compare_labor_items_never_fuzzy_matches_across_warehouses():
+    pdf_rows = [
+        LaborLineItem(source_type="pdf_invoice", source_file="wh1.pdf", source_page_or_row="p1", employee_id="", employee_name_raw="Alex Smith", hours=8, amount=100, currency="EUR", confidence=1, evidence_text="invoice row", warehouse_id="1"),
+    ]
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="bill.xlsx", source_page_or_row="Sheet1!2", employee_id="DE-ALEX", employee_name_raw="Alex Smith", hours=8, amount=100, currency="EUR", confidence=1, evidence_text="", warehouse_id="2"),
+    ]
+
+    result = compare_labor_items(pdf_rows, excel_rows, amount_tolerance=0.05, hours_tolerance=0.1)
+
+    assert result["summary"]["exceptionCount"] == 2
+    assert result["summary"]["unmatchedPdfCount"] == 1
+    assert result["summary"]["unmatchedExcelCount"] == 1
+    assert {row["warehouseId"] for row in result["rows"]} == {"1", "2"}
+    assert result["candidateMatches"] == []
 
 
 def test_compare_labor_items_treats_tiny_unmatched_excel_residual_as_passed_risk():
@@ -2088,6 +3598,16 @@ def test_ai_instruction_blocks_hallucinated_ids_and_non_employee_pages():
     assert "spatial calibration" in instruction.lower()
 
 
+def test_ai_instruction_requests_generic_line_semantics_for_unknown_suppliers():
+    instruction = _ai_instruction(resolve_supplier_profile("Unseen Vendor LLC"), for_image=True)
+
+    assert "description" in instruction
+    assert "item_type" in instruction
+    assert "quantity" in instruction
+    assert "unit" in instruction
+    assert "worked hours" in instruction.lower()
+
+
 def test_supplier_profile_adds_onesource_specific_extraction_guidance():
     profile = resolve_supplier_profile("One Source Staffing Inc.")
     instruction = _ai_instruction(profile)
@@ -2146,6 +3666,22 @@ def test_supplier_profiles_can_load_from_json_config(tmp_path):
     assert profiles[0].key == "demo"
     assert profiles[0].aliases == ["demo staffing"]
     assert "Charge Summary" in profiles[0].prompt_notes[0]
+    assert profiles[0].authoritative_total_methods == []
+
+
+def test_supplier_profile_round_trips_authoritative_total_methods(tmp_path):
+    path = save_supplier_profile(
+        {
+            "key": "demo",
+            "aliases": ["demo staffing"],
+            "authoritative_total_methods": ["configured_invoice_field"],
+        },
+        tmp_path,
+    )
+
+    profile = load_supplier_profiles(path)[0]
+
+    assert profile.authoritative_total_methods == ["configured_invoice_field"]
 
 
 def test_supplier_profiles_can_load_single_json_object(tmp_path):
@@ -2178,6 +3714,11 @@ def test_supplier_profile_resolver_prefers_external_config(tmp_path):
                     "key": "external-demo",
                     "aliases": ["onesource"],
                     "prompt_notes": ["External profile wins."],
+                    "version": 1,
+                    "status": "approved",
+                    "approvedBy": "p0-test-reviewer",
+                    "approvedAt": "2026-07-15T10:00:00Z",
+                    "created_from": "manual_review",
                 }
             ]
         ),
@@ -2346,8 +3887,9 @@ def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tm
             {
                 "source_file": "invoice.pdf",
                 "page": 1,
-                "text": "\n".join(
+                    "text": "\n".join(
                     [
+                        "Invoice CA#7",
                         "Aguilar, Hortensia",
                         "Reg",
                         "REG",
@@ -2386,7 +3928,493 @@ def test_quick_extract_totals_uses_wage_code_rows_from_all_pages(monkeypatch, tm
         supplier="Invoice",
     )
 
-    assert totals == [{"source_file": "invoice.pdf", "total_amount": 1963.51, "warehouse_id": "", "pdf_type": "unknown"}]
+    assert {key: totals[0][key] for key in ("source_file", "total_amount", "warehouse_id", "pdf_type")} == {
+        "source_file": "invoice.pdf",
+        "total_amount": 1963.51,
+        "warehouse_id": "7",
+        "pdf_type": "unknown",
+    }
+    assert totals[0]["authoritative"] is True
+    assert totals[0]["evidence_status"] == "authoritative"
+
+
+def test_quick_extract_totals_scans_later_image_pages_for_explicit_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "page": 1, "text": ""},
+            {"source_file": pdf.name, "page": 2, "text": ""},
+        ],
+    )
+    rendered_pages = []
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: (
+            rendered_pages.append(page_number)
+            or {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"}
+        ),
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"],
+            page=page["page"],
+            role="invoice_primary" if page["page"] == 1 else "invoice_total",
+            role_confidence=0.98,
+            warehouse_id="7",
+            total_amount=None if page["page"] == 1 else 4105.15,
+            total_label="" if page["page"] == 1 else "TOTAL",
+            evidence_text="TOTAL $4,105.15" if page["page"] == 2 else "Invoice details",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert rendered_pages == [1, 2]
+    assert result[0]["total_amount"] == 4105.15
+    assert result[0]["total_page"] == 2
+    assert result[0]["evidence_status"] == "authoritative"
+    assert result[0]["authoritative"] is True
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected_role"),
+    [
+        ("COI_WH-7.pdf", "supporting_attachment"),
+        ("Payment Terms.pdf", "supporting_attachment"),
+        ("timecard_WH-7.pdf", "timecard_summary"),
+        ("supporting_WH-7.pdf", "supporting_attachment"),
+    ],
+)
+def test_quick_extract_totals_image_non_payable_filename_overrides_ai_invoice_total(monkeypatch, tmp_path, filename, expected_role):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / filename
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""}],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"], page=page["page"], role="invoice_total", role_confidence=0.99,
+            warehouse_id="7", total_amount=4105.15, total_label="TOTAL", evidence_text="TOTAL $4,105.15",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["authoritative"] is False
+    assert result[0]["evidence_status"] == "needs_review"
+    assert result[0]["page_evidence"][0]["role"] == expected_role
+    assert result[0]["excluded_pages"] == [1]
+
+
+def test_quick_extract_totals_image_warehouse_conflict_demotes_ai_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "INVOICE_WH-3.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""}],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"], page=page["page"], role="invoice_total", role_confidence=0.99,
+            warehouse_id="30", total_amount=1000.0, total_label="TOTAL", evidence_text="TOTAL $1,000.00",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["authoritative"] is False
+    assert result[0]["evidence_status"] == "needs_review"
+    assert result[0]["warehouse_conflict"] == {
+        "source_file": pdf.name,
+        "filename_warehouse_id": "3",
+        "page_warehouse_ids": ["30"],
+    }
+
+
+def test_quick_extract_totals_mixed_image_and_text_pages_preserves_numeric_audit_order(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "INVOICE_WH-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""},
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 2, "text": "Invoice CA#7\nTotal Due: $4105.15"},
+        ],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"], page=page["page"], role="email_cover", role_confidence=0.99,
+            evidence_text="Invoice attached",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert [page["page"] for page in result[0]["page_evidence"]] == [1, 2]
+    assert [page["role"] for page in result[0]["page_evidence"]] == ["email_cover", "invoice_total"]
+    assert result[0]["excluded_pages"] == [1]
+
+
+def test_quick_extract_totals_mixed_text_and_image_warehouse_conflict_preserves_candidates(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "INVOICE_WH-3.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": "Invoice cover letter"},
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 2, "text": ""},
+        ],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"], page=page["page"], role="invoice_total", role_confidence=0.99,
+            warehouse_id="30", total_amount=1000.0, total_label="TOTAL", evidence_text="TOTAL $1,000.00",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["authoritative"] is False
+    assert result[0]["evidence_status"] == "needs_review"
+    assert result[0]["warehouse_conflict"] == {
+        "source_file": pdf.name,
+        "filename_warehouse_id": "3",
+        "page_warehouse_ids": ["30"],
+    }
+
+
+def test_quick_extract_totals_returns_review_status_instead_of_authoritative_zero(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "page": 1, "text": ""}],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"],
+            page=page["page"],
+            role="invoice_primary",
+            role_confidence=0.98,
+            warehouse_id="7",
+            evidence_text="Invoice details without a visible total",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["total_page"] is None
+    assert result[0]["evidence_status"] == "needs_review"
+    assert result[0]["authoritative"] is False
+
+
+def test_quick_extract_totals_preserves_page_role_audit(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "page": 1, "text": ""},
+            {"source_file": pdf.name, "page": 2, "text": ""},
+        ],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"],
+            page=page["page"],
+            role="email_cover" if page["page"] == 1 else "invoice_total",
+            role_confidence=0.98,
+            warehouse_id="7" if page["page"] == 2 else "",
+            total_amount=4105.15 if page["page"] == 2 else None,
+            total_label="TOTAL" if page["page"] == 2 else "",
+            evidence_text="TOTAL $4,105.15" if page["page"] == 2 else "Attached invoice",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert [page["role"] for page in result[0]["page_evidence"]] == ["email_cover", "invoice_total"]
+    assert result[0]["excluded_pages"] == [1]
+
+
+def test_quick_extract_totals_keeps_timecard_total_out_of_invoice_evidence(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7-timecard.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{
+            "source_file": pdf.name,
+            "source_path": str(pdf),
+            "page": 1,
+            "text": "TIME CARD\nCA#7\nTotal Due: $4105.15\nWorker One Reg 40.0 $4105.15",
+        }],
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["authoritative"] is False
+    assert result[0]["evidence_status"] == "needs_review"
+    assert result[0]["page_evidence"][0]["role"] == "timecard_summary"
+    assert result[0]["excluded_pages"] == [1]
+
+
+def test_quick_extract_totals_keeps_supporting_rule_rows_out_of_invoice_evidence(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7-supporting.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{
+            "source_file": pdf.name,
+            "source_path": str(pdf),
+            "page": 1,
+            "text": "SUPPORTING ATTACHMENT\nCA#7\nHours Amount Bill Rate Date Description Pay Rate\n$22.40 40.000 $896.00 5/17/2026 Arellano Luna, Pablo $17.500 Reg",
+        }],
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["authoritative"] is False
+    assert result[0]["page_evidence"][0]["role"] == "supporting_attachment"
+
+
+def test_quick_extract_totals_does_not_cache_needs_review_results(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import _totals_cache_path, quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    config = _ready_ai_config()
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": "Invoice CA#7"}],
+    )
+
+    result = quick_extract_totals([pdf], config, supplier="Demo")
+
+    assert result[0]["evidence_status"] == "needs_review"
+    assert not _totals_cache_path(pdf, config).exists()
+
+
+def test_quick_extract_totals_invalidates_cache_when_file_contents_change(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"first")
+    page_text = ["Invoice CA#7\nTotal Due: $10.00"]
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": page_text[0]}],
+    )
+
+    assert quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")[0]["total_amount"] == 10.0
+    pdf.write_bytes(b"second")
+    page_text[0] = "Invoice CA#7\nTotal Due: $20.00"
+
+    assert quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")[0]["total_amount"] == 20.0
+
+
+def test_quick_extract_totals_invalidates_cache_when_profile_authority_changes(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    profiles_path = tmp_path / "profiles.json"
+    profiles_path.write_text(json.dumps([{
+        "key": "demo",
+        "aliases": ["demo"],
+        "version": 1,
+        "status": "approved",
+        "approvedBy": "p0-test-reviewer",
+        "approvedAt": "2026-07-15T10:00:00Z",
+        "created_from": "manual_review",
+        "authoritative_total_methods": ["vendor_total"],
+    }]), encoding="utf-8")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""}],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, ai_config: LaborPageEvidence(
+            source_file=page["source_file"], page=page["page"], role="invoice_primary", role_confidence=0.98,
+            warehouse_id="7", total_amount=10.0, extraction_method="vendor_total",
+        ),
+    )
+    config = {**_ready_ai_config(), "supplier_profiles_path": str(profiles_path)}
+
+    assert quick_extract_totals([pdf], config, supplier="Demo")[0]["authoritative"] is True
+    profiles_path.write_text(json.dumps([{
+        "key": "demo", "aliases": ["demo"], "version": 2,
+        "status": "approved", "approvedBy": "p0-test-reviewer",
+        "approvedAt": "2026-07-15T10:05:00Z", "created_from": "manual_review",
+        "authoritative_total_methods": [],
+    }]), encoding="utf-8")
+
+    result = quick_extract_totals([pdf], config, supplier="Demo")
+
+    assert result[0]["total_amount"] == 0.0
+    assert result[0]["authoritative"] is False
+    assert result[0]["evidence_status"] == "needs_review"
+
+
+def test_quick_extract_totals_returns_review_result_for_input_without_extracted_pages(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_pdf_pages", lambda paths: [])
+
+    result = quick_extract_totals([pdf], {})
+
+    assert result == [{
+        "source_file": pdf.name,
+        "total_amount": 0.0,
+        "warehouse_id": "",
+        "pdf_type": "unknown",
+        "authoritative": False,
+        "evidence_status": "needs_review",
+        "total_page": None,
+        "total_label": "",
+        "page_evidence": [],
+        "excluded_pages": [],
+    }]
+
+
+def test_quick_extract_totals_keeps_duplicate_basenames_in_separate_path_groups(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    first = tmp_path / "first" / "invoice.pdf"
+    second = tmp_path / "second" / "invoice.pdf"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": "invoice.pdf", "source_path": str(first), "page": 1, "text": "Invoice CA#7\nTotal Due: $10.00"},
+            {"source_file": "invoice.pdf", "source_path": str(second), "page": 1, "text": "Invoice CA#8\nTotal Due: $20.00"},
+        ],
+    )
+
+    result = quick_extract_totals([first, second], _ready_ai_config(), supplier="Demo")
+
+    assert [row["total_amount"] for row in result] == [10.0, 20.0]
+    assert [row["warehouse_id"] for row in result] == ["7", "8"]
+
+
+def test_quick_extract_totals_ignores_legacy_cache_without_evidence_fields(tmp_path):
+    from bonus_platform.engine.labor.extract import _load_totals_cache
+
+    pdf = tmp_path / "warehouse-7.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    cache_path = tmp_path / ".ai_extract_cache" / f"warehouse-7_totals_mimo-v2.5_{AI_PAGE_CACHE_VERSION}.json"
+    cache_path.parent.mkdir()
+    cache_path.write_text(json.dumps({"total_amount": 0.0, "warehouse_id": "7"}), encoding="utf-8")
+
+    assert _load_totals_cache(pdf, _ready_ai_config()) is None
+
+
+def test_quick_extract_totals_prefers_invoice_footer_total_over_rounded_employee_sum(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "US_Elogis_Service__7_Invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": "US_Elogis_Service__7_Invoice.pdf",
+                "page": 1,
+                "text": "\n".join(
+                    [
+                        "Date Invoice #",
+                        "CA#7",
+                        "6/17/2026 ELOG7-9",
+                        "Name US Elogistics Service Corp #7",
+                        "Associate Base Rate Bill Rate OT Rate Reg. Time O.T Dbl. Time RT OT DT TOTAL",
+                        "Alpha One $20.00 25.60$     38.40$   1.00 0.00 25.60$         -$       -$             25.60$",
+                        "Beta Two $20.00 25.60$     38.40$   1.00 0.00 25.60$         -$       -$             25.60$",
+                        "Totals 2.00 0.00 0.00 $51.22 $0.00 $0.00 $51.22",
+                        "$51.22",
+                        "If paid after 07/17/2026 pleased pay: $60.00",
+                    ]
+                ),
+            }
+        ],
+    )
+
+    totals = quick_extract_totals([pdf], {}, supplier="oss")
+
+    assert {key: totals[0][key] for key in ("source_file", "total_amount", "warehouse_id", "pdf_type")} == {
+        "source_file": "US_Elogis_Service__7_Invoice.pdf",
+        "total_amount": 51.22,
+        "warehouse_id": "7",
+        "pdf_type": "unknown",
+    }
+    assert totals[0]["authoritative"] is True
+    assert totals[0]["evidence_status"] == "authoritative"
 
 
 def test_quick_extract_totals_runs_rule_extraction_without_ai_config(monkeypatch, tmp_path):
@@ -2414,14 +4442,14 @@ def test_quick_extract_totals_runs_rule_extraction_without_ai_config(monkeypatch
 
     totals = quick_extract_totals([pdf], {}, supplier="Strategic Staffing Solutions Corp.")
 
-    assert totals == [
-        {
-            "source_file": "NJ13 Invoice Report WE 051726 JF.pdf",
-            "total_amount": 48293.06,
-            "warehouse_id": "13",
-            "pdf_type": "unknown",
-        }
-    ]
+    assert {key: totals[0][key] for key in ("source_file", "total_amount", "warehouse_id", "pdf_type")} == {
+        "source_file": "NJ13 Invoice Report WE 051726 JF.pdf",
+        "total_amount": 48293.06,
+        "warehouse_id": "13",
+        "pdf_type": "unknown",
+    }
+    assert totals[0]["authoritative"] is True
+    assert totals[0]["evidence_status"] == "authoritative"
 
 
 def test_audit_ai_page_cache_candidates_are_confirmation_only(tmp_path):
@@ -2429,7 +4457,7 @@ def test_audit_ai_page_cache_candidates_are_confirmation_only(tmp_path):
     pdf.write_bytes(b"%PDF-1.4\n")
     cache_dir = tmp_path / ".ai_extract_cache"
     cache_dir.mkdir()
-    (cache_dir / "elog1-1_20260520204104_p1_mimo-v2.5_v6.json").write_text(
+    (cache_dir / f"elog1-1_20260520204104_p1_mimo-v2.5_{AI_PAGE_CACHE_VERSION}.json").write_text(
         json.dumps(
             [
                 {
@@ -2857,6 +4885,30 @@ def test_reocr_candidate_replay_blocks_employee_exceptions_even_when_total_match
     assert replay["blockers"] == ["employee_level_exceptions"]
 
 
+def test_reocr_candidate_replay_exposes_strict_ocr_name_gate_for_spelling_difference():
+    task = {"sourceFile": "invoice.pdf", "warehouseId": "29", "expectedExcelAmount": 847.84, "amountDelta": 0}
+    excel_rows = [
+        LaborLineItem(source_type="offline_workbook", source_file="账单.xlsx", source_page_or_row="账单!2", employee_id="", employee_name_raw="Deisi Pozo", hours=37.84, amount=847.84, currency="USD", confidence=1, evidence_text="", warehouse_id="29"),
+    ]
+    candidate_rows = [
+        {"employee_name_raw": "Deisy Rozo Panche", "source_page_or_row": "p1", "hours": 37.84, "amount": 847.84, "confidence": 0.96},
+    ]
+
+    replay = replay_reocr_candidate_result(
+        task,
+        candidate_rows,
+        excel_rows,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+        confidence_threshold=0.85,
+    )
+
+    assert replay["decision"] == "blocked_by_replay"
+    assert replay["nameGate"]["summary"]["confirmed"] == 0
+    assert replay["nameGate"]["summary"]["review"] == 1
+    assert replay["nameGate"]["matches"][0]["status"] == "review"
+
+
 def test_rule_change_candidate_requires_user_confirmation():
     candidate = build_rule_change_candidate(
         rule_id="warehouse-filename-hash-number",
@@ -3046,7 +5098,173 @@ def test_quick_extract_totals_uses_citi_bill_rate_rows(monkeypatch, tmp_path):
         supplier="CITI",
     )
 
-    assert totals == [{"source_file": "invoice.pdf", "total_amount": 909.44, "warehouse_id": "29", "pdf_type": "unknown"}]
+    assert {key: totals[0][key] for key in ("source_file", "total_amount", "warehouse_id", "pdf_type")} == {
+        "source_file": "invoice.pdf",
+        "total_amount": 909.44,
+        "warehouse_id": "29",
+        "pdf_type": "unknown",
+    }
+    assert totals[0]["authoritative"] is True
+    assert totals[0]["evidence_status"] == "authoritative"
+
+
+def test_quick_extract_totals_keeps_headerless_payable_continuation_pages(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "staffing-statement-7421.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    def payable_row(name: str, amount: str) -> str:
+        return "\n".join(
+            [
+                "5/24/2026",
+                name,
+                "8.00",
+                "Reg",
+                "REG",
+                "$20.00",
+                "$25.00",
+                amount,
+            ]
+        )
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 1,
+                "text": "INVOICE\n" + payable_row("Worker One", "$200.00") + "\nPage 1 of 3",
+            },
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 2,
+                "text": payable_row("Worker Two", "$200.00") + "\nPage 2 of 3",
+            },
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 3,
+                "text": payable_row("Worker Three", "$200.00") + "\nTotal Due:\n$600.00\nPage 3 of 3",
+            },
+        ],
+    )
+
+    result = quick_extract_totals(
+        [pdf],
+        {"enabled": False, "parallel_extraction_enabled": False, "cache_enabled": False},
+        supplier="Unseen Staffing Vendor",
+    )[0]
+
+    assert result["total_amount"] == 600.0
+    assert result["authoritative"] is True
+    assert result["excluded_pages"] == []
+    assert [page["role"] for page in result["page_evidence"]] == [
+        "invoice_primary",
+        "invoice_continuation",
+        "invoice_continuation",
+    ]
+
+
+def test_quick_extract_totals_keeps_invoice_page_with_payment_terms_field(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "GS invoice-ELOG-466-FL.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+
+    def payable_row(name: str, amount: str) -> str:
+        return "\n".join(
+            [
+                "5/24/2026",
+                name,
+                "8.00",
+                "Reg",
+                "REG",
+                "$20.00",
+                "$25.00",
+                amount,
+            ]
+        )
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 1,
+                "text": (
+                    "INVOICE ELOG-466-FL\n"
+                    "Period Cust. ID Tax ID PAYMENT TERMS Location\n"
+                    "No. Name Reg. Hours O.T Hours Reg. Rate O.T Rate Total\n"
+                    + payable_row("Worker One", "$200.00")
+                ),
+            },
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 2,
+                "text": payable_row("Worker Two", "$200.00") + "\nGRAND TOTAL\n$400.00",
+            },
+        ],
+    )
+
+    result = quick_extract_totals(
+        [pdf],
+        {"enabled": False, "parallel_extraction_enabled": False, "cache_enabled": False},
+        supplier="Unseen Staffing Vendor",
+    )[0]
+
+    assert result["total_amount"] == 400.0
+    assert result["authoritative"] is True
+    assert result["excluded_pages"] == []
+    assert [page["role"] for page in result["page_evidence"]] == [
+        "invoice_primary",
+        "invoice_total",
+    ]
+
+
+def test_quick_extract_totals_does_not_promote_explicit_supporting_vertical_rows(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "supporting-attachment.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 1,
+                "text": "\n".join(
+                    [
+                        "SUPPORTING ATTACHMENT",
+                        "5/24/2026",
+                        "Worker One",
+                        "8.00",
+                        "Reg",
+                        "REG",
+                        "$20.00",
+                        "$25.00",
+                        "$200.00",
+                    ]
+                ),
+            }
+        ],
+    )
+
+    result = quick_extract_totals(
+        [pdf],
+        {"enabled": False, "parallel_extraction_enabled": False, "cache_enabled": False},
+        supplier="Unseen Staffing Vendor",
+    )[0]
+
+    assert result["total_amount"] == 0.0
+    assert result["authoritative"] is False
+    assert result["excluded_pages"] == [1]
+    assert result["page_evidence"][0]["role"] == "supporting_attachment"
 
 
 def test_quick_extract_totals_preserves_warehouse_conflict(monkeypatch, tmp_path):
@@ -3071,19 +5289,941 @@ def test_quick_extract_totals_preserves_warehouse_conflict(monkeypatch, tmp_path
         supplier="Invoice",
     )
 
-    assert totals == [
+    assert {key: totals[0][key] for key in ("source_file", "total_amount", "warehouse_id", "pdf_type")} == {
+        "source_file": "INVOICE_WH-3.pdf",
+        "total_amount": 0.0,
+        "warehouse_id": "3",
+        "pdf_type": "primary",
+    }
+    assert totals[0]["authoritative"] is False
+    assert totals[0]["evidence_status"] == "needs_review"
+    assert totals[0]["warehouse_conflict"] == {
+        "source_file": "INVOICE_WH-3.pdf",
+        "filename_warehouse_id": "3",
+        "text_warehouse_id": "30",
+    }
+
+
+def test_page_evidence_image_anthropic_uses_thinking_json_fallback(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {"content": [{
+            "type": "thinking",
+            "thinking": json.dumps({
+                "page_role": "invoice_total",
+                "role_confidence": 0.98,
+                "warehouse_id": "7",
+                "total_amount": 4105.15,
+                "total_label": "TOTAL",
+                "evidence_text": "TOTAL $4,105.15",
+            }),
+        }]},
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "warehouse-7.pdf", "page": 2, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
         {
-            "source_file": "INVOICE_WH-3.pdf",
-            "total_amount": 1000.0,
-            "warehouse_id": "3",
-            "pdf_type": "primary",
-            "warehouse_conflict": {
-                "source_file": "INVOICE_WH-3.pdf",
-                "filename_warehouse_id": "3",
-                "text_warehouse_id": "30",
-            },
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+        },
+    )
+
+    assert evidence.role == "invoice_total"
+    assert evidence.total_amount == 4105.15
+    assert evidence.warehouse_id == "7"
+
+
+def test_page_evidence_image_openai_uses_filename_warehouse_fallback(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": "```json\n{\"page_role\":\"invoice_total\",\"role_confidence\":0.98,\"warehouse_id\":null,\"total_amount\":11837.79,\"total_label\":\"TOTAL\",\"evidence_text\":\"TOTAL $11,837.79\"}\n```"
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#9.pdf", "page": 2, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.warehouse_id == "9"
+    assert evidence.total_amount == 11837.79
+
+
+def test_page_evidence_image_normalizes_prefixed_warehouse_id(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "page_role": "invoice_primary",
+                        "role_confidence": 0.99,
+                        "warehouse_id": "#1",
+                        "total_amount": 1880.67,
+                        "total_label": "TOTAL",
+                        "evidence_text": "TOTAL: $1,880.67",
+                    })
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT_1.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.warehouse_id == "1"
+
+
+def test_page_evidence_prompt_has_no_real_example_values_and_distinguishes_invoice_rows():
+    from bonus_platform.engine.labor.extract import _page_evidence_prompt
+
+    prompt = _page_evidence_prompt()
+
+    assert "4105.15" not in prompt
+    assert '"warehouse_id": "2"' not in prompt
+    assert "Bill Rate" in prompt
+    assert "payable charge rows" in prompt
+    assert "attendance dates" in prompt
+    assert "Never copy" in prompt
+    assert "TOTAL HT" in prompt
+    assert "TOTAL TTC" in prompt
+    assert "TVA" in prompt
+
+
+def test_page_evidence_image_accepts_french_net_total_with_comma_decimal(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "page_role": "invoice_primary",
+                        "role_confidence": 0.98,
+                        "warehouse_id": None,
+                        "total_amount": "563,70",
+                        "total_label": "TOTAL HT",
+                        "evidence_text": "TOTAL HT 563,70",
+                    })
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "facture.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.total_amount == 563.70
+    assert evidence.total_label == "TOTAL HT"
+    assert evidence.evidence_text == "TOTAL HT 563,70"
+
+
+def test_page_evidence_reasoning_fallback_does_not_expose_model_reasoning(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": (
+                        "The document is clearly an invoice. I should return an invoice_primary role, "
+                        "but no explicit total is visible in this crop."
+                    ),
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "invoice.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.role == "invoice_primary"
+    assert evidence.evidence_text == ""
+
+
+def test_page_evidence_image_openai_has_reasoning_fallback_and_bounded_budget(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    captured = {}
+
+    def fake_post(url, headers, payload):
+        captured.update(payload)
+        return {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": json.dumps({
+                        "page_role": "invoice_primary",
+                        "role_confidence": 0.95,
+                        "warehouse_id": "1",
+                        "total_amount": 1880.67,
+                        "total_label": "TOTAL",
+                        "evidence_text": "TOTAL $1,880.67",
+                    }),
+                }
+            }]
         }
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._http_post_json", fake_post)
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#1.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert captured["max_tokens"] == 256
+    assert evidence.role == "invoice_primary"
+    assert evidence.total_amount == 1880.67
+
+
+def test_page_evidence_image_openai_classifies_truncated_reasoning_without_json(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": (
+                        "The page lists attendance dates, working hours and overtime by employee. "
+                        "This is not an invoice; it is a timecard or attendance summary and has no payable total."
+                    ),
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#2.pdf", "page": 3, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.role == "timecard_summary"
+    assert evidence.total_amount is None
+    assert evidence.warehouse_id == "2"
+
+
+def test_page_evidence_image_openai_extracts_invoice_total_from_truncated_reasoning(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": (
+                        "The document is clearly an invoice with Invoice #, Bill Rate and AMOUNT columns. "
+                        "A TOTAL row at the bottom shows $4,222.26."
+                    ),
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#5.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.role == "invoice_primary"
+    assert evidence.role_confidence == 0.95
+    assert evidence.total_amount == 4222.26
+    assert evidence.total_label == "TOTAL"
+
+
+def test_page_evidence_image_normalizes_high_confidence_label(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "page_role": "invoice_total",
+                        "role_confidence": "high",
+                        "warehouse_id": "8",
+                        "total_amount": 21456.76,
+                        "total_label": "TOTAL",
+                        "evidence_text": "TOTAL $21,456.76",
+                    })
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#8.pdf", "page": 2, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.role_confidence == 0.95
+
+
+def test_page_evidence_image_preserves_supported_net_tax_and_gross(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "page_role": "invoice_total",
+                        "role_confidence": 0.99,
+                        "warehouse_id": "2",
+                        "total_amount": 15421.72,
+                        "total_label": "TOTAL HT",
+                        "net_amount": 15421.72,
+                        "tax_amount": 3084.34,
+                        "gross_amount": 18506.06,
+                        "evidence_text": "TOTAL HT 15 421,72 TVA 3 084,34 TOTAL TTC 18 506,06",
+                    })
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "invoice.pdf", "page": 4, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.total_amount == 15421.72
+    assert evidence.net_amount == 15421.72
+    assert evidence.tax_amount == 3084.34
+    assert evidence.gross_amount == 18506.06
+
+
+def test_parse_bottom_total_ocr_text_accepts_closed_french_summary():
+    from bonus_platform.engine.labor.extract import _parse_bottom_total_ocr_text
+
+    result = _parse_bottom_total_ocr_text(
+        "TOTAL HT 15 421,72\nTVA 20,00 % 3 084,34\nTOTAL TTC GLOBAL 18 506,06"
+    )
+
+    assert result == {
+        "net_amount": 15421.72,
+        "tax_amount": 3084.34,
+        "gross_amount": 18506.06,
+    }
+
+
+def test_parse_bottom_total_ocr_text_accepts_dotted_french_labels():
+    from bonus_platform.engine.labor.extract import _parse_bottom_total_ocr_text
+
+    result = _parse_bottom_total_ocr_text(
+        "TOTAL H.T 5724,22\nT.V.A 1144,84\nTOTAL T.T.C 6869,06"
+    )
+
+    assert result == {
+        "net_amount": 5724.22,
+        "tax_amount": 1144.84,
+        "gross_amount": 6869.06,
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "HEURES TOTAL H.T TAUX T.V.A T.V.A TOTAL T.T.C\n"
+            "Valeur en votre aimable règlement\n"
+            "au 30/06/2026 45,40 20,00 9,08 54,48EUR",
+            {"net_amount": 45.40, "tax_amount": 9.08, "gross_amount": 54.48},
+        ),
+        (
+            "HEURES TOTAL H.T TAUX T.V.A T.V.A TOTAL T.T.C\n"
+            "Valeur en votre aimable règlement\n"
+            "au 30/06/2026 802,27 16716,35 20,00 3343,27 20059,62EUR",
+            {"net_amount": 16716.35, "tax_amount": 3343.27, "gross_amount": 20059.62},
+        ),
+    ],
+)
+def test_extract_closed_french_total_row_from_pdf_text(text, expected):
+    from bonus_platform.engine.labor.extract import _extract_closed_french_total_row
+
+    assert _extract_closed_french_total_row(text) == expected
+
+
+def test_parse_bottom_total_ocr_text_ignores_repeated_header_before_values():
+    from bonus_platform.engine.labor.extract import _parse_bottom_total_ocr_text
+
+    result = _parse_bottom_total_ocr_text(
+        "headers HEURES, TOTAL HT, TAUX TVA, TVA, TOTAL TTC.\n"
+        "TOTAL HT: 614,80\nTAUX TVA: 20,00\nTVA: 122,96\n"
+        "TOTAL TTC: 737,76\nTOTAL TTC GLOBAL: 737,76"
+    )
+
+    assert result == {
+        "net_amount": 614.80,
+        "tax_amount": 122.96,
+        "gross_amount": 737.76,
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "TOTAL TTC 18 506,06",
+        "TOTAL HT 15 421,72\nTVA 3 084,34\nTOTAL TTC 19 000,00",
+        "S/Total Interimaire 801,34",
+    ],
+)
+def test_parse_bottom_total_ocr_text_rejects_incomplete_or_unclosed_summary(text):
+    from bonus_platform.engine.labor.extract import _parse_bottom_total_ocr_text
+
+    assert _parse_bottom_total_ocr_text(text) is None
+
+
+def test_quick_extract_totals_uses_closed_bottom_ocr_when_json_evidence_is_empty(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""}],
+    )
+    image_page = {
+        "source_file": pdf.name,
+        "source_path": str(pdf),
+        "page": 1,
+        "mime_type": "image/png",
+        "base64": "page",
+    }
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: image_page,
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, config: LaborPageEvidence(
+            source_file=pdf.name,
+            page=1,
+            role="invoice_total",
+            role_confidence=0.99,
+            evidence_text="Invoice total area",
+        ),
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_bottom_total_evidence_with_ai_ocr",
+        lambda page, config: LaborPageEvidence(
+            source_file=pdf.name,
+            page=1,
+            role="invoice_total",
+            role_confidence=0.99,
+            total_amount=100.0,
+            total_label="TOTAL HT",
+            net_amount=100.0,
+            tax_amount=20.0,
+            gross_amount=120.0,
+            evidence_text="TOTAL HT 100,00 TVA 20,00 TOTAL TTC 120,00",
+            extraction_method="bottom_total_ocr",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert result[0]["total_amount"] == 100.0
+    assert result[0]["authoritative"] is True
+    assert result[0]["page_evidence"][0]["extraction_method"] == "bottom_total_ocr"
+
+
+def test_quick_extract_totals_uses_bottom_ocr_for_text_page_without_closed_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{
+            "source_file": pdf.name,
+            "source_path": str(pdf),
+            "page": 1,
+            "text": "FACTURE\nHEURES TOTAL H.T TAUX T.V.A T.V.A TOTAL T.T.C",
+        }],
+    )
+    image_page = {
+        "source_file": pdf.name,
+        "source_path": str(pdf),
+        "page": 1,
+        "mime_type": "image/png",
+        "base64": "page",
+    }
+    rendered_pages = []
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: rendered_pages.append(page_number) or image_page,
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_bottom_total_evidence_with_ai_ocr",
+        lambda page, config: LaborPageEvidence(
+            source_file=pdf.name,
+            page=1,
+            role="invoice_total",
+            role_confidence=0.99,
+            total_amount=5724.22,
+            total_label="TOTAL HT",
+            net_amount=5724.22,
+            tax_amount=1144.84,
+            gross_amount=6869.06,
+            evidence_text="TOTAL HT 5724.22; TVA 1144.84; TOTAL TTC 6869.06",
+            extraction_method="bottom_total_ocr",
+        ),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Unknown")
+
+    assert rendered_pages == [1]
+    assert result[0]["total_amount"] == 5724.22
+    assert result[0]["authoritative"] is True
+    assert result[0]["page_evidence"][0]["extraction_method"] == "bottom_total_ocr"
+
+
+def test_quick_extract_totals_does_not_render_text_page_with_authoritative_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{
+            "source_file": pdf.name,
+            "source_path": str(pdf),
+            "page": 1,
+            "text": "Invoice Total Due: $100.00",
+        }],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda *args: pytest.fail("authoritative text total must not render an image fallback"),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Unknown")
+
+    assert result[0]["total_amount"] == 100.0
+    assert result[0]["authoritative"] is True
+
+
+def test_quick_extract_totals_reads_closed_french_footer_without_rescanning_early_text_pages(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "facture.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": "FACTURE\nHEURES TOTAL H.T TAUX T.V.A T.V.A TOTAL T.T.C"},
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 2, "text": "Employee detail continuation"},
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 3, "text": "Employee detail continuation"},
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 4,
+                "text": (
+                    "HEURES TOTAL H.T TAUX T.V.A T.V.A TOTAL T.T.C\n"
+                    "au 30/06/2026 802,27 16716,35 20,00 3343,27 20059,62EUR"
+                ),
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda *args: pytest.fail("closed PDF text totals must not require image OCR"),
+    )
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Unknown")
+
+    assert result[0]["total_amount"] == 16716.35
+    assert result[0]["authoritative"] is True
+    assert result[0]["total_page"] == 4
+    assert result[0]["page_evidence"][3]["extraction_method"] == "text_closed_french_total_row"
+
+
+def test_bottom_total_ocr_uses_reasoning_content_when_visible_content_is_empty(monkeypatch):
+    from PIL import Image
+    from bonus_platform.engine.labor.extract import _extract_bottom_total_evidence_with_ai_ocr
+
+    image = Image.new("RGB", (200, 300), "white")
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    encoded = __import__("base64").b64encode(buffer.getvalue()).decode("ascii")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": "TOTAL HT 100,00\nTVA 20,00\nTOTAL TTC 120,00",
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_bottom_total_evidence_with_ai_ocr(
+        {
+            "source_file": "invoice.pdf",
+            "page": 1,
+            "mime_type": "image/png",
+            "base64": encoded,
+        },
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+        },
+    )
+
+    assert evidence is not None
+    assert evidence.net_amount == 100.0
+    assert evidence.evidence_text == "TOTAL HT 100.00; TVA 20.00; TOTAL TTC 120.00"
+
+
+def test_page_evidence_image_rejects_total_contradicted_by_evidence_text(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": json.dumps({
+                        "page_role": "invoice_total",
+                        "role_confidence": 0.95,
+                        "warehouse_id": "19",
+                        "total_amount": 865.72,
+                        "total_label": "Amount Due",
+                        "evidence_text": "No total or Amount Due is visible. Employee row amount 865.72.",
+                    })
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#19.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.total_amount is None
+    assert evidence.total_label == ""
+
+
+def test_page_evidence_image_does_not_join_prompt_label_to_employee_amount(monkeypatch):
+    from bonus_platform.engine.labor.extract import _extract_page_evidence_with_ai_image
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._http_post_json",
+        lambda url, headers, payload: {
+            "choices": [{
+                "message": {
+                    "content": "",
+                    "reasoning_content": (
+                        "The document is clearly an invoice with Bill Rate and AMOUNT columns. "
+                        "I need to look for TOTAL, Amount Due, or Balance Due.\n"
+                        "The table lists employee amounts such as 865.72 and 59.93, but no summation line is visible."
+                    ),
+                }
+            }]
+        },
+    )
+
+    evidence = _extract_page_evidence_with_ai_image(
+        {"source_file": "DEPT#19.pdf", "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+        "extract evidence",
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
+    )
+
+    assert evidence.role == "invoice_primary"
+    assert evidence.total_amount is None
+
+
+def test_quick_extract_totals_retries_first_invoice_page_without_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "DEPT#5.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""}],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    budgets = []
+
+    def fake_extract(page, prompt, config):
+        budgets.append(config.get("page_evidence_max_tokens"))
+        return LaborPageEvidence(
+            source_file=page["source_file"],
+            page=1,
+            role="invoice_primary",
+            role_confidence=0.95,
+            warehouse_id="5",
+            total_amount=4222.26 if config.get("page_evidence_max_tokens") == 1024 else None,
+            total_label="TOTAL" if config.get("page_evidence_max_tokens") == 1024 else "",
+        )
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image", fake_extract)
+
+    totals = quick_extract_totals([pdf], _ready_ai_config(), supplier="Prompt Priority INC")
+
+    assert budgets == [None, 1024]
+    assert totals[0]["total_amount"] == 4222.26
+    assert totals[0]["authoritative"] is True
+
+
+def test_quick_extract_totals_retries_gross_total_page_for_financial_breakdown(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "invoice.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": 3, "text": ""},
+        ],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {
+            "source_file": path.name,
+            "source_path": str(path),
+            "page": page_number,
+            "mime_type": "image/jpeg",
+            "base64": "page",
+        },
+    )
+    budgets = []
+
+    def fake_extract(page, prompt, config):
+        budgets.append(config.get("page_evidence_max_tokens"))
+        expanded = config.get("page_evidence_max_tokens") == 1024
+        return LaborPageEvidence(
+            source_file=page["source_file"],
+            page=page["page"],
+            role="invoice_total",
+            role_confidence=0.99,
+            total_amount=120.0,
+            total_label="TOTAL TTC",
+            net_amount=100.0 if expanded else None,
+            tax_amount=20.0 if expanded else None,
+            gross_amount=120.0 if expanded else None,
+            evidence_text="TOTAL HT 100,00 TVA 20,00 TOTAL TTC 120,00",
+        )
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image", fake_extract)
+
+    result = quick_extract_totals([pdf], _ready_ai_config(), supplier="Demo")
+
+    assert budgets == [None, 1024]
+    assert result[0]["page_evidence"][0]["net_amount"] == 100.0
+
+
+def test_quick_extract_totals_retries_non_invoice_role_with_payable_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "DEPT#5.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [{"source_file": pdf.name, "source_path": str(pdf), "page": 1, "text": ""}],
+    )
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {"source_file": path.name, "source_path": str(path), "page": 1, "mime_type": "image/jpeg", "base64": "page"},
+    )
+    budgets = []
+
+    def fake_extract(page, prompt, config):
+        budgets.append(config.get("page_evidence_max_tokens"))
+        retry = config.get("page_evidence_max_tokens") == 1024
+        return LaborPageEvidence(
+            source_file=page["source_file"],
+            page=1,
+            role="invoice_total" if retry else "timecard_summary",
+            role_confidence=0.95,
+            warehouse_id="5",
+            total_amount=4222.26,
+            total_label="TOTAL",
+            evidence_text="TOTAL $4,222.26",
+        )
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image", fake_extract)
+
+    totals = quick_extract_totals([pdf], _ready_ai_config(), supplier="Prompt Priority INC")
+
+    assert budgets == [None, 1024]
+    assert totals[0]["total_amount"] == 4222.26
+    assert totals[0]["authoritative"] is True
+
+
+def test_quick_extract_totals_stops_after_consecutive_ai_transport_failures(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "DEPT#8.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": page, "text": ""}
+            for page in range(1, 7)
+        ],
+    )
+    rendered = []
+
+    def fake_render(path, page_number, scale):
+        rendered.append(page_number)
+        return {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"}
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._render_pdf_page_to_image", fake_render)
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, config: (_ for _ in ()).throw(ConnectionResetError("connection reset")),
+    )
+
+    totals = quick_extract_totals([pdf], _ready_ai_config(), supplier="Prompt Priority INC")
+
+    assert rendered == [1, 2]
+    assert totals[0]["authoritative"] is False
+    assert totals[0]["evidence_status"] == "needs_review"
+    assert [page["extraction_method"] for page in totals[0]["page_evidence"]] == [
+        "ai_image_failed",
+        "ai_image_failed",
+        "not_scanned_after_consecutive_ai_failures",
+        "not_scanned_after_consecutive_ai_failures",
+        "not_scanned_after_consecutive_ai_failures",
+        "not_scanned_after_consecutive_ai_failures",
     ]
+
+
+def test_quick_extract_totals_stops_after_authoritative_invoice_section(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "DEPT#1.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": page, "text": ""}
+            for page in range(1, 5)
+        ],
+    )
+    rendered = []
+
+    def fake_render(path, page_number, scale):
+        rendered.append(page_number)
+        return {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"}
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._render_pdf_page_to_image", fake_render)
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image",
+        lambda page, prompt, config: LaborPageEvidence(
+            source_file=page["source_file"],
+            page=page["page"],
+            role="invoice_primary" if page["page"] == 1 else "email_cover",
+            role_confidence=0.98,
+            warehouse_id="1" if page["page"] == 1 else "",
+            total_amount=1880.67 if page["page"] == 1 else None,
+            total_label="TOTAL" if page["page"] == 1 else "",
+            evidence_text="TOTAL $1,880.67" if page["page"] == 1 else "Attached timecards",
+        ),
+    )
+
+    totals = quick_extract_totals([pdf], _ready_ai_config(), supplier="Prompt Priority INC")
+
+    assert rendered == [1, 2]
+    assert totals[0]["total_amount"] == 1880.67
+    assert [page["role"] for page in totals[0]["page_evidence"]] == [
+        "invoice_primary",
+        "email_cover",
+        "unknown",
+        "unknown",
+    ]
+    assert totals[0]["excluded_pages"] == [2, 3, 4]
+
+
+def test_quick_extract_totals_stops_after_authoritative_total_when_following_page_has_no_total(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "DEPT#10.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {"source_file": pdf.name, "source_path": str(pdf), "page": page, "text": ""}
+            for page in range(1, 5)
+        ],
+    )
+    rendered = []
+    extraction_calls = []
+
+    def fake_render(path, page_number, scale):
+        rendered.append(page_number)
+        return {"source_file": path.name, "source_path": str(path), "page": page_number, "mime_type": "image/jpeg", "base64": "page"}
+
+    def fake_extract(page, prompt, config):
+        page_number = page["page"]
+        extraction_calls.append((page_number, config.get("page_evidence_max_tokens")))
+        return LaborPageEvidence(
+            source_file=page["source_file"],
+            page=page_number,
+            role="invoice_primary" if page_number == 1 else "invoice_total",
+            role_confidence=0.95,
+            warehouse_id="10",
+            total_amount=873.03 if page_number == 1 else (32.0 if page_number == 4 else None),
+            total_label="TOTAL" if page_number in {1, 4} else "",
+            evidence_text="TOTAL $873.03" if page_number == 1 else "Supporting hours table",
+        )
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._render_pdf_page_to_image", fake_render)
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._extract_page_evidence_with_ai_image", fake_extract)
+
+    totals = quick_extract_totals([pdf], _ready_ai_config(), supplier="Prompt Priority INC")
+
+    assert rendered == [1, 2]
+    assert extraction_calls == [(1, None), (2, None)]
+    assert totals[0]["total_amount"] == 873.03
+    assert totals[0]["authoritative"] is True
+    assert totals[0]["excluded_pages"] == [3, 4]
 
 
 def test_non_payable_pdf_names_flags_supporting_types_when_payable_invoice_exists():
@@ -3142,13 +6282,61 @@ def test_rendered_invoice_images_preserve_pdf_orientation(monkeypatch, tmp_path)
     assert image.size == (100, 200)
 
 
+def test_rendered_invoice_images_skip_pages_outside_evidence_allowlist(monkeypatch, tmp_path):
+    from PIL import Image
+
+    rendered_indexes = []
+
+    class FakeBitmap:
+        def to_pil(self):
+            return Image.new("RGB", (100, 200), "white")
+
+    class FakePage:
+        def __init__(self, index):
+            self.index = index
+
+        def render(self, scale):
+            rendered_indexes.append(self.index)
+            return FakeBitmap()
+
+        def close(self):
+            pass
+
+    class FakeDocument:
+        def __init__(self, path):
+            pass
+
+        def __len__(self):
+            return 3
+
+        def __getitem__(self, index):
+            return FakePage(index)
+
+        def close(self):
+            pass
+
+    class FakePdfium:
+        PdfDocument = FakeDocument
+
+    monkeypatch.setitem(__import__("sys").modules, "pypdfium2", FakePdfium)
+    renderer = __import__("bonus_platform.engine.labor.extract", fromlist=["_render_pdf_pages_to_images"])._render_pdf_pages_to_images
+
+    rows = renderer(
+        [tmp_path / "scan.pdf"],
+        allowed_pages_by_source={"scan.pdf": {2}},
+    )
+
+    assert rendered_indexes == [1]
+    assert [row["page"] for row in rows] == [2]
+
+
 def test_pdf_text_extraction_keeps_pipeline_alive_for_unreadable_pdf(tmp_path):
     broken_pdf = tmp_path / "broken.pdf"
     broken_pdf.write_bytes(b"%PDF-1.4\n")
 
     pages = _extract_pdf_pages([broken_pdf])
 
-    assert pages == [{"source_file": "broken.pdf", "page": 1, "text": ""}]
+    assert pages == [{"source_file": "broken.pdf", "source_path": str(broken_pdf), "page": 1, "text": ""}]
 
 
 def test_mimo_image_extractor_sends_base64_pages_and_returns_rows(monkeypatch):
@@ -3241,6 +6429,30 @@ def test_mimo_image_extractor_annotates_single_page_rows_when_model_omits_source
 
     assert rows[0]["source_file"] == "scan.pdf"
     assert rows[0]["source_page_or_row"] == "p2"
+
+
+def test_mimo_image_extractor_rejects_unattributed_rows_from_multi_page_chunk(monkeypatch):
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._post_chat_completion",
+        lambda payload, ai_config: [{"employee_name_raw": "Unknown Source", "hours": 8, "amount": 160, "confidence": 0.9}],
+    )
+
+    rows = _extract_with_ai_images(
+        [
+            {"source_file": "a.pdf", "page": 1, "mime_type": "image/png", "base64": "abc"},
+            {"source_file": "b.pdf", "page": 1, "mime_type": "image/png", "base64": "def"},
+        ],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "max_pages_per_request": 2,
+            "cache_enabled": False,
+        },
+    )
+
+    assert rows == []
 
 
 def test_extract_invoice_items_uses_mimo_images_when_pdf_text_has_no_rows(monkeypatch, tmp_path):
@@ -3336,6 +6548,22 @@ def test_image_ai_rows_are_filtered_against_expected_employee_candidates():
     filtered = _filter_ai_rows_by_expected_employees(rows, expected_rows)
 
     assert [row["employee_name_raw"] for row in filtered] == ["Morales, Katherine", "Gerardo Torres Valencia"]
+
+
+def test_image_ai_expected_employee_filter_keeps_minor_spelling_variant_with_extra_token():
+    rows = [
+        {
+            "employee_name_raw": "BANTSIMBA GLOIRE RONLELE",
+            "hours": 45.76,
+            "amount": 1143.37,
+            "confidence": 0.95,
+        }
+    ]
+    expected_rows = [{"employee_name": "BATSIMBA Gloire"}]
+
+    filtered = _filter_ai_rows_by_expected_employees(rows, expected_rows)
+
+    assert filtered == rows
 
 
 def test_mimo_image_extractor_filters_timesheet_rows_without_money_evidence(monkeypatch):
@@ -3447,6 +6675,72 @@ def test_mimo_image_extractor_skips_timed_out_page_and_keeps_later_rows(monkeypa
     assert [row["employee_name_raw"] for row in rows] == ["Alvarez Minchaca, Rosa"]
 
 
+def test_mimo_image_extractor_fast_pass_skips_timeout_after_one_attempt(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_post(payload, config):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise MiMoTimeoutException("gateway timeout")
+        return [{"employee_name_raw": "Later Worker", "hours": 8, "amount": 160, "confidence": 0.95}]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post)
+    audit: list[dict] = []
+
+    rows = _extract_with_ai_images(
+        [
+            {"source_file": "scan.pdf", "page": 1, "mime_type": "image/png", "base64": "abc123"},
+            {"source_file": "scan.pdf", "page": 2, "mime_type": "image/png", "base64": "def456"},
+        ],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "max_pages_per_request": 1,
+            "image_retry_delays": [],
+            "cache_enabled": False,
+        },
+        audit_collector=audit,
+    )
+
+    assert calls["count"] == 2
+    assert [row["employee_name_raw"] for row in rows] == ["Later Worker"]
+    assert audit[0]["status"] == "failed"
+    assert audit[1]["status"] == "completed"
+
+
+def test_mimo_image_extractor_continues_after_non_timeout_page_error(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_post(payload, config):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("HTTP 502 upstream unavailable")
+        return [{"employee_name_raw": "Recovered Worker", "hours": 8, "amount": 160, "confidence": 0.95}]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post)
+
+    rows = _extract_with_ai_images(
+        [
+            {"source_file": "scan.pdf", "page": 1, "mime_type": "image/png", "base64": "abc123"},
+            {"source_file": "scan.pdf", "page": 2, "mime_type": "image/png", "base64": "def456"},
+        ],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "max_pages_per_request": 1,
+            "image_retry_delays": [],
+            "cache_enabled": False,
+        },
+    )
+
+    assert calls["count"] == 2
+    assert [row["employee_name_raw"] for row in rows] == ["Recovered Worker"]
+
+
 def test_token_plan_image_extractor_forces_single_page_chunks():
     assert _effective_max_pages_per_request(
         {
@@ -3457,12 +6751,18 @@ def test_token_plan_image_extractor_forces_single_page_chunks():
     ) == 1
 
 
+def test_runtime_image_extraction_uses_configured_single_page_chunks():
+    from bonus_platform.config import AI_CONFIG
+
+    assert AI_CONFIG["max_pages_per_request"] == 1
+
+
 def test_mimo_image_extractor_uses_page_cache(monkeypatch, tmp_path):
     pdf = tmp_path / "scan.pdf"
     pdf.write_bytes(b"pdf")
     cache_dir = tmp_path / ".ai_extract_cache"
     cache_dir.mkdir()
-    cache_file = cache_dir / "scan_p1_mimo-v2.5_v6.json"
+    cache_file = cache_dir / f"scan_p1_mimo-v2.5_{AI_PAGE_CACHE_VERSION}.json"
     cache_file.write_text(
         json.dumps(
             [
@@ -3493,6 +6793,37 @@ def test_mimo_image_extractor_uses_page_cache(monkeypatch, tmp_path):
     assert rows[0]["employee_name_raw"] == "Alvarez Minchaca, Rosa"
 
 
+def test_mimo_image_extractor_retries_empty_page_cache_when_configured(monkeypatch, tmp_path):
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"pdf")
+    cache_dir = tmp_path / ".ai_extract_cache"
+    cache_dir.mkdir()
+    cache_file = cache_dir / f"scan_p1_mimo-v2.5_{AI_PAGE_CACHE_VERSION}.json"
+    cache_file.write_text("[]", encoding="utf-8")
+    calls = {"count": 0}
+
+    def fake_post(payload, config):
+        calls["count"] += 1
+        return [{"employee_name_raw": "Recovered Worker", "hours": 8, "amount": 160, "confidence": 0.95}]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post)
+
+    rows = _extract_with_ai_images(
+        [{"source_file": "scan.pdf", "source_path": str(pdf), "page": 1, "mime_type": "image/png", "base64": "abc123"}],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "image_retry_delays": [],
+            "retry_empty_page_cache": True,
+        },
+    )
+
+    assert calls["count"] == 1
+    assert [row["employee_name_raw"] for row in rows] == ["Recovered Worker"]
+
+
 def test_mimo_image_extractor_writes_page_cache(monkeypatch, tmp_path):
     pdf = tmp_path / "scan.pdf"
     pdf.write_bytes(b"pdf")
@@ -3517,8 +6848,109 @@ def test_mimo_image_extractor_writes_page_cache(monkeypatch, tmp_path):
         {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5"},
     )
 
-    cache_file = tmp_path / ".ai_extract_cache" / "scan_p1_mimo-v2.5_v6.json"
+    cache_file = tmp_path / ".ai_extract_cache" / f"scan_p1_mimo-v2.5_{AI_PAGE_CACHE_VERSION}.json"
     assert cache_file.exists()
+
+
+def test_mimo_image_extractor_high_res_retries_when_page_has_no_usable_rows(monkeypatch, tmp_path):
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"pdf")
+    seen_images: list[str] = []
+
+    def fake_post(payload, config):
+        image_part = payload["messages"][1]["content"][0]
+        seen_images.append(image_part["image_url"]["url"])
+        if len(seen_images) == 1:
+            return [{"employee_name_raw": "Totals", "hours": 0, "amount": 0}]
+        return [
+            {
+                "employee_name_raw": "Alvarez Minchaca, Rosa",
+                "hours": 31.19,
+                "amount": 701.9,
+                "confidence": 0.95,
+                "evidence_text": "Total $701.90",
+            }
+        ]
+
+    monkeypatch.setattr("bonus_platform.engine.labor.extract._post_chat_completion", fake_post)
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._render_pdf_page_to_image",
+        lambda path, page_number, scale: {
+            "source_file": Path(path).name,
+            "source_path": str(path),
+            "page": page_number,
+            "mime_type": "image/jpeg",
+            "base64": "hires456",
+            "render_scale": scale,
+            "high_resolution_retry": True,
+        },
+    )
+    audit: list[dict] = []
+
+    rows = _extract_with_ai_images(
+        [
+            {
+                "source_file": "scan.pdf",
+                "source_path": str(pdf),
+                "page": 1,
+                "mime_type": "image/png",
+                "base64": "lowres123",
+                "render_scale": 1.0,
+            }
+        ],
+        {
+            "provider": "mimo",
+            "api_key": "token",
+            "base_url": "https://api.xiaomimimo.com/v1",
+            "model": "mimo-v2.5",
+            "cache_enabled": False,
+            "high_resolution_retry_enabled": True,
+        },
+        audit_collector=audit,
+    )
+
+    assert [row["employee_name_raw"] for row in rows] == ["Alvarez Minchaca, Rosa"]
+    assert "lowres123" in seen_images[0]
+    assert "hires456" in seen_images[1]
+    assert any(entry["status"] == "high_res_retry_applied" and entry["rowCount"] == 1 for entry in audit)
+
+
+def test_mimo_image_extractor_records_page_audit(monkeypatch, tmp_path):
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"pdf")
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._post_chat_completion",
+        lambda payload, config: [
+            {
+                "employee_name_raw": "Alvarez Minchaca, Rosa",
+                "hours": 31.19,
+                "amount": 701.9,
+                "confidence": 0.95,
+                "evidence_text": "Total $701.90",
+            }
+        ],
+    )
+    audit: list[dict] = []
+
+    _extract_with_ai_images(
+        [{"source_file": "scan.pdf", "source_path": str(pdf), "page": 1, "mime_type": "image/png", "base64": "abc123"}],
+        {"provider": "mimo", "api_key": "token", "base_url": "https://api.xiaomimimo.com/v1", "model": "mimo-v2.5", "cache_enabled": False},
+        audit_collector=audit,
+    )
+
+    assert audit == [
+        {
+            "sourceFile": "scan.pdf",
+            "page": 1,
+            "status": "completed",
+            "rowCount": 1,
+            "amountTotal": 701.9,
+            "renderScale": None,
+            "fromCache": False,
+            "highResolutionRetry": False,
+        }
+    ]
 
 
 def test_extract_invoice_items_surfaces_ai_failure_when_enabled(monkeypatch, tmp_path):
@@ -3548,57 +6980,6 @@ def test_safe_error_message_includes_mimo_error_body():
     message = _safe_error_message(error)
 
     assert "Invalid API Key" in message
-
-
-def test_supabase_request_retries_transient_urlopen_errors(monkeypatch):
-    calls = []
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def read(self):
-            return b'{"ok": true}'
-
-    def fake_urlopen(request, timeout):
-        calls.append((request, timeout))
-        if len(calls) < 3:
-            raise URLError("EOF occurred in violation of protocol")
-        return Response()
-
-    monkeypatch.setattr(labor_storage, "urlopen", fake_urlopen)
-    monkeypatch.setattr(labor_storage.time, "sleep", lambda *_args: None)
-
-    body = labor_storage._supabase_request("POST", "https://example.supabase.co/storage/v1/object/bucket/key", content=b"x")
-
-    assert body == b'{"ok": true}'
-    assert len(calls) == 3
-
-
-def test_supabase_request_does_not_retry_http_status_errors(monkeypatch):
-    calls = []
-
-    def fake_urlopen(request, timeout):
-        calls.append((request, timeout))
-        raise HTTPError(
-            url=request.full_url,
-            code=400,
-            msg="Bad Request",
-            hdrs={},
-            fp=BytesIO(b'{"error":"InvalidKey"}'),
-        )
-
-    monkeypatch.setattr(labor_storage, "urlopen", fake_urlopen)
-    monkeypatch.setattr(labor_storage.time, "sleep", lambda *_args: None)
-
-    with pytest.raises(labor_storage.SupabaseStorageStatusError) as exc_info:
-        labor_storage._supabase_request("POST", "https://example.supabase.co/storage/v1/object/bucket/key", content=b"x")
-
-    assert exc_info.value.status_code == 400
-    assert len(calls) == 1
 
 
 def test_http_post_json_enforces_wall_clock_timeout(monkeypatch):
@@ -3716,6 +7097,225 @@ def test_build_labor_report_contains_expected_sheets(tmp_path):
         assert internal_sheet_name not in workbook.sheetnames
     assert workbook["姓名格式差异"].max_row == 2
     assert workbook["全员对账明细"].max_row == 2
+
+
+def test_build_labor_report_shows_evidence_and_comparable_warehouse_conclusion(tmp_path):
+    output = tmp_path / "evidence-aware-report.xlsx"
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 1000.0,
+            "excelAmountTotal": 1250.0,
+            "amountDeltaTotal": -250.0,
+            "comparableExcelAmountTotal": 700.0,
+            "comparableAmountDeltaTotal": 100.0,
+            "missingPdfAmountTotal": 200.0,
+        },
+        "rows": [
+            {
+                "warehouseId": "1",
+                "matchStatus": "金额差异",
+                "reconciliationStatus": "amount_difference",
+                "pdfEmployeeCount": 2,
+                "excelEmployeeCount": 2,
+                "pdfHoursTotal": 80,
+                "excelHoursTotal": 80,
+                "pdfAmountTotal": 1000.0,
+                "excelAmountTotal": 900.0,
+                "amountDelta": 100.0,
+                "pdfEvidenceFile": "warehouse-1.pdf",
+                "pdfEvidencePage": 2,
+                "evidenceStatus": "authoritative",
+                "excludedPdfPages": [1, 3],
+            },
+            {
+                "warehouseId": "2",
+                "matchStatus": "缺少PDF发票",
+                "reconciliationStatus": "missing_pdf_invoice",
+                "pdfEmployeeCount": 0,
+                "excelEmployeeCount": 1,
+                "pdfAmountTotal": 0,
+                "excelAmountTotal": 200.0,
+                "amountDelta": -200.0,
+                "pdfEvidenceFile": "",
+                "pdfEvidencePage": None,
+                "evidenceStatus": "missing",
+                "excludedPdfPages": [],
+            },
+            {
+                "warehouseId": "3",
+                "matchStatus": "多余PDF发票",
+                "reconciliationStatus": "extra_pdf_invoice",
+                "pdfEmployeeCount": 1,
+                "excelEmployeeCount": 0,
+                "pdfAmountTotal": 50.0,
+                "excelAmountTotal": 0,
+                "amountDelta": 50.0,
+                "pdfEvidenceFile": "warehouse-3.pdf",
+                "pdfEvidencePage": 1,
+                "evidenceStatus": "authoritative",
+                "excludedPdfPages": [],
+            },
+            {
+                "warehouseId": "4",
+                "matchStatus": "待复核",
+                "reconciliationStatus": "needs_review",
+                "pdfEmployeeCount": 1,
+                "excelEmployeeCount": 1,
+                "pdfAmountTotal": 0,
+                "excelAmountTotal": 150.0,
+                "amountDelta": -150.0,
+                "pdfEvidenceFile": "warehouse-4.pdf",
+                "pdfEvidencePage": "1, 2",
+                "evidenceStatus": "needs_review",
+                "excludedPdfPages": [3],
+            },
+        ],
+    }
+    extraction_quality = calculate_extraction_quality(
+        pdf_rows=[],
+        comparison_summary={},
+        warehouse_comparison=warehouse_comparison,
+    )
+
+    build_labor_report(
+        output,
+        {"summary": {"conclusionLevel": "warning", "conclusionMessage": "仓库证据待复核"}, "rows": []},
+        [],
+        [],
+        {},
+        warehouse_comparison=warehouse_comparison,
+        extraction_quality=extraction_quality,
+    )
+
+    workbook = load_workbook(output, read_only=True)
+    warehouse_sheet = workbook["仓库金额汇总"]
+    headers = [cell.value for cell in warehouse_sheet[1]]
+    for required_header in ["核对状态", "PDF证据文件", "PDF证据页", "证据状态", "排除附件页"]:
+        assert required_header in headers
+    warehouse_rows = list(warehouse_sheet.iter_rows(min_row=2, values_only=True))
+    status_index = headers.index("核对状态")
+    assert {row[status_index] for row in warehouse_rows} == {"金额差异", "缺少PDF发票", "多余PDF发票", "待复核"}
+
+    conclusion = {
+        row[0]: row[1]
+        for row in workbook["核对结论"].iter_rows(values_only=True)
+        if row[0] is not None and len(row) > 1
+    }
+    assert conclusion["已上传权威PDF总额"] == "$1,000.00"
+    assert conclusion["整批Excel总额"] == "$1,250.00"
+    assert conclusion["整批金额差异"] == "-$250.00"
+    assert conclusion["可比仓库Excel总额"] == "$700.00"
+    assert conclusion["可比仓库金额差异"] == "+$100.00"
+    assert conclusion["缺少PDF发票金额"] == "$200.00"
+    assert conclusion["缺少PDF发票仓库"] == "2"
+    assert conclusion["核对结论"].startswith("需人工复核 - 仓库核对存在 4 项异常")
+
+    quality_values = {
+        row[0]: row[1]
+        for row in workbook["识别完整度"].iter_rows(values_only=True)
+        if row[0] is not None and len(row) > 1
+    }
+    assert quality_values["证据待复核仓库数"] == 1
+    assert quality_values["缺少PDF发票仓库数"] == 1
+    assert quality_values["多余PDF发票仓库数"] == 1
+
+
+def test_build_labor_report_legacy_warehouse_summary_marks_unavailable_missing_pdf_history(tmp_path):
+    output = tmp_path / "legacy-warehouse-report.xlsx"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 1,
+            "excelEmployeeCount": 1,
+            "pdfAmountTotal": 100.0,
+            "excelAmountTotal": 110.0,
+            "amountDeltaTotal": -10.0,
+        },
+        "rows": [],
+    }
+    legacy_warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 100.0,
+            "excelAmountTotal": 110.0,
+            "amountDeltaTotal": -10.0,
+        },
+        "rows": [
+            {
+                "warehouseId": "1",
+                "matchStatus": "通过",
+                "pdfEmployeeCount": 1,
+                "excelEmployeeCount": 1,
+                "pdfAmountTotal": 100.0,
+                "excelAmountTotal": 110.0,
+                "amountDelta": -10.0,
+            }
+        ],
+    }
+
+    build_labor_report(output, comparison, [], [], {}, warehouse_comparison=legacy_warehouse_comparison)
+
+    workbook = load_workbook(output, read_only=True)
+    conclusion = {
+        row[0]: row[1]
+        for row in workbook["核对结论"].iter_rows(values_only=True)
+        if row[0] is not None and len(row) > 1
+    }
+    assert conclusion["可比仓库Excel总额"] == "$110.00"
+    assert conclusion["可比仓库金额差异"] == "-$10.00"
+    assert conclusion["缺少PDF发票金额"] == "历史结果未记录"
+    assert conclusion["缺少PDF发票仓库"] == "历史结果未记录"
+
+
+def test_build_labor_report_current_summary_reports_no_missing_pdf_warehouses(tmp_path):
+    output = tmp_path / "current-no-missing-pdf-report.xlsx"
+    warehouse_comparison = {
+        "summary": {
+            "pdfAmountTotal": 100.0,
+            "excelAmountTotal": 100.0,
+            "amountDeltaTotal": 0.0,
+            "comparableExcelAmountTotal": 100.0,
+            "comparableAmountDeltaTotal": 0.0,
+            "missingPdfAmountTotal": 0.0,
+        },
+        "rows": [
+            {
+                "warehouseId": "1",
+                "matchStatus": "通过",
+                "reconciliationStatus": "passed",
+                "pdfAmountTotal": 100.0,
+                "excelAmountTotal": 100.0,
+                "amountDelta": 0.0,
+            }
+        ],
+    }
+
+    build_labor_report(output, {"summary": {}, "rows": []}, [], [], {}, warehouse_comparison=warehouse_comparison)
+
+    workbook = load_workbook(output, read_only=True)
+    conclusion = {
+        row[0]: row[1]
+        for row in workbook["核对结论"].iter_rows(values_only=True)
+        if row[0] is not None and len(row) > 1
+    }
+    assert conclusion["缺少PDF发票仓库"] == "无"
+
+
+def test_build_labor_report_highlights_review_and_invoice_presence_statuses(tmp_path):
+    output = tmp_path / "warehouse-status-fills.xlsx"
+    warehouse_comparison = {
+        "summary": {},
+        "rows": [
+            {"warehouseId": "review", "matchStatus": "待复核", "amountDelta": 0},
+            {"warehouseId": "missing", "matchStatus": "缺少PDF发票", "amountDelta": -200},
+            {"warehouseId": "extra", "matchStatus": "多余PDF发票", "amountDelta": 200},
+        ],
+    }
+
+    build_labor_report(output, {"summary": {}, "rows": []}, [], [], {}, warehouse_comparison=warehouse_comparison)
+
+    workbook = load_workbook(output, read_only=False)
+    sheet = workbook["仓库金额汇总"]
+    fills = {sheet.cell(row=row, column=1).value: sheet.cell(row=row, column=2).fill.fgColor.rgb[-6:] for row in range(2, 5)}
+    assert fills == {"review": "FFF4D6", "missing": "FFF4D6", "extra": "FFF4D6"}
 
 
 def test_build_labor_report_uses_business_language_inside_workbook(tmp_path):
@@ -3899,7 +7499,7 @@ def test_build_labor_report_can_include_ai_cache_audit(tmp_path):
                 "candidateAmountTotal": 1399.89,
                 "averageConfidence": 0.95,
                 "decision": "candidate_only",
-                "cacheFiles": ["elog1-1_20260520204104_p1_mimo-v2.5_v6.json"],
+                "cacheFiles": [f"elog1-1_20260520204104_p1_mimo-v2.5_{AI_PAGE_CACHE_VERSION}.json"],
                 "evidence": [{"employeeName": "Alvarez Michalec Rosa", "amount": 701.88, "evidenceText": "Total $701.88"}],
             }
         ],
@@ -4229,6 +7829,45 @@ def test_build_labor_business_html_report_marks_detail_rows_missing_as_total_pas
     assert "系统未能完成核对" not in html
 
 
+def test_build_labor_business_html_report_marks_partial_detail_coverage_as_incomplete(tmp_path):
+    output = tmp_path / "partial-detail-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 1,
+            "excelEmployeeCount": 1,
+            "pdfAmountTotal": 100.0,
+            "excelAmountTotal": 100.0,
+            "amountDeltaTotal": 0,
+            "passedCount": 1,
+            "amountDiffCount": 0,
+        },
+        "rows": [
+            {
+                "employeeName": "Employee One",
+                "matchStatus": "通过",
+                "pdfAmountTotal": 100.0,
+                "excelAmountTotal": 100.0,
+                "amountDelta": 0.0,
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Image Supplier",
+        period_start="2026-06-01",
+        period_end="2026-06-07",
+        detail_coverage_complete=False,
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "总账通过，但员工明细待确认" in html
+    assert "员工明细未完整识别" in html
+    assert "需业务确认" in html
+    assert ">可放行<" not in html
+
+
 def test_build_labor_business_html_report_treats_ten_cent_total_difference_as_pass(tmp_path):
     output = tmp_path / "ten-cent-total-pass.html"
     comparison = {
@@ -4310,6 +7949,47 @@ def test_build_labor_business_html_report_total_pass_with_review_items_does_not_
     assert "员工明细仍有需要确认的项目" in html
     assert "疑似同一员工，需确认" in html
     assert "部分员工明细未完整识别" not in html
+
+
+def test_build_labor_business_html_report_marks_excel_only_rows_as_incomplete_pdf_coverage(tmp_path):
+    output = tmp_path / "excel-only-coverage-report.html"
+    comparison = {
+        "summary": {
+            "pdfEmployeeCount": 0,
+            "excelEmployeeCount": 2,
+            "pdfAmountTotal": 0.0,
+            "excelAmountTotal": 1200.0,
+            "amountDeltaTotal": -1200.0,
+        },
+        "rows": [
+            {
+                "employeeName": "Excel Only Worker",
+                "matchStatus": "Excel有PDF无",
+                "riskFlags": [],
+                "pdfHoursTotal": 0,
+                "excelHoursTotal": 40,
+                "hoursDelta": -40,
+                "pdfAmountTotal": 0,
+                "excelAmountTotal": 1200,
+                "amountDelta": -1200,
+                "sourceRefs": "账单!2",
+            }
+        ],
+    }
+
+    build_labor_business_html_report(
+        output,
+        comparison,
+        supplier_name="Fairway",
+        period_start="2026-05-11",
+        period_end="2026-05-17",
+        invoice_scope="invoice upload",
+    )
+
+    html = output.read_text(encoding="utf-8")
+    assert "员工明细未完整展开" in html
+    assert "尚不能视为已与发票逐一核对" in html
+    assert "用于确认每位员工的发票金额和账单金额是否一致" not in html
 
 
 def test_build_labor_business_html_report_amount_close_but_name_unlike_stays_manual_confirmation(tmp_path):
@@ -4608,7 +8288,7 @@ def test_build_labor_business_html_report_explains_full_excel_count_vs_review_de
 
     html = output.read_text(encoding="utf-8")
     assert "整批账单已读取 128 行" in html
-    assert "当前展示的是需要确认的 18 名员工明细" in html
+    assert "当前展示的是需要确认的 1 名员工明细" in html
     assert "不代表账单只有这些员工" in html
     assert "员工明细识别情况" in html
     assert "只展开需要确认的员工明细" in html
@@ -4825,6 +8505,95 @@ def test_calculate_extraction_quality_respects_confidence_threshold_param_T_P2_3
     assert "John" not in names
 
 
+def test_calculate_extraction_quality_counts_unresolved_missing_and_extra_warehouse_evidence():
+    result = calculate_extraction_quality(
+        pdf_rows=[],
+        comparison_summary={},
+        warehouse_comparison={
+            "rows": [
+                {"warehouseId": "1", "reconciliationStatus": "passed"},
+                {"warehouseId": "2", "reconciliationStatus": "needs_review"},
+                {"warehouseId": "3", "reconciliationStatus": "missing_pdf_invoice"},
+                {"warehouseId": "4", "reconciliationStatus": "extra_pdf_invoice"},
+            ],
+        },
+    )
+
+    assert result["metrics"]["warehouseEvidence"] == {
+        "unresolvedEvidenceCount": 1,
+        "unresolvedEvidenceWarehouses": ["2"],
+        "missingPdfInvoiceCount": 1,
+        "missingPdfInvoiceWarehouses": ["3"],
+        "extraPdfInvoiceCount": 1,
+        "extraPdfInvoiceWarehouses": ["4"],
+    }
+
+
+def test_calculate_extraction_quality_uses_reconciliation_status_for_warehouse_issues():
+    result = calculate_extraction_quality(
+        pdf_rows=[],
+        comparison_summary={},
+        warehouse_comparison={
+            "rows": [
+                {"warehouseId": "1", "matchStatus": "金额差异", "reconciliationStatus": "amount_difference", "amountDelta": -250},
+                {"warehouseId": "2", "matchStatus": "缺少PDF发票", "reconciliationStatus": "missing_pdf_invoice", "amountDelta": -200},
+                {"warehouseId": "3", "matchStatus": "多余PDF发票", "reconciliationStatus": "extra_pdf_invoice", "amountDelta": 150},
+                {"warehouseId": "4", "matchStatus": "待复核", "reconciliationStatus": "needs_review", "amountDelta": 0},
+            ],
+        },
+    )
+
+    warehouse_issues = result["metrics"]["warehouseIssues"]
+    assert any("仓库 1" in issue and "金额差异" in issue for issue in warehouse_issues)
+    assert any("仓库 2" in issue and "缺少PDF发票" in issue and "金额差异" not in issue for issue in warehouse_issues)
+    assert any("仓库 3" in issue and "多余PDF发票" in issue and "金额差异" not in issue for issue in warehouse_issues)
+    assert any("仓库 4" in issue and "待复核" in issue and "金额差异" not in issue for issue in warehouse_issues)
+    assert all(issue in result["issues"] for issue in warehouse_issues)
+
+
+def test_calculate_extraction_quality_labels_business_delta_without_claiming_bad_extraction():
+    result = calculate_extraction_quality(
+        pdf_rows=[
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file="invoice.pdf",
+                source_page_or_row="p1",
+                employee_id="",
+                employee_name_raw="Worker One",
+                hours=8,
+                amount=1000,
+                currency="EUR",
+                confidence=1,
+                evidence_text="invoice row",
+                warehouse_id="1",
+            )
+        ],
+        comparison_summary={
+            "pdfEmployeeCount": 1,
+            "excelEmployeeCount": 1,
+            "pdfHoursTotal": 8,
+            "excelHoursTotal": 8,
+            "pdfAmountTotal": 1000,
+            "excelAmountTotal": 1150,
+            "unmatchedPdfCount": 0,
+            "unmatchedExcelCount": 0,
+        },
+        warehouse_comparison={
+            "rows": [
+                {
+                    "warehouseId": "1",
+                    "reconciliationStatus": "amount_difference",
+                    "amountDelta": -150,
+                }
+            ]
+        },
+    )
+
+    assert result["level"] == "warning"
+    assert result["message"] == "核对发现业务差异，请查看员工与仓库明细。"
+    assert "抽取" not in result["message"]
+
+
 def test_ai_instruction_retry_mode_appends_target_names_T_P2_4():
     prompt = _ai_instruction(retry_mode=True, target_names=["John", "Jane"])
     assert "RETRY MODE" in prompt
@@ -4856,6 +8625,22 @@ def test_generate_profile_from_extraction_basic_T_P3_1():
     assert profile["key"] == "fairway"
     assert isinstance(profile["prompt_notes"], list)
     assert profile["version"] == 1
+
+
+def test_generate_profile_candidate_learns_reviewable_line_item_aliases():
+    rows = [
+        replace(
+            _make_labor_item(name="Unknown Worker", hours=0, amount=19.44),
+            item_type="meal_allowance",
+            description="TICKET RESTAURANT",
+            quantity=4,
+            unit="meal",
+        )
+    ]
+
+    profile = generate_profile_from_extraction("Unseen Vendor LLC", rows)
+
+    assert profile["line_item_aliases"] == {"ticket restaurant": "meal_allowance"}
 
 
 def test_generate_profile_from_extraction_detects_zero_hours_premiums_T_P3_2():
@@ -4892,10 +8677,18 @@ def test_save_supplier_profile_creates_file_T_P3_4(tmp_path):
 def test_profiles_for_resolution_scans_directory_T_P3_5(tmp_path):
     # Create two profile JSON files in the directory
     profile_a = [
-        {"key": "supplier_a", "aliases": ["supplier a"], "prompt_notes": ["note a"]}
+        {
+            "key": "supplier_a", "aliases": ["supplier a"], "prompt_notes": ["note a"],
+            "version": 1, "status": "approved", "approvedBy": "p0-test-reviewer",
+            "approvedAt": "2026-07-15T10:00:00Z", "created_from": "manual_review",
+        }
     ]
     profile_b = [
-        {"key": "supplier_b", "aliases": ["supplier b"], "prompt_notes": ["note b"]}
+        {
+            "key": "supplier_b", "aliases": ["supplier b"], "prompt_notes": ["note b"],
+            "version": 1, "status": "approved", "approvedBy": "p0-test-reviewer",
+            "approvedAt": "2026-07-15T10:00:00Z", "created_from": "manual_review",
+        }
     ]
     (tmp_path / "a.json").write_text(json.dumps(profile_a), encoding="utf-8")
     (tmp_path / "b.json").write_text(json.dumps(profile_b), encoding="utf-8")
@@ -5106,6 +8899,7 @@ def test_build_material_replay_plan_suggests_uploads_mapping_and_risks(tmp_path)
     assert mapping["name"] == "姓名"
     assert mapping["hours"] == "时长总计(H)"
     assert mapping["amount"] == "费用总计(含税)"
+    assert "amountColumns" not in mapping
     assert item["replayReady"] is True
     assert item["replayMode"] == "deterministic_first"
     assert "异常解释" in item["aiAllowedFor"]
@@ -5135,6 +8929,228 @@ def test_build_material_replay_plan_excludes_hours_only_supporting_workbook(tmp_
     ]
     assert any("辅助材料排除" in risk for risk in item["expectedRisks"])
     assert item["replayReady"] is True
+
+
+def test_build_material_replay_plan_chooses_complete_mapping_sheet(tmp_path):
+    batch = tmp_path / "ADEQUAT"
+    batch.mkdir()
+    (batch / "invoice.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook = Workbook()
+    summary = workbook.active
+    summary.title = "Sheet1"
+    summary.append(["求和项:时长总计", "总计"])
+    summary.append(["Alice Worker", 8])
+    bill = workbook.create_sheet("Sheet2")
+    bill.append(["员工名称", "总计", "时薪", "本周薪资", "本周餐补", "总额"])
+    bill.append(["Alice Worker", 8, 12.5, 100, 10, 110])
+    workbook.save(batch / "巴黎1号仓.xlsx")
+
+    plan = build_material_replay_plan(tmp_path, batch_key="ADEQUAT")
+
+    item = plan["plans"][0]
+    assert item["replayReady"] is True
+    assert item["supplier"] == "adequat"
+    assert item["mappingCandidates"][0]["sheetName"] == "Sheet2"
+    assert item["mappingCandidates"][0]["suggestedMapping"]["name"] == "员工名称"
+    assert item["mappingCandidates"][0]["suggestedMapping"]["hours"] == "总计"
+    assert item["mappingCandidates"][0]["suggestedMapping"]["amount"] == "总额"
+
+
+def test_build_material_replay_plan_uses_amount_components_when_total_is_missing(tmp_path):
+    batch = tmp_path / "Sovitrat groupe"
+    batch.mkdir()
+    (batch / "invoice.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sheet2"
+    sheet.append(["员工名称", "总计", "时薪", "本周薪资", "本周餐补", "周日补贴"])
+    sheet.append(["Alice Worker", 8, 12.5, 100, 10, 5])
+    workbook.save(batch / "巴黎2号仓.xlsx")
+
+    plan = build_material_replay_plan(tmp_path, batch_key="Sovitrat_groupe")
+
+    mapping = plan["plans"][0]["mappingCandidates"][0]["suggestedMapping"]
+    assert plan["plans"][0]["supplier"] == "sovitrat groupe"
+    assert mapping["amountColumns"] == ["本周薪资", "本周餐补", "周日补贴"]
+
+
+def test_build_material_replay_plan_does_not_sum_aggregate_and_component_amounts(tmp_path):
+    batch = tmp_path / "oss"
+    batch.mkdir()
+    (batch / "invoice.pdf").write_bytes(b"%PDF-1.4\n")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "员工账单明细"
+    sheet.append(["姓名", "时长总计(H)", "费用总计(不含税)", "费用总计(含税)", "白班工作费用"])
+    sheet.append(["Alice Worker", 8, 100, 110, 100])
+    workbook.save(batch / "员工账单明细.xlsx")
+
+    plan = build_material_replay_plan(tmp_path, batch_key="oss")
+
+    mapping = plan["plans"][0]["mappingCandidates"][0]["suggestedMapping"]
+    assert mapping["amount"] == "费用总计(不含税)"
+    assert "amountColumns" not in mapping
+
+
+def test_labor_production_readiness_blocks_unsafe_serverless_configuration():
+    from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
+
+    result = evaluate_labor_production_readiness(
+        env={"VERCEL": "1", "SIGMA_LABOR_EXECUTION_MODE": "personal-worker"},
+        storage_info={"enabled": False, "backend": ""},
+        queue_health={"backend": "local-json", "ready": False},
+        build_info={"status": "current", "buildId": "test-build", "apiContractVersion": 2},
+    )
+
+    assert result["status"] == "blocked"
+    assert result["directPaymentAllowed"] is False
+    assert {issue["code"] for issue in result["blockers"]} == {
+        "persistent_storage_required",
+        "postgres_queue_required",
+        "worker_tokens_required",
+        "operations_token_required",
+    }
+
+
+def test_labor_production_readiness_stops_at_developer_preview_until_controlled_gates_exist():
+    from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
+
+    result = evaluate_labor_production_readiness(
+        env={
+            "VERCEL": "1",
+            "SIGMA_LABOR_EXECUTION_MODE": "personal-worker",
+            "SIGMA_LABOR_WORKER_TOKENS": '{"opaque":{"userId":"u1","deviceId":"d1"}}',
+            "SIGMA_LABOR_OPERATIONS_TOKEN": "ops-token",
+        },
+        storage_info={"enabled": True, "backend": "blob", "environment": "uat"},
+        queue_health={"backend": "postgres", "configured": True, "ready": True},
+        build_info={"status": "current", "buildId": "test-build", "apiContractVersion": 2},
+    )
+
+    assert result["status"] == "ready_for_developer_preview"
+    assert result["readinessLevel"] == "developer_preflight"
+    assert result["blockers"] == []
+    assert result["manualReviewRequired"] is True
+    assert result["directPaymentAllowed"] is False
+
+
+def test_labor_production_readiness_blocks_stale_runtime_build():
+    from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
+
+    result = evaluate_labor_production_readiness(
+        env={
+            "SIGMA_LABOR_EXECUTION_MODE": "personal-worker",
+            "SIGMA_LABOR_WORKER_TOKENS": '{"opaque":{"userId":"u1","deviceId":"d1"}}',
+            "SIGMA_LABOR_OPERATIONS_TOKEN": "ops-token",
+        },
+        storage_info={"enabled": True, "backend": "blob", "environment": "uat"},
+        queue_health={"backend": "postgres", "configured": True, "ready": True},
+        build_info={"status": "restart_required", "buildId": "stale-build", "apiContractVersion": 2},
+    )
+
+    assert result["status"] == "blocked"
+    assert {issue["code"] for issue in result["blockers"]} == {"runtime_restart_required"}
+    assert result["build"] == {
+        "status": "restart_required",
+        "buildId": "stale-build",
+        "apiContractVersion": 2,
+    }
+
+
+def test_labor_production_readiness_endpoint_returns_sanitized_gate(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_OPERATIONS_TOKEN", "ops-token")
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+    monkeypatch.setenv("SIGMA_LABOR_WORKER_TOKENS", '{"opaque":{"userId":"u1","deviceId":"d1"}}')
+    monkeypatch.setenv("SIGMA_LABOR_REQUIRE_CLIENT_CONTRACT", "true")
+    monkeypatch.setattr(app_module, "labor_persistent_storage_info", lambda: {"enabled": True, "backend": "blob"})
+    monkeypatch.setattr(
+        app_module,
+        "labor_worker_job_store_health",
+        lambda: {"backend": "postgres", "configured": True, "ready": True},
+    )
+
+    result = app_module.get_labor_production_readiness(x_admin_token="ops-token")
+
+    assert result["status"] == "ready_for_developer_preview"
+    assert "opaque" not in json.dumps(result)
+
+
+def test_labor_production_readiness_blocks_external_ai_for_first_uat():
+    from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
+
+    result = evaluate_labor_production_readiness(
+        env={
+            "SIGMA_LABOR_EXECUTION_MODE": "personal-worker",
+            "SIGMA_LABOR_WORKER_TOKENS": '{"opaque":{"userId":"u1","deviceId":"d1"}}',
+            "SIGMA_LABOR_OPERATIONS_TOKEN": "ops-token",
+            "SIGMA_LABOR_EXTERNAL_AI_ENABLED": "true",
+        },
+        storage_info={"enabled": True, "backend": "blob", "environment": "uat"},
+        queue_health={"backend": "postgres", "configured": True, "ready": True},
+        build_info={"status": "current", "buildId": "test-build", "apiContractVersion": 2},
+    )
+
+    assert result["status"] == "blocked"
+    assert {issue["code"] for issue in result["blockers"]} == {"external_ai_disabled_required"}
+
+
+def test_labor_production_readiness_rejects_malformed_worker_update_manifest():
+    from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
+
+    result = evaluate_labor_production_readiness(
+        env={
+            "SIGMA_LABOR_EXECUTION_MODE": "personal-worker",
+            "SIGMA_LABOR_WORKER_TOKENS": '{"opaque":{"userId":"u1","deviceId":"d1"}}',
+            "SIGMA_LABOR_OPERATIONS_TOKEN": "ops-token",
+            "SIGMA_LABOR_WORKER_UPDATE_MANIFEST": '{"version":"0.2"}',
+        },
+        storage_info={"enabled": True, "backend": "blob", "environment": "uat"},
+        queue_health={"backend": "postgres", "configured": True, "ready": True},
+        build_info={
+            "status": "current",
+            "buildId": "test-build",
+            "apiContractVersion": 2,
+            "requiredWorkerVersion": "0.3.0",
+        },
+    )
+
+    assert "signed_update_manifest_invalid" in {issue["code"] for issue in result["warnings"]}
+
+
+def test_labor_external_ai_requires_labor_specific_opt_in():
+    config = _ready_ai_config()
+    config["external_ai_enabled"] = False
+    assert _ai_ready(config) is False
+
+    config["external_ai_enabled"] = True
+    assert _ai_ready(config) is True
+
+
+def test_postgres_worker_claim_does_not_exceed_max_attempts():
+    from contextlib import contextmanager
+    from bonus_platform.engine.labor.worker_jobs_postgres import PostgresLaborWorkerStore
+
+    statements = []
+
+    class Result:
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def execute(self, statement, params=()):
+            statements.append(str(statement))
+            return Result()
+
+        def commit(self):
+            return None
+
+    @contextmanager
+    def connect():
+        yield Connection()
+
+    store = PostgresLaborWorkerStore("postgresql://unused", connect=connect)
+    assert store.claim("u1", "d1", "0.3.0") is None
+    assert "attempt < max_attempts" in statements[0]
 
 
 def test_build_material_replay_plan_identifies_prompt_priority_batch(tmp_path):
@@ -5674,7 +9690,7 @@ def test_build_material_dry_run_surfaces_cross_warehouse_allocation_review(monke
 
     dry_run = build_material_dry_run(tmp_path, "fairway已报账2")
 
-    assert dry_run["summary"]["comparison"]["exceptionCount"] == 0
+    assert dry_run["summary"]["comparison"]["exceptionCount"] == 4
     assert dry_run["summary"]["warehouse"]["allocationIssueCount"] == 2
     assert dry_run["summary"]["tierStatus"]["allocationIssueCount"] == 2
     assert dry_run["reviewQueues"]["primary"] == "allocation_review"
@@ -6132,3 +10148,589 @@ def _write_labor_bill_workbook_with_rows(path, rows):
     for row in rows:
         sheet.append(row)
     workbook.save(path)
+
+
+@pytest.mark.parametrize(
+    ("value", "locale_hint", "expected"),
+    [
+        ("1,059.16", "dot_decimal", 1059.16),
+        ("1.059,16", "comma_decimal", 1059.16),
+        ("26,479", "comma_decimal", 26.479),
+        ("$12,167.13", "dot_decimal", 12167.13),
+        ("12.167,13 EUR", "comma_decimal", 12167.13),
+    ],
+)
+def test_parse_localized_number(value, locale_hint, expected):
+    assert parse_localized_number(value, locale_hint) == expected
+
+
+def test_find_amount_closure_uses_structure_not_language():
+    closure = find_amount_closure(
+        ["Zwischensumme (netto) 10.224,48\nUmsatzsteuer 1.942,65\nGesamtbetrag 12.167,13"],
+        detail_sum=10224.48,
+    )
+
+    assert closure.net_amount == 10224.48
+    assert closure.tax_amount == 1942.65
+    assert closure.gross_amount == 12167.13
+    assert closure.confidence == "high"
+    assert closure.locale == "comma_decimal"
+
+
+def test_find_amount_closure_rejects_ambiguous_candidates():
+    closure = find_amount_closure(
+        ["100.00 100.00 10.00 110.00 20.00 120.00"],
+        detail_sum=100.00,
+    )
+
+    assert closure.confidence == "ambiguous"
+
+
+def _structure_row(name, *, source_type="pdf_invoice", source_file="invoice.pdf", warehouse_id="", amount=100.0):
+    return LaborLineItem(
+        source_type=source_type,
+        source_file=source_file,
+        source_page_or_row="p1" if source_type == "pdf_invoice" else "Sheet1!2",
+        employee_id="",
+        employee_name_raw=name,
+        hours=8.0,
+        amount=amount,
+        currency="EUR",
+        confidence=0.95,
+        evidence_text=name,
+        warehouse_id=warehouse_id,
+    )
+
+
+def test_infer_warehouse_requires_count_coverage_and_margin():
+    names = ["A One", "B Two", "C Three", "D Four", "E Five", "F Six"]
+    pdf_rows = [_structure_row(name) for name in names]
+    excel_rows = [
+        *[_structure_row(name, source_type="offline_workbook", warehouse_id="16") for name in names],
+        *[_structure_row(name, source_type="offline_workbook", warehouse_id="3") for name in names[:1]],
+    ]
+
+    result = infer_warehouse_from_rows(pdf_rows, excel_rows)
+
+    assert result.status == "matched"
+    assert result.warehouse_id == "16"
+    assert result.matched_count == 6
+    assert result.invoice_coverage == 1.0
+    assert result.runner_up_warehouse_id == "3"
+
+
+def test_infer_warehouse_returns_review_when_runner_up_is_close():
+    names = ["A One", "B Two", "C Three", "D Four", "E Five"]
+    pdf_rows = [_structure_row(name) for name in names]
+    excel_rows = [
+        *[_structure_row(name, source_type="offline_workbook", warehouse_id="3") for name in names],
+        *[_structure_row(name, source_type="offline_workbook", warehouse_id="6") for name in names[:4]],
+    ]
+
+    result = infer_warehouse_from_rows(pdf_rows, excel_rows)
+
+    assert result.status == "warehouse_review"
+    assert result.warehouse_id == ""
+
+
+def test_infer_warehouse_keeps_five_of_seven_unique_match():
+    invoice_names = ["A One", "B Two", "C Three", "D Four", "E Five", "OCR Wrong", "OCR Missing"]
+    pdf_rows = [_structure_row(name) for name in invoice_names]
+    excel_rows = [
+        *[_structure_row(name, source_type="offline_workbook", warehouse_id="12") for name in invoice_names[:5]],
+        _structure_row("Other Worker", source_type="offline_workbook", warehouse_id="9"),
+    ]
+
+    result = infer_warehouse_from_rows(pdf_rows, excel_rows)
+
+    assert result.status == "matched"
+    assert result.warehouse_id == "12"
+    assert result.matched_count == 5
+
+
+def test_infer_warehouse_reviews_small_invoice_even_when_unique():
+    names = ["A One", "B Two", "C Three", "D Four"]
+
+    result = infer_warehouse_from_rows(
+        [_structure_row(name) for name in names],
+        [_structure_row(name, source_type="offline_workbook", warehouse_id="12") for name in names],
+    )
+
+    assert result.status == "warehouse_review"
+
+
+def test_promote_unknown_invoice_when_rows_amount_and_warehouse_close(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "Rechnung_RE202606-0646.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    names = ["A One", "B Two", "C Three", "D Four", "E Five", "F Six"]
+    pdf_rows = [
+        _structure_row(name, source_file=pdf_path.name, amount=1700.0)
+        for name in names[:-1]
+    ]
+    pdf_rows.append(_structure_row(names[-1], source_file=pdf_path.name, amount=1724.48))
+    excel_rows = [
+        _structure_row(name, source_type="offline_workbook", warehouse_id="15")
+        for name in names
+    ]
+    monkeypatch.setattr(
+        labor_structure,
+        "extract_page_texts",
+        lambda _: ["10.224,48 1.942,65 12.167,13"],
+    )
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [
+            {
+                "source_file": pdf_path.name,
+                "total_amount": 0.0,
+                "warehouse_id": "",
+                "pdf_type": "unknown",
+                "authoritative": False,
+                "evidence_status": "needs_review",
+                "page_evidence": [{"page": 1, "role": "unknown"}],
+            }
+        ],
+        pdf_rows,
+        excel_rows,
+    )
+
+    promoted = result.pdf_totals[0]
+    assert promoted["warehouse_id"] == "15"
+    assert promoted["total_amount"] == 10224.48
+    assert promoted["authoritative"] is True
+    assert promoted["evidence_status"] == "authoritative"
+    assert promoted["total_label"] == "employee_detail_sum"
+    assert result.decisions[0]["status"] == "reconciled"
+
+
+def test_promote_authoritative_total_across_multiple_employee_warehouses(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    names = ["A One", "B Two", "C Three", "D Four", "E Five", "F Six"]
+    pdf_rows = [
+        _structure_row(name, source_file=pdf_path.name, amount=20.0 if index < 4 else 10.0)
+        for index, name in enumerate(names)
+    ]
+    excel_rows = [
+        _structure_row(
+            name,
+            source_type="offline_workbook",
+            warehouse_id="1" if index < 3 else "2",
+            amount=20.0 if index < 4 else 10.0,
+        )
+        for index, name in enumerate(names)
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: ["100.00 100.00 0.00"])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [
+            {
+                "source_file": pdf_path.name,
+                "total_amount": 100.0,
+                "warehouse_id": "",
+                "pdf_type": "primary",
+                "authoritative": True,
+                "evidence_status": "authoritative",
+            }
+        ],
+        pdf_rows,
+        excel_rows,
+    )
+
+    assert result.decisions[0]["status"] == "reconciled_multi_warehouse"
+    assert result.pdf_totals[0]["authoritative"] is True
+    assert result.unresolved_files == ()
+    assert {row.warehouse_id for row in result.pdf_rows} == {"1", "2"}
+
+
+def test_structured_promotion_keeps_explicit_warehouse_conflict_for_review(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    names = ["A One", "B Two", "C Three", "D Four", "E Five"]
+    pdf_rows = [_structure_row(name, source_file=pdf_path.name, amount=20.0) for name in names]
+    excel_rows = [
+        _structure_row(name, source_type="offline_workbook", warehouse_id="15")
+        for name in names
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: ["100.00 19.00 119.00"])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [{"source_file": pdf_path.name, "total_amount": 0.0, "warehouse_id": "3", "pdf_type": "unknown", "authoritative": False}],
+        pdf_rows,
+        excel_rows,
+    )
+
+    assert result.pdf_totals[0]["authoritative"] is False
+    assert result.decisions[0]["status"] == "warehouse_review"
+
+
+def test_structured_promotion_requires_visible_amount_closure(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    names = ["A One", "B Two", "C Three", "D Four", "E Five"]
+    pdf_rows = [_structure_row(name, source_file=pdf_path.name, amount=20.0) for name in names]
+    excel_rows = [
+        _structure_row(name, source_type="offline_workbook", warehouse_id="15")
+        for name in names
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: ["250.00 47.50 297.50"])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [{"source_file": pdf_path.name, "total_amount": 0.0, "warehouse_id": "", "pdf_type": "unknown", "authoritative": False}],
+        pdf_rows,
+        excel_rows,
+    )
+
+    assert result.pdf_totals[0]["authoritative"] is False
+    assert result.decisions[0]["status"] == "amount_review"
+
+
+def test_image_invoice_complete_detail_sum_promotes_when_batch_closes_to_excel(tmp_path, monkeypatch):
+    salary_pdf = tmp_path / "salary.pdf"
+    meal_pdf = tmp_path / "meal.pdf"
+    salary_pdf.write_bytes(b"%PDF-1.4\n")
+    meal_pdf.write_bytes(b"%PDF-1.4\n")
+    pdf_rows = [
+        _structure_row("COBY Hugues", source_file=salary_pdf.name, amount=563.70),
+        _structure_row("COBY Hugues", source_file=meal_pdf.name, amount=19.44),
+    ]
+    pdf_rows[0] = replace(pdf_rows[0], hours=27.92, evidence_text="COBY Hugues 27.92 563,70")
+    # Meal-ticket quantity may be extracted into the generic hours slot. It is
+    # still valid amount evidence and must remain an employee-level hours alert.
+    pdf_rows[1] = replace(pdf_rows[1], hours=4.0, evidence_text="COBY Hugues 4 repas 19,44")
+    excel_rows = [
+        _structure_row(
+            "COBY Hugues",
+            source_type="offline_workbook",
+            warehouse_id="1",
+            amount=583.14,
+        )
+    ]
+    excel_rows[0] = replace(excel_rows[0], hours=27.92)
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: [""])
+
+    result = promote_structured_invoice_evidence(
+        [salary_pdf, meal_pdf],
+        [
+            {"source_file": salary_pdf.name, "total_amount": 0.0, "warehouse_id": "", "authoritative": False, "evidence_status": "needs_review"},
+            {"source_file": meal_pdf.name, "total_amount": 0.0, "warehouse_id": "", "authoritative": False, "evidence_status": "needs_review"},
+        ],
+        pdf_rows,
+        excel_rows,
+        page_audit=[
+            {"sourceFile": salary_pdf.name, "page": 1, "status": "cache_hit", "rowCount": 1, "fromCache": True},
+            {"sourceFile": meal_pdf.name, "page": 1, "status": "completed", "rowCount": 1},
+        ],
+    )
+
+    assert [item["total_amount"] for item in result.pdf_totals] == [563.70, 19.44]
+    assert all(item["authoritative"] is True for item in result.pdf_totals)
+    assert {item["warehouse_id"] for item in result.pdf_totals} == {"1"}
+    assert result.unresolved_files == ()
+
+
+def test_image_invoice_uses_explicit_net_tax_gross_page_evidence(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    pdf_rows = [_structure_row("Worker One", source_file=pdf_path.name, amount=100.0)]
+    excel_rows = [
+        _structure_row("Worker One", source_type="offline_workbook", warehouse_id="2", amount=100.0)
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: [""])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [{
+            "source_file": pdf_path.name,
+            "total_amount": 120.0,
+            "total_label": "TOTAL TTC",
+            "warehouse_id": "",
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "page_evidence": [{
+                "page": 1,
+                "role": "invoice_total",
+                "role_confidence": 0.99,
+                "net_amount": 100.0,
+                "tax_amount": 20.0,
+                "gross_amount": 120.0,
+                "evidence_text": "TOTAL HT 100,00 TVA 20,00 TOTAL TTC 120,00",
+            }],
+        }],
+        pdf_rows,
+        excel_rows,
+    )
+
+    assert result.decisions[0]["status"] == "reconciled"
+    assert result.decisions[0]["closure"]["confidence"] == "page_evidence_high"
+    assert result.pdf_totals[0]["total_amount"] == 100.0
+
+
+def test_complete_image_invoice_rows_remain_visible_when_total_conflicts_with_excel(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    pdf_rows = [_structure_row("COBY Hugues", source_file=pdf_path.name, amount=563.70)]
+    excel_rows = [
+        _structure_row("COBY Hugues", source_type="offline_workbook", warehouse_id="1", amount=600.00)
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: [""])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [{"source_file": pdf_path.name, "total_amount": 0.0, "warehouse_id": "", "authoritative": False}],
+        pdf_rows,
+        excel_rows,
+        page_audit=[{"sourceFile": pdf_path.name, "page": 1, "status": "completed", "rowCount": 1}],
+    )
+
+    assert len(result.pdf_rows) == 1
+    assert result.pdf_rows[0].employee_name_raw == "COBY Hugues"
+    assert result.pdf_rows[0].amount == 563.70
+    assert result.pdf_totals[0]["authoritative"] is False
+    assert result.pdf_totals[0]["total_amount"] == 0.0
+    assert result.decisions[0]["status"] == "amount_review"
+
+
+def test_complete_image_invoice_rows_resolve_repeated_amount_candidates(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "bonus.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    pdf_rows = [_structure_row("Lautric Patrick", source_file=pdf_path.name, amount=134.40)]
+    excel_rows = [
+        _structure_row(
+            "Lautric Patrick",
+            source_type="offline_workbook",
+            warehouse_id="1",
+            amount=150.00,
+        )
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: ["134,40 134,40 134,40"])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [{"source_file": pdf_path.name, "total_amount": 0.0, "warehouse_id": "", "authoritative": False}],
+        pdf_rows,
+        excel_rows,
+        page_audit=[{"sourceFile": pdf_path.name, "page": 1, "status": "completed", "rowCount": 1}],
+    )
+
+    assert result.pdf_totals[0]["authoritative"] is True
+    assert result.pdf_totals[0]["total_amount"] == 134.40
+    assert result.decisions[0]["closure"]["confidence"] == "complete_line_sum"
+
+
+def test_image_invoice_amount_can_close_while_warehouse_remains_reviewable(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    pdf_rows = [_structure_row("COBY Hugues", source_file=pdf_path.name, amount=583.14)]
+    excel_rows = [
+        _structure_row("COBY Hugues", source_type="offline_workbook", warehouse_id="", amount=583.14)
+    ]
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: [""])
+
+    result = promote_structured_invoice_evidence(
+        [pdf_path],
+        [{"source_file": pdf_path.name, "total_amount": 0.0, "warehouse_id": "", "authoritative": False}],
+        pdf_rows,
+        excel_rows,
+        page_audit=[{"sourceFile": pdf_path.name, "page": 1, "status": "completed", "rowCount": 1}],
+    )
+
+    assert result.pdf_totals[0]["total_amount"] == 583.14
+    assert result.pdf_totals[0]["authoritative"] is True
+    assert result.pdf_totals[0]["warehouse_id"] == ""
+    assert result.decisions[0]["status"] == "reconciled_amount_warehouse_review"
+    assert result.unresolved_files == ()
+
+
+def test_batch_guard_blocks_zero_when_raw_rows_exist():
+    guard = evaluate_batch_guards(
+        pdf_paths=[Path("invoice.pdf")],
+        pdf_totals=[{"total_amount": 0.0}],
+        raw_pdf_rows=[_structure_row("A One", amount=100.0)],
+        formal_pdf_rows=[],
+        excel_rows=[_structure_row("A One", source_type="offline_workbook", warehouse_id="1", amount=100.0)],
+        requested_currency="USD",
+        detected_currencies=set(),
+    )
+
+    assert guard.status == "pdf_recognition_incomplete"
+    assert guard.allow_releasable_report is False
+
+
+def test_batch_guard_treats_image_only_zero_total_as_recognition_failure():
+    guard = evaluate_batch_guards(
+        pdf_paths=[Path("DEPT#1.pdf"), Path("DEPT#2.pdf")],
+        pdf_totals=[
+            {"source_file": "DEPT#1.pdf", "total_amount": 0.0},
+            {"source_file": "DEPT#2.pdf", "total_amount": 0.0},
+        ],
+        raw_pdf_rows=[],
+        formal_pdf_rows=[],
+        excel_rows=[],
+        requested_currency="USD",
+        detected_currencies=set(),
+        pdf_text_coverage={
+            "summary": {
+                "fileCount": 2,
+                "imageOnlyFileCount": 2,
+                "textReadableFileCount": 0,
+            }
+        },
+    )
+
+    assert guard.status == "pdf_recognition_incomplete"
+    assert guard.allow_releasable_report is False
+    assert "识别异常" in guard.message
+
+
+def test_batch_guard_flags_currency_conflict():
+    guard = evaluate_batch_guards(
+        pdf_paths=[Path("invoice.pdf")],
+        pdf_totals=[{"total_amount": 100.0}],
+        raw_pdf_rows=[_structure_row("A One", amount=100.0)],
+        formal_pdf_rows=[_structure_row("A One", amount=100.0)],
+        excel_rows=[],
+        requested_currency="USD",
+        detected_currencies={"EUR"},
+    )
+
+    assert guard.status == "currency_review"
+    assert guard.allow_releasable_report is False
+
+
+def test_batch_guard_keeps_unresolved_invoice_as_partial_review():
+    guard = evaluate_batch_guards(
+        pdf_paths=[Path("invoice.pdf")],
+        pdf_totals=[{"total_amount": 100.0}],
+        raw_pdf_rows=[_structure_row("A One", amount=100.0)],
+        formal_pdf_rows=[_structure_row("A One", amount=100.0)],
+        excel_rows=[],
+        requested_currency="EUR",
+        detected_currencies={"EUR"},
+        unresolved_files=["other.pdf"],
+    )
+
+    assert guard.status == "partial_review"
+    assert guard.unresolved_files == ("other.pdf",)
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("费用总计(不含税)", "net"),
+        ("Net Amount", "net"),
+        ("费用总计(含税)", "gross"),
+        ("Gross Amount", "gross"),
+        ("费用", "review"),
+    ],
+)
+def test_resolve_amount_scope(header, expected):
+    assert resolve_amount_scope(header) == expected
+
+
+def test_resolve_amount_scope_prefers_explicit_user_declaration():
+    assert resolve_amount_scope("本周薪资 本周餐补", declared_scope="net") == "net"
+    assert resolve_amount_scope("费用总计(不含税)", declared_scope="gross") == "gross"
+    assert resolve_amount_scope("本周薪资", declared_scope="unsupported") == "review"
+
+
+def test_extract_structured_invoice_rows_uses_numeric_columns_and_excel_names(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        labor_structure,
+        "extract_page_texts",
+        lambda _: [
+            "1 Archil Akhalkatsi 40 Stunde26,4791.059,16\n"
+            "2 Archil Akhalkatsi overtime 12,85Stunde33,099 425,32\n"
+            "Zwischensumme (netto) 1.484,48\nUmsatzsteuer 282,05\nGesamtbetrag 1.766,53"
+        ],
+    )
+    excel_rows = [
+        _structure_row("Archil Akhalkatsi", source_type="offline_workbook", warehouse_id="11")
+    ]
+
+    rows = extract_structured_invoice_rows([pdf_path], excel_rows)
+
+    assert len(rows) == 2
+    assert {row.employee_name_raw for row in rows} == {"Archil Akhalkatsi"}
+    assert [row.hours for row in rows] == [40.0, 12.85]
+    assert [row.amount for row in rows] == [1059.16, 425.32]
+    assert {row.currency for row in rows} == {"EUR"}
+    assert {row.source_page_or_row for row in rows} == {"p1"}
+
+
+def test_extract_structured_invoice_rows_reads_closed_employee_subtotal_blocks_across_pages(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        labor_structure,
+        "extract_page_texts",
+        lambda _: [
+            "DETAIL DES PRESTATIONS Quantité Taux Montant\n"
+            "ALICE WORKER Semaine 22 du 25/05/2026 au 31/05/2026\n"
+            "001 HEURES NORMALES 35,00 20,00 700,00",
+            "S/Total 42,00 1000,00\n"
+            "BOB WORKER Semaine 22 du 25/05/2026 au 31/05/2026\n"
+            "555 IND. TICKET RESTAU.-NS 5,00 4,86 24,30\n"
+            "S/Total 24,30\n"
+            "TR Total affect. 42,00 1024,30\n"
+            "au 30/06/2026 1024,30 20,00 204,86 1229,16EUR",
+        ],
+    )
+    excel_rows = [
+        _structure_row("Alice Worker", source_type="offline_workbook", warehouse_id="1"),
+        _structure_row("Bob Worker", source_type="offline_workbook", warehouse_id="1"),
+    ]
+
+    rows = extract_structured_invoice_rows([pdf_path], excel_rows)
+
+    assert [(row.employee_name_raw, row.hours, row.amount) for row in rows] == [
+        ("ALICE WORKER", 42.0, 1000.0),
+        ("BOB WORKER", 0.0, 24.3),
+    ]
+    assert {row.currency for row in rows} == {"EUR"}
+    assert [row.source_page_or_row for row in rows] == ["p2", "p2"]
+    assert prefer_closed_structured_rows([], rows, [pdf_path]) == rows
+
+
+def test_extract_structured_invoice_rows_rejects_unclosed_employee_subtotal_blocks(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(
+        labor_structure,
+        "extract_page_texts",
+        lambda _: [
+            "DETAIL DES PRESTATIONS Quantité Taux Montant\n"
+            "ALICE WORKER Semaine 22 du 25/05/2026 au 31/05/2026\n"
+            "S/Total 42,00 1000,00\n"
+            "TR Total affect. 999,00"
+        ],
+    )
+
+    rows = extract_structured_invoice_rows(
+        [pdf_path],
+        [_structure_row("Alice Worker", source_type="offline_workbook", warehouse_id="1")],
+    )
+
+    assert rows == []
+
+
+def test_prefer_closed_structured_rows_replaces_incomplete_ai_source(tmp_path, monkeypatch):
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(labor_structure, "extract_page_texts", lambda _: ["100.00 19.00 119.00"])
+    ai_rows = [_structure_row("A One", source_file=pdf_path.name, amount=40.0)]
+    structured_rows = [
+        _structure_row("A One", source_file=pdf_path.name, amount=40.0),
+        _structure_row("B Two", source_file=pdf_path.name, amount=60.0),
+    ]
+
+    selected = prefer_closed_structured_rows(ai_rows, structured_rows, [pdf_path])
+
+    assert len(selected) == 2
+    assert sum(row.amount for row in selected) == 100.0

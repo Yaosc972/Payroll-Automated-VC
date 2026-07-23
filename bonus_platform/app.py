@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import csv
-from contextlib import ExitStack, asynccontextmanager
+import hashlib
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import date, datetime, timedelta
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -14,13 +16,19 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+# httpx request INFO logs include full signed Storage URLs. Keep application
+# telemetry at INFO while preventing short-lived credentials from entering logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from pathlib import Path
+from dataclasses import replace
 import shutil
 from tempfile import NamedTemporaryFile, gettempdir
 from time import monotonic
-from typing import Any, Optional
-from urllib.parse import quote, urlencode
-from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from typing import Any, Callable, Optional
+from urllib.parse import quote, urlencode, urlparse
+from uuid import uuid4
+from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from openpyxl import Workbook, load_workbook
@@ -30,7 +38,14 @@ fbu_logger = logging.getLogger("bonus_platform.fbu")
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, PROJECT_ROOT, ensure_data_files
+from .auth import (
+    current_user_from_request,
+    labor_auth_health,
+    labor_auth_required,
+    user_can_enter_module,
+    user_is_system_admin,
+)
+from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, LABOR_RUNS_DIR, PROJECT_ROOT, ensure_data_files
 from .engine.domestic_labor.parser import MultiFilePayrollDataLoader
 from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
@@ -49,7 +64,7 @@ from .engine.china_employee_payroll import calculate_meal_allowance, parse_atten
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import amount_within_tolerance, compare_labor_items, compare_by_warehouse
-from .engine.labor.extract import extract_invoice_items, quick_extract_totals, _warehouse_id_from_filename, _warehouse_id_from_text
+from .engine.labor.extract import _ai_ready, _warehouse_id_from_filename, _warehouse_id_from_text, extract_invoice_items, quick_extract_totals
 from .engine.labor.governance import (
     audit_ai_page_cache_candidates,
     build_ai_cache_reconciliation_preview,
@@ -63,7 +78,10 @@ from .engine.labor.governance import (
     summarize_rule_replay,
 )
 from .engine.labor.quality import calculate_extraction_quality, calculate_quality_score, build_reconciliation_diagnostics
+from .engine.labor.ocr_candidate_runtime import evaluate_ocr_candidate_result, run_ocr_candidate_command
+from .engine.labor.presentation import build_labor_presentation, validate_labor_presentation
 from .engine.labor.report import build_labor_business_html_report, build_labor_governance_report, build_labor_projection_report, build_labor_report
+from .engine.labor.structure import evaluate_batch_guards, extract_structured_invoice_rows, prefer_closed_structured_rows, promote_structured_invoice_evidence, resolve_amount_scope
 from .engine.labor.materials import (
     _attach_text_coverage_to_reocr_plan,
     _build_material_combined_row_governance,
@@ -76,11 +94,53 @@ from .engine.labor.materials import (
 from .engine.labor.profiles import (
     SupplierExtractionProfile,
     generate_profile_from_extraction,
+    is_runtime_approved_profile,
     load_supplier_profiles,
-    record_profile_failure,
-    reset_profile_failure,
     resolve_supplier_profile,
+    supplier_alias_match_score,
 )
+from .engine.labor.worker_jobs import (
+    LaborWorkerLeaseError,
+    claim_labor_worker_job,
+    clear_labor_worker_result_acceptance,
+    complete_labor_worker_job,
+    complete_labor_worker_preflight_job,
+    fail_labor_worker_job,
+    get_labor_worker_job,
+    heartbeat_labor_worker_job,
+    list_labor_worker_jobs,
+    enqueue_labor_worker_job,
+    labor_worker_job_store_health,
+    mark_labor_worker_result_accepted,
+)
+from .engine.labor.operations import build_labor_operations_snapshot
+from .engine.labor.production_readiness import evaluate_labor_production_readiness
+from .engine.labor.state_postgres import (
+    LaborStateConflict,
+    LaborStateNotFound,
+    LaborStateOwnerMismatch,
+    create_pending_labor_file_states,
+    finalize_labor_file_state,
+    get_labor_file_state,
+    labor_postgres_state_enabled,
+    labor_postgres_state_health,
+    list_labor_file_states,
+    soft_delete_labor_run_state,
+)
+from .engine.labor.worker_identity_postgres import (
+    LaborWorkerDeviceNotFound,
+    LaborWorkerIdentityError,
+    LaborWorkerIdentityInvalid,
+    exchange_labor_worker_activation,
+    issue_labor_worker_activation,
+    labor_worker_identity_health,
+    list_labor_worker_devices,
+    resolve_labor_worker_token,
+    revoke_labor_worker_device,
+)
+from .engine.labor.build_info import LaborBuildMonitor
+from .engine.labor.worker_version import parse_stable_worker_version, worker_version_at_least
+from .engine.labor.worker_archive import LaborWorkerArchiveError, build_worker_input_archive, merge_worker_result_archive
 
 # --- FBU Performance engine imports ---
 from .engine.fbu_performance.engines.base import (
@@ -120,10 +180,15 @@ from .engine.fbu_performance.persistent_storage import (
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
 NON_PAYABLE_PDF_TYPES = {"supporting", "attachment"}
+LABOR_INVOICE_PAGE_ROLES = {"invoice_primary", "invoice_continuation", "invoice_total"}
+LABOR_SUPPORTING_PAGE_ROLES = {"email_cover", "timecard_summary", "daily_detail", "supporting_attachment"}
 LABOR_TELEMETRY_DIR = OUTPUT_DIR / "labor_telemetry"
 LABOR_TELEMETRY_FILE = LABOR_TELEMETRY_DIR / "events.jsonl"
 LABOR_TELEMETRY_SCHEMA_VERSION = 1
-OVERSEAS_LABOR_MODULE_VERSION = "0.4-uat"
+OVERSEAS_LABOR_MODULE_VERSION = "0.5-uat"
+OVERSEAS_LABOR_API_CONTRACT_VERSION = 2
+OVERSEAS_LABOR_REQUIRED_WORKER_VERSION = "0.3.11"
+_LABOR_BUILD_MONITOR = LaborBuildMonitor(PROJECT_ROOT)
 CURRENT_USER_CACHE_TTL_SECONDS = 60
 _CURRENT_USER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
@@ -161,6 +226,429 @@ def _non_payable_pdf_names(pdf_totals: list[dict]) -> set[str]:
     }
 
 
+def _labor_total_is_explicitly_non_payable(total: dict) -> bool:
+    evidence_status = str(total.get("evidence_status") or "").strip().lower()
+    pdf_type = str(total.get("pdf_type") or "").strip().lower()
+    page_roles = {
+        str(page.get("role") or page.get("page_role") or "").strip().lower()
+        for page in (total.get("page_evidence") or [])
+        if isinstance(page, dict)
+    }
+    if page_roles.intersection(LABOR_INVOICE_PAGE_ROLES):
+        return False
+    if page_roles.intersection(LABOR_SUPPORTING_PAGE_ROLES):
+        return True
+    return (
+        total.get("non_payable") is True
+        or evidence_status in {"supporting", "non_payable", "excluded"}
+        or pdf_type in NON_PAYABLE_PDF_TYPES
+    )
+
+
+def _labor_stage2_target_pdf_names(warehouse_rows: list[dict]) -> set[str]:
+    target_names: set[str] = set()
+    for row in warehouse_rows:
+        if row.get("reconciliationStatus") not in {"amount_difference", "needs_review"}:
+            continue
+        evidence_files = str(row.get("pdfEvidenceFile") or "")
+        target_names.update(name.strip() for name in evidence_files.split(";") if name.strip())
+    return target_names
+
+
+def _labor_row_page_number(row: LaborLineItem) -> int | None:
+    match = re.search(r"\d+", str(row.source_page_or_row or ""))
+    return int(match.group()) if match else None
+
+
+def _labor_invoice_evidence_pages(pdf_totals: list[dict]) -> dict[str, set[int]]:
+    audited_pages_by_file: dict[str, set[int]] = {}
+    for total in pdf_totals:
+        page_evidence = total.get("page_evidence")
+        if not isinstance(page_evidence, list) or not page_evidence:
+            continue
+        source_file = str(total.get("source_file") or "")
+        if not source_file:
+            continue
+        authoritative_total_page = None
+        if total.get("authoritative") is True and total.get("total_page") is not None:
+            authoritative_total_page = int(total["total_page"])
+        excluded_pages = {
+            int(page)
+            for page in (total.get("excluded_pages") or total.get("excludedPdfPages") or [])
+            if page is not None
+        }
+        unscanned_pages = {
+            int(page.get("page"))
+            for page in page_evidence
+            if isinstance(page, dict)
+            and page.get("page") is not None
+            and str(page.get("extraction_method") or page.get("extractionMethod") or "").strip().lower()
+            == "not_scanned_after_authoritative_total"
+        }
+        scanned_pages = [
+            page
+            for page in page_evidence
+            if isinstance(page, dict)
+            and page.get("page") is not None
+            and int(page.get("page")) not in unscanned_pages
+        ]
+        last_scanned_role = ""
+        if scanned_pages:
+            last_scanned = max(scanned_pages, key=lambda page: int(page.get("page") or 0))
+            last_scanned_role = str(last_scanned.get("role") or last_scanned.get("page_role") or "").strip().lower()
+        allowed_pages = {
+            int(page.get("page"))
+            for page in page_evidence
+            if page.get("page") is not None
+            and str(page.get("role") or page.get("page_role") or "") in LABOR_INVOICE_PAGE_ROLES
+            and int(page.get("page")) not in excluded_pages
+            and (
+                authoritative_total_page is None
+                or int(page.get("page")) <= authoritative_total_page
+            )
+        }
+        # The quick total scan deliberately stops once it has an authoritative
+        # total plus a following invoice-continuation page. Those later pages
+        # were never classified as supporting material; they remain eligible
+        # for the stricter employee-row extraction and amount-closure gates.
+        if unscanned_pages and last_scanned_role in LABOR_INVOICE_PAGE_ROLES:
+            allowed_pages.update(unscanned_pages)
+        page_roles = {
+            str(page.get("role") or page.get("page_role") or "").strip().lower()
+            for page in page_evidence
+            if isinstance(page, dict)
+        }
+        # An image-only invoice may have valid high-confidence employee rows
+        # while the cheaper page-role classifier can only return ``unknown``.
+        # Unknown is reviewable evidence, not proof that the page is supporting
+        # material. Only install a restrictive page map when classification has
+        # positively identified invoice or supporting roles.
+        if (
+            allowed_pages
+            or page_roles.intersection(LABOR_SUPPORTING_PAGE_ROLES)
+            or _labor_total_is_explicitly_non_payable(total)
+        ):
+            audited_pages_by_file[source_file] = allowed_pages
+    return audited_pages_by_file
+
+
+def _filter_labor_rows_to_invoice_evidence_pages(
+    pdf_rows: list[LaborLineItem],
+    pdf_totals: list[dict],
+) -> list[LaborLineItem]:
+    audited_pages_by_file = _labor_invoice_evidence_pages(pdf_totals)
+
+    if not audited_pages_by_file:
+        return list(pdf_rows)
+    return [
+        row
+        for row in pdf_rows
+        if row.source_file not in audited_pages_by_file
+        or _labor_row_page_number(row) in audited_pages_by_file[row.source_file]
+    ]
+
+
+def _labor_authoritative_detail_totals(
+    pdf_totals: list[dict],
+    target_pdf_names: set[str],
+) -> dict[str, dict]:
+    totals_by_source: dict[str, dict] = {}
+    for total in pdf_totals:
+        source_file = str(total.get("source_file") or "").strip()
+        amount = round(float(total.get("total_amount") or 0), 2)
+        if (
+            not source_file
+            or source_file not in target_pdf_names
+            or amount <= 0
+            or total.get("authoritative") is not True
+            or not str(total.get("warehouse_id") or "").strip()
+            or total.get("warehouse_conflict")
+        ):
+            continue
+        entry = totals_by_source.setdefault(
+            source_file,
+            {"expectedAmount": 0.0, "warehouseId": str(total.get("warehouse_id") or "")},
+        )
+        entry["expectedAmount"] = round(float(entry["expectedAmount"]) + amount, 2)
+    return totals_by_source
+
+
+def _labor_ocr_expected_totals(
+    pdf_totals: list[dict],
+    target_pdf_names: set[str],
+    *,
+    excel_rows: list[LaborLineItem] | None = None,
+) -> dict[str, float]:
+    expected: dict[str, float] = {}
+    for total in pdf_totals:
+        source_file = str(total.get("source_file") or "").strip()
+        if not source_file or source_file not in target_pdf_names:
+            continue
+        amount = round(float(total.get("total_amount") or 0), 2)
+        if amount > 0 and total.get("authoritative") is True:
+            expected[source_file] = amount
+            continue
+        page_amounts = {
+            round(float(page.get("total_amount") or 0), 2)
+            for page in total.get("page_evidence", [])
+            if str(page.get("role") or "") == "invoice_total"
+            and float(page.get("role_confidence") or 0) >= 0.9
+            and float(page.get("total_amount") or 0) > 0
+        }
+        if len(page_amounts) == 1:
+            expected[source_file] = page_amounts.pop()
+    if excel_rows:
+        excel_by_warehouse: dict[str, float] = {}
+        for row in excel_rows:
+            warehouse_id = str(row.warehouse_id or "").strip()
+            if warehouse_id:
+                excel_by_warehouse[warehouse_id] = round(
+                    excel_by_warehouse.get(warehouse_id, 0.0) + float(row.amount or 0),
+                    2,
+                )
+        sources_by_warehouse: dict[str, list[str]] = {}
+        for total in pdf_totals:
+            source_file = str(total.get("source_file") or "").strip()
+            warehouse_id = str(total.get("warehouse_id") or "").strip()
+            if source_file in target_pdf_names and warehouse_id:
+                sources_by_warehouse.setdefault(warehouse_id, []).append(source_file)
+        for warehouse_id, source_files in sources_by_warehouse.items():
+            excel_amount = excel_by_warehouse.get(warehouse_id, 0.0)
+            if len(source_files) == 1 and excel_amount > 0:
+                expected.setdefault(source_files[0], excel_amount)
+    return expected
+
+
+def _labor_should_run_auto_ocr(
+    *,
+    command: str,
+    pdf_rows: list,
+    target_pdf_names: set[str],
+    reconciliation_pdf_totals: list[dict],
+) -> bool:
+    if not command.strip() or not target_pdf_names:
+        return False
+    authoritative_sources = {
+        str(total.get("source_file") or "").strip()
+        for total in reconciliation_pdf_totals
+        if total.get("authoritative") is True and float(total.get("total_amount") or 0) > 0
+    }
+    return not pdf_rows or not target_pdf_names.issubset(authoritative_sources)
+
+
+def _labor_should_retry_detail_totals(
+    *,
+    pdf_rows: list,
+    mismatches: dict[str, dict],
+    auto_ocr_candidate: dict,
+) -> bool:
+    return bool(pdf_rows and mismatches) and auto_ocr_candidate.get("runtimeStatus") != "completed"
+
+
+def _run_labor_auto_ocr_candidate(
+    run_id: str,
+    pdf_paths: list[Path],
+    excel_rows: list[LaborLineItem],
+    reconciliation_pdf_totals: list[dict],
+    *,
+    supplier: str,
+    period_start: str,
+    period_end: str,
+    currency: str,
+    command: str,
+    timeout_seconds: int,
+    amount_tolerance: float,
+    hours_tolerance: float,
+    task_generation_id: str = "",
+) -> dict:
+    if not pdf_paths or not command.strip():
+        return {}
+    ocr_result = run_ocr_candidate_command(
+        pdf_paths,
+        command=command,
+        supplier=supplier,
+        period_start=period_start,
+        period_end=period_end,
+        currency=currency,
+        timeout_seconds=timeout_seconds,
+        progress_callback=_labor_ocr_progress_callback(run_id, task_generation_id=task_generation_id),
+    )
+    fallback_expected_totals = _labor_ocr_expected_totals(
+        reconciliation_pdf_totals,
+        {path.name for path in pdf_paths},
+        excel_rows=excel_rows,
+    )
+    pdf_total_evidence: dict[str, dict] = {}
+    for file_payload in ocr_result.get("files", []):
+        source_file = str(file_payload.get("sourceFile") or "").strip()
+        amount = round(float(file_payload.get("explicitTotalAmount") or 0), 2)
+        evidence = file_payload.get("explicitTotalEvidence") or {}
+        if not source_file or amount <= 0 or not isinstance(evidence, dict):
+            continue
+        pdf_total_evidence[source_file] = {
+            "amount": amount,
+            "page": int(evidence.get("page") or 0),
+            "label": str(evidence.get("label") or "TOTAL"),
+            "currency": str(evidence.get("currency") or currency or "").upper(),
+            "evidenceText": str(evidence.get("evidenceText") or ""),
+        }
+    expected_totals = dict(fallback_expected_totals)
+    expected_totals.update(
+        {source_file: evidence["amount"] for source_file, evidence in pdf_total_evidence.items()}
+    )
+    candidate = evaluate_ocr_candidate_result(
+        ocr_result,
+        excel_rows,
+        expected_totals,
+        amount_tolerance=amount_tolerance,
+        hours_tolerance=hours_tolerance,
+    )
+    candidate["runtimeStatus"] = ocr_result.get("status", "")
+    candidate["runtimeFiles"] = ocr_result.get("files", [])
+    candidate["runtimeError"] = ocr_result.get("error", "")
+    candidate["runtimeCacheCleanup"] = ocr_result.get("cacheCleanup", {})
+    candidate["pdfTotalEvidence"] = pdf_total_evidence
+    return candidate
+
+
+def _labor_apply_ocr_pdf_total_evidence(
+    pdf_totals: list[dict],
+    candidate: dict,
+) -> list[dict]:
+    evidence_by_source = candidate.get("pdfTotalEvidence") or {}
+    if not isinstance(evidence_by_source, dict) or not evidence_by_source:
+        return list(pdf_totals)
+    merged: list[dict] = []
+    for total in pdf_totals:
+        source_file = str(total.get("source_file") or "").strip()
+        evidence = evidence_by_source.get(source_file)
+        if not isinstance(evidence, dict) or float(evidence.get("amount") or 0) <= 0:
+            merged.append(dict(total))
+            continue
+        amount = round(float(evidence["amount"]), 2)
+        page = int(evidence.get("page") or 0)
+        updated = dict(total)
+        updated.update(
+            {
+                "total_amount": amount,
+                "authoritative": True,
+                "evidence_status": "ocr_explicit_total",
+                "total_label": str(evidence.get("label") or "TOTAL"),
+                "total_page": page or None,
+                "pdf_type": str(total.get("pdf_type") or "primary"),
+            }
+        )
+        page_evidence = list(updated.get("page_evidence") or [])
+        page_evidence.append(
+            {
+                "page": page,
+                "role": "invoice_total",
+                "role_confidence": 0.99,
+                "total_amount": amount,
+                "evidence_text": str(evidence.get("evidenceText") or ""),
+                "source": "local_ocr_explicit_total",
+            }
+        )
+        updated["page_evidence"] = page_evidence
+        merged.append(updated)
+    return merged
+
+
+def _labor_can_apply_review_ocr_rows(candidate: dict, target_sources: set[str]) -> bool:
+    if candidate.get("runtimeStatus") != "completed" or not target_sources:
+        return False
+    rows = candidate.get("rows") or []
+    row_sources = {
+        str(row.get("source_file") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("source_file") or "").strip()
+    }
+    evidence_sources = {
+        str(source_file).strip()
+        for source_file, evidence in (candidate.get("pdfTotalEvidence") or {}).items()
+        if str(source_file).strip()
+        and isinstance(evidence, dict)
+        and float(evidence.get("amount") or 0) > 0
+    }
+    runtime_by_source = {
+        str(item.get("sourceFile") or "").strip(): item
+        for item in (candidate.get("runtimeFiles") or [])
+        if isinstance(item, dict) and str(item.get("sourceFile") or "").strip()
+    }
+    for source_file in target_sources:
+        runtime = runtime_by_source.get(source_file) or {}
+        page_count = int(runtime.get("pageCount") or 0)
+        if (
+            source_file not in row_sources
+            or source_file not in evidence_sources
+            or page_count <= 0
+            or int(runtime.get("failedPageCount") or 0) > 0
+            or int(runtime.get("successfulPageCount") or 0) != page_count
+        ):
+            return False
+    return True
+
+
+def _labor_detail_total_mismatches(
+    pdf_rows: list[LaborLineItem],
+    authoritative_totals: dict[str, dict],
+    amount_tolerance: float,
+) -> dict[str, dict]:
+    actual_by_source = {source_file: 0.0 for source_file in authoritative_totals}
+    for row in pdf_rows:
+        if row.source_file in actual_by_source:
+            actual_by_source[row.source_file] = round(
+                actual_by_source[row.source_file] + float(row.amount or 0),
+                2,
+            )
+
+    mismatches: dict[str, dict] = {}
+    for source_file, expected in authoritative_totals.items():
+        expected_amount = round(float(expected.get("expectedAmount") or 0), 2)
+        actual_amount = round(actual_by_source.get(source_file, 0.0), 2)
+        delta = round(expected_amount - actual_amount, 2)
+        if not amount_within_tolerance(delta, amount_tolerance):
+            mismatches[source_file] = {
+                **expected,
+                "actualAmount": actual_amount,
+                "delta": delta,
+            }
+    return mismatches
+
+
+def _merge_labor_detail_retry_rows(
+    original_rows: list[LaborLineItem],
+    retry_rows: list[LaborLineItem],
+    authoritative_totals: dict[str, dict],
+) -> tuple[list[LaborLineItem], set[str]]:
+    original_by_source: dict[str, list[LaborLineItem]] = {
+        source_file: [] for source_file in authoritative_totals
+    }
+    retry_by_source: dict[str, list[LaborLineItem]] = {
+        source_file: [] for source_file in authoritative_totals
+    }
+    for row in original_rows:
+        if row.source_file in original_by_source:
+            original_by_source[row.source_file].append(row)
+    for row in retry_rows:
+        if row.source_file in retry_by_source:
+            retry_by_source[row.source_file].append(row)
+
+    replaced_sources: set[str] = set()
+    for source_file, expected in authoritative_totals.items():
+        expected_amount = round(float(expected.get("expectedAmount") or 0), 2)
+        original_amount = round(sum(float(row.amount or 0) for row in original_by_source[source_file]), 2)
+        retry_amount = round(sum(float(row.amount or 0) for row in retry_by_source[source_file]), 2)
+        if retry_by_source[source_file] and abs(expected_amount - retry_amount) < abs(expected_amount - original_amount):
+            replaced_sources.add(source_file)
+
+    if not replaced_sources:
+        return list(original_rows), set()
+    merged_rows = [row for row in original_rows if row.source_file not in replaced_sources]
+    merged_rows.extend(row for row in retry_rows if row.source_file in replaced_sources)
+    return merged_rows, replaced_sources
+
+
 def _warehouse_id_from_text_path(pdf_path: Path, diff_wh: list) -> bool:
     """检查 PDF 内容中的仓库号是否在差异仓库列表中。
 
@@ -175,26 +663,85 @@ def _warehouse_id_from_text_path(pdf_path: Path, diff_wh: list) -> bool:
     except Exception:
         pass
     return False
+
+
+def _labor_text_has_employee_detail_signal(text: str) -> bool:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return False
+    if re.search(r"Job Site/Warehouse\s+Name\s+Pay Type", normalized, re.IGNORECASE) and re.search(
+        r"Hourly-Reg", normalized, re.IGNORECASE
+    ):
+        return True
+    if re.search(r"\bName\s+Pay Type\s+Rate\s+Hours\b", normalized, re.IGNORECASE) and re.search(
+        r"Overtime\s*\(Hourly\)", normalized, re.IGNORECASE
+    ):
+        return True
+    if re.search(r"\bAssociate\s+Base Rate\s+Bill Rate\s+OT Rate\s+Reg\.?\s*Time\b", normalized, re.IGNORECASE):
+        return True
+    return False
+
+
+def _labor_pdf_has_employee_detail_signal(pdf_path: Path) -> bool:
+    try:
+        from .engine.labor.extract import _extract_pdf_pages
+
+        pages = _extract_pdf_pages([pdf_path], max_pages=2)
+        text = "\n".join(page.get("text", "") for page in pages)
+        return _labor_text_has_employee_detail_signal(text)
+    except Exception:
+        return False
+    return False
 from .engine.labor.runs import (
     attach_labor_file,
+    begin_labor_mapping_preflight,
+    begin_labor_metadata_task,
+    compare_and_update_labor_metadata,
     create_labor_run,
     get_labor_run_dir,
     list_labor_metadata,
     load_labor_metadata,
+    labor_run_metadata_lock,
     safe_labor_filename,
     safe_labor_storage_filename,
     update_labor_metadata,
     update_labor_metadata_record_only,
+    update_labor_metadata_for_mapping_preflight,
+    update_labor_metadata_for_task,
 )
 from .engine.labor.jobs import enqueue_labor_reconciliation_job, labor_worker_job_store_health, labor_worker_jobs_enabled
-from .engine.labor.blob_storage import labor_blob_storage_enabled, sync_labor_run_from_blob
+from .engine.labor.blob_storage import (
+    canonicalize_labor_metadata_for_blob,
+    create_labor_blob_presigned_url,
+    labor_blob_signed_urls_enabled,
+    labor_blob_storage_enabled,
+    sync_labor_run_from_blob,
+)
 from .engine.labor.persistent_storage import (
     create_labor_supabase_signed_upload,
     labor_persistent_storage_enabled,
     labor_persistent_storage_health,
+    labor_persistent_storage_info,
     labor_supabase_storage_enabled,
     sync_labor_run_from_persistent,
+    sync_labor_run_to_persistent,
 )
+from .engine.labor.persistent_storage import (
+    create_labor_supabase_signed_download,
+    create_labor_supabase_signed_upload_for_object,
+    delete_labor_run_from_persistent,
+    labor_p1_object_key,
+    labor_persistent_environment,
+    labor_storage_backend,
+    labor_supabase_object_metadata,
+    persist_labor_private_output,
+)
+from .engine.labor.audit import append_labor_audit_event, read_labor_audit_events
+from .engine.labor.hardening import LaborHardeningPolicy, LaborResourceLimitError, LaborTaskLimiter, labor_storage_info
+_LABOR_TASK_LIMITER = LaborTaskLimiter()
+from .engine.labor.lifecycle import cleanup_expired_labor_runs, delete_labor_run_directory, labor_run_is_active
+from .engine.labor.ocr_worker_cache import cleanup_ocr_cache, labor_ocr_cache_dir
+from .engine.labor.ocr_targeted_retry import build_targeted_ocr_retry_plan, merge_targeted_ocr_retry_rows
 from .engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 from .engine.rules import load_rulebook
 from .engine.runs import (
@@ -220,6 +767,7 @@ async def lifespan(app: FastAPI):
         init_admin_store()
     if not _is_vercel_runtime():
         _recover_stuck_labor_runs()
+    _cleanup_expired_labor_data()
     yield
 
 
@@ -431,6 +979,7 @@ def _feishu_identity_from_payloads(token_data: dict[str, Any], user_info: dict[s
 
 def _overseas_labor_access_config() -> dict:
     access = os.environ.get("SIGMA_OVERSEAS_LABOR_ACCESS", "uat").strip().lower() or "uat"
+    upload_policy = _labor_hardening_policy()
     disabled_values = {"disabled", "off", "false", "0", "deny", "closed"}
     uat_values = {"uat", "uat_trial", "trial"}
     enabled_values = {"enabled", "on", "true", "1", "production", "prod", "full", "online"}
@@ -447,15 +996,212 @@ def _overseas_labor_access_config() -> dict:
         for role in os.environ.get("SIGMA_OVERSEAS_LABOR_UAT_ROLES", "Payroll Admin,Compensation UAT").split(",")
         if role.strip()
     ]
+    build = _labor_build_snapshot()
+    runtime_current = build["status"] == "current"
+    request_scoped_runtime = _uses_request_scoped_labor_runtime()
+    personal_worker_enabled = _uses_personal_labor_worker()
+    formal_task_execution_ready = not request_scoped_runtime or personal_worker_enabled
+    formal_task_can_queue = runtime_current and formal_task_execution_ready
+    if not runtime_current:
+        formal_task_reason_code = "LABOR_SERVICE_RESTART_REQUIRED"
+        formal_task_message = "服务版本需要重启或重新部署，暂不能创建正式核对任务。"
+    elif not formal_task_execution_ready:
+        formal_task_reason_code = "LABOR_PERSONAL_WORKER_REQUIRED"
+        formal_task_message = "当前请求作用域环境未启用本人核对助手，暂不能创建正式核对任务。"
+    else:
+        formal_task_reason_code = ""
+        formal_task_message = (
+            "当前 UAT 通过本人核对助手执行正式核对任务。"
+            if personal_worker_enabled
+            else "当前持久化环境可执行正式核对任务。"
+        )
+    public_build = _labor_public_build_snapshot(build)
     return {
         "module": "overseas_labor_invoice_audit",
         "stage": stage,
         "version": OVERSEAS_LABOR_MODULE_VERSION,
         "access": access_mode,
+        "apiContractVersion": OVERSEAS_LABOR_API_CONTRACT_VERSION,
+        "buildId": public_build["buildId"],
+        "build": public_build,
+        "runtimeGate": {
+            "canStartFormalTask": runtime_current,
+            "runtimeSourceCurrent": runtime_current,
+            "reasonCode": "" if runtime_current else "LABOR_SERVICE_RESTART_REQUIRED",
+            "message": (
+                "当前服务代码与启动快照一致。"
+                if runtime_current
+                else "服务启动后海外劳务代码已变化，请重启或重新部署后再开始正式操作。"
+            ),
+        },
+        "formalTaskGate": {
+            "canQueue": formal_task_can_queue,
+            "executionMode": (
+                "personal_worker"
+                if personal_worker_enabled
+                else "blocked"
+                if request_scoped_runtime
+                else "local"
+            ),
+            "reasonCode": formal_task_reason_code,
+            "message": formal_task_message,
+        },
+        "p1": {
+            "required": _labor_p1_required(),
+            "uploadMode": "signed_private_direct" if _labor_p1_required() else "server_multipart",
+            "legacyMultipartAllowed": not _labor_p1_required(),
+        },
+        "uploadLimits": {
+            "maxPdfFiles": upload_policy.max_pdf_files,
+            "maxWorkbookFiles": upload_policy.max_workbook_files,
+        },
+        "reconciliationScope": "employee_detail_required",
+        "manualReviewRequired": True,
+        "directPaymentAllowed": False,
         "canUse": can_use,
         "allowedRoles": allowed_roles,
         "message": message if can_use else "海外劳务报账核对模块暂未开放。",
     }
+
+
+def _labor_build_snapshot() -> dict:
+    snapshot = _LABOR_BUILD_MONITOR.snapshot(
+        env=os.environ,
+        module_version=OVERSEAS_LABOR_MODULE_VERSION,
+        api_contract_version=OVERSEAS_LABOR_API_CONTRACT_VERSION,
+        required_worker_version=_labor_required_worker_version(),
+    )
+    if not _labor_supplier_profiles_in_release_bundle():
+        snapshot = dict(snapshot)
+        snapshot["status"] = "unverified"
+        snapshot["missingSentinels"] = sorted(
+            {
+                *(snapshot.get("missingSentinels") or []),
+                "supplier_profile_release_bundle",
+            }
+        )
+    return snapshot
+
+
+def _labor_supplier_profiles_in_release_bundle() -> bool:
+    configured = str(AI_CONFIG.get("supplier_profiles_path") or "").strip()
+    if not configured:
+        return False
+    candidate = Path(configured).expanduser()
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    if not candidate.exists():
+        return False
+    bundle = (PROJECT_ROOT / "data" / "supplier_profiles").resolve()
+    try:
+        candidate.resolve().relative_to(bundle)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _labor_public_build_snapshot(build: dict) -> dict:
+    return {
+        "schemaVersion": int(build.get("schemaVersion") or 0),
+        "moduleVersion": str(build.get("moduleVersion") or OVERSEAS_LABOR_MODULE_VERSION),
+        "apiContractVersion": int(build.get("apiContractVersion") or OVERSEAS_LABOR_API_CONTRACT_VERSION),
+        "buildId": str(build.get("buildId") or "")[:64],
+        "status": str(build.get("status") or "unverified"),
+        "requiredWorkerVersion": str(build.get("requiredWorkerVersion") or _labor_required_worker_version()),
+    }
+
+
+def _labor_required_worker_version() -> str:
+    baseline = OVERSEAS_LABOR_REQUIRED_WORKER_VERSION
+    configured = str(os.environ.get("SIGMA_LABOR_REQUIRED_WORKER_VERSION") or "").strip()
+    if not configured:
+        return baseline
+    try:
+        if parse_stable_worker_version(configured) >= parse_stable_worker_version(baseline):
+            return configured
+    except ValueError:
+        pass
+    return baseline
+
+
+def _labor_requires_employee_detail(metadata: dict) -> bool:
+    scope = str(metadata.get("reconciliationScope") or "").strip().lower()
+    return not (scope == "total_only_diagnostic" and metadata.get("diagnosticOnly") is True)
+
+
+def _labor_uat_review_state(conclusion: dict) -> dict:
+    level = str(conclusion.get("conclusionLevel") or "").strip().lower()
+    machine_status = "passed" if conclusion.get("canRelease") is True and level == "pass" else "blocked" if level == "critical" else "needs_review"
+    return {
+        "machineCheckStatus": machine_status,
+        "businessReviewStatus": "pending",
+        "manualReviewRequired": True,
+        "directPaymentAllowed": False,
+        "requiresHumanReview": True,
+    }
+
+
+def _labor_apply_reconciliation_diagnostics_gate(batch_guard: dict, diagnostics: dict) -> dict:
+    gated = dict(batch_guard)
+    if gated.get("allowReleasableReport") is not True:
+        return gated
+    level = str((diagnostics or {}).get("level") or "").strip().lower()
+    if level == "ok":
+        return gated
+    if level not in {"warning", "critical"}:
+        level = "critical"
+    gated.update(
+        {
+            "status": (
+                "reconciliation_diagnostics_blocked"
+                if level == "critical"
+                else "reconciliation_diagnostics_review"
+            ),
+            "message": str((diagnostics or {}).get("message") or "核对诊断证据不完整，不能机器通过。"),
+            "allowReleasableReport": False,
+        }
+    )
+    return gated
+
+
+def _labor_hardening_policy() -> LaborHardeningPolicy:
+    return LaborHardeningPolicy.from_env()
+
+
+def _labor_audit_path() -> Path:
+    configured = str(os.environ.get("LABOR_AUDIT_PATH") or "").strip()
+    return Path(configured).expanduser() if configured else OUTPUT_DIR / "labor_audit" / "events.jsonl"
+
+
+def _cleanup_expired_labor_data() -> dict:
+    policy = _labor_hardening_policy()
+    run_cleanup = cleanup_expired_labor_runs(
+        LABOR_RUNS_DIR,
+        retention_days=policy.run_retention_days,
+        audit_path=_labor_audit_path(),
+        delete_persistent=delete_labor_run_from_persistent,
+    )
+    cache_cleanup = cleanup_ocr_cache(
+        labor_ocr_cache_dir(),
+        retention_days=policy.ocr_cache_retention_days,
+        max_bytes=policy.ocr_cache_max_bytes,
+    )
+    append_labor_audit_event(
+        _labor_audit_path(),
+        action="cache_cleanup",
+        outcome="success",
+        reason_code="scheduled_cleanup",
+        details={
+            "deletedCacheEntryCount": (
+                int(cache_cleanup.get("expiredEntryCount") or 0)
+                + int(cache_cleanup.get("corruptEntryCount") or 0)
+                + int(cache_cleanup.get("capacityEvictedEntryCount") or 0)
+            ),
+            "reclaimedBytes": int(cache_cleanup.get("reclaimedBytes") or 0),
+            "remainingBytes": int(cache_cleanup.get("remainingBytes") or 0),
+        },
+    )
+    return {"runs": run_cleanup, "ocrCache": cache_cleanup}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -473,6 +1219,7 @@ def _workbench_access_config() -> dict:
     return {
         "hideDevelopingModules": _hide_developing_modules(),
         "blockedModules": [],
+        "authRequired": labor_auth_required(),
     }
 
 
@@ -487,8 +1234,19 @@ def _mock_auth_enabled() -> bool:
 def _uses_request_scoped_labor_runtime() -> bool:
     workbench_home = str(os.environ.get("SIGMA_WORKBENCH_HOME") or "")
     storage_backend = os.environ.get("SIGMA_LABOR_STORAGE_BACKEND", "").strip().lower()
-    return (_is_vercel_runtime() and storage_backend != "supabase") or (
-        workbench_home.startswith("/tmp/") and storage_backend == "blob"
+    return _is_vercel_runtime() or (workbench_home.startswith("/tmp/") and storage_backend == "blob")
+
+
+def _assert_local_labor_material_tool_available() -> None:
+    if not _uses_request_scoped_labor_runtime():
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=_labor_request_error(
+            message="当前请求作用域环境不执行本地材料扫描、复制或整批解析。",
+            error_code="LABOR_LOCAL_MATERIAL_TOOL_DISABLED",
+            next_action="请在受控本地/内网持久化环境运行材料验证；Vercel 正式长任务必须交给 Personal Worker。",
+        ),
     )
 
 
@@ -500,6 +1258,58 @@ def _uses_ephemeral_serverless_storage() -> bool:
 def _uses_vercel_labor_light_uat() -> bool:
     access = os.environ.get("SIGMA_OVERSEAS_LABOR_ACCESS", "uat").strip().lower() or "uat"
     return bool(os.environ.get("VERCEL")) and access in {"uat", "uat_trial", "trial"}
+
+
+def _uses_personal_labor_worker() -> bool:
+    return os.environ.get("SIGMA_LABOR_EXECUTION_MODE", "").strip().lower() in {
+        "personal-worker", "personal_worker", "desktop-worker", "desktop_worker"
+    }
+
+
+def _with_personal_worker_status(metadata: dict) -> dict:
+    if not _uses_personal_labor_worker():
+        return metadata
+    run_id = str(metadata.get("id") or "")
+    current_generation = _labor_task_generation_id(metadata)
+    matching_jobs = [
+        row
+        for row in list_labor_worker_jobs()
+        if str(row.get("runId") or "") == run_id
+        and str(row.get("taskGenerationId") or "").strip() == current_generation
+    ]
+    job = max(
+        matching_jobs,
+        key=lambda row: str(row.get("updatedAt") or row.get("createdAt") or ""),
+        default=None,
+    )
+    if not job or job.get("status") == "succeeded":
+        return metadata
+    status = str(job.get("status") or "")
+    labels = {
+        "queued": ("waiting_for_personal_worker", "等待本人核对助手上线"),
+        "retry_wait": ("retry_wait", "核对助手将在稍后重试"),
+        "running": ("running", "本人核对助手正在处理"),
+        "failed": ("failed", "本人核对助手处理失败"),
+    }
+    task_status, message = labels.get(status, (status, status))
+    payload = dict(metadata)
+    payload["workerTask"] = _public_labor_worker_job(job)
+    payload["asyncTask"] = {
+        **(payload.get("asyncTask") if isinstance(payload.get("asyncTask"), dict) else {}),
+        "status": task_status,
+        "statusLabel": message,
+        "message": str(job.get("errorMessage") or message),
+    }
+    if status == "failed":
+        payload.update(
+            {
+                "status": "失败",
+                "errorCode": str(job.get("errorCode") or "LABOR_WORKER_FAILED"),
+                "errorMessage": str(job.get("errorMessage") or message),
+                "retryable": False,
+            }
+        )
+    return payload
 
 
 def _labor_request_error(
@@ -704,6 +1514,8 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
     is_labor_page = path.rstrip("/") == "/overseas-labor.html"
     if not (is_labor_api or is_labor_page):
         return None
+    if is_labor_api and not _labor_browser_auth_path(path):
+        return None
     access = _overseas_labor_access_config()
     if not access["canUse"]:
         if is_labor_api:
@@ -730,6 +1542,8 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
         except KeyError:
             user_id = None
     if not user_id:
+        if not labor_auth_required():
+            return None
         if is_labor_api:
             return JSONResponse({"detail": "未登录。", "access": access}, status_code=401)
         return HTMLResponse(
@@ -766,6 +1580,301 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
     return None
 
 
+def _labor_runtime_guarded_mutation(path: str, method: str) -> bool:
+    if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    return (
+        path == "/api/labor/runs"
+        or path.startswith("/api/labor/runs/")
+        or path == "/api/labor/material-runs"
+        or path == "/api/labor/worker/devices"
+        or path.startswith("/api/labor/worker/devices/")
+        or bool(re.fullmatch(r"/api/labor/worker/jobs/[^/]+/(?:result|mapping-preflight-result|complete)", path))
+    )
+
+
+def _labor_client_contract_guarded_mutation(path: str, method: str) -> bool:
+    if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    return path == "/api/labor/runs" or path.startswith("/api/labor/runs/") or path == "/api/labor/material-runs"
+
+
+def _labor_p1_formal_mutation(path: str, method: str) -> bool:
+    if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    if path == "/api/labor/runs":
+        return True
+    if re.fullmatch(
+        r"/api/labor/runs/[^/]+/(?:files|mapping|mapping-preflight|business-review|extract-and-compare|upload-intents(?:/[^/]+/finalize)?)",
+        path,
+    ):
+        return True
+    return bool(re.fullmatch(r"/api/labor/worker/jobs/[^/]+/(?:result|mapping-preflight-result|complete)", path))
+
+
+def _labor_p1_formal_request(path: str, method: str) -> bool:
+    if _labor_p1_formal_mutation(path, method):
+        return True
+    normalized_method = method.upper()
+    if path == "/api/labor/worker/jobs/claim":
+        return normalized_method == "POST"
+    match = re.fullmatch(
+        r"/api/labor/worker/jobs/[^/]+/(heartbeat|input|input-manifest|input-file|mapping-preflight-result|result|events|complete|fail)",
+        path,
+    )
+    if not match:
+        return False
+    action = match.group(1)
+    if action in {"input", "input-manifest", "input-file"}:
+        return normalized_method == "GET"
+    return normalized_method == "POST"
+
+
+def _labor_p1_required() -> bool:
+    return _env_flag("SIGMA_LABOR_P1_REQUIRED", False)
+
+
+def _labor_p1_readiness_snapshot() -> dict:
+    try:
+        queue_health = labor_worker_job_store_health()
+    except Exception as exc:  # noqa: BLE001 - readiness must return a sanitized blocker.
+        queue_health = {"backend": "postgres", "configured": False, "ready": False, "error": str(exc)[:240]}
+    storage_info = labor_persistent_storage_info()
+    storage_health = labor_persistent_storage_health(probe=_labor_p1_required())
+    worker_identity_health = labor_worker_identity_health()
+    return evaluate_labor_production_readiness(
+        env=os.environ,
+        storage_info=storage_info,
+        queue_health=queue_health,
+        build_info=_labor_build_snapshot(),
+        auth_health=labor_auth_health(),
+        state_health=labor_postgres_state_health(),
+        storage_health=storage_health,
+        worker_identity_health=worker_identity_health,
+    )
+
+
+def _labor_p1_gate_response(request: Request) -> Response | None:
+    if not _labor_p1_required() or not _labor_p1_formal_request(request.url.path, request.method):
+        return None
+    readiness = _labor_p1_readiness_snapshot()
+    if bool((readiness.get("p1") or {}).get("ready")):
+        return None
+    blockers = readiness.get("blockers") if isinstance(readiness.get("blockers"), list) else []
+    blocker_codes = [str(item.get("code") or "") for item in blockers if isinstance(item, dict) and item.get("code")]
+    return JSONResponse(
+        {
+            "detail": {
+                **_labor_request_error(
+                    message="P1 基础设施尚未通过统一 readiness，正式上传和核对任务已锁定。",
+                    error_code="LABOR_P1_NOT_READY",
+                    retryable=True,
+                    next_action="请由管理员修复 readiness 阻断项后重试。",
+                ),
+                "blockerCodes": blocker_codes,
+            }
+        },
+        status_code=503,
+    )
+
+
+def _labor_p1_signed_upload_required_detail() -> dict:
+    return _labor_request_error(
+        message="P1 正式环境仅接受私有对象存储签名直传。",
+        error_code="LABOR_P1_SIGNED_UPLOAD_REQUIRED",
+        next_action="请刷新页面后重新选择文件，由页面完成私有直传。",
+        requires_reupload=True,
+    )
+
+
+def _labor_p1_legacy_upload_response(request: Request) -> Response | None:
+    if (
+        not _labor_p1_required()
+        or request.method.upper() != "POST"
+        or not re.fullmatch(r"/api/labor/runs/[^/]+/files", request.url.path)
+    ):
+        return None
+    return JSONResponse(
+        {"detail": _labor_p1_signed_upload_required_detail()},
+        status_code=409,
+    )
+
+
+def _labor_p1_device_auth_response(request: Request) -> Response | None:
+    path = request.url.path
+    if (
+        not _labor_p1_required()
+        or not (path == "/api/labor/worker/devices" or path.startswith("/api/labor/worker/devices/"))
+    ):
+        return None
+    try:
+        trusted_auth_ready = bool(labor_auth_health().get("ready"))
+    except Exception:  # noqa: BLE001 - device bootstrap must fail closed without exposing auth internals.
+        trusted_auth_ready = False
+    if trusted_auth_ready:
+        return None
+    return JSONResponse(
+        {
+            "detail": _labor_request_error(
+                message="P1 Worker 设备只能由可信企业登录用户激活。",
+                error_code="LABOR_P1_TRUSTED_AUTH_REQUIRED",
+                next_action="请先完成飞书登录、Postgres 角色库和安全会话配置，再激活核对助手。",
+            )
+        },
+        status_code=503,
+    )
+
+
+def _labor_browser_auth_path(path: str) -> bool:
+    if path.rstrip("/") == "/overseas-labor.html":
+        return True
+    if not path.startswith("/api/labor/"):
+        return False
+    if path == "/api/labor/worker/devices" or path.startswith("/api/labor/worker/devices/"):
+        return True
+    if path in {
+        "/api/labor/worker/release",
+        "/api/labor/worker/release/download",
+        "/api/labor/worker/release/upload-intent",
+    }:
+        return True
+    public_or_service_prefixes = (
+        "/api/labor/access",
+        "/api/labor/production-readiness",
+        "/api/labor/operations",
+        "/api/labor/maintenance/",
+        "/api/labor/worker/",
+    )
+    return not any(path == prefix or path.startswith(prefix) for prefix in public_or_service_prefixes)
+
+
+def _workbench_home_auth_response(request: Request) -> Response | None:
+    if not labor_auth_required() or request.url.path not in {"/", "/index.html"}:
+        return None
+    current = current_user_from_request(request)
+    if current is not None:
+        request.state.workbench_current_user = current
+        return None
+    return RedirectResponse(
+        url=f"/login.html?next={request.url.path}",
+        status_code=302,
+    )
+
+
+def _labor_auth_access_response(request: Request) -> Response | None:
+    if not labor_auth_required() or not _labor_browser_auth_path(request.url.path):
+        return None
+    current = current_user_from_request(request)
+    if current is None:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {
+                    "detail": _labor_request_error(
+                        message="请先登录西格玛工作台。",
+                        error_code="LABOR_AUTH_REQUIRED",
+                        next_action="登录后重新进入海外劳务报账核对。",
+                    )
+                },
+                status_code=401,
+            )
+        return RedirectResponse(
+            url=f"/login.html?next={request.url.path}",
+            status_code=302,
+        )
+    if not user_can_enter_module(current, "overseas"):
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                {
+                    "detail": _labor_request_error(
+                        message="当前用户没有海外劳务报账核对权限。",
+                        error_code="LABOR_MODULE_FORBIDDEN",
+                        next_action="请联系系统管理员授予海外报账管理员角色。",
+                    )
+                },
+                status_code=403,
+            )
+        return HTMLResponse(
+            "<h1>无权限访问：海外劳务报账核对</h1><p>请联系系统管理员授予海外报账管理员角色。</p>",
+            status_code=403,
+        )
+    request.state.labor_current_user = current
+    return None
+
+
+def _labor_request_actor(request: Request) -> tuple[str, bool]:
+    current = getattr(request.state, "labor_current_user", None)
+    if not isinstance(current, dict):
+        current = current_user_from_request(request) if labor_auth_required() else None
+    if not isinstance(current, dict):
+        return "local-default", False
+    user = current.get("user") if isinstance(current.get("user"), dict) else {}
+    user_id = str(user.get("id") or "").strip()
+    if not user_id:
+        return "local-default", False
+    return user_id, user_is_system_admin(current)
+
+
+def _labor_action_actor(request: Request | None, payload: dict, *legacy_fields: str) -> str:
+    if labor_auth_required() and request is not None:
+        actor_user_id, _ = _labor_request_actor(request)
+        return actor_user_id
+    for field in legacy_fields:
+        value = str(payload.get(field) or "").strip()
+        if value:
+            return value
+    return "local-default"
+
+
+def _labor_run_owner_access_response(request: Request) -> Response | None:
+    if not labor_auth_required():
+        return None
+    match = re.match(r"^/api/labor/runs/([0-9A-Za-z_-]+)(?:/|$)", request.url.path)
+    if not match:
+        return None
+    run_id = match.group(1)
+    actor_user_id, is_admin = _labor_request_actor(request)
+    if is_admin:
+        return None
+    try:
+        metadata = load_labor_metadata(get_labor_run_dir(run_id))
+    except FileNotFoundError:
+        return None
+    if str(metadata.get("ownerUserId") or "") == actor_user_id:
+        return None
+    return JSONResponse(
+        {
+            "detail": _labor_request_error(
+                message="劳务核对批次记录未找到。",
+                error_code="LABOR_RUN_NOT_FOUND",
+                next_action="请返回批次列表确认该批次仍存在。",
+            )
+        },
+        status_code=404,
+    )
+
+
+def _labor_client_contract_matches(request: Request, build: dict) -> bool:
+    return (
+        request.headers.get("x-sigma-labor-api-contract", "") == str(OVERSEAS_LABOR_API_CONTRACT_VERSION)
+        and request.headers.get("x-sigma-labor-ui-version", "") == OVERSEAS_LABOR_MODULE_VERSION
+        and request.headers.get("x-sigma-labor-ui-build", "") == str(build.get("buildId") or "")
+    )
+
+
+def _labor_assert_runtime_current() -> dict:
+    build = _labor_build_snapshot()
+    if build["status"] != "current":
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="服务启动后海外劳务代码已变化，请重启或重新部署后再开始正式操作。",
+                error_code="LABOR_SERVICE_RESTART_REQUIRED",
+                next_action="重启当前服务，确认页面与 API build 一致后重试。",
+            ),
+        )
+    return build
+
+
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
@@ -778,6 +1887,15 @@ async def overseas_labor_access_gate(request: Request, call_next):
     domestic_access_response = _domestic_labor_access_response(request)
     if domestic_access_response is not None:
         return domestic_access_response
+    home_auth_response = _workbench_home_auth_response(request)
+    if home_auth_response is not None:
+        return home_auth_response
+    auth_response = _labor_auth_access_response(request)
+    if auth_response is not None:
+        return auth_response
+    owner_response = _labor_run_owner_access_response(request)
+    if owner_response is not None:
+        return owner_response
     if _hide_developing_modules():
         blocked = _developing_module_block(path)
         if blocked:
@@ -807,7 +1925,61 @@ async def overseas_labor_access_gate(request: Request, call_next):
     overseas_access_response = _overseas_labor_access_response(request)
     if overseas_access_response is not None:
         return overseas_access_response
-    return await call_next(request)
+    is_labor_api = path.startswith("/api/labor/") and path != "/api/labor/access"
+    is_labor_page = path.rstrip("/") == "/overseas-labor.html"
+    if is_labor_api or is_labor_page:
+        access = _overseas_labor_access_config()
+        if not access["canUse"]:
+            if is_labor_api:
+                return JSONResponse({"detail": access["message"], "access": access}, status_code=403)
+            return HTMLResponse(
+                """
+                <!doctype html>
+                <html lang="zh-CN">
+                  <head><meta charset="utf-8"><title>模块未开放</title></head>
+                  <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
+                    <h1>海外劳务报账核对暂未开放</h1>
+                    <p>当前生产权限未开放此 UAT 模块。请联系薪酬自动化管理员调整权限后再访问。</p>
+                    <p><a href="/">返回西格玛工作台</a></p>
+                  </body>
+                </html>
+                """,
+                status_code=403,
+            )
+    if _labor_runtime_guarded_mutation(path, request.method):
+        try:
+            build = _labor_assert_runtime_current()
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        if (
+            _labor_client_contract_guarded_mutation(path, request.method)
+            and not _labor_client_contract_matches(request, build)
+        ):
+            return JSONResponse(
+                {
+                    "detail": _labor_request_error(
+                        message="当前页面与海外劳务 API 版本不一致，正式操作已锁定。",
+                        error_code="LABOR_CLIENT_UPGRADE_REQUIRED",
+                        next_action="刷新页面并确认页面显示的 build 与服务一致后重试。",
+                    )
+                },
+                status_code=409,
+            )
+    p1_response = _labor_p1_gate_response(request)
+    if p1_response is not None:
+        return p1_response
+    device_auth_response = _labor_p1_device_auth_response(request)
+    if device_auth_response is not None:
+        return device_auth_response
+    legacy_upload_response = _labor_p1_legacy_upload_response(request)
+    if legacy_upload_response is not None:
+        return legacy_upload_response
+    response = await call_next(request)
+    if path in {"/overseas-labor.html", "/overseas-labor.js", "/api/labor/access"}:
+        build = _labor_build_snapshot()
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Sigma-Labor-Build"] = str(build["buildId"])[:64]
+    return response
 
 
 @app.get("/api/health")
@@ -1064,6 +2236,82 @@ def labor_worker_health(probe: bool = False) -> dict:
     return labor_worker_job_store_health(probe=probe)
 
 
+@app.get("/api/labor/storage-info")
+def get_labor_storage_info() -> dict:
+    return labor_storage_info(
+        _labor_hardening_policy(),
+        run_dir=LABOR_RUNS_DIR,
+        cache_dir=labor_ocr_cache_dir(),
+        audit_path=_labor_audit_path(),
+        storage_backend=labor_storage_backend() or "local",
+        storage_environment=labor_persistent_environment(),
+        persistent_enabled=labor_persistent_storage_enabled(),
+    )
+
+
+@app.get("/api/labor/audit")
+def get_labor_audit_events(request: Request, run_id: str = "", limit: int = 50) -> dict:
+    safe_limit = min(max(int(limit), 1), 200)
+    owner_filter = ""
+    if labor_auth_required():
+        actor_user_id, is_admin = _labor_request_actor(request)
+        if not is_admin:
+            owner_filter = actor_user_id
+    events = read_labor_audit_events(
+        _labor_audit_path(),
+        limit=safe_limit,
+        owner_user_id=owner_filter,
+        run_id=run_id.strip(),
+    )
+    return {"events": list(reversed(events[-safe_limit:])), "limit": safe_limit}
+
+
+def _labor_upload_limit_http_error(exc: LaborResourceLimitError) -> HTTPException:
+    return HTTPException(
+        status_code=413,
+        detail=_labor_request_error(
+            message=str(exc),
+            error_code=exc.code,
+            next_action="请减少文件数量、文件大小或 PDF 页数后重新上传。",
+            requires_reupload=True,
+        ),
+    )
+
+
+def _record_labor_resource_rejection(run_id: str, owner_user_id: str, code: str, *, limit: int) -> None:
+    append_labor_audit_event(
+        _labor_audit_path(),
+        action="resource_limit_rejected",
+        run_id=run_id,
+        owner_user_id=owner_user_id,
+        actor_user_id=owner_user_id,
+        outcome="rejected",
+        reason_code=code,
+        details={"limit": limit},
+    )
+
+
+def _labor_pdf_page_count(path: Path) -> int:
+    try:
+        from pypdf import PdfReader
+
+        return len(PdfReader(str(path)).pages)
+    except Exception:
+        try:
+            return 1 if path.read_bytes().startswith(b"%PDF") else 0
+        except OSError:
+            return 0
+
+
+@app.post("/api/labor/maintenance/cleanup")
+def cleanup_labor_data(x_admin_token: str = Header(default="")) -> dict:
+    expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
+    if not expected or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
+    _labor_assert_runtime_current()
+    return _cleanup_expired_labor_data()
+
+
 @app.get("/api/workbench/access")
 def workbench_access() -> dict:
     return _workbench_access_config()
@@ -1190,12 +2438,20 @@ def get_run_table_data(run_id: str) -> dict:
 
 
 @app.get("/api/labor/runs")
-def list_labor_runs(limit: int = 50) -> dict:
+def list_labor_runs(request: Request, limit: int = 50) -> dict:
     bounded_limit = max(1, min(int(limit or 50), 200))
+    if labor_auth_required():
+        actor_user_id, is_admin = _labor_request_actor(request)
+        rows = list_labor_metadata(
+            limit=bounded_limit,
+            owner_user_id="" if is_admin else actor_user_id,
+        )
+    else:
+        rows = list_labor_metadata(limit=bounded_limit)
     return {
         "runs": [
             _summarize_labor_run_for_list(_normalize_labor_total_decision(row))
-            for row in list_labor_metadata(limit=bounded_limit)
+            for row in rows
         ]
     }
 
@@ -1218,28 +2474,55 @@ def _summarize_labor_run_for_list(row: dict) -> dict:
 
 
 def _normalize_labor_total_decision(metadata: dict) -> dict:
-    warehouse_comparison = metadata.get("warehouseComparison")
+    normalized = _normalize_labor_review_state(metadata)
+    warehouse_comparison = normalized.get("warehouseComparison")
     if not isinstance(warehouse_comparison, dict):
-        return metadata
+        return normalized
     warehouse_summary = warehouse_comparison.get("summary")
     if not isinstance(warehouse_summary, dict):
-        return metadata
+        return normalized
     if "amountDeltaTotal" not in warehouse_summary:
-        return metadata
+        return normalized
 
-    normalized = dict(metadata)
     normalized_warehouse = dict(warehouse_comparison)
     normalized_summary = dict(warehouse_summary)
     amount_delta = round(float(normalized_summary.get("amountDeltaTotal") or 0), 2)
     normalized_summary["amountDeltaTotal"] = amount_delta
-    normalized_summary["totalPassed"] = amount_within_tolerance(amount_delta, AI_CONFIG["amount_tolerance"])
+    warehouse_rows = normalized_warehouse.get("rows") or []
+    reconciliation_statuses = [
+        str(row.get("reconciliationStatus") or "")
+        for row in warehouse_rows
+        if isinstance(row, dict) and row.get("reconciliationStatus")
+    ]
+    if "totalPassed" not in normalized_summary:
+        if reconciliation_statuses:
+            normalized_summary["totalPassed"] = all(status == "passed" for status in reconciliation_statuses)
+        else:
+            normalized_summary["totalPassed"] = amount_within_tolerance(
+                amount_delta,
+                AI_CONFIG["amount_tolerance"],
+            )
     normalized_warehouse["summary"] = normalized_summary
     normalized["warehouseComparison"] = normalized_warehouse
     return normalized
 
 
+def _normalize_labor_review_state(metadata: dict) -> dict:
+    normalized = dict(metadata)
+    review_status = str(normalized.get("businessReviewStatus") or "pending").strip().lower()
+    if review_status not in {"pending", "approved", "rejected"}:
+        review_status = "pending"
+    normalized["businessReviewStatus"] = review_status
+    normalized["manualReviewRequired"] = True
+    normalized["directPaymentAllowed"] = False
+    normalized["requiresHumanReview"] = (
+        bool(normalized.get("requiresHumanReview")) if review_status == "approved" else True
+    )
+    return normalized
+
+
 @app.get("/api/labor/suppliers")
-def list_labor_suppliers() -> dict:
+def list_labor_suppliers(request: Request) -> dict:
     suppliers: dict[str, dict] = {}
 
     def add_supplier(name: str, source: str, aliases: list[str] | None = None) -> None:
@@ -1264,7 +2547,12 @@ def list_labor_suppliers() -> dict:
             if alias_value and alias_value not in record["aliases"] and alias_value.lower() != display_name.lower():
                 record["aliases"].append(alias_value)
 
-    for run in list_labor_metadata():
+    history_owner = ""
+    if labor_auth_required():
+        actor_user_id, is_admin = _labor_request_actor(request)
+        history_owner = "" if is_admin else actor_user_id
+    history_runs = list_labor_metadata(owner_user_id=history_owner)
+    for run in history_runs:
         add_supplier(str(run.get("supplierName") or run.get("supplier") or ""), "history")
 
     profiles_path = AI_CONFIG.get("supplier_profiles_path")
@@ -1299,6 +2587,7 @@ def _looks_like_invalid_supplier_suggestion(value: str) -> bool:
 
 
 LABOR_TELEMETRY_SUMMARY_FIELDS = {
+    "cacheHit",
     "pdfAmountTotal",
     "excelAmountTotal",
     "amountDeltaTotal",
@@ -1369,7 +2658,9 @@ def _sanitize_labor_telemetry(payload: dict) -> dict:
         value = summary.get(key)
         if value is None:
             continue
-        if isinstance(value, (int, float)):
+        if isinstance(value, bool):
+            event["summary"][key] = value
+        elif isinstance(value, (int, float)):
             event["summary"][key] = _telemetry_number(value)
         elif isinstance(value, (str, bool)):
             event["summary"][key] = _telemetry_text(value, 120)
@@ -1379,7 +2670,9 @@ def _sanitize_labor_telemetry(payload: dict) -> dict:
         value = context.get(key)
         if value is None:
             continue
-        if isinstance(value, (int, float)):
+        if isinstance(value, bool):
+            event["context"][key] = value
+        elif isinstance(value, (int, float)):
             event["context"][key] = _telemetry_number(value)
         elif isinstance(value, list):
             event["context"][key] = [_telemetry_text(item, 80) for item in value[:12]]
@@ -1410,8 +2703,1372 @@ def export_labor_telemetry() -> FileResponse:
     )
 
 
+def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> dict[str, str]:
+    prefix = "Bearer "
+    token = authorization[len(prefix) :].strip() if authorization.startswith(prefix) else ""
+    if labor_postgres_state_enabled():
+        try:
+            identity = resolve_labor_worker_token(token, worker_version=worker_version)
+            return {"userId": str(identity["userId"]), "deviceId": str(identity["deviceId"])}
+        except LaborWorkerIdentityInvalid as exc:
+            raise HTTPException(status_code=401, detail="Worker 身份令牌无效或已失效。") from exc
+        except Exception as exc:  # noqa: BLE001 - backend details stay in server logs.
+            raise HTTPException(
+                status_code=503,
+                detail=_labor_request_error(
+                    message="Worker 身份服务暂不可用。",
+                    error_code="LABOR_WORKER_IDENTITY_UNAVAILABLE",
+                    retryable=True,
+                    next_action="请稍后重新连接；持续失败请联系管理员。",
+                ),
+            ) from exc
+    try:
+        configured = json.loads(os.environ.get("SIGMA_LABOR_WORKER_TOKENS", "{}"))
+    except json.JSONDecodeError:
+        configured = {}
+    identity = configured.get(token) if token and isinstance(configured, dict) else None
+    if not isinstance(identity, dict) or not identity.get("userId") or not identity.get("deviceId"):
+        raise HTTPException(status_code=401, detail="Worker 身份令牌无效或已失效。")
+    return {"userId": str(identity["userId"]), "deviceId": str(identity["deviceId"])}
+
+
+def _labor_worker_token_ttl_seconds() -> int:
+    try:
+        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 8 * 60 * 60))
+    except (TypeError, ValueError):
+        value = 8 * 60 * 60
+    return max(300, min(value, 24 * 60 * 60))
+
+
+def _labor_worker_activation_url(request: Request, activation_code: str) -> str:
+    configured = str(os.environ.get("SIGMA_LABOR_PUBLIC_URL") or "").strip().rstrip("/")
+    candidate = configured or str(request.base_url).strip().rstrip("/")
+    parsed = urlparse(candidate)
+    is_secure = parsed.scheme == "https" or (
+        parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
+    )
+    if not is_secure or not parsed.netloc or parsed.path not in {"", "/"}:
+        raise HTTPException(
+            status_code=503,
+            detail=_labor_request_error(
+                message="Worker 公网服务地址未安全配置。",
+                error_code="LABOR_WORKER_PUBLIC_URL_INVALID",
+                next_action="请由管理员配置 HTTPS 的 SIGMA_LABOR_PUBLIC_URL。",
+            ),
+        )
+    api_url = f"{parsed.scheme}://{parsed.netloc}"
+    return f"sigma-overseas-labor-worker://activate?{urlencode({'apiUrl': api_url, 'code': activation_code})}"
+
+
+def _labor_worker_device_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, LaborWorkerDeviceNotFound):
+        return HTTPException(status_code=404, detail="Worker 设备不存在或已撤销。")
+    if isinstance(exc, LaborWorkerIdentityInvalid):
+        return HTTPException(status_code=401, detail="Worker 身份令牌无效或已失效。")
+    if isinstance(exc, (LaborWorkerIdentityError, ValueError)):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(
+        status_code=503,
+        detail=_labor_request_error(
+            message="Worker 设备身份服务暂不可用。",
+            error_code="LABOR_WORKER_IDENTITY_UNAVAILABLE",
+            retryable=True,
+            next_action="请稍后重试；持续失败请联系管理员。",
+        ),
+    )
+
+
+@app.get("/api/labor/worker/devices")
+def get_current_labor_worker_devices(request: Request) -> dict:
+    _labor_p1_state_required()
+    owner_user_id, _ = _labor_request_actor(request)
+    try:
+        devices = list_labor_worker_devices(owner_user_id=owner_user_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_worker_device_http_error(exc) from exc
+    return {"devices": devices}
+
+
+@app.post("/api/labor/worker/devices")
+def activate_current_labor_worker_device(request: Request, payload: dict = Body(default={})) -> dict:
+    _labor_p1_state_required()
+    owner_user_id, _ = _labor_request_actor(request)
+    display_name = str(payload.get("displayName") or "个人核对助手").strip()[:120]
+    platform = str(payload.get("platform") or "macos-arm64").strip()[:80]
+    worker_version = str(payload.get("workerVersion") or "").strip()[:40]
+    try:
+        issued = issue_labor_worker_activation(
+            owner_user_id=owner_user_id,
+            actor_user_id=owner_user_id,
+            display_name=display_name,
+            platform=platform,
+            worker_version=worker_version,
+            ttl_seconds=5 * 60,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_worker_device_http_error(exc) from exc
+    return {
+        "device": issued["device"],
+        "expiresIn": issued["expiresIn"],
+        "expiresAt": issued["expiresAt"],
+        "activationUrl": _labor_worker_activation_url(request, str(issued["activationCode"])),
+    }
+
+
+@app.post("/api/labor/worker/devices/{device_id}/rotate")
+def rotate_current_labor_worker_device(
+    request: Request,
+    device_id: str,
+    payload: dict = Body(default={}),
+) -> dict:
+    _labor_p1_state_required()
+    owner_user_id, _ = _labor_request_actor(request)
+    display_name = str(payload.get("displayName") or "个人核对助手").strip()[:120]
+    platform = str(payload.get("platform") or "macos-arm64").strip()[:80]
+    worker_version = str(payload.get("workerVersion") or "").strip()[:40]
+    try:
+        issued = issue_labor_worker_activation(
+            owner_user_id=owner_user_id,
+            actor_user_id=owner_user_id,
+            display_name=display_name,
+            platform=platform,
+            worker_version=worker_version,
+            ttl_seconds=5 * 60,
+            device_id=device_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_worker_device_http_error(exc) from exc
+    return {
+        "device": issued["device"],
+        "expiresIn": issued["expiresIn"],
+        "expiresAt": issued["expiresAt"],
+        "activationUrl": _labor_worker_activation_url(request, str(issued["activationCode"])),
+    }
+
+
+@app.post("/api/labor/worker/activate")
+def exchange_current_labor_worker_activation(
+    response: Response,
+    payload: dict = Body(default={}),
+) -> dict:
+    _labor_p1_state_required()
+    activation_code = str(payload.get("activationCode") or "").strip()[:256]
+    worker_version = str(payload.get("workerVersion") or "").strip()[:40]
+    try:
+        issued = exchange_labor_worker_activation(
+            activation_code,
+            worker_version=worker_version,
+            ttl_seconds=_labor_worker_token_ttl_seconds(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_worker_device_http_error(exc) from exc
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return issued
+
+
+@app.delete("/api/labor/worker/devices/{device_id}")
+def revoke_current_labor_worker_device(request: Request, device_id: str) -> dict:
+    _labor_p1_state_required()
+    owner_user_id, _ = _labor_request_actor(request)
+    try:
+        device = revoke_labor_worker_device(
+            owner_user_id=owner_user_id,
+            actor_user_id=owner_user_id,
+            device_id=device_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_worker_device_http_error(exc) from exc
+    return {"device": device, "revoked": True}
+
+
+def _public_labor_worker_job(job: dict | None) -> dict | None:
+    if not job:
+        return None
+    allowed = {
+        "id", "runId", "jobType", "status", "attempt", "maxAttempts", "availableAt",
+        "leaseExpiresAt", "heartbeatAt", "requiredWorkerVersion", "progress",
+        "errorCode", "errorMessage", "createdAt", "updatedAt", "startedAt", "finishedAt",
+        "taskGenerationId",
+    }
+    return {key: value for key, value in job.items() if key in allowed}
+
+
+def _labor_assert_worker_version(worker_version: str, job: dict | None = None) -> str:
+    current_required = _labor_required_worker_version()
+    job_required = str((job or {}).get("requiredWorkerVersion") or "").strip()
+    required_version = current_required
+    if job_required and not worker_version_at_least(current_required, job_required):
+        required_version = job_required
+    if not worker_version_at_least(worker_version, required_version):
+        raise HTTPException(
+            status_code=426,
+            detail={
+                **_labor_request_error(
+                    message=f"当前 Worker 版本无效或低于最低要求 {required_version}。",
+                    error_code="LABOR_WORKER_UPGRADE_REQUIRED",
+                    next_action="请先升级海外报账核对助手，再重新连接。",
+                ),
+                "requiredWorkerVersion": required_version,
+            },
+        )
+    return required_version
+
+
+def _labor_operations_events() -> list[dict]:
+    if not LABOR_TELEMETRY_FILE.exists():
+        return []
+    rows = []
+    for line in LABOR_TELEMETRY_FILE.read_text(encoding="utf-8").splitlines()[-5000:]:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            rows.append(event)
+    return rows
+
+
+@app.get("/api/labor/operations")
+def get_labor_operations(x_admin_token: str = Header(default="")) -> dict:
+    expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
+    if not expected or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
+    disk = shutil.disk_usage(LABOR_RUNS_DIR.parent)
+    snapshot = build_labor_operations_snapshot(
+        list_labor_worker_jobs(),
+        _labor_operations_events(),
+        storage={
+            "backend": labor_storage_backend() or "local",
+            "freeBytes": disk.free,
+            "totalBytes": disk.total,
+            "minimumFreeBytes": int(os.environ.get("LABOR_MINIMUM_FREE_BYTES", 2 * 1024**3)),
+        },
+    )
+    snapshot["recentJobs"] = [_public_labor_worker_job(job) for job in snapshot["recentJobs"]]
+    return snapshot
+
+
+@app.post("/api/labor/worker/jobs/claim")
+def claim_personal_labor_worker_job(
+    authorization: str = Header(default=""),
+    x_worker_version: str = Header(default=""),
+) -> dict:
+    identity = _labor_worker_identity(authorization, worker_version=x_worker_version)
+    _labor_assert_runtime_current()
+    _labor_assert_worker_version(x_worker_version)
+    job = claim_labor_worker_job(
+        owner_user_id=identity["userId"],
+        device_id=identity["deviceId"],
+        worker_version=x_worker_version,
+    )
+    if job and str(job.get("jobType") or "reconcile") == "mapping_preflight":
+        generation = str(job.get("taskGenerationId") or "").strip()
+        update_labor_metadata_for_mapping_preflight(
+            str(job.get("runId") or ""),
+            expected_task_generation_id=generation,
+            updates=lambda current: {
+                "mappingPreflight": {
+                    **(current.get("mappingPreflight") if isinstance(current.get("mappingPreflight"), dict) else {}),
+                    "status": "running",
+                    "statusLabel": "本人核对助手正在读取 Excel",
+                    "message": "正在读取工作表、列名和样例数据。",
+                    "workerDeviceId": identity["deviceId"],
+                }
+            },
+            actor_user_id=identity["userId"],
+            action="mapping_preflight_claimed",
+            reason_code="mapping_preflight_worker_claimed",
+        )
+    return {"job": _public_labor_worker_job(job)}
+
+
+_LABOR_WORKER_RELEASE_PLATFORMS = {"macos-arm64", "windows-x64"}
+
+
+def _labor_worker_release_platform(value: str) -> str:
+    platform = str(value or "macos-arm64").strip().lower()
+    if platform not in _LABOR_WORKER_RELEASE_PLATFORMS:
+        raise HTTPException(status_code=400, detail="核对助手平台仅支持 macos-arm64 或 windows-x64。")
+    return platform
+
+
+def _labor_worker_release_catalog() -> dict[str, dict]:
+    try:
+        manifest = json.loads(os.environ.get("SIGMA_LABOR_WORKER_UPDATE_MANIFEST", "{}"))
+    except json.JSONDecodeError:
+        manifest = {}
+    if not isinstance(manifest, dict):
+        manifest = {}
+    releases = manifest.get("releases")
+    if isinstance(releases, dict):
+        return {
+            platform: dict(release)
+            for platform, release in releases.items()
+            if platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
+        }
+    # Version 1 manifests represented the original macOS ARM64 release directly.
+    return {"macos-arm64": manifest} if manifest else {}
+
+
+def _labor_worker_release_config(platform: str = "macos-arm64") -> dict:
+    manifest = _labor_worker_release_catalog().get(_labor_worker_release_platform(platform), {})
+    return {
+        key: manifest[key]
+        for key in ("version", "url", "sha256", "signature", "minimumVersion", "objectKey", "blobPathname", "filename")
+        if key in manifest
+    }
+
+
+def _labor_worker_release_filename(platform: str, version: str) -> str:
+    if platform == "windows-x64":
+        return f"Σ海外报账核对助手-{version}-windows-x64.exe"
+    return f"Σ海外报账核对助手-{version}-arm64.dmg"
+
+
+def _labor_worker_release_content_types(platform: str) -> list[str]:
+    if platform == "windows-x64":
+        return ["application/x-msdownload", "application/vnd.microsoft.portable-executable", "application/octet-stream"]
+    return ["application/x-apple-diskimage", "application/octet-stream"]
+
+
+def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
+    platform = _labor_worker_release_platform(platform)
+    manifest = _labor_worker_release_config(platform)
+    version = str(manifest.get("version") or "").strip()
+    url = str(manifest.get("url") or "").strip()
+    object_key = str(manifest.get("objectKey") or "").strip()
+    blob_pathname = str(manifest.get("blobPathname") or "").strip()
+    filename = str(manifest.get("filename") or _labor_worker_release_filename(platform, version)).strip()
+    complete = bool(
+        version
+        and str(manifest.get("sha256") or "").strip()
+        and str(manifest.get("signature") or "").strip()
+        and (object_key or blob_pathname or url.startswith("https://"))
+    )
+    return {
+        "available": complete,
+        "platform": platform,
+        "version": version,
+        "minimumVersion": str(manifest.get("minimumVersion") or _labor_required_worker_version()),
+        "requiredWorkerVersion": _labor_required_worker_version(),
+        "sha256": str(manifest.get("sha256") or ""),
+        "signature": str(manifest.get("signature") or ""),
+        "filename": filename[:180],
+        "downloadUrl": (
+            (
+                "/api/labor/worker/release/download"
+                if platform == "macos-arm64"
+                else f"/api/labor/worker/release/download?platform={platform}"
+            )
+            if object_key or blob_pathname
+            else url
+        ),
+    }
+
+
+@app.get("/api/labor/worker/release")
+def get_personal_labor_worker_release(request: Request, platform: str = "macos-arm64") -> dict:
+    is_admin = False
+    if labor_auth_required():
+        _, is_admin = _labor_request_actor(request)
+    release = _labor_public_worker_release(platform)
+    release["canUpload"] = bool(is_admin)
+    return release
+
+
+@app.get("/api/labor/worker/release/download")
+def download_personal_labor_worker_release(request: Request, platform: str = "macos-arm64") -> Response:
+    if labor_auth_required():
+        _labor_request_actor(request)
+    platform = _labor_worker_release_platform(platform)
+    manifest = _labor_worker_release_config(platform)
+    release = _labor_public_worker_release(platform)
+    if not release["available"]:
+        raise HTTPException(status_code=503, detail="核对助手安装包尚未配置，请联系管理员。")
+    object_key = str(manifest.get("objectKey") or "").strip()
+    blob_pathname = str(manifest.get("blobPathname") or "").strip()
+    if blob_pathname:
+        try:
+            signed_url = create_labor_blob_presigned_url(blob_pathname, operation="get", expires_in=120)
+        except Exception as exc:  # noqa: BLE001 - keep storage internals out of browser errors.
+            logger.warning("labor worker Blob release signing failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="核对助手安装包暂时无法下载，请稍后重试。") from exc
+        return RedirectResponse(
+            url=signed_url,
+            status_code=307,
+            headers={"cache-control": "no-store", "referrer-policy": "no-referrer"},
+        )
+    if object_key:
+        try:
+            signed = create_labor_supabase_signed_download(
+                object_key,
+                filename=str(release.get("filename") or "worker.dmg"),
+                expires_in=120,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep storage internals out of browser errors.
+            logger.warning("labor worker release signing failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="核对助手安装包暂时无法下载，请稍后重试。") from exc
+        return RedirectResponse(url=str(signed["signedUrl"]), status_code=307)
+    return RedirectResponse(url=str(release["downloadUrl"]), status_code=307)
+
+
+@app.post("/api/labor/worker/release/upload-intent")
+def create_personal_labor_worker_release_upload_intent(request: Request, payload: dict = Body(...)) -> dict:
+    _, is_admin = _labor_request_actor(request)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="仅系统管理员可以上传核对助手安装包。")
+    platform = _labor_worker_release_platform(str(payload.get("platform") or "macos-arm64"))
+    version = str(payload.get("version") or "").strip()
+    try:
+        parse_stable_worker_version(version)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    required_version = _labor_required_worker_version()
+    if not worker_version_at_least(version, required_version):
+        raise HTTPException(status_code=409, detail=f"安装包版本不能低于当前最低要求 {required_version}。")
+    filename = str(payload.get("filename") or "").strip()
+    expected_filename = _labor_worker_release_filename(platform, version)
+    if filename != expected_filename:
+        raise HTTPException(status_code=400, detail=f"安装包文件名必须是 {expected_filename}。")
+    try:
+        size_bytes = int(payload.get("sizeBytes") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="安装包大小格式无效。") from exc
+    if size_bytes <= 0 or size_bytes > 300 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="核对助手安装包必须小于 300 MB。")
+    sha256 = str(payload.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise HTTPException(status_code=400, detail="安装包 SHA-256 格式无效。")
+    object_key = f"labor-runs/{labor_persistent_environment()}/owners/system/worker-releases/{platform}/{filename}"
+    content_types = _labor_worker_release_content_types(platform)
+    content_type = content_types[0]
+    if labor_blob_signed_urls_enabled():
+        try:
+            signed_url = create_labor_blob_presigned_url(
+                object_key,
+                operation="put",
+                expires_in=7200,
+                maximum_size_in_bytes=size_bytes,
+                allowed_content_types=content_types,
+            )
+        except Exception as exc:  # noqa: BLE001 - keep private storage details out of the response.
+            logger.warning("labor worker Blob release upload intent failed: %s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="暂时无法创建安装包上传通道，请稍后重试。") from exc
+        return {
+            "signedUrl": signed_url,
+            "method": "PUT",
+            "headers": {"content-type": content_type},
+            "blobPathname": object_key,
+            "platform": platform,
+            "expiresIn": 7200,
+            "version": version,
+            "filename": filename,
+            "sizeBytes": size_bytes,
+            "sha256": sha256,
+            "private": True,
+        }
+    try:
+        intent = create_labor_supabase_signed_upload_for_object(
+            object_key,
+            file_kind="worker_release",
+            content_type=content_type,
+        )
+    except Exception as exc:  # noqa: BLE001 - keep private storage details out of the response.
+        logger.warning("labor worker release upload intent failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="暂时无法创建安装包上传通道，请稍后重试。") from exc
+    return {
+        "signedUrl": intent["signedUrl"],
+        "method": "PUT",
+        "headers": intent.get("headers") or {"content-type": content_type},
+        "objectKey": object_key,
+        "platform": platform,
+        "expiresIn": int(intent.get("expiresIn") or 7200),
+        "version": version,
+        "filename": filename,
+        "sizeBytes": size_bytes,
+        "sha256": sha256,
+        "private": True,
+    }
+
+
+@app.get("/api/labor/worker/version")
+def get_personal_labor_worker_version(
+    currentVersion: str = "",
+    platform: str = "macos-arm64",
+    authorization: str = Header(default=""),
+) -> dict:
+    _labor_worker_identity(authorization, worker_version=currentVersion)
+    platform = _labor_worker_release_platform(platform)
+    manifest = _labor_worker_release_config(platform)
+    version = str(manifest.get("version") or "") if isinstance(manifest, dict) else ""
+    allowed = {key: manifest[key] for key in ("version", "url", "sha256", "signature", "minimumVersion") if key in manifest}
+    required_version = _labor_required_worker_version()
+    complete_manifest = all(allowed.get(key) for key in ("version", "url", "sha256", "signature"))
+    try:
+        manifest_version = parse_stable_worker_version(version)
+        current_version = parse_stable_worker_version(currentVersion)
+    except ValueError:
+        manifest_version = None
+        current_version = None
+    allowed["requiredWorkerVersion"] = required_version
+    allowed["platform"] = platform
+    allowed["upgradeRequired"] = not worker_version_at_least(currentVersion, required_version)
+    allowed["updateAvailable"] = bool(
+        complete_manifest
+        and manifest_version is not None
+        and current_version is not None
+        and manifest_version > current_version
+    )
+    return allowed
+
+
+@app.get("/api/labor/worker/health")
+def get_personal_labor_worker_health(x_admin_token: str = Header(default="")) -> dict:
+    expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
+    if not expected or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
+    return labor_worker_job_store_health()
+
+
+@app.get("/api/labor/production-readiness")
+def get_labor_production_readiness(x_admin_token: str = Header(default="")) -> dict:
+    expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
+    if not expected or x_admin_token != expected:
+        raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
+    return _labor_p1_readiness_snapshot()
+
+
+@app.post("/api/labor/worker/jobs/{job_id}/heartbeat")
+def heartbeat_personal_labor_worker_job(
+    job_id: str,
+    payload: dict = Body(default={}),
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        with _leased_worker_job(
+            job_id,
+            authorization,
+            progress=payload.get("progress") if isinstance(payload, dict) else None,
+        ) as (_, job, _, generation):
+            if str(job.get("jobType") or "reconcile") != "mapping_preflight":
+                heartbeat_at = str(job.get("heartbeatAt") or datetime.utcnow().isoformat())
+                _update_worker_generation_metadata(
+                    str(job.get("runId") or ""),
+                    generation,
+                    lambda current: {
+                        "progress": {
+                            **(current.get("progress") if isinstance(current.get("progress"), dict) else {}),
+                            "lastUpdatedAt": heartbeat_at,
+                        }
+                    },
+                )
+            return {"job": _public_labor_worker_job(job)}
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@contextmanager
+def _leased_worker_job(
+    job_id: str,
+    authorization: str,
+    *,
+    progress: dict | None = None,
+):
+    identity = _labor_worker_identity(authorization)
+    job = get_labor_worker_job(job_id)
+    run_id = str(job.get("runId") or "")
+    run_dir = get_labor_run_dir(run_id)
+    with labor_run_metadata_lock(run_id):
+        if not labor_postgres_state_enabled() and not (run_dir / "metadata.json").exists():
+            sync_labor_run_from_persistent(run_id, run_dir)
+        try:
+            metadata = load_labor_metadata(run_dir)
+            if str(job.get("jobType") or "reconcile") == "mapping_preflight":
+                preflight = (
+                    metadata.get("mappingPreflight")
+                    if isinstance(metadata.get("mappingPreflight"), dict)
+                    else {}
+                )
+                generation = str(preflight.get("taskGenerationId") or "").strip()
+            else:
+                generation = _labor_task_generation_id(metadata)
+        except FileNotFoundError:
+            if str(job.get("taskGenerationId") or "").strip():
+                raise LaborWorkerLeaseError("服务端缺少当前任务代次元数据，Worker 任务不能继续。")
+            generation = ""
+        job = heartbeat_labor_worker_job(
+            job_id,
+            owner_user_id=identity["userId"],
+            device_id=identity["deviceId"],
+            progress=progress,
+            expected_task_generation_id=generation,
+        )
+        yield identity, job, run_dir, generation
+
+
+def _update_worker_generation_metadata(
+    run_id: str,
+    generation: str,
+    updates: Callable[[dict], dict],
+) -> tuple[dict, bool]:
+    if generation:
+        return update_labor_metadata_for_task(
+            run_id,
+            expected_task_generation_id=generation,
+            updates=updates,
+        )
+    with labor_run_metadata_lock(run_id):
+        run_dir = get_labor_run_dir(run_id)
+        current = load_labor_metadata(run_dir)
+        if _labor_task_generation_id(current):
+            return current, False
+        return update_labor_metadata(run_id, updates(dict(current))), True
+
+
+def _mark_worker_result_rejected(run_id: str, generation: str, exc: LaborWorkerArchiveError) -> None:
+    _update_worker_generation_metadata(
+        run_id,
+        generation,
+        lambda current: {
+            **_labor_invalidate_official_result(
+                current,
+                status="抽取失败",
+                reason_code=str(exc.code),
+                message=str(exc),
+            ),
+            "status": "抽取失败",
+            "stage": "Worker 结果未接受",
+            "errorCode": f"LABOR_{str(exc.code).upper()}",
+            "errorMessage": str(exc),
+            "retryable": True,
+            "machineCheckStatus": "needs_review",
+            "manualReviewRequired": True,
+            "directPaymentAllowed": False,
+            "requiresHumanReview": True,
+            "asyncTask": {
+                **(current.get("asyncTask") if isinstance(current.get("asyncTask"), dict) else {}),
+                "status": "failed",
+                "statusLabel": "结果未接受",
+                "message": str(exc),
+                "failedAt": datetime.utcnow().isoformat(),
+                "taskGenerationId": generation,
+            },
+        },
+    )
+
+
+def _worker_result_error_detail(exc: LaborWorkerArchiveError) -> dict:
+    return _labor_request_error(
+        message=str(exc),
+        error_code=f"LABOR_{str(exc.code).upper()}",
+        retryable=True,
+        next_action="请让本人核对助手重新下载当前批次材料，并重新生成完整核对结果。",
+    )
+
+
+def _worker_result_acceptance_evidence(run_dir: Path) -> tuple[str, int, str]:
+    metadata = load_labor_metadata(run_dir)
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    diff_report = files.get("diffReport") if isinstance(files.get("diffReport"), dict) else {}
+    try:
+        report_size = int(diff_report.get("sizeBytes") or 0)
+    except (TypeError, ValueError):
+        report_size = 0
+    filename = Path(str(diff_report.get("filename") or "")).name
+    report_sha256 = str(diff_report.get("sha256") or "").strip().lower()
+    result_input_fingerprint = str(metadata.get("resultInputFingerprint") or "").strip().lower()
+    report_path = (run_dir / filename).resolve() if filename else run_dir
+    try:
+        report_path.relative_to(run_dir.resolve())
+    except ValueError:
+        return "", 0, ""
+    if (
+        not filename
+        or report_size <= 0
+        or not re.fullmatch(r"[0-9a-f]{64}", report_sha256)
+        or not re.fullmatch(r"[0-9a-f]{64}", result_input_fingerprint)
+        or result_input_fingerprint != _labor_result_input_fingerprint(metadata)
+        or not report_path.is_file()
+        or report_path.stat().st_size != report_size
+    ):
+        return "", 0, ""
+    digest = hashlib.sha256()
+    with report_path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != report_sha256:
+        return "", 0, ""
+    return (
+        report_sha256,
+        report_size,
+        result_input_fingerprint,
+    )
+
+
+def _publish_worker_result_to_authoritative_state(
+    run_id: str,
+    run_dir: Path,
+    *,
+    generation: str,
+) -> dict:
+    """Promote a validated Worker result from temporary disk into the P1 authority."""
+
+    try:
+        merged = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LaborWorkerArchiveError(
+            "Worker 合并结果 metadata.json 无法读取，不能写入权威状态。",
+            code="worker_result_state_payload_invalid",
+            formal_result_rejected=True,
+        ) from exc
+    if not isinstance(merged, dict):
+        raise LaborWorkerArchiveError(
+            "Worker 合并结果 metadata.json 格式无效。",
+            code="worker_result_state_payload_invalid",
+            formal_result_rejected=True,
+        )
+    if not labor_postgres_state_enabled():
+        return merged
+    fingerprint = str(merged.get("resultInputFingerprint") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise LaborWorkerArchiveError(
+            "Worker 合并结果缺少有效输入指纹，不能写入权威状态。",
+            code="worker_result_state_fingerprint_invalid",
+            formal_result_rejected=True,
+        )
+    published, committed = compare_and_update_labor_metadata(
+        run_id,
+        expected_task_generation_id=generation,
+        expected_fingerprint=fingerprint,
+        fingerprint=_labor_result_input_fingerprint,
+        updates=merged,
+        conflict_updates=lambda current: {
+            **_labor_invalidate_official_result(
+                current,
+                status="抽取失败",
+                reason_code="worker_result_state_conflict",
+                message="Worker 结果对应的输入或任务代次已变化，正式结果已拒绝。",
+            ),
+            "status": "抽取失败",
+            "errorCode": "LABOR_WORKER_RESULT_STATE_CONFLICT",
+            "errorMessage": "Worker 结果对应的输入或任务代次已变化，正式结果已拒绝。",
+            "retryable": True,
+        },
+    )
+    if not committed:
+        raise LaborWorkerArchiveError(
+            "Worker 结果对应的输入或任务代次已变化，不能写入当前批次。",
+            code="worker_result_state_conflict",
+            formal_result_rejected=True,
+        )
+    return published
+
+
+def _persist_worker_result_outputs(run_id: str, run_dir: Path) -> dict:
+    """Persist formal Worker reports privately and attach verified object evidence."""
+
+    try:
+        metadata = json.loads((run_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LaborWorkerArchiveError(
+            "Worker 输出清单无法读取，不能持久化正式报告。",
+            code="worker_output_manifest_invalid",
+            formal_result_rejected=True,
+        ) from exc
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    owner_user_id = str(metadata.get("ownerUserId") or "").strip()
+    if not owner_user_id:
+        raise LaborWorkerArchiveError(
+            "Worker 输出缺少服务端 owner，不能写入私有存储。",
+            code="worker_output_owner_missing",
+            formal_result_rejected=True,
+        )
+    output_specs = (
+        ("diffReport", "diff_report", "diffDownloadUrl"),
+        ("businessReport", "business_report", "businessReportDownloadUrl"),
+        ("projectionReport", "projection_report", "projectionReportDownloadUrl"),
+        ("governanceReport", "governance_report", "governanceReportDownloadUrl"),
+    )
+    persisted_count = 0
+    for file_key, output_kind, top_level_url in output_specs:
+        record = files.get(file_key) if isinstance(files.get(file_key), dict) else None
+        if not record:
+            continue
+        filename = Path(str(record.get("filename") or "").replace("\\", "/")).name
+        if not filename:
+            continue
+        source = (run_dir / filename).resolve()
+        try:
+            source.relative_to(run_dir.resolve())
+        except ValueError as exc:
+            raise LaborWorkerArchiveError(
+                "Worker 输出文件路径越界，不能写入私有存储。",
+                code="worker_output_path_invalid",
+                formal_result_rejected=True,
+            ) from exc
+        try:
+            storage_evidence = persist_labor_private_output(
+                owner_user_id=owner_user_id,
+                run_id=run_id,
+                output_kind=output_kind,
+                path=source,
+                expected_sha256=str(record.get("sha256") or ""),
+                expected_size_bytes=int(record.get("sizeBytes") or 0),
+            )
+        except Exception as exc:  # noqa: BLE001 - normalize private-storage internals.
+            raise LaborWorkerArchiveError(
+                f"Worker 正式输出 {filename} 未能写入私有存储。",
+                code="worker_output_storage_failed",
+                formal_result_rejected=True,
+            ) from exc
+        download_url = f"/api/labor/runs/{run_id}/download/{filename}"
+        record.update(storage_evidence)
+        record["downloadUrl"] = download_url
+        files[file_key] = record
+        if top_level_url in metadata or file_key in {"diffReport", "businessReport"}:
+            metadata[top_level_url] = download_url
+        persisted_count += 1
+    if not isinstance(files.get("diffReport"), dict) or persisted_count <= 0:
+        raise LaborWorkerArchiveError(
+            "Worker 正式差异报告未写入私有存储。",
+            code="worker_output_report_missing",
+            formal_result_rejected=True,
+        )
+    metadata["files"] = files
+    temporary = run_dir / f".metadata.{uuid4().hex}.tmp"
+    temporary.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, run_dir / "metadata.json")
+    return metadata
+
+
+def _mark_worker_result_upload_started(run_id: str, generation: str) -> None:
+    _, applied = _update_worker_generation_metadata(
+        run_id,
+        generation,
+        lambda current: {
+            **_labor_invalidate_official_result(
+                current,
+                status="抽取中",
+                reason_code="worker_result_upload_started",
+                message="正在校验新的 Worker 结果；上一版正式证据已失效。",
+            ),
+            "status": "抽取中",
+            "stage": "校验 Worker 结果",
+            "retryable": True,
+            "asyncTask": {
+                **(current.get("asyncTask") if isinstance(current.get("asyncTask"), dict) else {}),
+                "status": "running",
+                "statusLabel": "校验结果",
+                "message": "正在校验本人核对助手提交的新结果。",
+                "taskGenerationId": generation,
+            },
+        },
+    )
+    if not applied:
+        raise LaborWorkerLeaseError("Worker 任务代次已失效，不能接纳新结果。")
+
+
+@app.get("/api/labor/worker/jobs/{job_id}/input")
+def download_personal_labor_worker_input(job_id: str, authorization: str = Header(default="")) -> Response:
+    try:
+        with _leased_worker_job(job_id, authorization) as (_, job, run_dir, generation):
+            payload = build_worker_input_archive(run_dir, expected_task_generation_id=generation)
+            return Response(
+                payload,
+                media_type="application/zip",
+                headers={"content-disposition": f'attachment; filename="{job["runId"]}-input.zip"'},
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (LaborWorkerLeaseError, LaborWorkerArchiveError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _worker_input_manifest(
+    run_dir: Path,
+    *,
+    owner_user_id: str = "",
+    job_type: str = "reconcile",
+) -> dict:
+    metadata = load_labor_metadata(run_dir)
+    mapping_preflight_only = str(job_type or "reconcile").strip() == "mapping_preflight"
+    if labor_postgres_state_enabled():
+        owner = str(owner_user_id or metadata.get("ownerUserId") or "").strip()
+        ready_files = list_labor_file_states(
+            run_id=str(metadata.get("id") or run_dir.name),
+            owner_user_id=owner,
+            ready_only=True,
+        )
+        if ready_files:
+            direct_entries = []
+            direct_pdf_records = []
+            direct_workbook_records = []
+            for file_state in ready_files:
+                if mapping_preflight_only and str(file_state.get("fileKind") or "") != "workbook":
+                    continue
+                file_id = re.sub(r"[^0-9A-Za-z_-]+", "_", str(file_state.get("id") or "file"))[:128]
+                original_name = Path(str(file_state.get("originalFilename") or "file").replace("\\", "/")).name
+                relative = Path("inputs") / (file_id or "file") / (original_name or "file")
+                relative_path = relative.as_posix()
+                signed = create_labor_supabase_signed_download(
+                    str(file_state.get("objectKey") or ""),
+                    filename=original_name,
+                    expires_in=600,
+                )
+                record = {
+                    "id": str(file_state.get("id") or ""),
+                    "fileKind": str(file_state.get("fileKind") or ""),
+                    "filename": original_name,
+                    "originalFilename": original_name,
+                    "path": relative_path,
+                    "objectKey": str(file_state.get("objectKey") or ""),
+                    "contentType": str(file_state.get("contentType") or "application/octet-stream"),
+                    "sizeBytes": int(file_state.get("sizeBytes") or 0),
+                    "sha256": str(file_state.get("sha256") or ""),
+                    "uploadState": "ready",
+                    "storageBackend": "supabase",
+                }
+                if record["fileKind"] == "pdf_invoice":
+                    direct_pdf_records.append(record)
+                elif record["fileKind"] == "workbook":
+                    direct_workbook_records.append(record)
+                direct_entries.append(
+                    {
+                        "fileId": record["id"],
+                        "fileKind": record["fileKind"],
+                        "path": relative_path,
+                        "size": record["sizeBytes"],
+                        "sha256": record["sha256"],
+                        "contentType": record["contentType"],
+                        "signedUrl": signed["signedUrl"],
+                        "expiresIn": signed["expiresIn"],
+                    }
+                )
+            manifest_metadata = canonicalize_labor_metadata_for_blob(run_dir, metadata)
+            manifest_files = dict(manifest_metadata.get("files") or {})
+            manifest_files["pdfInvoices"] = [] if mapping_preflight_only else direct_pdf_records
+            manifest_files["workbooks"] = direct_workbook_records
+            if direct_workbook_records:
+                manifest_files["workbook"] = direct_workbook_records[0]
+            manifest_metadata["files"] = manifest_files
+            return {
+                "metadata": manifest_metadata,
+                "files": direct_entries,
+                "downloadMode": "signed_private",
+                "hashVerification": "worker_sha256",
+            }
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    paths: list[Path] = []
+    manifest_keys = ("workbooks",) if mapping_preflight_only else ("pdfInvoices", "workbooks")
+    for key in manifest_keys:
+        records = files.get(key) if isinstance(files.get(key), list) else []
+        for record in records:
+            if not isinstance(record, dict) or not record.get("path"):
+                continue
+            path = Path(str(record["path"]))
+            if path.is_file():
+                paths.append(path)
+    entries = []
+    for path in paths:
+        try:
+            relative = path.resolve().relative_to(run_dir.resolve()).as_posix()
+        except ValueError:
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        entries.append({"path": relative, "size": path.stat().st_size, "sha256": digest.hexdigest()})
+    return {
+        "metadata": canonicalize_labor_metadata_for_blob(run_dir, metadata),
+        "files": entries,
+        "downloadMode": "api_proxy",
+    }
+
+
+@app.get("/api/labor/worker/jobs/{job_id}/input-manifest")
+def get_personal_labor_worker_input_manifest(job_id: str, authorization: str = Header(default="")) -> dict:
+    try:
+        with _leased_worker_job(job_id, authorization) as (identity, job, run_dir, _):
+            return _worker_input_manifest(
+                run_dir,
+                owner_user_id=identity["userId"],
+                job_type=str(job.get("jobType") or "reconcile"),
+            )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LaborWorkerLeaseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/labor/worker/jobs/{job_id}/input-file")
+def download_personal_labor_worker_input_file(
+    job_id: str,
+    relativePath: str,
+    authorization: str = Header(default=""),
+) -> FileResponse:
+    try:
+        with _leased_worker_job(job_id, authorization) as (_, job, leased_run_dir, _):
+            run_dir = leased_run_dir.resolve()
+            path = (run_dir / relativePath).resolve()
+            path.relative_to(run_dir)
+            allowed = {
+                entry["path"]
+                for entry in _worker_input_manifest(
+                    run_dir,
+                    job_type=str(job.get("jobType") or "reconcile"),
+                )["files"]
+            }
+            if relativePath.replace("\\", "/") not in allowed or not path.is_file():
+                raise HTTPException(status_code=404, detail="任务文件不存在或不允许下载。")
+            return FileResponse(
+                path,
+                filename=path.name,
+                media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            )
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail="任务文件路径无效。") from exc
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/labor/worker/jobs/{job_id}/mapping-preflight-result")
+def upload_personal_labor_mapping_preflight_result(
+    job_id: str,
+    payload: dict = Body(...),
+    authorization: str = Header(default=""),
+    x_worker_version: str = Header(default=""),
+) -> dict:
+    _labor_assert_worker_version(x_worker_version)
+    try:
+        with _leased_worker_job(job_id, authorization) as (identity, job, run_dir, generation):
+            _labor_assert_worker_version(x_worker_version, job)
+            if str(job.get("jobType") or "reconcile") != "mapping_preflight":
+                raise LaborWorkerLeaseError("正式核对任务不能提交字段预检结果。")
+            metadata = load_labor_metadata(run_dir)
+            fingerprint = str(payload.get("inputFingerprint") or "").strip().lower()
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+                or fingerprint != _labor_mapping_input_fingerprint(metadata)
+            ):
+                raise LaborWorkerLeaseError("字段预检对应的 Excel 输入已经变化，结果已拒绝。")
+            normalized = _normalize_mapping_preflight_result(metadata, payload)
+            completed_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            updated, applied = update_labor_metadata_for_mapping_preflight(
+                str(job.get("runId") or ""),
+                expected_task_generation_id=generation,
+                updates=lambda current: {
+                    "mappingPreflight": {
+                        **(current.get("mappingPreflight") if isinstance(current.get("mappingPreflight"), dict) else {}),
+                        "status": "completed",
+                        "statusLabel": "Excel 字段预检完成",
+                        "message": "工作表、列名和样例已由本人核对助手读取，等待用户确认字段映射。",
+                        "completedAt": completed_at,
+                        "workerDeviceId": identity["deviceId"],
+                        "workbooks": normalized["workbooks"],
+                        "sheets": normalized["sheets"],
+                        "errorCode": "",
+                        "errorMessage": "",
+                    }
+                },
+                actor_user_id=identity["userId"],
+                action="mapping_preflight_completed",
+                reason_code="mapping_preflight_worker_result",
+            )
+            if not applied:
+                raise LaborWorkerLeaseError("字段预检任务代次已失效，不能覆盖当前批次。")
+            return {
+                "ok": True,
+                "mappingPreflight": updated.get("mappingPreflight") or {},
+            }
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/labor/worker/jobs/{job_id}/result")
+async def upload_personal_labor_worker_result(
+    job_id: str,
+    result_archive: UploadFile = File(...),
+    authorization: str = Header(default=""),
+    x_worker_version: str = Header(default=""),
+) -> dict:
+    _labor_assert_worker_version(x_worker_version)
+    try:
+        with _leased_worker_job(job_id, authorization) as (identity, job, _, generation):
+            _labor_assert_worker_version(x_worker_version, job)
+            if str(job.get("jobType") or "reconcile") != "reconcile":
+                raise LaborWorkerLeaseError("字段预检任务不能提交正式核对结果包。")
+            _mark_worker_result_upload_started(str(job["runId"]), generation)
+            clear_labor_worker_result_acceptance(
+                job_id,
+                owner_user_id=identity["userId"],
+                device_id=identity["deviceId"],
+                expected_task_generation_id=generation,
+            )
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        payload = await result_archive.read(200 * 1024 * 1024 + 1)
+    except Exception as read_exc:  # noqa: BLE001 - fail closed after revoking prior acceptance.
+        rejection = LaborWorkerArchiveError(
+            "Worker 结果包读取失败，上一版正式结果已失效，请重试。",
+            code="worker_result_upload_read_failed",
+            formal_result_rejected=True,
+        )
+        _mark_worker_result_rejected(str(job["runId"]), generation, rejection)
+        raise HTTPException(status_code=503, detail=_worker_result_error_detail(rejection)) from read_exc
+    if len(payload) > 200 * 1024 * 1024:
+        rejection = LaborWorkerArchiveError(
+            "Worker 结果包超过 200 MB 限制，上一版正式结果已失效。",
+            code="worker_result_archive_too_large",
+            formal_result_rejected=True,
+        )
+        _mark_worker_result_rejected(str(job["runId"]), generation, rejection)
+        raise HTTPException(status_code=413, detail=_worker_result_error_detail(rejection))
+    try:
+        with _leased_worker_job(job_id, authorization) as (identity, job, run_dir, generation):
+            _labor_assert_worker_version(x_worker_version, job)
+            try:
+                merged = merge_worker_result_archive(
+                    run_dir,
+                    payload,
+                    expected_task_generation_id=generation,
+                )
+            except LaborWorkerArchiveError as exc:
+                _mark_worker_result_rejected(str(job["runId"]), generation, exc)
+                raise HTTPException(
+                    status_code=409 if exc.formal_result_rejected else 400,
+                    detail=_worker_result_error_detail(exc),
+                ) from exc
+            try:
+                if labor_postgres_state_enabled():
+                    _persist_worker_result_outputs(str(job["runId"]), run_dir)
+                    _publish_worker_result_to_authoritative_state(
+                        str(job["runId"]),
+                        run_dir,
+                        generation=generation,
+                    )
+                else:
+                    sync_labor_run_to_persistent(str(job["runId"]), run_dir)
+                report_sha256, report_size, input_fingerprint = _worker_result_acceptance_evidence(run_dir)
+                mark_labor_worker_result_accepted(
+                    job_id,
+                    owner_user_id=identity["userId"],
+                    device_id=identity["deviceId"],
+                    expected_task_generation_id=generation,
+                    result_report_sha256=report_sha256,
+                    result_report_size_bytes=report_size,
+                    result_input_fingerprint=input_fingerprint,
+                )
+            except Exception as acceptance_exc:  # noqa: BLE001 - compensate cross-store acceptance failure.
+                logger.exception(
+                    "[%s] Worker 结果接纳失败 type=%s code=%s",
+                    job["runId"],
+                    type(acceptance_exc).__name__,
+                    str(getattr(acceptance_exc, "code", ""))[:80],
+                )
+                rejection = LaborWorkerArchiveError(
+                    "Worker 结果写入后未能完成服务端接纳，正式结果已撤销，请重试。",
+                    code="worker_result_acceptance_failed",
+                    formal_result_rejected=True,
+                )
+                try:
+                    clear_labor_worker_result_acceptance(
+                        job_id,
+                        owner_user_id=identity["userId"],
+                        device_id=identity["deviceId"],
+                        expected_task_generation_id=generation,
+                    )
+                except Exception as clear_exc:  # noqa: BLE001 - run evidence still fails closed below.
+                    logger.error("[%s] Worker 接纳失败后清除任务凭证失败: %s", job["runId"], clear_exc)
+                _mark_worker_result_rejected(str(job["runId"]), generation, rejection)
+                if not labor_postgres_state_enabled():
+                    try:
+                        sync_labor_run_to_persistent(str(job["runId"]), run_dir)
+                    except Exception as compensation_sync_exc:  # noqa: BLE001 - local readiness remains fail-closed.
+                        logger.error(
+                            "[%s] Worker 接纳失败补偿状态持久化失败: %s",
+                            job["runId"],
+                            compensation_sync_exc,
+                        )
+                raise HTTPException(
+                    status_code=503,
+                    detail=_worker_result_error_detail(rejection),
+                ) from acceptance_exc
+            return {"ok": True, "mergedFiles": merged}
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/labor/worker/jobs/{job_id}/events")
+def record_personal_labor_worker_events(
+    job_id: str,
+    payload: dict = Body(default={}),
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        with _leased_worker_job(job_id, authorization) as (_, job, _, _):
+            events = payload.get("events") if isinstance(payload.get("events"), list) else []
+            if len(events) > 1000:
+                raise HTTPException(status_code=413, detail="单次 Worker 指标事件不能超过 1000 条。")
+            LABOR_TELEMETRY_DIR.mkdir(parents=True, exist_ok=True)
+            accepted = 0
+            with LABOR_TELEMETRY_FILE.open("a", encoding="utf-8") as handle:
+                for raw in events:
+                    if not isinstance(raw, dict):
+                        continue
+                    event = _sanitize_labor_telemetry(raw)
+                    if event["event"] not in {"ocr_cache", "model_call"}:
+                        continue
+                    event["source"] = "personal-desktop-worker"
+                    event["runId"] = str(job.get("runId") or "")
+                    handle.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+                    accepted += 1
+            return {"ok": True, "accepted": accepted}
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/labor/worker/jobs/{job_id}/complete")
+def complete_personal_labor_worker_job(
+    job_id: str,
+    authorization: str = Header(default=""),
+    x_worker_version: str = Header(default=""),
+) -> dict:
+    _labor_assert_worker_version(x_worker_version)
+    try:
+        with _leased_worker_job(job_id, authorization) as (identity, leased_job, run_dir, generation):
+            _labor_assert_worker_version(x_worker_version, leased_job)
+            if str(leased_job.get("jobType") or "reconcile") == "mapping_preflight":
+                metadata = load_labor_metadata(run_dir)
+                preflight = (
+                    metadata.get("mappingPreflight")
+                    if isinstance(metadata.get("mappingPreflight"), dict)
+                    else {}
+                )
+                if (
+                    str(preflight.get("status") or "") != "completed"
+                    or str(preflight.get("taskGenerationId") or "").strip() != generation
+                    or str(preflight.get("inputFingerprint") or "").strip().lower()
+                    != _labor_mapping_input_fingerprint(metadata)
+                ):
+                    raise LaborWorkerLeaseError("字段预检结果尚未被服务端接纳，不能完成任务。")
+                job = complete_labor_worker_preflight_job(
+                    job_id,
+                    owner_user_id=identity["userId"],
+                    device_id=identity["deviceId"],
+                    expected_task_generation_id=generation,
+                )
+                return {"job": _public_labor_worker_job(job)}
+            report_sha256, report_size, input_fingerprint = _worker_result_acceptance_evidence(run_dir)
+            if (
+                not re.fullmatch(r"[0-9a-f]{64}", report_sha256)
+                or report_size <= 0
+                or not re.fullmatch(r"[0-9a-f]{64}", input_fingerprint)
+            ):
+                rejection = LaborWorkerArchiveError(
+                    "当前 Worker 正式结果或报告文件已变化，不能完成任务。",
+                    code="worker_result_acceptance_evidence_mismatch",
+                    formal_result_rejected=True,
+                )
+                clear_labor_worker_result_acceptance(
+                    job_id,
+                    owner_user_id=identity["userId"],
+                    device_id=identity["deviceId"],
+                    expected_task_generation_id=generation,
+                )
+                _mark_worker_result_rejected(str(leased_job["runId"]), generation, rejection)
+                if not labor_postgres_state_enabled():
+                    try:
+                        sync_labor_run_to_persistent(str(leased_job["runId"]), run_dir)
+                    except Exception as sync_exc:  # noqa: BLE001 - local result remains fail-closed.
+                        logger.error("[%s] Worker 完成前证据失效状态持久化失败: %s", leased_job["runId"], sync_exc)
+                raise LaborWorkerLeaseError(str(rejection))
+            job = complete_labor_worker_job(
+                job_id,
+                owner_user_id=identity["userId"],
+                device_id=identity["deviceId"],
+                expected_task_generation_id=generation,
+                expected_result_report_sha256=report_sha256,
+                expected_result_report_size_bytes=report_size,
+                expected_result_input_fingerprint=input_fingerprint,
+            )
+            return {"job": _public_labor_worker_job(job)}
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/labor/worker/jobs/{job_id}/fail")
+def fail_personal_labor_worker_job(
+    job_id: str,
+    payload: dict = Body(default={}),
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        with _leased_worker_job(job_id, authorization) as (identity, leased_job, _, generation):
+            job = fail_labor_worker_job(
+                job_id,
+                owner_user_id=identity["userId"],
+                device_id=identity["deviceId"],
+                error_code=str(payload.get("errorCode") or "LABOR_WORKER_FAILED"),
+                error_message=str(payload.get("errorMessage") or "Worker 任务失败。"),
+                retryable=bool(payload.get("retryable")),
+                expected_task_generation_id=generation,
+            )
+            run_id = str(leased_job.get("runId") or "")
+            status = str(job.get("status") or "")
+            if str(leased_job.get("jobType") or "reconcile") == "mapping_preflight":
+                update_labor_metadata_for_mapping_preflight(
+                    run_id,
+                    expected_task_generation_id=generation,
+                    updates=lambda current: {
+                        "mappingPreflight": {
+                            **(current.get("mappingPreflight") if isinstance(current.get("mappingPreflight"), dict) else {}),
+                            "status": status,
+                            "statusLabel": "等待重试" if status == "retry_wait" else "字段预检失败",
+                            "message": str(job.get("errorMessage") or "Worker 字段预检失败。"),
+                            "errorCode": str(job.get("errorCode") or "LABOR_WORKER_FAILED"),
+                            "errorMessage": str(job.get("errorMessage") or "Worker 字段预检失败。"),
+                        }
+                    },
+                    actor_user_id=identity["userId"],
+                    action="mapping_preflight_retry_wait" if status == "retry_wait" else "mapping_preflight_failed",
+                    reason_code=str(job.get("errorCode") or "LABOR_WORKER_FAILED"),
+                )
+                return {"job": _public_labor_worker_job(job)}
+            try:
+                update_labor_metadata_for_task(
+                    run_id,
+                    expected_task_generation_id=generation,
+                    updates={
+                        "status": "抽取中" if status == "retry_wait" else "失败",
+                        "asyncTask": {
+                            "status": status,
+                            "statusLabel": "等待重试" if status == "retry_wait" else "处理失败",
+                            "message": str(job.get("errorMessage") or "Worker 任务失败。"),
+                            **({"taskGenerationId": generation} if generation else {}),
+                        },
+                        "errorCode": str(job.get("errorCode") or "LABOR_WORKER_FAILED"),
+                        "errorMessage": str(job.get("errorMessage") or "Worker 任务失败。"),
+                        "retryable": status == "retry_wait",
+                        "businessReviewStatus": "pending",
+                        "manualReviewRequired": True,
+                        "directPaymentAllowed": False,
+                        "requiresHumanReview": True,
+                    },
+                )
+            except FileNotFoundError:
+                if generation:
+                    raise
+            return {"job": _public_labor_worker_job(job)}
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/api/labor/material-index")
 def labor_material_index(root: str = "") -> dict:
+    _assert_local_labor_material_tool_available()
     material_root = root or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具"
     try:
         return build_material_index(material_root)
@@ -1423,6 +4080,7 @@ def labor_material_index(root: str = "") -> dict:
 
 @app.get("/api/labor/material-replay-plan")
 def labor_material_replay_plan(root: str = "", batchKey: str = "") -> dict:
+    _assert_local_labor_material_tool_available()
     material_root = root or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具"
     try:
         return build_material_replay_plan(material_root, batch_key=batchKey)
@@ -1434,6 +4092,7 @@ def labor_material_replay_plan(root: str = "", batchKey: str = "") -> dict:
 
 @app.post("/api/labor/material-dry-run")
 def labor_material_dry_run(payload: dict = Body(...)) -> dict:
+    _assert_local_labor_material_tool_available()
     material_root = str(payload.get("root") or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具")
     batch_key = str(payload.get("batchKey") or payload.get("batch_key") or "").strip()
     if not batch_key:
@@ -1454,7 +4113,8 @@ def labor_material_dry_run(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/labor/material-runs")
-def create_labor_run_from_material(payload: dict = Body(...)) -> dict:
+def create_labor_run_from_material(request: Request, payload: dict = Body(...)) -> dict:
+    _assert_local_labor_material_tool_available()
     material_root = str(payload.get("root") or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具")
     batch_key = str(payload.get("batchKey") or payload.get("batch_key") or "").strip()
     if not batch_key:
@@ -1471,6 +4131,10 @@ def create_labor_run_from_material(payload: dict = Body(...)) -> dict:
     supplier = str(payload.get("supplierName") or payload.get("supplier_name") or plan.get("supplier") or "").strip()
     if not supplier or supplier == "unknown":
         supplier = str(plan.get("directory") or plan.get("batchKey") or "unknown").strip()
+    if labor_auth_required():
+        owner_user_id, _ = _labor_request_actor(request)
+    else:
+        owner_user_id = str(payload.get("ownerUserId") or payload.get("owner_user_id") or "local-default")
     run = create_labor_run(
         {
             "supplierName": supplier,
@@ -1478,8 +4142,18 @@ def create_labor_run_from_material(payload: dict = Body(...)) -> dict:
             "periodEnd": str(payload.get("periodEnd") or payload.get("period_end") or "").strip(),
             "currency": str(payload.get("currency") or "USD").strip() or "USD",
             "notes": str(payload.get("notes") or f"Created from material batch {plan.get('batchKey', '')}"),
+            "ownerUserId": owner_user_id,
         }
     )
+    if not labor_postgres_state_enabled():
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="run_created",
+            run_id=run["id"],
+            owner_user_id=owner_user_id,
+            actor_user_id=owner_user_id,
+            outcome="success",
+        )
     run_dir = get_labor_run_dir(run["id"])
     try:
         files, copied_sources = _copy_material_plan_files(run["id"], run_dir, root_path, plan)
@@ -1494,6 +4168,25 @@ def create_labor_run_from_material(payload: dict = Body(...)) -> dict:
         ),
         {},
     )
+    copied_workbooks = [item for item in copied_sources if item.get("kind") == "workbook"]
+    mapping_by_relative_path = {
+        str(item.get("relativePath") or ""): item
+        for item in plan.get("mappingCandidates", []) or []
+        if item.get("sheetName") and item.get("suggestedMapping") and not item.get("error")
+    }
+    workbook_mappings = []
+    for copied in copied_workbooks:
+        candidate = mapping_by_relative_path.get(str(copied.get("relativePath") or ""))
+        if not candidate:
+            continue
+        workbook_mappings.append(
+            {
+                "relativePath": copied.get("relativePath", ""),
+                "filename": Path(str(copied.get("copiedPath") or "")).name,
+                "sheetName": candidate["sheetName"],
+                "mapping": candidate["suggestedMapping"],
+            }
+        )
     updates = {
         "status": "已确认字段" if mapping_candidate else "已上传文件",
         "files": files,
@@ -1519,6 +4212,7 @@ def create_labor_run_from_material(payload: dict = Body(...)) -> dict:
             "expectedRisks": plan.get("expectedRisks", []),
             "createdAt": datetime.utcnow().isoformat(),
         },
+        "workbookMappings": workbook_mappings,
     }
     if mapping_candidate:
         updates["workbookSheet"] = mapping_candidate["sheetName"]
@@ -1527,7 +4221,7 @@ def create_labor_run_from_material(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/labor/runs")
-def create_labor_run_endpoint(payload: dict = Body(...)) -> dict:
+def create_labor_run_endpoint(request: Request, payload: dict = Body(...)) -> dict:
     supplier = str(payload.get("supplier_name") or payload.get("supplierName") or "").strip()
     period_start = str(payload.get("period_start") or payload.get("periodStart") or "").strip()
     period_end = str(payload.get("period_end") or payload.get("periodEnd") or "").strip()
@@ -1535,14 +4229,21 @@ def create_labor_run_endpoint(payload: dict = Body(...)) -> dict:
         raise HTTPException(status_code=400, detail="请填写供应商名称。")
     if not period_start or not period_end:
         raise HTTPException(status_code=400, detail="请填写账期开始和结束日期。")
+    if labor_auth_required():
+        owner_user_id, _ = _labor_request_actor(request)
+    else:
+        owner_user_id = str(payload.get("ownerUserId") or payload.get("owner_user_id") or "local-default")
     try:
-        return create_labor_run(
+        run = create_labor_run(
             {
                 "supplierName": supplier,
                 "periodStart": period_start,
                 "periodEnd": period_end,
                 "currency": str(payload.get("currency") or "USD").strip() or "USD",
                 "notes": str(payload.get("notes") or ""),
+                "requireEmployeeDetail": True,
+                "reconciliationScope": "employee_detail_required",
+                "ownerUserId": owner_user_id,
             }
         )
     except Exception as exc:
@@ -1551,10 +4252,20 @@ def create_labor_run_endpoint(payload: dict = Body(...)) -> dict:
             status_code=503,
             detail={
                 "message": "海外劳务批次创建失败，持久化存储暂不可用。",
-                "nextAction": "请管理员检查 Supabase Storage 的 service_role key、bucket 名称和写入权限后重试。",
+                "nextAction": "请管理员检查私有存储和状态数据库配置后重试。",
                 "errorType": type(exc).__name__,
             },
         ) from exc
+    if not labor_postgres_state_enabled():
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="run_created",
+            run_id=run["id"],
+            owner_user_id=owner_user_id,
+            actor_user_id=owner_user_id,
+            outcome="success",
+        )
+    return run
 
 
 @app.get("/api/labor/runs/{run_id}")
@@ -1563,46 +4274,756 @@ def get_labor_run(run_id: str) -> dict:
         metadata = load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
         _raise_labor_run_missing(exc)
-    return _with_labor_readiness(_check_stale_extracting(_normalize_labor_total_decision(metadata)))
+    return _with_labor_readiness(
+        _with_personal_worker_status(_check_stale_extracting(_normalize_labor_total_decision(metadata)))
+    )
+
+
+@app.post("/api/labor/runs/{run_id}/business-review")
+def review_labor_run_result(request: Request, run_id: str, payload: dict = Body(...)) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision not in {"approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="业务复核结论仅支持 approved 或 rejected。")
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="请填写业务复核理由。")
+    expected_fingerprint = str(metadata.get("resultInputFingerprint") or "").strip().lower()
+    current_fingerprint = _labor_result_input_fingerprint(metadata)
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint) or expected_fingerprint != current_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="当前核对结果已失效或不属于最新输入材料，不能完成业务复核。",
+                error_code="LABOR_REVIEW_INPUT_FINGERPRINT_MISMATCH",
+                next_action="请重新生成完整核对结果后再复核。",
+            ),
+        )
+    actor_user_id, _ = _labor_request_actor(request)
+    reviewed_at = datetime.utcnow().isoformat()
+    updated = update_labor_metadata(
+        run_id,
+        {
+            "businessReviewStatus": decision,
+            "businessReviewReason": reason[:1000],
+            "businessReviewedBy": actor_user_id,
+            "businessReviewedAt": reviewed_at,
+            "manualReviewRequired": True,
+            "requiresHumanReview": decision != "approved",
+            "directPaymentAllowed": False,
+        },
+        actor_user_id=actor_user_id,
+        action=f"business_review_{decision}",
+        reason_code="manual_business_review",
+        audit_details={"decision": decision, "resultInputFingerprint": expected_fingerprint},
+    )
+    return _normalize_labor_total_decision(updated)
+
+
+@app.delete("/api/labor/runs/{run_id}")
+def delete_labor_run(request: Request, run_id: str, reason: str = "user_requested") -> dict:
+    run_dir = get_labor_run_dir(run_id)
+    try:
+        load_labor_metadata(run_dir)
+        actor_user_id, _ = _labor_request_actor(request)
+        result = delete_labor_run_directory(
+            run_dir,
+            audit_path=_labor_audit_path(),
+            reason_code=reason or "user_requested",
+            actor_user_id=actor_user_id,
+            delete_persistent=delete_labor_run_from_persistent,
+            delete_authoritative=(
+                lambda deleted_run_id, actor, reason_code: soft_delete_labor_run_state(
+                    deleted_run_id,
+                    actor_user_id=actor,
+                    reason_code=reason_code,
+                )
+            )
+            if labor_postgres_state_enabled()
+            else None,
+            record_audit=not labor_postgres_state_enabled(),
+        )
+    except FileNotFoundError as exc:
+        _raise_labor_run_missing(exc)
+    except RuntimeError as exc:
+        if str(exc) == "ACTIVE_RUN":
+            raise HTTPException(
+                status_code=409,
+                detail=_labor_request_error(
+                    message="核对任务正在运行，不能删除批次。",
+                    error_code="LABOR_ACTIVE_RUN_DELETE_BLOCKED",
+                    retryable=True,
+                    next_action="请等待任务完成或失败后再删除。",
+                ),
+            ) from exc
+        raise
+    return {"message": f"已删除海外劳务核对批次: {run_id}", **result}
+
+
+_LABOR_P1_FILE_KINDS = {"pdf_invoice", "workbook"}
+_LABOR_P1_WORKBOOK_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
+
+
+def _labor_p1_state_required() -> None:
+    if labor_postgres_state_enabled():
+        return
+    raise HTTPException(
+        status_code=503,
+        detail=_labor_request_error(
+            message="P1 直传要求启用 Postgres 权威状态库。",
+            error_code="LABOR_P1_STATE_REQUIRED",
+            retryable=True,
+            next_action="请由管理员完成 P1 状态库配置后重试。",
+        ),
+    )
+
+
+def _labor_p1_file_spec(raw: object, *, policy: LaborHardeningPolicy) -> dict:
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="上传文件信息格式错误。")
+    file_kind = str(raw.get("fileKind") or "").strip().lower()
+    if file_kind not in _LABOR_P1_FILE_KINDS:
+        raise HTTPException(status_code=400, detail="文件类型仅支持 pdf_invoice 或 workbook。")
+    original_filename = Path(str(raw.get("filename") or "").replace("\\", "/")).name.strip()
+    if not original_filename:
+        raise HTTPException(status_code=400, detail="上传文件缺少文件名。")
+    extension = Path(original_filename).suffix.lower()
+    if file_kind == "pdf_invoice" and extension != ".pdf":
+        raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
+    if file_kind == "workbook" and extension not in _LABOR_P1_WORKBOOK_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。")
+    try:
+        size_bytes = int(raw.get("sizeBytes") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="上传文件大小格式错误。") from exc
+    size_limit = policy.max_pdf_bytes if file_kind == "pdf_invoice" else policy.max_workbook_bytes
+    if size_bytes <= 0:
+        raise HTTPException(status_code=400, detail="上传文件大小必须大于 0。")
+    if size_bytes > size_limit:
+        code = "LABOR_PDF_SIZE_LIMIT_EXCEEDED" if file_kind == "pdf_invoice" else "LABOR_WORKBOOK_SIZE_LIMIT_EXCEEDED"
+        raise _labor_upload_limit_http_error(
+            LaborResourceLimitError(code, f"文件 {original_filename} 超过大小限制。", limit=size_limit)
+        )
+    digest = str(raw.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise HTTPException(status_code=400, detail="上传文件缺少有效的 SHA-256。")
+    default_content_type = (
+        "application/pdf"
+        if file_kind == "pdf_invoice"
+        else mimetypes.guess_type(original_filename)[0] or "application/octet-stream"
+    )
+    content_type = str(raw.get("contentType") or default_content_type).split(";", 1)[0].strip().lower()
+    if file_kind == "pdf_invoice" and content_type not in {"application/pdf", "application/octet-stream"}:
+        raise HTTPException(status_code=400, detail="PDF 文件的 Content-Type 不合法。")
+    return {
+        "fileKind": file_kind,
+        "filename": original_filename[:255],
+        "contentType": content_type or default_content_type,
+        "sizeBytes": size_bytes,
+        "sha256": digest,
+    }
+
+
+def _labor_p1_state_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (LaborStateNotFound, LaborStateOwnerMismatch)):
+        return HTTPException(
+            status_code=404,
+            detail=_labor_request_error(
+                message="劳务核对批次或文件记录未找到。",
+                error_code="LABOR_FILE_NOT_FOUND",
+                next_action="请刷新批次后重试。",
+            ),
+        )
+    if isinstance(exc, LaborStateConflict):
+        return HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message=str(exc),
+                error_code="LABOR_FILE_STATE_CONFLICT",
+                retryable=True,
+                next_action="请刷新文件状态后重试。",
+            ),
+        )
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(
+        status_code=503,
+        detail=_labor_request_error(
+            message="P1 文件状态服务暂不可用。",
+            error_code="LABOR_P1_STATE_UNAVAILABLE",
+            retryable=True,
+            next_action="请稍后重试；持续失败请联系管理员查看服务日志。",
+        ),
+    )
+
+
+def _labor_p1_storage_http_error() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=_labor_request_error(
+            message="P1 私有文件存储暂不可用。",
+            error_code="LABOR_P1_STORAGE_UNAVAILABLE",
+            retryable=True,
+            next_action="请稍后重试；持续失败请联系管理员检查私有存储 readiness。",
+        ),
+    )
+
+
+@app.post("/api/labor/runs/{run_id}/upload-intents")
+def create_labor_upload_intents(
+    request: Request,
+    run_id: str,
+    payload: dict = Body(...),
+) -> dict:
+    _labor_p1_state_required()
+    try:
+        metadata = load_labor_metadata(get_labor_run_dir(run_id))
+    except FileNotFoundError as exc:
+        _raise_labor_run_missing(exc)
+    owner_user_id = str(metadata.get("ownerUserId") or "").strip()
+    actor_user_id, _ = _labor_request_actor(request)
+    raw_files = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(raw_files, list) or not raw_files:
+        raise HTTPException(status_code=400, detail="请至少提交一个上传文件。")
+    policy = _labor_hardening_policy()
+    specs = [_labor_p1_file_spec(item, policy=policy) for item in raw_files]
+    pdf_count = sum(item["fileKind"] == "pdf_invoice" for item in specs)
+    workbook_count = sum(item["fileKind"] == "workbook" for item in specs)
+    if pdf_count > policy.max_pdf_files:
+        raise _labor_upload_limit_http_error(
+            LaborResourceLimitError(
+                "LABOR_PDF_FILE_COUNT_LIMIT_EXCEEDED",
+                f"每个批次最多上传 {policy.max_pdf_files} 个 PDF 文件。",
+                limit=policy.max_pdf_files,
+            )
+        )
+    if workbook_count > policy.max_workbook_files:
+        raise _labor_upload_limit_http_error(
+            LaborResourceLimitError(
+                "LABOR_WORKBOOK_FILE_COUNT_LIMIT_EXCEEDED",
+                f"每个批次最多上传 {policy.max_workbook_files} 个 Excel 文件。",
+                limit=policy.max_workbook_files,
+            )
+        )
+    prepared = []
+    for spec in specs:
+        file_id = f"labor_file_{uuid4().hex}"
+        object_key = labor_p1_object_key(
+            owner_user_id=owner_user_id,
+            run_id=run_id,
+            file_id=file_id,
+            filename=spec["filename"],
+        )
+        try:
+            signed = create_labor_supabase_signed_upload_for_object(
+                object_key,
+                file_kind=spec["fileKind"],
+                content_type=spec["contentType"],
+            )
+        except Exception as exc:  # noqa: BLE001 - never expose signed-storage internals.
+            raise _labor_p1_storage_http_error() from exc
+        prepared.append(
+            {
+                "state": {
+                    "file_id": file_id,
+                    "file_kind": spec["fileKind"],
+                    "object_key": object_key,
+                    "original_filename": spec["filename"],
+                    "content_type": spec["contentType"],
+                    "size_bytes": spec["sizeBytes"],
+                    "sha256": spec["sha256"],
+                },
+                "intent": {"fileId": file_id, **signed},
+            }
+        )
+    try:
+        create_pending_labor_file_states(
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            files=[item["state"] for item in prepared],
+            max_files_by_kind={
+                "pdf_invoice": policy.max_pdf_files,
+                "workbook": policy.max_workbook_files,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - mapped to stable public state errors below.
+        diagnostic = getattr(exc, "diag", None)
+        logger.error(
+            "Labor P1 upload intent state write failed: "
+            "run_id=%s file_count=%d pdf_count=%d workbook_count=%d "
+            "error_type=%s sqlstate=%s table=%s constraint=%s",
+            run_id,
+            len(prepared),
+            pdf_count,
+            workbook_count,
+            type(exc).__name__,
+            str(getattr(exc, "sqlstate", "") or "")[:16],
+            str(getattr(diagnostic, "table_name", "") or "")[:128],
+            str(getattr(diagnostic, "constraint_name", "") or "")[:128],
+        )
+        raise _labor_p1_state_http_error(exc) from exc
+    intents = [item["intent"] for item in prepared]
+    return {"runId": run_id, "intents": intents}
+
+
+@app.post("/api/labor/runs/{run_id}/upload-intents/{file_id}/finalize")
+def finalize_labor_upload_intent(
+    request: Request,
+    run_id: str,
+    file_id: str,
+    payload: dict = Body(default={}),
+) -> dict:
+    _labor_p1_state_required()
+    metadata = _labor_metadata_or_404(run_id)
+    owner_user_id = str(metadata.get("ownerUserId") or "").strip()
+    actor_user_id, _ = _labor_request_actor(request)
+    try:
+        file_state = get_labor_file_state(
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            file_id=file_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_state_http_error(exc) from exc
+    try:
+        observed = labor_supabase_object_metadata(str(file_state.get("objectKey") or ""))
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_storage_http_error() from exc
+    expected_type = str(file_state.get("contentType") or "").split(";", 1)[0].strip().lower()
+    observed_type = str(observed.get("contentType") or "").split(";", 1)[0].strip().lower()
+    if expected_type and observed_type and expected_type != "application/octet-stream" and expected_type != observed_type:
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="对象存储中的文件类型与上传意图不一致。",
+                error_code="LABOR_FILE_CONTENT_TYPE_MISMATCH",
+                next_action="请删除当前文件并重新上传。",
+                requires_reupload=True,
+            ),
+        )
+    try:
+        finalized = finalize_labor_file_state(
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            file_id=file_id,
+            observed_size_bytes=int(observed.get("sizeBytes") or 0),
+            reported_sha256=str(file_state.get("sha256") or ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_state_http_error(exc) from exc
+    return {
+        "runId": run_id,
+        "file": finalized,
+        "hashVerification": "worker_required",
+        "clientObjectKeyIgnored": bool(payload.get("objectKey")) if isinstance(payload, dict) else False,
+    }
+
+
+@app.get("/api/labor/runs/{run_id}/files/{file_id}/signed-download")
+def get_labor_file_signed_download(run_id: str, file_id: str) -> dict:
+    _labor_p1_state_required()
+    metadata = _labor_metadata_or_404(run_id)
+    owner_user_id = str(metadata.get("ownerUserId") or "").strip()
+    try:
+        file_state = get_labor_file_state(
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            file_id=file_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_state_http_error(exc) from exc
+    if str(file_state.get("uploadState") or "") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="文件尚未完成上传确认。",
+                error_code="LABOR_FILE_NOT_READY",
+                retryable=True,
+                next_action="请等待上传完成后重试。",
+            ),
+        )
+    try:
+        return create_labor_supabase_signed_download(
+            str(file_state.get("objectKey") or ""),
+            filename=str(file_state.get("originalFilename") or ""),
+            expires_in=120,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_storage_http_error() from exc
 
 
 @app.post("/api/labor/runs/{run_id}/files")
 async def upload_labor_files(
+    request: Request,
     run_id: str,
-    pdf_files: list[UploadFile] = File(...),
-    workbook_files: list[UploadFile] = File(...),
+    pdf_files: Optional[list[UploadFile]] = File(default=None),
+    workbook_files: Optional[list[UploadFile]] = File(default=None),
 ) -> dict:
+    if _labor_p1_required():
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_p1_signed_upload_required_detail(),
+        )
     try:
         run_dir = get_labor_run_dir(run_id)
         metadata = load_labor_metadata(run_dir)
     except FileNotFoundError as exc:
         _raise_labor_run_missing(exc)
-    if not pdf_files:
+    pdf_files = list(pdf_files or [])
+    workbook_files = list(workbook_files or [])
+    files = dict(metadata.get("files", {}))
+    existing_pdf_records = list(files.get("pdfInvoices") or [])
+    existing_workbook_records = list(files.get("workbooks") or [])
+    if not pdf_files and not workbook_files:
+        raise HTTPException(status_code=400, detail="请至少选择一个待上传文件。")
+    if not pdf_files and not existing_pdf_records:
         raise HTTPException(status_code=400, detail="请至少上传一张 PDF 发票。")
-    if not workbook_files:
+    if not workbook_files and not existing_workbook_records:
         raise HTTPException(status_code=400, detail="请上传线下账单 Excel 文件。")
+    policy = _labor_hardening_policy()
+    owner_user_id = str(metadata.get("ownerUserId") or "local-default")
+    if len(existing_pdf_records) + len(pdf_files) > policy.max_pdf_files:
+        _record_labor_resource_rejection(
+            run_id,
+            owner_user_id,
+            "LABOR_PDF_FILE_COUNT_LIMIT_EXCEEDED",
+            limit=policy.max_pdf_files,
+        )
+        raise _labor_upload_limit_http_error(
+            LaborResourceLimitError(
+                "LABOR_PDF_FILE_COUNT_LIMIT_EXCEEDED",
+                f"每个批次最多上传 {policy.max_pdf_files} 个 PDF 文件。",
+                limit=policy.max_pdf_files,
+            )
+        )
+    if len(existing_workbook_records) + len(workbook_files) > policy.max_workbook_files:
+        _record_labor_resource_rejection(
+            run_id,
+            owner_user_id,
+            "LABOR_WORKBOOK_FILE_COUNT_LIMIT_EXCEEDED",
+            limit=policy.max_workbook_files,
+        )
+        raise _labor_upload_limit_http_error(
+            LaborResourceLimitError(
+                "LABOR_WORKBOOK_FILE_COUNT_LIMIT_EXCEEDED",
+                f"每个批次最多上传 {policy.max_workbook_files} 个 Excel 文件。",
+                limit=policy.max_workbook_files,
+            )
+        )
     _EXCEL_EXTS = (".xlsx", ".xlsm", ".xls")
-    pdf_records = []
+    existing_names = {
+        str(record.get("originalFilename") or "").strip().casefold()
+        for record in existing_pdf_records + existing_workbook_records
+        if isinstance(record, dict)
+    }
+    incoming_names: set[str] = set()
+    for upload in [*pdf_files, *workbook_files]:
+        normalized_name = str(upload.filename or "").strip().casefold()
+        if normalized_name in existing_names or normalized_name in incoming_names:
+            raise HTTPException(status_code=409, detail=f"同名文件已在当前批次中：{upload.filename}。请勿重复上传或先新建批次。")
+        incoming_names.add(normalized_name)
     for upload in pdf_files:
         if not upload.filename.lower().endswith(".pdf"):
             raise HTTPException(status_code=400, detail="供应商发票请上传 PDF 文件。")
-        path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
-        record = attach_labor_file(run_id, path, "PDF发票")
-        record["originalFilename"] = upload.filename
-        pdf_records.append(record)
-    workbook_records = []
     for upload in workbook_files:
         if not upload.filename.lower().endswith(_EXCEL_EXTS):
             raise HTTPException(status_code=400, detail=f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{upload.filename}")
-        path = await _save_upload_to(upload, run_dir / safe_labor_filename(upload.filename))
-        workbook_records.append(attach_labor_file(run_id, path, "线下账单"))
-    files = dict(metadata.get("files", {}))
-    files["pdfInvoices"] = pdf_records
-    files["workbooks"] = workbook_records
+    pdf_records = []
+    workbook_records = []
+    saved_paths: list[Path] = []
+    total_pdf_pages = sum(
+        _labor_pdf_page_count(Path(str(record.get("path") or "")))
+        for record in existing_pdf_records
+        if isinstance(record, dict) and str(record.get("path") or "") and Path(str(record.get("path") or "")).exists()
+    )
+    uploaded_bytes = 0
+    try:
+        for upload in pdf_files:
+            path = await _save_upload_to(
+                upload,
+                run_dir / safe_labor_filename(upload.filename),
+                max_bytes=policy.max_pdf_bytes,
+                limit_code="LABOR_PDF_SIZE_LIMIT_EXCEEDED",
+            )
+            saved_paths.append(path)
+            uploaded_bytes += path.stat().st_size
+            total_pdf_pages += _labor_pdf_page_count(path)
+            if total_pdf_pages > policy.max_pdf_pages:
+                raise LaborResourceLimitError(
+                    "LABOR_PDF_PAGE_LIMIT_EXCEEDED",
+                    f"每个批次 PDF 合计最多 {policy.max_pdf_pages} 页。",
+                    limit=policy.max_pdf_pages,
+                    details={"pdfPageCount": total_pdf_pages},
+                )
+            record = attach_labor_file(run_id, path, "PDF发票")
+            record["originalFilename"] = upload.filename
+            pdf_records.append(record)
+        for upload in workbook_files:
+            path = await _save_upload_to(
+                upload,
+                run_dir / safe_labor_filename(upload.filename),
+                max_bytes=policy.max_workbook_bytes,
+                limit_code="LABOR_WORKBOOK_SIZE_LIMIT_EXCEEDED",
+            )
+            saved_paths.append(path)
+            uploaded_bytes += path.stat().st_size
+            record = attach_labor_file(run_id, path, "线下账单")
+            record["originalFilename"] = upload.filename
+            workbook_records.append(record)
+    except LaborResourceLimitError as exc:
+        for path in saved_paths:
+            path.unlink(missing_ok=True)
+        _record_labor_resource_rejection(run_id, owner_user_id, exc.code, limit=exc.limit)
+        raise _labor_upload_limit_http_error(exc) from exc
+    files["pdfInvoices"] = existing_pdf_records + pdf_records
+    files["workbooks"] = existing_workbook_records + workbook_records
     # 兼容旧字段：第一个文件也写入 workbook
-    if workbook_records:
-        files["workbook"] = workbook_records[0]
-    return update_labor_metadata(run_id, {"status": "已上传文件", "files": files})
+    if files["workbooks"]:
+        files["workbook"] = files["workbooks"][0]
+    actor_user_id, _ = _labor_request_actor(request)
+    audit_details = {
+        "pdfFileCount": len(pdf_records),
+        "workbookFileCount": len(workbook_records),
+        "pdfFileCountTotal": len(files["pdfInvoices"]),
+        "workbookFileCountTotal": len(files["workbooks"]),
+        "pdfPageCount": total_pdf_pages,
+        "uploadedBytes": uploaded_bytes,
+    }
+    updated = update_labor_metadata(
+        run_id,
+        _labor_invalidate_official_result(
+            metadata,
+            status="已上传文件",
+            reason_code="input_files_changed",
+            message="PDF 或 Excel 已更新，旧核对结果已失效，必须重新确认映射并执行整批核对。",
+            files=files,
+        ),
+        actor_user_id=actor_user_id,
+        action="files_uploaded",
+        audit_details=audit_details,
+    )
+    if not labor_postgres_state_enabled():
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="files_uploaded",
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            outcome="success",
+            details=audit_details,
+        )
+    return updated
+
+
+def _labor_ready_private_records(metadata: dict, key: str) -> list[dict]:
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    records = files.get(key) if isinstance(files.get(key), list) else []
+    ready = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            size_bytes = int(record.get("sizeBytes") or 0)
+        except (TypeError, ValueError):
+            continue
+        if (
+            str(record.get("uploadState") or "").strip().lower() == "ready"
+            and str(record.get("objectKey") or "").strip()
+            and re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256") or "").strip().lower())
+            and size_bytes > 0
+        ):
+            ready.append(dict(record))
+    return ready
+
+
+def _mapping_preflight_snapshot(metadata: dict) -> dict:
+    preflight = metadata.get("mappingPreflight") if isinstance(metadata.get("mappingPreflight"), dict) else {}
+    if (
+        str(preflight.get("status") or "") != "completed"
+        or str(preflight.get("inputFingerprint") or "").strip().lower()
+        != _labor_mapping_input_fingerprint(metadata)
+    ):
+        status = str(preflight.get("status") or "not_started")
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="本人核对助手尚未完成 Excel 字段预检。",
+                error_code="LABOR_MAPPING_PREFLIGHT_PENDING",
+                retryable=True,
+                next_action=(
+                    "请保持本人核对助手在线，等待其读取工作表和列名后再试。"
+                    if status in {"queued", "running"}
+                    else "请点击“读取工作表”，启动本人核对助手字段预检。"
+                ),
+            ),
+        )
+    return preflight
+
+
+def _bounded_mapping_preview_value(value):
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:500]
+
+
+def _normalize_mapping_preflight_result(metadata: dict, payload: dict) -> dict:
+    expected = _labor_ready_private_records(metadata, "workbooks")
+    expected_by_id = {str(item.get("id") or "").strip(): item for item in expected}
+    if not expected_by_id or "" in expected_by_id:
+        raise LaborWorkerLeaseError("当前批次缺少可验证的私有 Excel 文件清单。")
+    raw_workbooks = payload.get("workbooks") if isinstance(payload.get("workbooks"), list) else []
+    if len(raw_workbooks) != len(expected_by_id) or len(raw_workbooks) > 20:
+        raise LaborWorkerLeaseError("字段预检结果未覆盖当前批次全部 Excel 文件。")
+    normalized_workbooks = []
+    seen_ids: set[str] = set()
+    union_sheets: list[str] = []
+    for raw_workbook in raw_workbooks:
+        if not isinstance(raw_workbook, dict):
+            raise LaborWorkerLeaseError("字段预检 Excel 结果格式无效。")
+        file_id = str(raw_workbook.get("fileId") or "").strip()
+        if file_id not in expected_by_id or file_id in seen_ids:
+            raise LaborWorkerLeaseError("字段预检结果包含未知或重复的 Excel 文件。")
+        seen_ids.add(file_id)
+        raw_sheets = raw_workbook.get("sheets") if isinstance(raw_workbook.get("sheets"), list) else []
+        if not raw_sheets or len(raw_sheets) > 100:
+            raise LaborWorkerLeaseError("字段预检工作表数量无效。")
+        normalized_sheets = []
+        seen_sheet_names: set[str] = set()
+        for raw_sheet in raw_sheets:
+            if not isinstance(raw_sheet, dict):
+                raise LaborWorkerLeaseError("字段预检工作表结果格式无效。")
+            name = str(raw_sheet.get("name") or "").strip()[:200]
+            suggestion = raw_sheet.get("suggestion") if isinstance(raw_sheet.get("suggestion"), dict) else {}
+            if not name or name in seen_sheet_names:
+                raise LaborWorkerLeaseError("字段预检包含空白或重复工作表名称。")
+            seen_sheet_names.add(name)
+            raw_headers = suggestion.get("headers")
+            if not isinstance(raw_headers, list):
+                raise LaborWorkerLeaseError("字段预检列名列表格式无效。")
+            headers = [str(value)[:200] for value in raw_headers[:200]]
+            suggested = suggestion.get("suggestedMapping") if isinstance(suggestion.get("suggestedMapping"), dict) else {}
+            suggested_mapping = {
+                key: str(suggested.get(key) or "")[:200]
+                for key in ("employeeId", "name", "hours", "amount", "currency")
+            }
+            raw_amount_candidates = suggestion.get("amountColumnCandidates")
+            if not isinstance(raw_amount_candidates, list):
+                raise LaborWorkerLeaseError("字段预检金额候选列表格式无效。")
+            amount_candidates = [
+                str(value)[:200]
+                for value in raw_amount_candidates[:100]
+            ]
+            raw_preview_rows = suggestion.get("previewRows")
+            if not isinstance(raw_preview_rows, list):
+                raise LaborWorkerLeaseError("字段预检样例行列表格式无效。")
+            preview_rows = []
+            for raw_row in raw_preview_rows[:20]:
+                if not isinstance(raw_row, dict):
+                    raise LaborWorkerLeaseError("字段预检样例行格式无效。")
+                preview_rows.append(
+                    {
+                        str(key)[:200]: _bounded_mapping_preview_value(value)
+                        for key, value in list(raw_row.items())[:200]
+                    }
+                )
+            normalized_sheets.append(
+                {
+                    "name": name,
+                    "suggestion": {
+                        "sheetName": name,
+                        "headers": headers,
+                        "suggestedMapping": suggested_mapping,
+                        "amountColumnCandidates": amount_candidates,
+                        "previewRows": preview_rows,
+                    },
+                }
+            )
+            if name not in union_sheets:
+                union_sheets.append(name)
+        expected_record = expected_by_id[file_id]
+        normalized_workbooks.append(
+            {
+                "fileId": file_id,
+                "filename": Path(
+                    str(expected_record.get("originalFilename") or expected_record.get("filename") or "workbook")
+                ).name,
+                "sheets": normalized_sheets,
+            }
+        )
+    return {"workbooks": normalized_workbooks, "sheets": union_sheets}
+
+
+@app.post("/api/labor/runs/{run_id}/mapping-preflight")
+def start_labor_mapping_preflight(request: Request, run_id: str) -> dict:
+    if not _uses_personal_labor_worker():
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="当前环境未启用本人核对助手字段预检。",
+                error_code="LABOR_MAPPING_PREFLIGHT_WORKER_REQUIRED",
+                next_action="本地持久化环境请直接读取 Excel；P1 环境请先启用本人核对助手。",
+            ),
+        )
+    metadata = _labor_metadata_or_404(run_id)
+    if not _labor_ready_private_records(metadata, "workbooks"):
+        raise HTTPException(status_code=400, detail="请先完成线下账单 Excel 的私有上传。")
+    owner_user_id = str(metadata.get("ownerUserId") or "local-default")
+    actor_user_id, _ = _labor_request_actor(request)
+    fingerprint = _labor_mapping_input_fingerprint(metadata)
+    generation = uuid4().hex
+    queued, started = begin_labor_mapping_preflight(
+        run_id,
+        task_generation_id=generation,
+        input_fingerprint=fingerprint,
+        actor_user_id=actor_user_id,
+    )
+    preflight = queued.get("mappingPreflight") if isinstance(queued.get("mappingPreflight"), dict) else {}
+    current_generation = str(preflight.get("taskGenerationId") or generation).strip()
+    job = next(
+        (
+            item
+            for item in list_labor_worker_jobs()
+            if str(item.get("runId") or "") == run_id
+            and str(item.get("jobType") or "reconcile") == "mapping_preflight"
+            and str(item.get("taskGenerationId") or "") == current_generation
+            and str(item.get("status") or "") in {"queued", "running", "retry_wait"}
+        ),
+        None,
+    )
+    if started:
+        try:
+            job = enqueue_labor_worker_job(
+                run_id,
+                owner_user_id=owner_user_id,
+                required_worker_version=_labor_required_worker_version(),
+                task_generation_id=current_generation,
+                job_type="mapping_preflight",
+            )
+        except Exception as exc:
+            update_labor_metadata_for_mapping_preflight(
+                run_id,
+                expected_task_generation_id=current_generation,
+                updates=lambda current: {
+                    "mappingPreflight": {
+                        **(current.get("mappingPreflight") if isinstance(current.get("mappingPreflight"), dict) else {}),
+                        "status": "failed",
+                        "statusLabel": "字段预检提交失败",
+                        "errorCode": "LABOR_MAPPING_PREFLIGHT_HANDOFF_FAILED",
+                        "errorMessage": str(exc)[:300],
+                    }
+                },
+                actor_user_id=actor_user_id,
+                action="mapping_preflight_handoff_failed",
+                reason_code="mapping_preflight_handoff_failed",
+            )
+            raise
+    return {
+        "mappingPreflight": preflight,
+        "workerTask": _public_labor_worker_job(job),
+        "started": started,
+    }
 
 
 @app.post("/api/labor/runs/{run_id}/direct-upload-plan")
@@ -1718,6 +5139,13 @@ def complete_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict
 @app.get("/api/labor/runs/{run_id}/workbook-sheets")
 def labor_workbook_sheets(run_id: str) -> dict:
     metadata = _labor_metadata_or_404(run_id)
+    if _labor_ready_private_records(metadata, "workbooks"):
+        preflight = _mapping_preflight_snapshot(metadata)
+        return {
+            "sheets": list(preflight.get("sheets") or []),
+            "fileCount": len(preflight.get("workbooks") or []),
+            "source": "personal_worker_preflight",
+        }
     paths = _labor_workbook_paths(metadata)
     try:
         if len(paths) == 1:
@@ -1738,10 +5166,20 @@ def labor_workbook_sheets(run_id: str) -> dict:
 @app.post("/api/labor/runs/{run_id}/field-suggestions")
 def labor_field_suggestions(run_id: str, payload: dict = Body(...)) -> dict:
     metadata = _labor_metadata_or_404(run_id)
-    paths = _labor_workbook_paths(metadata)
     sheet_name = str(payload.get("sheet_name") or payload.get("sheetName") or "").strip()
     if not sheet_name:
         raise HTTPException(status_code=400, detail="请选择 Excel 工作表。")
+    if _labor_ready_private_records(metadata, "workbooks"):
+        preflight = _mapping_preflight_snapshot(metadata)
+        for workbook in preflight.get("workbooks") or []:
+            if not isinstance(workbook, dict):
+                continue
+            for sheet in workbook.get("sheets") or []:
+                if isinstance(sheet, dict) and str(sheet.get("name") or "") == sheet_name:
+                    suggestion = sheet.get("suggestion") if isinstance(sheet.get("suggestion"), dict) else {}
+                    return dict(suggestion)
+        raise HTTPException(status_code=400, detail="字段预检结果中找不到所选工作表，请重新读取。")
+    paths = _labor_workbook_paths(metadata)
     try:
         # 从第一个文件读取字段映射建议（所有文件结构应一致）
         return suggest_mapping(paths[0], sheet_name)
@@ -1750,7 +5188,12 @@ def labor_field_suggestions(run_id: str, payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/labor/runs/{run_id}/mapping")
-def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
+def save_labor_mapping(
+    run_id: str,
+    payload: dict = Body(...),
+    request: Request = None,
+) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
     sheet_name = str(payload.get("sheet_name") or payload.get("sheetName") or "").strip()
     mapping = payload.get("mapping") or {}
     manual_name_mapping = payload.get("manualNameMapping") or payload.get("manual_name_mapping") or payload.get("manualMapping") or {}
@@ -1759,20 +5202,47 @@ def save_labor_mapping(run_id: str, payload: dict = Body(...)) -> dict:
     for field in ("name", "hours", "amount"):
         if not mapping.get(field):
             raise HTTPException(status_code=400, detail="字段映射缺少姓名、工时或金额。")
+    amount_columns = mapping.get("amountColumns") or mapping.get("amount_columns") or []
+    if amount_columns and not isinstance(amount_columns, list):
+        raise HTTPException(status_code=400, detail="叠加金额列格式无效。")
+    if isinstance(amount_columns, list):
+        mapping["amountColumns"] = list(
+            dict.fromkeys(
+                str(value).strip()
+                for value in [mapping.get("amount"), *amount_columns]
+                if str(value or "").strip()
+            )
+        )
+    amount_scope = str(mapping.get("amountScope") or mapping.get("amount_scope") or "auto").strip().lower()
+    mapping["amountScope"] = amount_scope if amount_scope in {"auto", "net", "gross"} else "auto"
+    actor_user_id, _ = _labor_request_actor(request) if request is not None else (
+        str(metadata.get("ownerUserId") or "local-default"),
+        False,
+    )
     return update_labor_metadata(
         run_id,
         {
-            "status": "已确认字段",
+            **_labor_invalidate_official_result(
+                metadata,
+                status="已确认字段",
+                reason_code="workbook_mapping_changed",
+                message="Excel 工作表或字段映射已更新，旧核对结果已失效，必须重新执行整批核对。",
+            ),
             "workbookSheet": sheet_name,
             "excelMapping": mapping,
             "manualNameMapping": manual_name_mapping,
         },
+        actor_user_id=actor_user_id,
+        action="workbook_mapping_changed",
+        reason_code="workbook_mapping_changed",
     )
 
 
 @app.post("/api/labor/runs/{run_id}/extract-and-compare")
-async def extract_and_compare_labor_run(run_id: str) -> dict:
-    if _uses_vercel_labor_light_uat():
+async def extract_and_compare_labor_run(run_id: str, request: Request = None) -> dict:
+    request_scoped_runtime = _uses_request_scoped_labor_runtime()
+    personal_worker_enabled = _uses_personal_labor_worker()
+    if request_scoped_runtime and not personal_worker_enabled:
         raise HTTPException(
             status_code=409,
             detail=_labor_request_error(
@@ -1786,13 +5256,28 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
     if metadata.get("status") == "抽取中" and async_task.get("status") in {"queued", "running"}:
         return _with_labor_readiness(_normalize_labor_total_decision(metadata))
     files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
-    pdf_paths = [Path(record["path"]) for record in files.get("pdfInvoices", []) if record.get("path")]
-    workbook_paths = [Path(record["path"]) for record in files.get("workbooks", []) if record.get("path")]
-    if not pdf_paths or not workbook_paths:
+    pdf_records = [record for record in files.get("pdfInvoices", []) if isinstance(record, dict)]
+    workbook_records = [record for record in files.get("workbooks", []) if isinstance(record, dict)]
+
+    def available(record: dict) -> bool:
+        local_path = Path(str(record.get("path") or ""))
+        if local_path.is_file():
+            return True
+        return bool(
+            personal_worker_enabled
+            and str(record.get("uploadState") or "").strip().lower() == "ready"
+            and str(record.get("objectKey") or "").strip()
+            and re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256") or "").strip().lower())
+            and int(record.get("sizeBytes") or 0) > 0
+        )
+
+    available_pdfs = [record for record in pdf_records if available(record)]
+    available_workbooks = [record for record in workbook_records if available(record)]
+    if not available_pdfs or not available_workbooks:
         missing_parts = []
-        if not pdf_paths:
+        if not available_pdfs:
             missing_parts.append("PDF 发票")
-        if not workbook_paths:
+        if not available_workbooks:
             missing_parts.append("Excel 账单")
         missing_text = "、".join(missing_parts)
         raise HTTPException(
@@ -1815,66 +5300,155 @@ async def extract_and_compare_labor_run(run_id: str) -> dict:
                 next_action="请在「字段映射」步骤选择工作表，并确认姓名、工时、金额字段。",
             ),
         )
-    if labor_worker_jobs_enabled():
+    owner_user_id = str(metadata.get("ownerUserId") or "local-default")
+    actor_user_id = (
+        _labor_request_actor(request)[0]
+        if request is not None and labor_auth_required()
+        else owner_user_id
+    )
+    reservation_token = ""
+    if not personal_worker_enabled:
         try:
-            job = enqueue_labor_reconciliation_job(run_id, metadata)
-        except RuntimeError as exc:
+            reservation_token = _LABOR_TASK_LIMITER.reserve(
+                run_id,
+                owner_user_id,
+                policy=_labor_hardening_policy(),
+                active_runs=[_check_stale_extracting(item) for item in list_labor_metadata()],
+            )
+        except LaborResourceLimitError as exc:
+            _record_labor_resource_rejection(run_id, owner_user_id, exc.code, limit=exc.limit)
             raise HTTPException(
-                status_code=503,
+                status_code=409 if exc.code == "LABOR_RUN_ALREADY_ACTIVE" else 429,
                 detail=_labor_request_error(
-                    message="后台 Worker 队列未配置，无法提交海外劳务核对任务。",
-                    error_code="LABOR_WORKER_QUEUE_UNAVAILABLE",
-                    next_action="请在 Vercel/Worker 环境配置 ADMIN_DATABASE_URL 或 SIGMA_LABOR_JOB_DATABASE_URL，并确认 Supabase 迁移已执行。",
+                    message=str(exc),
+                    error_code=exc.code,
                     retryable=True,
+                    next_action="请等待正在运行的核对任务完成后再重试。",
                 ),
             ) from exc
-        queued = update_labor_metadata(
+    queued_at = datetime.now().isoformat(timespec="seconds")
+    task_generation_id = uuid4().hex
+    try:
+        queued, started = begin_labor_metadata_task(
             run_id,
-            {
+            task_generation_id=task_generation_id,
+            actor_user_id=actor_user_id,
+            updates=lambda current: {
+                **_labor_invalidate_official_result(
+                    current,
+                    status="抽取中",
+                    reason_code="new_extraction_started",
+                    message="已开始重新核对；上一版机器结果和报告已失效，必须等待本次整批核对完成。",
+                ),
+                "inputSnapshotRejected": False,
                 "status": "抽取中",
-                "stage": "等待后台 Worker 处理",
+                "stage": "等待后台处理",
+                "progress": {
+                    "status": "queued",
+                    "phase": "queued",
+                    "phaseLabel": "等待后台处理",
+                    "message": "核对任务已提交，等待后台开始处理。",
+                    "startedAt": queued_at,
+                    "lastUpdatedAt": queued_at,
+                },
                 "asyncTask": {
                     "status": "queued",
                     "statusLabel": "待处理",
-                    "message": "核对任务已提交到后台 Worker，等待处理。",
-                    "jobId": job["id"],
-                    "queuedAt": datetime.utcnow().isoformat(),
+                    "message": "核对任务已提交，等待后台处理。",
+                    "queuedAt": queued_at,
+                    "taskGenerationId": task_generation_id,
                 },
                 "errorMessage": "",
                 "errorCode": "",
                 "failureType": "",
                 "retryable": False,
                 "requiresReupload": False,
-                "requiresHumanReview": False,
+                "businessReviewStatus": "pending",
+                "manualReviewRequired": True,
+                "directPaymentAllowed": False,
+                "requiresHumanReview": True,
                 "nextAction": "",
                 "diffDownloadUrl": "",
+                "invoiceEvidenceAudit": [],
             },
         )
-        return JSONResponse(status_code=202, content=_with_labor_readiness(_normalize_labor_total_decision(queued)))
-    queued = update_labor_metadata(
-        run_id,
-        {
-            "status": "抽取中",
-            "stage": "等待后台处理",
-            "asyncTask": {
-                "status": "queued",
-                "statusLabel": "待处理",
-                "message": "核对任务已提交，等待后台处理。",
-                "queuedAt": datetime.utcnow().isoformat(),
-            },
-            "errorMessage": "",
-            "errorCode": "",
-            "failureType": "",
-            "retryable": False,
-            "requiresReupload": False,
-            "requiresHumanReview": False,
-            "nextAction": "",
-            "diffDownloadUrl": "",
-        },
+    except Exception:
+        if reservation_token:
+            _LABOR_TASK_LIMITER.release(run_id, reservation_token)
+        raise
+    if not started:
+        if reservation_token:
+            _LABOR_TASK_LIMITER.release(run_id, reservation_token)
+        return _with_labor_readiness(_normalize_labor_total_decision(queued))
+    try:
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="extraction_started",
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            outcome="success",
+        )
+        if personal_worker_enabled:
+            # Keep the run generation check and queue handoff in one run -> job
+            # critical section. Otherwise an older request can resume after a
+            # newer generation enqueues and incorrectly supersede the new job.
+            with labor_run_metadata_lock(run_id):
+                current = load_labor_metadata(get_labor_run_dir(run_id))
+                if _labor_task_generation_id(current) != task_generation_id:
+                    return _with_labor_readiness(
+                        _normalize_labor_total_decision(_with_personal_worker_status(current))
+                    )
+                job = enqueue_labor_worker_job(
+                    run_id,
+                    owner_user_id=owner_user_id,
+                    required_worker_version=_labor_required_worker_version(),
+                    task_generation_id=task_generation_id,
+                )
+            return _with_labor_readiness(
+                {
+                    **_normalize_labor_total_decision(queued),
+                    "workerTask": _public_labor_worker_job(job),
+                }
+            )
+        # 在独立线程中运行，不阻塞事件循环
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            _run_labor_extract_compare_with_release,
+            run_id,
+            task_generation_id,
+            reservation_token,
+        )
+        return queued
+    except Exception as exc:
+        if reservation_token:
+            _LABOR_TASK_LIMITER.release(run_id, reservation_token)
+        _mark_labor_task_handoff_failed(run_id, task_generation_id, exc)
+        raise
+
+
+def _mark_labor_task_handoff_failed(run_id: str, task_generation_id: str, exc: BaseException) -> None:
+    message = f"核对任务提交失败：{str(exc)[:300]}"
+    failure = _labor_retryable_system_failure(
+        message=message,
+        stage="任务提交失败",
+        error_code="LABOR_TASK_HANDOFF_FAILED",
     )
-    # 在独立线程中运行，不阻塞事件循环
-    asyncio.get_event_loop().run_in_executor(None, _run_labor_extract_compare, run_id)
-    return queued
+    failure["asyncTask"] = {
+        "status": "failed",
+        "statusLabel": "提交失败",
+        "message": message,
+        "failedAt": datetime.utcnow().isoformat(),
+        "taskGenerationId": task_generation_id,
+    }
+    try:
+        update_labor_metadata_for_task(
+            run_id,
+            expected_task_generation_id=task_generation_id,
+            updates=failure,
+        )
+    except Exception as update_exc:  # noqa: BLE001 - preserve the original handoff failure.
+        logger.error("[%s] 任务提交失败状态写入失败: %s", run_id, update_exc)
 
 
 @app.get("/api/labor/runs/{run_id}/governance")
@@ -2297,7 +5871,7 @@ def generate_labor_reocr_candidate_template_batch(run_id: str, payload: dict = B
 
 
 @app.post("/api/labor/runs/{run_id}/reocr-candidates/confirm")
-def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...)) -> dict:
+def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     source_file = str(payload.get("sourceFile") or payload.get("source_file") or "").strip()
@@ -2312,6 +5886,7 @@ def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...)) -> dic
 
     now = datetime.utcnow().isoformat()
     candidate_id = f"reocr_{run_id}_{_safe_record_id(source_file)}_{_safe_record_id(warehouse_id or 'all')}"
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     active = {
         "candidateId": candidate_id,
         "decision": "active",
@@ -2319,14 +5894,14 @@ def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...)) -> dic
         "requiresConfirmation": False,
         "sourceFile": source_file,
         "warehouseId": warehouse_id,
-        "confirmedBy": str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+        "confirmedBy": actor,
         "confirmationReason": str(payload.get("reason") or "").strip(),
         "confirmedAt": now,
         "replay": replay,
         "auditTrail": [
             {
                 "action": "confirmed",
-                "actor": str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+                "actor": actor,
                 "reason": str(payload.get("reason") or "").strip(),
                 "replayedAt": replay.get("replayedAt", ""),
             }
@@ -2342,16 +5917,22 @@ def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...)) -> dic
         files["reocrPreviewReport"] = attach_labor_file(run_id, report_path, "图片识别结果预览报告")
         response["preview"] = preview
         response["reportFile"] = files["reocrPreviewReport"]
-    updated = update_labor_metadata(run_id, {"reocrReplayGovernance": governance, "files": files})
+    updated = update_labor_metadata(
+        run_id,
+        {"reocrReplayGovernance": governance, "files": files},
+        actor_user_id=actor,
+        action="reocr_candidate_confirmed",
+        audit_details={"candidateId": candidate_id},
+    )
     response["activeCandidate"] = _find_reocr_record(updated["reocrReplayGovernance"]["activeCandidates"], candidate_id)
     return response
 
 
 @app.post("/api/labor/runs/{run_id}/reocr-candidates/confirm-batch")
-def confirm_labor_reocr_candidate_batch(run_id: str, payload: dict = Body(default={})) -> dict:
+def confirm_labor_reocr_candidate_batch(run_id: str, payload: dict = Body(default={}), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
-    actor = str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     reason = str(payload.get("reason") or "").strip()
     requested = {
         (Path(str(item.get("sourceFile") or "")).name, str(item.get("warehouseId") or ""))
@@ -2424,13 +6005,19 @@ def confirm_labor_reocr_candidate_batch(run_id: str, payload: dict = Body(defaul
         files["reocrPreviewReport"] = attach_labor_file(run_id, report_path, "图片识别批量结果预览报告")
         response["preview"] = preview
         response["reportFile"] = files["reocrPreviewReport"]
-    updated = update_labor_metadata(run_id, {"reocrReplayGovernance": governance, "files": files})
+    updated = update_labor_metadata(
+        run_id,
+        {"reocrReplayGovernance": governance, "files": files},
+        actor_user_id=actor,
+        action="reocr_candidates_batch_confirmed",
+        audit_details={"confirmedCount": len(confirmed)},
+    )
     response["readinessGate"] = _build_labor_readiness_gate(updated)
     return response
 
 
 @app.post("/api/labor/runs/{run_id}/reocr-candidates/{candidate_id}/apply")
-def apply_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = Body(default={})) -> dict:
+def apply_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = Body(default={}), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     active = _find_reocr_record(governance["activeCandidates"], candidate_id)
@@ -2446,24 +6033,39 @@ def apply_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = 
     if not comparison_summary:
         raise HTTPException(status_code=400, detail="图片识别结果缺少核对摘要，不能采纳。")
 
-    actor = str(payload.get("appliedBy") or payload.get("applied_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "appliedBy", "applied_by")
     reason = str(payload.get("reason") or "").strip()
     now = datetime.utcnow().isoformat()
     previous_snapshot = {
+        "status": metadata.get("status", ""),
         "comparisonSummary": metadata.get("comparisonSummary", {}),
         "comparisonRows": metadata.get("comparisonRows", []),
         "candidateMatches": metadata.get("candidateMatches", []),
+        "presentation": metadata.get("presentation", {}),
+        "batchGuard": metadata.get("batchGuard", {}),
+        "reconciliationDiagnostics": metadata.get("reconciliationDiagnostics", {}),
+        "machineCheckStatus": metadata.get("machineCheckStatus", "needs_review"),
+        "businessReviewStatus": metadata.get("businessReviewStatus", "pending"),
+        "manualReviewRequired": metadata.get("manualReviewRequired", True),
+        "directPaymentAllowed": metadata.get("directPaymentAllowed", False),
+        "requiresHumanReview": metadata.get("requiresHumanReview", True),
         "reocrAdoption": metadata.get("reocrAdoption", {}),
         "files": metadata.get("files", {}),
         "diffDownloadUrl": metadata.get("diffDownloadUrl", ""),
     }
-    adopted_summary = {
-        **comparison_summary,
-        "conclusionLevel": "pass" if int(comparison_summary.get("exceptionCount") or 0) == 0 else "warning",
-        "conclusionMessage": "已采纳人工确认的图片识别结果作为当前批次核对依据。",
-        "notInInvoiceCount": sum(1 for row in comparison_rows if row.get("matchStatus") == "Excel有PDF无"),
-        "reocrCandidateApplied": True,
-    }
+    adopted_summary = _labor_reocr_pending_revalidation_summary(
+        {
+            **comparison_summary,
+            "notInInvoiceCount": sum(1 for row in comparison_rows if row.get("matchStatus") == "Excel有PDF无"),
+            "reocrCandidateApplied": True,
+        }
+    )
+    adopted_presentation = _build_validated_labor_presentation(
+        adopted_summary,
+        comparison_rows,
+        replay.get("candidateMatches", []),
+        excel_record_count=len(metadata.get("excelRows") or []),
+    )
     preflight = _build_reocr_apply_preflight(metadata, [active], adopted_summary, comparison_rows)
     applied = {
         **active,
@@ -2507,6 +6109,7 @@ def apply_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = 
                 comparison_summary=adopted_summary,
                 comparison_rows=comparison_rows,
                 candidate_matches=replay.get("candidateMatches", []),
+                presentation=adopted_presentation,
             )
             files["diffReport"] = report_file
             adoption["reportFile"] = report_file
@@ -2518,15 +6121,22 @@ def apply_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = 
     updated = update_labor_metadata(
         run_id,
         {
-            "status": "已生成差异报告",
+            "status": "部分核对完成",
             "comparisonSummary": adopted_summary,
             "comparisonRows": comparison_rows,
             "candidateMatches": replay.get("candidateMatches", []),
+            "presentation": adopted_presentation,
             "reocrReplayGovernance": governance,
             "reocrAdoption": adoption,
             "files": files,
             "diffDownloadUrl": adoption.get("diffDownloadUrl", metadata.get("diffDownloadUrl", "")),
+            "batchGuard": _labor_reocr_revalidation_batch_guard(),
+            "reconciliationDiagnostics": _labor_reocr_revalidation_diagnostics(),
+            **_labor_uat_review_state(adopted_summary),
         },
+        actor_user_id=actor,
+        action="reocr_candidate_applied",
+        audit_details={"candidateId": candidate_id},
     )
     readiness = _build_labor_readiness_gate(updated)
     return {
@@ -2549,7 +6159,7 @@ def preview_labor_reocr_batch_apply(run_id: str, payload: dict = Body(default={}
 
 
 @app.post("/api/labor/runs/{run_id}/reocr-candidates/batch-apply")
-def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={})) -> dict:
+def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={}), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     candidate_ids = payload.get("candidateIds") or payload.get("candidate_ids") or []
@@ -2560,13 +6170,22 @@ def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={})) -> di
     if preview["summary"]["duplicateScopeCount"] > 0:
         raise HTTPException(status_code=400, detail="候选中存在重复文件/仓库范围，不能批量采纳。")
 
-    actor = str(payload.get("appliedBy") or payload.get("applied_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "appliedBy", "applied_by")
     reason = str(payload.get("reason") or "").strip()
     now = datetime.utcnow().isoformat()
     previous_snapshot = {
+        "status": metadata.get("status", ""),
         "comparisonSummary": metadata.get("comparisonSummary", {}),
         "comparisonRows": metadata.get("comparisonRows", []),
         "candidateMatches": metadata.get("candidateMatches", []),
+        "presentation": metadata.get("presentation", {}),
+        "batchGuard": metadata.get("batchGuard", {}),
+        "reconciliationDiagnostics": metadata.get("reconciliationDiagnostics", {}),
+        "machineCheckStatus": metadata.get("machineCheckStatus", "needs_review"),
+        "businessReviewStatus": metadata.get("businessReviewStatus", "pending"),
+        "manualReviewRequired": metadata.get("manualReviewRequired", True),
+        "directPaymentAllowed": metadata.get("directPaymentAllowed", False),
+        "requiresHumanReview": metadata.get("requiresHumanReview", True),
         "reocrAdoption": metadata.get("reocrAdoption", {}),
         "files": metadata.get("files", {}),
         "diffDownloadUrl": metadata.get("diffDownloadUrl", ""),
@@ -2615,6 +6234,7 @@ def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={})) -> di
                 comparison_summary=preview["comparisonSummary"],
                 comparison_rows=preview["comparisonRows"],
                 candidate_matches=preview["candidateMatches"],
+                presentation=preview["presentation"],
             )
             files["diffReport"] = report_file
             adoption["reportFile"] = report_file
@@ -2626,15 +6246,22 @@ def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={})) -> di
     updated = update_labor_metadata(
         run_id,
         {
-            "status": "已生成差异报告",
+            "status": "部分核对完成",
             "comparisonSummary": preview["comparisonSummary"],
             "comparisonRows": preview["comparisonRows"],
             "candidateMatches": preview["candidateMatches"],
+            "presentation": preview["presentation"],
             "reocrReplayGovernance": governance,
             "reocrAdoption": adoption,
             "files": files,
             "diffDownloadUrl": adoption.get("diffDownloadUrl", metadata.get("diffDownloadUrl", "")),
+            "batchGuard": _labor_reocr_revalidation_batch_guard(),
+            "reconciliationDiagnostics": _labor_reocr_revalidation_diagnostics(),
+            **_labor_uat_review_state(preview["comparisonSummary"]),
         },
+        actor_user_id=actor,
+        action="reocr_candidates_batch_applied",
+        audit_details={"candidateIds": sorted(applied_ids)},
     )
     readiness = _build_labor_readiness_gate(updated)
     return {
@@ -2647,14 +6274,14 @@ def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={})) -> di
 
 
 @app.post("/api/labor/runs/{run_id}/reocr-candidates/{candidate_id}/rollback")
-def rollback_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def rollback_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     active = _find_reocr_record(governance["activeCandidates"], candidate_id)
     if not active:
         raise HTTPException(status_code=404, detail="未找到已确认的图片识别结果。")
 
-    actor = str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     reason = str(payload.get("reason") or payload.get("rollbackReason") or payload.get("rollback_reason") or "").strip()
     now = datetime.utcnow().isoformat()
     rolled_back = {
@@ -2682,11 +6309,20 @@ def rollback_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict
         restored_files = previous_snapshot.get("files") if isinstance(previous_snapshot.get("files"), dict) else {}
         updates.update(
             {
+                "status": previous_snapshot.get("status", "部分核对完成"),
                 "comparisonSummary": previous_snapshot.get("comparisonSummary", {}),
                 "comparisonRows": previous_snapshot.get("comparisonRows", []),
                 "candidateMatches": previous_snapshot.get("candidateMatches", []),
+                "presentation": previous_snapshot.get("presentation", {}),
                 "files": restored_files,
                 "diffDownloadUrl": previous_snapshot.get("diffDownloadUrl", ""),
+                "batchGuard": previous_snapshot.get("batchGuard", {}),
+                "reconciliationDiagnostics": previous_snapshot.get("reconciliationDiagnostics", {}),
+                "machineCheckStatus": previous_snapshot.get("machineCheckStatus", "needs_review"),
+                "businessReviewStatus": previous_snapshot.get("businessReviewStatus", "pending"),
+                "manualReviewRequired": previous_snapshot.get("manualReviewRequired", True),
+                "directPaymentAllowed": previous_snapshot.get("directPaymentAllowed", False),
+                "requiresHumanReview": previous_snapshot.get("requiresHumanReview", True),
                 "reocrAdoption": {
                     **(previous_snapshot.get("reocrAdoption") if isinstance(previous_snapshot.get("reocrAdoption"), dict) else {}),
                     "status": "rolled_back",
@@ -2696,31 +6332,44 @@ def rollback_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict
                 },
             }
         )
-    updated = update_labor_metadata(run_id, updates)
+    updated = update_labor_metadata(
+        run_id,
+        updates,
+        actor_user_id=actor,
+        action="reocr_candidate_rolled_back",
+        audit_details={"candidateId": candidate_id},
+    )
     return _find_reocr_record(updated["reocrReplayGovernance"]["rolledBackCandidates"], candidate_id) or rolled_back
 
 
 @app.post("/api/labor/runs/{run_id}/rule-candidates")
-def create_labor_rule_candidate(run_id: str, payload: dict = Body(...)) -> dict:
+def create_labor_rule_candidate(run_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_labor_governance(metadata.get("ruleGovernance"))
     rule_id = _rule_id_from_payload(payload)
     if _find_rule_record(governance["candidates"], rule_id):
         raise HTTPException(status_code=409, detail=f"规则候选已存在：{rule_id}")
+    actor = _labor_action_actor(request, payload, "proposedBy", "proposed_by")
     candidate = build_rule_change_candidate(
         rule_id=rule_id,
         title=str(payload.get("title") or "未命名规则候选").strip(),
         description=str(payload.get("description") or "").strip(),
         supplier=str(payload.get("supplier") or metadata.get("supplierName") or "").strip(),
         source=str(payload.get("source") or f"labor_run:{run_id}").strip(),
-        proposed_by=str(payload.get("proposedBy") or payload.get("proposed_by") or "ai").strip(),
+        proposed_by=actor,
         evidence=payload.get("evidence") if isinstance(payload.get("evidence"), list) else [],
         conditions=payload.get("conditions") if isinstance(payload.get("conditions"), dict) else {},
     )
     candidate["runId"] = run_id
     candidate["createdAt"] = datetime.utcnow().isoformat()
     governance["candidates"].append(candidate)
-    updated = update_labor_metadata(run_id, {"ruleGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"ruleGovernance": governance},
+        actor_user_id=actor,
+        action="rule_candidate_created",
+        audit_details={"ruleId": rule_id},
+    )
     return _normalized_labor_governance(updated.get("ruleGovernance"))
 
 
@@ -2770,7 +6419,7 @@ def auto_replay_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = 
 
 
 @app.post("/api/labor/runs/{run_id}/rule-candidates/{rule_id}/confirm")
-def confirm_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body(...)) -> dict:
+def confirm_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_labor_governance(metadata.get("ruleGovernance"))
     candidate = _find_rule_record(governance["candidates"], rule_id)
@@ -2779,11 +6428,12 @@ def confirm_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body
     replay_summary = governance["replaySummaries"].get(rule_id)
     if not replay_summary:
         raise HTTPException(status_code=400, detail="规则候选缺少历史回放摘要，不能确认生效。")
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     try:
         active = confirm_rule_candidate(
             candidate,
             replay_summary,
-            confirmed_by=str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+            confirmed_by=actor,
             reason=str(payload.get("reason") or "").strip(),
         )
     except ValueError as exc:
@@ -2793,22 +6443,29 @@ def confirm_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body
     active["preflight"] = replay_summary.get("preflight") or _build_rule_replay_preflight(replay_summary)
     _upsert_rule_record(governance["activeRules"], active)
     _upsert_rule_record(governance["candidates"], {**candidate, "status": "confirmed", "decision": "confirmed"})
-    updated = update_labor_metadata(run_id, {"ruleGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"ruleGovernance": governance},
+        actor_user_id=actor,
+        action="rule_candidate_confirmed",
+        audit_details={"ruleId": rule_id},
+    )
     return _find_rule_record(updated["ruleGovernance"]["activeRules"], rule_id)
 
 
 @app.post("/api/labor/runs/{run_id}/rule-candidates/{rule_id}/rollback")
-def rollback_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body(...)) -> dict:
+def rollback_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_labor_governance(metadata.get("ruleGovernance"))
     active = _find_rule_record(governance["activeRules"], rule_id)
     if not active:
         raise HTTPException(status_code=404, detail=f"已确认规则不存在：{rule_id}")
+    actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     try:
         target_version = payload.get("targetVersion", payload.get("target_version"))
         rolled_back = rollback_rule_version(
             active,
-            rolled_back_by=str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip(),
+            rolled_back_by=actor,
             reason=str(payload.get("reason") or "").strip(),
             target_version=int(target_version) if target_version is not None else None,
         )
@@ -2818,13 +6475,32 @@ def rollback_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Bod
     rolled_back["rolledBackAt"] = datetime.utcnow().isoformat()
     _upsert_rule_record(governance["rolledBackRules"], rolled_back)
     _remove_rule_record(governance["activeRules"], rule_id)
-    updated = update_labor_metadata(run_id, {"ruleGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"ruleGovernance": governance},
+        actor_user_id=actor,
+        action="rule_candidate_rolled_back",
+        audit_details={"ruleId": rule_id},
+    )
     return _find_rule_record(updated["ruleGovernance"]["rolledBackRules"], rule_id)
 
 
 @app.post("/api/labor/runs/{run_id}/name-mapping-candidates/{candidate_id}/confirm")
-def confirm_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def confirm_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
+    recalculate_requested = bool(
+        payload.get("recalculate") or payload.get("generateReport") or payload.get("generate_report")
+    )
+    if recalculate_requested and labor_run_is_active(metadata):
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="当前批次已有核对任务正在运行，不能同时重算姓名映射结果。",
+                error_code="LABOR_RUN_ALREADY_ACTIVE",
+                retryable=True,
+                next_action="请等待当前任务完成或失败后，再确认并重新生成报告。",
+            ),
+        )
     governance = _normalized_name_mapping_governance(metadata.get("nameMappingGovernance"))
     candidate = _find_name_mapping_record(governance["candidates"], candidate_id)
     if not candidate:
@@ -2838,7 +6514,7 @@ def confirm_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload
     if replay_summary.get("decision") != "ready_for_user_confirmation":
         raise HTTPException(status_code=400, detail="姓名映射候选未通过影响回放，不能确认生效。")
 
-    actor = str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     reason = str(payload.get("reason") or "").strip()
     active = {
         **candidate,
@@ -2859,11 +6535,29 @@ def confirm_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload
     manual_mapping.update({str(key): str(value) for key, value in proposed.items()})
     _upsert_name_mapping_record(governance["activeMappings"], active)
     _upsert_name_mapping_record(governance["candidates"], {**candidate, "status": "confirmed", "decision": "confirmed"})
-    updated = update_labor_metadata(run_id, {"manualNameMapping": manual_mapping, "nameMappingGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {
+            **_labor_invalidate_official_result(
+                metadata,
+                status="已确认姓名映射",
+                reason_code="name_mapping_changed",
+                message="姓名映射已更新，旧核对结果已失效，必须重新执行整批核对。",
+            ),
+            "manualNameMapping": manual_mapping,
+            "nameMappingGovernance": governance,
+        },
+        actor_user_id=actor,
+        action="name_mapping_candidate_confirmed",
+        audit_details={"candidateId": candidate_id},
+    )
     recalculated_run = None
-    if bool(payload.get("recalculate") or payload.get("generateReport") or payload.get("generate_report")):
+    if recalculate_requested:
         try:
-            recalculated_run = _perform_labor_extract_compare(run_id)
+            submitted = asyncio.run(extract_and_compare_labor_run(run_id))
+            recalculated_run = _labor_metadata_or_404(run_id)
+            if str(recalculated_run.get("status") or "") == "已确认姓名映射":
+                recalculated_run = submitted
             updated = recalculated_run
         except Exception as exc:  # noqa: BLE001 - mapping confirmation should remain auditable even if report refresh fails.
             logger.warning(f"[{run_id}] 姓名映射确认后重算失败: {exc}")
@@ -2880,14 +6574,14 @@ def confirm_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload
 
 
 @app.post("/api/labor/runs/{run_id}/allocation-candidates/{candidate_id}/confirm")
-def confirm_labor_allocation_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def confirm_labor_allocation_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_allocation_governance(metadata.get("allocationGovernance"))
     candidate = _find_allocation_record(governance["candidates"], candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail=f"跨仓库归属候选不存在：{candidate_id}")
 
-    actor = str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     reason = str(payload.get("reason") or "").strip()
     decision_note = str(payload.get("decisionNote") or payload.get("decision_note") or "").strip()
     now = datetime.utcnow().isoformat()
@@ -2913,7 +6607,13 @@ def confirm_labor_allocation_candidate(run_id: str, candidate_id: str, payload: 
     }
     _upsert_allocation_record(governance["activeAllocations"], active)
     _upsert_allocation_record(governance["candidates"], {**candidate, "status": "confirmed", "decision": "confirmed"})
-    updated = update_labor_metadata(run_id, {"allocationGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"allocationGovernance": governance},
+        actor_user_id=actor,
+        action="allocation_candidate_confirmed",
+        audit_details={"candidateId": candidate_id},
+    )
     readiness = _build_labor_readiness_gate(updated)
     response = _find_allocation_record(updated["allocationGovernance"]["activeAllocations"], candidate_id) or active
     response["readinessGate"] = readiness
@@ -2921,14 +6621,14 @@ def confirm_labor_allocation_candidate(run_id: str, candidate_id: str, payload: 
 
 
 @app.post("/api/labor/runs/{run_id}/allocation-candidates/{candidate_id}/rollback")
-def rollback_labor_allocation_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def rollback_labor_allocation_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_allocation_governance(metadata.get("allocationGovernance"))
     active = _find_allocation_record(governance["activeAllocations"], candidate_id)
     if not active:
         raise HTTPException(status_code=404, detail=f"已确认跨仓库归属候选不存在：{candidate_id}")
 
-    actor = str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     reason = str(payload.get("reason") or payload.get("rollbackReason") or payload.get("rollback_reason") or "").strip()
     now = datetime.utcnow().isoformat()
     rolled_back = {
@@ -2946,7 +6646,13 @@ def rollback_labor_allocation_candidate(run_id: str, candidate_id: str, payload:
     _upsert_allocation_record(governance["rolledBackAllocations"], rolled_back)
     _remove_allocation_record(governance["activeAllocations"], candidate_id)
     _upsert_allocation_record(governance["candidates"], {**active, "status": "rolled_back", "decision": "rolled_back"})
-    updated = update_labor_metadata(run_id, {"allocationGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"allocationGovernance": governance},
+        actor_user_id=actor,
+        action="allocation_candidate_rolled_back",
+        audit_details={"candidateId": candidate_id},
+    )
     response = _find_allocation_record(updated["allocationGovernance"]["rolledBackAllocations"], candidate_id) or rolled_back
     response["readinessGate"] = _build_labor_readiness_gate(updated)
     return response
@@ -2983,14 +6689,14 @@ def auto_replay_labor_name_mapping_candidate(run_id: str, candidate_id: str, pay
 
 
 @app.post("/api/labor/runs/{run_id}/name-mapping-candidates/{candidate_id}/rollback")
-def rollback_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def rollback_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_name_mapping_governance(metadata.get("nameMappingGovernance"))
     active = _find_name_mapping_record(governance["activeMappings"], candidate_id)
     if not active:
         raise HTTPException(status_code=404, detail=f"已确认姓名映射不存在：{candidate_id}")
 
-    actor = str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip()
+    actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     reason = str(payload.get("reason") or "").strip()
     proposed = active.get("proposedMapping") if isinstance(active.get("proposedMapping"), dict) else {}
     manual_mapping = dict(metadata.get("manualNameMapping") or {})
@@ -3012,14 +6718,20 @@ def rollback_labor_name_mapping_candidate(run_id: str, candidate_id: str, payloa
     _upsert_name_mapping_record(governance["rolledBackMappings"], rolled_back)
     _remove_name_mapping_record(governance["activeMappings"], candidate_id)
     _upsert_name_mapping_record(governance["candidates"], {**active, "status": "rolled_back", "decision": "rolled_back"})
-    updated = update_labor_metadata(run_id, {"manualNameMapping": manual_mapping, "nameMappingGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"manualNameMapping": manual_mapping, "nameMappingGovernance": governance},
+        actor_user_id=actor,
+        action="name_mapping_candidate_rolled_back",
+        audit_details={"candidateId": candidate_id},
+    )
     response = _find_name_mapping_record(updated["nameMappingGovernance"]["rolledBackMappings"], candidate_id) or rolled_back
     response["manualNameMapping"] = updated.get("manualNameMapping", {})
     return response
 
 
 @app.post("/api/labor/runs/{run_id}/profile-candidates/{candidate_id}/confirm")
-def confirm_labor_profile_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def confirm_labor_profile_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_profile_governance(metadata.get("profileGovernance"))
     candidate = _find_profile_record(governance["candidates"], candidate_id)
@@ -3030,20 +6742,31 @@ def confirm_labor_profile_candidate(run_id: str, candidate_id: str, payload: dic
         raise HTTPException(status_code=400, detail="Profile 候选缺少历史回放摘要，不能确认生效。")
     if replay_summary.get("decision") != "ready_for_user_confirmation":
         raise HTTPException(status_code=400, detail="供应商格式建议未通过历史影响预览，不能确认生效。")
+    runtime_profile = _supplier_profile_from_governance_data(
+        candidate.get("profileData") if isinstance(candidate.get("profileData"), dict) else {},
+        fallback_key=str(candidate.get("profileKey") or "candidate-profile"),
+        fallback_aliases=[str(candidate.get("supplier") or "")],
+    )
+    if runtime_profile is None or not is_runtime_approved_profile(runtime_profile):
+        raise HTTPException(
+            status_code=400,
+            detail="draft Supplier Profile 只能保留为候选；完成 Golden 复核并补齐 approved 审批元数据后才能激活。",
+        )
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     active = {
         **candidate,
         "decision": "active",
         "status": "active",
         "requiresConfirmation": False,
         "version": int((candidate.get("profileData") or {}).get("version") or candidate.get("version") or 1),
-        "confirmedBy": str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+        "confirmedBy": actor,
         "confirmationReason": str(payload.get("reason") or "").strip(),
         "confirmedAt": datetime.utcnow().isoformat(),
         "auditTrail": [
             *(candidate.get("auditTrail") or []),
             {
                 "action": "confirmed",
-                "actor": str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+                "actor": actor,
                 "reason": str(payload.get("reason") or "").strip(),
                 "replaySummary": replay_summary.get("summary", {}),
             },
@@ -3053,7 +6776,13 @@ def confirm_labor_profile_candidate(run_id: str, candidate_id: str, payload: dic
     }
     _upsert_profile_record(governance["activeProfiles"], active)
     _upsert_profile_record(governance["candidates"], {**candidate, "status": "confirmed", "decision": "confirmed"})
-    updated = update_labor_metadata(run_id, {"profileGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"profileGovernance": governance},
+        actor_user_id=actor,
+        action="profile_candidate_confirmed",
+        audit_details={"candidateId": candidate_id},
+    )
     return _find_profile_record(updated["profileGovernance"]["activeProfiles"], candidate_id)
 
 
@@ -3083,7 +6812,7 @@ def auto_replay_labor_profile_candidate(run_id: str, candidate_id: str, payload:
 
 
 @app.post("/api/labor/runs/{run_id}/profile-candidates/{candidate_id}/rollback")
-def rollback_labor_profile_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def rollback_labor_profile_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_profile_governance(metadata.get("profileGovernance"))
     active = _find_profile_record(governance["activeProfiles"], candidate_id)
@@ -3092,11 +6821,12 @@ def rollback_labor_profile_candidate(run_id: str, candidate_id: str, payload: di
     current_version = int(active.get("version") or 1)
     target_version = payload.get("targetVersion", payload.get("target_version"))
     rollback_target = int(target_version) if target_version is not None else max(current_version - 1, 0)
+    actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     rolled_back = {
         **active,
         "decision": "rolled_back",
         "status": "rolled_back",
-        "rolledBackBy": str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip(),
+        "rolledBackBy": actor,
         "rollbackReason": str(payload.get("reason") or "").strip(),
         "rollbackToVersion": rollback_target,
         "rolledBackAt": datetime.utcnow().isoformat(),
@@ -3104,7 +6834,7 @@ def rollback_labor_profile_candidate(run_id: str, candidate_id: str, payload: di
             *(active.get("auditTrail") or []),
             {
                 "action": "rolled_back",
-                "actor": str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip(),
+                "actor": actor,
                 "reason": str(payload.get("reason") or "").strip(),
                 "fromVersion": current_version,
                 "toVersion": rollback_target,
@@ -3113,12 +6843,18 @@ def rollback_labor_profile_candidate(run_id: str, candidate_id: str, payload: di
     }
     _upsert_profile_record(governance["rolledBackProfiles"], rolled_back)
     _remove_profile_record(governance["activeProfiles"], candidate_id)
-    updated = update_labor_metadata(run_id, {"profileGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"profileGovernance": governance},
+        actor_user_id=actor,
+        action="profile_candidate_rolled_back",
+        audit_details={"candidateId": candidate_id},
+    )
     return _find_profile_record(updated["profileGovernance"]["rolledBackProfiles"], candidate_id)
 
 
 @app.post("/api/labor/runs/{run_id}/correction-candidates/{candidate_id}/confirm")
-def confirm_labor_correction_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def confirm_labor_correction_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_correction_governance(metadata.get("correctionGovernance"))
     candidate = _find_correction_record(governance["candidates"], candidate_id)
@@ -3129,19 +6865,20 @@ def confirm_labor_correction_candidate(run_id: str, candidate_id: str, payload: 
         raise HTTPException(status_code=400, detail="修正候选缺少影响回放摘要，不能确认生效。")
     if replay_summary.get("decision") != "ready_for_user_confirmation":
         raise HTTPException(status_code=400, detail="修正候选未通过影响回放，不能确认生效。")
+    actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     active = {
         **candidate,
         "decision": "active",
         "status": "active",
         "requiresConfirmation": False,
-        "confirmedBy": str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+        "confirmedBy": actor,
         "confirmationReason": str(payload.get("reason") or "").strip(),
         "confirmedAt": datetime.utcnow().isoformat(),
         "auditTrail": [
             *(candidate.get("auditTrail") or []),
             {
                 "action": "confirmed",
-                "actor": str(payload.get("confirmedBy") or payload.get("confirmed_by") or "user").strip(),
+                "actor": actor,
                 "reason": str(payload.get("reason") or "").strip(),
                 "replaySummary": replay_summary.get("summary", {}),
             },
@@ -3150,7 +6887,13 @@ def confirm_labor_correction_candidate(run_id: str, candidate_id: str, payload: 
     }
     _upsert_correction_record(governance["activeCorrections"], active)
     _upsert_correction_record(governance["candidates"], {**candidate, "status": "confirmed", "decision": "confirmed"})
-    updated = update_labor_metadata(run_id, {"correctionGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"correctionGovernance": governance},
+        actor_user_id=actor,
+        action="correction_candidate_confirmed",
+        audit_details={"candidateId": candidate_id},
+    )
     return _find_correction_record(updated["correctionGovernance"]["activeCorrections"], candidate_id)
 
 
@@ -3175,31 +6918,38 @@ def auto_replay_labor_correction_candidate(run_id: str, candidate_id: str, paylo
 
 
 @app.post("/api/labor/runs/{run_id}/correction-candidates/{candidate_id}/rollback")
-def rollback_labor_correction_candidate(run_id: str, candidate_id: str, payload: dict = Body(...)) -> dict:
+def rollback_labor_correction_candidate(run_id: str, candidate_id: str, payload: dict = Body(...), request: Request = None) -> dict:
     metadata = _labor_metadata_or_404(run_id)
     governance = _normalized_correction_governance(metadata.get("correctionGovernance"))
     active = _find_correction_record(governance["activeCorrections"], candidate_id)
     if not active:
         raise HTTPException(status_code=404, detail=f"已确认修正不存在：{candidate_id}")
+    actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     rolled_back = {
         **active,
         "decision": "rolled_back",
         "status": "rolled_back",
-        "rolledBackBy": str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip(),
+        "rolledBackBy": actor,
         "rollbackReason": str(payload.get("reason") or "").strip(),
         "rolledBackAt": datetime.utcnow().isoformat(),
         "auditTrail": [
             *(active.get("auditTrail") or []),
             {
                 "action": "rolled_back",
-                "actor": str(payload.get("rolledBackBy") or payload.get("rolled_back_by") or "user").strip(),
+                "actor": actor,
                 "reason": str(payload.get("reason") or "").strip(),
             },
         ],
     }
     _upsert_correction_record(governance["rolledBackCorrections"], rolled_back)
     _remove_correction_record(governance["activeCorrections"], candidate_id)
-    updated = update_labor_metadata(run_id, {"correctionGovernance": governance})
+    updated = update_labor_metadata(
+        run_id,
+        {"correctionGovernance": governance},
+        actor_user_id=actor,
+        action="correction_candidate_rolled_back",
+        audit_details={"candidateId": candidate_id},
+    )
     return _find_correction_record(updated["correctionGovernance"]["rolledBackCorrections"], candidate_id)
 
 
@@ -4539,6 +8289,7 @@ def _generate_reocr_adopted_diff_report(
     comparison_summary: dict,
     comparison_rows: list[dict],
     candidate_matches: list[dict],
+    presentation: dict | None = None,
 ) -> dict:
     from .engine.labor.models import line_items_from_dicts
 
@@ -4549,7 +8300,13 @@ def _generate_reocr_adopted_diff_report(
         "rows": comparison_rows,
         "candidateMatches": candidate_matches,
     }
-    report_path = get_labor_run_dir(run_id) / safe_labor_storage_filename("labor_reconciliation_report.xlsx", "diff_report_reocr_adopted")
+    presentation = presentation or _build_validated_labor_presentation(
+        comparison_summary,
+        comparison_rows,
+        candidate_matches,
+        excel_record_count=len(excel_rows),
+    )
+    report_path = get_labor_run_dir(run_id) / safe_labor_filename("海外劳务工报账核对报告.xlsx", "差异报告_图片识别已采纳")
     build_labor_report(
         report_path,
         comparison,
@@ -4560,8 +8317,30 @@ def _generate_reocr_adopted_diff_report(
         metadata.get("extractionQuality") if isinstance(metadata.get("extractionQuality"), dict) else {},
         reconciliation_diagnostics=metadata.get("reconciliationDiagnostics") if isinstance(metadata.get("reconciliationDiagnostics"), dict) else {},
         ai_cache_audit=metadata.get("aiCacheAudit") if isinstance(metadata.get("aiCacheAudit"), dict) else {},
+        presentation=presentation,
     )
     return attach_labor_file(run_id, report_path, "差异报告")
+
+
+def _build_validated_labor_presentation(
+    comparison_summary: dict,
+    comparison_rows: list[dict],
+    candidate_matches: list[dict],
+    *,
+    excel_record_count: int,
+) -> dict:
+    presentation = build_labor_presentation(
+        {
+            "summary": comparison_summary,
+            "rows": comparison_rows,
+            "candidateMatches": candidate_matches,
+        },
+        excel_record_count=excel_record_count,
+    )
+    errors = validate_labor_presentation(presentation)
+    if errors:
+        raise ValueError("核对展示口径校验失败: " + "；".join(errors))
+    return presentation
 
 
 def _select_reocr_apply_candidates(governance: dict, candidate_ids: list | None) -> list[dict]:
@@ -4604,14 +8383,19 @@ def _build_reocr_batch_apply_preview(metadata: dict, candidates: list[dict]) -> 
 
     coverage = _build_reocr_plan_coverage(metadata, candidates)
     comparison_summary = _summarize_reocr_batch_comparison(summaries, comparison_rows)
-    comparison_summary.update(
+    comparison_summary = _labor_reocr_pending_revalidation_summary(
         {
-            "conclusionLevel": "pass" if int(comparison_summary.get("exceptionCount") or 0) == 0 else "warning",
-            "conclusionMessage": "已批量采纳人工确认的图片识别结果作为当前批次核对依据。",
+            **comparison_summary,
             "notInInvoiceCount": sum(1 for row in comparison_rows if row.get("matchStatus") == "Excel有PDF无"),
             "reocrCandidateApplied": True,
             "reocrBatchApplied": True,
         }
+    )
+    presentation = _build_validated_labor_presentation(
+        comparison_summary,
+        comparison_rows,
+        candidate_matches,
+        excel_record_count=len(metadata.get("excelRows") or []),
     )
     preflight = _build_reocr_apply_preflight(metadata, candidates, comparison_summary, comparison_rows, duplicate_scope_count=len(duplicate_scopes))
     return {
@@ -4638,6 +8422,157 @@ def _build_reocr_batch_apply_preview(metadata: dict, candidates: list[dict]) -> 
         "comparisonSummary": comparison_summary,
         "comparisonRows": comparison_rows,
         "candidateMatches": candidate_matches,
+        "presentation": presentation,
+    }
+
+
+def _labor_reocr_pending_revalidation_summary(summary: dict) -> dict:
+    pending = {
+        **summary,
+        "conclusionLevel": "warning",
+        "conclusionMessage": "已采纳人工确认的图片识别候选；重新执行整批完整核对前不能机器通过。",
+        "canRelease": False,
+    }
+    pending.update(_labor_uat_review_state(pending))
+    return pending
+
+
+def _stable_labor_file_records(metadata: dict, key: str) -> list[dict]:
+    files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+    records = files.get(key) if isinstance(files.get(key), list) else []
+    stable_records = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        stable_record = {
+            str(field): value
+            for field, value in record.items()
+            if field not in {"path", "downloadUrl", "url", "signedUrl"}
+        }
+        local_path = Path(str(record.get("path") or ""))
+        if local_path.exists() and local_path.is_file():
+            digest = hashlib.sha256()
+            with local_path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            stable_record["sizeBytes"] = local_path.stat().st_size
+            stable_record["sha256"] = digest.hexdigest()
+        stable_records.append(stable_record)
+    return stable_records
+
+
+def _labor_mapping_input_fingerprint(metadata: dict) -> str:
+    """Bind a mapping preflight to the exact workbook objects it inspected."""
+
+    payload = {
+        "runId": str(metadata.get("id") or ""),
+        "workbooks": _stable_labor_file_records(metadata, "workbooks"),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _labor_result_input_fingerprint(metadata: dict) -> str:
+    """Bind an official result to the exact input and active governance state."""
+
+    governance_specs = (
+        ("ruleGovernance", "activeRules"),
+        ("nameMappingGovernance", "activeMappings"),
+        ("allocationGovernance", "activeAllocations"),
+        ("profileGovernance", "activeProfiles"),
+        ("correctionGovernance", "activeCorrections"),
+        ("reocrReplayGovernance", "activeCandidates"),
+    )
+    active_governance = {}
+    for governance_key, active_key in governance_specs:
+        governance = metadata.get(governance_key) if isinstance(metadata.get(governance_key), dict) else {}
+        active_governance[governance_key] = (
+            governance.get(active_key) if isinstance(governance.get(active_key), list) else []
+        )
+
+    payload = {
+        "supplierName": str(metadata.get("supplierName") or metadata.get("supplier") or ""),
+        "periodStart": str(metadata.get("periodStart") or ""),
+        "periodEnd": str(metadata.get("periodEnd") or ""),
+        "currency": str(metadata.get("currency") or ""),
+        "reconciliationScope": str(metadata.get("reconciliationScope") or "employee_detail_required"),
+        "pdfInvoices": _stable_labor_file_records(metadata, "pdfInvoices"),
+        "workbooks": _stable_labor_file_records(metadata, "workbooks"),
+        "workbookSheet": str(metadata.get("workbookSheet") or ""),
+        "excelMapping": metadata.get("excelMapping") if isinstance(metadata.get("excelMapping"), dict) else {},
+        "workbookMappings": metadata.get("workbookMappings") if isinstance(metadata.get("workbookMappings"), list) else [],
+        "manualNameMapping": metadata.get("manualNameMapping") if isinstance(metadata.get("manualNameMapping"), dict) else {},
+        "activeGovernance": active_governance,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _labor_invalidate_official_result(
+    metadata: dict,
+    *,
+    status: str,
+    reason_code: str,
+    message: str,
+    files: dict | None = None,
+) -> dict:
+    clean_files = dict(files if isinstance(files, dict) else metadata.get("files") or {})
+    clean_files.pop("diffReport", None)
+    clean_files.pop("businessReport", None)
+    return {
+        "status": status,
+        "files": clean_files,
+        "comparisonSummary": {},
+        "comparisonRows": [],
+        "candidateMatches": [],
+        "presentation": {},
+        "warehouseComparison": {},
+        "extractionQuality": {},
+        "reconciliationDiagnostics": {
+            "level": "warning",
+            "message": message,
+            "issues": [{"code": reason_code, "level": "warning", "message": message}],
+        },
+        "batchGuard": {
+            "status": reason_code,
+            "message": message,
+            "allowReleasableReport": False,
+            "unresolvedFiles": [],
+        },
+        "resultInputFingerprint": "",
+        "machineCheckStatus": "needs_review",
+        "businessReviewStatus": "pending",
+        "manualReviewRequired": True,
+        "directPaymentAllowed": False,
+        "requiresHumanReview": True,
+        "diffDownloadUrl": "",
+        "businessReportDownloadUrl": "",
+    }
+
+
+def _labor_reocr_revalidation_batch_guard() -> dict:
+    return {
+        "status": "reocr_revalidation_required",
+        "message": "图片识别候选已采纳，但逐文件明细覆盖、金额闭合和核对诊断尚未重新计算。",
+        "allowReleasableReport": False,
+        "unresolvedFiles": [],
+    }
+
+
+def _labor_reocr_revalidation_diagnostics() -> dict:
+    return {
+        "level": "warning",
+        "message": "图片识别候选采纳后需要重新执行整批完整核对。",
+        "nextStep": "重新运行抽取与核对，生成新的 batchGuard 和 reconciliationDiagnostics。",
+        "issues": [
+            {
+                "code": "reocr_revalidation_required",
+                "level": "warning",
+                "title": "图片识别采纳结果待整批重算",
+                "message": "候选结果不能仅凭异常数为 0 改写为机器通过。",
+                "items": [],
+            }
+        ],
     }
 
 
@@ -4673,6 +8608,8 @@ def _build_reocr_apply_preflight(
         post_apply_warnings.append(f"仍有 {missing_applied_count} 个图片识别复核任务未采纳，交付状态将保持阻断。")
     if exception_count:
         post_apply_warnings.append(f"投影结果仍有 {exception_count} 项异常，采纳后仍需人工复核。")
+    if candidates:
+        post_apply_warnings.append("采纳后必须重新执行整批完整核对，重新生成员工明细覆盖、金额闭合和诊断门禁。")
     if not candidates:
         post_apply_warnings.append("没有可采纳的图片识别结果。")
     preflight = {
@@ -4685,7 +8622,7 @@ def _build_reocr_apply_preflight(
         "affectedEmployeeCount": len(affected_employee_names),
         "affectedEmployees": affected_employee_names[:50],
         "coverageCompleteAfterApply": bool(coverage["coverageComplete"]),
-        "blockingAfterApply": bool(duplicate_scope_count or missing_applied_count or exception_count),
+        "blockingAfterApply": bool(candidates or duplicate_scope_count or missing_applied_count or exception_count),
         "postApplyWarnings": post_apply_warnings,
         "formalResultFields": ["comparisonSummary", "comparisonRows", "candidateMatches", "diffDownloadUrl"],
     }
@@ -4746,6 +8683,8 @@ def _with_labor_readiness(metadata: dict) -> dict:
 def _build_labor_readiness_gate(metadata: dict) -> dict:
     summary = metadata.get("comparisonSummary") if isinstance(metadata.get("comparisonSummary"), dict) else {}
     quality = metadata.get("extractionQuality") if isinstance(metadata.get("extractionQuality"), dict) else {}
+    diagnostics = metadata.get("reconciliationDiagnostics") if isinstance(metadata.get("reconciliationDiagnostics"), dict) else {}
+    batch_guard = metadata.get("batchGuard") if isinstance(metadata.get("batchGuard"), dict) else {}
     issues: list[dict] = []
 
     status = str(metadata.get("status") or "")
@@ -4756,19 +8695,120 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
                 "code": "no_official_result",
                 "level": "blocked",
                 "title": "尚未生成正式核对结果",
-                "message": "需要先完成抽取、核对并生成差异报告，才能判断本批次是否可上线交付。",
+                "message": "需要先完成抽取、核对并生成差异报告，才能判断本批次是否具备业务确认条件。",
                 "action": "点击抽取并核对，完成后下载正式报告复核。",
             }
         )
 
-    if status in {"抽取中", "抽取失败"}:
+    if has_result:
+        result_input_fingerprint = str(metadata.get("resultInputFingerprint") or "").strip()
+        if not result_input_fingerprint:
+            issues.append(
+                {
+                    "code": "missing_result_input_fingerprint",
+                    "level": "blocked",
+                    "title": "正式结果缺少输入版本绑定",
+                    "message": "当前结果无法证明对应现有 PDF、Excel、字段映射和治理版本。",
+                    "action": "使用当前版本重新执行完整核对。",
+                }
+            )
+        elif result_input_fingerprint != _labor_result_input_fingerprint(metadata):
+            issues.append(
+                {
+                    "code": "stale_result_inputs",
+                    "level": "blocked",
+                    "title": "正式结果已过期",
+                    "message": "PDF、Excel、字段映射或已启用治理规则在结果生成后发生变化。",
+                    "action": "不要沿用旧报告；重新执行整批完整核对。",
+                }
+            )
+
+        if batch_guard.get("allowReleasableReport") is not True:
+            issues.append(
+                {
+                    "code": "non_releasable_batch_guard",
+                    "level": "blocked",
+                    "title": "批次证据门禁未通过",
+                    "message": str(batch_guard.get("message") or "批次缺少完整且可追溯的 PDF 员工明细门禁结果。"),
+                    "action": "补齐逐文件员工明细和金额闭合证据后重新执行完整核对。",
+                }
+            )
+
+        diagnostics_level = str(diagnostics.get("level") or "").strip().lower()
+        if diagnostics_level == "critical":
+            issues.append(
+                {
+                    "code": "critical_reconciliation_diagnostics",
+                    "level": "blocked",
+                    "title": "核对诊断存在冲突",
+                    "message": str(diagnostics.get("message") or "核对诊断为 critical，不能进入业务确认。"),
+                    "action": "处理总额、仓库、员工归因或来源冲突后重新核对。",
+                }
+            )
+        elif diagnostics_level == "warning":
+            issues.append(
+                {
+                    "code": "warning_reconciliation_diagnostics",
+                    "level": "needs_review",
+                    "title": "核对诊断仍有不稳定项",
+                    "message": str(diagnostics.get("message") or "核对诊断为 warning，不能视为机器通过。"),
+                    "action": "逐项复核诊断证据并重新执行完整核对。",
+                }
+            )
+        elif diagnostics_level != "ok":
+            issues.append(
+                {
+                    "code": "missing_reconciliation_diagnostics",
+                    "level": "blocked",
+                    "title": "缺少正式核对诊断",
+                    "message": "当前结果没有可追溯的 reconciliationDiagnostics=ok 证据。",
+                    "action": "使用当前版本重新执行完整核对。",
+                }
+            )
+
+        machine_status = str(metadata.get("machineCheckStatus") or summary.get("machineCheckStatus") or "").strip().lower()
+        if (
+            summary.get("canRelease") is not True
+            or str(summary.get("conclusionLevel") or "").strip().lower() != "pass"
+            or machine_status != "passed"
+        ):
+            issues.append(
+                {
+                    "code": "machine_result_not_releasable",
+                    "level": "blocked",
+                    "title": "机器结果未达到业务确认前置条件",
+                    "message": "正式结果必须同时满足 canRelease=true、conclusionLevel=pass 和 machineCheckStatus=passed。",
+                    "action": "不要手工改写状态；修复证据后重新执行完整核对。",
+                }
+            )
+
+    async_task = metadata.get("asyncTask") if isinstance(metadata.get("asyncTask"), dict) else {}
+    async_status = str(async_task.get("status") or "").strip().lower()
+    if status != "已生成差异报告" or async_status in {
+        "queued",
+        "running",
+        "retry_wait",
+        "failed",
+        "error",
+    }:
         issues.append(
             {
                 "code": "run_not_finished",
                 "level": "blocked",
                 "title": "批次未完成",
-                "message": f"当前批次状态为「{status}」，不能作为上线结果交付。",
+                "message": f"当前批次状态为「{status}」，不能进入业务确认。",
                 "action": "等待抽取完成，或修复失败原因后重新核对。",
+            }
+        )
+
+    if not _labor_requires_employee_detail(metadata):
+        issues.append(
+            {
+                "code": "formal_employee_detail_scope_required",
+                "level": "blocked",
+                "title": "正式核对范围不完整",
+                "message": "total_only_diagnostic 只能用于诊断，不能进入正式业务确认。",
+                "action": "切换为 employee_detail_required 并重新执行整批员工级核对。",
             }
         )
 
@@ -4791,7 +8831,7 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
                 "code": "critical_extraction_quality",
                 "level": "blocked",
                 "title": "抽取质量为高风险",
-                "message": "PDF/Excel 抽取质量诊断为 critical，不能直接交付。",
+                "message": "PDF/Excel 抽取质量诊断为 critical，不能作为机器通过结果。",
                 "action": "优先处理低置信度抽取、OCR 缺失或供应商 Profile 问题。",
                 "evidenceCount": len(quality_issues),
             }
@@ -4803,7 +8843,7 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
                 "code": "warning_extraction_quality",
                 "level": "needs_review",
                 "title": "抽取质量需要复核",
-                "message": f"质量诊断中有 {len(quality_issues)} 条提示，建议业务复核证据后再交付。",
+                "message": f"质量诊断中有 {len(quality_issues)} 条提示，需先复核证据再进入业务确认。",
                 "action": "查看质量诊断与员工级证据，确认无漏抽或误抽。",
             }
         )
@@ -4832,7 +8872,7 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
                 "level": "blocked",
                 "title": "图片识别结果已确认但未正式采纳",
                 "message": f"还有 {confirmed_not_applied_count} 个图片识别结果只处于已确认状态，正式核对结果和差异报告尚未更新。",
-                "action": "请批量预览并采纳，或回滚不适用的识别结果；未采纳前不能作为上线结果交付。",
+                "action": "请批量预览并采纳，或回滚不适用的识别结果；未采纳前不能进入业务确认。",
             }
         )
 
@@ -4844,24 +8884,62 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
                 "level": "needs_review",
                 "title": "仍有治理候选未闭环",
                 "message": f"还有 {governance_pending} 个规则、姓名映射、Profile、修正、图片识别或跨仓库归属建议未确认/未应用/未回滚。",
-                "action": "逐项回放并确认、应用或回滚，确保 AI 建议不会静默影响正式结论。",
+                "action": "逐项回放并确认、应用或回滚，确保候选建议不会静默影响正式结论。",
             }
         )
 
     files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
     diff_report = files.get("diffReport") if isinstance(files.get("diffReport"), dict) else {}
     diff_download_url = str(metadata.get("diffDownloadUrl") or "")
-    if has_result and (summary.get("reocrCandidateApplied") or summary.get("reocrBatchApplied")) and not diff_download_url:
+    comparison_rows = metadata.get("comparisonRows") if isinstance(metadata.get("comparisonRows"), list) else []
+    pdf_employee_count = _safe_int(summary.get("pdfEmployeeCount"))
+    excel_employee_count = _safe_int(summary.get("excelEmployeeCount"))
+    if has_result and not comparison_rows:
         issues.append(
             {
-                "code": "missing_adopted_report",
+                "code": "missing_employee_detail_result",
                 "level": "blocked",
-                "title": "正式报告缺失",
-                "message": "已采纳图片识别结果，但没有可下载的正式差异报告。",
-                "action": "重新生成采纳后的差异报告，确保下载文件与正式结果一致。",
+                "title": "员工级核对明细缺失",
+                "message": "正式结果没有可追溯的员工级 comparisonRows。",
+                "action": "重新执行整批员工级核对并生成完整明细。",
             }
         )
-    elif has_result and diff_download_url and diff_report and diff_report.get("downloadUrl") != diff_download_url:
+    if has_result and (
+        pdf_employee_count <= 0
+        or excel_employee_count <= 0
+        or pdf_employee_count != excel_employee_count
+        or len(comparison_rows) != pdf_employee_count
+    ):
+        issues.append(
+            {
+                "code": "employee_detail_counts_not_closed",
+                "level": "blocked",
+                "title": "员工级数量证据未闭合",
+                "message": "正式结果必须包含正数且一致的 PDF/Excel 员工数，并与 comparisonRows 逐人覆盖数一致。",
+                "action": "检查漏抽、重复员工和账单映射后重新执行整批核对。",
+            }
+        )
+    if has_result and any(str(row.get("matchStatus") or "").strip() != "通过" for row in comparison_rows):
+        issues.append(
+            {
+                "code": "employee_detail_rows_not_clean",
+                "level": "blocked",
+                "title": "员工级明细仍有异常",
+                "message": "机器通过结果中的每一条 comparisonRows 都必须明确标记为通过。",
+                "action": "处理未匹配、金额、工时或低置信度异常后重新核对。",
+            }
+        )
+    if has_result and (not diff_download_url or not diff_report):
+        issues.append(
+            {
+                "code": "missing_official_report",
+                "level": "blocked",
+                "title": "正式报告缺失",
+                "message": "当前机器结果没有完整的差异报告文件记录和下载链接。",
+                "action": "重新生成正式差异报告并确认文件可下载。",
+            }
+        )
+    elif has_result and diff_report.get("downloadUrl") != diff_download_url:
         issues.append(
             {
                 "code": "report_url_mismatch",
@@ -4886,14 +8964,17 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
     review_count = sum(1 for issue in issues if issue["level"] == "needs_review")
     status_code = "blocked" if blocked_count else "needs_review" if review_count else "ready"
     labels = {
-        "ready": "可上线",
-        "needs_review": "需复核",
-        "blocked": "不可上线",
+        "ready": "可进入业务确认",
+        "needs_review": "需处理后复核",
+        "blocked": "机器结果阻断",
     }
     return {
         "status": status_code,
         "label": labels[status_code],
         "ready": status_code == "ready",
+        "machineReady": status_code == "ready",
+        "businessReviewRequired": True,
+        "directPaymentAllowed": False,
         "summary": {
             "issueCount": len(issues),
             "blockedCount": blocked_count,
@@ -4911,17 +8992,48 @@ def _build_labor_readiness_gate(metadata: dict) -> dict:
 
 
 def _labor_diff_report_file_exists(metadata: dict, diff_report: dict) -> bool:
-    report_path = str(diff_report.get("path") or "").strip()
-    if report_path and Path(report_path).exists():
-        return True
-    run_id = str(metadata.get("id") or "")
-    filename = str(diff_report.get("filename") or "").strip()
-    if not run_id or not filename:
+    if labor_postgres_state_enabled() and str(diff_report.get("objectKey") or "").strip():
+        try:
+            expected_size = int(diff_report.get("sizeBytes") or 0)
+            verified_size = int(diff_report.get("storageVerifiedSizeBytes") or 0)
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            diff_report.get("storageVerified") is True
+            and expected_size > 0
+            and verified_size == expected_size
+            and re.fullmatch(r"[0-9a-f]{64}", str(diff_report.get("sha256") or "").strip().lower())
+        )
+    explicit_path = Path(str(diff_report.get("path") or ""))
+    if str(diff_report.get("path") or ""):
+        path = explicit_path
+    else:
+        filename = str(diff_report.get("filename") or "")
+        if not filename:
+            return False
+        run_id = str(metadata.get("runId") or metadata.get("id") or "")
+        if not run_id:
+            return False
+        run_dir = get_labor_run_dir(run_id)
+        path = _resolve_labor_download_path(run_dir, filename)
+    if not path.exists() or not path.is_file():
         return False
+    expected_hash = str(diff_report.get("sha256") or "").strip().lower()
     try:
-        return (get_labor_run_dir(run_id) / Path(filename).name).exists()
-    except FileNotFoundError:
+        expected_size = int(diff_report.get("sizeBytes"))
+    except (TypeError, ValueError):
         return False
+    if (
+        expected_size <= 0
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+        or path.stat().st_size != expected_size
+    ):
+        return False
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest() == expected_hash
 
 
 def _count_labor_pending_governance(metadata: dict) -> int:
@@ -5044,26 +9156,107 @@ def _row_matches_any_affected_name(row: dict, affected_names: list[str]) -> bool
 
 def _active_supplier_profile_override(supplier: str, profile_governance: dict) -> SupplierExtractionProfile | None:
     normalized_supplier = _normalize_supplier_for_profile(supplier)
-    for record in reversed(profile_governance.get("activeProfiles") or []):
+    candidates: list[tuple[tuple[int, int], bool, SupplierExtractionProfile]] = []
+    for record in profile_governance.get("activeProfiles") or []:
         if record.get("decision") != "active" or record.get("status") != "active":
             continue
         profile_data = record.get("profileData") if isinstance(record.get("profileData"), dict) else {}
         aliases = [str(alias) for alias in profile_data.get("aliases", []) if str(alias).strip()]
         record_supplier = str(record.get("supplier") or "").strip()
         scope_values = [record_supplier, *aliases]
-        if normalized_supplier and not any(_normalize_supplier_for_profile(value) in normalized_supplier for value in scope_values if value):
+        scores = [
+            score
+            for value in scope_values
+            if value and (score := supplier_alias_match_score(normalized_supplier, value)) is not None
+        ]
+        if not normalized_supplier or not scores:
             continue
-        key = str(profile_data.get("key") or record.get("profileKey") or "active-profile")
-        return SupplierExtractionProfile(
-            key=key,
-            aliases=aliases or ([supplier.lower().strip()] if supplier else []),
-            prompt_notes=[str(note) for note in profile_data.get("prompt_notes", []) if str(note).strip()],
-            image_page_policy=str(profile_data.get("image_page_policy") or "all"),
-            version=int(profile_data.get("version") or record.get("version") or 1),
-            failure_count=int(profile_data.get("failure_count") or 0),
-            deprecated=False,
+        profile = _supplier_profile_from_governance_data(
+            profile_data,
+            fallback_key=str(record.get("profileKey") or "active-profile"),
+            fallback_aliases=aliases or ([supplier.lower().strip()] if supplier else []),
         )
-    return None
+        if profile is not None and is_runtime_approved_profile(profile):
+            exact_scope = any(
+                _normalize_supplier_for_profile(value) == normalized_supplier
+                for value in scope_values
+                if value
+            )
+            candidates.append((max(scores), exact_scope, profile))
+    if not candidates:
+        return None
+
+    best_score = max(score for score, _exact, _profile in candidates)
+    best_candidates = [item for item in candidates if item[0] == best_score]
+    profile_keys = {profile.key for _score, _exact, profile in best_candidates}
+    if len(profile_keys) != 1:
+        logger.warning(
+            "运行内 Supplier Profile 匹配冲突，已拒绝覆盖: supplier=%s, profiles=%s",
+            supplier,
+            sorted(profile_keys),
+        )
+        return None
+    selected_score, exact_scope, selected = max(
+        best_candidates,
+        key=lambda item: item[2].version,
+    )
+    baseline = resolve_supplier_profile(
+        supplier,
+        profiles_path=AI_CONFIG.get("supplier_profiles_path"),
+    )
+    baseline_scores = [
+        score
+        for alias in baseline.aliases
+        if (score := supplier_alias_match_score(normalized_supplier, alias)) is not None
+    ]
+    if baseline.key != "default" and baseline.key != selected.key and baseline_scores:
+        baseline_score = max(baseline_scores)
+        if selected_score < baseline_score or (selected_score == baseline_score and not exact_scope):
+            logger.warning(
+                "运行内 Supplier Profile 覆盖范围不够具体，已保留既有 Profile: supplier=%s, active=%s, baseline=%s",
+                supplier,
+                selected.key,
+                baseline.key,
+            )
+            return None
+    return selected
+
+
+def _supplier_profile_from_governance_data(
+    profile_data: dict,
+    *,
+    fallback_key: str,
+    fallback_aliases: list[str],
+) -> SupplierExtractionProfile | None:
+    try:
+        version = int(profile_data.get("version") or 0)
+        failure_count = int(profile_data.get("failure_count") or 0)
+    except (TypeError, ValueError):
+        return None
+    aliases = [str(alias) for alias in profile_data.get("aliases", []) if str(alias).strip()]
+    return SupplierExtractionProfile(
+        key=str(profile_data.get("key") or fallback_key),
+        aliases=aliases or [alias for alias in fallback_aliases if alias],
+        prompt_notes=[str(note) for note in profile_data.get("prompt_notes", []) if str(note).strip()],
+        authoritative_total_methods=[
+            str(method)
+            for method in profile_data.get("authoritative_total_methods", [])
+            if str(method).strip()
+        ],
+        line_item_aliases={
+            str(label).strip().lower(): str(item_type).strip()
+            for label, item_type in (profile_data.get("line_item_aliases") or {}).items()
+            if str(label).strip() and str(item_type).strip()
+        },
+        image_page_policy=str(profile_data.get("image_page_policy") or "all"),
+        version=version,
+        failure_count=failure_count,
+        deprecated=bool(profile_data.get("deprecated", False)),
+        status=str(profile_data.get("status") or "draft").strip().lower(),
+        approved_by=str(profile_data.get("approvedBy") or profile_data.get("approved_by") or "").strip(),
+        approved_at=str(profile_data.get("approvedAt") or profile_data.get("approved_at") or "").strip(),
+        created_from=str(profile_data.get("created_from") or "").strip(),
+    )
 
 
 def _normalize_supplier_for_profile(value: str) -> str:
@@ -5071,43 +9264,375 @@ def _normalize_supplier_for_profile(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _run_labor_extract_compare(run_id: str) -> bool:
+def _labor_progress_completed(message: str = "核对报告已生成。") -> dict:
+    now = datetime.now().isoformat(timespec="seconds")
+    return {
+        "status": "completed",
+        "phase": "completed",
+        "phaseLabel": "完成",
+        "message": message,
+        "lastUpdatedAt": now,
+        "completedAt": now,
+    }
+
+
+def _labor_task_generation_id(metadata: dict) -> str:
+    async_task = metadata.get("asyncTask") if isinstance(metadata.get("asyncTask"), dict) else {}
+    return str(metadata.get("taskGenerationId") or async_task.get("taskGenerationId") or "").strip()
+
+
+def _update_labor_task_metadata(
+    run_id: str,
+    task_generation_id: str,
+    updates: dict | Callable[[dict], dict],
+) -> tuple[dict, bool]:
+    generation = str(task_generation_id or "").strip()
+    if generation:
+        return update_labor_metadata_for_task(
+            run_id,
+            expected_task_generation_id=generation,
+            updates=updates,
+        )
+    current = _labor_metadata_or_404(run_id)
+    payload = updates(current) if callable(updates) else updates
+    return update_labor_metadata(run_id, payload), True
+
+
+def _update_labor_progress(
+    run_id: str,
+    *,
+    phase: str,
+    phase_label: str,
+    message: str = "",
+    status: str = "running",
+    total_files: int | None = None,
+    processed_files: int | None = None,
+    total_pages: int | None = None,
+    processed_pages: int | None = None,
+    current_file: str = "",
+    current_page: int | None = None,
+    cache_hit_count: int | None = None,
+    retry_delay_seconds: int | None = None,
+    retry_attempt: int | None = None,
+    task_generation_id: str = "",
+) -> bool:
+    """Persist reader-facing labor progress for frontend polling.
+
+    This updates the existing metadata file only; it does not create a second
+    job store or affect non-labor modules.
+    """
+    try:
+        def build_updates(metadata: dict) -> dict:
+            now = datetime.now().isoformat(timespec="seconds")
+            previous_progress = metadata.get("progress") if isinstance(metadata.get("progress"), dict) else {}
+            previous_task = metadata.get("asyncTask") if isinstance(metadata.get("asyncTask"), dict) else {}
+            progress = dict(previous_progress)
+            progress.update(
+                {
+                    "status": status,
+                    "phase": phase,
+                    "phaseLabel": phase_label,
+                    "message": message or phase_label,
+                    "lastUpdatedAt": now,
+                    "startedAt": progress.get("startedAt") or previous_task.get("startedAt") or now,
+                }
+            )
+            for key, value in {
+                "totalFiles": total_files,
+                "processedFiles": processed_files,
+                "totalPages": total_pages,
+                "processedPages": processed_pages,
+                "currentFile": current_file,
+                "currentPage": current_page,
+                "cacheHitCount": cache_hit_count,
+                "retryDelaySeconds": retry_delay_seconds,
+                "retryAttempt": retry_attempt,
+            }.items():
+                if value not in (None, ""):
+                    progress[key] = value
+
+            task_status = "failed" if status == "failed" else "completed" if status == "completed" else "running"
+            task_label = "失败" if status == "failed" else "完成" if status == "completed" else "处理中"
+            async_task = dict(previous_task)
+            async_task.update(
+                {
+                    "status": task_status,
+                    "statusLabel": task_label,
+                    "message": message or phase_label,
+                    "startedAt": async_task.get("startedAt") or progress.get("startedAt") or now,
+                }
+            )
+            return {
+                "stage": phase_label,
+                "progress": progress,
+                "asyncTask": async_task,
+            }
+
+        _metadata, committed = _update_labor_task_metadata(
+            run_id,
+            task_generation_id,
+            build_updates,
+        )
+        return committed
+    except Exception as exc:  # noqa: BLE001 - progress must not break the audit job.
+        logger.warning(f"[{run_id}] 更新劳务核对进度失败: {exc}")
+        return False
+
+
+def _labor_ai_progress_callback(
+    run_id: str,
+    *,
+    total_files: int,
+    task_generation_id: str = "",
+) -> Callable[[dict], None]:
+    def _handle(event: dict) -> None:
+        event_name = str(event.get("event") or "")
+        total_pages = _coerce_int(event.get("total_pages"))
+        processed_pages = _coerce_int(event.get("processed_pages"))
+        current_file = str(event.get("current_file") or "")
+        current_page = _coerce_int(event.get("current_page"))
+        base_payload = {
+            "phase": "pdf_detail",
+            "phase_label": "识别 PDF 发票明细",
+            "total_files": total_files,
+            "total_pages": total_pages,
+            "processed_pages": processed_pages,
+            "current_file": current_file,
+            "current_page": current_page,
+        }
+        if task_generation_id:
+            base_payload["task_generation_id"] = task_generation_id
+        if event_name == "pdf_pages_loaded":
+            _update_labor_progress(
+                run_id,
+                **base_payload,
+                message=f"已读取 {total_files} 张 PDF 发票，共 {total_pages or 0} 页。",
+            )
+            return
+        if event_name == "rendering_images":
+            _update_labor_progress(
+                run_id,
+                **base_payload,
+                message="正在准备图片型发票识别。",
+            )
+            return
+        if event_name == "ai_image_start":
+            _update_labor_progress(
+                run_id,
+                **base_payload,
+                message=f"开始识别 PDF 发票明细，共 {total_pages or 0} 页。",
+            )
+            return
+        if event_name == "ai_image_page_started":
+            detail = _labor_page_progress_text(processed_pages, total_pages, current_file, current_page, active=True)
+            _update_labor_progress(run_id, **base_payload, message=detail)
+            return
+        if event_name == "ai_image_page_retrying":
+            delay = _coerce_int(event.get("retry_delay_seconds"))
+            attempt = _coerce_int(event.get("retry_attempt"))
+            retry_text = f"AI 识别服务响应较慢，正在重试当前页（第 {attempt or 1} 次）。"
+            _update_labor_progress(
+                run_id,
+                **base_payload,
+                message=retry_text,
+                retry_delay_seconds=delay,
+                retry_attempt=attempt,
+            )
+            return
+        if event_name == "ai_image_high_res_retrying":
+            detail = _labor_page_progress_text(processed_pages, total_pages, current_file, current_page, active=True)
+            _update_labor_progress(run_id, **base_payload, message=f"{detail} 正在用更清晰的图片重新识别。")
+            return
+        if event_name in {"ai_image_page_completed", "ai_image_page_skipped"}:
+            detail = _labor_page_progress_text(processed_pages, total_pages, current_file, current_page, active=False)
+            if event_name == "ai_image_page_skipped":
+                detail = f"{detail} 当前页识别失败，已继续处理下一页。"
+            _update_labor_progress(run_id, **base_payload, message=detail)
+
+    return _handle
+
+
+def _labor_ocr_progress_callback(run_id: str, *, task_generation_id: str = "") -> Callable[[dict], None]:
+    def _handle(snapshot: dict) -> None:
+        progress_payload = {
+            "phase": "auto_ocr",
+            "phase_label": "本地 OCR 识别",
+            "message": str(snapshot.get("message") or "正在调用本地 Worker 识别 PDF 发票。"),
+            "status": "running",
+            "total_files": _coerce_int(snapshot.get("totalFiles")),
+            "processed_files": _coerce_int(snapshot.get("processedFiles")),
+            "total_pages": _coerce_int(snapshot.get("totalPages")),
+            "processed_pages": _coerce_int(snapshot.get("processedPages")),
+            "current_file": str(snapshot.get("currentFile") or ""),
+            "cache_hit_count": _coerce_int(snapshot.get("cacheHitCount")),
+        }
+        if task_generation_id:
+            progress_payload["task_generation_id"] = task_generation_id
+        _update_labor_progress(
+            run_id,
+            **progress_payload,
+        )
+
+    return _handle
+
+
+def _summarize_pdf_page_audit(audit_rows: list[dict]) -> dict:
+    total_pages = len(audit_rows)
+    zero_row_pages = 0
+    failed_pages = 0
+    high_res_pages = 0
+    extracted_rows = 0
+    amount_total = 0.0
+    for row in audit_rows:
+        status = str(row.get("status") or "")
+        row_count = _coerce_int(row.get("rowCount")) or 0
+        extracted_rows += row_count
+        try:
+            amount_total += float(row.get("amountTotal") or 0)
+        except (TypeError, ValueError):
+            pass
+        if row_count == 0 and status in {"completed", "cache_hit", "high_res_retry_no_rows"}:
+            zero_row_pages += 1
+        if "failed" in status:
+            failed_pages += 1
+        if row.get("highResolutionRetry") or status.startswith("high_res_retry"):
+            high_res_pages += 1
+    return {
+        "pageCount": total_pages,
+        "zeroRowPageCount": zero_row_pages,
+        "failedPageCount": failed_pages,
+        "highResolutionRetryPageCount": high_res_pages,
+        "extractedRowCount": extracted_rows,
+        "amountTotal": round(amount_total, 2),
+    }
+
+
+def _labor_page_progress_text(
+    processed_pages: int | None,
+    total_pages: int | None,
+    current_file: str,
+    current_page: int | None,
+    *,
+    active: bool,
+) -> str:
+    done = int(processed_pages or 0)
+    total = int(total_pages or 0)
+    prefix = "正在识别 PDF 发票" if active else "已识别 PDF 发票"
+    progress = f"{done} / {total} 页" if total else f"{done} 页"
+    location = ""
+    if current_file and current_page:
+        location = f"，当前文件：{current_file}，第 {current_page} 页"
+    elif current_file:
+        location = f"，当前文件：{current_file}"
+    return f"{prefix}：{progress}{location}。"
+
+
+def _coerce_int(value) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _run_labor_extract_compare(
+    run_id: str,
+    task_generation_id: str = "",
+    reservation_token: str = "",
+) -> bool:
+    generation = str(task_generation_id or "").strip()
     try:
         logger.info(f"[{run_id}] === 抽取任务启动 ===")
         run_dir = get_labor_run_dir(run_id)
         if labor_persistent_storage_enabled():
             sync_labor_run_from_persistent(run_id, run_dir)
-        update_labor_metadata(
+        current = _labor_metadata_or_404(run_id)
+        current_async_task = current.get("asyncTask") if isinstance(current.get("asyncTask"), dict) else {}
+        if not generation and current.get("status") == "抽取中" and current_async_task.get("status") in {"queued", "running"}:
+            generation = _labor_task_generation_id(current)
+        _running, current_task = _update_labor_task_metadata(
             run_id,
+            generation,
             {
                 "status": "抽取中",
                 "stage": "后台处理中",
                 "asyncTask": {
+                    **current_async_task,
                     "status": "running",
                     "statusLabel": "处理中",
                     "message": "后台正在读取已上传文件并生成核对结果。",
                     "startedAt": datetime.utcnow().isoformat(),
+                    **({"taskGenerationId": generation} if generation else {}),
                 },
             },
         )
-        _perform_labor_extract_compare(run_id)
-        update_labor_metadata(
+        if generation and not current_task:
+            logger.info("[%s] 任务代次已失效，跳过旧任务启动", run_id)
+            return False
+        _update_labor_progress(
             run_id,
+            phase="queued",
+            phase_label="准备核对材料",
+            message="后台已接收任务，正在准备读取材料。",
+            task_generation_id=generation,
+        )
+        performed = (
+            _perform_labor_extract_compare(run_id, task_generation_id=generation)
+            if generation
+            else _perform_labor_extract_compare(run_id)
+        )
+        if isinstance(performed, dict) and performed.get("_taskGenerationRejected") is True:
+            logger.info("[%s] 旧任务完成结果已忽略，当前批次属于较新任务", run_id)
+            return False
+        if isinstance(performed, dict) and performed.get("inputSnapshotRejected") is True:
+            raise ValueError("核对期间输入发生变化，本次旧快照结果未发布；请使用当前材料重新执行整批核对。")
+        completed_metadata, completed_current_task = _update_labor_task_metadata(
+            run_id,
+            generation,
             {
+                "progress": _labor_progress_completed("核对报告已生成。"),
                 "asyncTask": {
+                    **(
+                        performed.get("asyncTask")
+                        if isinstance(performed, dict) and isinstance(performed.get("asyncTask"), dict)
+                        else {}
+                    ),
                     "status": "completed",
                     "statusLabel": "完成",
                     "message": "核对结果已生成。",
                     "completedAt": datetime.utcnow().isoformat(),
+                    **({"taskGenerationId": generation} if generation else {}),
                 },
             },
+        )
+        if generation and not completed_current_task:
+            logger.info("[%s] 旧任务完成状态已忽略，当前批次属于较新任务", run_id)
+            return False
+        completed_owner = str(completed_metadata.get("ownerUserId") or "local-default")
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="extraction_completed",
+            run_id=run_id,
+            owner_user_id=completed_owner,
+            actor_user_id=completed_owner,
+            outcome="success",
         )
         logger.info(f"[{run_id}] === 抽取任务完成 ===")
         return True
     except ValueError as exc:
         logger.error(f"[{run_id}] 抽取失败(ValueError): {exc}")
-        update_labor_metadata(
+        _update_labor_progress(
             run_id,
+            phase="failed",
+            phase_label="核对失败",
+            message=str(exc),
+            status="failed",
+            task_generation_id=generation,
+        )
+        _failed_metadata, failed_current_task = _update_labor_task_metadata(
+            run_id,
+            generation,
             {
                 "status": "抽取失败",
                 "stage": "错误",
@@ -5117,15 +9642,35 @@ def _run_labor_extract_compare(run_id: str) -> bool:
                     "statusLabel": "失败",
                     "message": str(exc),
                     "failedAt": datetime.utcnow().isoformat(),
+                    **({"taskGenerationId": generation} if generation else {}),
                 },
             },
+        )
+        if generation and not failed_current_task:
+            logger.info("[%s] 旧任务失败状态已忽略，当前批次属于较新任务", run_id)
+            return False
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="extraction_failed",
+            run_id=run_id,
+            outcome="failed",
+            reason_code="LABOR_EXTRACT_VALUE_ERROR",
         )
         return False
     except Exception as exc:
         logger.error(f"[{run_id}] 抽取失败(Exception): {exc}", exc_info=True)
         message = f"生成劳务核对结果失败：{exc}"
-        update_labor_metadata(
+        _update_labor_progress(
             run_id,
+            phase="failed",
+            phase_label="核对失败",
+            message=message,
+            status="failed",
+            task_generation_id=generation,
+        )
+        _failed_metadata, failed_current_task = _update_labor_task_metadata(
+            run_id,
+            generation,
             {
                 "status": "抽取失败",
                 "stage": "错误",
@@ -5135,10 +9680,52 @@ def _run_labor_extract_compare(run_id: str) -> bool:
                     "statusLabel": "失败",
                     "message": message,
                     "failedAt": datetime.utcnow().isoformat(),
+                    **({"taskGenerationId": generation} if generation else {}),
                 },
             },
         )
+        if generation and not failed_current_task:
+            logger.info("[%s] 旧任务异常状态已忽略，当前批次属于较新任务", run_id)
+            return False
+        append_labor_audit_event(
+            _labor_audit_path(),
+            action="extraction_failed",
+            run_id=run_id,
+            outcome="failed",
+            reason_code="LABOR_EXTRACT_EXCEPTION",
+        )
         return False
+    finally:
+        if reservation_token:
+            _LABOR_TASK_LIMITER.release(run_id, reservation_token)
+
+
+def _run_labor_extract_compare_with_release(
+    run_id: str,
+    task_generation_id: str = "",
+    reservation_token: str = "",
+) -> None:
+    # Keep the endpoint compatible with test/extension runners that still expose
+    # the historical ``runner(run_id)`` callable while production uses the
+    # generation-aware signature. The wrapper owns a final idempotent release so
+    # a substituted runner cannot leak the reservation.
+    import inspect
+
+    try:
+        runner = _run_labor_extract_compare
+        parameters = inspect.signature(runner).parameters.values()
+        accepts_generation = any(
+            parameter.name == "task_generation_id"
+            or parameter.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
+            for parameter in parameters
+        )
+        if accepts_generation:
+            runner(run_id, task_generation_id, reservation_token)
+        else:
+            runner(run_id)
+    finally:
+        if reservation_token:
+            _LABOR_TASK_LIMITER.release(run_id, reservation_token)
 
 
 def _aggregate_excel_rows(excel_rows: list) -> list:
@@ -5191,6 +9778,21 @@ def _aggregate_excel_rows(excel_rows: list) -> list:
     return aggregated
 
 
+def _labor_apply_workbook_warehouse_fallback(
+    rows: list[LaborLineItem],
+    source_file: str,
+    batch_warehouse_id: str = "",
+) -> list[LaborLineItem]:
+    """Fill only blank warehouse ids from explicit batch/filename evidence."""
+    fallback = str(batch_warehouse_id or "").strip() or _warehouse_id_from_filename(source_file)
+    if not fallback:
+        return list(rows)
+    return [
+        row if str(row.warehouse_id or "").strip() else replace(row, warehouse_id=fallback)
+        for row in rows
+    ]
+
+
 def _labor_cost_summaries(workbook_paths: list[Path]) -> list[dict]:
     summaries: list[dict] = []
     for workbook_path in workbook_paths:
@@ -5203,8 +9805,145 @@ def _labor_cost_summaries(workbook_paths: list[Path]) -> list[dict]:
     return summaries
 
 
-def _perform_labor_extract_compare(run_id: str) -> dict:
+def _labor_has_complete_warehouse_cost_evidence(
+    pdf_totals: list[dict],
+    cost_summaries: list[dict],
+) -> bool:
+    """Return whether OTWS-style summaries cover every authoritative invoice warehouse."""
+    invoice_warehouses = {
+        str(item.get("warehouse_id") or "").strip()
+        for item in pdf_totals
+        if item.get("authoritative") is not False
+        and float(item.get("total_amount") or 0) > 0
+        and str(item.get("warehouse_id") or "").strip()
+    }
+    summary_warehouses = {
+        str(item.get("warehouseId") or "").strip()
+        for item in cost_summaries
+        if str(item.get("warehouseId") or "").strip()
+        and float((item.get("summary") or {}).get("reportedTotal") or 0) > 0
+    }
+    return bool(invoice_warehouses) and invoice_warehouses.issubset(summary_warehouses)
+
+
+def _labor_apply_cost_summary_amount_basis(
+    warehouse_comparison: dict,
+    cost_summaries: list[dict],
+    *,
+    amount_tolerance: float,
+) -> dict:
+    """Use the OTWS reported warehouse total instead of one mapped detail sheet."""
+    if not cost_summaries:
+        return warehouse_comparison
+
+    summaries_by_warehouse = {
+        str(item.get("warehouseId") or "").strip(): item
+        for item in cost_summaries
+        if str(item.get("warehouseId") or "").strip()
+        and isinstance(item.get("summary"), dict)
+        and item["summary"].get("reportedTotal") is not None
+    }
+    if not summaries_by_warehouse:
+        return warehouse_comparison
+
+    normalized = dict(warehouse_comparison)
+    rows: list[dict] = []
+    for original in warehouse_comparison.get("rows", []) or []:
+        row = dict(original)
+        warehouse_id = str(row.get("warehouseId") or "").strip()
+        cost_summary = summaries_by_warehouse.get(warehouse_id)
+        if not cost_summary:
+            rows.append(row)
+            continue
+
+        summary = cost_summary.get("summary") or {}
+        details = cost_summary.get("details") or {}
+        excel_amount = round(float(summary.get("reportedTotal") or 0), 2)
+        excel_hours = round(
+            sum(
+                float((details.get(key) or {}).get("hours") or 0)
+                for key in ("employeeExpenses", "employeeBenefits", "loadingAndUnloading")
+            ),
+            2,
+        )
+        amount_delta = round(float(row.get("pdfAmountTotal") or 0) - excel_amount, 2)
+        row.update(
+            {
+                "excelEmployeeCount": int(cost_summary.get("employeeCount") or row.get("excelEmployeeCount") or 0),
+                "excelHoursTotal": excel_hours,
+                "excelAmountTotal": excel_amount,
+                "amountDelta": amount_delta,
+                "excelEvidenceFile": str(cost_summary.get("sourceFile") or ""),
+                "excelEvidenceRef": str(summary.get("evidence") or ""),
+            }
+        )
+        if row.get("reconciliationStatus") not in {"needs_review", "missing_pdf_invoice"}:
+            reconciliation_status = (
+                "passed"
+                if amount_within_tolerance(amount_delta, amount_tolerance)
+                else "amount_difference"
+            )
+            row["reconciliationStatus"] = reconciliation_status
+            row["matchStatus"] = "通过" if reconciliation_status == "passed" else "金额差异"
+        rows.append(row)
+
+    normalized["rows"] = rows
+    summary = dict(warehouse_comparison.get("summary") or {})
+    pdf_total = round(sum(float(row.get("pdfAmountTotal") or 0) for row in rows), 2)
+    excel_total = round(sum(float(row.get("excelAmountTotal") or 0) for row in rows), 2)
+    comparable_rows = [
+        row
+        for row in rows
+        if row.get("reconciliationStatus") in {"passed", "amount_difference"}
+    ]
+    passed_count = sum(1 for row in rows if row.get("reconciliationStatus") == "passed")
+    summary.update(
+        {
+            "pdfAmountTotal": pdf_total,
+            "excelAmountTotal": excel_total,
+            "amountDeltaTotal": round(pdf_total - excel_total, 2),
+            "totalPassed": bool(rows)
+            and not (warehouse_comparison.get("errors") or [])
+            and all(row.get("reconciliationStatus") == "passed" for row in rows),
+            "warehouseCount": len(rows),
+            "passedCount": passed_count,
+            "exceptionCount": len(rows) - passed_count,
+            "diffWarehouses": [
+                row.get("warehouseId")
+                for row in rows
+                if row.get("reconciliationStatus") != "passed"
+            ],
+            "comparableExcelAmountTotal": round(
+                sum(float(row.get("excelAmountTotal") or 0) for row in comparable_rows),
+                2,
+            ),
+            "comparableAmountDeltaTotal": round(
+                sum(float(row.get("amountDelta") or 0) for row in comparable_rows),
+                2,
+            ),
+            "missingPdfAmountTotal": round(
+                sum(
+                    float(row.get("excelAmountTotal") or 0)
+                    for row in rows
+                    if row.get("reconciliationStatus") == "missing_pdf_invoice"
+                ),
+                2,
+            ),
+        }
+    )
+    normalized["summary"] = summary
+    return normalized
+
+
+def _perform_labor_extract_compare(run_id: str, task_generation_id: str = "") -> dict:
     metadata = _labor_metadata_or_404(run_id)
+    generation = str(task_generation_id or "").strip()
+    if generation and _labor_task_generation_id(metadata) != generation:
+        return {**metadata, "_taskGenerationRejected": True}
+    input_fingerprint_at_start = _labor_result_input_fingerprint(metadata)
+    from .engine.labor.models import line_items_from_dicts
+
+    previous_pdf_rows = line_items_from_dicts(metadata.get("pdfExtractedRows") or [])
     run_dir = get_labor_run_dir(run_id)
     mapping = metadata.get("excelMapping") or {}
     sheet_name = metadata.get("workbookSheet") or ""
@@ -5220,16 +9959,58 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
     name_mapping_governance = _normalized_name_mapping_governance(metadata.get("nameMappingGovernance"))
     active_supplier_profile = _active_supplier_profile_override(supplier, profile_governance)
     final_status = "已生成差异报告"
+    structure_reconciliation = {
+        "decisions": [],
+        "unresolvedFiles": [],
+        "reconciledFiles": [],
+        "currencyCodes": [],
+    }
+    auto_ocr_candidate = {}
 
     try:
         # [F] Excel 解析（多文件合并）
         logger.info(f"[{run_id}] [F] 开始解析 Excel: {len(workbook_paths)} 个文件, 工作表: {sheet_name}")
-        update_labor_metadata(run_id, {"stage": "解析 Excel 账单"})
+        _update_labor_progress(
+            run_id,
+            phase="excel",
+            phase_label="读取 Excel 账单",
+            message="正在读取 Excel 账单。",
+            total_files=len(workbook_paths),
+            processed_files=0,
+            task_generation_id=generation,
+        )
+        _update_labor_task_metadata(run_id, generation, {"stage": "解析 Excel 账单"})
         excel_rows = []
-        for wb_path in workbook_paths:
-            rows = read_workbook_rows(wb_path, sheet_name, mapping)
+        for index, wb_path in enumerate(workbook_paths, start=1):
+            _update_labor_progress(
+                run_id,
+                phase="excel",
+                phase_label="读取 Excel 账单",
+                message=f"正在读取账单文件：{wb_path.name}",
+                total_files=len(workbook_paths),
+                processed_files=index - 1,
+                current_file=wb_path.name,
+                task_generation_id=generation,
+            )
+            workbook_sheet, workbook_mapping = _labor_workbook_mapping(metadata, wb_path)
+            rows = read_workbook_rows(wb_path, workbook_sheet, workbook_mapping)
+            rows = _labor_apply_workbook_warehouse_fallback(
+                rows,
+                wb_path.name,
+                str(metadata.get("warehouseId") or metadata.get("warehouse_id") or ""),
+            )
             logger.info(f"[{run_id}] [F]   {wb_path.name}: {len(rows)} 行")
             excel_rows.extend(rows)
+            _update_labor_progress(
+                run_id,
+                phase="excel",
+                phase_label="读取 Excel 账单",
+                message=f"账单文件已读取：{wb_path.name}",
+                total_files=len(workbook_paths),
+                processed_files=index,
+                current_file=wb_path.name,
+                task_generation_id=generation,
+            )
         logger.info(f"[{run_id}] [F] Excel 解析完成: 共 {len(excel_rows)} 行")
         # 聚合同一员工的多天记录
         excel_rows = _aggregate_excel_rows(excel_rows)
@@ -5239,6 +10020,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         ]
         cost_summaries = _labor_cost_summaries(workbook_paths)
         ai_cache_audit = audit_ai_page_cache_candidates(pdf_paths)
+        pdf_page_audit: list[dict] = []
         ai_cache_reconciliation_preview = build_ai_cache_reconciliation_preview(
             pdf_paths,
             excel_rows,
@@ -5262,7 +10044,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
         all_pdfs_need_ocr = bool(pdf_paths) and int(text_coverage_summary.get("imageOnlyFileCount") or 0) >= len(pdf_paths)
         bulk_image_reocr_batch = len(pdf_paths) > 1 and all_pdfs_need_ocr
         if (
-            metadata.get("materialReplaySource")
+            (metadata.get("materialReplaySource") or {}).get("skipFormalAiExtraction") is True
             and int(existing_reocr_summary.get("taskCount") or 0) > 0
             and bulk_image_reocr_batch
         ):
@@ -5372,32 +10154,94 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
 
         # === Stage 1: Quick total extraction ===
         logger.info(f"[{run_id}] === Stage 1: 快速总金额抽取 ({len(pdf_paths)} 个 PDF) ===")
-        update_labor_metadata(run_id, {"stage": "Stage 1: 快速抽取总金额"})
+        _update_labor_progress(
+            run_id,
+            phase="pdf_total",
+            phase_label="核对发票总金额",
+            message=f"正在读取 {len(pdf_paths)} 张 PDF 发票的总金额。",
+            total_files=len(pdf_paths),
+            processed_files=0,
+            task_generation_id=generation,
+        )
+        _update_labor_task_metadata(run_id, generation, {"stage": "Stage 1: 快速抽取总金额"})
         pdf_totals = quick_extract_totals(pdf_paths, AI_CONFIG, supplier=supplier)
         for t in pdf_totals:
             logger.info(f"[{run_id}]   PDF总金额: {t.get('source_file','?')} -> {t.get('total_amount', 0)}")
-        all_totals_zero = all(float(t.get("total_amount") or 0) == 0 for t in pdf_totals)
-        if all_totals_zero:
-            logger.warning(f"[{run_id}] 所有 PDF 总金额为 0，将进入 Stage 2 全量抽取")
-            pdf_totals = []  # Fall through to full extraction
-        non_payable_pdf_names = _non_payable_pdf_names(pdf_totals)
-        payable_pdf_totals = [t for t in pdf_totals if str(t.get("source_file") or "") not in non_payable_pdf_names]
+        invoice_evidence_audit = list(pdf_totals)
+        _update_labor_task_metadata(run_id, generation, {"invoiceEvidenceAudit": invoice_evidence_audit})
+        invoice_page_pdf_names = {
+            str(total.get("source_file") or "")
+            for total in pdf_totals
+            if any(
+                str(page.get("role") or page.get("page_role") or "").strip().lower()
+                in LABOR_INVOICE_PAGE_ROLES
+                for page in (total.get("page_evidence") or [])
+                if isinstance(page, dict)
+            )
+        }
+        non_payable_pdf_names = {
+            str(total.get("source_file") or "")
+            for total in pdf_totals
+            if _labor_total_is_explicitly_non_payable(total)
+        }
+        non_payable_pdf_names.update(
+            _non_payable_pdf_names(pdf_totals) - invoice_page_pdf_names
+        )
+        reconciliation_pdf_totals = [
+            total
+            for total in pdf_totals
+            if str(total.get("source_file") or "") not in non_payable_pdf_names
+        ]
+        authoritative_pdf_names = {
+            str(total.get("source_file") or "")
+            for total in reconciliation_pdf_totals
+            if str(total.get("source_file") or "") not in non_payable_pdf_names
+            and total.get("authoritative") is not False
+            and not total.get("warehouse_conflict")
+            and float(total.get("total_amount") or 0) > 0
+        }
+        unresolved_pdf_names = {
+            str(total.get("source_file") or "")
+            for total in reconciliation_pdf_totals
+            if str(total.get("source_file") or "") not in non_payable_pdf_names
+            and str(total.get("source_file") or "") not in authoritative_pdf_names
+        }
+        has_complete_warehouse_cost_evidence = _labor_has_complete_warehouse_cost_evidence(
+            reconciliation_pdf_totals,
+            cost_summaries,
+        )
         warehouse_comparison = compare_by_warehouse(
-            pdf_totals=payable_pdf_totals,
+            pdf_totals=reconciliation_pdf_totals,
             excel_rows_with_warehouse=excel_warehouse_data,
             amount_tolerance=AI_CONFIG["amount_tolerance"],
             manual_name_mapping=manual_name_mapping,
         )
+        warehouse_comparison = _labor_apply_cost_summary_amount_basis(
+            warehouse_comparison,
+            cost_summaries,
+            amount_tolerance=AI_CONFIG["amount_tolerance"],
+        )
 
         pdf_rows = []
+        raw_pdf_rows = []
         comparison = {"summary": {}, "rows": [], "candidateMatches": []}
         extraction_quality = {"level": "ok", "message": "总金额核对通过，无需抽取员工明细。", "issues": [], "retryAttempted": False, "retryApplied": False}
         stage2_quality_issues: list[str] = []
-        force_employee_detail = bool(metadata.get("materialReplaySource") or metadata.get("requireEmployeeDetail"))
+        force_full_image_detail = bool(
+            all_pdfs_need_ocr
+            and len(reconciliation_pdf_totals) > 1
+            and not unresolved_pdf_names
+            and len(authoritative_pdf_names) == len(reconciliation_pdf_totals)
+        )
+        force_employee_detail = bool(
+            _labor_requires_employee_detail(metadata)
+            or metadata.get("materialReplaySource")
+            or force_full_image_detail
+        )
 
         if warehouse_comparison["summary"]["totalPassed"] and not force_employee_detail:
             logger.info(f"[{run_id}] ✅ Stage 1 通过: 总金额一致，无需抽取员工明细")
-            update_labor_metadata(run_id, {"stage": "Stage 1 通过: 总金额一致"})
+            _update_labor_task_metadata(run_id, generation, {"stage": "Stage 1 通过: 总金额一致"})
         else:
             # === Stage 2: Full extraction for diff warehouses ===
             if warehouse_comparison["summary"]["totalPassed"]:
@@ -5405,86 +10249,390 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 stage2_quality_issues.append("总金额已通过，但真实材料回放批次仍执行员工级明细核对，用于发现合并行、姓名映射和员工级差异。")
             else:
                 logger.info(f"[{run_id}] === Stage 2: 总金额不一致，进入员工明细抽取 ===")
-            update_labor_metadata(run_id, {"stage": "Stage 2: 抽取员工明细"})
-            diff_wh = ["*"] if warehouse_comparison["summary"]["totalPassed"] and force_employee_detail else warehouse_comparison["summary"].get("diffWarehouses", [])
-            if not diff_wh and not all_totals_zero:
-                # Totals don't match but no warehouses identified — shouldn't happen
-                all_totals_zero = True
-            if all_totals_zero:
-                # Quick extraction failed, extract all employees
-                diff_wh = ["*"]
-            if diff_wh:
-                # Only extract employees from diff warehouse PDFs (unless all totals failed)
-                if "*" not in diff_wh:
-                    # 先尝试从文件名提取仓库号匹配
-                    filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_filename(p.name) in diff_wh]
-                    # 如果文件名无法匹配任何仓库号（如 US ELogistics 格式），回退到从 PDF 内容提取
-                    if not filtered_pdf_paths:
-                        filtered_pdf_paths = [p for p in pdf_paths if _warehouse_id_from_text_path(p, diff_wh)]
-                    zero_total_pdf_names = {
-                        str(total.get("source_file") or "")
-                        for total in pdf_totals
-                        if float(total.get("total_amount") or 0) == 0
-                    }
-                    non_payable_pdf_paths = [p for p in pdf_paths if p.name in non_payable_pdf_names]
-                    if non_payable_pdf_paths:
-                        issue = (
-                            "检测到支持材料/附件 PDF，未计入应付金额明细抽取，避免与主发票重复计入。"
-                            f" 文件: {', '.join(p.name for p in non_payable_pdf_paths)}"
-                        )
-                        stage2_quality_issues.append(issue)
-                        logger.warning(f"[{run_id}] {issue}")
-                    zero_total_pdf_paths = [p for p in pdf_paths if p.name in zero_total_pdf_names and p not in filtered_pdf_paths]
-                    zero_total_pdf_paths = [p for p in zero_total_pdf_paths if p.name not in non_payable_pdf_names]
-                    if zero_total_pdf_paths:
-                        filtered_pdf_paths.extend(zero_total_pdf_paths)
-                        issue = (
-                            "部分 PDF 快速总金额为 0，已纳入 Stage 2 明细抽取，避免扫描件或未知版式被仓库过滤遗漏。"
-                            f" 文件: {', '.join(p.name for p in zero_total_pdf_paths)}"
-                        )
-                        stage2_quality_issues.append(issue)
-                        logger.warning(f"[{run_id}] {issue}")
-                    filtered_excel_rows = [r for r in excel_rows if r.warehouse_id in diff_wh]
-                    if not filtered_pdf_paths:
-                        filtered_pdf_paths = pdf_paths
-                        filtered_excel_rows = excel_rows
-                        issue = (
-                            "无法将异常仓库映射到具体 PDF，已全量抽取 PDF 并按全量 Excel 比对。"
-                            f" 异常仓库: {', '.join(diff_wh)}"
-                        )
-                        stage2_quality_issues.append(issue)
-                        logger.warning(f"[{run_id}] {issue}")
-                else:
-                    filtered_pdf_paths = pdf_paths
-                    filtered_excel_rows = excel_rows
+            _update_labor_task_metadata(run_id, generation, {"stage": "Stage 2: 抽取员工明细"})
+            warehouse_rows = warehouse_comparison.get("rows", [])
+            if force_employee_detail:
+                target_pdf_names = {
+                    path.name
+                    for path in pdf_paths
+                    if path.name not in non_payable_pdf_names
+                }
+                target_warehouse_ids = {
+                    str(row.get("warehouseId") or "")
+                    for row in warehouse_rows
+                    if row.get("reconciliationStatus") != "missing_pdf_invoice"
+                }
+            else:
+                target_pdf_names = _labor_stage2_target_pdf_names(warehouse_rows)
+                target_warehouse_ids = {
+                    str(row.get("warehouseId") or "")
+                    for row in warehouse_rows
+                    if row.get("reconciliationStatus") in {"amount_difference", "needs_review"}
+                }
+            target_pdf_names.difference_update(non_payable_pdf_names)
+            filtered_pdf_paths = [
+                path
+                for path in pdf_paths
+                if path.name in target_pdf_names and path.name not in non_payable_pdf_names
+            ]
+            invoice_evidence_pages = _labor_invoice_evidence_pages(reconciliation_pdf_totals)
+            allowed_pages_by_source = {
+                path.name: invoice_evidence_pages[path.name]
+                for path in filtered_pdf_paths
+                if invoice_evidence_pages.get(path.name)
+            }
+            has_unmapped_target = any(
+                str(total.get("source_file") or "") in target_pdf_names
+                and not str(total.get("warehouse_id") or "").strip()
+                for total in reconciliation_pdf_totals
+            )
+            filtered_excel_rows = (
+                excel_rows
+                if force_employee_detail or has_unmapped_target
+                else [row for row in excel_rows if str(row.warehouse_id or "") in target_warehouse_ids]
+            )
+            non_payable_pdf_paths = [path for path in pdf_paths if path.name in non_payable_pdf_names]
+            if non_payable_pdf_paths:
+                issue = (
+                    "检测到支持材料/附件 PDF，仅保留为审计证据，不执行员工金额抽取。"
+                    f" 文件: {', '.join(path.name for path in non_payable_pdf_paths)}"
+                )
+                stage2_quality_issues.append(issue)
+                logger.warning(f"[{run_id}] {issue}")
+            unavailable_target_names = target_pdf_names - {path.name for path in filtered_pdf_paths}
+            if unavailable_target_names:
+                issue = f"异常发票证据文件不可用，未扩大到其他 PDF: {', '.join(sorted(unavailable_target_names))}"
+                stage2_quality_issues.append(issue)
+                logger.warning(f"[{run_id}] {issue}")
+            if not filtered_pdf_paths and not force_employee_detail:
+                extraction_quality = {
+                    "level": "warning",
+                    "message": "存在材料完整性差异，但没有需要执行员工明细 OCR 的 PDF。",
+                    "issues": list(stage2_quality_issues),
+                    "retryAttempted": False,
+                    "retryApplied": False,
+                }
+            if filtered_pdf_paths:
 
                 logger.info(f"[{run_id}] [C/D] 开始抽取员工明细: {len(filtered_pdf_paths)} 个 PDF, {len(filtered_excel_rows)} 行 Excel")
-                update_labor_metadata(run_id, {"stage": f"Stage 2: AI 抽取 {len(filtered_pdf_paths)} 个 PDF"})
+                _update_labor_progress(
+                    run_id,
+                    phase="pdf_detail",
+                    phase_label="识别 PDF 发票明细",
+                    message=f"正在准备识别 {len(filtered_pdf_paths)} 张 PDF 发票明细。",
+                    total_files=len(filtered_pdf_paths),
+                    processed_files=0,
+                    processed_pages=0,
+                    task_generation_id=generation,
+                )
+                _update_labor_task_metadata(
+                    run_id,
+                    generation,
+                    {"stage": f"Stage 2: AI 抽取 {len(filtered_pdf_paths)} 个 PDF"},
+                )
                 extraction_error = ""
-                try:
-                    pdf_rows = extract_invoice_items(
-                        filtered_pdf_paths, AI_CONFIG,
-                        supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
-                        expected_rows=_expected_labor_rows(filtered_excel_rows),
-                        supplier_profile_override=active_supplier_profile,
+                if all_pdfs_need_ocr and not _ai_ready(AI_CONFIG) and not str(AI_CONFIG.get("ocr_command") or "").strip():
+                    stage2_quality_issues.append("当前未连接图片识别服务，图片发票无法自动读取。请启用 MiMo 或兼容的图片识别模型后重试。")
+                progress_callback = _labor_ai_progress_callback(
+                    run_id,
+                    total_files=len(filtered_pdf_paths),
+                    task_generation_id=generation,
+                )
+                structured_pdf_rows = extract_structured_invoice_rows(filtered_pdf_paths, excel_rows)
+                closed_structured_rows = prefer_closed_structured_rows(
+                    [],
+                    structured_pdf_rows,
+                    filtered_pdf_paths,
+                    tolerance=AI_CONFIG["amount_tolerance"],
+                )
+                structured_sources = {str(row.source_file or "") for row in closed_structured_rows}
+                target_sources = {path.name for path in filtered_pdf_paths}
+                if _labor_should_run_auto_ocr(
+                    command=str(AI_CONFIG.get("ocr_command") or ""),
+                    pdf_rows=closed_structured_rows,
+                    target_pdf_names=target_sources,
+                    reconciliation_pdf_totals=reconciliation_pdf_totals,
+                ):
+                    logger.info(f"[{run_id}] 在旧明细抽取前提交本地 OCR 候选任务")
+                    _update_labor_task_metadata(run_id, generation, {"stage": "自动识别图片发票"})
+                    _update_labor_progress(
+                        run_id,
+                        phase="auto_ocr",
+                        phase_label="本地 OCR 识别",
+                        message=f"正在优先检查 {len(filtered_pdf_paths)} 张 PDF 的本地 OCR 缓存。",
+                        total_files=len(filtered_pdf_paths),
+                        processed_files=0,
+                        task_generation_id=generation,
                     )
-                except Exception as exc:  # noqa: BLE001 - material replay must preserve governance evidence when online AI is unavailable.
-                    extraction_error = str(exc)
-                    if not metadata.get("materialReplaySource"):
-                        raise
-                    pdf_rows = []
-                    logger.warning(f"[{run_id}] 材料回放批次员工明细抽取失败，降级为待图片识别复核: {extraction_error}")
+                    auto_ocr_candidate = _run_labor_auto_ocr_candidate(
+                        run_id,
+                        filtered_pdf_paths,
+                        filtered_excel_rows,
+                        reconciliation_pdf_totals,
+                        supplier=supplier,
+                        period_start=period_start,
+                        period_end=period_end,
+                        currency=currency,
+                        command=str(AI_CONFIG.get("ocr_command") or ""),
+                        timeout_seconds=max(int(AI_CONFIG.get("timeout_seconds") or 90) * 10, 300),
+                        amount_tolerance=AI_CONFIG["amount_tolerance"],
+                        hours_tolerance=AI_CONFIG["hours_tolerance"],
+                        task_generation_id=generation,
+                    )
+                    reconciliation_pdf_totals = _labor_apply_ocr_pdf_total_evidence(
+                        reconciliation_pdf_totals,
+                        auto_ocr_candidate,
+                    )
+                if auto_ocr_candidate.get("safeToUse"):
+                    pdf_rows = line_items_from_dicts(auto_ocr_candidate.get("rows") or [])
+                    logger.info(f"[{run_id}] 早期 OCR 候选通过安全门禁，跳过旧明细抽取: {len(pdf_rows)} 行")
+                elif target_sources and target_sources.issubset(structured_sources):
+                    pdf_rows = closed_structured_rows
+                    logger.info(f"[{run_id}] 结构行金额全部闭合，跳过 AI 明细抽取: {len(pdf_rows)} 行")
+                else:
+                    targeted_retry_applied = False
+                    review_ocr_rows_applied = False
+                    if auto_ocr_candidate:
+                        targeted_plan = build_targeted_ocr_retry_plan(auto_ocr_candidate)
+                        if targeted_plan.get("eligible"):
+                            targeted_pages = targeted_plan.get("allowedPagesBySource") or {}
+                            targeted_paths = [path for path in filtered_pdf_paths if path.name in targeted_pages]
+                            candidate_rows = line_items_from_dicts(auto_ocr_candidate.get("rows") or [])
+                            expected_totals = _labor_ocr_expected_totals(
+                                reconciliation_pdf_totals,
+                                {path.name for path in filtered_pdf_paths},
+                                excel_rows=filtered_excel_rows,
+                            )
+                            try:
+                                targeted_rows = extract_invoice_items(
+                                    targeted_paths, AI_CONFIG,
+                                    supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                                    expected_rows=_expected_labor_rows(filtered_excel_rows),
+                                    supplier_profile_override=active_supplier_profile,
+                                    progress_callback=progress_callback,
+                                    audit_collector=pdf_page_audit,
+                                    allowed_pages_by_source=targeted_pages,
+                                )
+                                targeted_merge = merge_targeted_ocr_retry_rows(
+                                    candidate_rows,
+                                    targeted_rows,
+                                    allowed_pages_by_source=targeted_pages,
+                                    expected_totals=expected_totals,
+                                    tolerance=AI_CONFIG["amount_tolerance"],
+                                )
+                                targeted_retry_applied = bool(targeted_merge.get("closed"))
+                                auto_ocr_candidate["targetedRetry"] = {
+                                    **targeted_plan,
+                                    "applied": targeted_retry_applied,
+                                    "retriedPageCount": sum(len(pages) for pages in targeted_pages.values()),
+                                }
+                                if targeted_retry_applied:
+                                    pdf_rows = targeted_merge["rows"]
+                                    logger.info(
+                                        f"[{run_id}] 姓名待复核仅重识别 {sum(len(pages) for pages in targeted_pages.values())} 页，"
+                                        "合并后金额闭合，跳过整批旧明细抽取"
+                                    )
+                            except Exception as exc:  # noqa: BLE001 - targeted retry must safely fall back to the full extraction path.
+                                auto_ocr_candidate["targetedRetry"] = {
+                                    **targeted_plan,
+                                    "applied": False,
+                                    "error": str(exc),
+                                }
+                                logger.warning(f"[{run_id}] 姓名待复核定向页识别失败，回退原明细抽取: {exc}")
+                    if (
+                        not targeted_retry_applied
+                        and _labor_can_apply_review_ocr_rows(auto_ocr_candidate, target_sources)
+                    ):
+                        pdf_rows = line_items_from_dicts(auto_ocr_candidate.get("rows") or [])
+                        review_ocr_rows_applied = True
+                        auto_ocr_candidate["reviewRowsApplied"] = True
+                        auto_ocr_candidate["reviewRowsSources"] = sorted(target_sources)
+                        stage2_quality_issues.append(
+                            "本地图片识别已完成全部页面并读取到票面明确总额；员工明细作为待复核证据展示，"
+                            "姓名或逐行金额门禁未全部通过，确认前不能机器放行。"
+                        )
+                        logger.warning(
+                            f"[{run_id}] OCR 全页与票面总额证据完整，保留 {len(pdf_rows)} 条待复核明细；"
+                            f"阻断项: {auto_ocr_candidate.get('blockers', [])}"
+                        )
+                    if not targeted_retry_applied and not review_ocr_rows_applied:
+                        if auto_ocr_candidate:
+                            stage2_quality_issues.append(
+                                "本地图片识别已完成，但金额闭合、页面完整性或姓名安全门禁未全部通过；已回退原明细抽取，候选仅供人工复核。"
+                            )
+                            logger.warning(
+                                f"[{run_id}] 早期 OCR 候选未自动采用，回退旧明细抽取: "
+                                f"{auto_ocr_candidate.get('blockers', [])}"
+                            )
+                        try:
+                            pdf_rows = extract_invoice_items(
+                                filtered_pdf_paths, AI_CONFIG,
+                                supplier=supplier, period_start=period_start, period_end=period_end, currency=currency,
+                                expected_rows=_expected_labor_rows(filtered_excel_rows),
+                                supplier_profile_override=active_supplier_profile,
+                                progress_callback=progress_callback,
+                                audit_collector=pdf_page_audit,
+                                allowed_pages_by_source=allowed_pages_by_source,
+                            )
+                        except Exception as exc:  # noqa: BLE001 - material replay must preserve governance evidence when online AI is unavailable.
+                            extraction_error = str(exc)
+                            if not (
+                                metadata.get("materialReplaySource")
+                                or all_pdfs_need_ocr
+                                or has_complete_warehouse_cost_evidence
+                            ):
+                                raise
+                            pdf_rows = []
+                            logger.warning(f"[{run_id}] 员工明细抽取失败，保留已确认的仓库级金额证据: {extraction_error}")
+                    pdf_rows = prefer_closed_structured_rows(
+                        pdf_rows,
+                        structured_pdf_rows,
+                        filtered_pdf_paths,
+                        tolerance=AI_CONFIG["amount_tolerance"],
+                    )
+                raw_pdf_rows = list(pdf_rows)
+                structure_promotion = promote_structured_invoice_evidence(
+                    filtered_pdf_paths,
+                    pdf_totals,
+                    raw_pdf_rows,
+                    excel_rows,
+                    tolerance=AI_CONFIG["amount_tolerance"],
+                    page_audit=pdf_page_audit,
+                )
+                pdf_totals = _labor_apply_ocr_pdf_total_evidence(
+                    structure_promotion.pdf_totals,
+                    auto_ocr_candidate,
+                )
+                invoice_evidence_audit = list(pdf_totals)
+                reconciliation_pdf_totals = [
+                    total
+                    for total in pdf_totals
+                    if str(total.get("source_file") or "") not in non_payable_pdf_names
+                ]
+                structure_reconciliation = {
+                    "decisions": structure_promotion.decisions,
+                    "unresolvedFiles": list(structure_promotion.unresolved_files),
+                    "reconciledFiles": list(structure_promotion.reconciled_files),
+                    "currencyCodes": list(structure_promotion.currency_codes),
+                }
+                pdf_rows = _filter_labor_rows_to_invoice_evidence_pages(structure_promotion.pdf_rows, pdf_totals)
+                detail_total_retry_attempted = False
+                detail_total_retry_applied = False
+                remaining_detail_total_mismatches: dict[str, dict] = {}
+                authoritative_detail_totals = _labor_authoritative_detail_totals(
+                    reconciliation_pdf_totals,
+                    {path.name for path in filtered_pdf_paths},
+                )
+                if all_pdfs_need_ocr and previous_pdf_rows and authoritative_detail_totals:
+                    previous_scoped_rows = [
+                        row for row in previous_pdf_rows if row.source_file in authoritative_detail_totals
+                    ]
+                    current_scoped_rows = [
+                        row for row in pdf_rows if row.source_file in authoritative_detail_totals
+                    ]
+                    pdf_rows, resumed_sources = _merge_labor_detail_retry_rows(
+                        previous_scoped_rows,
+                        current_scoped_rows,
+                        authoritative_detail_totals,
+                    )
+                    if resumed_sources:
+                        logger.info(
+                            f"[{run_id}] 图片明细续跑采用更接近金额闭合的新结果: "
+                            f"{', '.join(sorted(resumed_sources))}"
+                        )
+                    preserved_sources = {
+                        row.source_file for row in pdf_rows
+                    } - resumed_sources
+                    if preserved_sources:
+                        stage2_quality_issues.append(
+                            "图片明细续跑保留上一轮更完整结果；本轮失败页未覆盖已有员工明细。"
+                        )
+                initial_detail_total_mismatches = _labor_detail_total_mismatches(
+                    pdf_rows,
+                    authoritative_detail_totals,
+                    AI_CONFIG["amount_tolerance"],
+                )
+                if _labor_should_retry_detail_totals(
+                    pdf_rows=pdf_rows,
+                    mismatches=initial_detail_total_mismatches,
+                    auto_ocr_candidate=auto_ocr_candidate,
+                ):
+                    detail_total_retry_attempted = True
+                    retry_pdf_names = set(initial_detail_total_mismatches)
+                    retry_pdf_paths = [path for path in filtered_pdf_paths if path.name in retry_pdf_names]
+                    retry_warehouse_ids = {
+                        str(item.get("warehouseId") or "")
+                        for item in initial_detail_total_mismatches.values()
+                        if str(item.get("warehouseId") or "")
+                    }
+                    retry_excel_rows = [
+                        row
+                        for row in filtered_excel_rows
+                        if not retry_warehouse_ids or str(row.warehouse_id or "") in retry_warehouse_ids
+                    ]
+                    retry_allowed_pages = {
+                        source_file: pages
+                        for source_file, pages in allowed_pages_by_source.items()
+                        if source_file in retry_pdf_names
+                    }
+                    retry_config = dict(AI_CONFIG)
+                    retry_config["cache_enabled"] = False
+                    retry_config["parallel_max_workers"] = 1
+                    retry_config["parallel_image_render_workers"] = 1
+                    try:
+                        current_render_scale = float(retry_config.get("render_scale") or 0)
+                    except (TypeError, ValueError):
+                        current_render_scale = 0.0
+                    retry_config["render_scale"] = max(current_render_scale, 2.4)
+                    logger.info(
+                        f"[{run_id}] 员工明细金额不闭合，高清重识别 {len(retry_pdf_paths)} 个 PDF: "
+                        f"{', '.join(sorted(retry_pdf_names))}"
+                    )
+                    try:
+                        retry_rows = extract_invoice_items(
+                            retry_pdf_paths,
+                            retry_config,
+                            supplier=supplier,
+                            period_start=period_start,
+                            period_end=period_end,
+                            currency=currency,
+                            expected_rows=_expected_labor_rows(retry_excel_rows),
+                            supplier_profile_override=active_supplier_profile,
+                            retry_mode=True,
+                            progress_callback=progress_callback,
+                            audit_collector=pdf_page_audit,
+                            allowed_pages_by_source=retry_allowed_pages,
+                        )
+                        retry_rows = _filter_labor_rows_to_invoice_evidence_pages(retry_rows, pdf_totals)
+                        pdf_rows, replaced_sources = _merge_labor_detail_retry_rows(
+                            pdf_rows,
+                            retry_rows,
+                            initial_detail_total_mismatches,
+                        )
+                        detail_total_retry_applied = bool(replaced_sources)
+                        if replaced_sources:
+                            logger.info(
+                                f"[{run_id}] 高清重识别改善金额闭合，采用新结果: "
+                                f"{', '.join(sorted(replaced_sources))}"
+                            )
+                    except Exception as exc:  # noqa: BLE001 - retry failure must preserve the original evidence.
+                        logger.warning(f"[{run_id}] 员工明细金额闭合重识别失败，保留原结果: {exc}")
+
+                    remaining_detail_total_mismatches = _labor_detail_total_mismatches(
+                        pdf_rows,
+                        authoritative_detail_totals,
+                        AI_CONFIG["amount_tolerance"],
+                    )
+                    for source_file, mismatch in remaining_detail_total_mismatches.items():
+                        stage2_quality_issues.append(
+                            f"员工明细与发票权威总额不闭合：{source_file} 权威总额 "
+                            f"${float(mismatch['expectedAmount']):,.2f}，明细 ${float(mismatch['actualAmount']):,.2f}，"
+                            f"差异 ${abs(float(mismatch['delta'])):,.2f}；该文件员工归因不可直接采信。"
+                        )
                 logger.info(f"[{run_id}] [C/D] 员工明细抽取完成: {len(pdf_rows)} 条记录")
 
-                # === Profile 失效检测 ===
-                _supplier_profile = resolve_supplier_profile(supplier, AI_CONFIG.get("supplier_profiles_path"))
-                if _supplier_profile and _supplier_profile.key != "default":
-                    _profile_file = Path(AI_CONFIG.get("supplier_profiles_path", "")) / f"{_supplier_profile.key}.json"
-                    if _profile_file.exists():
-                        if not pdf_rows:
-                            record_profile_failure(_profile_file)
-                        else:
-                            reset_profile_failure(_profile_file)
+                # 正式核对只读取已批准的运行时 Profile，不得自动改写全局配置。
+                # 抽取成功/失败会留在批次审计与 Profile 候选中，由治理流程显式批准、回滚。
 
                 if not pdf_rows and metadata.get("materialReplaySource"):
                     final_status = "待图片识别复核"
@@ -5512,7 +10660,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     }
                     _append_quality_issues(extraction_quality, stage2_quality_issues)
                     warehouse_comparison = compare_by_warehouse(
-                        pdf_totals=payable_pdf_totals,
+                        pdf_totals=reconciliation_pdf_totals,
                         pdf_rows=pdf_rows,
                         excel_rows_with_warehouse=excel_warehouse_data,
                         amount_tolerance=AI_CONFIG["amount_tolerance"],
@@ -5520,14 +10668,70 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                         confidence_threshold=AI_CONFIG["confidence_threshold"],
                         manual_name_mapping=manual_name_mapping,
                     )
-                    update_labor_metadata(run_id, {"stage": "待图片识别复核"})
+                    warehouse_comparison = _labor_apply_cost_summary_amount_basis(
+                        warehouse_comparison,
+                        cost_summaries,
+                        amount_tolerance=AI_CONFIG["amount_tolerance"],
+                    )
+                    _update_labor_task_metadata(run_id, generation, {"stage": "待图片识别复核"})
                     logger.warning(f"[{run_id}] 已生成待图片识别复核结果，未改变核对结论。")
                 elif not pdf_rows:
-                    raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或先完成图片识别复核。")
+                    if has_complete_warehouse_cost_evidence:
+                        final_status = "部分核对完成"
+                        issue = (
+                            "发票按班组汇总计费，员工页未直接提供可核验的员工金额；"
+                            "已保留仓库总额与 OTWS 费用组成核对，员工金额不可据此自动分摊。"
+                        )
+                        if extraction_error:
+                            issue = f"{issue} 员工明细抽取信息: {extraction_error}"
+                        stage2_quality_issues.append(issue)
+                        comparison = compare_labor_items(
+                            [],
+                            [],
+                            amount_tolerance=AI_CONFIG["amount_tolerance"],
+                            hours_tolerance=AI_CONFIG["hours_tolerance"],
+                            confidence_threshold=AI_CONFIG["confidence_threshold"],
+                            manual_name_mapping=manual_name_mapping,
+                        )
+                        extraction_quality = {
+                            "level": "warning",
+                            "message": "已完成仓库级金额核对；员工金额缺少发票直接证据，必须人工复核。",
+                            "issues": list(stage2_quality_issues),
+                            "retryAttempted": False,
+                            "retryApplied": False,
+                        }
+                        logger.warning(f"[{run_id}] SSS/OTWS 班组汇总发票降级为仓库级核对结果。")
+                    elif target_pdf_names & unresolved_pdf_names:
+                        issue = "待复核发票未找到可用于员工金额比对的发票页，已保留票面证据并维持待复核结论。"
+                        stage2_quality_issues.append(issue)
+                        comparison = compare_labor_items(
+                            [],
+                            filtered_excel_rows,
+                            amount_tolerance=AI_CONFIG["amount_tolerance"],
+                            hours_tolerance=AI_CONFIG["hours_tolerance"],
+                            confidence_threshold=AI_CONFIG["confidence_threshold"],
+                            manual_name_mapping=manual_name_mapping,
+                        )
+                        extraction_quality = {
+                            "level": "warning",
+                            "message": "发票页面证据不足，必须人工复核。",
+                            "issues": list(stage2_quality_issues),
+                            "retryAttempted": False,
+                            "retryApplied": False,
+                        }
+                    else:
+                        raise ValueError("PDF 未抽取出员工明细。请确认发票是可复制文本 PDF，或先完成图片识别复核。")
 
                 if pdf_rows:
                     logger.info(f"[{run_id}] [G] 开始数据比对: PDF {len(pdf_rows)} 行 vs Excel {len(filtered_excel_rows)} 行")
-                    update_labor_metadata(run_id, {"stage": "比对员工明细"})
+                    _update_labor_progress(
+                        run_id,
+                        phase="matching",
+                        phase_label="匹配员工明细",
+                        message=f"正在匹配 PDF {len(pdf_rows)} 条明细和 Excel {len(filtered_excel_rows)} 条账单。",
+                        task_generation_id=generation,
+                    )
+                    _update_labor_task_metadata(run_id, generation, {"stage": "比对员工明细"})
                     comparison = compare_labor_items(
                         pdf_rows, filtered_excel_rows,
                         amount_tolerance=AI_CONFIG["amount_tolerance"],
@@ -5536,12 +10740,21 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                         manual_name_mapping=manual_name_mapping,
                     )
                     extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], confidence_threshold=AI_CONFIG["confidence_threshold"])
-                    extraction_quality["retryAttempted"] = False
-                    extraction_quality["retryApplied"] = False
+                    extraction_quality["retryAttempted"] = detail_total_retry_attempted
+                    extraction_quality["retryApplied"] = detail_total_retry_applied
+                    if remaining_detail_total_mismatches:
+                        extraction_quality["level"] = "critical"
+                        extraction_quality["message"] = "部分 PDF 员工明细金额无法与权威发票总额闭合，员工归因必须人工复核。"
                     _append_quality_issues(extraction_quality, stage2_quality_issues)
                     logger.info(f"[{run_id}] [G] 比对完成: 质量={extraction_quality['level']}, 问题={len(extraction_quality.get('issues',[]))}条")
 
                 should_retry_quality = bool(pdf_rows) and extraction_quality["level"] in ("warning", "critical")
+                if should_retry_quality and detail_total_retry_attempted:
+                    should_retry_quality = False
+                    logger.info(f"[{run_id}] 已按金额闭合执行定向重识别，跳过重复的全量质量重试")
+                if should_retry_quality and all_pdfs_need_ocr:
+                    should_retry_quality = False
+                    logger.info(f"[{run_id}] PDF 已识别为图片型或无文本层，跳过质量重试以避免重复大图 AI 请求")
                 if should_retry_quality and any("快速总金额为 0" in issue for issue in stage2_quality_issues):
                     should_retry_quality = False
                     logger.info(f"[{run_id}] 已包含扫描/未知版式 PDF 补充抽取，跳过质量重试以避免重复大图 AI 请求")
@@ -5553,7 +10766,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
 
                 if should_retry_quality:
                     logger.info(f"[{run_id}] 质量为 {extraction_quality['level']}，尝试重试...")
-                    update_labor_metadata(run_id, {"stage": "重试抽取（质量优化）"})
+                    _update_labor_task_metadata(run_id, generation, {"stage": "重试抽取（质量优化）"})
                     original_rows = list(pdf_rows)
                     original_comparison = dict(comparison)
                     original_quality = dict(extraction_quality)
@@ -5617,6 +10830,27 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                             supplier_profile_override=active_supplier_profile,
                         )
 
+                filtered_retry_rows = _filter_labor_rows_to_invoice_evidence_pages(pdf_rows, pdf_totals)
+                if len(filtered_retry_rows) != len(pdf_rows):
+                    retry_attempted = extraction_quality.get("retryAttempted", False)
+                    retry_applied = extraction_quality.get("retryApplied", False)
+                    pdf_rows = filtered_retry_rows
+                    comparison = compare_labor_items(
+                        pdf_rows,
+                        filtered_excel_rows,
+                        amount_tolerance=AI_CONFIG["amount_tolerance"],
+                        hours_tolerance=AI_CONFIG["hours_tolerance"],
+                        confidence_threshold=AI_CONFIG["confidence_threshold"],
+                        manual_name_mapping=manual_name_mapping,
+                    )
+                    extraction_quality = calculate_extraction_quality(
+                        pdf_rows,
+                        comparison["summary"],
+                        confidence_threshold=AI_CONFIG["confidence_threshold"],
+                    )
+                    extraction_quality["retryAttempted"] = retry_attempted
+                    extraction_quality["retryApplied"] = retry_applied
+
                 # === 供应商 Profile 建议（只生成候选，不静默写入生产 Profile） ===
                 if extraction_quality.get("level") == "ok" and pdf_rows:
                     try:
@@ -5634,14 +10868,21 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                 # Re-run warehouse comparison with full employee rows for Tier 3.
                 # Pass pdf_totals to preserve correct total amounts for non-diff warehouses.
                 if pdf_rows:
+                    tier3_target_names = _labor_stage2_target_pdf_names(warehouse_rows)
+                    tier3_pdf_rows = [row for row in pdf_rows if row.source_file in tier3_target_names]
                     warehouse_comparison = compare_by_warehouse(
-                        pdf_totals=payable_pdf_totals,
-                        pdf_rows=pdf_rows,
+                        pdf_totals=reconciliation_pdf_totals,
+                        pdf_rows=tier3_pdf_rows,
                         excel_rows_with_warehouse=excel_warehouse_data,
                         amount_tolerance=AI_CONFIG["amount_tolerance"],
                         hours_tolerance=AI_CONFIG["hours_tolerance"],
                         confidence_threshold=AI_CONFIG["confidence_threshold"],
                         manual_name_mapping=manual_name_mapping,
+                    )
+                    warehouse_comparison = _labor_apply_cost_summary_amount_basis(
+                        warehouse_comparison,
+                        cost_summaries,
+                        amount_tolerance=AI_CONFIG["amount_tolerance"],
                     )
 
                     # Recalculate quality with warehouse comparison data, preserving retry flags.
@@ -5650,16 +10891,97 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
                     extraction_quality = calculate_extraction_quality(pdf_rows, comparison["summary"], warehouse_comparison, confidence_threshold=AI_CONFIG["confidence_threshold"])
                     extraction_quality["retryAttempted"] = retry_attempted
                     extraction_quality["retryApplied"] = retry_applied
+                    if remaining_detail_total_mismatches:
+                        extraction_quality["level"] = "critical"
+                        extraction_quality["message"] = "部分 PDF 员工明细金额无法与权威发票总额闭合，员工归因必须人工复核。"
                     _append_quality_issues(extraction_quality, stage2_quality_issues)
+
+        detected_currency_codes = {
+            str(row.currency or "").strip().upper()
+            for row in raw_pdf_rows
+            if str(row.currency or "").strip()
+        }
+        detected_currency_codes.update(structure_reconciliation.get("currencyCodes") or [])
+        batch_guard_result = evaluate_batch_guards(
+            pdf_paths=pdf_paths,
+            pdf_totals=reconciliation_pdf_totals,
+            raw_pdf_rows=raw_pdf_rows,
+            formal_pdf_rows=pdf_rows,
+            excel_rows=excel_rows,
+            requested_currency=currency,
+            detected_currencies=detected_currency_codes,
+            unresolved_files=structure_reconciliation.get("unresolvedFiles") or [],
+            pdf_text_coverage=pdf_text_coverage,
+        )
+        amount_scope = resolve_amount_scope(
+            " ".join(
+                str(value).strip()
+                for value in (mapping.get("amountColumns") or [mapping.get("amount")])
+                if str(value or "").strip()
+            ),
+            declared_scope=str(mapping.get("amountScope") or mapping.get("amount_scope") or ""),
+        )
+        batch_guard = {
+            "status": batch_guard_result.status,
+            "message": batch_guard_result.message,
+            "allowReleasableReport": batch_guard_result.allow_releasable_report,
+            "unresolvedFiles": list(batch_guard_result.unresolved_files),
+            "amountScope": amount_scope,
+            "requestedCurrency": str(currency or "").upper(),
+            "detectedCurrencies": sorted(detected_currency_codes),
+        }
+        if amount_scope == "review" and batch_guard["status"] == "ok":
+            batch_guard.update(
+                {
+                    "status": "amount_scope_review",
+                    "message": "Excel 金额字段未明确含税或不含税口径，确认前不能放行。",
+                    "allowReleasableReport": False,
+                }
+            )
+        if auto_ocr_candidate.get("reviewRowsApplied"):
+            batch_guard.update(
+                {
+                    "status": "ocr_candidate_review",
+                    "message": (
+                        "PDF 全页识别和票面总额已完成；员工明细仍有姓名或逐行金额待确认，"
+                        "本批次只可人工复核，不能机器放行。"
+                    ),
+                    "allowReleasableReport": False,
+                }
+            )
+        if batch_guard["status"] == "pdf_recognition_incomplete":
+            final_status = "PDF识别未完成"
+            extraction_quality["level"] = "critical"
+            extraction_quality["message"] = batch_guard["message"]
+            _append_quality_issues(extraction_quality, [batch_guard["message"]])
+        elif batch_guard["status"] == "ocr_candidate_review":
+            final_status = "图片识别待复核"
+            extraction_quality["level"] = "critical"
+            extraction_quality["message"] = batch_guard["message"]
+            _append_quality_issues(extraction_quality, [batch_guard["message"]])
+        elif final_status == "待图片识别复核":
+            pass
+        elif batch_guard["status"] == "currency_review":
+            final_status = "待币种确认"
+        elif batch_guard["status"] in {"partial_review", "amount_scope_review", "employee_detail_incomplete"}:
+            final_status = "部分核对完成"
 
         # 诊断和候选证据必须先于报告生成，确保下载报告与 API 元数据一致。
         reconciliation_diagnostics = build_reconciliation_diagnostics(
-            pdf_totals=payable_pdf_totals,
+            pdf_totals=reconciliation_pdf_totals,
+            pdf_rows=pdf_rows,
             comparison_summary=comparison["summary"],
             warehouse_comparison=warehouse_comparison,
             amount_tolerance=AI_CONFIG["amount_tolerance"],
             cost_summaries=cost_summaries,
         )
+        previous_batch_guard_status = batch_guard.get("status")
+        batch_guard = _labor_apply_reconciliation_diagnostics_gate(
+            batch_guard,
+            reconciliation_diagnostics,
+        )
+        if batch_guard.get("status") != previous_batch_guard_status:
+            final_status = "部分核对完成"
         correction_governance["candidates"] = _build_low_confidence_correction_candidates(
             run_id,
             pdf_rows,
@@ -5691,7 +11013,7 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             comparison_summary=comparison["summary"],
             warehouse_summary=warehouse_comparison.get("summary", {}),
             exception_rows=comparison.get("rows", []),
-            pdf_text_coverage={},
+            pdf_text_coverage=pdf_text_coverage if final_status == "待图片识别复核" or not pdf_rows else {},
             reocr_plan=reocr_plan,
             ai_cache_preview=ai_cache_reconciliation_preview,
             name_mapping_governance=name_mapping_governance,
@@ -5699,10 +11021,33 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             allocation_issues=warehouse_comparison.get("allocationIssues", []),
             hours_tolerance=AI_CONFIG["hours_tolerance"],
         )
+        presentation = build_labor_presentation(
+            comparison,
+            excel_record_count=len(excel_rows),
+        )
+        presentation_errors = validate_labor_presentation(presentation)
+        if presentation_errors:
+            raise ValueError("核对展示口径校验失败: " + "；".join(presentation_errors))
 
-        logger.info(f"[{run_id}] 生成差异报告...")
-        update_labor_metadata(run_id, {"stage": "生成报告"})
-        report_path = run_dir / safe_labor_storage_filename("labor_reconciliation_report.xlsx", "diff_report")
+        report_label = (
+            "待图片识别复核报告"
+            if final_status == "待图片识别复核"
+            else "PDF识别诊断报告"
+            if final_status == "PDF识别未完成"
+            else "币种待确认报告"
+            if final_status == "待币种确认"
+            else "差异报告"
+        )
+        logger.info(f"[{run_id}] 生成{report_label}...")
+        _update_labor_progress(
+            run_id,
+            phase="report",
+            phase_label="生成核对报告",
+            message=f"正在生成{report_label}。",
+            task_generation_id=generation,
+        )
+        _update_labor_task_metadata(run_id, generation, {"stage": "生成报告"})
+        report_path = run_dir / safe_labor_filename("海外劳务工报账核对报告.xlsx", report_label)
         build_labor_report(
             report_path,
             comparison,
@@ -5713,41 +11058,86 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             extraction_quality,
             reconciliation_diagnostics=reconciliation_diagnostics,
             ai_cache_audit=ai_cache_audit,
+            presentation=presentation,
         )
         logger.info(f"[{run_id}] 报告已生成: {report_path.name}")
     except ValueError:
         raise
     files = dict(metadata.get("files", {}))
-    files["diffReport"] = attach_labor_file(run_id, report_path, "差异报告")
-    business_report_path = run_dir / safe_labor_storage_filename("labor_reconciliation_business_report.html", "business_report")
-    build_labor_business_html_report(
-        business_report_path,
-        comparison,
-        supplier_name=str(metadata.get("supplierName") or metadata.get("supplier") or ""),
-        period_start=str(metadata.get("periodStart") or ""),
-        period_end=str(metadata.get("periodEnd") or ""),
-        invoice_scope=_labor_business_invoice_scope(metadata, pdf_rows),
-        warehouse_comparison=warehouse_comparison,
-        excel_record_count=len(excel_rows),
+    report_label = (
+        "待图片识别复核报告"
+        if final_status == "待图片识别复核"
+        else "PDF识别诊断报告"
+        if final_status == "PDF识别未完成"
+        else "币种待确认报告"
+        if final_status == "待币种确认"
+        else "差异报告"
     )
-    files["businessReport"] = attach_labor_file(run_id, business_report_path, "业务核对报告")
+    files["diffReport"] = attach_labor_file(run_id, report_path, report_label)
+    if batch_guard["status"] not in {
+        "pdf_recognition_incomplete",
+        "currency_review",
+        "amount_scope_review",
+        "reconciliation_diagnostics_blocked",
+    }:
+        business_report_path = run_dir / safe_labor_filename("海外劳务工报账核对业务报告.html", "业务报告")
+        build_labor_business_html_report(
+            business_report_path,
+            comparison,
+            supplier_name=str(metadata.get("supplierName") or metadata.get("supplier") or ""),
+            period_start=str(metadata.get("periodStart") or ""),
+            period_end=str(metadata.get("periodEnd") or ""),
+            invoice_scope=_labor_business_invoice_scope(metadata, pdf_rows),
+            warehouse_comparison=warehouse_comparison,
+            excel_record_count=len(excel_rows),
+            detail_coverage_complete=_labor_detail_coverage_complete(reconciliation_diagnostics),
+            presentation=presentation,
+        )
+        files["businessReport"] = attach_labor_file(run_id, business_report_path, "业务核对报告")
+    else:
+        files.pop("businessReport", None)
 
     # 计算结论级别
     conclusion = _build_conclusion(warehouse_comparison, comparison, extraction_quality, amount_tolerance=AI_CONFIG["amount_tolerance"])
+    conclusion["canRelease"] = bool(batch_guard["allowReleasableReport"] and conclusion.get("conclusionLevel") == "pass")
+    if not batch_guard["allowReleasableReport"]:
+        conclusion["conclusionLevel"] = (
+            "critical"
+            if batch_guard["status"] in {"pdf_recognition_incomplete", "reconciliation_diagnostics_blocked"}
+            else "warning"
+        )
+        conclusion["conclusionMessage"] = batch_guard["message"]
+    review_state = _labor_uat_review_state(conclusion)
+    conclusion.update(review_state)
 
-    updated = update_labor_metadata(
-        run_id,
-        {
+    result_updates = {
+            "inputSnapshotRejected": False,
             "status": final_status,
+            "stage": "待图片识别复核" if final_status == "待图片识别复核" else "生成报告",
+            "progress": _labor_progress_completed("核对报告已生成。"),
+            "asyncTask": {
+                "status": "completed",
+                "statusLabel": "完成",
+                "message": "核对结果已生成。",
+                "completedAt": datetime.utcnow().isoformat(),
+                **({"taskGenerationId": generation} if generation else {}),
+            },
+            "errorMessage": "",
+            "errorCode": "",
+            "nextAction": "",
             "files": files,
             "comparisonSummary": {**comparison["summary"], **conclusion},
             "comparisonRows": comparison["rows"],
             "candidateMatches": comparison.get("candidateMatches", []),
+            "presentation": presentation,
             "warehouseComparison": warehouse_comparison,
             "extractionQuality": extraction_quality,
             "reconciliationDiagnostics": reconciliation_diagnostics,
             "costSummaries": cost_summaries,
             "aiCacheAudit": ai_cache_audit,
+            "invoiceEvidenceAudit": invoice_evidence_audit,
+            "pdfPageAudit": pdf_page_audit,
+            "pdfPageAuditSummary": _summarize_pdf_page_audit(pdf_page_audit),
             "aiCacheReconciliationPreview": ai_cache_reconciliation_preview,
             "reocrPlan": reocr_plan,
             "nameMappingGovernance": name_mapping_governance,
@@ -5756,12 +11146,39 @@ def _perform_labor_extract_compare(run_id: str) -> dict:
             "reviewQueues": review_queues,
             "profileGovernance": profile_governance,
             "correctionGovernance": correction_governance,
+            "structureReconciliation": structure_reconciliation,
+            "autoOcrCandidate": auto_ocr_candidate,
+            "batchGuard": batch_guard,
+            **review_state,
             "pdfExtractedRows": [row.to_dict() for row in pdf_rows],
             "excelRows": [row.to_dict() for row in excel_rows],
             "diffDownloadUrl": files["diffReport"]["downloadUrl"],
-            "businessReportDownloadUrl": files["businessReport"]["downloadUrl"],
+            "businessReportDownloadUrl": (files.get("businessReport") or {}).get("downloadUrl", ""),
+        }
+    result_updates["resultInputFingerprint"] = _labor_result_input_fingerprint(
+        {**metadata, **result_updates}
+    )
+    updated, committed = compare_and_update_labor_metadata(
+        run_id,
+        expected_task_generation_id=generation,
+        expected_fingerprint=input_fingerprint_at_start,
+        fingerprint=_labor_result_input_fingerprint,
+        updates=result_updates,
+        conflict_updates=lambda current: {
+            **_labor_invalidate_official_result(
+                current,
+                status="输入已变更，待重新核对",
+                reason_code="inputs_changed_during_extraction",
+                message="核对期间 PDF、Excel、字段映射或已启用治理状态发生变化；本次旧快照结果未发布，请重新执行整批核对。",
+            ),
+            "inputSnapshotRejected": True,
         },
     )
+    if not committed:
+        if generation and _labor_task_generation_id(updated) != generation:
+            logger.info("[%s] 任务代次已更新，已拒绝发布旧任务结果", run_id)
+            return {**updated, "_taskGenerationRejected": True}
+        logger.warning("[%s] 核对输入在任务期间发生变化，已拒绝发布旧快照结果", run_id)
     return updated
 
 
@@ -5883,6 +11300,14 @@ def _retry_if_better(pdf_paths, pdf_rows, excel_rows, extraction_quality, compar
         extraction_quality["retryAttempted"] = True
         extraction_quality["retryApplied"] = False
         return pdf_rows, comparison, extraction_quality
+    min_retry_rows = (len(pdf_rows) * 8 + 9) // 10
+    if len(retry_pdf_rows) < min_retry_rows:
+        logger.warning(
+            f"重试抽取结果不完整: 原始 {len(pdf_rows)} 条，重试 {len(retry_pdf_rows)} 条，保留原始结果"
+        )
+        extraction_quality["retryAttempted"] = True
+        extraction_quality["retryApplied"] = False
+        return pdf_rows, comparison, extraction_quality
     if retry_pdf_rows:
         retry_comparison = compare_labor_items(
             retry_pdf_rows, excel_rows,
@@ -5926,7 +11351,7 @@ def _labor_quality_score(quality: dict, summary: dict) -> tuple:
 
 
 def _check_stale_extracting(metadata: dict) -> dict:
-    """Mark run as failed if it's been stuck in '抽取中' for over 10 minutes."""
+    """Mark run as failed if it's been stuck in '抽取中' for over 30 minutes."""
     if metadata.get("status") != "抽取中":
         return metadata
     from datetime import datetime as _dt, timedelta
@@ -5935,7 +11360,8 @@ def _check_stale_extracting(metadata: dict) -> dict:
         updated_dt = _dt.fromisoformat(updated)
     except (ValueError, TypeError):
         return metadata
-    if _dt.now() - updated_dt > timedelta(minutes=30):
+    now = _dt.now(updated_dt.tzinfo) if updated_dt.tzinfo is not None else _dt.now()
+    if now - updated_dt > timedelta(minutes=30):
         run_id = metadata.get("id")
         if run_id:
             try:
@@ -5953,8 +11379,30 @@ def _check_stale_extracting(metadata: dict) -> dict:
     return metadata
 
 
+def _labor_retryable_system_failure(*, message: str, stage: str, error_code: str) -> dict:
+    return {
+        "status": "抽取失败",
+        "stage": stage,
+        "failureType": "system_interrupted",
+        "errorCode": error_code,
+        "errorMessage": message,
+        "retryable": True,
+        "requiresReupload": False,
+        "businessReviewStatus": "pending",
+        "manualReviewRequired": True,
+        "directPaymentAllowed": False,
+        "requiresHumanReview": True,
+        "nextAction": "无需重新上传材料。请重新点击「抽取并核对」重试；若连续失败，请联系管理员检查服务状态。",
+    }
+
+
 def _recover_stuck_labor_runs() -> None:
-    """Mark stale '抽取中' runs as failed on server startup."""
+    """Recover in-process tasks that cannot survive a server restart."""
+    if _uses_personal_labor_worker():
+        # The durable queue and the user's desktop Worker outlive a Vercel
+        # function instance. Treating every cold start as a task interruption
+        # races with valid Worker result publication and can overwrite it.
+        return
     try:
         rows = list_labor_metadata()
     except Exception as exc:
@@ -5966,25 +11414,20 @@ def _recover_stuck_labor_runs() -> None:
         run_id = metadata.get("id")
         if run_id:
             try:
-                update_labor_metadata(run_id, {
-                    "status": "抽取失败",
-                    "stage": "系统中断",
-                    "errorMessage": "服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
-                    "errorCode": "LABOR_EXTRACT_INTERRUPTED",
-                    "failureType": "system_interrupted",
-                    "retryable": True,
-                    "requiresReupload": False,
-                    "requiresHumanReview": False,
-                    "nextAction": "请重新点击「抽取并核对」重试；如连续失败，请联系管理员查看后台日志。",
-                })
+                update_labor_metadata(
+                    run_id,
+                    _labor_retryable_system_failure(
+                        message="服务器已重启，抽取任务被中断。请重新点击「抽取并核对」重试。",
+                        stage="系统中断",
+                        error_code="LABOR_EXTRACT_INTERRUPTED",
+                    ),
+                )
             except Exception:
                 pass
 
 
 def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_quality: dict, amount_tolerance: float = 0.05) -> dict:
     """Build conclusion level and message for the reconciliation result."""
-    from bonus_platform.engine.labor.compare import _adaptive_tolerance
-
     wc_summary = warehouse_comparison.get("summary", {})
     comp_summary = comparison.get("summary", {})
     total_passed = wc_summary.get("totalPassed", False)
@@ -6001,25 +11444,30 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
     exception_count = comp_summary.get("exceptionCount", 0)
 
     # 结论级别判定
-    effective_tolerance = _adaptive_tolerance(max_amount, amount_tolerance)
     if extraction_quality.get("level") == "critical":
         conclusion_level = "critical"
         conclusion_message = "抽取质量存在严重问题，必须人工复核"
-    elif extraction_quality.get("level") == "warning" or low_confidence_count > 0:
+    elif extraction_quality.get("level") == "warning" and str(extraction_quality.get("message") or "").strip():
+        conclusion_level = "warning"
+        conclusion_message = str(extraction_quality.get("message")).strip()
+    elif low_confidence_count > 0:
         conclusion_level = "warning"
         conclusion_message = "存在低置信度抽取，需人工复核"
-    elif total_passed and amount_diff_count == 0:
+    elif pdf_employee_count <= 0 or excel_employee_count <= 0 or pdf_employee_count != excel_employee_count:
+        conclusion_level = "warning"
+        conclusion_message = "员工明细数量未闭合，需人工复核"
+    elif exception_count > 0 or amount_diff_count > 0:
+        conclusion_level = "warning"
+        conclusion_message = f"{exception_count or amount_diff_count}项员工/金额差异需关注"
+    elif extraction_quality.get("level") == "warning":
+        conclusion_level = "warning"
+        conclusion_message = "核对存在风险，请查看质量提示"
+    elif total_passed:
         conclusion_level = "pass"
         conclusion_message = "仓库总金额核对通过"
-    elif amount_delta_total <= effective_tolerance and amount_diff_count == 0:
-        conclusion_level = "pass"
-        conclusion_message = f"仓库总金额核对通过，差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
     else:
         conclusion_level = "warning"
-        if amount_diff_count > 0:
-            conclusion_message = f"{amount_diff_count}人工时/金额差异需关注"
-        else:
-            conclusion_message = f"仓库总金额差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
+        conclusion_message = f"仓库总金额差异 ${amount_delta_total:.2f} ({amount_delta_pct:.2f}%)"
 
     # 计算不在本批发票人数（使用实际的"Excel有PDF无"行数，而非简单减法）
     comparison_rows = comparison.get("rows", [])
@@ -6032,8 +11480,53 @@ def _build_conclusion(warehouse_comparison: dict, comparison: dict, extraction_q
     }
 
 
+def _labor_detail_coverage_complete(reconciliation_diagnostics: dict) -> bool | None:
+    signals = reconciliation_diagnostics.get("signals") if isinstance(reconciliation_diagnostics, dict) else {}
+    coverage = signals.get("pdfDetailCoverage") if isinstance(signals, dict) else {}
+    if not isinstance(coverage, dict) or not coverage:
+        return None
+    invoice_count = int(coverage.get("invoiceFileCount") or 0)
+    detail_count = int(coverage.get("detailFileCount") or 0)
+    return invoice_count > 0 and detail_count >= invoice_count
+
+
 @app.get("/api/labor/runs/{run_id}/download/{filename}")
-def download_labor_file(run_id: str, filename: str) -> FileResponse:
+def download_labor_file(run_id: str, filename: str) -> Response:
+    if labor_postgres_state_enabled():
+        metadata = _labor_metadata_or_404(run_id)
+        files = metadata.get("files") if isinstance(metadata.get("files"), dict) else {}
+        safe_filename = Path(str(filename).replace("\\", "/")).name
+        for key in ("diffReport", "businessReport", "projectionReport", "governanceReport"):
+            record = files.get(key) if isinstance(files.get(key), dict) else {}
+            if (
+                Path(str(record.get("filename") or "").replace("\\", "/")).name != safe_filename
+                or not str(record.get("objectKey") or "").strip()
+                or record.get("storageVerified") is not True
+            ):
+                continue
+            try:
+                signed = create_labor_supabase_signed_download(
+                    str(record["objectKey"]),
+                    filename=safe_filename,
+                    expires_in=120,
+                )
+            except Exception as exc:  # noqa: BLE001 - do not expose storage internals.
+                raise _labor_p1_storage_http_error() from exc
+            return RedirectResponse(
+                url=str(signed["signedUrl"]),
+                status_code=307,
+                headers={"cache-control": "no-store", "referrer-policy": "no-referrer"},
+            )
+    if _labor_p1_required():
+        raise HTTPException(
+            status_code=409,
+            detail=_labor_request_error(
+                message="当前报告缺少已验证的私有存储证据，P1 不允许从服务本地回退下载。",
+                error_code="LABOR_P1_PRIVATE_REPORT_REQUIRED",
+                next_action="请重新生成核对报告；持续失败请联系管理员检查私有存储。",
+                requires_human_review=True,
+            ),
+        )
     try:
         run_dir = get_labor_run_dir(run_id)
     except FileNotFoundError as exc:
@@ -6075,6 +11568,19 @@ def download_labor_file(run_id: str, filename: str) -> FileResponse:
                     next_action="请重新生成报告；如果批次已完成但仍无法下载，请联系管理员恢复该批次报告文件。",
                 ),
             )
+    try:
+        metadata = load_labor_metadata(run_dir)
+        owner_user_id = str(metadata.get("ownerUserId") or "local-default")
+    except Exception:
+        owner_user_id = "local-default"
+    append_labor_audit_event(
+        _labor_audit_path(),
+        action="report_downloaded",
+        run_id=run_id,
+        owner_user_id=owner_user_id,
+        actor_user_id=owner_user_id,
+        outcome="success",
+    )
     return FileResponse(path, filename=path.name)
 
 
@@ -6259,9 +11765,32 @@ async def _save_upload(file: UploadFile) -> Path:
         return Path(tmp.name)
 
 
-async def _save_upload_to(file: UploadFile, path: Path) -> Path:
+async def _save_upload_to(
+    file: UploadFile,
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    limit_code: str = "LABOR_FILE_SIZE_LIMIT_EXCEEDED",
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(await file.read())
+    written = 0
+    try:
+        with path.open("wb") as destination:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if max_bytes is not None and written > max_bytes:
+                    raise LaborResourceLimitError(
+                        limit_code,
+                        f"文件 {file.filename} 超过允许大小。",
+                        limit=max_bytes,
+                    )
+                destination.write(chunk)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     return path
 
 
@@ -6566,8 +12095,20 @@ def _labor_excel_rows_from_metadata(metadata: dict) -> list:
         raise HTTPException(status_code=400, detail="请先确认 Excel 工作表和字段映射。")
     excel_rows = []
     for path in _labor_workbook_paths(metadata):
-        excel_rows.extend(read_workbook_rows(path, sheet_name, mapping))
+        workbook_sheet, workbook_mapping = _labor_workbook_mapping(metadata, path)
+        excel_rows.extend(read_workbook_rows(path, workbook_sheet, workbook_mapping))
     return _aggregate_excel_rows(excel_rows)
+
+
+def _labor_workbook_mapping(metadata: dict, path: Path) -> tuple[str, dict]:
+    for item in metadata.get("workbookMappings") or []:
+        if not isinstance(item, dict) or str(item.get("filename") or "") != path.name:
+            continue
+        item_sheet = str(item.get("sheetName") or "").strip()
+        item_mapping = item.get("mapping") if isinstance(item.get("mapping"), dict) else {}
+        if item_sheet and item_mapping:
+            return item_sheet, item_mapping
+    return str(metadata.get("workbookSheet") or "").strip(), metadata.get("excelMapping") or {}
 
 
 def _labor_pdf_path_for_source(metadata: dict, source_file: str) -> Path:
