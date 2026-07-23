@@ -638,7 +638,7 @@ function syncLaborWorkerReleaseUploadControls() {
   }
   setText(
     labor.workerReleaseUploadStatus,
-    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 后上传到 UAT 私有存储。`,
+    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 后上传到当前环境私有存储。`,
   );
 }
 
@@ -679,7 +679,7 @@ async function uploadLaborWorkerRelease() {
     });
     if (!uploaded.ok) throw new Error(`私有存储未接收安装包（HTTP ${uploaded.status}）。`);
     const platformLabel = laborWorkerPlatformLabel(releasePlatform);
-    setText(labor.workerReleaseUploadStatus, `${platformLabel} ${requiredVersion} 已上传到 UAT 私有存储；更新清单生效后用户会收到提示。`);
+    setText(labor.workerReleaseUploadStatus, `${platformLabel} ${requiredVersion} 已上传到当前环境私有存储；更新清单生效后用户会收到提示。`);
     toast(`${platformLabel} 核对助手 ${requiredVersion} 安装包上传完成。`);
   } catch (error) {
     setText(labor.workerReleaseUploadStatus, error.message, true);
@@ -1017,7 +1017,7 @@ async function restoreLaborRunFromUrl() {
     advanceWizardStep(hasUploadedFiles ? "3" : "2");
     showLaborToolbench();
     if (labor.uploadStatus && hasUploadedFiles) {
-      setText(labor.uploadStatus, "已恢复批次，文件仍保存在 UAT 私有存储中。");
+      setText(labor.uploadStatus, "已恢复批次，文件仍保存在当前环境私有存储中。");
     }
     toast(`已恢复批次 ${run.id}。`);
     if (hasUploadedFiles && run.mappingPreflight?.status === "completed") {

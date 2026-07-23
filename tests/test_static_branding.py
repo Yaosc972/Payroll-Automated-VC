@@ -1083,6 +1083,8 @@ def test_overseas_labor_page_exposes_worker_download_and_update_status():
     assert "platform: releasePlatform" in js
     assert "updateAvailable" in js
     assert "有新版本" in js
+    assert "UAT 私有存储" not in html
+    assert "UAT 私有存储" not in js
 
     release_action_css = html[
         html.index(".overseas-labor-shell .worker-release-action {"):
