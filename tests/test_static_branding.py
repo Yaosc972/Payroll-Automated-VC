@@ -73,7 +73,7 @@ def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime()
     assert "upload-intents" in script
     assert "intent.signedUrl" in script
     assert "upload-intents/${intent.fileId}/finalize" in script
-    assert 'overseas-labor.js?v=33' in html
+    assert 'overseas-labor.js?v=34' in html
 
 
 def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
@@ -94,7 +94,7 @@ def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     assert "function selectPeriodDate(value)" in script
     assert "addDays(picked, 6)" in script
     assert "periodPickerState.selectingEnd" in script
-    assert 'overseas-labor.js?v=33' in html
+    assert 'overseas-labor.js?v=34' in html
 
 
 def test_overseas_labor_async_actions_share_button_loading_transitions():
@@ -117,7 +117,7 @@ def test_overseas_labor_async_actions_share_button_loading_transitions():
     assert 'beginButtonLoading(labor.activateWorker, "正在连接")' in script
     assert 'beginButtonLoading(labor.deleteCurrentRun, "正在删除")' in script
     assert 'beginButtonLoading(button, "正在撤销")' in script
-    assert 'overseas-labor.js?v=33' in html
+    assert 'overseas-labor.js?v=34' in html
 
 
 def test_overseas_labor_uses_server_formal_task_gate_instead_of_hostname_guessing():
@@ -1044,10 +1044,24 @@ def test_overseas_labor_upload_shows_and_prevalidates_configured_workbook_limit(
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 
     assert "workbookUploadHint(0)" in js
-    assert 'overseas-labor.js?v=33' in html
+    assert 'overseas-labor.js?v=34' in html
     assert "access.uploadLimits?.maxWorkbookFiles" in js
     assert "existing.workbook + pendingWorkbookCount > maxWorkbookFiles" in js
     assert "最多选择 ${maxWorkbookFiles} 个 Excel 文件" in js
+
+
+def test_overseas_labor_direct_upload_uses_bounded_parallel_batches():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    upload_block = script[
+        script.index("async function uploadFilesDirectlyToPrivateStorage"):
+        script.index("async function loadSheets")
+    ]
+
+    assert "const LABOR_DIRECT_UPLOAD_CONCURRENCY = 3" in script
+    assert "offset += LABOR_DIRECT_UPLOAD_CONCURRENCY" in upload_block
+    assert "Promise.allSettled(batch.map(uploadOne))" in upload_block
+    assert "completedCount += 1" in upload_block
+    assert "上传批次中有文件失败" in upload_block
 
 
 def test_overseas_labor_uses_inline_toolbench_and_module_only_branding():

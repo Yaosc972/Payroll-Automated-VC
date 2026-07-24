@@ -32,6 +32,7 @@ const laborState = {
 let laborFieldSuggestionRequestId = 0;
 
 const LABOR_TOTAL_AMOUNT_TOLERANCE = 0.1;
+const LABOR_DIRECT_UPLOAD_CONCURRENCY = 3;
 
 const periodPickerState = {
   cursorMonth: null,
@@ -1428,7 +1429,8 @@ async function uploadFilesDirectlyToPrivateStorage() {
   if (intents.length !== selected.length) {
     throw new Error("服务端返回的私有上传清单不完整，请重新上传本批文件。");
   }
-  for (let index = 0; index < intents.length; index += 1) {
+  let completedCount = 0;
+  const uploadOne = async (index) => {
     const intent = intents[index];
     const item = selected[index];
     const uploadUrl = new URL(String(intent.signedUrl || ""), window.location.href);
@@ -1437,7 +1439,10 @@ async function uploadFilesDirectlyToPrivateStorage() {
     if (!secureUrl || String(intent.method || "").toUpperCase() !== "PUT") {
       throw new Error("服务端返回了不安全的私有上传地址，请联系管理员。");
     }
-    setText(labor.uploadStatus, `正在直传文件 ${index + 1}/${intents.length}：${item.file.name}`);
+    setText(
+      labor.uploadStatus,
+      `正在并发上传文件（已完成 ${completedCount}/${intents.length}）：${item.file.name}`,
+    );
     const uploaded = await fetch(intent.signedUrl, {
       method: "PUT",
       headers: intent.headers || { "content-type": item.file.type || "application/octet-stream" },
@@ -1451,6 +1456,20 @@ async function uploadFilesDirectlyToPrivateStorage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sha256: fileSpecs[index].sha256 }),
     });
+    completedCount += 1;
+    setText(labor.uploadStatus, `文件上传确认 ${completedCount}/${intents.length}：${item.file.name}`);
+  };
+  for (let offset = 0; offset < intents.length; offset += LABOR_DIRECT_UPLOAD_CONCURRENCY) {
+    const batch = Array.from(
+      { length: Math.min(LABOR_DIRECT_UPLOAD_CONCURRENCY, intents.length - offset) },
+      (_value, batchIndex) => offset + batchIndex,
+    );
+    const results = await Promise.allSettled(batch.map(uploadOne));
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) {
+      const message = failed.reason instanceof Error ? failed.reason.message : String(failed.reason || "");
+      throw new Error(message || "上传批次中有文件失败，请检查网络后重试。");
+    }
   }
   return requestJson(`/api/labor/runs/${runId}`);
 }
