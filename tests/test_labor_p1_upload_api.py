@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -117,6 +119,7 @@ def test_p1_upload_intent_accepts_near_limit_pdf_and_workbook_and_rejects_oversi
 ):
     pending_batches = []
     signing_calls = []
+    signing_barrier = threading.Barrier(2)
     monkeypatch.setattr(app_module, "labor_postgres_state_enabled", lambda: True)
     monkeypatch.setattr(
         app_module,
@@ -129,6 +132,7 @@ def test_p1_upload_intent_accepts_near_limit_pdf_and_workbook_and_rejects_oversi
 
     def sign(object_key, **_kwargs):
         signing_calls.append(object_key)
+        signing_barrier.wait(timeout=2)
         return {
             "signedUrl": "https://project.supabase.co/upload?token=short",
             "method": "PUT",
@@ -381,6 +385,83 @@ def test_p1_finalize_and_signed_download_use_manifest_not_client_object_path(p1_
     assert download_response.status_code == 200
     assert download_response.json()["private"] is True
     assert "attacker" not in download_response.json()["signedUrl"]
+
+
+def test_p1_batch_finalize_checks_objects_and_commits_manifest_once(p1_upload_env, monkeypatch):
+    file_states = [
+        {
+            "id": "file-pdf",
+            "runId": "labor-1",
+            "ownerUserId": "overseasAdminUser",
+            "fileKind": "pdf_invoice",
+            "objectKey": "labor-runs/production/owners/overseasAdminUser/runs/labor-1/inputs/file-pdf/invoice.pdf",
+            "originalFilename": "invoice.pdf",
+            "contentType": "application/pdf",
+            "sizeBytes": 1024,
+            "sha256": "a" * 64,
+            "uploadState": "pending",
+        },
+        {
+            "id": "file-xlsx",
+            "runId": "labor-1",
+            "ownerUserId": "overseasAdminUser",
+            "fileKind": "workbook",
+            "objectKey": "labor-runs/production/owners/overseasAdminUser/runs/labor-1/inputs/file-xlsx/bill.xlsx",
+            "originalFilename": "bill.xlsx",
+            "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "sizeBytes": 2048,
+            "sha256": "b" * 64,
+            "uploadState": "pending",
+        },
+    ]
+    finalized_batches = []
+    monkeypatch.setattr(app_module, "labor_postgres_state_enabled", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "list_labor_file_states",
+        lambda **_kwargs: [dict(item) for item in file_states],
+    )
+    monkeypatch.setattr(
+        app_module,
+        "labor_supabase_object_metadata",
+        lambda object_key: {
+            "objectKey": object_key,
+            "sizeBytes": 1024 if object_key.endswith("invoice.pdf") else 2048,
+            "contentType": (
+                "application/pdf"
+                if object_key.endswith("invoice.pdf")
+                else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "finalize_labor_file_states",
+        lambda **kwargs: finalized_batches.append(kwargs) or [
+            {**item, "uploadState": "ready"} for item in file_states
+        ],
+        raising=False,
+    )
+
+    with TestClient(app) as client:
+        _login(client)
+        run = _create_run(client)
+        for item in file_states:
+            item["runId"] = run["id"]
+            item["objectKey"] = item["objectKey"].replace("labor-1", run["id"])
+        response = client.post(
+            f"/api/labor/runs/{run['id']}/upload-intents/batch-finalize",
+            headers=_headers(client),
+            json={"fileIds": ["file-pdf", "file-xlsx"]},
+        )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["files"]] == ["file-pdf", "file-xlsx"]
+    assert len(finalized_batches) == 1
+    assert [item["file_id"] for item in finalized_batches[0]["files"]] == [
+        "file-pdf",
+        "file-xlsx",
+    ]
 
 
 def test_p1_rejects_legacy_multipart_upload_even_when_readiness_is_green(p1_upload_env, monkeypatch):

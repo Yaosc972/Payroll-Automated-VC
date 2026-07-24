@@ -593,6 +593,79 @@ def test_p1_finalize_file_manifest_verifies_expected_size_and_hash():
     assert mismatch_connection.rolled_back is True
 
 
+def test_p1_finalize_file_batch_updates_run_snapshot_once():
+    pdf_row = {
+        "id": "file-pdf",
+        "run_id": "labor-1",
+        "owner_user_id": "user-1",
+        "file_kind": "pdf_invoice",
+        "object_key": "labor-runs/uat/owners/user-1/runs/labor-1/inputs/file-pdf/invoice.pdf",
+        "original_filename": "invoice.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": 1024,
+        "sha256": "a" * 64,
+        "upload_state": "pending",
+    }
+    workbook_row = {
+        "id": "file-xlsx",
+        "run_id": "labor-1",
+        "owner_user_id": "user-1",
+        "file_kind": "workbook",
+        "object_key": "labor-runs/uat/owners/user-1/runs/labor-1/inputs/file-xlsx/bill.xlsx",
+        "original_filename": "bill.xlsx",
+        "content_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "size_bytes": 2048,
+        "sha256": "b" * 64,
+        "upload_state": "pending",
+    }
+    ready_pdf = {**pdf_row, "upload_state": "ready"}
+    ready_workbook = {**workbook_row, "upload_state": "ready"}
+    ready_run = _state_row(revision=2, snapshot={"status": "已上传文件"})
+    connection = FakeConnection(
+        [
+            FakeResult(row=_state_row()),
+            FakeResult(row=pdf_row),
+            FakeResult(row=ready_pdf),
+            FakeResult(row=workbook_row),
+            FakeResult(row=ready_workbook),
+            FakeResult(rows=[ready_pdf, ready_workbook]),
+            FakeResult(row=ready_run),
+            FakeResult(),
+            FakeResult(),
+        ]
+    )
+
+    ready = state_postgres.finalize_labor_file_states(
+        run_id="labor-1",
+        owner_user_id="user-1",
+        actor_user_id="user-1",
+        files=[
+            {
+                "file_id": "file-pdf",
+                "observed_size_bytes": 1024,
+                "reported_sha256": "a" * 64,
+            },
+            {
+                "file_id": "file-xlsx",
+                "observed_size_bytes": 2048,
+                "reported_sha256": "b" * 64,
+            },
+        ],
+        connect=lambda: connection,
+    )
+
+    run_updates = [
+        query for query in connection.queries
+        if "update public.labor_runs" in query[0].lower()
+    ]
+    assert len(run_updates) == 1
+    snapshot = run_updates[0][1][1]
+    assert '"file-pdf"' in snapshot
+    assert '"file-xlsx"' in snapshot
+    assert [item["id"] for item in ready] == ["file-pdf", "file-xlsx"]
+    assert connection.committed is True
+
+
 def test_p1_result_outputs_do_not_rewrite_or_reclassify_authoritative_input_manifest():
     input_files = {
         "pdfInvoices": [

@@ -178,6 +178,10 @@ def test_labor_access_selects_private_direct_upload_only_when_p1_is_required(mon
 
 def test_p1_hard_gate_targets_formal_data_flow_not_device_bootstrap():
     assert app_module._labor_p1_formal_mutation("/api/labor/runs/labor-1/upload-intents", "POST") is True
+    assert app_module._labor_p1_formal_mutation(
+        "/api/labor/runs/labor-1/upload-intents/batch-finalize",
+        "POST",
+    ) is True
     assert app_module._labor_p1_formal_mutation("/api/labor/runs/labor-1/extract-and-compare", "POST") is True
     assert app_module._labor_p1_formal_mutation("/api/labor/worker/devices", "POST") is False
     assert app_module._labor_p1_formal_mutation("/api/labor/worker/devices/device-1/rotate", "POST") is False

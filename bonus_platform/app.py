@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from datetime import date, datetime, timedelta
 import json
@@ -121,6 +122,7 @@ from .engine.labor.state_postgres import (
     LaborStateOwnerMismatch,
     create_pending_labor_file_states,
     finalize_labor_file_state,
+    finalize_labor_file_states,
     get_labor_file_state,
     labor_postgres_state_enabled,
     labor_postgres_state_health,
@@ -1609,7 +1611,7 @@ def _labor_p1_formal_mutation(path: str, method: str) -> bool:
     if path == "/api/labor/runs":
         return True
     if re.fullmatch(
-        r"/api/labor/runs/[^/]+/(?:files|mapping|mapping-preflight|business-review|extract-and-compare|upload-intents(?:/[^/]+/finalize)?)",
+        r"/api/labor/runs/[^/]+/(?:files|mapping|mapping-preflight|business-review|extract-and-compare|upload-intents(?:/batch-finalize|/[^/]+/finalize)?)",
         path,
     ):
         return True
@@ -4544,14 +4546,6 @@ def create_labor_upload_intents(
             file_id=file_id,
             filename=spec["filename"],
         )
-        try:
-            signed = create_labor_supabase_signed_upload_for_object(
-                object_key,
-                file_kind=spec["fileKind"],
-                content_type=spec["contentType"],
-            )
-        except Exception as exc:  # noqa: BLE001 - never expose signed-storage internals.
-            raise _labor_p1_storage_http_error() from exc
         prepared.append(
             {
                 "state": {
@@ -4563,9 +4557,26 @@ def create_labor_upload_intents(
                     "size_bytes": spec["sizeBytes"],
                     "sha256": spec["sha256"],
                 },
-                "intent": {"fileId": file_id, **signed},
+                "fileId": file_id,
+                "fileKind": spec["fileKind"],
+                "contentType": spec["contentType"],
             }
         )
+    def sign_prepared(item: dict) -> dict:
+        return {
+            "fileId": item["fileId"],
+            **create_labor_supabase_signed_upload_for_object(
+                item["state"]["object_key"],
+                file_kind=item["fileKind"],
+                content_type=item["contentType"],
+            ),
+        }
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, len(prepared))) as executor:
+            intents = list(executor.map(sign_prepared, prepared))
+    except Exception as exc:  # noqa: BLE001 - never expose signed-storage internals.
+        raise _labor_p1_storage_http_error() from exc
     try:
         create_pending_labor_file_states(
             run_id=run_id,
@@ -4593,8 +4604,93 @@ def create_labor_upload_intents(
             str(getattr(diagnostic, "constraint_name", "") or "")[:128],
         )
         raise _labor_p1_state_http_error(exc) from exc
-    intents = [item["intent"] for item in prepared]
     return {"runId": run_id, "intents": intents}
+
+
+@app.post("/api/labor/runs/{run_id}/upload-intents/batch-finalize")
+def batch_finalize_labor_upload_intents(
+    request: Request,
+    run_id: str,
+    payload: dict = Body(...),
+) -> dict:
+    _labor_p1_state_required()
+    metadata = _labor_metadata_or_404(run_id)
+    owner_user_id = str(metadata.get("ownerUserId") or "").strip()
+    actor_user_id, _ = _labor_request_actor(request)
+    raw_file_ids = payload.get("fileIds") if isinstance(payload, dict) else None
+    if not isinstance(raw_file_ids, list) or not raw_file_ids:
+        raise HTTPException(status_code=400, detail="请至少提交一个待确认文件。")
+    file_ids = [str(value or "").strip() for value in raw_file_ids]
+    if any(not value for value in file_ids):
+        raise HTTPException(status_code=400, detail="待确认文件 ID 不能为空。")
+    if len(file_ids) > 64:
+        raise HTTPException(status_code=400, detail="单次确认文件数量不能超过 64。")
+    if len(set(file_ids)) != len(file_ids):
+        raise HTTPException(status_code=400, detail="待确认文件 ID 不能重复。")
+    try:
+        file_states = list_labor_file_states(
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_state_http_error(exc) from exc
+    state_by_id = {
+        str(item.get("id") or ""): item
+        for item in file_states
+    }
+    selected_states = []
+    for file_id in file_ids:
+        file_state = state_by_id.get(file_id)
+        if not file_state:
+            raise _labor_p1_state_http_error(LaborStateNotFound("上传文件记录不存在。"))
+        selected_states.append(file_state)
+
+    def observe(file_state: dict) -> dict:
+        observed = labor_supabase_object_metadata(str(file_state.get("objectKey") or ""))
+        expected_type = str(file_state.get("contentType") or "").split(";", 1)[0].strip().lower()
+        observed_type = str(observed.get("contentType") or "").split(";", 1)[0].strip().lower()
+        if (
+            expected_type
+            and observed_type
+            and expected_type != "application/octet-stream"
+            and expected_type != observed_type
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=_labor_request_error(
+                    message="对象存储中的文件类型与上传意图不一致。",
+                    error_code="LABOR_FILE_CONTENT_TYPE_MISMATCH",
+                    next_action="请删除当前文件并重新上传。",
+                    requires_reupload=True,
+                ),
+            )
+        return {
+            "file_id": str(file_state.get("id") or ""),
+            "observed_size_bytes": int(observed.get("sizeBytes") or 0),
+            "reported_sha256": str(file_state.get("sha256") or ""),
+        }
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, len(selected_states))) as executor:
+            observed_files = list(executor.map(observe, selected_states))
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_storage_http_error() from exc
+    try:
+        finalized = finalize_labor_file_states(
+            run_id=run_id,
+            owner_user_id=owner_user_id,
+            actor_user_id=actor_user_id,
+            files=observed_files,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _labor_p1_state_http_error(exc) from exc
+    return {
+        "runId": run_id,
+        "files": finalized,
+        "hashVerification": "worker_required",
+    }
 
 
 @app.post("/api/labor/runs/{run_id}/upload-intents/{file_id}/finalize")

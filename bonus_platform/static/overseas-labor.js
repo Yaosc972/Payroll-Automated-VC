@@ -32,7 +32,6 @@ const laborState = {
 let laborFieldSuggestionRequestId = 0;
 
 const LABOR_TOTAL_AMOUNT_TOLERANCE = 0.1;
-const LABOR_DIRECT_UPLOAD_CONCURRENCY = 3;
 
 const periodPickerState = {
   cursorMonth: null,
@@ -1451,26 +1450,21 @@ async function uploadFilesDirectlyToPrivateStorage() {
     if (!uploaded.ok) {
       throw new Error(`私有存储未接收文件 ${item.file.name}（HTTP ${uploaded.status}）。`);
     }
-    await requestJson(`/api/labor/runs/${runId}/upload-intents/${intent.fileId}/finalize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sha256: fileSpecs[index].sha256 }),
-    });
     completedCount += 1;
-    setText(labor.uploadStatus, `文件上传确认 ${completedCount}/${intents.length}：${item.file.name}`);
+    setText(labor.uploadStatus, `文件直传完成 ${completedCount}/${intents.length}：${item.file.name}`);
   };
-  for (let offset = 0; offset < intents.length; offset += LABOR_DIRECT_UPLOAD_CONCURRENCY) {
-    const batch = Array.from(
-      { length: Math.min(LABOR_DIRECT_UPLOAD_CONCURRENCY, intents.length - offset) },
-      (_value, batchIndex) => offset + batchIndex,
-    );
-    const results = await Promise.allSettled(batch.map(uploadOne));
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed) {
-      const message = failed.reason instanceof Error ? failed.reason.message : String(failed.reason || "");
-      throw new Error(message || "上传批次中有文件失败，请检查网络后重试。");
-    }
+  const results = await Promise.allSettled(intents.map(uploadOne));
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) {
+    const message = failed.reason instanceof Error ? failed.reason.message : String(failed.reason || "");
+    throw new Error(message || "上传文件中有文件失败，请检查网络后重试。");
   }
+  setText(labor.uploadStatus, `正在一次确认 ${intents.length} 个文件，请稍候…`);
+  await requestJson(`/api/labor/runs/${runId}/upload-intents/batch-finalize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileIds: intents.map((intent) => intent.fileId) }),
+  });
   return requestJson(`/api/labor/runs/${runId}`);
 }
 

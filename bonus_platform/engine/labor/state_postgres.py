@@ -537,44 +537,97 @@ def finalize_labor_file_state(
     reported_sha256: str,
     connect: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
+    return finalize_labor_file_states(
+        run_id=run_id,
+        owner_user_id=owner_user_id,
+        actor_user_id=actor_user_id,
+        files=[
+            {
+                "file_id": file_id,
+                "observed_size_bytes": observed_size_bytes,
+                "reported_sha256": reported_sha256,
+            }
+        ],
+        connect=connect,
+    )[0]
+
+
+def finalize_labor_file_states(
+    *,
+    run_id: str,
+    owner_user_id: str,
+    actor_user_id: str,
+    files: list[Mapping[str, Any]],
+    connect: Callable[[], Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Finalize one uploaded file batch with a single run lock and commit."""
     safe_run_id = _required(run_id, "run_id")
     owner = _required(owner_user_id, "owner_user_id")
     actor = _required(actor_user_id, "actor_user_id")
-    safe_file_id = _required(file_id, "file_id")
-    observed_size = int(observed_size_bytes or 0)
-    digest = _validated_sha256(reported_sha256)
+    if not isinstance(files, list) or not files:
+        raise ValueError("files must contain at least one uploaded file")
+    if len(files) > 64:
+        raise ValueError("upload finalize batch is too large")
+    normalized = []
+    seen_file_ids = set()
+    for raw in files:
+        if not isinstance(raw, Mapping):
+            raise ValueError("uploaded file record must be a mapping")
+        safe_file_id = _required(raw.get("file_id"), "file_id")
+        if safe_file_id in seen_file_ids:
+            raise ValueError("upload finalize batch contains duplicate file_id")
+        seen_file_ids.add(safe_file_id)
+        normalized.append(
+            {
+                "file_id": safe_file_id,
+                "observed_size_bytes": int(raw.get("observed_size_bytes") or 0),
+                "reported_sha256": _validated_sha256(raw.get("reported_sha256")),
+            }
+        )
     with _open_connection(connect=connect) as connection:
         try:
             run_row = _lock_owned_run(connection, safe_run_id, owner)
-            file_row = connection.execute(
-                """
-                select * from public.labor_run_files
-                where id=%s and run_id=%s and owner_user_id=%s and deleted_at is null
-                for update
-                """,
-                (safe_file_id, safe_run_id, owner),
-            ).fetchone()
-            if not file_row:
-                raise LaborStateNotFound("上传文件记录不存在。")
-            file_values = dict(file_row)
-            expected_size = int(file_values.get("size_bytes") or 0)
-            expected_digest = str(file_values.get("sha256") or "").strip().lower()
-            if observed_size != expected_size or digest != expected_digest:
-                raise LaborStateConflict("对象存储文件大小或 SHA-256 与上传意图不一致。")
-            if str(file_values.get("upload_state") or "") == "ready":
+            finalized_rows = []
+            newly_finalized = []
+            for item in normalized:
+                safe_file_id = item["file_id"]
+                file_row = connection.execute(
+                    """
+                    select * from public.labor_run_files
+                    where id=%s and run_id=%s and owner_user_id=%s and deleted_at is null
+                    for update
+                    """,
+                    (safe_file_id, safe_run_id, owner),
+                ).fetchone()
+                if not file_row:
+                    raise LaborStateNotFound("上传文件记录不存在。")
+                file_values = dict(file_row)
+                expected_size = int(file_values.get("size_bytes") or 0)
+                expected_digest = str(file_values.get("sha256") or "").strip().lower()
+                if (
+                    item["observed_size_bytes"] != expected_size
+                    or item["reported_sha256"] != expected_digest
+                ):
+                    raise LaborStateConflict("对象存储文件大小或 SHA-256 与上传意图不一致。")
+                if str(file_values.get("upload_state") or "") == "ready":
+                    finalized_rows.append(file_values)
+                    continue
+                row = connection.execute(
+                    """
+                    update public.labor_run_files
+                    set upload_state='ready', updated_at=now()
+                    where id=%s and run_id=%s and owner_user_id=%s and upload_state='pending' and deleted_at is null
+                    returning *
+                    """,
+                    (safe_file_id, safe_run_id, owner),
+                ).fetchone()
+                if not row:
+                    raise LaborStateConflict("文件上传状态已变化，请刷新后重试。")
+                finalized_rows.append(row)
+                newly_finalized.append((row, item))
+            if not newly_finalized:
                 connection.commit()
-                return _file_from_row(file_values)
-            row = connection.execute(
-                """
-                update public.labor_run_files
-                set upload_state='ready', updated_at=now()
-                where id=%s and run_id=%s and owner_user_id=%s and upload_state='pending' and deleted_at is null
-                returning *
-                """,
-                (safe_file_id, safe_run_id, owner),
-            ).fetchone()
-            if not row:
-                raise LaborStateConflict("文件上传状态已变化，请刷新后重试。")
+                return [_file_from_row(row) for row in finalized_rows]
             ready_rows = connection.execute(
                 """
                 select * from public.labor_run_files
@@ -626,19 +679,24 @@ def finalize_labor_file_state(
             ).fetchone()
             if not updated_run:
                 raise LaborStateConflict("批次文件清单已被其他请求更新，请刷新后重试。")
-            _insert_audit(
-                connection,
-                run_id=safe_run_id,
-                owner_user_id=owner,
-                actor_user_id=actor,
-                action="file_upload_finalized",
-                details={"fileId": safe_file_id, "sizeBytes": observed_size, "sha256": digest},
-            )
+            for row, item in newly_finalized:
+                _insert_audit(
+                    connection,
+                    run_id=safe_run_id,
+                    owner_user_id=owner,
+                    actor_user_id=actor,
+                    action="file_upload_finalized",
+                    details={
+                        "fileId": str(row.get("id") or item["file_id"]),
+                        "sizeBytes": item["observed_size_bytes"],
+                        "sha256": item["reported_sha256"],
+                    },
+                )
             connection.commit()
         except Exception:
             connection.rollback()
             raise
-    return _file_from_row(row)
+    return [_file_from_row(row) for row in finalized_rows]
 
 
 def _labor_file_snapshot_record(file_state: Mapping[str, Any]) -> dict[str, Any]:
