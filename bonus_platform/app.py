@@ -5245,6 +5245,63 @@ def save_labor_mapping(
         )
     amount_scope = str(mapping.get("amountScope") or mapping.get("amount_scope") or "auto").strip().lower()
     mapping["amountScope"] = amount_scope if amount_scope in {"auto", "net", "gross"} else "auto"
+    if _labor_ready_private_records(metadata, "workbooks"):
+        preflight = _mapping_preflight_snapshot(metadata)
+        workbook_headers: list[set[str]] = []
+        missing_sheet_workbooks: list[str] = []
+        for workbook in preflight.get("workbooks") or []:
+            if not isinstance(workbook, dict):
+                continue
+            selected_sheet = next(
+                (
+                    item
+                    for item in workbook.get("sheets") or []
+                    if isinstance(item, dict) and str(item.get("name") or "") == sheet_name
+                ),
+                None,
+            )
+            if selected_sheet is None:
+                missing_sheet_workbooks.append(str(workbook.get("filename") or "Excel"))
+                continue
+            suggestion = (
+                selected_sheet.get("suggestion")
+                if isinstance(selected_sheet.get("suggestion"), dict)
+                else {}
+            )
+            workbook_headers.append(
+                {
+                    str(value)
+                    for value in suggestion.get("headers") or []
+                    if str(value or "").strip()
+                }
+            )
+        if missing_sheet_workbooks or not workbook_headers:
+            raise HTTPException(
+                status_code=400,
+                detail=f"部分 Excel 不包含所选工作表 {sheet_name}，请重新读取并选择共同的明细表。",
+            )
+        selected_columns = {
+            str(value).strip()
+            for value in [
+                mapping.get("employeeId"),
+                mapping.get("name"),
+                mapping.get("hours"),
+                mapping.get("amount"),
+                mapping.get("currency"),
+                *(mapping.get("amountColumns") or []),
+            ]
+            if str(value or "").strip()
+        }
+        unknown_columns = sorted(
+            column
+            for column in selected_columns
+            if any(column not in headers for headers in workbook_headers)
+        )
+        if unknown_columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"所选工作表不包含字段：{'、'.join(unknown_columns)}。请等待字段建议加载完成后重新确认。",
+            )
     actor_user_id, _ = _labor_request_actor(request) if request is not None else (
         str(metadata.get("ownerUserId") or "local-default"),
         False,

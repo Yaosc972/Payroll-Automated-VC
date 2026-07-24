@@ -140,7 +140,22 @@ def test_p1_mapping_preflight_round_trip_persists_worker_proposal_for_user_confi
                                 "amountColumnCandidates": ["金额"],
                                 "previewRows": [{"姓名": "Alice", "工时": 8, "金额": 100}],
                             },
-                        }
+                        },
+                        {
+                            "name": "汇总",
+                            "suggestion": {
+                                "headers": ["人数", "总金额"],
+                                "suggestedMapping": {
+                                    "employeeId": "",
+                                    "name": "人数",
+                                    "hours": "总金额",
+                                    "amount": "总金额",
+                                    "currency": "",
+                                },
+                                "amountColumnCandidates": ["总金额"],
+                                "previewRows": [{"人数": 1, "总金额": 100}],
+                            },
+                        },
                     ],
                 }
             ],
@@ -171,13 +186,24 @@ def test_p1_mapping_preflight_round_trip_persists_worker_proposal_for_user_confi
     )
 
     assert sheets.json() == {
-        "sheets": ["员工账单"],
+        "sheets": ["员工账单", "汇总"],
         "fileCount": 1,
         "source": "personal_worker_preflight",
     }
     assert suggestion.json()["suggestedMapping"]["name"] == "姓名"
     assert completed.status_code == 200
     assert completed.json()["job"]["status"] == "succeeded"
+
+    stale_mapping = client.post(
+        "/api/labor/runs/labor_preflight/mapping",
+        headers=browser_headers,
+        json={
+            "sheet_name": "员工账单",
+            "mapping": {"name": "人数", "hours": "总金额", "amount": "总金额"},
+        },
+    )
+    assert stale_mapping.status_code == 400
+    assert "所选工作表不包含字段" in stale_mapping.json()["detail"]
 
     mapped = client.post(
         "/api/labor/runs/labor_preflight/mapping",

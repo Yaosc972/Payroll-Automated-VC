@@ -29,6 +29,8 @@ const laborState = {
   selectedWorkbookFiles: [],
 };
 
+let laborFieldSuggestionRequestId = 0;
+
 const LABOR_TOTAL_AMOUNT_TOLERANCE = 0.1;
 
 const periodPickerState = {
@@ -1497,14 +1499,21 @@ async function ensureP1MappingPreflight() {
 }
 
 async function loadFieldSuggestions() {
+  const requestId = ++laborFieldSuggestionRequestId;
+  const runId = laborState.run?.id;
   const sheetName = labor.sheetSelect.value;
-  if (!sheetName) return;
+  if (!sheetName || !runId) return;
   try {
-    const data = await requestJson(`/api/labor/runs/${laborState.run.id}/field-suggestions`, {
+    const data = await requestJson(`/api/labor/runs/${runId}/field-suggestions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sheet_name: sheetName }),
     });
+    if (
+      requestId !== laborFieldSuggestionRequestId
+      || laborState.run?.id !== runId
+      || labor.sheetSelect.value !== sheetName
+    ) return;
     laborState.headers = data.headers || [];
     fillColumnSelect(labor.employeeIdColumn, data.suggestedMapping?.employeeId, true);
     fillColumnSelect(labor.nameColumn, data.suggestedMapping?.name);
@@ -1515,6 +1524,11 @@ async function loadFieldSuggestions() {
     fillColumnSelect(labor.currencyColumn, data.suggestedMapping?.currency, true);
     renderMappingPreview(data.previewRows || []);
   } catch (error) {
+    if (
+      requestId !== laborFieldSuggestionRequestId
+      || laborState.run?.id !== runId
+      || labor.sheetSelect.value !== sheetName
+    ) return;
     toast(error.message);
   }
 }
