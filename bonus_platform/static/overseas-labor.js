@@ -1453,7 +1453,7 @@ async function uploadFilesDirectlyToPrivateStorage() {
     completedCount += 1;
     setText(labor.uploadStatus, `文件直传完成 ${completedCount}/${intents.length}：${item.file.name}`);
   };
-  const results = await Promise.allSettled(intents.map(uploadOne));
+  const results = await Promise.allSettled(intents.map((_intent, index) => uploadOne(index)));
   const failed = results.find((result) => result.status === "rejected");
   if (failed) {
     const message = failed.reason instanceof Error ? failed.reason.message : String(failed.reason || "");

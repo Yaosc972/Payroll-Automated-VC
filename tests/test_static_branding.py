@@ -73,7 +73,7 @@ def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime()
     assert "upload-intents" in script
     assert "intent.signedUrl" in script
     assert "upload-intents/batch-finalize" in script
-    assert 'overseas-labor.js?v=35' in html
+    assert 'overseas-labor.js?v=36' in html
 
 
 def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
@@ -94,7 +94,7 @@ def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     assert "function selectPeriodDate(value)" in script
     assert "addDays(picked, 6)" in script
     assert "periodPickerState.selectingEnd" in script
-    assert 'overseas-labor.js?v=35' in html
+    assert 'overseas-labor.js?v=36' in html
 
 
 def test_overseas_labor_async_actions_share_button_loading_transitions():
@@ -117,7 +117,7 @@ def test_overseas_labor_async_actions_share_button_loading_transitions():
     assert 'beginButtonLoading(labor.activateWorker, "正在连接")' in script
     assert 'beginButtonLoading(labor.deleteCurrentRun, "正在删除")' in script
     assert 'beginButtonLoading(button, "正在撤销")' in script
-    assert 'overseas-labor.js?v=35' in html
+    assert 'overseas-labor.js?v=36' in html
 
 
 def test_overseas_labor_uses_server_formal_task_gate_instead_of_hostname_guessing():
@@ -1044,7 +1044,7 @@ def test_overseas_labor_upload_shows_and_prevalidates_configured_workbook_limit(
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 
     assert "workbookUploadHint(0)" in js
-    assert 'overseas-labor.js?v=35' in html
+    assert 'overseas-labor.js?v=36' in html
     assert "access.uploadLimits?.maxWorkbookFiles" in js
     assert "existing.workbook + pendingWorkbookCount > maxWorkbookFiles" in js
     assert "最多选择 ${maxWorkbookFiles} 个 Excel 文件" in js
@@ -1057,7 +1057,8 @@ def test_overseas_labor_direct_upload_finalizes_one_atomic_batch():
         script.index("async function loadSheets")
     ]
 
-    assert "Promise.allSettled(intents.map(uploadOne))" in upload_block
+    assert "Promise.allSettled(intents.map((_intent, index) => uploadOne(index)))" in upload_block
+    assert "Promise.allSettled(intents.map(uploadOne))" not in upload_block
     assert "upload-intents/batch-finalize" in upload_block
     assert "fileIds: intents.map((intent) => intent.fileId)" in upload_block
     assert "completedCount += 1" in upload_block
