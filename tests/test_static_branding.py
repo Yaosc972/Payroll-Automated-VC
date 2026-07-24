@@ -73,7 +73,7 @@ def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime()
     assert "upload-intents" in script
     assert "intent.signedUrl" in script
     assert "upload-intents/batch-finalize" in script
-    assert 'overseas-labor.js?v=36' in html
+    assert 'overseas-labor.js?v=37' in html
 
 
 def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
@@ -94,7 +94,7 @@ def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     assert "function selectPeriodDate(value)" in script
     assert "addDays(picked, 6)" in script
     assert "periodPickerState.selectingEnd" in script
-    assert 'overseas-labor.js?v=36' in html
+    assert 'overseas-labor.js?v=37' in html
 
 
 def test_overseas_labor_async_actions_share_button_loading_transitions():
@@ -117,7 +117,7 @@ def test_overseas_labor_async_actions_share_button_loading_transitions():
     assert 'beginButtonLoading(labor.activateWorker, "正在连接")' in script
     assert 'beginButtonLoading(labor.deleteCurrentRun, "正在删除")' in script
     assert 'beginButtonLoading(button, "正在撤销")' in script
-    assert 'overseas-labor.js?v=36' in html
+    assert 'overseas-labor.js?v=37' in html
 
 
 def test_overseas_labor_uses_server_formal_task_gate_instead_of_hostname_guessing():
@@ -269,12 +269,36 @@ def test_overseas_labor_revalidates_completed_mapping_preflight_before_reuse():
     script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
     preflight_block = script[
         script.index("async function ensureP1MappingPreflight"):
-        script.index("async function loadFieldSuggestions")
+        script.index("function mappingPreflightSuggestion")
     ]
 
     assert 'requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight`' in preflight_block
     assert 'if (current.status === "completed") return;' not in preflight_block
     assert 'response.mappingPreflight' in preflight_block
+    assert "return submittedPreflight" in preflight_block
+    assert "return preflight" in preflight_block
+    assert "const delayMs = Math.min(15000, 5000 + (attempt * 2500))" in preflight_block
+
+
+def test_overseas_labor_reuses_worker_mapping_preflight_without_redundant_api_calls():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    sheets_block = script[
+        script.index("async function loadSheets"):
+        script.index("async function ensureP1MappingPreflight")
+    ]
+    suggestion_block = script[
+        script.index("function mappingPreflightSuggestion"):
+        script.index("async function saveMapping")
+    ]
+
+    assert "const preflight = await ensureP1MappingPreflight()" in sheets_block
+    assert "Array.isArray(preflight?.sheets)" in sheets_block
+    assert "if (usesP1DirectUpload())" in sheets_block
+    assert "return;" in sheets_block
+    assert 'preflight?.status !== "completed"' in suggestion_block
+    assert "mappingPreflightSuggestion(sheetName)" in suggestion_block
+    assert "cachedSuggestion || await requestJson" in suggestion_block
+    assert "applyFieldSuggestions(data)" in suggestion_block
 
 
 def test_overseas_labor_discards_stale_field_suggestion_responses():
@@ -1044,7 +1068,7 @@ def test_overseas_labor_upload_shows_and_prevalidates_configured_workbook_limit(
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 
     assert "workbookUploadHint(0)" in js
-    assert 'overseas-labor.js?v=36' in html
+    assert 'overseas-labor.js?v=37' in html
     assert "access.uploadLimits?.maxWorkbookFiles" in js
     assert "existing.workbook + pendingWorkbookCount > maxWorkbookFiles" in js
     assert "最多选择 ${maxWorkbookFiles} 个 Excel 文件" in js

@@ -1473,7 +1473,13 @@ async function loadSheets() {
   beginButtonLoading(labor.loadSheets, "正在读取");
   try {
     if (usesP1DirectUpload()) {
-      await ensureP1MappingPreflight();
+      const preflight = await ensureP1MappingPreflight();
+      const sheets = Array.isArray(preflight?.sheets) ? preflight.sheets : [];
+      labor.sheetSelect.innerHTML = sheets
+        .map((sheet) => `<option value="${escapeHtml(sheet)}">${escapeHtml(sheet)}</option>`)
+        .join("");
+      if (sheets.length) await loadFieldSuggestions();
+      return;
     }
     const data = await requestJson(`/api/labor/runs/${laborState.run.id}/workbook-sheets`);
     labor.sheetSelect.innerHTML = data.sheets
@@ -1495,20 +1501,46 @@ async function ensureP1MappingPreflight() {
   });
   const submittedPreflight = response.mappingPreflight || {};
   laborState.run = { ...laborState.run, mappingPreflight: submittedPreflight };
-  if (submittedPreflight.status === "completed") return;
-  for (let attempt = 0; attempt < 300; attempt += 1) {
+  if (submittedPreflight.status === "completed") return submittedPreflight;
+  const deadline = Date.now() + (10 * 60 * 1000);
+  for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+    const delayMs = Math.min(15000, 5000 + (attempt * 2500));
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
     const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
     laborState.run = run;
     const preflight = run.mappingPreflight || {};
-    if (preflight.status === "completed") return;
+    if (preflight.status === "completed") return preflight;
     if (preflight.status === "failed") {
       throw new Error(preflight.errorMessage || "本人核对助手读取 Excel 失败，请检查助手状态后重试。");
     }
     const message = preflight.message || "等待本人核对助手读取 Excel 工作表和列名…";
     labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(message)}</p>`;
-    await new Promise((resolve) => window.setTimeout(resolve, 1000));
   }
   throw new Error("字段预检等待超过 10 分钟，请确认本人核对助手已激活并在线后重试。");
+}
+
+function mappingPreflightSuggestion(sheetName) {
+  const preflight = laborState.run?.mappingPreflight;
+  if (preflight?.status !== "completed" || !Array.isArray(preflight.workbooks)) return null;
+  for (const workbook of preflight.workbooks) {
+    const sheet = Array.isArray(workbook?.sheets)
+      ? workbook.sheets.find((item) => String(item?.name || "") === sheetName)
+      : null;
+    if (sheet?.suggestion && typeof sheet.suggestion === "object") return sheet.suggestion;
+  }
+  return null;
+}
+
+function applyFieldSuggestions(data) {
+  laborState.headers = data.headers || [];
+  fillColumnSelect(labor.employeeIdColumn, data.suggestedMapping?.employeeId, true);
+  fillColumnSelect(labor.nameColumn, data.suggestedMapping?.name);
+  fillColumnSelect(labor.hoursColumn, data.suggestedMapping?.hours);
+  fillColumnSelect(labor.amountColumn, data.suggestedMapping?.amount);
+  laborState.amountColumnCandidates = data.amountColumnCandidates || [];
+  renderAmountComponentOptions();
+  fillColumnSelect(labor.currencyColumn, data.suggestedMapping?.currency, true);
+  renderMappingPreview(data.previewRows || []);
 }
 
 async function loadFieldSuggestions() {
@@ -1517,7 +1549,8 @@ async function loadFieldSuggestions() {
   const sheetName = labor.sheetSelect.value;
   if (!sheetName || !runId) return;
   try {
-    const data = await requestJson(`/api/labor/runs/${runId}/field-suggestions`, {
+    const cachedSuggestion = mappingPreflightSuggestion(sheetName);
+    const data = cachedSuggestion || await requestJson(`/api/labor/runs/${runId}/field-suggestions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sheet_name: sheetName }),
@@ -1527,15 +1560,7 @@ async function loadFieldSuggestions() {
       || laborState.run?.id !== runId
       || labor.sheetSelect.value !== sheetName
     ) return;
-    laborState.headers = data.headers || [];
-    fillColumnSelect(labor.employeeIdColumn, data.suggestedMapping?.employeeId, true);
-    fillColumnSelect(labor.nameColumn, data.suggestedMapping?.name);
-    fillColumnSelect(labor.hoursColumn, data.suggestedMapping?.hours);
-    fillColumnSelect(labor.amountColumn, data.suggestedMapping?.amount);
-    laborState.amountColumnCandidates = data.amountColumnCandidates || [];
-    renderAmountComponentOptions();
-    fillColumnSelect(labor.currencyColumn, data.suggestedMapping?.currency, true);
-    renderMappingPreview(data.previewRows || []);
+    applyFieldSuggestions(data);
   } catch (error) {
     if (
       requestId !== laborFieldSuggestionRequestId
