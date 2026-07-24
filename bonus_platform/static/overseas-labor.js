@@ -30,6 +30,7 @@ const laborState = {
 };
 
 let laborFieldSuggestionRequestId = 0;
+let laborRunRestoreGeneration = 0;
 
 const LABOR_TOTAL_AMOUNT_TOLERANCE = 0.1;
 
@@ -984,6 +985,7 @@ function showLaborResultsView() {
 }
 
 async function restoreLaborRunFromUrl() {
+  const restoreGeneration = ++laborRunRestoreGeneration;
   const runId = new URLSearchParams(window.location.search).get("run");
   if (!runId || !laborState.releaseCompatible) {
     showLaborToolbench();
@@ -995,6 +997,10 @@ async function restoreLaborRunFromUrl() {
   }
   try {
     const run = await requestJson(`/api/labor/runs/${encodeURIComponent(runId)}`);
+    if (
+      restoreGeneration !== laborRunRestoreGeneration
+      || new URLSearchParams(window.location.search).get("run") !== runId
+    ) return;
     laborState.run = run;
     if (labor.chromeRunBadge) {
       labor.chromeRunBadge.hidden = false;
@@ -1026,6 +1032,10 @@ async function restoreLaborRunFromUrl() {
       await loadSheets();
     }
   } catch (error) {
+    if (
+      restoreGeneration !== laborRunRestoreGeneration
+      || new URLSearchParams(window.location.search).get("run") !== runId
+    ) return;
     toast(`恢复批次失败：${error.message}`);
   }
 }
@@ -1201,6 +1211,7 @@ function setLaborRunQuery(runId) {
 }
 
 function beginNewLaborBatch() {
+  laborRunRestoreGeneration += 1;
   stopComparePolling();
   endButtonLoading(labor.extractCompare, { disabled: false });
   laborState.run = null;

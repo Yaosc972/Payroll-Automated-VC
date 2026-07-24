@@ -229,6 +229,24 @@ def test_overseas_labor_new_batch_resets_restored_run_and_tracks_new_run_url():
     assert "setLaborRunQuery(run.id)" in create_block
 
 
+def test_overseas_labor_new_batch_invalidates_an_inflight_restore():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    restore_block = script[
+        script.index("async function restoreLaborRunFromUrl"):
+        script.index("function laborRunHasSettledResult")
+    ]
+    reset_block = script[
+        script.index("function beginNewLaborBatch"):
+        script.index("async function createRun")
+    ]
+
+    assert "let laborRunRestoreGeneration = 0;" in script
+    assert "const restoreGeneration = ++laborRunRestoreGeneration;" in restore_block
+    assert "restoreGeneration !== laborRunRestoreGeneration" in restore_block
+    assert 'new URLSearchParams(window.location.search).get("run") !== runId' in restore_block
+    assert "laborRunRestoreGeneration += 1;" in reset_block
+
+
 def test_overseas_labor_new_batch_clears_all_prior_result_labels_and_ignores_stale_poll():
     script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
     clear_block = script[
