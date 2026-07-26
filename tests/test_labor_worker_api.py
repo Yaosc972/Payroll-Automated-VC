@@ -55,6 +55,42 @@ def test_worker_api_claims_only_token_owner_job(monkeypatch, tmp_path):
     assert "ownerUserId" not in response.json()["job"]
 
 
+def test_run_status_exposes_active_mapping_preflight_worker_progress(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+    monkeypatch.setattr(
+        app_module,
+        "list_labor_worker_jobs",
+        lambda: [
+            {
+                "id": "mapping-job-1",
+                "runId": "labor-preflight",
+                "jobType": "mapping_preflight",
+                "taskGenerationId": "mapping-generation-1",
+                "status": "running",
+                "progress": {
+                    "phase": "reading_workbook",
+                    "message": "正在读取工作表",
+                },
+                "updatedAt": "2026-07-25T16:00:00Z",
+            }
+        ],
+    )
+
+    enriched = app_module._with_personal_worker_status(
+        {
+            "id": "labor-preflight",
+            "mappingPreflight": {
+                "status": "running",
+                "taskGenerationId": "mapping-generation-1",
+            },
+        }
+    )
+
+    assert enriched["workerTask"]["id"] == "mapping-job-1"
+    assert enriched["workerTask"]["progress"]["phase"] == "reading_workbook"
+    assert "asyncTask" not in enriched
+
+
 def test_p1_mapping_preflight_round_trip_persists_worker_proposal_for_user_confirmation(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")

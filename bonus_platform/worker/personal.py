@@ -103,6 +103,8 @@ class PersonalLaborWorker:
         self.runner = runner
         self.client = client or httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0))
         self.logger = _worker_logger(self.data_root / "logs" / "worker.log")
+        self._required_version_checked = False
+        self._next_idle_update_check_at = time.monotonic() + 300.0
         self._write_status("connecting", "正在连接核对服务。")
 
     @property
@@ -111,32 +113,69 @@ class PersonalLaborWorker:
 
     def process_once(self) -> dict[str, Any] | None:
         self._write_status("connecting", "正在检查本人待处理任务。")
-        version_status = self.check_update()
-        if version_status and version_status.get("upgradeRequired"):
-            required = str(version_status.get("requiredWorkerVersion") or version_status.get("minimumVersion") or "最新版本")
-            self._write_status("upgrade_required", f"当前版本不再兼容，请先升级到 {required} 或更高版本。")
-            return None
+        if not self._required_version_checked:
+            version_status = self.check_update()
+            self._required_version_checked = True
+            if version_status and version_status.get("upgradeRequired"):
+                required = str(
+                    version_status.get("requiredWorkerVersion")
+                    or version_status.get("minimumVersion")
+                    or "最新版本"
+                )
+                self._write_status("upgrade_required", f"当前版本不再兼容，请先升级到 {required} 或更高版本。")
+                return None
         response = self.client.post(f"{self.api_url}/api/labor/worker/jobs/claim", headers=self.headers)
         response.raise_for_status()
         job = response.json().get("job")
         if not job:
+            version_status = self._check_idle_update_if_due()
+            if version_status and version_status.get("upgradeRequired"):
+                required = str(
+                    version_status.get("requiredWorkerVersion")
+                    or version_status.get("minimumVersion")
+                    or "最新版本"
+                )
+                self._write_status("upgrade_required", f"当前版本不再兼容，请先升级到 {required} 或更高版本。")
+                return None
             self._write_status("idle", "核对助手在线，暂无待处理任务。")
             return None
         job_id = str(job["id"])
         run_id = str(job["runId"])
         stop = threading.Event()
-        heartbeat = threading.Thread(target=self._heartbeat_loop, args=(job_id, stop), daemon=True)
+        progress_state = {
+            "status": "running",
+            "phase": "claimed",
+            "message": "Worker 已领取任务。",
+        }
+        heartbeat = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(job_id, stop, progress_state),
+            daemon=True,
+        )
         heartbeat.start()
         try:
             self._write_status("processing", "正在处理本人核对任务。", job=job)
             self.logger.info("claimed job=%s run=%s attempt=%s", job_id, run_id, job.get("attempt"))
             is_mapping_preflight = str(job.get("jobType") or "reconcile") == "mapping_preflight"
             if is_mapping_preflight:
+                self._report_progress(job_id, progress_state, phase="claimed", message="Worker 已领取任务。")
                 self._write_status("processing", "正在下载 Excel 工作表。", job=job)
+                self._report_progress(
+                    job_id,
+                    progress_state,
+                    phase="downloading_excel",
+                    message="正在下载 Excel。",
+                )
             self._download_input(job_id, run_id)
             if is_mapping_preflight:
                 self._write_status("processing", "正在读取 Excel 工作表和字段。", job=job)
-                self._upload_mapping_preflight_result(job_id, run_id)
+                self._report_progress(
+                    job_id,
+                    progress_state,
+                    phase="reading_workbook",
+                    message="正在读取工作表。",
+                )
+                self._upload_mapping_preflight_result(job_id, run_id, progress_state=progress_state)
             else:
                 metrics_path = self.data_root / "worker-temp" / f"{job_id}-metrics.jsonl"
                 metrics_path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +206,7 @@ class PersonalLaborWorker:
             stop.set()
             heartbeat.join(timeout=2)
             self.check_update()
+            self._next_idle_update_check_at = time.monotonic() + 300.0
 
     def _upload_runtime_metrics(self, job_id: str, metrics_path: Path) -> None:
         if not metrics_path.exists():
@@ -194,9 +234,13 @@ class PersonalLaborWorker:
     def run_forever(self, *, interval_seconds: float = 2.0) -> None:
         delay = max(1.0, interval_seconds)
         while True:
+            cycle_started_at = time.monotonic()
             try:
                 result = self.process_once()
-                time.sleep(delay if result is None else 0.5)
+                if result is None:
+                    time.sleep(max(0.0, delay - (time.monotonic() - cycle_started_at)))
+                else:
+                    time.sleep(0.5)
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code if exc.response is not None else 0
                 self.logger.warning("worker API rejected request status=%s", status_code)
@@ -233,6 +277,7 @@ class PersonalLaborWorker:
                 f"{self.api_url}/api/labor/worker/version",
                 headers=self.headers,
                 params={"currentVersion": self.worker_version, "platform": _worker_platform()},
+                timeout=2.0,
             )
             if response.status_code == 404:
                 return None
@@ -247,6 +292,12 @@ class PersonalLaborWorker:
         except httpx.HTTPError as exc:
             self.logger.warning("update check failed: %s", exc)
             return None
+
+    def _check_idle_update_if_due(self) -> dict[str, Any] | None:
+        if time.monotonic() < self._next_idle_update_check_at:
+            return None
+        self._next_idle_update_check_at = time.monotonic() + 300.0
+        return self.check_update()
 
     def _download_input(self, job_id: str, run_id: str) -> None:
         run_dir = self.data_root / "labor_runs" / run_id
@@ -327,9 +378,21 @@ class PersonalLaborWorker:
         finally:
             archive.unlink(missing_ok=True)
 
-    def _upload_mapping_preflight_result(self, job_id: str, run_id: str) -> None:
+    def _upload_mapping_preflight_result(
+        self,
+        job_id: str,
+        run_id: str,
+        *,
+        progress_state: dict[str, Any],
+    ) -> None:
         run_dir = self.data_root / "labor_runs" / run_id
         payload = _build_mapping_preflight_payload(run_dir)
+        self._report_progress(
+            job_id,
+            progress_state,
+            phase="uploading_result",
+            message="正在回传结果。",
+        )
         response = self.client.post(
             f"{self.api_url}/api/labor/worker/jobs/{job_id}/mapping-preflight-result",
             headers=self.headers,
@@ -337,23 +400,58 @@ class PersonalLaborWorker:
         )
         response.raise_for_status()
 
-    def _heartbeat_loop(self, job_id: str, stop: threading.Event) -> None:
+    def _report_progress(
+        self,
+        job_id: str,
+        progress_state: dict[str, Any],
+        *,
+        phase: str,
+        message: str,
+    ) -> None:
+        normalized_phase = str(phase)
+        timeline = progress_state.setdefault("timeline", {})
+        timeline.setdefault(
+            normalized_phase,
+            datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        )
+        progress_state.update(
+            {
+                "status": "running",
+                "phase": normalized_phase,
+                "message": str(message)[:160],
+            }
+        )
+        try:
+            response = self.client.post(
+                f"{self.api_url}/api/labor/worker/jobs/{job_id}/heartbeat",
+                headers=self.headers,
+                json={"progress": dict(progress_state)},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            self.logger.warning("progress update failed job=%s phase=%s: %s", job_id, phase, exc)
+
+    def _heartbeat_loop(
+        self,
+        job_id: str,
+        stop: threading.Event,
+        progress_state: dict[str, Any],
+    ) -> None:
         while not stop.wait(30):
             try:
                 disk = shutil.disk_usage(self.data_root)
+                progress = {
+                    **progress_state,
+                    "storage": {
+                        "freeBytes": disk.free,
+                        "totalBytes": disk.total,
+                        "minimumFreeBytes": int(os.environ.get("LABOR_WORKER_MINIMUM_FREE_BYTES", 5 * 1024**3)),
+                    },
+                }
                 response = self.client.post(
                     f"{self.api_url}/api/labor/worker/jobs/{job_id}/heartbeat",
                     headers=self.headers,
-                    json={
-                        "progress": {
-                            "status": "running",
-                            "storage": {
-                                "freeBytes": disk.free,
-                                "totalBytes": disk.total,
-                                "minimumFreeBytes": int(os.environ.get("LABOR_WORKER_MINIMUM_FREE_BYTES", 5 * 1024**3)),
-                            },
-                        }
-                    },
+                    json={"progress": progress},
                 )
                 response.raise_for_status()
             except httpx.HTTPError as exc:

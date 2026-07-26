@@ -269,6 +269,8 @@ def test_personal_worker_runs_mapping_preflight_without_reconcile_engine_or_resu
     fingerprint = "c" * 64
     submitted = {}
     calls = []
+    progress_phases = []
+    progress_timelines = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append((request.method, request.url.path))
@@ -314,6 +316,11 @@ def test_personal_worker_runs_mapping_preflight_without_reconcile_engine_or_resu
         if request.url.path.endswith("/mapping-preflight-result"):
             submitted.update(json.loads(request.content))
             return httpx.Response(200, json={"ok": True})
+        if request.url.path.endswith("/heartbeat"):
+            progress = json.loads(request.content)["progress"]
+            progress_phases.append(progress["phase"])
+            progress_timelines.append(progress["timeline"])
+            return httpx.Response(200, json={"job": {"id": "job-preflight", "status": "running"}})
         if request.url.path.endswith("/complete"):
             return httpx.Response(200, json={"job": {"id": "job-preflight", "status": "succeeded"}})
         raise AssertionError(request.url)
@@ -342,6 +349,9 @@ def test_personal_worker_runs_mapping_preflight_without_reconcile_engine_or_resu
     }
     assert not any(path.endswith("/input-file") for _, path in calls)
     assert not any(path.endswith("/result") for _, path in calls)
+    assert progress_phases == ["claimed", "downloading_excel", "reading_workbook", "uploading_result"]
+    assert list(progress_timelines[-1]) == progress_phases
+    assert all(str(value).endswith("Z") for value in progress_timelines[-1].values())
 
 
 def test_personal_worker_reports_engine_failure(tmp_path):
@@ -480,6 +490,33 @@ def test_personal_worker_writes_idle_status_when_queue_is_empty(tmp_path):
     assert status["status"] == "idle"
     assert status["jobId"] == ""
     assert status["runId"] == ""
+
+
+def test_personal_worker_does_not_block_each_claim_with_repeated_update_checks(tmp_path):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        if request.url.path.endswith("/version"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/claim"):
+            return httpx.Response(200, json={"job": None})
+        raise AssertionError(request.url)
+
+    worker = PersonalLaborWorker(
+        api_url="https://example.test",
+        token="secret",
+        worker_version="0.3.0",
+        data_root=tmp_path,
+        runner=lambda _: True,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert worker.process_once() is None
+    assert worker.process_once() is None
+
+    assert calls.count("/api/labor/worker/version") == 1
+    assert calls.count("/api/labor/worker/jobs/claim") == 2
 
 
 def test_personal_worker_checks_required_version_before_claiming_work(tmp_path):

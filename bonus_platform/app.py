@@ -189,7 +189,7 @@ LABOR_TELEMETRY_FILE = LABOR_TELEMETRY_DIR / "events.jsonl"
 LABOR_TELEMETRY_SCHEMA_VERSION = 1
 OVERSEAS_LABOR_MODULE_VERSION = "0.5-uat"
 OVERSEAS_LABOR_API_CONTRACT_VERSION = 2
-OVERSEAS_LABOR_REQUIRED_WORKER_VERSION = "0.3.11"
+OVERSEAS_LABOR_REQUIRED_WORKER_VERSION = "0.3.12"
 _LABOR_BUILD_MONITOR = LaborBuildMonitor(PROJECT_ROOT)
 CURRENT_USER_CACHE_TTL_SECONDS = 60
 _CURRENT_USER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -1276,12 +1276,28 @@ def _with_personal_worker_status(metadata: dict) -> dict:
     if not _uses_personal_labor_worker():
         return metadata
     run_id = str(metadata.get("id") or "")
-    current_generation = _labor_task_generation_id(metadata)
+    mapping_preflight = (
+        metadata.get("mappingPreflight")
+        if isinstance(metadata.get("mappingPreflight"), dict)
+        else {}
+    )
+    mapping_status = str(mapping_preflight.get("status") or "")
+    mapping_active = mapping_status in {"queued", "running", "retry_wait"}
+    current_generation = (
+        str(mapping_preflight.get("taskGenerationId") or "").strip()
+        if mapping_active
+        else _labor_task_generation_id(metadata)
+    )
     matching_jobs = [
         row
         for row in list_labor_worker_jobs()
         if str(row.get("runId") or "") == run_id
         and str(row.get("taskGenerationId") or "").strip() == current_generation
+        and (
+            str(row.get("jobType") or "reconcile") == "mapping_preflight"
+            if mapping_active
+            else str(row.get("jobType") or "reconcile") != "mapping_preflight"
+        )
     ]
     job = max(
         matching_jobs,
@@ -1290,6 +1306,11 @@ def _with_personal_worker_status(metadata: dict) -> dict:
     )
     if not job or job.get("status") == "succeeded":
         return metadata
+    if mapping_active:
+        return {
+            **metadata,
+            "workerTask": _public_labor_worker_job(job),
+        }
     status = str(job.get("status") or "")
     labels = {
         "queued": ("waiting_for_personal_worker", "等待本人核对助手上线"),

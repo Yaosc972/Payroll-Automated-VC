@@ -547,18 +547,33 @@ function openLaborWorkerPanel() {
 function workerDeviceIsOnline(device) {
   if (!device?.lastSeenAt || device?.revokedAt) return false;
   const seenAt = Date.parse(device.lastSeenAt);
-  return Number.isFinite(seenAt) && Date.now() - seenAt < 3 * 60 * 1000;
+  return Number.isFinite(seenAt) && Date.now() - seenAt < 6 * 1000;
+}
+
+function laborWorkerEnvironmentLabel() {
+  return window.location.hostname === "sigma-workbench.vercel.app" ? "生产环境" : "UAT 环境";
+}
+
+function laborWorkerOfflineMessage() {
+  return laborWorkerEnvironmentLabel() === "生产环境"
+    ? "核对助手尚未连接当前生产环境，请先激活或重新连接。"
+    : "核对助手尚未连接当前 UAT 环境，请先激活或重新连接。";
 }
 
 function updateLaborWorkerHeader(devices) {
   const active = devices.filter((device) => !device.revokedAt);
   const online = active.some(workerDeviceIsOnline);
+  const environment = laborWorkerEnvironmentLabel();
   if (labor.btnWorkerStatus) {
     labor.btnWorkerStatus.hidden = laborState.moduleAccess?.p1?.required !== true;
     labor.btnWorkerStatus.classList.toggle("online", online);
   }
   if (labor.workerStatusLabel) {
-    labor.workerStatusLabel.textContent = online ? "核对助手在线" : active.length ? "核对助手待连接" : "核对助手未激活";
+    labor.workerStatusLabel.textContent = online
+      ? `核对助手在线 · ${environment}`
+      : active.length
+        ? `核对助手待连接 · ${environment}`
+        : `核对助手未激活 · ${environment}`;
   }
 }
 
@@ -571,10 +586,15 @@ async function loadLaborWorkerDevices() {
     laborState.workerDevices = Array.isArray(data.devices) ? data.devices : [];
     renderLaborWorkerDevices();
     renderLaborWorkerRelease();
+    if (labor.workerMessage) {
+      labor.workerMessage.textContent = `当前页面是${laborWorkerEnvironmentLabel()}；重新激活会将桌面核对助手切换到当前环境。`;
+    }
+    return laborState.workerDevices;
   } catch (error) {
     if (labor.workerDevices) labor.workerDevices.innerHTML = `<span class="audit-empty">${escapeHtml(error.message)}</span>`;
     if (labor.workerMessage) labor.workerMessage.textContent = "核对助手身份服务尚未就绪，当前不能开始私有材料处理。";
     updateLaborWorkerHeader([]);
+    return [];
   }
 }
 
@@ -1505,14 +1525,25 @@ async function loadSheets() {
 }
 
 async function ensureP1MappingPreflight() {
+  await loadLaborWorkerDevices();
+  if (!laborState.workerDevices.some(workerDeviceIsOnline)) {
+    throw new Error(laborWorkerOfflineMessage());
+  }
   const response = await requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
   const submittedPreflight = response.mappingPreflight || {};
-  laborState.run = { ...laborState.run, mappingPreflight: submittedPreflight };
+  laborState.run = {
+    ...laborState.run,
+    mappingPreflight: submittedPreflight,
+    workerTask: response.workerTask || laborState.run.workerTask,
+  };
   if (submittedPreflight.status === "completed") return submittedPreflight;
+  let progressMessage = mappingPreflightProgressMessage(laborState.run);
+  labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(progressMessage)}</p>`;
+  beginButtonLoading(labor.loadSheets, progressMessage);
   const deadline = Date.now() + (10 * 60 * 1000);
   for (let attempt = 0; Date.now() < deadline; attempt += 1) {
     const delayMs = Math.min(15000, 5000 + (attempt * 2500));
@@ -1524,10 +1555,27 @@ async function ensureP1MappingPreflight() {
     if (preflight.status === "failed") {
       throw new Error(preflight.errorMessage || "本人核对助手读取 Excel 失败，请检查助手状态后重试。");
     }
-    const message = preflight.message || "等待本人核对助手读取 Excel 工作表和列名…";
-    labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(message)}</p>`;
+    progressMessage = mappingPreflightProgressMessage(run);
+    beginButtonLoading(labor.loadSheets, progressMessage);
+    labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(progressMessage)}</p>`;
   }
   throw new Error("字段预检等待超过 10 分钟，请确认本人核对助手已激活并在线后重试。");
+}
+
+function mappingPreflightProgressMessage(run) {
+  const task = run?.workerTask || {};
+  const status = String(task.status || "");
+  const phase = String(task.progress?.phase || "");
+  const phaseMessages = {
+    claimed: "Worker 已领取任务",
+    downloading_excel: "正在下载 Excel",
+    reading_workbook: "正在读取工作表",
+    uploading_result: "正在回传结果",
+  };
+  if (phaseMessages[phase]) return phaseMessages[phase];
+  if (status === "running") return "Worker 已领取任务";
+  if (status === "retry_wait") return "核对助手将在稍后重试";
+  return "等待核对助手连接";
 }
 
 function mappingPreflightSuggestion(sheetName) {

@@ -298,6 +298,38 @@ def test_overseas_labor_revalidates_completed_mapping_preflight_before_reuse():
     assert "const delayMs = Math.min(15000, 5000 + (attempt * 2500))" in preflight_block
 
 
+def test_overseas_labor_mapping_preflight_requires_current_environment_worker_and_shows_real_phase():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    preflight_block = script[
+        script.index("async function ensureP1MappingPreflight"):
+        script.index("function mappingPreflightSuggestion")
+    ]
+
+    assert "await loadLaborWorkerDevices()" in preflight_block
+    assert preflight_block.index("await loadLaborWorkerDevices()") < preflight_block.index(
+        'requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight`'
+    )
+    assert "workerDeviceIsOnline" in preflight_block
+    assert "核对助手尚未连接当前生产环境，请先激活或重新连接。" in script
+    assert "mappingPreflightProgressMessage" in preflight_block
+    assert "等待核对助手连接" in script
+    assert "Worker 已领取任务" in script
+    assert "正在下载 Excel" in script
+    assert "正在读取工作表" in script
+    assert "正在回传结果" in script
+    assert "Date.now() - seenAt < 6 * 1000" in script
+
+
+def test_overseas_labor_worker_status_names_current_environment_and_switch_warning():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "function laborWorkerEnvironmentLabel" in script
+    assert 'window.location.hostname === "sigma-workbench.vercel.app"' in script
+    assert "生产环境" in script
+    assert "UAT 环境" in script
+    assert "重新激活会将桌面核对助手切换到当前环境" in script
+
+
 def test_overseas_labor_reuses_worker_mapping_preflight_without_redundant_api_calls():
     script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
     sheets_block = script[
