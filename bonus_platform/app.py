@@ -13595,6 +13595,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "message": "计算完成" if status == "已完成" else "计算失败",
         "error": metadata.get("error", ""),
         "input_summary": input_summary,
+        "collection_seniority_roster": collection_roster if "gonglingjiang" in engine_list else [],
+        "collection_seniority_roster_count": len(collection_roster) if "gonglingjiang" in engine_list else 0,
     }
 
 
