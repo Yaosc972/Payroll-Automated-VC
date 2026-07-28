@@ -144,7 +144,7 @@ def current_user_from_request(request: Request) -> dict[str, Any] | None:
     except KeyError:
         return None
     user = current.get("user") if isinstance(current, dict) else None
-    if not isinstance(user, dict) or user.get("status") != "active":
+    if not isinstance(user, dict) or user.get("status") not in {"active", "pending"}:
         return None
     return current
 

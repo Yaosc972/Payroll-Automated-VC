@@ -314,6 +314,26 @@ def test_workbench_exposes_auth_requirement_and_home_uses_real_session(p1_identi
     assert authenticated_home.status_code == 200
 
 
+def test_pending_user_can_enter_home_but_cannot_enter_modules(p1_identity_env):
+    admin_store.init_admin_store()
+    pending_user = admin_store.upsert_feishu_user(
+        feishu_open_id="ou_pending_home_user",
+        email="pending.home@example.com",
+        name="Pending Home User",
+    )
+    assert pending_user["status"] == "pending"
+    assert pending_user["roleIds"] == []
+
+    with TestClient(app, follow_redirects=False) as client:
+        _login(client, pending_user["id"])
+        home = client.get("/")
+        overseas_api = client.get("/api/labor/runs")
+
+    assert home.status_code == 200
+    assert overseas_api.status_code == 403
+    assert overseas_api.json()["detail"]["errorCode"] == "LABOR_MODULE_FORBIDDEN"
+
+
 def test_authenticated_governance_actor_ignores_client_supplied_name(monkeypatch):
     monkeypatch.setattr(app_module, "labor_auth_required", lambda: True)
     request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
