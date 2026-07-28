@@ -8,7 +8,6 @@ const state = {
   attendanceMonth: '',
   payrollFile: null,
   payrollFiles: [],
-  hrbpList: null,
   currentRun: null,
   currentResults: [],
   currentResultsRunId: '',
@@ -64,7 +63,7 @@ const SUBJECT_WORKBENCH = {
     resultField: 'gonglingjiang',
     totalField: 'total_gonglingjiang',
     uploadTitle: '工龄奖数据 Excel',
-    uploadDescription: '工龄奖核算需要月考勤数据；莞深区揽收人员还需确认当月 HRBP 发放名单。',
+    uploadDescription: '工龄奖核算需要月考勤数据；仅识别到东莞第四纵队时要求确认揽收线工龄奖名单。',
   },
 };
 
@@ -95,27 +94,77 @@ const ENGINE_META = {
   },
 };
 
-const DEFAULT_HRBP_LIST = [
-  'OWHN2313',
-  'OWHN0424',
-  'OWHN6172',
-  'OWHN0474',
-  'OWHN2248',
-  'OWHN6887',
-  'OWHN10141',
-  'OWHN10605',
-  'OWHN10863',
-  'OWHN10892',
-  'OWHN11388',
-  'OWHN11405',
+const DEFAULT_COLLECTION_SENIORITY_ROSTER = [
+  { employeeId: 'OWHN2313', employeeName: '何俊伟' },
+  { employeeId: 'OWHN0424', employeeName: '韩录阳' },
+  { employeeId: 'OWHN6172', employeeName: '邓军洋' },
+  { employeeId: 'OWHN0474', employeeName: '曾威' },
+  { employeeId: 'OWHN2248', employeeName: '赖志强' },
+  { employeeId: 'OWHN6887', employeeName: '梁嘉恩' },
+  { employeeId: 'OWHN10141', employeeName: '谢丹' },
+  { employeeId: 'OWHN10605', employeeName: '蒋治云' },
+  { employeeId: 'OWHN10863', employeeName: '黄华' },
+  { employeeId: 'OWHN10892', employeeName: '黄宝强' },
+  { employeeId: 'OWHN11388', employeeName: '夏雷' },
+  { employeeId: 'OWHN11405', employeeName: '陈鹏宇' },
 ];
+
+function normalizeCollectionRoster(value) {
+  if (!Array.isArray(value)) return [];
+  const roster = [];
+  const seen = new Set();
+  value.forEach((item) => {
+    const employeeId = String(typeof item === 'string' ? item : (item?.employeeId || item?.employee_id || '')).trim();
+    const employeeName = String(typeof item === 'string' ? '' : (item?.employeeName || item?.employee_name || '')).trim();
+    if (!employeeId || seen.has(employeeId)) return;
+    seen.add(employeeId);
+    roster.push({ employeeId, employeeName });
+  });
+  return roster;
+}
+
+function renderCollectionRosterRow(item = {}) {
+  return `
+    <tr data-collection-roster-row>
+      <td><input class="dl-roster-input" data-roster-field="employeeId" value="${escapeHtml(item.employeeId || '')}" placeholder="OWHN0001" aria-label="人员工号"></td>
+      <td>
+        <div class="dl-roster-name-cell">
+          <input class="dl-roster-input" data-roster-field="employeeName" value="${escapeHtml(item.employeeName || '')}" placeholder="姓名" aria-label="人员姓名">
+          <button class="dl-icon-btn dl-roster-remove" type="button" title="删除人员" aria-label="删除人员">×</button>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function renderCollectionRosterRows(value) {
+  const roster = normalizeCollectionRoster(value);
+  return (roster.length ? roster : [{}]).map(renderCollectionRosterRow).join('');
+}
+
+function collectCollectionRosterTable() {
+  return normalizeCollectionRoster([...document.querySelectorAll('[data-collection-roster-row]')].map(row => ({
+    employeeId: row.querySelector('[data-roster-field="employeeId"]')?.value || '',
+    employeeName: row.querySelector('[data-roster-field="employeeName"]')?.value || '',
+  })));
+}
 
 function loadCanbuBatches() {
   try {
     const raw = window.localStorage.getItem(CANBU_BATCH_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     state.canbuBatches = Array.isArray(parsed)
-      ? parsed.map(batch => ({ ...batch, subject: batch.subject || 'canbu' }))
+      ? parsed.map(batch => ({
+          ...batch,
+          subject: batch.subject || 'canbu',
+          collectionSeniorityRoster: batch.subject === 'gonglingjiang'
+            ? normalizeCollectionRoster(
+                Array.isArray(batch.collectionSeniorityRoster)
+                  ? batch.collectionSeniorityRoster
+                  : (Array.isArray(batch.hrbpList) ? batch.hrbpList : DEFAULT_COLLECTION_SENIORITY_ROSTER)
+              )
+            : [],
+        }))
       : [];
   } catch {
     state.canbuBatches = [];
@@ -140,6 +189,9 @@ function createCanbuBatch(month, name, subject = state.activeWorkbenchSubject) {
     exportFileName: '',
     exportedAt: '',
     runId: '',
+    collectionSeniorityRoster: subject === 'gonglingjiang'
+      ? DEFAULT_COLLECTION_SENIORITY_ROSTER.map(item => ({ ...item }))
+      : [],
     createdAt: now,
     updatedAt: now,
   };
@@ -237,13 +289,10 @@ const el = {
   filePassword: document.querySelector('#filePassword'),
   btnToStep3: document.querySelector('#btnToStep3'),
   uploadStatus: document.querySelector('#uploadStatus'),
-  hrbpList: document.querySelector('#hrbpList'),
-  paramStatus: document.querySelector('#paramStatus'),
   btnToStep4: document.querySelector('#btnToStep4'),
   confirmEngines: document.querySelector('#confirmEngines'),
   confirmMonth: document.querySelector('#confirmMonth'),
   confirmFile: document.querySelector('#confirmFile'),
-  confirmHrbp: document.querySelector('#confirmHrbp'),
   submitStatus: document.querySelector('#submitStatus'),
   btnSubmitTask: document.querySelector('#btnSubmitTask'),
 
@@ -328,7 +377,6 @@ function init() {
   bindEvents();
   setDefaultMonth();
   setDefaultCanbuBatchMonth();
-  setDefaultHrbpList();
   renderEmptyWorkbench();
   renderRecentBatchTable();
   showView('home');
@@ -372,13 +420,6 @@ function renderCanbuBatchMonthPicker() {
       </button>
     `;
   }).join('');
-}
-
-function setDefaultHrbpList() {
-  if (!el.hrbpList || el.hrbpList.value.trim()) return;
-  el.hrbpList.value = JSON.stringify(DEFAULT_HRBP_LIST, null, 2);
-  state.hrbpList = [...DEFAULT_HRBP_LIST];
-  setText(el.paramStatus, `已预置莞深区揽收工龄奖名单 ${DEFAULT_HRBP_LIST.length} 人，可继续补充。`);
 }
 
 function loadEngineCards() {
@@ -1046,6 +1087,13 @@ function renderCanbuStepContent(step, results = []) {
   if (!root) return;
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
+  const collectionRoster = batch?.subject === 'gonglingjiang'
+    ? normalizeCollectionRoster(
+        Array.isArray(batch.collectionSeniorityRoster)
+          ? batch.collectionSeniorityRoster
+          : DEFAULT_COLLECTION_SENIORITY_ROSTER
+      )
+    : [];
   if (step === 'upload') {
     root.innerHTML = `
       <section class="dl-panel">
@@ -1074,9 +1122,20 @@ function renderCanbuStepContent(step, results = []) {
           </div>` : ''}
         </div>
         ${batch?.subject === 'gonglingjiang' ? `
-        <label class="field-label" for="workbenchHrbpList">当月莞深区揽收工龄奖发放名单</label>
-        <textarea class="field-textarea" id="workbenchHrbpList" rows="5" spellcheck="false">${escapeHtml(JSON.stringify(DEFAULT_HRBP_LIST, null, 2))}</textarea>
-        <p class="inline-status">名单按工号填写 JSON 数组；不在名单内的揽收人员按不发放处理，空名单会进入异常复核。</p>` : ''}
+        <details class="dl-parameter-panel dl-upload-parameter">
+          <summary><span>揽收线工龄奖名单</span><strong><span id="workbenchCollectionRosterCount">${collectionRoster.length}</span> 人</strong><span class="dl-badge">仅命中东莞第四纵队时要求</span></summary>
+          <div class="dl-upload-parameter-body">
+            <div class="dl-roster-table-wrap">
+              <table class="dl-roster-table">
+                <colgroup><col class="dl-roster-id-col"><col></colgroup>
+                <thead><tr><th>工号</th><th>姓名</th></tr></thead>
+                <tbody id="workbenchCollectionRosterRows">${renderCollectionRosterRows(collectionRoster)}</tbody>
+              </table>
+            </div>
+            <button class="dl-btn dl-roster-add" id="btnAddCollectionRosterPerson" type="button">＋ 新增人员</button>
+            <p class="inline-status">字段检查识别到工作地区为东莞、二级部门为第四纵队时，才校验本名单；其他部门无需维护。名单会随本次批次保存。</p>
+          </div>
+        </details>` : ''}
         <div class="upload-zone" id="fileUploadZone" role="button" tabindex="0">
           <input id="payrollFile" type="file" accept=".xlsx,.xlsm,.xls" multiple />
           <p class="upload-title">${escapeHtml(config.uploadTitle)}</p>
@@ -1171,6 +1230,27 @@ function renderSelectedPayrollFiles(message = '') {
 
 function bindCanbuUploadEvents() {
   const submit = document.querySelector('#btnSubmitCanbuBatch');
+  const collectionRosterRows = document.querySelector('#workbenchCollectionRosterRows');
+  const collectionRosterCount = document.querySelector('#workbenchCollectionRosterCount');
+  const syncCollectionRoster = () => {
+    const roster = collectCollectionRosterTable();
+    updateActiveCanbuBatch({ collectionSeniorityRoster: roster });
+    if (collectionRosterCount) collectionRosterCount.textContent = String(roster.length);
+  };
+  collectionRosterRows?.addEventListener('input', syncCollectionRoster);
+  collectionRosterRows?.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('.dl-roster-remove');
+    if (!removeButton) return;
+    removeButton.closest('[data-collection-roster-row]')?.remove();
+    if (!collectionRosterRows.querySelector('[data-collection-roster-row]')) {
+      collectionRosterRows.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
+    }
+    syncCollectionRoster();
+  });
+  document.querySelector('#btnAddCollectionRosterPerson')?.addEventListener('click', () => {
+    collectionRosterRows?.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
+    collectionRosterRows?.querySelector('tr:last-child [data-roster-field="employeeId"]')?.focus();
+  });
   el.fileUploadZone?.addEventListener('click', (event) => {
     if (event.target === el.payrollFile) return;
     el.payrollFile?.click();
@@ -1197,6 +1277,7 @@ function bindCanbuUploadEvents() {
 
 function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
   const validationSummary = renderInputValidationSummary();
+  const inputSummary = state.currentRun?.inputSummary || state.currentRun?.input_summary || {};
   if (subject === 'waisu_butie') {
     return `
       <section class="dl-panel">
@@ -1212,6 +1293,9 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
     `;
   }
   if (subject === 'gonglingjiang') {
+    const requiresCollectionRoster = Boolean(inputSummary.requires_collection_seniority_roster);
+    const collectionEmployeeCount = Number(inputSummary.collection_seniority_employee_count || 0);
+    const rosterCount = normalizeCollectionRoster(getActiveCanbuBatch()?.collectionSeniorityRoster || []).length;
     return `
       <section class="dl-panel">
         <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">字段检查按工龄、资格和线下缺勤折算口径分组展示。</p></div></div>
@@ -1220,6 +1304,11 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
           ${renderFieldGroup('基础员工字段', ['工号', '姓名', '考勤月份', '一级部门名称', '二级部门名称', '岗位名称', '工作地区'])}
           ${renderFieldGroup('工龄与出勤字段', ['入职日期', '排班天数', '实际在职工作日天数', '正班出勤天数'])}
           ${renderFieldGroup('缺勤折算字段', ['事假时数', '病假时数', '旷工时数/天数', '排休请假时数/天数'])}
+          ${renderFieldGroup('揽收线工龄奖名单', [
+            requiresCollectionRoster
+              ? `已识别东莞第四纵队 ${collectionEmployeeCount} 人，已确认名单 ${rosterCount} 人`
+              : '未识别到东莞第四纵队，本批次无需维护名单',
+          ])}
         </div>
         <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看工龄、标准、折算过程和异常。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
       </section>
@@ -1635,6 +1724,12 @@ function renderGonglingResults(results = []) {
     return Number(details['应发'] || 0) > 0 && Number(details['应发']) >= Number(details['上限'] || Infinity);
   }).length;
   const warnings = countSubjectWarnings(rows, 'gonglingjiang');
+  const batch = getActiveCanbuBatch();
+  const savedCollectionRoster = normalizeCollectionRoster(
+    state.currentRun?.collectionSeniorityRoster || batch?.collectionSeniorityRoster || []
+  );
+  const requiresCollectionRoster = Boolean(state.currentRun?.inputSummary?.requires_collection_seniority_roster);
+  const hasSavedRunRoster = Array.isArray(state.currentRun?.collectionSeniorityRoster);
   root.innerHTML = `
     <section class="dl-panel">
       <div class="dl-panel-head"><div><h2 class="dl-panel-title">工龄奖核算</h2><p class="dl-panel-sub">按工作地区、部门岗位、入职日期及线下缺勤口径复核应发工龄奖。</p></div></div>
@@ -1645,6 +1740,13 @@ function renderGonglingResults(results = []) {
         <div class="dl-result-stat"><span>达到上限</span><strong>${cappedCount}</strong></div>
         <div class="dl-result-stat warning"><span>需处理</span><strong>${warnings}</strong></div>
       </div>
+      ${requiresCollectionRoster ? `<details class="dl-parameter-panel">
+        <summary><span>本批次揽收线工龄奖名单</span><strong>${savedCollectionRoster.length} 人</strong><span class="dl-badge ${hasSavedRunRoster ? 'ok' : 'warn'}">${hasSavedRunRoster ? '已随任务保存' : '旧批次待复核'}</span></summary>
+        <div class="dl-parameter-panel-body">
+          <div class="dl-parameter-list">${savedCollectionRoster.length ? savedCollectionRoster.map(item => `<span class="dl-badge">${escapeHtml(item.employeeId)} · ${escapeHtml(item.employeeName || '姓名待补')}</span>`).join('') : '<span class="inline-status">本批次名单为空。</span>'}</div>
+          <button class="dl-btn" id="btnEditGonglingHrbpList" type="button">修改名单并重新核算</button>
+        </div>
+      </details>` : ''}
       <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
         <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门、岗位" aria-label="筛选工龄奖结果">
         <select class="dl-select" id="reviewStatusFilter" aria-label="筛选异常状态"><option value="all">全部状态</option><option value="review">只看异常</option><option value="pass">只看通过</option></select>
@@ -1664,6 +1766,7 @@ function renderGonglingResults(results = []) {
   if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
   if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
   bindGonglingResultFilters();
+  document.querySelector('#btnEditGonglingHrbpList')?.addEventListener('click', restartActiveBatchForRecalculation);
   renderGonglingResultsTable(rows);
   renderExceptionQueue(rows);
 }
@@ -1966,23 +2069,7 @@ function bindCanbuWorkbenchEvents() {
     showView('canbuBatches');
     renderCanbuBatchList();
   });
-  document.querySelector('#btnRecalculateCanbu')?.addEventListener('click', () => {
-    const batch = getActiveCanbuBatch();
-    if (batch) {
-      updateActiveCanbuBatch({
-        status: '草稿',
-        employeeCount: 0,
-        payableTotal: 0,
-        exceptionCount: 0,
-        exportFileName: '',
-        exportedAt: '',
-        runId: '',
-      });
-    }
-    clearCurrentRunState({ clearFile: true });
-    resetCanbuFilters();
-    renderCanbuWorkbench('upload');
-  });
+  document.querySelector('#btnRecalculateCanbu')?.addEventListener('click', restartActiveBatchForRecalculation);
   document.querySelector('#btnExportCanbu')?.addEventListener('click', () => exportResults(true));
   document.querySelector('#btnGoCanbuResults')?.addEventListener('click', () => renderCanbuWorkbench('results'));
   document.querySelectorAll('[data-canbu-step]').forEach((button) => {
@@ -1992,6 +2079,24 @@ function bindCanbuWorkbenchEvents() {
     });
   });
   el.btnToggleAside?.addEventListener('click', toggleAside);
+}
+
+function restartActiveBatchForRecalculation() {
+  const batch = getActiveCanbuBatch();
+  if (batch) {
+    updateActiveCanbuBatch({
+      status: '草稿',
+      employeeCount: 0,
+      payableTotal: 0,
+      exceptionCount: 0,
+      exportFileName: '',
+      exportedAt: '',
+      runId: '',
+    });
+  }
+  clearCurrentRunState({ clearFile: true });
+  resetCanbuFilters();
+  renderCanbuWorkbench('upload');
 }
 
 function getBatchStatusClass(status) {
@@ -2044,6 +2149,10 @@ function syncCanbuBatchFromRun(targetRun = state.currentRun, options = {}) {
     runId: targetRun.id || '',
     status: options.status || getBatchStatusFromRunStatus(targetRun.status),
   };
+
+  if (Array.isArray(targetRun.collectionSeniorityRoster)) {
+    patch.collectionSeniorityRoster = normalizeCollectionRoster(targetRun.collectionSeniorityRoster);
+  }
 
   if (options.includeResults) {
     const results = state.currentResults || [];
@@ -2110,20 +2219,6 @@ function renderConfirmSummary() {
   el.confirmMonth.textContent = el.attendanceMonth.value || '—';
   el.confirmFile.textContent = state.payrollFile?.name || '—';
 
-  const hrbpText = el.hrbpList.value.trim();
-  if (hrbpText) {
-    try {
-      const arr = JSON.parse(hrbpText);
-      state.hrbpList = arr;
-      el.confirmHrbp.textContent = `已配置 ${arr.length} 个工号（含预置名单）`;
-    } catch {
-      state.hrbpList = null;
-      el.confirmHrbp.textContent = '格式错误（揽收工龄奖将按未配置处理）';
-    }
-  } else {
-    state.hrbpList = null;
-    el.confirmHrbp.textContent = '未配置';
-  }
 }
 
 async function submitTask() {
@@ -2140,9 +2235,6 @@ async function submitTask() {
     form.append('engines', state.selectedEngines.join(','));
     form.append('attendance_month', el.attendanceMonth.value);
     form.append('password', el.filePassword.value || '');
-    if (state.hrbpList) {
-      form.append('hrbp_list', JSON.stringify(state.hrbpList));
-    }
 
     const data = await requestJson('/api/domestic-labor/runs', {
       method: 'POST',
@@ -2196,25 +2288,25 @@ async function submitCanbuBatch() {
     form.append('attendance_month', String(batch.month || '').replace('-', ''));
     form.append('password', el.filePassword?.value || '');
     if (batch.subject === 'gonglingjiang') {
-      const hrbpText = document.querySelector('#workbenchHrbpList')?.value.trim() || '[]';
-      let hrbpList;
-      try {
-        hrbpList = JSON.parse(hrbpText);
-      } catch {
-        throw new Error('当月 HRBP 发放名单格式错误，请填写工号 JSON 数组。');
-      }
-      if (!Array.isArray(hrbpList) || hrbpList.some(item => typeof item !== 'string')) {
-        throw new Error('当月 HRBP 发放名单必须是工号字符串组成的 JSON 数组。');
-      }
-      form.append('hrbp_list', JSON.stringify(hrbpList.map(item => item.trim()).filter(Boolean)));
+      const collectionRoster = collectCollectionRosterTable();
+      updateCanbuBatch({ collectionSeniorityRoster: collectionRoster }, { batchId: batch.id });
+      form.append('hrbp_list', JSON.stringify(collectionRoster.map(item => ({
+        employee_id: item.employeeId,
+        employee_name: item.employeeName,
+      }))));
     }
-
     const data = await requestJson('/api/domestic-labor/runs', {
       method: 'POST',
       body: form,
     });
 
-    state.currentRun = { id: data.run_id, status: data.status, inputSummary: data.input_summary };
+    state.currentRun = {
+      id: data.run_id,
+      status: data.status,
+      inputSummary: data.input_summary,
+      collectionSeniorityRoster: data.collection_seniority_roster,
+      collectionSeniorityRosterCount: data.collection_seniority_roster_count,
+    };
     state.currentResultsRunId = '';
     syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: '已上传' });
     startPolling();
@@ -2555,7 +2647,8 @@ function filterResults(results) {
 
 function renderExceptionQueue(results) {
   if (!el.exceptionQueue) return;
-  const rows = results.filter(hasReviewIssue);
+  const activeSubject = state.view === 'canbuWorkbench' ? getActiveWorkbenchSubject() : '';
+  const rows = results.filter(row => activeSubject ? hasSubjectReviewIssue(row, activeSubject) : hasReviewIssue(row));
   if (!rows.length) {
     el.exceptionQueue.innerHTML = `
       <div class="dl-exception">
@@ -2566,8 +2659,8 @@ function renderExceptionQueue(results) {
     return;
   }
   el.exceptionQueue.innerHTML = rows.map(row => {
-    const level = getWarningLevel(row);
-    const firstException = getEffectiveExceptions(row)[0];
+    const level = activeSubject ? getSubjectWarningLevel(row, activeSubject) : getWarningLevel(row);
+    const firstException = activeSubject ? getSubjectExceptions(row, activeSubject)[0] : getEffectiveExceptions(row)[0];
     const message = firstException?.message || getEffectiveWarningText(row);
     return `
       <button class="dl-exception ${level.className}" data-exception-id="${escapeHtml(row.employee_id)}" type="button">
@@ -2586,8 +2679,16 @@ function renderExceptionQueue(results) {
 
 function openExplainDrawer(row) {
   if (!row || !el.explainDrawer || !el.explainTitle || !el.explainBody) return;
+  const allSubjectKeys = ['quanqinjiang', 'canbu', 'waisu_butie', 'gonglingjiang'];
+  const activeSubject = state.view === 'canbuWorkbench' ? getActiveWorkbenchSubject() : '';
+  const calculatedSubjectKeys = allSubjectKeys.filter(key => getSubjectDetail(row, key));
+  const subjectKeys = activeSubject && ENGINE_META[activeSubject]
+    ? [activeSubject]
+    : (calculatedSubjectKeys.length ? calculatedSubjectKeys : allSubjectKeys);
+  const singleSubject = subjectKeys.length === 1 ? subjectKeys[0] : '';
+  const singleSubjectMeta = singleSubject ? ENGINE_META[singleSubject] : null;
   el.explainTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''}`;
-  const subjectCards = ['quanqinjiang', 'canbu', 'waisu_butie', 'gonglingjiang'].map(key => {
+  const subjectCards = subjectKeys.map(key => {
     const meta = ENGINE_META[key];
     const amount = Number(row[key] || 0);
     const subjectDetail = getSubjectDetail(row, key);
@@ -2605,20 +2706,23 @@ function openExplainDrawer(row) {
       </div>
     `;
   }).join('');
-  const rowExceptions = getEffectiveExceptions(row);
+  const rowExceptions = singleSubject ? getSubjectExceptions(row, singleSubject) : getEffectiveExceptions(row);
   const warningText = getEffectiveWarningText(row);
-  const needsReview = hasReviewIssue(row);
+  const needsReview = singleSubject ? hasSubjectReviewIssue(row, singleSubject) : hasReviewIssue(row);
+  const warningLevel = singleSubject ? getSubjectWarningLevel(row, singleSubject) : getWarningLevel(row);
+  const payableLabel = singleSubjectMeta ? `应发${singleSubjectMeta.name}` : '应发合计';
+  const payableAmount = singleSubject ? row[singleSubject] : row.total;
   el.explainBody.innerHTML = `
     <div class="dl-kv-grid">
       <div class="dl-kv"><span>部门</span><strong>${escapeHtml(row.department || '—')}</strong></div>
-      <div class="dl-kv"><span>应发合计</span><strong>${formatMoney(row.total)}</strong></div>
+      <div class="dl-kv"><span>${escapeHtml(payableLabel)}</span><strong>${formatMoney(payableAmount)}</strong></div>
       <div class="dl-kv"><span>复核状态</span><strong>${needsReview ? '待复核' : '自动通过'}</strong></div>
     </div>
     ${subjectCards}
     <div class="dl-rule-card">
       <h3>异常与处理</h3>
       <dl>
-        <dt>异常等级</dt><dd>${getWarningLevel(row).label}</dd>
+        <dt>异常等级</dt><dd>${warningLevel.label}</dd>
         <dt>异常说明</dt><dd>${formatExceptions(rowExceptions) || escapeHtml(warningText || '暂无异常')}</dd>
         <dt>建议动作</dt><dd>${rowExceptions[0]?.suggested_action ? escapeHtml(rowExceptions[0].suggested_action) : (warningText ? '确认数据、补充规则参数或登记人工调整原因。' : '无需人工处理，结果可直接导出。')}</dd>
       </dl>
@@ -2635,7 +2739,7 @@ function buildRuleExplanation(key, row) {
   if (key === 'quanqinjiang') return '按考勤月份、入离职、旷工、迟到早退、签卡和扣款条件判断。';
   if (key === 'canbu') return '按餐补资格、日有效出勤和月度封顶金额计算。';
   if (key === 'waisu_butie') return '按外宿资格、当月在职天数、住宿扣除和缺勤阈值折算。';
-  if (key === 'gonglingjiang') return '按区域、部门、岗位、工龄、排班天数、缺勤与 HRBP 发放名单计算。';
+  if (key === 'gonglingjiang') return '按地区、部门、岗位、工龄、排班天数、缺勤与揽收线工龄奖名单计算。';
   return '该科目按照当前规则包计算。';
 }
 
@@ -2648,6 +2752,22 @@ function getWarningLevel(row) {
   if (!text) return { label: '通过', className: 'ok' };
   if (/失败|异常|不存在|缺失|请提供/.test(text)) return { label: '高风险', className: 'warn' };
   return { label: '提示', className: 'warn' };
+}
+
+function getSubjectExceptions(row, subject) {
+  return (getSubjectDetail(row, subject)?.exceptions || []).filter(item => !isNormalHrbpListExclusionException(item));
+}
+
+function hasSubjectReviewIssue(row, subject) {
+  return getSubjectExceptions(row, subject).length > 0 || Boolean(getEffectiveWarningText(row));
+}
+
+function getSubjectWarningLevel(row, subject) {
+  const exceptions = getSubjectExceptions(row, subject);
+  if (exceptions.some(item => item.level === 'blocking')) return { label: '阻断', className: 'block' };
+  if (exceptions.some(item => item.level !== 'info')) return { label: '高风险', className: 'warn' };
+  if (exceptions.length || getEffectiveWarningText(row)) return { label: '提示', className: 'warn' };
+  return { label: '通过', className: 'ok' };
 }
 
 function countWarnings(results) {
@@ -2720,7 +2840,7 @@ function isNormalHrbpListExclusionException(item) {
 
 function isNormalHrbpListExclusionText(value) {
   const text = String(value || '');
-  return /不在本月HRBP发放名单|不在.*HRBP.*发放名单|揽收工龄奖不发放/.test(text);
+  return /不在本月HRBP发放名单|不在.*HRBP.*发放名单|未命中揽收线工龄奖名单|揽收工龄奖不发放/.test(text);
 }
 
 function formatAuditMap(value) {

@@ -1399,11 +1399,13 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
 
-            # Region auto-detection
             region = "default"
             if monthly.rows:
                 dept2 = str(monthly.rows[0].get("二级部门名称", ""))
-                if any(k in dept2 for k in ("华东枢纽", "华东揽收组", "华西枢纽", "华西揽收组")):
+                if any(k in dept2 for k in (
+                    "华东枢纽", "华东揽收组", "东南枢纽", "华西区操作部",
+                    "华西枢纽", "华西揽收组", "闽赣揽收组", "华东B2B枢纽",
+                )):
                     region = "wes"
 
             results = []
@@ -1484,6 +1486,29 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         if e not in valid_engines:
             raise HTTPException(400, f"未知引擎: {e}")
 
+    collection_roster = []
+    if hrbp_list.strip():
+        try:
+            parsed_hrbp = __import__("json").loads(hrbp_list)
+        except Exception as exc:
+            raise HTTPException(400, "第四纵队揽收发放名单格式错误") from exc
+        if not isinstance(parsed_hrbp, list):
+            raise HTTPException(400, "揽收线工龄奖名单必须为人员列表")
+        seen_ids = set()
+        for item in parsed_hrbp:
+            if isinstance(item, str):
+                employee_id = item.strip()
+                employee_name = ""
+            elif isinstance(item, dict):
+                employee_id = str(item.get("employee_id") or item.get("employeeId") or "").strip()
+                employee_name = str(item.get("employee_name") or item.get("employeeName") or "").strip()
+            else:
+                raise HTTPException(400, "揽收线工龄奖名单人员格式错误")
+            if not employee_id or employee_id in seen_ids:
+                continue
+            seen_ids.add(employee_id)
+            collection_roster.append({"employee_id": employee_id, "employee_name": employee_name})
+
     # Save uploaded file
     DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
     run = create_payroll_run({
@@ -1503,14 +1528,6 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
             target.write(await uploaded_file.read())
         saved_paths.append(file_path)
 
-    # Parse hrbp_list if provided
-    hrbp = None
-    if hrbp_list.strip():
-        try:
-            hrbp = __import__("json").loads(hrbp_list)
-        except Exception:
-            pass
-
     try:
         with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None) as loader:
             input_summary = loader.validate_inputs(engine_list, attendance_month)
@@ -1518,6 +1535,15 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         message = f"数据文件校验失败：{exc}"
         shutil.rmtree(run_dir, ignore_errors=True)
         raise HTTPException(400, message) from exc
+
+    requires_collection_roster = bool(input_summary.get("requires_collection_seniority_roster"))
+    if requires_collection_roster and (
+        not collection_roster or any(not item["employee_name"] for item in collection_roster)
+    ):
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(400, "已识别到东莞第四纵队，请维护包含工号和姓名的揽收线工龄奖名单")
+
+    hrbp = [item["employee_id"] for item in collection_roster]
 
     update_payroll_metadata(run_id, {
         "status": "已上传",
@@ -1527,6 +1553,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "savedFileNames": [path.name for path in saved_paths],
         "fileSize": sum(path.stat().st_size for path in saved_paths),
         "inputSummary": input_summary,
+        "collectionSeniorityRoster": collection_roster if "gonglingjiang" in engine_list else [],
+        "collectionSeniorityRosterCount": len(collection_roster) if "gonglingjiang" in engine_list else 0,
     })
 
     # Launch background calculation
@@ -1540,6 +1568,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "status": "已上传",
         "message": "数据文件校验通过，计算任务已提交",
         "input_summary": input_summary,
+        "collection_seniority_roster": collection_roster if "gonglingjiang" in engine_list else [],
+        "collection_seniority_roster_count": len(collection_roster) if "gonglingjiang" in engine_list else 0,
     }
 
 

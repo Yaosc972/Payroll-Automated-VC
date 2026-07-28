@@ -101,7 +101,8 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         "columns": [
             {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN2313"},
             {"name": "姓名", "desc": "员工姓名", "required": True, "example": "何俊伟"},
-            {"name": "二级部门名称", "desc": "决定部门类别（操作/揽收/FBU）", "required": True, "example": "中国操作部"},
+            {"name": "工作地区", "desc": "匹配东莞、嘉善、义乌或晋江地区规则", "required": True, "example": "东莞"},
+            {"name": "二级部门名称", "desc": "识别操作、第四纵队揽收、FBU及兼容区域归属", "required": True, "example": "中国操作部"},
             {"name": "岗位名称", "desc": "决定是否有工龄奖资格", "required": True, "example": "操作员"},
             {"name": "入职日期", "desc": "格式YYYY-MM-DD", "required": True, "example": "2023-05-15"},
             {"name": "考勤月份", "desc": "格式YYYYMM", "required": True, "example": "202603"},
@@ -111,7 +112,7 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "备注", "desc": "如有特殊备注（如全月事假）", "required": False, "example": ""},
         ],
         "example_extra": [
-            {"工号": "OWHN0424", "姓名": "韩录阳", "二级部门名称": "中国操作部", "岗位名称": "操作员",
+            {"工号": "OWHN0424", "姓名": "韩录阳", "工作地区": "东莞", "二级部门名称": "中国操作部", "岗位名称": "操作员",
              "入职日期": "2021-08-10", "考勤月份": "202603", "请假时数": "0", "排班天数": "26",
              "实际在职工作日天数": "26", "备注": ""},
         ],

@@ -9,15 +9,12 @@ from ..models import AuditExplanation, PayrollException
 SUBJECT = "gonglingjiang"
 
 
-# ==================== 莞深广珠区域 ====================
-# 部门映射
 DEPARTMENT_MAP_GSDG = {
     "中国操作部": "操作",
     "第四纵队": "揽收",
     "头程运营部": "FBU",
 }
 
-# 操作部岗位名单
 OPERATION_POSITIONS_GSDG = {
     "内勤专员", "中转员", "门禁员", "操作员", "监察员",
     "安检员", "操作文员", "查验员", "叉车司机", "揽收充电司机",
@@ -29,7 +26,8 @@ OPERATION_DEPARTMENTS = {
 }
 
 DONGGUAN_OPERATION_POSITIONS = {
-    "安检员", "操作文员", "操作员", "叉车司机", "查验员", "监察员",
+    "安检员", "操作文员", "操作员", "叉车司机", "揽收充电司机",
+    "查验员", "监察员", "理货员",
 }
 
 DONGGUAN_EXCLUDED_POSITIONS = {
@@ -39,22 +37,15 @@ DONGGUAN_EXCLUDED_POSITIONS = {
 
 JINJIANG_OPERATION_POSITIONS = {"操作员", "门禁员"}
 
-# 工龄奖上限
-SENIORITY_CAP_GSDG = {
-    "操作": 600,
-    "揽收": 600,
-    "FBU": 500,
-}
+DONGGUAN_SENIORITY_CAP = 600
+DONGGUAN_SENIORITY_RATE = 150
+JINJIANG_SENIORITY_CAP = 150
+JINJIANG_SENIORITY_RATE = 50
+COLLECTION_SENIORITY_CAP = 600
+COLLECTION_SENIORITY_RATE = 150
+FBU_SENIORITY_CAP = 500
+FBU_SENIORITY_RATE = 100
 
-# 工龄奖标准（每年）
-SENIORITY_RATE_GSDG = {
-    "操作": 150,
-    "揽收": 150,
-    "FBU": 100,
-}
-
-# ==================== 华西华东东南区域 ====================
-# 部门映射
 DEPARTMENT_MAP_WES = {
     "华东枢纽": "操作",
     "华东揽收组": "揽收",
@@ -64,33 +55,19 @@ DEPARTMENT_MAP_WES = {
     "华东B2B枢纽": "操作",
 }
 
-# 操作部岗位名单（华西华东东南）
 OPERATION_POSITIONS_WES = {
     "操作员", "内勤专员", "中转员", "门禁员", "安检员", "操作文员",
 }
 
-# 揽收部岗位名单（华西华东东南）
-COLLECTION_POSITIONS_WES = {
-    "揽收操作员", "内勤专员",
-}
+COLLECTION_POSITIONS_WES = {"揽收操作员", "内勤专员"}
 
-# 无工龄奖的岗位（组长类、非一线）
 NO_BONUS_POSITIONS_WES = {
     "操作组长", "见习组长", "HRBP专员", "揽收组长",
     "操作副主管", "操作主管", "操作经理",
 }
 
-# 工龄奖上限（华西华东东南统一）
-SENIORITY_CAP_WES = 150
-
-# 工龄奖标准（每年，华西华东东南统一）
-SENIORITY_RATE_WES = 50
-
-# ==================== 兼容旧代码（莞深广珠默认） ====================
-DEPARTMENT_MAP = DEPARTMENT_MAP_GSDG
-OPERATION_POSITIONS = OPERATION_POSITIONS_GSDG
-SENIORITY_CAP = SENIORITY_CAP_GSDG
-SENIORITY_RATE = SENIORITY_RATE_GSDG
+WES_SENIORITY_CAP = 150
+WES_SENIORITY_RATE = 50
 
 
 def _excel_round(value: float, digits: int = 2) -> float:
@@ -178,15 +155,15 @@ class GongLingJiangEngine(BaseEngine):
 
         Args:
             employee_data: 月考勤数据
-            hrbp_list: 揽收部HRBP发放名单（工号列表）
-            region: 区域 ('gsdg'=莞深广珠, 'wes'=华西华东东南, None=自动检测)
+            hrbp_list: 东莞第四纵队揽收线工龄奖名单中的工号
+            region: 区域兼容口径（'wes'=华西/华东/东南，其他为莞深广珠）
         """
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
         warnings = []
         exceptions = []
 
-        # F1: 归属部门大类（自动检测区域或使用指定区域）
+        # F1: 按员工工作地区和操作归属部门逐行判断
         primary_department = str(employee_data.get("一级部门名称", ""))
         department = str(employee_data.get("二级部门名称", ""))
         position = str(employee_data.get("岗位名称", ""))
@@ -203,20 +180,18 @@ class GongLingJiangEngine(BaseEngine):
         }
         zero_reason = ""
         zero_rule_name = "工龄奖资格判断"
-        zero_steps = ["部门已匹配，但岗位或名单条件未满足", "工龄奖金额为0"]
+        zero_steps = ["部门已匹配，但岗位条件未满足", "工龄奖金额为0"]
 
-        is_operation_department = department in OPERATION_DEPARTMENTS or (
-            primary_department == "东南区" and department == "HRBP部"
-        )
+        is_operation_department = department in OPERATION_DEPARTMENTS
 
         if is_operation_department:
             dept_category = "操作"
             standard = 0
-            cap = SENIORITY_CAP_GSDG["操作"]
+            cap = DONGGUAN_SENIORITY_CAP
 
             if work_area == "东莞":
                 if position in DONGGUAN_OPERATION_POSITIONS and position not in DONGGUAN_EXCLUDED_POSITIONS:
-                    standard = SENIORITY_RATE_GSDG["操作"]
+                    standard = DONGGUAN_SENIORITY_RATE
                 else:
                     zero_reason = "东莞操作岗位不享有工龄奖"
                     zero_steps = ["工作地区为东莞，部门归属操作", "岗位不在东莞操作享有范围或命中不享有岗位", "工龄奖金额为0"]
@@ -225,40 +200,60 @@ class GongLingJiangEngine(BaseEngine):
                 zero_rule_name = "工龄奖工作地区判断"
                 zero_steps = [f"工作地区为{work_area}", f"{work_area}区域无工龄奖", "工龄奖金额为0"]
             elif work_area == "晋江":
-                cap = SENIORITY_CAP_WES
+                cap = JINJIANG_SENIORITY_CAP
                 if position in JINJIANG_OPERATION_POSITIONS:
-                    standard = SENIORITY_RATE_WES
+                    standard = JINJIANG_SENIORITY_RATE
                 else:
                     zero_reason = "晋江操作岗位不享有工龄奖"
                     zero_steps = ["工作地区为晋江，部门归属操作", "岗位不是晋江一线操作员", "工龄奖金额为0"]
             else:
-                # 未明确覆盖的工作地区继续沿用现平台操作规则，避免扩大规则变更范围。
                 if department in DEPARTMENT_MAP_GSDG and position in OPERATION_POSITIONS_GSDG:
-                    standard = SENIORITY_RATE_GSDG["操作"]
+                    standard = DONGGUAN_SENIORITY_RATE
                 elif region == "wes" and department in DEPARTMENT_MAP_WES and position in OPERATION_POSITIONS_WES:
-                    standard = SENIORITY_RATE_WES
-                    cap = SENIORITY_CAP_WES
+                    standard = WES_SENIORITY_RATE
+                    cap = WES_SENIORITY_CAP
                 else:
                     zero_reason = "工作地区未配置操作工龄奖规则"
-                    zero_steps = ["部门归属操作", "工作地区未命中东莞、嘉善或晋江", "岗位未命中现有兜底规则", "工龄奖金额为0"]
+                    zero_steps = ["部门归属操作", "工作地区及历史兼容口径均未命中", "工龄奖金额为0"]
+
+        elif work_area == "东莞" and department == "第四纵队":
+            dept_category = "揽收"
+            cap = COLLECTION_SENIORITY_CAP
+            standard = 0
+            if hrbp_list and employee_id in hrbp_list and "组长" not in position:
+                standard = COLLECTION_SENIORITY_RATE
+            elif not hrbp_list:
+                message = f"员工{employee_id}为第四纵队揽收人员，请维护本月揽收线工龄奖名单"
+                warnings.append(message)
+                exceptions.append(_exception(
+                    "MISSING_HRBP_LIST",
+                    "warning",
+                    employee_id,
+                    employee_name,
+                    message,
+                    "补充包含工号和姓名的本月揽收线工龄奖名单，或人工确认该员工不发放工龄奖。",
+                ))
+                zero_reason = "缺少揽收线工龄奖名单"
+                zero_steps = ["工作地区为东莞且二级部门为第四纵队", "未维护本月揽收线工龄奖名单", "工龄奖金额为0"]
+            else:
+                zero_reason = "未命中揽收线工龄奖名单或岗位为组长"
+                zero_steps = ["工作地区为东莞且二级部门为第四纵队", "工号未命中名单或岗位包含组长", "工龄奖金额为0"]
+
+        elif work_area == "东莞" and department == "头程运营部":
+            dept_category = "FBU"
+            standard = FBU_SENIORITY_RATE
+            cap = FBU_SENIORITY_CAP
 
         elif region == "wes":
-            # 华西华东东南区域
             dept_category = DEPARTMENT_MAP_WES.get(department, "其他")
             standard = 0
-            cap = SENIORITY_CAP_WES
+            cap = WES_SENIORITY_CAP
 
-            if dept_category == "操作":
-                if position in OPERATION_POSITIONS_WES:
-                    standard = SENIORITY_RATE_WES
-            elif dept_category == "揽收":
-                if position in COLLECTION_POSITIONS_WES:
-                    standard = SENIORITY_RATE_WES
-            elif dept_category == "其他":
-                # HRBP部、共享运营中心等无工龄奖
-                pass
+            if dept_category == "操作" and position in OPERATION_POSITIONS_WES:
+                standard = WES_SENIORITY_RATE
+            elif dept_category == "揽收" and position in COLLECTION_POSITIONS_WES:
+                standard = WES_SENIORITY_RATE
 
-            # 检查是否为无工龄奖岗位
             if position in NO_BONUS_POSITIONS_WES:
                 standard = 0
                 if dept_category != "其他":
@@ -274,32 +269,9 @@ class GongLingJiangEngine(BaseEngine):
                     ))
 
         else:
-            # 莞深广珠区域（默认）
-            dept_category = DEPARTMENT_MAP_GSDG.get(department, "其他")
+            dept_category = "其他"
             standard = 0
-
-            if dept_category == "操作":
-                if position in OPERATION_POSITIONS_GSDG:
-                    standard = SENIORITY_RATE_GSDG["操作"]
-            elif dept_category == "揽收":
-                if hrbp_list and employee_id in hrbp_list and "组长" not in position:
-                    standard = SENIORITY_RATE_GSDG["揽收"]
-                else:
-                    if not hrbp_list:
-                        message = f"员工{employee_id}为揽收部人员，请提供本月HRBP发放名单"
-                        warnings.append(message)
-                        exceptions.append(_exception(
-                            "MISSING_HRBP_LIST",
-                            "warning",
-                            employee_id,
-                            employee_name,
-                            message,
-                            "补充本月HRBP发放工号名单，或人工确认该员工不发放工龄奖。",
-                        ))
-            elif dept_category == "FBU":
-                standard = SENIORITY_RATE_GSDG["FBU"]
-
-            cap = region_cap if region_cap is not None else SENIORITY_CAP_GSDG.get(dept_category, 0)
+            cap = 0
 
         if dept_category == "其他":
             return CalculationResult(
@@ -307,11 +279,15 @@ class GongLingJiangEngine(BaseEngine):
                 employee_name=employee_name,
                 amount=0,
                 details=_details(
-                    {"reason": "部门不在工龄奖范围", "department": department},
+                    {"reason": "非操作线部门不在当前工龄奖范围", "department": department},
                     amount=0,
                     rule_name="工龄奖部门范围判断",
-                    inputs={**input_snapshot, "部门类别": dept_category},
-                    steps=["二级部门未匹配工龄奖适用范围", "工龄奖金额为0"],
+                    inputs={
+                        **input_snapshot,
+                        "部门类别": dept_category,
+                        "揽收线工龄奖名单人数": len(hrbp_list or []) if dept_category == "揽收" else "不适用",
+                    },
+                    steps=["二级部门未匹配当前操作线工龄奖适用范围", "工龄奖金额为0"],
                     formula="不适用部门 = 0",
                     exceptions=exceptions,
                 ),
@@ -327,7 +303,7 @@ class GongLingJiangEngine(BaseEngine):
                     {"reason": zero_reason or "不符合工龄奖标准", "department": dept_category, "position": position},
                     amount=0,
                     rule_name=zero_rule_name,
-                    inputs={**input_snapshot, "部门类别": dept_category, "HRBP名单人数": len(hrbp_list or [])},
+                    inputs={**input_snapshot, "部门类别": dept_category},
                     steps=zero_steps,
                     formula="资格不满足 = 0",
                     exceptions=exceptions,
@@ -528,10 +504,10 @@ class GongLingJiangEngine(BaseEngine):
                     inputs={
                         **input_snapshot,
                         "部门类别": dept_category,
-                        "区域": region or "gsdg",
+                        "规则地区": work_area or "未配置",
                         "排班天数": paiban,
                         "实际在职工作日天数": actual_days,
-                        "HRBP名单人数": len(hrbp_list or []),
+                        "揽收线工龄奖名单人数": len(hrbp_list or []) if dept_category == "揽收" else "不适用",
                     },
                     intermediate_values={
                         "工龄(年)": years,
