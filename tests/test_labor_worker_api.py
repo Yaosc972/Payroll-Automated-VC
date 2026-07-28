@@ -720,6 +720,27 @@ def test_worker_heartbeat_refreshes_run_progress_for_browser_polling(monkeypatch
     assert saved["progress"]["lastUpdatedAt"] != "2026-07-20T15:00:00"
 
 
+def test_completed_worker_heartbeat_is_idempotent_for_same_device(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    completed = {
+        "id": "job-completed",
+        "runId": "labor-completed",
+        "status": "succeeded",
+        "ownerUserId": "user-1",
+        "claimedDeviceId": "device-a",
+    }
+    monkeypatch.setattr(app_module, "get_labor_worker_job", lambda _job_id: completed)
+
+    response = client.post(
+        "/api/labor/worker/jobs/job-completed/heartbeat",
+        headers={"authorization": "Bearer token-user-1", "x-worker-version": CURRENT_WORKER_VERSION},
+        json={"progress": {"phase": "completed"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["status"] == "succeeded"
+
+
 def test_operations_endpoint_requires_admin_token(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     monkeypatch.setenv("SIGMA_LABOR_OPERATIONS_TOKEN", "admin-secret")

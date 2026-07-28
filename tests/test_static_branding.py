@@ -317,7 +317,11 @@ def test_overseas_labor_mapping_preflight_requires_current_environment_worker_an
     assert "正在下载 Excel" in script
     assert "正在读取工作表" in script
     assert "正在回传结果" in script
-    assert "Date.now() - seenAt < 6 * 1000" in script
+    assert "Date.now() - seenAt < 15 * 1000" in script
+    assert "startLaborWorkerDevicePolling" in script
+    assert "window.setInterval" in script
+    assert "3000" in script
+    assert "document.hidden" in script
 
 
 def test_overseas_labor_worker_status_names_current_environment_and_switch_warning():

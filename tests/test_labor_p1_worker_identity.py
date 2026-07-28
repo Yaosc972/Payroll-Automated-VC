@@ -212,6 +212,7 @@ def test_p1_worker_token_resolution_is_device_bound_and_updates_last_seen():
     resolved = identity.resolve_labor_worker_token(
         token,
         worker_version="0.3.1",
+        refresh_ttl_seconds=24 * 60 * 60,
         connect=lambda: connection,
     )
 
@@ -223,6 +224,9 @@ def test_p1_worker_token_resolution_is_device_bound_and_updates_last_seen():
     device_update = next((sql, params) for sql, params in connection.queries if "last_seen_at=now()" in sql.lower())
     assert "worker_version" in device_update[0].lower()
     assert "0.3.1" in device_update[1]
+    token_update = next((sql, params) for sql, params in connection.queries if "last_used_at=now()" in sql.lower())
+    assert "greatest(expires_at, now()+(%s*interval '1 second'))" in token_update[0].lower()
+    assert token_update[1][:2] == (24 * 60 * 60, 24 * 60 * 60)
 
 
 def test_p1_worker_token_rejects_expired_or_revoked_record_before_updating_last_seen():
@@ -297,6 +301,31 @@ def test_p1_worker_token_rotation_does_not_replace_reported_version_with_browser
         if "update public.labor_worker_devices" in sql.lower()
     )
     assert device_update[1][2] == "0.3.0"
+
+
+def test_p1_reactivation_code_preserves_current_worker_token_until_exchange(monkeypatch):
+    device = _device_row()
+    connection = FakeConnection([FakeResult(row=device), FakeResult(), FakeResult(), FakeResult()])
+    monkeypatch.setattr(identity.secrets, "token_urlsafe", lambda _size: "replacement-activation")
+
+    identity.issue_labor_worker_activation(
+        owner_user_id="overseasAdminUser",
+        actor_user_id="overseasAdminUser",
+        display_name="My Mac",
+        platform="macos-arm64",
+        worker_version="",
+        ttl_seconds=300,
+        device_id="labor_device_1",
+        connect=lambda: connection,
+    )
+
+    revoke_query = next(
+        (sql, params)
+        for sql, params in connection.queries
+        if "update public.labor_worker_tokens" in sql.lower()
+    )
+    assert "id like %s" in revoke_query[0].lower()
+    assert revoke_query[1][-1] == "labor_activation_%"
 
 
 @pytest.fixture
@@ -407,21 +436,30 @@ def test_p1_device_activation_rejects_untrusted_auth_before_issuing_a_token(monk
 
 
 def test_p1_worker_bearer_identity_uses_postgres_resolver_not_static_env(monkeypatch):
+    resolved_calls = []
     monkeypatch.setenv(
         "SIGMA_LABOR_WORKER_TOKENS",
         '{"database-token":{"userId":"wrong","deviceId":"wrong"}}',
     )
+    monkeypatch.delenv("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS", raising=False)
     monkeypatch.setattr(app_module, "labor_postgres_state_enabled", lambda: True)
     monkeypatch.setattr(
         app_module,
         "resolve_labor_worker_token",
-        lambda raw, **_kwargs: {"userId": "database-user", "deviceId": "database-device", "raw": raw},
+        lambda raw, **kwargs: resolved_calls.append((raw, kwargs))
+        or {"userId": "database-user", "deviceId": "database-device", "raw": raw},
         raising=False,
     )
 
     resolved = app_module._labor_worker_identity("Bearer database-token")
 
     assert resolved == {"userId": "database-user", "deviceId": "database-device"}
+    assert resolved_calls == [
+        (
+            "database-token",
+            {"worker_version": "", "refresh_ttl_seconds": 24 * 60 * 60},
+        )
+    ]
 
 
 def test_browser_device_revocation_immediately_invalidates_old_worker_bearer(

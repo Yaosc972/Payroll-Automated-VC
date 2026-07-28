@@ -23,6 +23,7 @@ const laborState = {
   moduleAccess: null,
   releaseCompatible: false,
   workerDevices: [],
+  workerDevicePollTimer: null,
   workerRelease: null,
   workerPlatform: detectLaborWorkerPlatform(),
   selectedPdfFiles: [],
@@ -547,7 +548,7 @@ function openLaborWorkerPanel() {
 function workerDeviceIsOnline(device) {
   if (!device?.lastSeenAt || device?.revokedAt) return false;
   const seenAt = Date.parse(device.lastSeenAt);
-  return Number.isFinite(seenAt) && Date.now() - seenAt < 6 * 1000;
+  return Number.isFinite(seenAt) && Date.now() - seenAt < 15 * 1000;
 }
 
 function laborWorkerEnvironmentLabel() {
@@ -577,10 +578,10 @@ function updateLaborWorkerHeader(devices) {
   }
 }
 
-async function loadLaborWorkerDevices() {
+async function loadLaborWorkerDevices({ silent = false } = {}) {
   if (laborState.moduleAccess?.p1?.required !== true) return;
   if (labor.workerSection) labor.workerSection.hidden = false;
-  if (labor.workerDevices) labor.workerDevices.innerHTML = '<span class="audit-empty">正在读取...</span>';
+  if (!silent && labor.workerDevices) labor.workerDevices.innerHTML = '<span class="audit-empty">正在读取...</span>';
   try {
     const data = await requestJson("/api/labor/worker/devices");
     laborState.workerDevices = Array.isArray(data.devices) ? data.devices : [];
@@ -596,6 +597,14 @@ async function loadLaborWorkerDevices() {
     updateLaborWorkerHeader([]);
     return [];
   }
+}
+
+function startLaborWorkerDevicePolling() {
+  if (laborState.workerDevicePollTimer) window.clearInterval(laborState.workerDevicePollTimer);
+  laborState.workerDevicePollTimer = window.setInterval(() => {
+    if (document.hidden || laborState.moduleAccess?.p1?.required !== true) return;
+    void loadLaborWorkerDevices({ silent: true });
+  }, 3000);
 }
 
 async function loadLaborWorkerRelease() {
@@ -862,7 +871,10 @@ async function loadModuleAccess() {
     renderLaborUploadLimits(access);
     if (labor.workerSection) labor.workerSection.hidden = access.p1?.required !== true;
     if (labor.btnWorkerStatus) labor.btnWorkerStatus.hidden = access.p1?.required !== true;
-    if (access.p1?.required === true) loadLaborWorkerDevices();
+    if (access.p1?.required === true) {
+      loadLaborWorkerDevices();
+      startLaborWorkerDevicePolling();
+    }
     const compatibility = laborReleaseCompatibility(access);
     laborState.releaseCompatible = access.canUse !== false && compatibility.compatible;
     if (labor.moduleStageBadge) {

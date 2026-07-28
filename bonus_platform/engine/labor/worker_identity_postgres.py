@@ -72,6 +72,7 @@ def _issue_labor_worker_credential(
     maximum_ttl_seconds: int,
     registered_action: str,
     rotated_action: str,
+    revoke_token_id_prefix: str = "",
     connect: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     owner = _required(owner_user_id, "owner_user_id")
@@ -144,13 +145,20 @@ def _issue_labor_worker_credential(
                 if not device_row:
                     raise LaborWorkerIdentityError("Worker 设备注册失败。")
                 action = registered_action
+            revoke_scope = "and id like %s" if revoke_token_id_prefix else ""
+            revoke_params = (
+                (safe_device_id, owner, f"{revoke_token_id_prefix}%")
+                if revoke_token_id_prefix
+                else (safe_device_id, owner)
+            )
             connection.execute(
-                """
+                f"""
                 update public.labor_worker_tokens
                 set revoked_at=coalesce(revoked_at, now())
                 where device_id=%s and owner_user_id=%s and revoked_at is null
+                  {revoke_scope}
                 """,
-                (safe_device_id, owner),
+                revoke_params,
             )
             connection.execute(
                 """
@@ -240,6 +248,7 @@ def issue_labor_worker_activation(
         maximum_ttl_seconds=10 * 60,
         registered_action="worker_activation_registered",
         rotated_action="worker_activation_rotated",
+        revoke_token_id_prefix="labor_activation_",
         connect=connect,
     )
     return {"activationCode": issued.pop("credential"), **issued}
@@ -345,10 +354,12 @@ def resolve_labor_worker_token(
     raw_token: str,
     *,
     worker_version: str = "",
+    refresh_ttl_seconds: int = 0,
     connect: Callable[[], Any] | None = None,
 ) -> dict[str, str]:
     token = str(raw_token or "").strip()
     safe_version = str(worker_version or "").strip()[:40]
+    safe_refresh_ttl = max(0, min(int(refresh_ttl_seconds or 0), 24 * 60 * 60))
     if not token.startswith("sigma_labor_w1_") or len(token) < 24:
         raise LaborWorkerIdentityInvalid("Worker 身份令牌无效或已失效。")
     with _open_connection(connect=connect) as connection:
@@ -370,10 +381,15 @@ def resolve_labor_worker_token(
             values = dict(row)
             connection.execute(
                 """
-                update public.labor_worker_tokens set last_used_at=now()
+                update public.labor_worker_tokens
+                set last_used_at=now(),
+                    expires_at=case
+                        when %s > 0 then greatest(expires_at, now()+(%s*interval '1 second'))
+                        else expires_at
+                    end
                 where id=%s and revoked_at is null and expires_at > now()
                 """,
-                (str(values.get("token_id") or ""),),
+                (safe_refresh_ttl, safe_refresh_ttl, str(values.get("token_id") or "")),
             )
             connection.execute(
                 """

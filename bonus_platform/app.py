@@ -2735,7 +2735,11 @@ def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> d
     token = authorization[len(prefix) :].strip() if authorization.startswith(prefix) else ""
     if labor_postgres_state_enabled():
         try:
-            identity = resolve_labor_worker_token(token, worker_version=worker_version)
+            identity = resolve_labor_worker_token(
+                token,
+                worker_version=worker_version,
+                refresh_ttl_seconds=_labor_worker_token_ttl_seconds(),
+            )
             return {"userId": str(identity["userId"]), "deviceId": str(identity["deviceId"])}
         except LaborWorkerIdentityInvalid as exc:
             raise HTTPException(status_code=401, detail="Worker 身份令牌无效或已失效。") from exc
@@ -2761,9 +2765,9 @@ def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> d
 
 def _labor_worker_token_ttl_seconds() -> int:
     try:
-        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 8 * 60 * 60))
+        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 24 * 60 * 60))
     except (TypeError, ValueError):
-        value = 8 * 60 * 60
+        value = 24 * 60 * 60
     return max(300, min(value, 24 * 60 * 60))
 
 
@@ -3280,10 +3284,19 @@ def heartbeat_personal_labor_worker_job(
     authorization: str = Header(default=""),
 ) -> dict:
     try:
+        identity = _labor_worker_identity(authorization)
+        existing = get_labor_worker_job(job_id)
+        if (
+            str(existing.get("status") or "") == "succeeded"
+            and str(existing.get("ownerUserId") or "") == identity["userId"]
+            and str(existing.get("claimedDeviceId") or "") == identity["deviceId"]
+        ):
+            return {"job": _public_labor_worker_job(existing)}
         with _leased_worker_job(
             job_id,
             authorization,
             progress=payload.get("progress") if isinstance(payload, dict) else None,
+            identity=identity,
         ) as (_, job, _, generation):
             if str(job.get("jobType") or "reconcile") != "mapping_preflight":
                 heartbeat_at = str(job.get("heartbeatAt") or datetime.utcnow().isoformat())
@@ -3308,8 +3321,9 @@ def _leased_worker_job(
     authorization: str,
     *,
     progress: dict | None = None,
+    identity: dict[str, str] | None = None,
 ):
-    identity = _labor_worker_identity(authorization)
+    identity = identity or _labor_worker_identity(authorization)
     job = get_labor_worker_job(job_id)
     run_id = str(job.get("runId") or "")
     run_dir = get_labor_run_dir(run_id)
