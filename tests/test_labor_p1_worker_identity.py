@@ -250,6 +250,74 @@ def test_p1_worker_token_rejects_expired_or_revoked_record_before_updating_last_
     assert connection.rolled_back is True
 
 
+def test_p1_worker_token_recovers_recent_naturally_expired_latest_device_token():
+    token = "sigma_labor_w1_recover-recent-expiry"
+    token_row = {
+        "token_id": "labor_token_1",
+        "device_id": "labor_device_1",
+        "owner_user_id": "overseasAdminUser",
+        "expires_at": datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc),
+        "display_name": "My Mac",
+        "platform": "macos-arm64",
+    }
+    connection = FakeConnection(
+        [
+            FakeResult(row=None),
+            FakeResult(row=token_row),
+            FakeResult(),
+            FakeResult(),
+            FakeResult(),
+        ]
+    )
+
+    resolved = identity.resolve_labor_worker_token(
+        token,
+        worker_version="0.3.12",
+        refresh_ttl_seconds=90 * 24 * 60 * 60,
+        recovery_grace_seconds=7 * 24 * 60 * 60,
+        connect=lambda: connection,
+    )
+
+    assert resolved == {
+        "userId": "overseasAdminUser",
+        "deviceId": "labor_device_1",
+    }
+    recovery_query, recovery_params = connection.queries[1]
+    normalized = recovery_query.lower()
+    assert "t.expires_at <= now()" in normalized
+    assert "t.revoked_at is null" in normalized
+    assert "d.revoked_at is null" in normalized
+    assert "newer.created_at > t.created_at" in normalized
+    assert recovery_params == (
+        hashlib.sha256(token.encode()).hexdigest(),
+        7 * 24 * 60 * 60,
+    )
+    token_update = next(
+        (sql, params)
+        for sql, params in connection.queries
+        if "set last_used_at=now()" in sql.lower()
+    )
+    assert token_update[1][:2] == (90 * 24 * 60 * 60, 90 * 24 * 60 * 60)
+    assert connection.committed is True
+
+
+def test_p1_worker_token_does_not_recover_when_grace_lookup_finds_no_safe_record():
+    token = "sigma_labor_w1_revoked-stale-or-superseded"
+    connection = FakeConnection([FakeResult(row=None), FakeResult(row=None)])
+
+    with pytest.raises(identity.LaborWorkerIdentityInvalid, match="无效或已失效"):
+        identity.resolve_labor_worker_token(
+            token,
+            worker_version="0.3.12",
+            refresh_ttl_seconds=90 * 24 * 60 * 60,
+            recovery_grace_seconds=7 * 24 * 60 * 60,
+            connect=lambda: connection,
+        )
+
+    assert len(connection.queries) == 2
+    assert connection.rolled_back is True
+
+
 def test_p1_worker_device_revoke_is_owner_scoped_and_revokes_all_active_tokens():
     connection = FakeConnection(
         [FakeResult(row=_device_row()), FakeResult(), FakeResult(), FakeResult()]
@@ -457,7 +525,11 @@ def test_p1_worker_bearer_identity_uses_postgres_resolver_not_static_env(monkeyp
     assert resolved_calls == [
         (
             "database-token",
-            {"worker_version": "", "refresh_ttl_seconds": 24 * 60 * 60},
+            {
+                "worker_version": "",
+                "refresh_ttl_seconds": 90 * 24 * 60 * 60,
+                "recovery_grace_seconds": 7 * 24 * 60 * 60,
+            },
         )
     ]
 

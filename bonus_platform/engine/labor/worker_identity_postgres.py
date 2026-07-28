@@ -258,12 +258,12 @@ def exchange_labor_worker_activation(
     raw_activation_code: str,
     *,
     worker_version: str = "",
-    ttl_seconds: int = 8 * 60 * 60,
+    ttl_seconds: int = 90 * 24 * 60 * 60,
     connect: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     activation_code = str(raw_activation_code or "").strip()
     safe_version = str(worker_version or "").strip()[:40]
-    safe_ttl = max(300, min(int(ttl_seconds or 0), 24 * 60 * 60))
+    safe_ttl = max(300, min(int(ttl_seconds or 0), 365 * 24 * 60 * 60))
     if not activation_code.startswith("sigma_labor_a1_") or len(activation_code) < 24:
         raise LaborWorkerIdentityInvalid("Worker 激活码无效或已失效。")
 
@@ -355,11 +355,13 @@ def resolve_labor_worker_token(
     *,
     worker_version: str = "",
     refresh_ttl_seconds: int = 0,
+    recovery_grace_seconds: int = 0,
     connect: Callable[[], Any] | None = None,
 ) -> dict[str, str]:
     token = str(raw_token or "").strip()
     safe_version = str(worker_version or "").strip()[:40]
-    safe_refresh_ttl = max(0, min(int(refresh_ttl_seconds or 0), 24 * 60 * 60))
+    safe_refresh_ttl = max(0, min(int(refresh_ttl_seconds or 0), 365 * 24 * 60 * 60))
+    safe_recovery_grace = max(0, min(int(recovery_grace_seconds or 0), 30 * 24 * 60 * 60))
     if not token.startswith("sigma_labor_w1_") or len(token) < 24:
         raise LaborWorkerIdentityInvalid("Worker 身份令牌无效或已失效。")
     with _open_connection(connect=connect) as connection:
@@ -376,6 +378,32 @@ def resolve_labor_worker_token(
                 """,
                 (_token_hash(token),),
             ).fetchone()
+            recovered = False
+            if not row and safe_recovery_grace:
+                row = connection.execute(
+                    """
+                    select t.id as token_id, t.device_id, t.owner_user_id, t.expires_at,
+                           d.display_name, d.platform
+                    from public.labor_worker_tokens t
+                    join public.labor_worker_devices d on d.id=t.device_id
+                    where t.token_hash=%s and t.id like 'labor_token_%%'
+                      and t.revoked_at is null and t.expires_at <= now()
+                      and t.expires_at > now()-(%s*interval '1 second')
+                      and d.revoked_at is null and d.owner_user_id=t.owner_user_id
+                      and not exists (
+                          select 1
+                          from public.labor_worker_tokens newer
+                          where newer.device_id=t.device_id
+                            and newer.owner_user_id=t.owner_user_id
+                            and newer.id like 'labor_token_%%'
+                            and newer.created_at > t.created_at
+                            and newer.revoked_at is null
+                      )
+                    for update of t, d
+                    """,
+                    (_token_hash(token), safe_recovery_grace),
+                ).fetchone()
+                recovered = bool(row)
             if not row:
                 raise LaborWorkerIdentityInvalid("Worker 身份令牌无效或已失效。")
             values = dict(row)
@@ -387,7 +415,7 @@ def resolve_labor_worker_token(
                         when %s > 0 then greatest(expires_at, now()+(%s*interval '1 second'))
                         else expires_at
                     end
-                where id=%s and revoked_at is null and expires_at > now()
+                where id=%s and revoked_at is null
                 """,
                 (safe_refresh_ttl, safe_refresh_ttl, str(values.get("token_id") or "")),
             )
@@ -401,6 +429,18 @@ def resolve_labor_worker_token(
                 """,
                 (safe_version, safe_version, str(values.get("device_id") or "")),
             )
+            if recovered:
+                _insert_audit(
+                    connection,
+                    run_id="",
+                    owner_user_id=str(values.get("owner_user_id") or ""),
+                    actor_user_id=str(values.get("owner_user_id") or ""),
+                    action="worker_token_grace_recovered",
+                    details={
+                        "deviceId": str(values.get("device_id") or ""),
+                        "recoveryGraceSeconds": safe_recovery_grace,
+                    },
+                )
             connection.commit()
         except Exception:
             connection.rollback()

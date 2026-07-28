@@ -2739,6 +2739,7 @@ def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> d
                 token,
                 worker_version=worker_version,
                 refresh_ttl_seconds=_labor_worker_token_ttl_seconds(),
+                recovery_grace_seconds=_labor_worker_token_recovery_grace_seconds(),
             )
             return {"userId": str(identity["userId"]), "deviceId": str(identity["deviceId"])}
         except LaborWorkerIdentityInvalid as exc:
@@ -2765,10 +2766,23 @@ def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> d
 
 def _labor_worker_token_ttl_seconds() -> int:
     try:
-        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 24 * 60 * 60))
+        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 90 * 24 * 60 * 60))
     except (TypeError, ValueError):
-        value = 24 * 60 * 60
-    return max(300, min(value, 24 * 60 * 60))
+        value = 90 * 24 * 60 * 60
+    return max(300, min(value, 365 * 24 * 60 * 60))
+
+
+def _labor_worker_token_recovery_grace_seconds() -> int:
+    try:
+        value = int(
+            str(
+                os.environ.get("SIGMA_LABOR_WORKER_TOKEN_RECOVERY_GRACE_SECONDS")
+                or 7 * 24 * 60 * 60
+            )
+        )
+    except (TypeError, ValueError):
+        value = 7 * 24 * 60 * 60
+    return max(0, min(value, 30 * 24 * 60 * 60))
 
 
 def _labor_worker_activation_url(request: Request, activation_code: str) -> str:
