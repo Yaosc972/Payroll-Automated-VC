@@ -296,9 +296,237 @@ _RULE_PACKAGE["version_history"] = [
 ]
 
 
+_RULE_PACKAGE_V1_1_1 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_1)
+_RULE_PACKAGE.update({
+    "version": "1.1.2",
+    "display_version": "DL-PAYROLL.v1.1.2",
+    "released_at": "2026-07-21",
+    "effective_from": "2026-07",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang.update({
+    "version": "DL-GONGLING.v1.0.1",
+    "effective_from": "2026-07",
+    "summary": "仅核算操作线人员，按工作地区、操作岗位、月初司龄及缺勤口径计算。",
+    "data_sources": [
+        "月考勤：工号、姓名、考勤月份、工作地区、部门、岗位、入职日期及排班出勤字段",
+        "缺勤字段：事假时数、病假时数、旷工时数/天数、排休请假时数/天数",
+    ],
+    "regions": [
+        {
+            "name": "东莞",
+            "rule": "中国操作部按已验证一线操作岗位发放，非操作线不纳入当前平台工龄奖核算。",
+            "formula": "150元×司龄，封顶600元，再按缺勤和入离职折算",
+            "details": [
+                "操作享有岗位：安检员、操作文员、操作员、叉车司机、查验员、监察员。",
+                "保洁、组长、主管及未命中岗位不发放。",
+            ],
+        },
+        {
+            "name": "嘉善 / 义乌",
+            "rule": "按已验证实际工资表，操作条线不发放工龄奖。",
+            "formula": "0元",
+            "details": ["工作地区为嘉善或义乌时直接返回0。"],
+        },
+        {
+            "name": "晋江",
+            "rule": "操作员、门禁员享有，其他操作岗位不发放。",
+            "formula": "50元×司龄，封顶150元，再按缺勤和入离职折算",
+            "details": [
+                "工龄计算、56小时缺勤门槛和入离职扣减与通用规则一致。",
+                "最终金额按Excel ROUND保留2位小数。",
+            ],
+        },
+    ],
+    "verification": [
+        "2026年5月东莞操作考勤798人按线下公式重算逐行一致",
+    ],
+})
+_gonglingjiang["common_rules"].insert(0, "当前平台仅开放东莞、嘉善/义乌、晋江操作线工龄奖；历史兼容口径不参与资格或金额判断。")
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.1",
+    "released_at": "2026-07-21",
+    "changes": "仅保留明确地区操作线规则，非操作线及历史兼容规则转为本地暂缓归档。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.2",
+        "display_version": "DL-PAYROLL.v1.1.2",
+        "status": "当前版本",
+        "released_at": "2026-07-21",
+        "effective_from": "2026-07",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "工龄奖仅保留明确地区操作线规则，其他历史兼容规则转为本地暂缓归档。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_1["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_1["version_history"][1:],
+]
+
+_RULE_PACKAGE_V1_1_2 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_2)
+_RULE_PACKAGE.update({
+    "version": "1.1.3",
+    "display_version": "DL-PAYROLL.v1.1.3",
+    "released_at": "2026-07-22",
+    "effective_from": "2026-02",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang.update({
+    "version": "DL-GONGLING.v1.0.2",
+    "effective_from": "2026-02",
+    "summary": "核算操作线、东莞第四纵队揽收、东莞头程运营部/FBU及华西/华东/东南兼容区域人员，按月初司龄和缺勤口径计算。",
+    "data_sources": [
+        "月考勤：工号、姓名、考勤月份、工作地区、部门、岗位、入职日期及排班出勤字段",
+        "缺勤字段：事假时数、病假时数、旷工时数/天数、排休请假时数/天数",
+        "业务参数：东莞第四纵队揽收人员当月HRBP发放工号名单",
+    ],
+    "regions": [
+        {
+            "name": "东莞操作",
+            "rule": "中国操作部按已验证一线操作岗位发放。",
+            "formula": "150元×司龄，封顶600元，再按缺勤和入离职折算",
+            "details": [
+                "操作享有岗位：安检员、操作文员、操作员、叉车司机、查验员、监察员。",
+                "保洁、组长、主管及未命中岗位不发放。",
+            ],
+        },
+        {
+            "name": "东莞第四纵队揽收",
+            "rule": "二级部门为第四纵队，工号命中当月HRBP发放名单，且岗位不包含组长。",
+            "formula": "150元×司龄，封顶600元，再按缺勤和入离职折算",
+            "details": [
+                "未提供名单时进入异常复核。",
+                "已提供名单但工号未命中，或岗位包含组长时按0处理。",
+            ],
+        },
+        {
+            "name": "东莞头程运营部/FBU",
+            "rule": "工作地区为东莞且二级部门为头程运营部。",
+            "formula": "100元×司龄，封顶500元，再按缺勤和入离职折算",
+            "details": ["无需HRBP发放名单，命中部门后按FBU标准计算。"],
+        },
+        {
+            "name": "嘉善 / 义乌",
+            "rule": "按已验证实际工资表，操作条线不发放工龄奖。",
+            "formula": "0元",
+            "details": ["工作地区为嘉善或义乌时直接返回0。"],
+        },
+        {
+            "name": "晋江",
+            "rule": "操作员、门禁员享有，其他操作岗位不发放。",
+            "formula": "50元×司龄，封顶150元，再按缺勤和入离职折算",
+            "details": [
+                "工龄计算、56小时缺勤门槛和入离职扣减与通用规则一致。",
+                "最终金额按Excel ROUND保留2位小数。",
+            ],
+        },
+        {
+            "name": "华西 / 华东 / 东南兼容区域",
+            "rule": "按华东枢纽、华东揽收组、东南枢纽、华西区操作部、闽赣揽收组、华东B2B枢纽的部门及岗位名单判断。",
+            "formula": "50元×司龄，封顶150元，再按缺勤和入离职折算",
+            "details": [
+                "操作享有岗位：操作员、内勤专员、中转员、门禁员、安检员、操作文员。",
+                "揽收享有岗位：揽收操作员、内勤专员。",
+                "组长、主管、经理及HRBP专员等非一线岗位不发放。",
+            ],
+        },
+    ],
+    "verification": [
+        "2026年2月莞深广珠FBU实际工资表711人逐行一致",
+        "2026年3月莞深广珠FBU实际工资表756人中755人一致，剩余1人为待确认的重新入职边界",
+        "2026年5月东莞操作考勤798人按线下公式重算逐行一致",
+        "2026年2月华西华东东南实际工资表287人逐行一致",
+        "2026年3月华西华东东南实际工资表338人逐行一致",
+    ],
+})
+_gonglingjiang["common_rules"][0] = "当前平台开放操作线、东莞第四纵队揽收、东莞头程运营部/FBU及华西/华东/东南兼容区域工龄奖。"
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.2",
+    "released_at": "2026-07-22",
+    "changes": "恢复东莞第四纵队揽收、东莞头程运营部/FBU及华西/华东/东南兼容区域口径。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.3",
+        "display_version": "DL-PAYROLL.v1.1.3",
+        "status": "当前版本",
+        "released_at": "2026-07-22",
+        "effective_from": "2026-02",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "恢复东莞第四纵队揽收、头程运营部/FBU及华西/华东/东南兼容区域工龄奖。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_2["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_2["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_1_3 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_3)
+_RULE_PACKAGE.update({
+    "version": "1.1.4",
+    "display_version": "DL-PAYROLL.v1.1.4",
+    "released_at": "2026-07-22",
+    "effective_from": "2026-02",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang["version"] = "DL-GONGLING.v1.0.3"
+_gonglingjiang["summary"] = "按地区、部门岗位、月初司龄和缺勤口径核算；仅识别到东莞第四纵队时要求维护含工号、姓名的揽收线工龄奖名单。"
+_gonglingjiang["data_sources"] = [
+    item.replace("东莞第四纵队揽收人员当月HRBP发放工号名单", "东莞第四纵队揽收线工龄奖名单（工号、姓名）")
+    for item in _gonglingjiang["data_sources"]
+]
+collection_region = next(region for region in _gonglingjiang["regions"] if region["name"] == "东莞第四纵队揽收")
+collection_region["rule"] = "仅当月考勤识别到东莞第四纵队时要求维护揽收线工龄奖名单；工号命中名单且岗位不包含组长。"
+collection_region["details"] = [
+    "名单同时保存工号和姓名，工号参与计算、姓名用于人工复核。",
+    "未识别到东莞第四纵队时无需维护名单；已识别但未维护完整名单时阻止提交。",
+    "工号未命中名单或岗位包含组长时按0处理。",
+]
+dongguan_operation = next(region for region in _gonglingjiang["regions"] if region["name"] == "东莞操作")
+dongguan_operation["details"] = [
+    "操作享有岗位：安检员、操作文员、操作员、叉车司机、揽收充电司机、查验员、监察员、理货员。",
+    "岗位资格不按职级判断；保洁、组长、主管及未命中岗位不发放。",
+]
+_gonglingjiang["verification"].insert(0, "2026年6月线下工龄奖复核确认东莞理货员享有，补齐后原8名理货员差异归零。")
+_gonglingjiang["pending_confirmations"].append(
+    "待薪酬确认：线下规则图列明东莞文员享有，但OWHN12121张春燕2026年6月已满1年且无折算缺勤，线下工龄奖仍为0；确认前平台暂不开放文员。"
+)
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.3",
+    "released_at": "2026-07-22",
+    "changes": "补齐东莞操作享有岗位；揽收线工龄奖名单增加姓名，并改为仅识别到东莞第四纵队时要求维护。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.4",
+        "display_version": "DL-PAYROLL.v1.1.4",
+        "status": "当前版本",
+        "released_at": "2026-07-22",
+        "effective_from": "2026-02",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "补齐东莞操作岗位，并完善按部门触发、包含工号姓名的揽收线工龄奖名单管理。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_3["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_3["version_history"][1:],
+]
+
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
     _RULE_PACKAGE_V1_1_0["version"]: _RULE_PACKAGE_V1_1_0,
+    _RULE_PACKAGE_V1_1_1["version"]: _RULE_PACKAGE_V1_1_1,
+    _RULE_PACKAGE_V1_1_2["version"]: _RULE_PACKAGE_V1_1_2,
+    _RULE_PACKAGE_V1_1_3["version"]: _RULE_PACKAGE_V1_1_3,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 

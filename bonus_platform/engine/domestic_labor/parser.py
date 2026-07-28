@@ -726,7 +726,13 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             if self.housing is None:
                 raise ValueError("外宿补贴核算缺少住宿名单；即使当月无人住宿，也请上传带表头的空名单")
 
-        return {
+        collection_seniority_rows = [
+            row for row in self.monthly.rows
+            if str(row.get("工作地区", "")).strip() == "东莞"
+            and str(row.get("二级部门名称", "")).strip() == "第四纵队"
+        ]
+
+        summary = {
             "file_count": len(self.parsers),
             "monthly_rows": self.monthly.row_count,
             "daily_rows": self.daily.row_count if self.daily else 0,
@@ -734,6 +740,20 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             "present_types": sorted(self._present_types),
             "sources": self._source_summary,
         }
+        if "gonglingjiang" in engine_set:
+            summary.update({
+                "requires_collection_seniority_roster": bool(collection_seniority_rows),
+                "collection_seniority_employee_count": len(collection_seniority_rows),
+                "collection_seniority_employees": [
+                {
+                    "employee_id": str(row.get("工号", "")).strip(),
+                    "employee_name": str(row.get("姓名", "")).strip(),
+                    "position": str(row.get("岗位名称", "")).strip(),
+                }
+                for row in collection_seniority_rows
+                ],
+            })
+        return summary
 
 
 class DongguanDataLoader:

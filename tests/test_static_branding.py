@@ -914,10 +914,11 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
     assert "应发外宿补贴" in js
 
 
-def test_domestic_labor_subject_cards_are_labeled_as_operations_line():
+def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
 
-    assert html.count('class="dl-subject-line-tag">操作线</span>') == 4
+    assert html.count('class="dl-subject-line-tag">操作线</span>') == 3
+    assert html.count('class="dl-subject-line-tag">全区域</span>') == 1
     assert ".dl-subject-line-tag" in html
 
 

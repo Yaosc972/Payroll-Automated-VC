@@ -1341,6 +1341,115 @@
         font-weight: 600;
       }
 
+      .dl-parameter-panel {
+        border-bottom: 1px solid var(--dl-line);
+        background: #ffffff;
+      }
+
+      .dl-parameter-panel summary {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 44px;
+        padding: 10px 14px;
+        color: var(--dl-ink);
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .dl-parameter-panel summary::-webkit-details-marker { display: none; }
+      .dl-parameter-panel summary::before { content: '›'; color: var(--dl-muted); font-size: 18px; transform: rotate(0deg); transition: transform 0.16s ease; }
+      .dl-parameter-panel[open] summary::before { transform: rotate(90deg); }
+      .dl-parameter-panel summary strong { font-variant-numeric: tabular-nums; }
+
+      .dl-parameter-panel-body {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 0 14px 14px 38px;
+      }
+
+      .dl-parameter-list { display: flex; flex: 1; flex-wrap: wrap; gap: 6px; min-width: 0; }
+
+      .dl-upload-parameter {
+        margin: 14px 0;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
+      }
+
+      .dl-upload-parameter-body {
+        display: grid;
+        gap: 8px;
+        padding: 0 14px 14px 38px;
+      }
+
+      .dl-roster-table-wrap {
+        max-height: 320px;
+        overflow: auto;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .dl-roster-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      .dl-roster-id-col { width: 42%; }
+
+      .dl-roster-table th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--dl-line-strong);
+        background: #f8fafc;
+        color: var(--dl-muted);
+        font-size: 12px;
+        font-weight: 700;
+        text-align: left;
+      }
+
+      .dl-roster-table td {
+        padding: 0;
+        border-bottom: 1px solid var(--dl-line);
+        border-right: 1px solid var(--dl-line);
+      }
+
+      .dl-roster-table td:last-child { border-right: 0; }
+      .dl-roster-table tr:last-child td { border-bottom: 0; }
+
+      .dl-roster-input {
+        width: 100%;
+        min-height: 38px;
+        border: 0;
+        padding: 8px 12px;
+        background: transparent;
+        color: var(--dl-ink);
+        font: inherit;
+        outline: none;
+      }
+
+      .dl-roster-input:focus { box-shadow: inset 0 0 0 2px var(--dl-accent); }
+
+      .dl-roster-name-cell { display: flex; align-items: center; min-width: 0; }
+      .dl-roster-name-cell .dl-roster-input { flex: 1; min-width: 0; }
+
+      .dl-roster-remove {
+        flex: 0 0 34px;
+        width: 34px;
+        height: 34px;
+        margin-right: 2px;
+        color: var(--dl-muted);
+        font-size: 18px;
+      }
+
+      .dl-roster-remove:hover { color: var(--dl-danger); background: var(--dl-danger-soft); }
+      .dl-roster-add { justify-self: start; }
+
       .dl-segment.compact {
         min-height: 28px;
         padding: 4px 8px;
@@ -2514,7 +2623,7 @@
                   </button>
                   <div class="dl-subject-secondary">
                     <button class="dl-subject-card primary" data-subject-entry="gonglingjiang" type="button">
-                      <span class="dl-subject-line-tag">操作线</span>
+                      <span class="dl-subject-line-tag">全区域</span>
                       <span class="dl-subject-kicker">工龄奖 · 已开放</span>
                       <strong>工龄奖核算</strong>
                       <span>按地区、岗位、工龄和缺勤口径核算，支持当月发放名单复核。</span>

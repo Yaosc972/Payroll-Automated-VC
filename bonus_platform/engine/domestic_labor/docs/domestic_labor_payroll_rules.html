@@ -686,7 +686,7 @@
       <div class="section-head">
         <div>
           <h2>5. 工龄奖</h2>
-          <p class="section-sub">按部门类别、工作地区、岗位、HRBP 名单和司龄确定应发，再按请假与入离职缺勤折算。</p>
+          <p class="section-sub">按工作地区、部门岗位、揽收线工龄奖名单和司龄确定应发，再按请假与入离职缺勤折算。</p>
         </div>
         <span class="chip strong">科目字段：gonglingjiang</span>
       </div>
@@ -694,7 +694,7 @@
         <div class="grid-2">
           <div class="card">
             <h3>涉及表和字段</h3>
-            <p><span class="tag">月报/月考勤</span><span class="tag">参数：HRBP名单</span></p>
+            <p><span class="tag">月报/月考勤</span><span class="tag">参数：揽收线工龄奖名单</span></p>
             <p><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工时数/旷工天数</code>、<code>排休请假时数/排休请假天数</code>、<code>备注</code>。</p>
           </div>
           <div class="card">
@@ -716,13 +716,13 @@
           <tbody>
             <tr>
               <td>操作归属部门</td>
-              <td><code>二级部门名称</code> 在 <code>东南枢纽</code>、<code>华东B2B枢纽</code>、<code>华东枢纽</code>、<code>中国操作部</code>，或 <code>一级部门名称=东南区</code> 且 <code>二级部门名称=HRBP部</code>。</td>
+              <td>工作地区明确时优先按东莞、嘉善/义乌、晋江规则判断；其他情况再按华西/华东/东南兼容区域的部门与岗位名单判断。</td>
               <td>进入工作地区规则。</td>
               <td>进入工作地区规则。</td>
             </tr>
             <tr>
               <td>东莞 / 操作</td>
-              <td>岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>查验员</code>、<code>监察员</code>，且不在不享有岗位清单。</td>
+              <td>岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>、<code>理货员</code>，且不在不享有岗位清单；不按职级判断。线下规则图列有“文员”，但 2026 年 6 月实际结果存在反例，确认前暂不开放。</td>
               <td>150 元/年</td>
               <td>600 元</td>
             </tr>
@@ -745,20 +745,20 @@
               <td>600 元</td>
             </tr>
             <tr>
-              <td>默认莞深广珠 / 揽收</td>
-              <td><code>二级部门名称=第四纵队</code>，工号在 HRBP 发放名单内，且岗位不含“组长”。</td>
+              <td>东莞第四纵队 / 揽收</td>
+              <td>仅当识别到<code>工作地区=东莞</code>、<code>二级部门名称=第四纵队</code>时要求维护揽收线工龄奖名单；名单保存工号和姓名，工号命中且岗位不含“组长”时享有。</td>
               <td>150 元/年</td>
               <td>600 元</td>
             </tr>
             <tr>
-              <td>默认莞深广珠 / FBU</td>
-              <td><code>二级部门名称=头程运营部</code>。</td>
+              <td>东莞头程运营部 / FBU</td>
+              <td><code>工作地区=东莞</code>且<code>二级部门名称=头程运营部</code>。</td>
               <td>100 元/年</td>
               <td>500 元</td>
             </tr>
             <tr>
-              <td>WES 区域</td>
-              <td>系统只在批次首行 <code>二级部门名称</code> 包含华东/华西关键字时自动识别为 WES；按 WES 部门映射和岗位名单计算。</td>
+              <td>华西 / 华东 / 东南兼容区域</td>
+              <td>按华东枢纽、华东揽收组、东南枢纽、华西区操作部、闽赣揽收组、华东B2B枢纽的部门和岗位名单判断。</td>
               <td>50 元/年</td>
               <td>150 元</td>
             </tr>
@@ -877,7 +877,7 @@
             </tr>
             <tr>
               <td>工龄奖</td>
-              <td>操作、揽收、FBU、WES 部门映射与岗位名单。</td>
+              <td>操作线工作地区、部门映射与岗位名单。</td>
               <td>资格不满足直接为 0。</td>
             </tr>
             <tr>
@@ -964,7 +964,7 @@
             <tr>
               <td>工龄奖</td>
               <td><code>工号</code>、<code>姓名</code>、<code>一级部门名称</code>、<code>二级部门名称</code>、<code>岗位名称</code>、<code>工作地区</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>排班天数</code>、<code>实际在职工作日天数</code>、<code>正班出勤天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>旷工时数/旷工天数</code>、<code>排休请假时数/排休请假天数/排休请假</code>、<code>备注</code></td>
-              <td>参数：HRBP 发放工号名单。</td>
+              <td>参数：揽收线工龄奖名单（工号、姓名），仅识别到东莞第四纵队时要求维护。</td>
             </tr>
           </tbody>
         </table>

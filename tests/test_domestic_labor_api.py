@@ -251,8 +251,18 @@ def _gonglingjiang_data() -> bytes:
     """工龄奖 API 工作流测试数据"""
     return _create_test_excel({
         "月考勤": [
-            ["工号", "姓名", "考勤月份", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "正班出勤天数", "事假时数", "病假时数", "旷工天数", "排休请假天数"],
-            ["OWHN001", "张三", "202606", "第四纵队", "内勤专员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
+            ["工号", "姓名", "考勤月份", "工作地区", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "正班出勤天数", "事假时数", "病假时数", "旷工天数", "排休请假天数"],
+            ["OWHN001", "张三", "202606", "东莞", "中国操作部", "操作员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
+        ],
+    })
+
+
+def _gonglingjiang_collection_data() -> bytes:
+    """东莞第四纵队工龄奖名单校验数据"""
+    return _create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份", "工作地区", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "正班出勤天数", "事假时数", "病假时数", "旷工天数", "排休请假天数"],
+            ["OWHN001", "张三", "202606", "东莞", "第四纵队", "操作员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
         ],
     })
 
@@ -324,7 +334,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.1.1"
+    assert package["version"] == "1.1.4"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie", "gonglingjiang"}
@@ -333,7 +343,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.1.1"
+    assert package["version_history"][0]["version"] == "1.1.4"
     assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie", "gonglingjiang"]
 
 
@@ -347,6 +357,10 @@ def test_rule_package_publishes_verified_seniority_but_not_attendance_bonus():
     assert "全勤奖" not in payload
     gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
     assert gongling["status"] == "已验证"
+    assert gongling["version"] == "DL-GONGLING.v1.0.3"
+    assert "第四纵队" in str(gongling)
+    assert "头程运营部" in str(gongling)
+    assert "华西 / 华东 / 东南兼容区域" in str(gongling)
     assert gongling["pending_confirmations"]
     assert "OWHN2187" in gongling["pending_confirmations"][0]
 
@@ -362,6 +376,14 @@ def test_rule_package_supports_immutable_version_lookup():
     assert {subject["id"] for subject in published.json()["subjects"]} == {"canbu", "waisu_butie"}
     assert missing.status_code == 404
     assert missing.json()["detail"] == "规则包版本不存在: 9.9.9"
+
+
+def test_rule_package_preserves_operation_only_intermediate_version():
+    package = TestClient(app).get("/api/domestic-labor/rule-package", params={"version": "1.1.2"}).json()
+    gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
+
+    assert "第四纵队" not in str(gongling)
+    assert "头程运营部" not in str(gongling)
 
 
 def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
@@ -675,7 +697,7 @@ def test_domestic_direct_upload_complete_materializes_and_calculates(monkeypatch
 
     assert response.status_code == 200
     assert response.json()["status"] == "已完成"
-    assert calculated[0][2:] == ("202606", ["quanqinjiang"], None, [{"工号": "OWHN001"}])
+    assert calculated[0][2:] == ("202606", ["quanqinjiang"], None, ["OWHN001"])
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
@@ -1358,7 +1380,7 @@ def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
         data={
             "engines": "gonglingjiang",
             "attendance_month": "202606",
-            "hrbp_list": '["OWHN001"]',
+            "hrbp_list": '[{"employee_id":"OWHN001","employee_name":"张三"}]',
         },
     )
     assert create_response.status_code == 200
@@ -1373,6 +1395,9 @@ def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
             break
 
     assert metadata["status"] == "已完成"
+    assert metadata["collectionSeniorityRoster"] == [{"employee_id": "OWHN001", "employee_name": "张三"}]
+    assert metadata["collectionSeniorityRosterCount"] == 1
+    assert metadata["inputSummary"]["requires_collection_seniority_roster"] is False
     row = metadata["results"][0]
     subject_detail = row["subject_details"]["gonglingjiang"]
     explanation = subject_detail["audit_explanation"]
@@ -1384,6 +1409,65 @@ def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
     assert explanation["intermediate_values"]["工龄(年)"] == 3
     assert row["exceptions"] == []
 
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_gonglingjiang_api_rejects_invalid_hrbp_list():
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("gongling.xlsx", _gonglingjiang_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={
+            "engines": "gonglingjiang",
+            "attendance_month": "202606",
+            "hrbp_list": '{"OWHN001": true}',
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "揽收线工龄奖名单必须为人员列表"
+
+
+def test_gonglingjiang_api_requires_named_roster_only_for_fourth_column():
+    client = TestClient(app)
+
+    missing_name = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("collection.xlsx", _gonglingjiang_collection_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={
+            "engines": "gonglingjiang",
+            "attendance_month": "202606",
+            "hrbp_list": '[{"employee_id":"OWHN001","employee_name":""}]',
+        },
+    )
+
+    assert missing_name.status_code == 400
+    assert missing_name.json()["detail"] == "已识别到东莞第四纵队，请维护包含工号和姓名的揽收线工龄奖名单"
+
+    accepted = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("collection.xlsx", _gonglingjiang_collection_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={
+            "engines": "gonglingjiang",
+            "attendance_month": "202606",
+            "hrbp_list": '[{"employee_id":"OWHN001","employee_name":"张三"}]',
+        },
+    )
+    assert accepted.status_code == 200
+    run_id = accepted.json()["run_id"]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.25)
+        metadata = client.get(f"/api/domestic-labor/runs/{run_id}").json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    assert metadata["inputSummary"]["requires_collection_seniority_roster"] is True
+    assert metadata["inputSummary"]["collection_seniority_employee_count"] == 1
+    assert metadata["results"][0]["gonglingjiang"] == 450
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
@@ -2204,57 +2288,66 @@ def test_waisu_butie_active_housing_and_absence_over_56_gets_zero():
     assert result.details["reason"] == "在宿且缺勤满56小时"
 
 
-def test_gonglingjiang_returns_structured_exception_for_missing_hrbp_list():
-    """工龄奖缺少 HRBP 名单时保留 warning，并返回结构化异常"""
-    result = GongLingJiangEngine().calculate(_gongling_collection_employee(), hrbp_list=[], region="gsdg")
+def test_gonglingjiang_fourth_column_collection_uses_hrbp_list():
+    employee = {**_gongling_employee(), "二级部门名称": "第四纵队", "岗位名称": "内勤专员"}
 
-    assert result.amount == 0
-    assert "请提供本月HRBP发放名单" in result.warnings[0]
-    assert result.details["exceptions"][0]["code"] == "MISSING_HRBP_LIST"
-    assert result.details["exceptions"][0]["level"] == "warning"
-    assert result.details["exceptions"][0]["subject"] == "gonglingjiang"
-    assert "suggested_action" in result.details["exceptions"][0]
-    assert result.details["audit_explanation"]["rule_name"] == "工龄奖资格判断"
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"])
 
-
-def test_gonglingjiang_returns_audit_explanation_for_hrbp_match():
-    """工龄奖发放结果包含审计解释、中间值和计算步骤"""
-    result = GongLingJiangEngine().calculate(
-        _gongling_collection_employee(),
-        hrbp_list=["OWHN001"],
-        region="gsdg",
-    )
-
-    explanation = result.details["audit_explanation"]
     assert result.amount == 450
-    assert explanation["subject"] == "gonglingjiang"
-    assert explanation["amount"] == 450
-    assert explanation["inputs"]["HRBP名单人数"] == 1
-    assert explanation["intermediate_values"]["工龄(年)"] == 3
-    assert explanation["intermediate_values"]["标准"] == 150
-    assert explanation["intermediate_values"]["上限"] == 600
-    assert explanation["steps"]
-    assert result.details["exceptions"] == []
+    assert result.details["部门类别"] == "揽收"
+    assert result.details["标准"] == 150
+    assert result.details["上限"] == 600
 
 
-def test_gonglingjiang_collection_employee_outside_hrbp_list_is_normal_zero():
-    """HRBP 名单存在但员工不在名单内时，正常不发放且不进入异常队列"""
-    result = GongLingJiangEngine().calculate(
-        _gongling_collection_employee(),
-        hrbp_list=["OWHN999"],
-        region="gsdg",
-    )
+def test_gonglingjiang_fourth_column_collection_requires_hrbp_list():
+    employee = {**_gongling_employee(), "二级部门名称": "第四纵队", "岗位名称": "内勤专员"}
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[])
 
     assert result.amount == 0
-    assert result.details["reason"] == "不符合工龄奖标准"
-    assert result.details["exceptions"] == []
-    assert result.warnings == []
+    assert result.details["exceptions"][0]["code"] == "MISSING_HRBP_LIST"
+
+
+def test_gonglingjiang_headhaul_fbu_uses_fbu_rate_and_cap():
+    employee = {**_gongling_employee(), "二级部门名称": "头程运营部"}
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 300
+    assert result.details["部门类别"] == "FBU"
+    assert result.details["标准"] == 100
+    assert result.details["上限"] == 500
+
+
+@pytest.mark.parametrize(
+    ("department", "position"),
+    [
+        ("华东枢纽", "操作员"),
+        ("东南枢纽", "操作员"),
+        ("华西区操作部", "操作员"),
+        ("闽赣揽收组", "内勤专员"),
+        ("华东B2B枢纽", "操作员"),
+    ],
+)
+def test_gonglingjiang_keeps_wes_compatibility_route(department, position):
+    employee = {
+        **_gongling_employee(),
+        "工作地区": "",
+        "二级部门名称": department,
+        "岗位名称": position,
+    }
+
+    result = GongLingJiangEngine().calculate(employee, region="wes")
+
+    assert result.amount == 150
+    assert result.details["标准"] == 50
+    assert result.details["上限"] == 150
 
 
 def test_gonglingjiang_uses_raw_absence_fields_instead_of_leave_hours():
     """工龄奖缺勤折算不读取月报聚合的请假时数，按规则卡原始字段计算"""
     employee = {
-        **_gongling_collection_employee(),
+        **_gongling_employee(),
         "请假时数": 80,
         "事假时数": 0,
         "病假时数": 0,
@@ -2272,7 +2365,7 @@ def test_gonglingjiang_uses_raw_absence_fields_instead_of_leave_hours():
 def test_gonglingjiang_absence_components_trigger_proration():
     """事假+病假+旷工天数×8+排休请假天数×8 达到56小时后按天折算"""
     employee = {
-        **_gongling_collection_employee(),
+        **_gongling_employee(),
         "事假时数": 8,
         "病假时数": 8,
         "旷工天数": 1,
@@ -2362,7 +2455,7 @@ def test_excel_parser_preserves_first_nonempty_duplicate_header_value(tmp_path):
 def test_gonglingjiang_keeps_negative_amount_from_offline_formula():
     """线下工资表未设置最低0元兜底，折算结果可为负数"""
     employee = {
-        **_gongling_collection_employee(),
+        **_gongling_employee(),
         "实际在职工作日天数": -10,
     }
     result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"], region="gsdg")
@@ -2374,7 +2467,7 @@ def test_gonglingjiang_keeps_negative_amount_from_offline_formula():
 def test_gonglingjiang_full_month_personal_leave_is_zero():
     """正班出勤为0且存在事假时按线下工资表人工归零口径处理"""
     employee = {
-        **_gongling_collection_employee(),
+        **_gongling_employee(),
         "正班出勤天数": 0,
         "事假时数": 128,
         "排班天数": 20,
@@ -2405,6 +2498,36 @@ def test_gonglingjiang_dongguan_operation_uses_work_area_position_rules():
     assert explanation["inputs"]["工作地区"] == "东莞"
     assert explanation["intermediate_values"]["标准"] == 150
     assert explanation["intermediate_values"]["上限"] == 600
+
+
+@pytest.mark.parametrize("position", ["理货员", "揽收充电司机"])
+def test_gonglingjiang_dongguan_operation_includes_offline_eligible_positions(position):
+    """东莞线下规则表明确列出的岗位均享有工龄奖，资格不依赖职级"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": position,
+        "职级": "",
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 450
+    assert result.details["audit_explanation"]["intermediate_values"]["标准"] == 150
+
+
+def test_gonglingjiang_dongguan_clerk_stays_pending_confirmation():
+    """规则图与6月线下结果冲突，文员确认前不开放"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "文员",
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "东莞操作岗位不享有工龄奖"
 
 
 def test_gonglingjiang_dongguan_operation_excludes_non_allowed_position():
@@ -2523,12 +2646,14 @@ def test_gonglingjiang_operation_does_not_deduct_work_injury_days():
     assert "工伤" not in " ".join(explanation["steps"])
 
 
-def _gongling_collection_employee() -> dict:
+def _gongling_employee() -> dict:
     return {
         "工号": "OWHN001",
         "姓名": "张三",
-        "二级部门名称": "第四纵队",
-        "岗位名称": "内勤专员",
+        "一级部门名称": "莞深操作",
+        "二级部门名称": "中国操作部",
+        "岗位名称": "操作员",
+        "工作地区": "东莞",
         "入职日期": date(2023, 1, 1),
         "考勤月份": "202606",
         "排班天数": 26,

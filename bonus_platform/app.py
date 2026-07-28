@@ -12842,15 +12842,34 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                         "error": f"数据文件校验失败：{exc}",
                         "errorCode": "INPUT_VALIDATION_FAILED",
                     })
+                collection_roster = list(
+                    (initial_metadata or {}).get("collectionSeniorityRoster") or []
+                )
+                if (
+                    "gonglingjiang" in engines
+                    and input_summary.get("requires_collection_seniority_roster")
+                    and (
+                        not collection_roster
+                        or any(not str(item.get("employee_name") or "").strip() for item in collection_roster)
+                    )
+                ):
+                    return update_payroll_metadata(run_id, {
+                        "status": "失败",
+                        "error": "已识别到东莞第四纵队，请维护包含工号和姓名的揽收线工龄奖名单",
+                        "errorCode": "INPUT_VALIDATION_FAILED",
+                        "inputSummary": input_summary,
+                    })
             monthly = loader.monthly
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
 
-            # Region auto-detection
             region = "default"
             if monthly.rows:
                 dept2 = str(monthly.rows[0].get("二级部门名称", ""))
-                if any(k in dept2 for k in ("华东枢纽", "华东揽收组", "华西枢纽", "华西揽收组")):
+                if any(k in dept2 for k in (
+                    "华东枢纽", "华东揽收组", "东南枢纽", "华西区操作部",
+                    "华西枢纽", "华西揽收组", "闽赣揽收组", "华东B2B枢纽",
+                )):
                     region = "wes"
 
             engine_started = monotonic()
@@ -12937,6 +12956,33 @@ def list_domestic_labor_runs() -> dict:
     }
 
 
+def _normalize_domestic_collection_roster(raw_roster: Any) -> list[dict]:
+    if raw_roster in (None, ""):
+        return []
+    if not isinstance(raw_roster, list):
+        raise HTTPException(400, "揽收线工龄奖名单必须为人员列表")
+    collection_roster = []
+    seen_ids = set()
+    for item in raw_roster:
+        if isinstance(item, str):
+            employee_id = item.strip()
+            employee_name = ""
+        elif isinstance(item, dict):
+            employee_id = str(
+                item.get("employee_id") or item.get("employeeId") or item.get("工号") or ""
+            ).strip()
+            employee_name = str(
+                item.get("employee_name") or item.get("employeeName") or item.get("姓名") or ""
+            ).strip()
+        else:
+            raise HTTPException(400, "揽收线工龄奖名单人员格式错误")
+        if not employee_id or employee_id in seen_ids:
+            continue
+        seen_ids.add(employee_id)
+        collection_roster.append({"employee_id": employee_id, "employee_name": employee_name})
+    return collection_roster
+
+
 @app.post("/api/domestic-labor/runs")
 async def create_domestic_labor_run(files: list[UploadFile] = File(None),
                                      file: UploadFile = File(None), engines: str = Body(""),
@@ -12958,6 +13004,14 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         if e not in valid_engines:
             raise HTTPException(400, f"未知引擎: {e}")
 
+    parsed_hrbp = []
+    if hrbp_list.strip():
+        try:
+            parsed_hrbp = __import__("json").loads(hrbp_list)
+        except Exception as exc:
+            raise HTTPException(400, "第四纵队揽收发放名单格式错误") from exc
+    collection_roster = _normalize_domestic_collection_roster(parsed_hrbp)
+
     # Save uploaded file
     DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
     run = create_payroll_run({
@@ -12978,14 +13032,6 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
                 target.write(chunk)
         saved_paths.append(file_path)
 
-    # Parse hrbp_list if provided
-    hrbp = None
-    if hrbp_list.strip():
-        try:
-            hrbp = __import__("json").loads(hrbp_list)
-        except Exception:
-            pass
-
     try:
         with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None) as loader:
             input_summary = loader.validate_inputs(engine_list, attendance_month)
@@ -12993,6 +13039,15 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         message = f"数据文件校验失败：{exc}"
         shutil.rmtree(run_dir, ignore_errors=True)
         raise HTTPException(400, message) from exc
+
+    requires_collection_roster = bool(input_summary.get("requires_collection_seniority_roster"))
+    if requires_collection_roster and (
+        not collection_roster or any(not item["employee_name"] for item in collection_roster)
+    ):
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(400, "已识别到东莞第四纵队，请维护包含工号和姓名的揽收线工龄奖名单")
+
+    hrbp = [item["employee_id"] for item in collection_roster]
 
     update_payroll_metadata(run_id, {
         "status": "已上传",
@@ -13002,6 +13057,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "savedFileNames": [path.name for path in saved_paths],
         "fileSize": sum(path.stat().st_size for path in saved_paths),
         "inputSummary": input_summary,
+        "collectionSeniorityRoster": collection_roster if "gonglingjiang" in engine_list else [],
+        "collectionSeniorityRosterCount": len(collection_roster) if "gonglingjiang" in engine_list else 0,
     })
     try:
         for file_path in saved_paths:
@@ -13182,9 +13239,8 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         payroll_logger.exception("Failed to materialize direct domestic labor upload %s", run_id)
         raise HTTPException(503, "读取已上传文件失败，请稍后重试。") from exc
 
-    hrbp = payload.get("hrbpList")
-    if hrbp is not None and not isinstance(hrbp, list):
-        raise HTTPException(400, "HRBP 名单格式不正确。")
+    collection_roster = _normalize_domestic_collection_roster(payload.get("hrbpList"))
+    hrbp = [item["employee_id"] for item in collection_roster]
     attendance_month = str(payload.get("attendanceMonth") or "")
     password = str(payload.get("password") or "") or None
     actual_size = sum(path.stat().st_size for path in file_paths)
@@ -13194,6 +13250,10 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         "filePath": str(file_paths[0]),
         "filePaths": [str(path) for path in file_paths],
         "fileSize": actual_size,
+        **({
+            "collectionSeniorityRoster": collection_roster,
+            "collectionSeniorityRosterCount": len(collection_roster),
+        } if "gonglingjiang" in engine_list else {}),
     }
     result = await asyncio.to_thread(
         _run_payroll_calculation,
@@ -13216,6 +13276,8 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         "message": "计算完成" if status == "已完成" else "计算失败",
         "error": result.get("error", ""),
         "input_summary": input_summary,
+        "collection_seniority_roster": collection_roster if "gonglingjiang" in engine_list else [],
+        "collection_seniority_roster_count": len(collection_roster) if "gonglingjiang" in engine_list else 0,
     }
 
 
