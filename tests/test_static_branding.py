@@ -645,6 +645,8 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert 'href="domestic-labor.html"' in html
     assert 'href="overseas-labor.html"' in html
     assert 'href="china-employee-payroll.html"' in html
+    assert "支持集团、WX考勤、月度规则计算与结果导出。" in html
+    assert "支持微信考勤" not in html
     assert 'href="admin.html"' in html
     assert "V0.5-UAT" in html
     assert "本机 OCR" in html
