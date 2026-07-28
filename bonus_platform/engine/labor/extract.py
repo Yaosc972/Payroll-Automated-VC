@@ -35,8 +35,8 @@ HOUR_RE = re.compile(r"^\d+(?:\.\d+)?$")
 PAY_CODE_RE = re.compile(r"^(?:Reg|OT|DT)$", re.IGNORECASE)
 TYPE_RE = re.compile(r"^(?:REG|OT|DT)$", re.IGNORECASE)
 MONEY_RE = re.compile(r"^\$?[\d,]+\.\d{2}\$?$")
-AI_PAGE_CACHE_VERSION = "v14"
-TOTALS_CACHE_VERSION = "v5"
+AI_PAGE_CACHE_VERSION = "v15"
+TOTALS_CACHE_VERSION = "v6"
 ProgressCallback = Callable[[Dict[str, Any]], None]
 
 
@@ -373,9 +373,14 @@ def _extract_invoice_total_from_text(page_text: str) -> float:
     signals over slower model extraction and over "pay after due date" amounts.
     """
     lines = [" ".join(line.split()) for line in (page_text or "").splitlines()]
+    authoritative_totals: List[float] = []
     totals: List[float] = []
 
     for line in lines:
+        if re.search(r"\bTOTAL\s+INVOICE\s+AMOUNT\b", line, re.IGNORECASE):
+            amounts = re.findall(r"\$?\s*[\d,]+\.\d{2}\$?", line)
+            if amounts:
+                authoritative_totals.append(parse_number(amounts[-1]))
         if re.search(r"\bTotals\b", line, re.IGNORECASE):
             amounts = re.findall(r"\$?\s*[\d,]+\.\d{2}\$?", line)
             if amounts:
@@ -440,6 +445,10 @@ def _extract_invoice_total_from_text(page_text: str) -> float:
                 and footer_values[2] <= footer_values[0]
             ):
                 totals.append(footer_values[0])
+
+    authoritative_candidates = [value for value in authoritative_totals if value > 0]
+    if authoritative_candidates:
+        return round(authoritative_candidates[-1], 2)
 
     candidates = [value for value in [*totals, *grand_totals] if value > 0]
     return round(candidates[-1], 2) if candidates else 0.0
@@ -532,13 +541,17 @@ def _candidate_score(rows: List[LaborLineItem], pages: List[Dict[str, Any]], exp
 def _candidate_is_confident(rows: List[LaborLineItem], pages: List[Dict[str, Any]], expected_rows: List[Dict[str, Any]] | None = None) -> bool:
     if not rows:
         return False
+    expected_count = _expected_employee_count(expected_rows)
+    if expected_count:
+        coverage = _candidate_employee_count(rows) / max(expected_count, 1)
+        if coverage < 0.85:
+            return False
+
     target_amount = _candidate_target_amount_from_pages(pages)
     if target_amount > 0:
         return abs(_candidate_total_amount(rows) - target_amount) <= max(0.10, round(target_amount * 0.00001, 2))
 
-    expected_count = _expected_employee_count(expected_rows)
     if expected_count:
-        coverage = _candidate_employee_count(rows) / max(expected_count, 1)
         return coverage >= 0.85 and _candidate_average_confidence(rows) >= 0.9
 
     return target_amount <= 0 and len(rows) >= 2 and _candidate_average_confidence(rows) >= 0.9
@@ -616,6 +629,15 @@ def extract_invoice_items(
     def _extract_rules_for_page(page: Dict[str, Any]) -> List[LaborLineItem]:
         """对单个页面尝试规则抽取"""
         rows = []
+        voyage_rows = _extract_voyage_invoice_rows(
+            page,
+            supplier=supplier,
+            period_start=period_start,
+            period_end=period_end,
+            currency=currency,
+        )
+        if voyage_rows:
+            return voyage_rows
         layout_plan = analyze_invoice_layout([page])
         rows.extend(
             extract_rows_from_layout_plan(
@@ -1273,6 +1295,14 @@ def _extract_rule_total_rows_from_page(
 
 def _has_deterministic_payable_rows(page: Dict[str, Any]) -> bool:
     if _extract_rule_total_rows_from_page(page):
+        return True
+    if _extract_voyage_invoice_rows(
+        page,
+        supplier="",
+        period_start="",
+        period_end="",
+        currency="",
+    ):
         return True
     return bool(
         _extract_tabular_invoice_rows(
@@ -3394,6 +3424,16 @@ def _json_array(content: str) -> List[Dict[str, Any]]:
 def _extract_with_rules(pages: List[Dict[str, Any]], supplier: str, period_start: str, period_end: str, currency: str) -> List[LaborLineItem]:
     rows: List[LaborLineItem] = []
     for page in pages:
+        voyage_rows = _extract_voyage_invoice_rows(
+            page,
+            supplier=supplier,
+            period_start=period_start,
+            period_end=period_end,
+            currency=currency,
+        )
+        if voyage_rows:
+            rows.extend(voyage_rows)
+            continue
         layout_plan = analyze_invoice_layout([page])
         rows.extend(
             extract_rows_from_layout_plan(
@@ -3727,6 +3767,55 @@ def _extract_elga_invoice_detail_rows(page: Dict[str, Any], supplier: str, perio
             pending_parts.append(compact)
 
     _flush()
+    return rows
+
+
+_VOYAGE_NUMBER = r"(?:-\$|-?\$?\d[\d,]*(?:\.\d+)?\$?)"
+_VOYAGE_ROW_RE = re.compile(
+    rf"^(?P<row>\d+)\s+"
+    rf"(?P<name>[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ\s.,'’()\-]*?)\s*"
+    rf"(?P<values>{_VOYAGE_NUMBER}(?:\s+{_VOYAGE_NUMBER}){{10}})$"
+)
+
+
+def _extract_voyage_invoice_rows(
+    page: Dict[str, Any],
+    supplier: str,
+    period_start: str,
+    period_end: str,
+    currency: str,
+) -> List[LaborLineItem]:
+    """Extract Voyage rows, including continuation pages without a repeated header."""
+    rows: List[LaborLineItem] = []
+    warehouse_id = _warehouse_id_from_filename(str(page.get("source_file") or "")) or _warehouse_id_from_text(
+        str(page.get("text") or "")
+    )
+    for raw_line in (page.get("text") or "").splitlines():
+        compact = " ".join(raw_line.split())
+        match = _VOYAGE_ROW_RE.match(compact)
+        if not match:
+            continue
+        values = [parse_number(value) for value in re.findall(_VOYAGE_NUMBER, match.group("values"))]
+        if len(values) != 11:
+            continue
+        rows.append(
+            LaborLineItem(
+                source_type="pdf_invoice",
+                source_file=str(page.get("source_file") or ""),
+                source_page_or_row=f"p{page.get('page') or 1}",
+                employee_id="",
+                employee_name_raw=match.group("name").strip(),
+                hours=round(values[1] + values[4] + values[7], 2),
+                amount=round(values[10], 2),
+                currency=currency,
+                confidence=0.99,
+                evidence_text=compact,
+                supplier=supplier,
+                period_start=period_start,
+                period_end=period_end,
+                warehouse_id=warehouse_id,
+            )
+        )
     return rows
 
 

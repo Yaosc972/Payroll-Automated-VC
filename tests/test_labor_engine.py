@@ -1403,6 +1403,120 @@ def test_fairway_invoice_total_prefers_totals_or_grand_total_over_late_payment()
     ) == 15089.88
 
 
+def test_voyage_invoice_total_prefers_explicit_invoice_amount_over_grand_total_hours():
+    assert _extract_invoice_total_from_text(
+        "\n".join(
+            [
+                "TOTAL REG: 2089.21",
+                "TOTAL OT: 104.73",
+                "TOTAL DT: 0.00",
+                "GRAND TOTAL: 2193.94",
+                "TOTAL INVOICE AMOUNT: $54,358.11",
+            ]
+        )
+    ) == 54358.11
+
+
+def test_voyage_numbered_rows_parse_without_repeated_header():
+    from bonus_platform.engine.labor.extract import _extract_voyage_invoice_rows
+
+    page = {
+        "source_file": "CA 7 46292.pdf",
+        "page": 2,
+        "text": "\n".join(
+            [
+                "31 Alison Guzman 17.5 8.00 22.40 179.20 0.10 33.60 3.36 0.00 44.8 0.00 182.56",
+                "32 Alison Guzman 17.5 8.00 22.40 179.20 0.07 33.60 2.35 0.00 44.8 0.00 181.55",
+            ]
+        ),
+    }
+
+    rows = _extract_voyage_invoice_rows(
+        page,
+        supplier="Voyage Employer Services",
+        period_start="2026-06-29",
+        period_end="2026-07-05",
+        currency="USD",
+    )
+
+    assert [(row.employee_name_raw, row.hours, row.amount, row.warehouse_id) for row in rows] == [
+        ("Alison Guzman", 8.1, 182.56, "7"),
+        ("Alison Guzman", 8.07, 181.55, "7"),
+    ]
+
+
+def test_voyage_rows_accept_zero_amount_dash_and_parenthesized_name():
+    from bonus_platform.engine.labor.extract import _extract_voyage_invoice_rows
+
+    page = {
+        "source_file": "CA 18 46286.pdf",
+        "page": 1,
+        "text": (
+            "1 Ever Ferreira(Voyage) 21 7.58 26.88 203.75$ "
+            "0.00 40.32 -$ 0.00 53.76 0.00 203.75$"
+        ),
+    }
+
+    rows = _extract_voyage_invoice_rows(
+        page,
+        supplier="Voyage Employer Services",
+        period_start="2026-06-29",
+        period_end="2026-07-05",
+        currency="USD",
+    )
+
+    assert [(row.employee_name_raw, row.hours, row.amount, row.warehouse_id) for row in rows] == [
+        ("Ever Ferreira(Voyage)", 7.58, 203.75, "18"),
+    ]
+
+
+def test_voyage_rows_accept_pdf_text_without_space_before_payrate():
+    from bonus_platform.engine.labor.extract import _extract_voyage_invoice_rows
+
+    page = {
+        "source_file": "CA 7 46292.pdf",
+        "page": 3,
+        "text": (
+            "95 Daniel Alexander Martinez - Ruedas20 "
+            "7.98 25.60 204.29 0.00 38.40 0.00 0.00 51.2 0.00 204.29"
+        ),
+    }
+
+    rows = _extract_voyage_invoice_rows(
+        page,
+        supplier="Voyage Employer Services",
+        period_start="2026-06-29",
+        period_end="2026-07-05",
+        currency="USD",
+    )
+
+    assert [(row.employee_name_raw, row.hours, row.amount) for row in rows] == [
+        ("Daniel Alexander Martinez - Ruedas", 7.98, 204.29),
+    ]
+
+
+def test_candidate_with_closed_amount_still_requires_expected_employee_coverage():
+    rows = [
+        LaborLineItem(
+            source_type="pdf_invoice",
+            source_file="invoice.pdf",
+            source_page_or_row="p1",
+            employee_id="",
+            employee_name_raw="Worker One",
+            hours=40.0,
+            amount=100.0,
+            confidence=0.98,
+        )
+    ]
+    pages = [{"source_file": "invoice.pdf", "page": 1, "text": "INVOICE TOTAL: $100.00"}]
+    expected_rows = [
+        {"employee_name_raw": "Worker One", "amount": 100.0},
+        {"employee_name_raw": "Worker Two", "amount": 100.0},
+    ]
+
+    assert _candidate_is_confident(rows, pages, expected_rows=expected_rows) is False
+
+
 def test_sss_invoice_total_reads_billable_total_row():
     assert _extract_invoice_total_from_text(
         """
@@ -5165,6 +5279,58 @@ def test_quick_extract_totals_keeps_headerless_payable_continuation_pages(monkey
         "invoice_primary",
         "invoice_continuation",
         "invoice_continuation",
+    ]
+
+
+def test_quick_extract_totals_keeps_voyage_continuation_and_uses_invoice_amount(monkeypatch, tmp_path):
+    from bonus_platform.engine.labor.extract import quick_extract_totals
+
+    pdf = tmp_path / "CA 7 46292.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    row_one = "1 Abel Gonzalez 18.5 8.00 23.68 189.44 0.40 35.52 14.21 0.00 47.36 0.00 203.65"
+    row_two = "31 Alison Guzman 17.5 8.00 22.40 179.20 0.10 33.60 3.36 0.00 44.8 0.00 182.56"
+    row_three = "271 Ying Fang 17.5 8.00 22.40 179.20 0.00 33.60 0.00 0.00 44.8 0.00 179.20"
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.extract._extract_pdf_pages",
+        lambda paths: [
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 1,
+                "text": "INVOICE #46292\nCA #7\nPayrate Hours Bill Rate\n" + row_one,
+            },
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 2,
+                "text": row_two,
+            },
+            {
+                "source_file": pdf.name,
+                "source_path": str(pdf),
+                "page": 3,
+                "text": (
+                    row_three
+                    + "\nTOTAL REG: 2089.21\nTOTAL OT: 104.73\nTOTAL DT: 0.00"
+                    + "\nGRAND TOTAL: 2193.94\nTOTAL INVOICE AMOUNT: $54,358.11"
+                ),
+            },
+        ],
+    )
+
+    result = quick_extract_totals(
+        [pdf],
+        {"enabled": False, "parallel_extraction_enabled": False, "cache_enabled": False},
+        supplier="Voyage Employer Services",
+    )[0]
+
+    assert result["total_amount"] == 54358.11
+    assert result["authoritative"] is True
+    assert result["excluded_pages"] == []
+    assert [page["role"] for page in result["page_evidence"]] == [
+        "invoice_primary",
+        "invoice_continuation",
+        "invoice_total",
     ]
 
 
