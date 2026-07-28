@@ -1288,9 +1288,18 @@ def _with_personal_worker_status(metadata: dict) -> dict:
         if mapping_active
         else _labor_task_generation_id(metadata)
     )
+    try:
+        worker_jobs = list_labor_worker_jobs()
+    except Exception as exc:  # noqa: BLE001 - worker status is supplemental run metadata.
+        logger.warning(
+            "Labor run worker status lookup failed: run_id=%s error_type=%s",
+            run_id,
+            type(exc).__name__,
+        )
+        return metadata
     matching_jobs = [
         row
-        for row in list_labor_worker_jobs()
+        for row in worker_jobs
         if str(row.get("runId") or "") == run_id
         and str(row.get("taskGenerationId") or "").strip() == current_generation
         and (

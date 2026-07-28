@@ -1417,6 +1417,23 @@ async function uploadFiles() {
     toast("文件上传完成。");
     advanceWizardStep("3");
   } catch (error) {
+    if (error.uploadFinalized) {
+      laborState.selectedPdfFiles = [];
+      laborState.selectedWorkbookFiles = [];
+      labor.pdfFiles.value = "";
+      labor.workbookFile.value = "";
+      renderSelectedLaborFiles();
+      recordLaborTelemetry("labor.upload.finalized_refresh_failed", {
+        step: "upload",
+        status: "finalized",
+        durationMs: elapsedMs(startedAt),
+        errorMessage: error.message,
+        context: uploadContext,
+      });
+      setText(labor.uploadStatus, error.message, true);
+      toast(error.message);
+      return;
+    }
     recordLaborTelemetry("labor.upload.failed", {
       step: "upload",
       status: "failed",
@@ -1434,6 +1451,24 @@ async function uploadFiles() {
 function usesP1DirectUpload() {
   return laborState.moduleAccess?.p1?.required === true
     && laborState.moduleAccess?.p1?.uploadMode === "signed_private_direct";
+}
+
+async function loadFinalizedLaborRunWithRetry(runId) {
+  const delays = [0, 500, 1500, 3000];
+  let lastError = null;
+  for (const delay of delays) {
+    if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+    try {
+      return await requestJson(`/api/labor/runs/${runId}`, { cache: "no-store" });
+    } catch (error) {
+      lastError = error;
+      if (!error.retryable) break;
+    }
+  }
+  const error = new Error("文件已经保存完成，但批次状态刷新失败。请刷新页面继续，无需重新上传。");
+  error.uploadFinalized = true;
+  error.cause = lastError;
+  throw error;
 }
 
 async function sha256File(file) {
@@ -1508,7 +1543,7 @@ async function uploadFilesDirectlyToPrivateStorage() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ fileIds: intents.map((intent) => intent.fileId) }),
   });
-  return requestJson(`/api/labor/runs/${runId}`);
+  return loadFinalizedLaborRunWithRetry(runId);
 }
 
 async function loadSheets() {
@@ -4082,10 +4117,20 @@ async function requestJson(url, options = {}) {
     response = await fetch(url, options);
   } catch (error) {
     const host = window.location.host || "当前环境";
-    throw new Error(`无法连接当前服务（${host}）。请稍后重试；若持续失败，请联系管理员检查环境状态。`);
+    const connectionError = new Error(
+      `无法连接当前服务（${host}）。请稍后重试；若持续失败，请联系管理员检查环境状态。`,
+    );
+    connectionError.retryable = true;
+    connectionError.status = 0;
+    throw connectionError;
   }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(formatLaborRequestError(data.detail || data.message || "请求失败。"));
+  if (!response.ok) {
+    const requestError = new Error(formatLaborRequestError(data.detail || data.message || "请求失败。"));
+    requestError.status = response.status;
+    requestError.retryable = response.status >= 500 || [408, 425, 429].includes(response.status);
+    throw requestError;
+  }
   return data;
 }
 

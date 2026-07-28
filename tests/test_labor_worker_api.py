@@ -91,6 +91,18 @@ def test_run_status_exposes_active_mapping_preflight_worker_progress(monkeypatch
     assert "asyncTask" not in enriched
 
 
+def test_run_status_survives_transient_worker_queue_lookup_failure(monkeypatch):
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+
+    def unavailable():
+        raise RuntimeError("temporary queue lookup failure")
+
+    monkeypatch.setattr(app_module, "list_labor_worker_jobs", unavailable)
+    metadata = {"id": "labor-uploaded", "status": "已创建"}
+
+    assert app_module._with_personal_worker_status(metadata) == metadata
+
+
 def test_p1_mapping_preflight_round_trip_persists_worker_proposal_for_user_confirmation(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
