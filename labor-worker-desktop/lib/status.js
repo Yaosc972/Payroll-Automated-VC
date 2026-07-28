@@ -4,6 +4,11 @@ const ALLOWED_STATUSES = new Set([
   "idle",
   "processing",
   "offline",
+  "proxy_unavailable",
+  "network_offline",
+  "service_unavailable",
+  "recovering",
+  "identity_expired",
   "failed",
   "upgrade_required"
 ]);
@@ -24,7 +29,17 @@ function presentWorkerStatus(raw = {}, options = {}) {
   }
 
   let status = ALLOWED_STATUSES.has(raw.status) ? raw.status : (processRunning ? "connecting" : "offline");
-  if (!processRunning && !["failed", "offline", "upgrade_required"].includes(status)) status = "offline";
+  const stoppedStatuses = new Set([
+    "failed",
+    "offline",
+    "proxy_unavailable",
+    "network_offline",
+    "service_unavailable",
+    "recovering",
+    "identity_expired",
+    "upgrade_required"
+  ]);
+  if (!processRunning && !stoppedStatuses.has(status)) status = "offline";
   if (options.updateVersion && status === "idle") status = "update_available";
   const defaultMessage = status === "offline" ? "核对助手未运行，正在自动恢复。" : "正在连接核对服务。";
   return {

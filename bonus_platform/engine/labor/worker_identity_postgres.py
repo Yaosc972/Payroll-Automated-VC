@@ -345,10 +345,12 @@ def resolve_labor_worker_token(
     raw_token: str,
     *,
     worker_version: str = "",
+    refresh_ttl_seconds: int = 30 * 24 * 60 * 60,
     connect: Callable[[], Any] | None = None,
 ) -> dict[str, str]:
     token = str(raw_token or "").strip()
     safe_version = str(worker_version or "").strip()[:40]
+    safe_refresh_ttl = max(24 * 60 * 60, min(int(refresh_ttl_seconds or 0), 90 * 24 * 60 * 60))
     if not token.startswith("sigma_labor_w1_") or len(token) < 24:
         raise LaborWorkerIdentityInvalid("Worker 身份令牌无效或已失效。")
     with _open_connection(connect=connect) as connection:
@@ -370,10 +372,12 @@ def resolve_labor_worker_token(
             values = dict(row)
             connection.execute(
                 """
-                update public.labor_worker_tokens set last_used_at=now()
+                update public.labor_worker_tokens
+                set last_used_at=now(),
+                    expires_at=greatest(expires_at, now()+(%s*interval '1 second'))
                 where id=%s and revoked_at is null and expires_at > now()
                 """,
-                (str(values.get("token_id") or ""),),
+                (safe_refresh_ttl, str(values.get("token_id") or "")),
             )
             connection.execute(
                 """
@@ -404,9 +408,16 @@ def list_labor_worker_devices(
     with _open_connection(connect=connect) as connection:
         rows = connection.execute(
             """
-            select * from public.labor_worker_devices
-            where owner_user_id=%s
-            order by revoked_at nulls first, updated_at desc, id
+            select d.*, credentials.credential_expires_at
+            from public.labor_worker_devices d
+            left join lateral (
+                select max(t.expires_at) as credential_expires_at
+                from public.labor_worker_tokens t
+                where t.device_id=d.id and t.owner_user_id=d.owner_user_id
+                  and t.revoked_at is null
+            ) credentials on true
+            where d.owner_user_id=%s
+            order by d.revoked_at nulls first, d.updated_at desc, d.id
             """,
             (owner,),
         ).fetchall()
@@ -479,6 +490,7 @@ def _public_device(row: Mapping[str, Any]) -> dict[str, Any]:
         "platform": str(values.get("platform") or ""),
         "workerVersion": str(values.get("worker_version") or ""),
         "lastSeenAt": _stamp(values.get("last_seen_at")),
+        "credentialExpiresAt": _stamp(values.get("credential_expires_at")),
         "revokedAt": _stamp(values.get("revoked_at")),
         "createdAt": _stamp(values.get("created_at")),
         "updatedAt": _stamp(values.get("updated_at")),

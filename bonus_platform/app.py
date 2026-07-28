@@ -1990,7 +1990,11 @@ def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> d
     token = authorization[len(prefix) :].strip() if authorization.startswith(prefix) else ""
     if labor_postgres_state_enabled():
         try:
-            identity = resolve_labor_worker_token(token, worker_version=worker_version)
+            identity = resolve_labor_worker_token(
+                token,
+                worker_version=worker_version,
+                refresh_ttl_seconds=_labor_worker_token_ttl_seconds(),
+            )
             return {"userId": str(identity["userId"]), "deviceId": str(identity["deviceId"])}
         except LaborWorkerIdentityInvalid as exc:
             raise HTTPException(status_code=401, detail="Worker 身份令牌无效或已失效。") from exc
@@ -2016,10 +2020,10 @@ def _labor_worker_identity(authorization: str, *, worker_version: str = "") -> d
 
 def _labor_worker_token_ttl_seconds() -> int:
     try:
-        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 8 * 60 * 60))
+        value = int(str(os.environ.get("SIGMA_LABOR_WORKER_TOKEN_TTL_SECONDS") or 30 * 24 * 60 * 60))
     except (TypeError, ValueError):
-        value = 8 * 60 * 60
-    return max(300, min(value, 24 * 60 * 60))
+        value = 30 * 24 * 60 * 60
+    return max(24 * 60 * 60, min(value, 90 * 24 * 60 * 60))
 
 
 def _labor_worker_activation_url(request: Request, activation_code: str) -> str:
