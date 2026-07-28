@@ -12,7 +12,7 @@ const labels = {
 const previewStatus = {
   status: "unactivated",
   message: "请从海外劳务报账页面激活本机核对助手。",
-  workerVersion: "0.3.12"
+  workerVersion: "0.3.13"
 };
 const workerBridge = window.sigmaLaborWorker || {
   getStatus: async () => previewStatus,
