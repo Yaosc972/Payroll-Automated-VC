@@ -274,3 +274,22 @@ def test_blob_put_signed_url_preserves_the_exact_release_path(monkeypatch):
     )
 
     assert parse_qs(urlparse(signed_url).query)["vercel-blob-add-random-suffix"] == ["false"]
+
+
+def test_blob_put_bytes_preserves_the_exact_pathname(monkeypatch):
+    captured = {}
+
+    def fake_request(method, query="", **kwargs):
+        captured.update({"method": method, "query": query, **kwargs})
+        return {"pathname": "labor-runs/uat/owners/system/worker-releases/manifest.json"}
+
+    monkeypatch.setattr(blob, "_blob_request", fake_request)
+
+    blob.blob_put_bytes(
+        "labor-runs/uat/owners/system/worker-releases/manifest.json",
+        b"{}",
+        content_type="application/json",
+    )
+
+    assert captured["headers"]["x-add-random-suffix"] == "0"
+    assert captured["headers"]["x-allow-overwrite"] == "1"

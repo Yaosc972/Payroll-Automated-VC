@@ -223,6 +223,7 @@ def blob_put_bytes(pathname: str, content: bytes, *, content_type: str | None = 
     params = httpx.QueryParams({"pathname": pathname})
     headers = {
         "x-vercel-blob-access": access,
+        "x-add-random-suffix": "0",
         "x-allow-overwrite": "1",
         "x-content-length": str(len(content)),
     }
