@@ -1,0 +1,160 @@
+name: Labor Worker Dual-Platform Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Worker version from labor-worker-desktop/package.json
+        required: true
+        type: string
+  push:
+    tags:
+      - "labor-worker-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Validate shared Worker version
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - id: version
+        name: Require the requested and packaged versions to match
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          packaged_version="$(node -p "require('./labor-worker-desktop/package.json').version")"
+          requested_version="$REQUESTED_VERSION"
+          if [ "$EVENT_NAME" = "push" ]; then
+            requested_version="${TAG_NAME#labor-worker-v}"
+          fi
+          if ! printf '%s' "$requested_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Worker version must use X.Y.Z: $requested_version" >&2
+            exit 1
+          fi
+          if [ "$packaged_version" != "$requested_version" ]; then
+            echo "package.json is $packaged_version but release requested $requested_version" >&2
+            exit 1
+          fi
+          echo "value=$packaged_version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-15
+            artifact-name: labor-worker-macos-arm64
+            artifact-path: labor-worker-desktop/release/*-arm64.dmg
+          - platform: windows-x64
+            os: windows-2025
+            artifact-name: labor-worker-windows-x64
+            artifact-path: labor-worker-desktop/release/*-windows-x64.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: labor-worker-desktop/package-lock.json
+      - name: Verify native build architecture
+        shell: bash
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: |
+          machine="$(python -c 'import platform; print(platform.machine().lower())')"
+          if [ "$EXPECTED_PLATFORM" = "macos-arm64" ] && [ "$machine" != "arm64" ]; then
+            echo "macOS Worker must be built natively on arm64, observed: $machine" >&2
+            exit 1
+          fi
+          if [ "$EXPECTED_PLATFORM" = "windows-x64" ] && [ "$machine" != "amd64" ] && [ "$machine" != "x86_64" ]; then
+            echo "Windows Worker must be built natively on x64, observed: $machine" >&2
+            exit 1
+          fi
+      - name: Install Worker dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r labor-worker-desktop/requirements-worker.txt pyinstaller pillow pytest
+      - name: Install desktop dependencies
+        working-directory: labor-worker-desktop
+        run: npm ci
+      - name: Run shared Worker checks
+        run: python -m pytest -q tests/test_personal_labor_worker.py tests/test_labor_worker_package_boundary.py
+      - name: Run desktop checks
+        working-directory: labor-worker-desktop
+        run: |
+          npm run check
+          npm test
+      - name: Build native Python Worker
+        working-directory: labor-worker-desktop
+        run: npm run build:worker
+      - name: Build macOS installer
+        if: matrix.platform == 'macos-arm64'
+        working-directory: labor-worker-desktop
+        run: npx electron-builder --mac dmg --arm64
+      - name: Build Windows installer
+        if: matrix.platform == 'windows-x64'
+        working-directory: labor-worker-desktop
+        run: npx electron-builder --win nsis --x64
+      - name: Verify expected installer exists
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          if [ "$PLATFORM" = "windows-x64" ]; then
+            expected="labor-worker-desktop/release/Σ海外报账核对助手-${VERSION}-windows-x64.exe"
+          else
+            expected="labor-worker-desktop/release/Σ海外报账核对助手-${VERSION}-arm64.dmg"
+          fi
+          test -s "$expected"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ matrix.artifact-path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  pair:
+    name: Require matching macOS and Windows installers
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+      - name: Verify the dual-platform release pair
+        env:
+          VERSION: ${{ needs.version.outputs.value }}
+        run: |
+          mac="release-artifacts/labor-worker-macos-arm64/Σ海外报账核对助手-${VERSION}-arm64.dmg"
+          windows="release-artifacts/labor-worker-windows-x64/Σ海外报账核对助手-${VERSION}-windows-x64.exe"
+          test -s "$mac"
+          test -s "$windows"
+          sha256sum "$mac" "$windows" | tee release-artifacts/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: labor-worker-${{ needs.version.outputs.value }}-release-pair
+          path: |
+            release-artifacts/labor-worker-macos-arm64/*
+            release-artifacts/labor-worker-windows-x64/*
+            release-artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
