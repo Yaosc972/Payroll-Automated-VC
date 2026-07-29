@@ -33,6 +33,7 @@ const laborState = {
   workerDevices: [],
   workerDevicePollTimer: null,
   workerRelease: null,
+  workerReleaseAdmin: null,
   workerPlatform: detectLaborWorkerPlatform(),
   selectedPdfFiles: [],
   selectedWorkbookFiles: [],
@@ -507,7 +508,10 @@ function bindLaborEvents() {
     });
   }
   if (labor.workerReleasePlatform) {
-    labor.workerReleasePlatform.addEventListener("change", syncLaborWorkerReleaseUploadControls);
+    labor.workerReleasePlatform.addEventListener("change", () => {
+      syncLaborWorkerReleaseUploadControls();
+      void loadLaborWorkerAdminRelease();
+    });
     syncLaborWorkerReleaseUploadControls();
   }
   if (labor.uploadWorkerRelease) labor.uploadWorkerRelease.addEventListener("click", uploadLaborWorkerRelease);
@@ -639,6 +643,7 @@ async function loadLaborWorkerRelease() {
   try {
     laborState.workerRelease = await requestJson(`/api/labor/worker/release?platform=${encodeURIComponent(laborState.workerPlatform)}`);
     renderLaborWorkerRelease();
+    if (laborState.workerRelease?.canUpload === true) await loadLaborWorkerAdminRelease();
   } catch (error) {
     laborState.workerRelease = null;
     labor.downloadWorker.classList.add("disabled");
@@ -646,6 +651,16 @@ async function loadLaborWorkerRelease() {
     labor.downloadWorker.href = "#";
     labor.workerReleaseStatus.textContent = "安装包暂不可用";
   }
+}
+
+async function loadLaborWorkerAdminRelease() {
+  const platform = labor.workerReleasePlatform?.value || "macos-arm64";
+  try {
+    laborState.workerReleaseAdmin = await requestJson(`/api/labor/worker/release?platform=${encodeURIComponent(platform)}`);
+  } catch (_error) {
+    laborState.workerReleaseAdmin = null;
+  }
+  renderLaborWorkerReleaseUploadHint();
 }
 
 function compareStableVersions(left, right) {
@@ -693,9 +708,20 @@ function renderLaborWorkerReleaseUploadHint() {
   const releasePlatform = labor.workerReleasePlatform?.value || "macos-arm64";
   const isWindows = releasePlatform === "windows-x64";
   const environmentLabel = laborWorkerStorageEnvironmentLabel(laborState.workerRelease?.storageEnvironment);
+  const pendingVersions = laborState.workerReleaseAdmin?.pendingVersions || {};
+  const pending = Object.entries(pendingVersions)
+    .map(([platform, version]) => `${laborWorkerPlatformLabel(platform)} ${version}`)
+    .join("、");
+  if (pending) {
+    setText(
+      labor.workerReleaseUploadStatus,
+      `待发布：${pending}。两个平台版本一致后才会统一生效。`,
+    );
+    return;
+  }
   setText(
     labor.workerReleaseUploadStatus,
-    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 后上传到${environmentLabel}私有存储。`,
+    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 上传到${environmentLabel}私有存储；两个平台齐全后统一发布。`,
   );
 }
 
@@ -757,7 +783,7 @@ async function uploadLaborWorkerRelease() {
     });
     if (!uploaded.ok) throw new Error(`私有存储未接收安装包（HTTP ${uploaded.status}）。`);
     beginButtonLoading(labor.uploadWorkerRelease, "正在发布");
-    await requestJson("/api/labor/worker/release/finalize", {
+    const finalized = await requestJson("/api/labor/worker/release/finalize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -770,8 +796,14 @@ async function uploadLaborWorkerRelease() {
     });
     await loadLaborWorkerRelease();
     const platformLabel = laborWorkerPlatformLabel(releasePlatform);
-    setText(labor.workerReleaseUploadStatus, `${platformLabel} ${releaseVersion} 已发布；旧版本助手会提示立即更新。`);
-    toast(`${platformLabel} 核对助手 ${releaseVersion} 已发布。`);
+    if (finalized.published === true) {
+      setText(labor.workerReleaseUploadStatus, `macOS 与 Windows ${releaseVersion} 已统一发布；旧版本助手会提示立即更新。`);
+      toast(`核对助手 ${releaseVersion} 双平台已统一发布。`);
+    } else {
+      const missing = (finalized.missingPlatforms || []).map(laborWorkerPlatformLabel).join("、");
+      setText(labor.workerReleaseUploadStatus, `${platformLabel} ${releaseVersion} 已安全暂存；还缺 ${missing} 同版本安装包。`);
+      toast(`${platformLabel} 安装包已暂存，等待另一平台同版本安装包。`);
+    }
   } catch (error) {
     setText(labor.workerReleaseUploadStatus, error.message, true);
     toast(error.message);

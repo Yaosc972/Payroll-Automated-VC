@@ -418,7 +418,7 @@ def test_persisted_worker_release_overrides_environment_and_becomes_required(mon
     assert response.json()["storageEnvironment"] == "production"
 
 
-def test_admin_can_finalize_uploaded_worker_release_and_publish_manifest(monkeypatch, tmp_path):
+def test_admin_can_finalize_uploaded_worker_release_as_pending_manifest(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     monkeypatch.setattr(app_module, "_labor_request_actor", lambda request: ("admin-user", True))
     monkeypatch.setattr(app_module, "_load_persisted_labor_worker_release_manifest", lambda: {})
@@ -451,10 +451,121 @@ def test_admin_can_finalize_uploaded_worker_release_and_publish_manifest(monkeyp
 
     assert response.status_code == 200
     assert response.json()["version"] == "0.3.13"
-    assert response.json()["requiredWorkerVersion"] == "0.3.13"
-    assert stored["requiredWorkerVersion"] == "0.3.13"
-    assert stored["releases"]["macos-arm64"]["sha256"] == digest
-    assert stored["releases"]["macos-arm64"]["signature"] == f"sha256:{digest}"
+    assert response.json()["published"] is False
+    assert response.json()["missingPlatforms"] == ["windows-x64"]
+    assert response.json()["requiredWorkerVersion"] == CURRENT_WORKER_VERSION
+    assert stored["requiredWorkerVersion"] == CURRENT_WORKER_VERSION
+    assert stored["releases"] == {}
+    assert stored["pendingReleases"]["macos-arm64"]["sha256"] == digest
+    assert stored["pendingReleases"]["macos-arm64"]["signature"] == f"sha256:{digest}"
+
+
+def test_admin_worker_release_waits_for_matching_platform_before_atomic_publish(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(app_module, "labor_auth_required", lambda: True)
+    monkeypatch.setattr(
+        app_module,
+        "current_user_from_request",
+        lambda request: {"user": {"id": "admin-user"}, "roles": ["admin"]},
+    )
+    monkeypatch.setattr(app_module, "user_can_enter_module", lambda current, module: True)
+    monkeypatch.setattr(app_module, "_labor_request_actor", lambda request: ("admin-user", True))
+    monkeypatch.setattr(app_module, "get_session_user_id", lambda token: "admin-user")
+    monkeypatch.setattr(app_module, "_user_can_enter_module", lambda user_id, module: True)
+    active_version = CURRENT_WORKER_VERSION
+    release_version = "0.3.14"
+    stored = {
+        "schemaVersion": 3,
+        "requiredWorkerVersion": active_version,
+        "releases": {
+            platform: {
+                "version": active_version,
+                "minimumVersion": active_version,
+                "sha256": digest,
+                "signature": f"sha256:{digest}",
+                "blobPathname": f"worker-releases/{platform}/old-package",
+                "filename": app_module._labor_worker_release_filename(platform, active_version),
+            }
+            for platform, digest in (("macos-arm64", "a" * 64), ("windows-x64", "b" * 64))
+        },
+    }
+    monkeypatch.setattr(
+        app_module,
+        "_load_persisted_labor_worker_release_manifest",
+        lambda: json.loads(json.dumps(stored)),
+    )
+
+    def persist(manifest):
+        stored.clear()
+        stored.update(json.loads(json.dumps(manifest)))
+
+    monkeypatch.setattr(app_module, "_persist_labor_worker_release_manifest", persist)
+    monkeypatch.setattr(
+        app_module,
+        "_verify_labor_worker_release_artifact",
+        lambda **kwargs: {
+            "blobPathname": (
+                f"worker-releases/{kwargs['platform']}/"
+                f"{app_module._labor_worker_release_filename(kwargs['platform'], kwargs['version'])}"
+            ),
+            "sizeBytes": kwargs["size_bytes"],
+        },
+    )
+
+    mac = client.post(
+        "/api/labor/worker/release/finalize",
+        json={
+            "platform": "macos-arm64",
+            "version": release_version,
+            "filename": app_module._labor_worker_release_filename("macos-arm64", release_version),
+            "sizeBytes": 126_000_000,
+            "sha256": "c" * 64,
+        },
+    )
+
+    assert mac.status_code == 200
+    assert mac.json()["published"] is False
+    assert mac.json()["missingPlatforms"] == ["windows-x64"]
+    assert stored["requiredWorkerVersion"] == active_version
+    assert stored["releases"]["macos-arm64"]["version"] == active_version
+    assert stored["pendingReleases"]["macos-arm64"]["version"] == release_version
+
+    client.cookies.set(app_module.SESSION_COOKIE_NAME, "test-session")
+    pending_status = client.get("/api/labor/worker/release?platform=windows-x64")
+    assert pending_status.status_code == 200, pending_status.text
+    assert pending_status.json()["pendingVersions"] == {"macos-arm64": release_version}
+
+    mismatched_windows = client.post(
+        "/api/labor/worker/release/finalize",
+        json={
+            "platform": "windows-x64",
+            "version": "0.3.15",
+            "filename": app_module._labor_worker_release_filename("windows-x64", "0.3.15"),
+            "sizeBytes": 150_000_000,
+            "sha256": "e" * 64,
+        },
+    )
+    assert mismatched_windows.status_code == 200
+    assert mismatched_windows.json()["published"] is False
+    assert stored["requiredWorkerVersion"] == active_version
+
+    windows = client.post(
+        "/api/labor/worker/release/finalize",
+        json={
+            "platform": "windows-x64",
+            "version": release_version,
+            "filename": app_module._labor_worker_release_filename("windows-x64", release_version),
+            "sizeBytes": 150_000_000,
+            "sha256": "d" * 64,
+        },
+    )
+
+    assert windows.status_code == 200
+    assert windows.json()["published"] is True
+    assert windows.json()["missingPlatforms"] == []
+    assert stored["requiredWorkerVersion"] == release_version
+    assert stored["pendingReleases"] == {}
+    assert {release["version"] for release in stored["releases"].values()} == {release_version}
 
 
 def test_worker_version_exposes_direct_private_download_for_persisted_release(monkeypatch, tmp_path):

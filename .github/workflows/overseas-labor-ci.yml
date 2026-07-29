@@ -112,6 +112,16 @@ jobs:
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           fi
           printf '%s\n' "$changed_paths"
+          worker_runtime_paths="$(printf '%s\n' "$changed_paths" | grep -E '^(bonus_platform/worker/|labor-worker-desktop/(main\.js|preload\.js|worker_entry\.py|pyinstaller-worker\.spec|requirements-worker\.txt|lib/|renderer/))' || true)"
+          if [ -n "$worker_runtime_paths" ]; then
+            base_package="$(git show "$BASE_SHA:labor-worker-desktop/package.json" 2>/dev/null || true)"
+            base_version="$(printf '%s' "$base_package" | python3 -c 'import json,sys; payload=sys.stdin.read(); print(json.loads(payload).get("version", "") if payload else "")')"
+            head_version="$(python3 -c 'import json; print(json.load(open("labor-worker-desktop/package.json", encoding="utf-8"))["version"])')"
+            if [ -n "$base_version" ] && [ "$base_version" = "$head_version" ]; then
+              printf 'Worker runtime changed without a version bump from %s:\n%s\n' "$head_version" "$worker_runtime_paths" >&2
+              exit 1
+            fi
+          fi
           forbidden_paths="$(printf '%s\n' "$changed_paths" | grep -E '^(desktop/|bonus_platform/engine/fbu_performance/|\.playwright-cli/|\.superpowers/|output/|tmp/|labor-worker-desktop/(node_modules|worker-build|worker-dist|release|dist)/)' || true)"
           if [ -n "$forbidden_paths" ]; then
             printf 'Overseas Labor candidate contains forbidden paths:\n%s\n' "$forbidden_paths" >&2
@@ -168,10 +178,45 @@ jobs:
           node --check ../bonus_platform/static/labor-operations.js
       - run: npm test
 
+  worker_platform:
+    name: Worker platform check (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-15
+          - platform: windows-x64
+            os: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: labor-worker-desktop/package-lock.json
+      - name: Install focused Worker dependencies
+        run: python -m pip install -r requirements.txt pytest pillow
+      - name: Install desktop dependencies
+        working-directory: labor-worker-desktop
+        run: npm ci
+      - name: Run cross-platform Worker tests
+        run: python -m pytest -q tests/test_personal_labor_worker.py tests/test_labor_worker_package_boundary.py
+      - name: Run Electron shell tests
+        working-directory: labor-worker-desktop
+        run: |
+          npm run check
+          npm test
+
   gate:
     name: Overseas labor final gate
     if: always()
-    needs: [scope, python, worker]
+    needs: [scope, python, worker, worker_platform]
     runs-on: ubuntu-latest
     steps:
       - name: Require every applicable check
@@ -179,7 +224,9 @@ jobs:
           SCOPE_RESULT: ${{ needs.scope.result }}
           PYTHON_RESULT: ${{ needs.python.result }}
           WORKER_RESULT: ${{ needs.worker.result }}
+          WORKER_PLATFORM_RESULT: ${{ needs.worker_platform.result }}
         run: |
           test "$PYTHON_RESULT" = "success"
           test "$WORKER_RESULT" = "success"
+          test "$WORKER_PLATFORM_RESULT" = "success"
           test "$SCOPE_RESULT" = "success"

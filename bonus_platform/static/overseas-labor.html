@@ -1785,7 +1785,7 @@
         width: min(1180px, calc(100% - 48px));
         min-height: 620px;
         margin: 24px auto 56px;
-        overflow: hidden;
+        overflow: visible;
         transform: none;
         border: 1px solid rgba(255, 255, 255, 0.78);
         border-radius: 28px;
@@ -2447,6 +2447,7 @@
           <h3>本人核对助手</h3>
           <div class="worker-panel">
             <p class="worker-panel-copy" id="laborWorkerMessage">核对助手负责在你的电脑读取私有发票和 Excel，平台不会在 Vercel 执行长时间 OCR。</p>
+            <p class="worker-panel-copy">首次打开：Mac 如提示无法验证开发者，请先尝试打开一次，再到“系统设置 → 隐私与安全性 → 仍要打开”；Windows 如出现保护提示，请选择“更多信息 → 仍要运行”。请只使用本页面下载的安装包。</p>
             <div class="worker-device-list" id="laborWorkerDevices"><span class="audit-empty">正在读取...</span></div>
             <div class="worker-panel-actions">
               <button class="worker-activate" id="activateLaborWorker" type="button">激活 / 重新连接</button>
@@ -2465,8 +2466,8 @@
                 <input id="laborWorkerReleasePackage" class="field-input" type="file" accept=".dmg,application/x-apple-diskimage" />
               </label>
               <div class="worker-panel-actions">
-                <button id="uploadLaborWorkerRelease" type="button">上传当前要求版本</button>
-                <span class="inline-status" id="laborWorkerReleaseUploadStatus">选择对应版本 DMG 后上传到当前环境私有存储。</span>
+                <button id="uploadLaborWorkerRelease" type="button">上传待发布安装包</button>
+                <span class="inline-status" id="laborWorkerReleaseUploadStatus">选择对应版本 DMG 上传到当前环境私有存储；两个平台齐全后统一发布。</span>
               </div>
             </div>
           </div>

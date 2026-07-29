@@ -79,6 +79,7 @@ def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime()
 def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
     script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    toolbench_css = html.split(".overseas-labor-shell .batch-toolbench {", 1)[1].split("}", 1)[0]
 
     assert 'id="periodRange"' in html
     assert 'id="periodCalendar"' in html
@@ -92,6 +93,7 @@ def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     assert "最近7天" not in html
     assert "function renderPeriodCalendar()" in script
     assert "function selectPeriodDate(value)" in script
+    assert "overflow: visible" in toolbench_css
     assert "addDays(picked, 6)" in script
     assert "periodPickerState.selectingEnd" in script
     assert 'overseas-labor.js?v=38' in html

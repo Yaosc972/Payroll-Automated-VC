@@ -100,3 +100,18 @@ def test_windows_builder_is_codex_independent_and_keeps_release_gate():
     assert "SIGMA_LABOR_GOLDEN_MATERIALS_ROOT" in powershell
     assert 'Join-Path $DesktopRoot "release-gate-materials"' in powershell
     assert "ExecutionPolicy Bypass" in launcher
+
+
+def test_worker_release_workflow_requires_matching_native_mac_and_windows_packages():
+    workflow = (ROOT / ".github" / "workflows" / "labor-worker-release.yml").read_text(encoding="utf-8")
+    ci = (ROOT / ".github" / "workflows" / "overseas-labor-ci.yml").read_text(encoding="utf-8")
+
+    assert "macos-15" in workflow
+    assert "windows-2025" in workflow
+    assert "Verify native build architecture" in workflow
+    assert "Require matching macOS and Windows installers" in workflow
+    assert "Σ海外报账核对助手-${VERSION}-arm64.dmg" in workflow
+    assert "Σ海外报账核对助手-${VERSION}-windows-x64.exe" in workflow
+    assert "worker_platform:" in ci
+    assert "WORKER_PLATFORM_RESULT" in ci
+    assert "Worker runtime changed without a version bump" in ci

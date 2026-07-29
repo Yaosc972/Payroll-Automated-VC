@@ -3191,8 +3191,35 @@ def get_personal_labor_worker_release(request: Request, platform: str = "macos-a
     is_admin = False
     if labor_auth_required():
         _, is_admin = _labor_request_actor(request)
+    platform = _labor_worker_release_platform(platform)
     release = _labor_public_worker_release(platform)
     release["canUpload"] = bool(is_admin)
+    if is_admin:
+        persisted = _load_persisted_labor_worker_release_manifest()
+        pending = persisted.get("pendingReleases") if isinstance(persisted, dict) else {}
+        pending = pending if isinstance(pending, dict) else {}
+        selected = pending.get(platform) if isinstance(pending.get(platform), dict) else {}
+        pending_version = str(selected.get("version") or "")
+        matching = sorted(
+            candidate
+            for candidate in _LABOR_WORKER_RELEASE_PLATFORMS
+            if isinstance(pending.get(candidate), dict)
+            and str(pending[candidate].get("version") or "") == pending_version
+        ) if pending_version else []
+        release.update(
+            {
+                "pendingVersion": pending_version,
+                "pendingVersions": {
+                    candidate: str(candidate_release.get("version") or "")
+                    for candidate, candidate_release in pending.items()
+                    if candidate in _LABOR_WORKER_RELEASE_PLATFORMS
+                    and isinstance(candidate_release, dict)
+                    and str(candidate_release.get("version") or "")
+                },
+                "pendingPlatforms": matching,
+                "missingPlatforms": sorted(_LABOR_WORKER_RELEASE_PLATFORMS.difference(matching)),
+            }
+        )
     return release
 
 
@@ -3392,6 +3419,11 @@ def finalize_personal_labor_worker_release(request: Request, payload: dict = Bod
         for release_platform, release in (existing.get("releases") or {}).items()
         if release_platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
     } if isinstance(existing, dict) and isinstance(existing.get("releases"), dict) else {}
+    pending_releases = {
+        release_platform: dict(release)
+        for release_platform, release in (existing.get("pendingReleases") or {}).items()
+        if release_platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
+    } if isinstance(existing, dict) and isinstance(existing.get("pendingReleases"), dict) else {}
     published_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
     release = {
         "version": version,
@@ -3407,12 +3439,26 @@ def finalize_personal_labor_worker_release(request: Request, payload: dict = Bod
             if artifact.get(key)
         },
     }
-    releases[platform] = release
+    pending_releases[platform] = release
+    matching_platforms = {
+        candidate
+        for candidate in _LABOR_WORKER_RELEASE_PLATFORMS
+        if str((pending_releases.get(candidate) or {}).get("version") or "") == version
+    }
+    missing_platforms = sorted(_LABOR_WORKER_RELEASE_PLATFORMS.difference(matching_platforms))
+    published = not missing_platforms
+    active_required_version = str(existing.get("requiredWorkerVersion") or required_version)
+    if published:
+        for candidate in sorted(_LABOR_WORKER_RELEASE_PLATFORMS):
+            releases[candidate] = pending_releases.pop(candidate)
+        active_required_version = version
     manifest = {
-        "schemaVersion": 3,
-        "requiredWorkerVersion": version,
-        "publishedAt": published_at,
+        "schemaVersion": 4,
+        "requiredWorkerVersion": active_required_version,
+        "publishedAt": published_at if published else str(existing.get("publishedAt") or ""),
+        "updatedAt": published_at,
         "releases": releases,
+        "pendingReleases": pending_releases,
     }
     try:
         _persist_labor_worker_release_manifest(manifest)
@@ -3420,19 +3466,26 @@ def finalize_personal_labor_worker_release(request: Request, payload: dict = Bod
         logger.warning("labor worker release manifest publish failed: %s", type(exc).__name__)
         raise HTTPException(status_code=503, detail="安装包已上传，但发布清单写入失败；旧版本仍然有效，请重试发布。") from exc
     return {
-        "available": True,
+        "available": published,
+        "published": published,
         "platform": platform,
         "storageEnvironment": labor_persistent_environment(),
         "version": version,
-        "minimumVersion": version,
-        "requiredWorkerVersion": version,
+        "minimumVersion": active_required_version,
+        "requiredWorkerVersion": active_required_version,
+        "pendingPlatforms": sorted(matching_platforms),
+        "missingPlatforms": missing_platforms,
         "sha256": sha256,
         "signature": f"sha256:{sha256}",
         "filename": filename,
         "downloadUrl": (
-            "/api/labor/worker/release/download"
-            if platform == "macos-arm64"
-            else f"/api/labor/worker/release/download?platform={platform}"
+            (
+                "/api/labor/worker/release/download"
+                if platform == "macos-arm64"
+                else f"/api/labor/worker/release/download?platform={platform}"
+            )
+            if published
+            else ""
         ),
     }
 
