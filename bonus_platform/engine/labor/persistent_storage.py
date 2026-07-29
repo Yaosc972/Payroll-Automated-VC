@@ -402,6 +402,21 @@ def create_labor_supabase_signed_download(
     }
 
 
+def put_labor_supabase_private_object(
+    object_key: str,
+    content: bytes,
+    *,
+    content_type: str = "application/octet-stream",
+) -> dict[str, Any]:
+    normalized_key = _normalize_labor_p1_object_key(object_key)
+    return _supabase_upload_bytes(normalized_key, content, content_type=content_type)
+
+
+def get_labor_supabase_private_object(object_key: str) -> bytes | None:
+    normalized_key = _normalize_labor_p1_object_key(object_key)
+    return _supabase_download_bytes(normalized_key)
+
+
 def labor_supabase_object_metadata(object_key: str) -> dict[str, Any]:
     """Read object metadata with service credentials without proxying the file body."""
     if not labor_supabase_storage_enabled():

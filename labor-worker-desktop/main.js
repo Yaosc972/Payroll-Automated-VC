@@ -17,6 +17,7 @@ let statusTimer = null;
 let updateTimer = null;
 let quitting = false;
 let pendingUpdateVersion = "";
+let pendingUpdateDownloadUrl = "";
 let cachedSettings;
 
 function projectRoot() {
@@ -186,8 +187,18 @@ function restartWorker() {
 async function openUpdatePage() {
   const settings = loadSettings();
   if (!settings?.apiUrl) return { opened: false };
-  const updatePageUrl = new URL("/overseas-labor.html", `${settings.apiUrl}/`).toString();
-  await shell.openExternal(updatePageUrl);
+  const apiUrl = new URL(`${settings.apiUrl}/`);
+  const candidate = pendingUpdateDownloadUrl || "/api/labor/worker/release/download";
+  const resolved = new URL(candidate, apiUrl);
+  if (
+    resolved.origin !== apiUrl.origin
+    || resolved.pathname !== "/api/labor/worker/release/download"
+  ) {
+    console.error("Refused an unexpected worker update URL");
+    return { opened: false };
+  }
+  const downloadUrl = resolved.toString();
+  await shell.openExternal(downloadUrl);
   return { opened: true };
 }
 
@@ -252,6 +263,7 @@ function watchStatus() {
       const nextUpdateVersion = String(manifest.version || "");
       const shouldNotify = Boolean(nextUpdateVersion && nextUpdateVersion !== pendingUpdateVersion);
       pendingUpdateVersion = nextUpdateVersion;
+      pendingUpdateDownloadUrl = String(manifest.downloadUrl || "/api/labor/worker/release/download");
       sendStatus();
       if (shouldNotify && Notification.isSupported()) {
         new Notification({ title: "核对助手有新版本", body: `版本 ${manifest.version || ""} 已可用，请完成当前任务后更新。` }).show();

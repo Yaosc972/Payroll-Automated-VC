@@ -10,6 +10,14 @@ function laborWorkerPlatformLabel(platform) {
   return platform === "windows-x64" ? "Windows x64" : "macOS Apple 芯片";
 }
 
+function laborWorkerStorageEnvironmentLabel(environment) {
+  const normalized = String(environment || "").trim().toLowerCase();
+  if (["production", "prod"].includes(normalized)) return "生产环境";
+  if (["preview", "staging", "uat"].includes(normalized)) return "UAT/预览环境";
+  if (["local", "development", "dev", "test"].includes(normalized)) return "本地环境";
+  return normalized ? `${normalized} 环境` : "当前环境";
+}
+
 const laborState = {
   run: null,
   headers: [],
@@ -635,6 +643,7 @@ function renderLaborWorkerRelease() {
   const release = laborState.workerRelease;
   if (!release || !labor.downloadWorker || !labor.workerReleaseStatus) return;
   if (labor.workerReleaseAdmin) labor.workerReleaseAdmin.hidden = release.canUpload !== true;
+  renderLaborWorkerReleaseUploadHint();
   const version = String(release.version || "");
   const downloadUrl = String(release.downloadUrl || "");
   const platformLabel = laborWorkerPlatformLabel(release.platform || laborState.workerPlatform);
@@ -642,6 +651,7 @@ function renderLaborWorkerRelease() {
     labor.downloadWorker.classList.add("disabled");
     labor.downloadWorker.setAttribute("aria-disabled", "true");
     labor.downloadWorker.href = "#";
+    labor.downloadWorker.textContent = "下载核对助手";
     labor.workerReleaseStatus.textContent = `${platformLabel} 版待发布`;
     return;
   }
@@ -652,11 +662,22 @@ function renderLaborWorkerRelease() {
     .filter((device) => !device.revokedAt && device.workerVersion)
     .map((device) => String(device.workerVersion));
   const updateAvailable = installedVersions.some((installed) => compareStableVersions(version, installed) > 0);
+  labor.downloadWorker.textContent = updateAvailable ? `立即更新至 ${version}` : "下载核对助手";
   labor.workerReleaseStatus.textContent = updateAvailable
     ? `${platformLabel} 有新版本 ${version}，请下载更新`
     : installedVersions.length
       ? `${platformLabel} 已是最新版本 ${version}`
       : `${platformLabel} 最新版本 ${version}`;
+}
+
+function renderLaborWorkerReleaseUploadHint() {
+  const releasePlatform = labor.workerReleasePlatform?.value || "macos-arm64";
+  const isWindows = releasePlatform === "windows-x64";
+  const environmentLabel = laborWorkerStorageEnvironmentLabel(laborState.workerRelease?.storageEnvironment);
+  setText(
+    labor.workerReleaseUploadStatus,
+    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 后上传到${environmentLabel}私有存储。`,
+  );
 }
 
 function syncLaborWorkerReleaseUploadControls() {
@@ -668,22 +689,28 @@ function syncLaborWorkerReleaseUploadControls() {
       ? ".exe,application/x-msdownload,application/vnd.microsoft.portable-executable"
       : ".dmg,application/x-apple-diskimage";
   }
-  setText(
-    labor.workerReleaseUploadStatus,
-    `选择对应版本 ${isWindows ? "EXE" : "DMG"} 后上传到当前环境私有存储。`,
-  );
+  renderLaborWorkerReleaseUploadHint();
 }
 
 async function uploadLaborWorkerRelease() {
   const file = labor.workerReleasePackage?.files?.[0];
   const requiredVersion = String(laborState.workerRelease?.requiredWorkerVersion || "");
   const releasePlatform = labor.workerReleasePlatform?.value || laborState.workerPlatform;
+  const filenamePattern = releasePlatform === "windows-x64"
+    ? /^Σ海外报账核对助手-(\d+\.\d+\.\d+)-windows-x64\.exe$/
+    : /^Σ海外报账核对助手-(\d+\.\d+\.\d+)-arm64\.dmg$/;
+  const releaseVersion = String(file?.name || "").match(filenamePattern)?.[1] || "";
   const expectedFilename = releasePlatform === "windows-x64"
-    ? `Σ海外报账核对助手-${requiredVersion}-windows-x64.exe`
-    : `Σ海外报账核对助手-${requiredVersion}-arm64.dmg`;
+    ? `Σ海外报账核对助手-X.Y.Z-windows-x64.exe`
+    : `Σ海外报账核对助手-X.Y.Z-arm64.dmg`;
   if (!file) return toast(`请先选择核对助手 ${releasePlatform === "windows-x64" ? "EXE" : "DMG"} 安装包。`);
-  if (!requiredVersion || file.name !== expectedFilename) {
-    const message = `请选择当前要求版本安装包：${expectedFilename}`;
+  if (!releaseVersion) {
+    const message = `安装包文件名应为：${expectedFilename}`;
+    setText(labor.workerReleaseUploadStatus, message, true);
+    return toast(message);
+  }
+  if (requiredVersion && compareStableVersions(releaseVersion, requiredVersion) < 0) {
+    const message = `安装包版本不能低于当前最低要求 ${requiredVersion}。`;
     setText(labor.workerReleaseUploadStatus, message, true);
     return toast(message);
   }
@@ -695,7 +722,7 @@ async function uploadLaborWorkerRelease() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         platform: releasePlatform,
-        version: requiredVersion,
+        version: releaseVersion,
         filename: file.name,
         sizeBytes: file.size,
         sha256,
@@ -710,9 +737,22 @@ async function uploadLaborWorkerRelease() {
       body: file,
     });
     if (!uploaded.ok) throw new Error(`私有存储未接收安装包（HTTP ${uploaded.status}）。`);
+    beginButtonLoading(labor.uploadWorkerRelease, "正在发布");
+    await requestJson("/api/labor/worker/release/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        platform: releasePlatform,
+        version: releaseVersion,
+        filename: file.name,
+        sizeBytes: file.size,
+        sha256,
+      }),
+    });
+    await loadLaborWorkerRelease();
     const platformLabel = laborWorkerPlatformLabel(releasePlatform);
-    setText(labor.workerReleaseUploadStatus, `${platformLabel} ${requiredVersion} 已上传到当前环境私有存储；更新清单生效后用户会收到提示。`);
-    toast(`${platformLabel} 核对助手 ${requiredVersion} 安装包上传完成。`);
+    setText(labor.workerReleaseUploadStatus, `${platformLabel} ${releaseVersion} 已发布；旧版本助手会提示立即更新。`);
+    toast(`${platformLabel} 核对助手 ${releaseVersion} 已发布。`);
   } catch (error) {
     setText(labor.workerReleaseUploadStatus, error.message, true);
     toast(error.message);

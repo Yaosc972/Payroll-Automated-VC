@@ -1,6 +1,6 @@
 {
   "name": "sigma-overseas-reconciliation-worker",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "private": true,
   "description": "Personal desktop worker for Sigma overseas reimbursement reconciliation.",
   "main": "main.js",

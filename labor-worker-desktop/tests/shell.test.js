@@ -150,7 +150,9 @@ test("package metadata is worker-only and uses the dedicated product identity", 
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   const serialized = JSON.stringify(packageJson);
   assert.equal(packageJson.name, "sigma-overseas-reconciliation-worker");
+  assert.equal(packageJson.version, "0.3.13");
   assert.equal(packageJson.build.productName, "Σ海外报账核对助手");
+  assert.match(fs.readFileSync(path.join(ROOT, "renderer", "app.js"), "utf8"), /workerVersion:\s*"0\.3\.13"/);
   assert.equal(packageJson.build.appId, "com.sigmaworkbench.overseaslaborworker");
   assert.deepEqual(packageJson.build.protocols[0].schemes, ["sigma-overseas-labor-worker"]);
   assert.match(packageJson.build.mac.icon, /overseas-labor-worker\.icns$/);
@@ -240,7 +242,9 @@ test("desktop shell exposes automatic update status and a safe browser download 
   assert.match(html, /id="updateButton"/);
   assert.match(preload, /openUpdate:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("worker:open-update"\)/);
   assert.match(main, /ipcMain\.handle\("worker:open-update"/);
-  assert.match(main, /shell\.openExternal\(updatePageUrl/);
+  assert.match(main, /pendingUpdateDownloadUrl/);
+  assert.match(main, /\/api\/labor\/worker\/release\/download/);
+  assert.match(main, /shell\.openExternal\(downloadUrl/);
   assert.match(renderer, /workerBridge\.openUpdate\(\)/);
   assert.match(renderer, /key === "upgrade_required" \|\| key === "update_available"/);
 });

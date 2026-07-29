@@ -375,6 +375,122 @@ def test_browser_worker_release_exposes_latest_private_installer_without_object_
     assert "objectKey" not in response.json()
 
 
+def test_persisted_worker_release_overrides_environment_and_becomes_required(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_ENV", "production")
+    digest = "f" * 64
+    monkeypatch.setenv(
+        "SIGMA_LABOR_WORKER_UPDATE_MANIFEST",
+        json.dumps(
+            {
+                "version": CURRENT_WORKER_VERSION,
+                "minimumVersion": CURRENT_WORKER_VERSION,
+                "url": "https://uat.example.com/old.dmg",
+                "sha256": "a" * 64,
+                "signature": f"sha256:{'a' * 64}",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_load_persisted_labor_worker_release_manifest",
+        lambda: {
+            "schemaVersion": 3,
+            "requiredWorkerVersion": "0.3.13",
+            "releases": {
+                "macos-arm64": {
+                    "version": "0.3.13",
+                    "minimumVersion": "0.3.13",
+                    "sha256": digest,
+                    "signature": f"sha256:{digest}",
+                    "blobPathname": "labor-runs/production/owners/system/worker-releases/macos-arm64/worker.dmg",
+                    "filename": "worker.dmg",
+                }
+            },
+        },
+    )
+
+    response = client.get("/api/labor/worker/release")
+
+    assert response.status_code == 200
+    assert response.json()["version"] == "0.3.13"
+    assert response.json()["requiredWorkerVersion"] == "0.3.13"
+    assert response.json()["storageEnvironment"] == "production"
+
+
+def test_admin_can_finalize_uploaded_worker_release_and_publish_manifest(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(app_module, "_labor_request_actor", lambda request: ("admin-user", True))
+    monkeypatch.setattr(app_module, "_load_persisted_labor_worker_release_manifest", lambda: {})
+    monkeypatch.setattr(
+        app_module,
+        "_verify_labor_worker_release_artifact",
+        lambda **kwargs: {
+            "blobPathname": "labor-runs/production/owners/system/worker-releases/macos-arm64/worker.dmg",
+            "sizeBytes": kwargs["size_bytes"],
+        },
+    )
+    stored = {}
+    monkeypatch.setattr(
+        app_module,
+        "_persist_labor_worker_release_manifest",
+        lambda manifest: stored.update(manifest),
+    )
+    digest = "b" * 64
+
+    response = client.post(
+        "/api/labor/worker/release/finalize",
+        json={
+            "platform": "macos-arm64",
+            "version": "0.3.13",
+            "filename": "Σ海外报账核对助手-0.3.13-arm64.dmg",
+            "sizeBytes": 126_000_000,
+            "sha256": digest,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["version"] == "0.3.13"
+    assert response.json()["requiredWorkerVersion"] == "0.3.13"
+    assert stored["requiredWorkerVersion"] == "0.3.13"
+    assert stored["releases"]["macos-arm64"]["sha256"] == digest
+    assert stored["releases"]["macos-arm64"]["signature"] == f"sha256:{digest}"
+
+
+def test_worker_version_exposes_direct_private_download_for_persisted_release(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    digest = "c" * 64
+    monkeypatch.setattr(
+        app_module,
+        "_load_persisted_labor_worker_release_manifest",
+        lambda: {
+            "schemaVersion": 3,
+            "requiredWorkerVersion": "0.3.13",
+            "releases": {
+                "macos-arm64": {
+                    "version": "0.3.13",
+                    "minimumVersion": "0.3.13",
+                    "sha256": digest,
+                    "signature": f"sha256:{digest}",
+                    "objectKey": "labor-runs/production/owners/system/worker-releases/macos-arm64/worker.dmg",
+                    "filename": "worker.dmg",
+                }
+            },
+        },
+    )
+
+    response = client.get(
+        "/api/labor/worker/version",
+        headers={"authorization": "Bearer token-user-1"},
+        params={"currentVersion": CURRENT_WORKER_VERSION, "platform": "macos-arm64"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["updateAvailable"] is True
+    assert response.json()["upgradeRequired"] is True
+    assert response.json()["downloadUrl"] == "/api/labor/worker/release/download"
+
+
 def test_browser_worker_release_selects_windows_x64_from_release_catalog(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     digest = "e" * 64

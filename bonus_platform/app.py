@@ -717,6 +717,9 @@ from .engine.labor.jobs import (
     labor_worker_jobs_enabled,
 )
 from .engine.labor.blob_storage import (
+    blob_get_bytes,
+    blob_list_prefix,
+    blob_put_bytes,
     canonicalize_labor_metadata_for_blob,
     create_labor_blob_presigned_url,
     labor_blob_signed_urls_enabled,
@@ -736,11 +739,13 @@ from .engine.labor.persistent_storage import (
     create_labor_supabase_signed_download,
     create_labor_supabase_signed_upload_for_object,
     delete_labor_run_from_persistent,
+    get_labor_supabase_private_object,
     labor_p1_object_key,
     labor_persistent_environment,
     labor_storage_backend,
     labor_supabase_object_metadata,
     persist_labor_private_output,
+    put_labor_supabase_private_object,
 )
 from .engine.labor.audit import append_labor_audit_event, read_labor_audit_events
 from .engine.labor.hardening import LaborHardeningPolicy, LaborResourceLimitError, LaborTaskLimiter, labor_storage_info
@@ -1118,16 +1123,20 @@ def _labor_public_build_snapshot(build: dict) -> dict:
 
 
 def _labor_required_worker_version() -> str:
-    baseline = OVERSEAS_LABOR_REQUIRED_WORKER_VERSION
+    candidates = [OVERSEAS_LABOR_REQUIRED_WORKER_VERSION]
     configured = str(os.environ.get("SIGMA_LABOR_REQUIRED_WORKER_VERSION") or "").strip()
-    if not configured:
-        return baseline
-    try:
-        if parse_stable_worker_version(configured) >= parse_stable_worker_version(baseline):
-            return configured
-    except ValueError:
-        pass
-    return baseline
+    if configured:
+        candidates.append(configured)
+    persisted = _load_persisted_labor_worker_release_manifest()
+    if isinstance(persisted, dict):
+        candidates.append(str(persisted.get("requiredWorkerVersion") or ""))
+    valid = []
+    for candidate in candidates:
+        try:
+            valid.append((parse_stable_worker_version(candidate), candidate))
+        except ValueError:
+            continue
+    return max(valid)[1] if valid else OVERSEAS_LABOR_REQUIRED_WORKER_VERSION
 
 
 def _labor_requires_employee_detail(metadata: dict) -> bool:
@@ -3045,6 +3054,7 @@ def claim_personal_labor_worker_job(
 
 
 _LABOR_WORKER_RELEASE_PLATFORMS = {"macos-arm64", "windows-x64"}
+_LABOR_WORKER_RELEASE_MANIFEST_FILENAME = "manifest.json"
 
 
 def _labor_worker_release_platform(value: str) -> str:
@@ -3052,6 +3062,41 @@ def _labor_worker_release_platform(value: str) -> str:
     if platform not in _LABOR_WORKER_RELEASE_PLATFORMS:
         raise HTTPException(status_code=400, detail="核对助手平台仅支持 macos-arm64 或 windows-x64。")
     return platform
+
+
+def _labor_worker_release_manifest_path() -> str:
+    return (
+        f"labor-runs/{labor_persistent_environment()}/owners/system/"
+        f"worker-releases/{_LABOR_WORKER_RELEASE_MANIFEST_FILENAME}"
+    )
+
+
+def _load_persisted_labor_worker_release_manifest() -> dict:
+    pathname = _labor_worker_release_manifest_path()
+    try:
+        if labor_blob_signed_urls_enabled():
+            content = blob_get_bytes(pathname)
+        elif labor_persistent_storage_enabled():
+            content = get_labor_supabase_private_object(pathname)
+        else:
+            return {}
+        parsed = json.loads(content.decode("utf-8")) if content else {}
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception as exc:  # noqa: BLE001 - an unavailable manifest falls back to the deployment baseline.
+        logger.warning("labor worker release manifest read failed: %s", type(exc).__name__)
+        return {}
+
+
+def _persist_labor_worker_release_manifest(manifest: dict) -> None:
+    payload = json.dumps(manifest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    pathname = _labor_worker_release_manifest_path()
+    if labor_blob_signed_urls_enabled():
+        blob_put_bytes(pathname, payload, content_type="application/json")
+        return
+    if labor_persistent_storage_enabled():
+        put_labor_supabase_private_object(pathname, payload, content_type="application/json")
+        return
+    raise RuntimeError("未配置核对助手发布清单的持久化存储。")
 
 
 def _labor_worker_release_catalog() -> dict[str, dict]:
@@ -3063,13 +3108,25 @@ def _labor_worker_release_catalog() -> dict[str, dict]:
         manifest = {}
     releases = manifest.get("releases")
     if isinstance(releases, dict):
-        return {
+        catalog = {
             platform: dict(release)
             for platform, release in releases.items()
             if platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
         }
-    # Version 1 manifests represented the original macOS ARM64 release directly.
-    return {"macos-arm64": manifest} if manifest else {}
+    else:
+        # Version 1 manifests represented the original macOS ARM64 release directly.
+        catalog = {"macos-arm64": manifest} if manifest else {}
+    persisted = _load_persisted_labor_worker_release_manifest()
+    persisted_releases = persisted.get("releases") if isinstance(persisted, dict) else {}
+    if isinstance(persisted_releases, dict):
+        catalog.update(
+            {
+                platform: dict(release)
+                for platform, release in persisted_releases.items()
+                if platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
+            }
+        )
+    return catalog
 
 
 def _labor_worker_release_config(platform: str = "macos-arm64") -> dict:
@@ -3110,6 +3167,7 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
     return {
         "available": complete,
         "platform": platform,
+        "storageEnvironment": labor_persistent_environment(),
         "version": version,
         "minimumVersion": str(manifest.get("minimumVersion") or _labor_required_worker_version()),
         "requiredWorkerVersion": _labor_required_worker_version(),
@@ -3253,6 +3311,132 @@ def create_personal_labor_worker_release_upload_intent(request: Request, payload
     }
 
 
+def _verify_labor_worker_release_artifact(
+    *,
+    platform: str,
+    version: str,
+    filename: str,
+    size_bytes: int,
+) -> dict:
+    object_key = (
+        f"labor-runs/{labor_persistent_environment()}/owners/system/"
+        f"worker-releases/{platform}/{filename}"
+    )
+    if labor_blob_signed_urls_enabled():
+        matches = [
+            entry
+            for entry in blob_list_prefix(object_key)
+            if str(entry.get("pathname") or "") == object_key
+        ]
+        if not matches:
+            raise HTTPException(status_code=409, detail="私有存储中未找到刚上传的安装包，请重新上传。")
+        observed_size = int(matches[0].get("size") or matches[0].get("sizeBytes") or 0)
+        location = {"blobPathname": object_key}
+    elif labor_persistent_storage_enabled():
+        observed = labor_supabase_object_metadata(object_key)
+        observed_size = int(observed.get("sizeBytes") or 0)
+        location = {"objectKey": object_key}
+    else:
+        raise RuntimeError("未配置核对助手安装包的私有持久化存储。")
+    if observed_size != size_bytes:
+        raise HTTPException(
+            status_code=409,
+            detail=f"安装包大小与上传前不一致（预期 {size_bytes}，实际 {observed_size}），请重新上传。",
+        )
+    return {**location, "sizeBytes": observed_size}
+
+
+@app.post("/api/labor/worker/release/finalize")
+def finalize_personal_labor_worker_release(request: Request, payload: dict = Body(...)) -> dict:
+    _, is_admin = _labor_request_actor(request)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="仅系统管理员可以发布核对助手安装包。")
+    platform = _labor_worker_release_platform(str(payload.get("platform") or "macos-arm64"))
+    version = str(payload.get("version") or "").strip()
+    try:
+        parse_stable_worker_version(version)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    required_version = _labor_required_worker_version()
+    if not worker_version_at_least(version, required_version):
+        raise HTTPException(status_code=409, detail=f"安装包版本不能低于当前最低要求 {required_version}。")
+    filename = str(payload.get("filename") or "").strip()
+    expected_filename = _labor_worker_release_filename(platform, version)
+    if filename != expected_filename:
+        raise HTTPException(status_code=400, detail=f"安装包文件名必须是 {expected_filename}。")
+    try:
+        size_bytes = int(payload.get("sizeBytes") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="安装包大小格式无效。") from exc
+    if size_bytes <= 0 or size_bytes > 300 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="核对助手安装包必须小于 300 MB。")
+    sha256 = str(payload.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise HTTPException(status_code=400, detail="安装包 SHA-256 格式无效。")
+    try:
+        artifact = _verify_labor_worker_release_artifact(
+            platform=platform,
+            version=version,
+            filename=filename,
+            size_bytes=size_bytes,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - keep storage internals out of the response.
+        logger.warning("labor worker release verification failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="暂时无法确认安装包上传结果，请稍后重试。") from exc
+
+    existing = _load_persisted_labor_worker_release_manifest()
+    releases = {
+        release_platform: dict(release)
+        for release_platform, release in (existing.get("releases") or {}).items()
+        if release_platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
+    } if isinstance(existing, dict) and isinstance(existing.get("releases"), dict) else {}
+    published_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    release = {
+        "version": version,
+        "minimumVersion": version,
+        "sha256": sha256,
+        "signature": f"sha256:{sha256}",
+        "filename": filename,
+        "sizeBytes": int(artifact["sizeBytes"]),
+        "publishedAt": published_at,
+        **{
+            key: str(artifact[key])
+            for key in ("objectKey", "blobPathname")
+            if artifact.get(key)
+        },
+    }
+    releases[platform] = release
+    manifest = {
+        "schemaVersion": 3,
+        "requiredWorkerVersion": version,
+        "publishedAt": published_at,
+        "releases": releases,
+    }
+    try:
+        _persist_labor_worker_release_manifest(manifest)
+    except Exception as exc:  # noqa: BLE001 - a failed manifest write must not activate the release.
+        logger.warning("labor worker release manifest publish failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="安装包已上传，但发布清单写入失败；旧版本仍然有效，请重试发布。") from exc
+    return {
+        "available": True,
+        "platform": platform,
+        "storageEnvironment": labor_persistent_environment(),
+        "version": version,
+        "minimumVersion": version,
+        "requiredWorkerVersion": version,
+        "sha256": sha256,
+        "signature": f"sha256:{sha256}",
+        "filename": filename,
+        "downloadUrl": (
+            "/api/labor/worker/release/download"
+            if platform == "macos-arm64"
+            else f"/api/labor/worker/release/download?platform={platform}"
+        ),
+    }
+
+
 @app.get("/api/labor/worker/version")
 def get_personal_labor_worker_version(
     currentVersion: str = "",
@@ -3261,11 +3445,15 @@ def get_personal_labor_worker_version(
 ) -> dict:
     _labor_worker_identity(authorization, worker_version=currentVersion)
     platform = _labor_worker_release_platform(platform)
-    manifest = _labor_worker_release_config(platform)
-    version = str(manifest.get("version") or "") if isinstance(manifest, dict) else ""
-    allowed = {key: manifest[key] for key in ("version", "url", "sha256", "signature", "minimumVersion") if key in manifest}
+    release = _labor_public_worker_release(platform)
+    version = str(release.get("version") or "")
+    allowed = {
+        key: release[key]
+        for key in ("version", "sha256", "signature", "minimumVersion", "downloadUrl")
+        if release.get(key)
+    }
     required_version = _labor_required_worker_version()
-    complete_manifest = all(allowed.get(key) for key in ("version", "url", "sha256", "signature"))
+    complete_manifest = release.get("available") is True
     try:
         manifest_version = parse_stable_worker_version(version)
         current_version = parse_stable_worker_version(currentVersion)
