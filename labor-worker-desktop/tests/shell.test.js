@@ -9,6 +9,7 @@ const { createActivationDispatcher } = require("../lib/activation-dispatcher");
 const { presentWorkerStatus } = require("../lib/status");
 const { workerCommand } = require("../lib/worker-command");
 const { activeWorkerPid } = require("../lib/worker-pid");
+const { proxyEnvironment } = require("../lib/proxy");
 
 test("activation accepts only the worker scheme, HTTPS API, and one-time code", () => {
   const valid = parseActivationUrl(
@@ -68,6 +69,32 @@ test("activation links received before app readiness are delivered once after re
 
   await dispatcher.enqueue("activation-after-ready");
   assert.deepEqual(delivered, ["activation-before-ready", "activation-after-ready"]);
+});
+
+test("resolved Electron system proxy is passed to the Python worker", () => {
+  const cleared = {
+    ALL_PROXY: "",
+    HTTP_PROXY: "",
+    HTTPS_PROXY: "",
+    all_proxy: "",
+    http_proxy: "",
+    https_proxy: ""
+  };
+  assert.deepEqual(proxyEnvironment("PROXY 127.0.0.1:7890; DIRECT"), {
+    ...cleared,
+    HTTP_PROXY: "http://127.0.0.1:7890",
+    HTTPS_PROXY: "http://127.0.0.1:7890",
+    SIGMA_WORKER_PROXY_MODE: "system"
+  });
+  assert.deepEqual(proxyEnvironment("DIRECT"), {
+    ...cleared,
+    SIGMA_WORKER_PROXY_MODE: "direct"
+  });
+  assert.deepEqual(proxyEnvironment("SOCKS5 127.0.0.1:7891"), {
+    ...cleared,
+    ALL_PROXY: "socks5://127.0.0.1:7891",
+    SIGMA_WORKER_PROXY_MODE: "system"
+  });
 });
 
 test("packaged worker command launches only the dedicated worker executable", () => {
@@ -150,9 +177,9 @@ test("package metadata is worker-only and uses the dedicated product identity", 
   const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
   const serialized = JSON.stringify(packageJson);
   assert.equal(packageJson.name, "sigma-overseas-reconciliation-worker");
-  assert.equal(packageJson.version, "0.3.13");
+  assert.equal(packageJson.version, "0.3.14");
   assert.equal(packageJson.build.productName, "Σ海外报账核对助手");
-  assert.match(fs.readFileSync(path.join(ROOT, "renderer", "app.js"), "utf8"), /workerVersion:\s*"0\.3\.13"/);
+  assert.match(fs.readFileSync(path.join(ROOT, "renderer", "app.js"), "utf8"), /workerVersion:\s*"0\.3\.14"/);
   assert.equal(packageJson.build.appId, "com.sigmaworkbench.overseaslaborworker");
   assert.deepEqual(packageJson.build.protocols[0].schemes, ["sigma-overseas-labor-worker"]);
   assert.match(packageJson.build.mac.icon, /overseas-labor-worker\.icns$/);
@@ -220,6 +247,13 @@ test("status presentation covers the worker lifecycle and strips unknown fields"
   assert.equal(presentWorkerStatus({}, { activated: false }).status, "unactivated");
 });
 
+test("status presentation preserves actionable connection failure states", () => {
+  for (const status of ["proxy_unavailable", "network_offline", "service_unavailable", "recovering", "identity_expired"]) {
+    assert.equal(presentWorkerStatus({ status }, { activated: true, processRunning: true }).status, status);
+    assert.equal(presentWorkerStatus({ status }, { activated: true, processRunning: false }).status, status);
+  }
+});
+
 test("pending update is shown only while the worker is not processing", () => {
   assert.equal(
     presentWorkerStatus({ status: "idle" }, { activated: true, processRunning: true, updateVersion: "0.4.0" }).status,
@@ -256,4 +290,14 @@ test("active worker PID prevents duplicate desktop workers", () => {
   assert.equal(activeWorkerPid(root, () => false), null);
   assert.equal(fs.existsSync(path.join(root, "worker.pid")), false);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("desktop reconnect waits for the previous PID and adopts an existing live worker", () => {
+  const main = fs.readFileSync(path.join(ROOT, "main.js"), "utf8");
+  assert.match(main, /processRunning:\s*workerProcessRunning\(\)/);
+  assert.match(main, /async function stopWorker\(\)/);
+  assert.match(main, /await waitForWorkerExit/);
+  assert.match(main, /workerStopping/);
+  assert.match(main, /powerMonitor\.on\("resume"/);
+  assert.match(main, /superviseWorker/);
 });

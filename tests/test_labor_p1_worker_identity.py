@@ -221,6 +221,9 @@ def test_p1_worker_token_resolution_is_device_bound_and_updates_last_seen():
     assert params == (hashlib.sha256(token.encode()).hexdigest(),)
     assert resolved["userId"] == "overseasAdminUser"
     assert resolved["deviceId"] == "labor_device_1"
+    token_update = next((sql, params) for sql, params in connection.queries if "last_used_at=now()" in sql.lower())
+    assert "greatest(expires_at, now()+(%s*interval '1 second'))" in token_update[0].lower()
+    assert token_update[1] == (24 * 60 * 60, 24 * 60 * 60, "labor_token_1")
     device_update = next((sql, params) for sql, params in connection.queries if "last_seen_at=now()" in sql.lower())
     assert "worker_version" in device_update[0].lower()
     assert "0.3.1" in device_update[1]
@@ -316,6 +319,24 @@ def test_p1_worker_token_does_not_recover_when_grace_lookup_finds_no_safe_record
 
     assert len(connection.queries) == 2
     assert connection.rolled_back is True
+
+
+def test_p1_worker_device_list_exposes_credential_expiry_for_connection_diagnostics():
+    row = {
+        **_device_row(),
+        "credential_expires_at": datetime(2026, 8, 16, 8, 0, tzinfo=timezone.utc),
+    }
+    connection = FakeConnection([FakeResult(rows=[row])])
+
+    devices = identity.list_labor_worker_devices(
+        owner_user_id="overseasAdminUser",
+        connect=lambda: connection,
+    )
+
+    query, params = connection.queries[0]
+    assert "labor_worker_tokens" in query.lower()
+    assert params == ("overseasAdminUser",)
+    assert devices[0]["credentialExpiresAt"] == "2026-08-16T08:00:00Z"
 
 
 def test_p1_worker_device_revoke_is_owner_scoped_and_revokes_all_active_tokens():

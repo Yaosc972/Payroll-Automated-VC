@@ -559,6 +559,19 @@ function workerDeviceIsOnline(device) {
   return Number.isFinite(seenAt) && Date.now() - seenAt < 15 * 1000;
 }
 
+function workerDeviceConnectionState(device) {
+  if (device?.revokedAt) return "revoked";
+  const credentialExpiresAt = Date.parse(device?.credentialExpiresAt || "");
+  if (Number.isFinite(credentialExpiresAt) && credentialExpiresAt <= Date.now()) return "identity_expired";
+  if (workerDeviceIsOnline(device)) return "online";
+  if (!device?.lastSeenAt) return "offline";
+  const seenAt = Date.parse(device.lastSeenAt);
+  if (!Number.isFinite(seenAt)) return "offline";
+  const age = Date.now() - seenAt;
+  if (age < 3 * 60 * 1000) return "recovering";
+  return "offline";
+}
+
 function laborWorkerEnvironmentLabel() {
   return window.location.hostname === "sigma-workbench.vercel.app" ? "生产环境" : "UAT 环境";
 }
@@ -573,6 +586,8 @@ function updateLaborWorkerHeader(devices) {
   const active = devices.filter((device) => !device.revokedAt);
   const online = active.some(workerDeviceIsOnline);
   const environment = laborWorkerEnvironmentLabel();
+  const recovering = active.some((device) => workerDeviceConnectionState(device) === "recovering");
+  const identityExpired = active.some((device) => workerDeviceConnectionState(device) === "identity_expired");
   if (labor.btnWorkerStatus) {
     labor.btnWorkerStatus.hidden = laborState.moduleAccess?.p1?.required !== true;
     labor.btnWorkerStatus.classList.toggle("online", online);
@@ -580,9 +595,13 @@ function updateLaborWorkerHeader(devices) {
   if (labor.workerStatusLabel) {
     labor.workerStatusLabel.textContent = online
       ? `核对助手在线 · ${environment}`
-      : active.length
-        ? `核对助手待连接 · ${environment}`
-        : `核对助手未激活 · ${environment}`;
+      : identityExpired
+        ? `核对助手身份已失效 · ${environment}`
+        : recovering
+          ? `核对助手正在恢复连接 · ${environment}`
+          : active.length
+            ? `核对助手网络已离线 · ${environment}`
+            : `核对助手未激活 · ${environment}`;
   }
 }
 
@@ -770,9 +789,20 @@ function renderLaborWorkerDevices() {
     return;
   }
   labor.workerDevices.innerHTML = active.map((device) => {
-    const online = workerDeviceIsOnline(device);
+    const connectionState = workerDeviceConnectionState(device);
+    const statusLabels = {
+      online: "在线",
+      recovering: "正在恢复",
+      identity_expired: "身份已失效",
+      offline: "网络离线",
+    };
     const seen = device.lastSeenAt ? String(device.lastSeenAt).replace("T", " ").slice(0, 19) : "尚未连接";
-    return `<div class="worker-device-item"><div><strong>${escapeHtml(device.displayName || "个人核对助手")} · ${online ? "在线" : "待连接"}</strong><span>版本 ${escapeHtml(device.workerVersion || "待上报")} · 最近连接 ${escapeHtml(seen)}</span></div><button type="button" data-worker-revoke="${escapeHtml(device.id)}">撤销</button></div>`;
+    const hint = connectionState === "identity_expired"
+      ? "请重新激活"
+      : connectionState === "offline"
+        ? "请打开助手查看代理或网络原因"
+        : "";
+    return `<div class="worker-device-item"><div><strong>${escapeHtml(device.displayName || "个人核对助手")} · ${statusLabels[connectionState] || "待连接"}</strong><span>版本 ${escapeHtml(device.workerVersion || "待上报")} · 最近连接 ${escapeHtml(seen)}${hint ? ` · ${escapeHtml(hint)}` : ""}</span></div><button type="button" data-worker-revoke="${escapeHtml(device.id)}">撤销</button></div>`;
   }).join("");
 }
 

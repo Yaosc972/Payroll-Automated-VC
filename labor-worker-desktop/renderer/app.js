@@ -4,6 +4,11 @@ const labels = {
   idle: "在线，等待任务",
   processing: "正在核对",
   offline: "连接已中断",
+  proxy_unavailable: "系统代理不可用",
+  network_offline: "网络连接不可用",
+  service_unavailable: "核对服务暂不可用",
+  recovering: "正在恢复连接",
+  identity_expired: "身份已失效",
   failed: "任务需要重试",
   upgrade_required: "必须升级后使用",
   update_available: "有新版本可用"
@@ -12,7 +17,7 @@ const labels = {
 const previewStatus = {
   status: "unactivated",
   message: "请从海外劳务报账页面激活本机核对助手。",
-  workerVersion: "0.3.13"
+  workerVersion: "0.3.14"
 };
 const workerBridge = window.sigmaLaborWorker || {
   getStatus: async () => previewStatus,

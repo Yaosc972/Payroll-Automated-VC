@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import errno
 import hashlib
 import json
@@ -34,6 +35,62 @@ def _worker_platform() -> str:
 
 class WorkerAlreadyRunning(RuntimeError):
     pass
+
+
+class LaborWorkerLeaseLost(RuntimeError):
+    pass
+
+
+class _FailoverHttpClient:
+    """Use direct networking only when the configured proxy cannot connect."""
+
+    _SAFE_FALLBACK_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError)
+
+    def __init__(self, primary: httpx.Client, direct: httpx.Client) -> None:
+        self.primary = primary
+        self.direct = direct
+
+    def request(self, method: str, url: str, **kwargs):
+        try:
+            return self.primary.request(method, url, **kwargs)
+        except self._SAFE_FALLBACK_ERRORS:
+            return self.direct.request(method, url, **kwargs)
+
+    def get(self, url: str, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+    @contextmanager
+    def stream(self, method: str, url: str, **kwargs):
+        stream_context = self.primary.stream(method, url, **kwargs)
+        try:
+            response = stream_context.__enter__()
+        except self._SAFE_FALLBACK_ERRORS:
+            stream_context = self.direct.stream(method, url, **kwargs)
+            response = stream_context.__enter__()
+        try:
+            yield response
+        except BaseException:
+            if not stream_context.__exit__(*sys.exc_info()):
+                raise
+        else:
+            stream_context.__exit__(None, None, None)
+
+    def close(self) -> None:
+        self.primary.close()
+        self.direct.close()
+
+
+def _default_worker_http_client():
+    timeout = httpx.Timeout(30.0, connect=3.0)
+    if os.environ.get("SIGMA_WORKER_PROXY_MODE") == "system":
+        return _FailoverHttpClient(
+            httpx.Client(timeout=timeout, trust_env=True),
+            httpx.Client(timeout=timeout, trust_env=False),
+        )
+    return httpx.Client(timeout=timeout, trust_env=False)
 
 
 class _WorkerInstanceLock:
@@ -101,10 +158,11 @@ class PersonalLaborWorker:
         self.worker_version = worker_version
         self.data_root = Path(data_root)
         self.runner = runner
-        self.client = client or httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0))
+        self.client = client or _default_worker_http_client()
         self.logger = _worker_logger(self.data_root / "logs" / "worker.log")
         self._required_version_checked = False
         self._next_idle_update_check_at = time.monotonic() + 300.0
+        self._ever_connected = False
         self._write_status("connecting", "正在连接核对服务。")
 
     @property
@@ -112,10 +170,14 @@ class PersonalLaborWorker:
         return {"authorization": f"Bearer {self.token}", "x-worker-version": self.worker_version}
 
     def process_once(self) -> dict[str, Any] | None:
-        self._write_status("connecting", "正在检查本人待处理任务。")
+        if not self._ever_connected:
+            self._write_status("connecting", "正在连接核对服务。")
         if not self._required_version_checked:
             version_status = self.check_update()
             self._required_version_checked = True
+            if version_status is not None:
+                self._ever_connected = True
+                self._write_status("idle", "核对助手已连接，正在检查待处理任务。")
             if version_status and version_status.get("upgradeRequired"):
                 required = str(
                     version_status.get("requiredWorkerVersion")
@@ -126,6 +188,7 @@ class PersonalLaborWorker:
                 return None
         response = self.client.post(f"{self.api_url}/api/labor/worker/jobs/claim", headers=self.headers)
         response.raise_for_status()
+        self._ever_connected = True
         job = response.json().get("job")
         if not job:
             version_status = self._check_idle_update_if_due()
@@ -142,6 +205,7 @@ class PersonalLaborWorker:
         job_id = str(job["id"])
         run_id = str(job["runId"])
         stop = threading.Event()
+        lease_lost = threading.Event()
         progress_state = {
             "status": "running",
             "phase": "claimed",
@@ -149,7 +213,7 @@ class PersonalLaborWorker:
         }
         heartbeat = threading.Thread(
             target=self._heartbeat_loop,
-            args=(job_id, stop, progress_state),
+            args=(job_id, stop, progress_state, lease_lost),
             daemon=True,
         )
         heartbeat.start()
@@ -175,6 +239,7 @@ class PersonalLaborWorker:
                     phase="reading_workbook",
                     message="正在读取工作表。",
                 )
+                self._assert_worker_lease(lease_lost)
                 self._upload_mapping_preflight_result(job_id, run_id, progress_state=progress_state)
             else:
                 metrics_path = self.data_root / "worker-temp" / f"{job_id}-metrics.jsonl"
@@ -190,13 +255,19 @@ class PersonalLaborWorker:
                         os.environ.pop("LABOR_RUNTIME_METRICS_PATH", None)
                     else:
                         os.environ["LABOR_RUNTIME_METRICS_PATH"] = previous_metrics_path
+                self._assert_worker_lease(lease_lost)
                 self._upload_runtime_metrics(job_id, metrics_path)
                 self._upload_result(job_id, run_id)
+            self._assert_worker_lease(lease_lost)
             completed = self.client.post(f"{self.api_url}/api/labor/worker/jobs/{job_id}/complete", headers=self.headers)
             completed.raise_for_status()
             self.logger.info("completed job=%s run=%s", job_id, run_id)
             self._write_status("idle", "任务已完成，核对助手继续等待。")
             return completed.json().get("job")
+        except LaborWorkerLeaseLost:
+            self.logger.warning("worker lease lost job=%s run=%s", job_id, run_id)
+            self._write_status("recovering", "任务连接已经失效，结果未提交；正在安全恢复。", job=job)
+            return {**job, "status": "lease_lost"}
         except Exception as exc:  # noqa: BLE001 - report stable failure to the queue.
             self.logger.exception("failed job=%s run=%s", job_id, run_id)
             self._report_failure(job_id, exc)
@@ -205,7 +276,7 @@ class PersonalLaborWorker:
         finally:
             stop.set()
             heartbeat.join(timeout=2)
-            self.check_update()
+            self.check_update(suppress_errors=True)
             self._next_idle_update_check_at = time.monotonic() + 300.0
 
     def _upload_runtime_metrics(self, job_id: str, metrics_path: Path) -> None:
@@ -245,15 +316,20 @@ class PersonalLaborWorker:
                 status_code = exc.response.status_code if exc.response is not None else 0
                 self.logger.warning("worker API rejected request status=%s", status_code)
                 if status_code in {401, 403}:
-                    self._write_status("unactivated", "核对助手身份已失效，请从海外劳务报账页面重新激活。")
+                    self._write_status("identity_expired", "核对助手身份已失效，请从海外劳务报账页面重新激活。")
                 elif status_code == 426:
                     self._write_status("upgrade_required", "当前版本不再兼容，请先升级核对助手。")
+                elif status_code >= 500:
+                    self._write_status("service_unavailable", "生产核对服务暂时不可用，正在自动恢复连接。")
                 else:
-                    self._write_status("offline", "核对服务暂时不可用，正在自动重连。")
+                    self._write_status("recovering", "核对服务拒绝了连接，正在自动恢复。")
                 time.sleep(min(delay * 2, 60.0))
             except httpx.RequestError as exc:
                 self.logger.warning("worker API unavailable: %s", exc)
-                self._write_status("offline", "无法连接核对服务，正在自动重连。")
+                if os.environ.get("SIGMA_WORKER_PROXY_MODE") == "system":
+                    self._write_status("proxy_unavailable", "系统代理当前不可用，请检查代理软件；助手会自动重试。")
+                else:
+                    self._write_status("network_offline", "网络当前不可用，核对助手正在自动重连。")
                 time.sleep(min(delay * 2, 60.0))
 
     def _write_status(self, status: str, message: str, *, job: dict[str, Any] | None = None) -> None:
@@ -271,7 +347,7 @@ class PersonalLaborWorker:
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temporary, destination)
 
-    def check_update(self) -> dict[str, Any] | None:
+    def check_update(self, *, suppress_errors: bool = False) -> dict[str, Any] | None:
         try:
             response = self.client.get(
                 f"{self.api_url}/api/labor/worker/version",
@@ -291,7 +367,9 @@ class PersonalLaborWorker:
             return manifest
         except httpx.HTTPError as exc:
             self.logger.warning("update check failed: %s", exc)
-            return None
+            if suppress_errors:
+                return None
+            raise
 
     def _check_idle_update_if_due(self) -> dict[str, Any] | None:
         if time.monotonic() < self._next_idle_update_check_at:
@@ -400,6 +478,11 @@ class PersonalLaborWorker:
         )
         response.raise_for_status()
 
+    @staticmethod
+    def _assert_worker_lease(lease_lost: threading.Event) -> None:
+        if lease_lost.is_set():
+            raise LaborWorkerLeaseLost("Worker 任务租约已经失效。")
+
     def _report_progress(
         self,
         job_id: str,
@@ -436,8 +519,10 @@ class PersonalLaborWorker:
         job_id: str,
         stop: threading.Event,
         progress_state: dict[str, Any],
+        lease_lost: threading.Event,
     ) -> None:
-        while not stop.wait(30):
+        interval_seconds = 20
+        while not stop.wait(interval_seconds):
             try:
                 disk = shutil.disk_usage(self.data_root)
                 progress = {
@@ -454,7 +539,17 @@ class PersonalLaborWorker:
                     json={"progress": progress},
                 )
                 response.raise_for_status()
+                interval_seconds = 20
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code if exc.response is not None else 0
+                if status_code in {401, 403, 409, 426}:
+                    lease_lost.set()
+                    self.logger.warning("heartbeat rejected and lease lost job=%s status=%s", job_id, status_code)
+                    return
+                interval_seconds = 5
+                self.logger.warning("heartbeat service failure job=%s status=%s", job_id, status_code)
             except httpx.HTTPError as exc:
+                interval_seconds = 5
                 self.logger.warning("heartbeat failed job=%s: %s", job_id, exc)
 
     def _report_failure(self, job_id: str, exc: Exception) -> None:

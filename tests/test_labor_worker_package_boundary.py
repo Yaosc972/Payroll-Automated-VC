@@ -14,7 +14,7 @@ def test_worker_release_version_is_explicit_and_not_older_than_server_gate():
     package = json.loads((WORKER_DESKTOP / "package.json").read_text(encoding="utf-8"))
     lockfile = json.loads((WORKER_DESKTOP / "package-lock.json").read_text(encoding="utf-8"))
 
-    assert package["version"] == "0.3.12"
+    assert package["version"] == "0.3.14"
     assert lockfile["version"] == package["version"]
     assert lockfile["packages"][""]["version"] == package["version"]
     assert worker_version_at_least(package["version"], OVERSEAS_LABOR_REQUIRED_WORKER_VERSION)

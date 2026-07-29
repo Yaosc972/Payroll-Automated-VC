@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, Notification, Tray, net, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, Menu, Notification, Tray, net, powerMonitor, safeStorage, session, shell } = require("electron");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const { exchangeActivation, parseActivationUrl } = require("./lib/activation");
 const { createActivationDispatcher } = require("./lib/activation-dispatcher");
+const { proxyEnvironment } = require("./lib/proxy");
 const { presentWorkerStatus } = require("./lib/status");
 const { workerCommand } = require("./lib/worker-command");
 const { activeWorkerPid } = require("./lib/worker-pid");
@@ -15,9 +16,13 @@ let tray = null;
 let workerProcess = null;
 let statusTimer = null;
 let updateTimer = null;
+let supervisorTimer = null;
 let quitting = false;
+let workerStopping = false;
+let supervisorBusy = false;
 let pendingUpdateVersion = "";
 let pendingUpdateDownloadUrl = "";
+let workerProxyEnvironment = { SIGMA_WORKER_PROXY_MODE: "unresolved" };
 let cachedSettings;
 
 function projectRoot() {
@@ -92,7 +97,8 @@ async function activateWorker(value) {
   fs.writeFileSync(paths.settings, JSON.stringify(settings, null, 2), { mode: 0o600 });
   fs.writeFileSync(paths.credential, safeStorage.encryptString(issued.token), { mode: 0o600 });
   cachedSettings = { ...settings, token: issued.token };
-  restartWorker();
+  await refreshWorkerProxyEnvironment(settings.apiUrl);
+  await restartWorker();
   showWindow();
   return true;
 }
@@ -110,7 +116,7 @@ function currentStatus() {
     const status = JSON.parse(fs.readFileSync(paths.status, "utf8"));
     return presentWorkerStatus(status, {
       activated: true,
-      processRunning: Boolean(workerProcess),
+      processRunning: workerProcessRunning(),
       workerVersion: app.getVersion(),
       localDeviceId,
       updateVersion: pendingUpdateVersion
@@ -118,7 +124,7 @@ function currentStatus() {
   } catch (_error) {
     return presentWorkerStatus({}, {
       activated: true,
-      processRunning: Boolean(workerProcess),
+      processRunning: workerProcessRunning(),
       workerVersion: app.getVersion(),
       localDeviceId,
       updateVersion: pendingUpdateVersion
@@ -132,6 +138,33 @@ function sendStatus() {
 
 function pythonCommand() {
   return process.env.SIGMA_WORKER_PYTHON || (process.platform === "win32" ? "python" : "python3");
+}
+
+function workerProcessRunning() {
+  return Boolean(workerProcess) || Boolean(activeWorkerPid(app.getPath("userData")));
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForWorkerExit(dataRoot, timeoutMilliseconds = 3000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (activeWorkerPid(dataRoot) && Date.now() < deadline) {
+    await delay(100);
+  }
+  return !activeWorkerPid(dataRoot);
+}
+
+async function refreshWorkerProxyEnvironment(apiUrl) {
+  try {
+    const rules = await session.defaultSession.resolveProxy(apiUrl);
+    workerProxyEnvironment = proxyEnvironment(rules);
+  } catch (error) {
+    console.error("Unable to resolve the system proxy", error instanceof Error ? error.name : "Error");
+    workerProxyEnvironment = { SIGMA_WORKER_PROXY_MODE: "unresolved" };
+  }
+  return workerProxyEnvironment;
 }
 
 function startWorker() {
@@ -148,40 +181,75 @@ function startWorker() {
     python: pythonCommand(),
     settings: { apiUrl: settings.apiUrl, version: app.getVersion(), dataRoot }
   });
-  workerProcess = spawn(command.command, command.args, {
+  const child = spawn(command.command, command.args, {
     cwd: command.cwd,
-    env: { ...process.env, SIGMA_WORKBENCH_HOME: app.getPath("userData"), PYTHONUNBUFFERED: "1" },
+    env: {
+      ...process.env,
+      ...workerProxyEnvironment,
+      SIGMA_WORKBENCH_HOME: app.getPath("userData"),
+      PYTHONUNBUFFERED: "1"
+    },
     stdio: ["pipe", "ignore", "ignore"],
     windowsHide: true
   });
+  workerProcess = child;
   workerProcess.stdin.on("error", () => {});
   workerProcess.stdin.end(`${token}\n`);
-  workerProcess.on("exit", () => {
-    workerProcess = null;
+  child.on("exit", () => {
+    if (workerProcess === child) workerProcess = null;
     sendStatus();
-    if (!quitting) setTimeout(() => {
-      if (!activeWorkerPid(dataRoot)) startWorker();
-    }, 5000);
+    if (!quitting && !workerStopping) setTimeout(async () => {
+      if (!activeWorkerPid(dataRoot)) {
+        await refreshWorkerProxyEnvironment(settings.apiUrl);
+        startWorker();
+      }
+    }, 1000);
   });
   sendStatus();
   return true;
 }
 
-function stopWorker() {
-  const childPid = workerProcess ? workerProcess.pid : null;
-  if (workerProcess) workerProcess.kill();
-  workerProcess = null;
-  const actualPid = activeWorkerPid(app.getPath("userData"));
-  if (actualPid && actualPid !== childPid) {
+async function stopWorker() {
+  workerStopping = true;
+  const dataRoot = app.getPath("userData");
+  const actualPid = workerProcess?.pid || activeWorkerPid(dataRoot);
+  if (actualPid) {
     try {
       process.kill(actualPid, "SIGTERM");
     } catch (_error) {}
   }
+  const exited = await waitForWorkerExit(dataRoot);
+  if (workerProcess?.pid === actualPid) workerProcess = null;
+  workerStopping = false;
+  sendStatus();
+  return exited;
 }
 
-function restartWorker() {
-  stopWorker();
+async function restartWorker() {
+  const settings = loadSettings();
+  await stopWorker();
+  if (settings?.apiUrl) await refreshWorkerProxyEnvironment(settings.apiUrl);
   return startWorker();
+}
+
+async function superviseWorker({ refreshNetwork = false } = {}) {
+  if (quitting || workerStopping || supervisorBusy) return false;
+  const settings = loadSettings();
+  if (!settings?.apiUrl) return false;
+  supervisorBusy = true;
+  try {
+    if (!workerProcessRunning()) {
+      await refreshWorkerProxyEnvironment(settings.apiUrl);
+      return startWorker();
+    }
+    if (refreshNetwork && currentStatus().status !== "processing") {
+      await restartWorker();
+      return true;
+    }
+    return true;
+  } finally {
+    supervisorBusy = false;
+  }
 }
 
 async function openUpdatePage() {
@@ -243,7 +311,7 @@ function createTray() {
   tray.setToolTip("Σ海外报账核对助手");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "查看助手状态", click: showWindow },
-    { label: "重新连接", click: restartWorker },
+    { label: "重新连接", click: () => void restartWorker() },
     { label: "检查 / 下载更新", click: () => void openUpdatePage() },
     { label: "打开日志目录", click: () => shell.openPath(settingsPaths().logs) },
     { type: "separator" },
@@ -254,6 +322,7 @@ function createTray() {
 
 function watchStatus() {
   statusTimer = setInterval(sendStatus, 2000);
+  supervisorTimer = setInterval(() => void superviseWorker(), 5000);
   updateTimer = setInterval(() => {
     const updatePath = settingsPaths().update;
     if (!fs.existsSync(updatePath)) return;
@@ -276,7 +345,7 @@ function watchStatus() {
 
 function registerIpc() {
   ipcMain.handle("worker:get-status", currentStatus);
-  ipcMain.handle("worker:reconnect", () => ({ restarted: restartWorker() }));
+  ipcMain.handle("worker:reconnect", async () => ({ restarted: await restartWorker() }));
   ipcMain.handle("worker:open-update", openUpdatePage);
   ipcMain.handle("worker:open-logs", async () => {
     fs.mkdirSync(settingsPaths().logs, { recursive: true });
@@ -302,12 +371,15 @@ app.on("second-instance", (_event, argv) => {
 app.whenReady().then(async () => {
   app.setAsDefaultProtocolClient("sigma-overseas-labor-worker");
   registerIpc();
+  powerMonitor.on("resume", () => void superviseWorker({ refreshNetwork: true }));
   await activationDispatcher.markReady();
   const activationUrl = process.argv.find((value) => value.startsWith("sigma-overseas-labor-worker://activate"));
   if (activationUrl) await activationDispatcher.enqueue(activationUrl);
   if (!mainWindow) createWindow();
   createTray();
   watchStatus();
+  const settings = loadSettings();
+  if (settings?.apiUrl) await refreshWorkerProxyEnvironment(settings.apiUrl);
   startWorker();
 });
 
@@ -319,5 +391,6 @@ app.on("before-quit", () => {
   quitting = true;
   if (statusTimer) clearInterval(statusTimer);
   if (updateTimer) clearInterval(updateTimer);
-  stopWorker();
+  if (supervisorTimer) clearInterval(supervisorTimer);
+  void stopWorker();
 });

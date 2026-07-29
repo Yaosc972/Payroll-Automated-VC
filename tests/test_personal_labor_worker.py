@@ -4,6 +4,7 @@ import io
 import os
 import shlex
 import sys
+import threading
 import zipfile
 from io import BytesIO
 
@@ -11,7 +12,13 @@ import httpx
 import pytest
 from openpyxl import Workbook
 
-from bonus_platform.worker.personal import PersonalLaborWorker, WorkerAlreadyRunning, _WorkerInstanceLock, _default_runner
+from bonus_platform.worker.personal import (
+    PersonalLaborWorker,
+    WorkerAlreadyRunning,
+    _FailoverHttpClient,
+    _WorkerInstanceLock,
+    _default_runner,
+)
 
 
 def test_personal_worker_reads_desktop_token_from_one_time_stdin_pipe():
@@ -31,6 +38,76 @@ def test_personal_worker_normalizes_supported_desktop_platforms(monkeypatch):
     monkeypatch.setattr(personal.sys, "platform", "darwin")
     monkeypatch.setattr(personal.platform, "machine", lambda: "arm64")
     assert personal._worker_platform() == "macos-arm64"
+
+
+def test_worker_http_client_falls_back_to_direct_only_before_connection_is_established():
+    request = httpx.Request("GET", "https://sigma.example.com/api/labor/worker/version")
+
+    class Client:
+        def __init__(self, result):
+            self.result = result
+            self.calls = 0
+
+        def request(self, *_args, **_kwargs):
+            self.calls += 1
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    direct_response = httpx.Response(200, request=request)
+    proxied = Client(httpx.ConnectError("proxy refused", request=request))
+    direct = Client(direct_response)
+    client = _FailoverHttpClient(proxied, direct)
+
+    assert client.get(str(request.url)) is direct_response
+    assert proxied.calls == 1
+    assert direct.calls == 1
+
+    proxied_timeout = Client(httpx.ReadTimeout("response stalled", request=request))
+    direct_not_called = Client(direct_response)
+    with pytest.raises(httpx.ReadTimeout):
+        _FailoverHttpClient(proxied_timeout, direct_not_called).get(str(request.url))
+    assert direct_not_called.calls == 0
+
+
+def test_worker_http_stream_does_not_fallback_after_response_is_open():
+    request = httpx.Request("GET", "https://sigma.example.com/private.pdf")
+
+    class StreamContext:
+        def __init__(self, response=None, enter_error=None):
+            self.response = response
+            self.enter_error = enter_error
+
+        def __enter__(self):
+            if self.enter_error:
+                raise self.enter_error
+            return self.response
+
+        def __exit__(self, *_args):
+            return False
+
+    class Client:
+        def __init__(self, context):
+            self.context = context
+            self.calls = 0
+
+        def stream(self, *_args, **_kwargs):
+            self.calls += 1
+            return self.context
+
+    response = httpx.Response(200, request=request)
+    primary = Client(StreamContext(response=response))
+    direct = Client(StreamContext(response=response))
+    with pytest.raises(httpx.ConnectError):
+        with _FailoverHttpClient(primary, direct).stream("GET", str(request.url)):
+            raise httpx.ConnectError("read failed after response opened", request=request)
+    assert primary.calls == 1
+    assert direct.calls == 0
+
+    primary_unavailable = Client(StreamContext(enter_error=httpx.ConnectError("proxy refused", request=request)))
+    with _FailoverHttpClient(primary_unavailable, direct).stream("GET", str(request.url)) as opened:
+        assert opened is response
+    assert direct.calls == 1
 
 
 def test_personal_worker_update_check_sends_platform(tmp_path, monkeypatch):
@@ -417,6 +494,33 @@ def test_personal_worker_reports_server_503_as_retryable(tmp_path):
     assert failed_payload["errorCode"] == "LABOR_WORKER_TRANSIENT"
 
 
+def test_personal_worker_marks_task_lease_lost_on_heartbeat_conflict(tmp_path):
+    waits = []
+
+    class StopAfterHeartbeat:
+        def wait(self, seconds):
+            waits.append(seconds)
+            return len(waits) > 1
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, request=request, json={"detail": "lease expired"})
+
+    worker = PersonalLaborWorker(
+        api_url="https://example.test",
+        token="secret",
+        worker_version="0.3.13",
+        data_root=tmp_path,
+        runner=lambda _: True,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    lease_lost = threading.Event()
+
+    worker._heartbeat_loop("job-1", StopAfterHeartbeat(), {}, lease_lost)
+
+    assert waits[0] == 20
+    assert lease_lost.is_set() is True
+
+
 def _zip(files: dict[str, bytes]) -> bytes:
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -519,6 +623,34 @@ def test_personal_worker_does_not_block_each_claim_with_repeated_update_checks(t
     assert calls.count("/api/labor/worker/jobs/claim") == 2
 
 
+def test_personal_worker_marks_connected_after_first_successful_handshake(tmp_path):
+    status_seen_before_claim = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/version"):
+            return httpx.Response(200, json={"updateAvailable": False})
+        if request.url.path.endswith("/claim"):
+            status_seen_before_claim.update(
+                json.loads((tmp_path / "worker-status.json").read_text(encoding="utf-8"))
+            )
+            return httpx.Response(200, json={"job": None})
+        raise AssertionError(request.url)
+
+    worker = PersonalLaborWorker(
+        api_url="https://example.test",
+        token="secret",
+        worker_version="0.3.13",
+        data_root=tmp_path,
+        runner=lambda _: True,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    worker.process_once()
+
+    assert status_seen_before_claim["status"] == "idle"
+    assert "已连接" in status_seen_before_claim["message"]
+
+
 def test_personal_worker_checks_required_version_before_claiming_work(tmp_path):
     calls = []
 
@@ -556,7 +688,7 @@ def test_personal_worker_checks_required_version_before_claiming_work(tmp_path):
     assert "0.3.0" in status["message"]
 
 
-def test_personal_worker_writes_offline_status_when_api_is_unreachable(monkeypatch, tmp_path):
+def test_personal_worker_distinguishes_unavailable_system_proxy(monkeypatch, tmp_path):
     class StopWorkerLoop(Exception):
         pass
 
@@ -571,13 +703,14 @@ def test_personal_worker_writes_offline_status_when_api_is_unreachable(monkeypat
         runner=lambda _: True,
         client=httpx.Client(transport=httpx.MockTransport(unavailable)),
     )
+    monkeypatch.setenv("SIGMA_WORKER_PROXY_MODE", "system")
     monkeypatch.setattr("bonus_platform.worker.personal.time.sleep", lambda _: (_ for _ in ()).throw(StopWorkerLoop()))
 
     with pytest.raises(StopWorkerLoop):
         worker.run_forever(interval_seconds=1)
 
     status = json.loads((tmp_path / "worker-status.json").read_text(encoding="utf-8"))
-    assert status["status"] == "offline"
+    assert status["status"] == "proxy_unavailable"
     assert "secret-token-that-must-never-leak" not in (tmp_path / "worker-status.json").read_text(encoding="utf-8")
 
 
@@ -603,9 +736,33 @@ def test_personal_worker_requests_reactivation_when_token_has_expired(monkeypatc
 
     raw_status = (tmp_path / "worker-status.json").read_text(encoding="utf-8")
     status = json.loads(raw_status)
-    assert status["status"] == "unactivated"
+    assert status["status"] == "identity_expired"
     assert "重新激活" in status["message"]
     assert "expired-secret-token-that-must-never-leak" not in raw_status
+
+
+def test_personal_worker_distinguishes_production_service_failure(monkeypatch, tmp_path):
+    class StopWorkerLoop(Exception):
+        pass
+
+    def unavailable(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, request=request, json={"detail": "unavailable"})
+
+    worker = PersonalLaborWorker(
+        api_url="https://example.test",
+        token="secret",
+        worker_version="0.3.0",
+        data_root=tmp_path,
+        runner=lambda _: True,
+        client=httpx.Client(transport=httpx.MockTransport(unavailable)),
+    )
+    monkeypatch.setattr("bonus_platform.worker.personal.time.sleep", lambda _: (_ for _ in ()).throw(StopWorkerLoop()))
+
+    with pytest.raises(StopWorkerLoop):
+        worker.run_forever(interval_seconds=1)
+
+    status = json.loads((tmp_path / "worker-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "service_unavailable"
 
 
 def test_worker_instance_lock_allows_only_one_process_per_data_root(tmp_path):
