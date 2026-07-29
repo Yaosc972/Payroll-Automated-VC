@@ -14,7 +14,7 @@ def test_worker_release_version_is_explicit_and_not_older_than_server_gate():
     package = json.loads((WORKER_DESKTOP / "package.json").read_text(encoding="utf-8"))
     lockfile = json.loads((WORKER_DESKTOP / "package-lock.json").read_text(encoding="utf-8"))
 
-    assert package["version"] == "0.3.12"
+    assert package["version"] == "0.3.14"
     assert lockfile["version"] == package["version"]
     assert lockfile["packages"][""]["version"] == package["version"]
     assert worker_version_at_least(package["version"], OVERSEAS_LABOR_REQUIRED_WORKER_VERSION)
@@ -100,3 +100,18 @@ def test_windows_builder_is_codex_independent_and_keeps_release_gate():
     assert "SIGMA_LABOR_GOLDEN_MATERIALS_ROOT" in powershell
     assert 'Join-Path $DesktopRoot "release-gate-materials"' in powershell
     assert "ExecutionPolicy Bypass" in launcher
+
+
+def test_worker_release_workflow_requires_matching_native_mac_and_windows_packages():
+    workflow = (ROOT / ".github" / "workflows" / "labor-worker-release.yml").read_text(encoding="utf-8")
+    ci = (ROOT / ".github" / "workflows" / "overseas-labor-ci.yml").read_text(encoding="utf-8")
+
+    assert "macos-15" in workflow
+    assert "windows-2025" in workflow
+    assert "Verify native build architecture" in workflow
+    assert "Require matching macOS and Windows installers" in workflow
+    assert "Σ海外报账核对助手-${VERSION}-arm64.dmg" in workflow
+    assert "Σ海外报账核对助手-${VERSION}-windows-x64.exe" in workflow
+    assert "worker_platform:" in ci
+    assert "WORKER_PLATFORM_RESULT" in ci
+    assert "Worker runtime changed without a version bump" in ci
