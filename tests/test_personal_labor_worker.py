@@ -1,3 +1,4 @@
+import ctypes
 import json
 import hashlib
 import io
@@ -18,6 +19,7 @@ from bonus_platform.worker.personal import (
     _FailoverHttpClient,
     _WorkerInstanceLock,
     _default_runner,
+    _pid_is_alive,
 )
 
 
@@ -773,6 +775,42 @@ def test_worker_instance_lock_allows_only_one_process_per_data_root(tmp_path):
                 pass
 
     assert not (tmp_path / "worker.pid").exists()
+
+
+@pytest.mark.parametrize(("exit_code", "expected"), [(259, True), (0, False)])
+def test_worker_pid_probe_uses_windows_process_status(monkeypatch, exit_code, expected):
+    from bonus_platform.worker import personal
+
+    calls = []
+
+    class FakeKernel32:
+        def OpenProcess(self, access, inherit_handle, pid):
+            calls.append(("open", access, inherit_handle, pid))
+            return 123
+
+        def GetExitCodeProcess(self, handle, result):
+            calls.append(("status", handle))
+            result._obj.value = exit_code
+            return True
+
+        def CloseHandle(self, handle):
+            calls.append(("close", handle))
+            return True
+
+    monkeypatch.setattr(personal.sys, "platform", "win32")
+    monkeypatch.setattr(
+        personal.os,
+        "kill",
+        lambda *_: pytest.fail("Windows PID probing must not call os.kill(pid, 0)"),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32(), raising=False)
+
+    assert _pid_is_alive(4321) is expected
+    assert calls == [
+        ("open", 0x1000, False, 4321),
+        ("status", 123),
+        ("close", 123),
+    ]
 
 
 def test_worker_instance_lock_reclaims_stale_pid(tmp_path):
