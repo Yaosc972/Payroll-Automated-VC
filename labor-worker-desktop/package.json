@@ -8,7 +8,7 @@
     "dev": "electron .",
     "start": "electron .",
     "check": "node --check main.js && node --check preload.js && node --check renderer/app.js && node --check lib/activation.js && node --check lib/activation-dispatcher.js && node --check lib/proxy.js && node --check lib/status.js && node --check lib/worker-command.js && node --check lib/worker-pid.js && node --check scripts/build-worker.js && node --check scripts/run-release-gate.js && node --check scripts/ad-hoc-sign-mac.js",
-    "test": "node --test tests/*.test.js",
+    "test": "node --test",
     "release:gate": "node scripts/run-release-gate.js",
     "build:worker": "node scripts/build-worker.js",
     "dist:mac": "npm run release:gate && npm run build:worker && electron-builder --mac dmg",
