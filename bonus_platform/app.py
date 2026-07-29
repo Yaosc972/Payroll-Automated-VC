@@ -3236,7 +3236,7 @@ def download_personal_labor_worker_release(request: Request, platform: str = "ma
     blob_pathname = str(manifest.get("blobPathname") or "").strip()
     if blob_pathname:
         try:
-            signed_url = create_labor_blob_presigned_url(blob_pathname, operation="get", expires_in=120)
+            signed_url = create_labor_blob_presigned_url(blob_pathname, operation="get", expires_in=7200)
         except Exception as exc:  # noqa: BLE001 - keep storage internals out of browser errors.
             logger.warning("labor worker Blob release signing failed: %s", type(exc).__name__)
             raise HTTPException(status_code=503, detail="核对助手安装包暂时无法下载，请稍后重试。") from exc
@@ -3250,7 +3250,7 @@ def download_personal_labor_worker_release(request: Request, platform: str = "ma
             signed = create_labor_supabase_signed_download(
                 object_key,
                 filename=str(release.get("filename") or "worker.dmg"),
-                expires_in=120,
+                expires_in=7200,
             )
         except Exception as exc:  # noqa: BLE001 - keep storage internals out of browser errors.
             logger.warning("labor worker release signing failed: %s", type(exc).__name__)

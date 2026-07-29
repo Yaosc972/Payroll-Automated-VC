@@ -670,6 +670,7 @@ def test_browser_worker_release_reports_unpublished_windows_build(monkeypatch, t
 def test_browser_worker_release_download_redirects_to_short_private_url(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     digest = "b" * 64
+    observed = {}
     monkeypatch.setenv(
         "SIGMA_LABOR_WORKER_UPDATE_MANIFEST",
         json.dumps(
@@ -687,22 +688,27 @@ def test_browser_worker_release_download_redirects_to_short_private_url(monkeypa
     monkeypatch.setattr(
         app_module,
         "create_labor_supabase_signed_download",
-        lambda object_key, **kwargs: {
-            "signedUrl": "https://project.supabase.co/storage/v1/object/sign/private?token=short",
-            "expiresIn": 120,
-        },
+        lambda object_key, **kwargs: (
+            observed.update({"expiresIn": kwargs["expires_in"]})
+            or {
+                "signedUrl": "https://project.supabase.co/storage/v1/object/sign/private?token=short",
+                "expiresIn": kwargs["expires_in"],
+            }
+        ),
     )
 
     response = client.get("/api/labor/worker/release/download", follow_redirects=False)
 
     assert response.status_code == 307
     assert response.headers["location"].startswith("https://project.supabase.co/")
+    assert observed["expiresIn"] == 7200
 
 
 def test_browser_worker_release_download_redirects_to_short_private_blob_url(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
     digest = "b" * 64
     pathname = "labor-runs/uat/owners/system/worker-releases/macos-arm64/worker.dmg"
+    observed = {}
     monkeypatch.setenv(
         "SIGMA_LABOR_WORKER_UPDATE_MANIFEST",
         json.dumps(
@@ -720,13 +726,17 @@ def test_browser_worker_release_download_redirects_to_short_private_blob_url(mon
     monkeypatch.setattr(
         app_module,
         "create_labor_blob_presigned_url",
-        lambda blob_pathname, **kwargs: "https://store.private.blob.vercel-storage.com/worker.dmg?short=1",
+        lambda blob_pathname, **kwargs: (
+            observed.update({"expiresIn": kwargs["expires_in"]})
+            or "https://store.private.blob.vercel-storage.com/worker.dmg?short=1"
+        ),
     )
 
     response = client.get("/api/labor/worker/release/download", follow_redirects=False)
 
     assert response.status_code == 307
     assert response.headers["location"].startswith("https://store.private.blob.vercel-storage.com/")
+    assert observed["expiresIn"] == 7200
 
 
 def test_browser_worker_release_download_uses_requested_windows_blob(monkeypatch, tmp_path):
