@@ -2,6 +2,7 @@ const path = require("node:path");
 
 function workerCommand({ packaged, resourcesRoot, projectRoot, platform, python, settings }) {
   const executable = platform === "win32" ? "sigma-labor-worker.exe" : "sigma-labor-worker";
+  const targetPath = platform === "win32" ? path.win32 : path.posix;
   const args = [
     "--api-url", settings.apiUrl,
     "--token-stdin",
@@ -10,7 +11,7 @@ function workerCommand({ packaged, resourcesRoot, projectRoot, platform, python,
   ];
   if (packaged) {
     return {
-      command: path.join(resourcesRoot, "worker", "sigma-labor-worker", executable),
+      command: targetPath.join(resourcesRoot, "worker", "sigma-labor-worker", executable),
       args,
       cwd: resourcesRoot
     };

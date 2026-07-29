@@ -135,7 +135,10 @@ test("packaged Windows worker launches the bundled exe without a Python dependen
       dataRoot: "C:\\Users\\test\\AppData\\Roaming\\Sigma Labor Worker"
     }
   });
-  assert.match(command.command, /sigma-labor-worker\.exe$/);
+  assert.equal(
+    command.command,
+    "C:\\Program Files\\Sigma Labor Worker\\resources\\worker\\sigma-labor-worker\\sigma-labor-worker.exe"
+  );
   assert.equal(command.command.includes("python"), false);
 });
 
