@@ -893,6 +893,50 @@ def test_operations_endpoint_requires_admin_token(monkeypatch, tmp_path):
     assert {"alerts", "metrics", "recentJobs", "storage"}.issubset(response.json())
 
 
+def test_mapping_preflight_status_endpoint_does_not_build_full_run_status(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "labor_preflight_status"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "labor_preflight_status",
+                "ownerUserId": "user-1",
+                "status": "已上传文件",
+                "mappingPreflight": {
+                    "status": "running",
+                    "statusLabel": "本人核对助手正在读取 Excel",
+                    "message": "正在读取工作表、列名和样例数据。",
+                    "taskGenerationId": "generation-current",
+                    "sheets": [],
+                    "workbooks": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_with_personal_worker_status",
+        lambda _metadata: (_ for _ in ()).throw(AssertionError("lightweight preflight status must not load full job status")),
+    )
+
+    response = client.get("/api/labor/runs/labor_preflight_status/mapping-preflight-status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "mappingPreflight": {
+            "status": "running",
+            "statusLabel": "本人核对助手正在读取 Excel",
+            "message": "正在读取工作表、列名和样例数据。",
+            "taskGenerationId": "generation-current",
+        }
+    }
+
+
 def test_personal_worker_status_is_visible_in_run_polling(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
@@ -908,11 +952,13 @@ def test_personal_worker_status_uses_latest_attempt(monkeypatch):
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
     monkeypatch.setattr(
         app_module,
-        "list_labor_worker_jobs",
-        lambda: [
-            {"id": "old", "runId": "labor_own", "status": "failed", "updatedAt": "2026-07-13T01:00:00Z"},
-            {"id": "new", "runId": "labor_own", "status": "succeeded", "updatedAt": "2026-07-13T02:00:00Z"},
-        ],
+        "get_latest_labor_worker_job",
+        lambda *_args, **_kwargs: {
+            "id": "new",
+            "runId": "labor_own",
+            "status": "succeeded",
+            "updatedAt": "2026-07-13T02:00:00Z",
+        },
     )
 
     result = app_module._with_personal_worker_status({"id": "labor_own", "status": "PDF识别未完成"})
@@ -922,25 +968,22 @@ def test_personal_worker_status_uses_latest_attempt(monkeypatch):
 
 def test_personal_worker_status_ignores_jobs_from_superseded_generation(monkeypatch):
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+    requested = {}
+
+    def current_generation_job(run_id, **kwargs):
+        requested.update({"runId": run_id, **kwargs})
+        return {
+            "id": "current",
+            "runId": "labor_own",
+            "status": "queued",
+            "taskGenerationId": "generation-current",
+            "updatedAt": "2026-07-13T02:00:00Z",
+        }
+
     monkeypatch.setattr(
         app_module,
-        "list_labor_worker_jobs",
-        lambda: [
-            {
-                "id": "old",
-                "runId": "labor_own",
-                "status": "running",
-                "taskGenerationId": "generation-old",
-                "updatedAt": "2026-07-13T03:00:00Z",
-            },
-            {
-                "id": "current",
-                "runId": "labor_own",
-                "status": "queued",
-                "taskGenerationId": "generation-current",
-                "updatedAt": "2026-07-13T02:00:00Z",
-            },
-        ],
+        "get_latest_labor_worker_job",
+        current_generation_job,
     )
 
     result = app_module._with_personal_worker_status(
@@ -954,6 +997,10 @@ def test_personal_worker_status_ignores_jobs_from_superseded_generation(monkeypa
 
     assert result["workerTask"]["id"] == "current"
     assert result["asyncTask"]["status"] == "waiting_for_personal_worker"
+    assert requested == {
+        "runId": "labor_own",
+        "task_generation_id": "generation-current",
+    }
 
 
 def test_worker_input_and_result_require_current_lease(monkeypatch, tmp_path):

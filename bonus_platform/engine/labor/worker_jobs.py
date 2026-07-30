@@ -417,6 +417,44 @@ def get_labor_worker_job(job_id: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def get_latest_labor_worker_job(
+    run_id: str,
+    *,
+    task_generation_id: str | None = None,
+    job_type: str = "",
+    statuses: set[str] | None = None,
+) -> dict[str, Any] | None:
+    store = _postgres_store()
+    if store:
+        return store.find_latest(
+            run_id,
+            task_generation_id=task_generation_id,
+            job_type=job_type,
+            statuses=statuses,
+        )
+    normalized_statuses = {str(status) for status in (statuses or set()) if str(status)}
+    matching = []
+    for job in list_labor_worker_jobs():
+        if str(job.get("runId") or "") != str(run_id):
+            continue
+        if task_generation_id is not None and str(job.get("taskGenerationId") or "") != str(task_generation_id):
+            continue
+        if job_type and str(job.get("jobType") or "reconcile") != str(job_type):
+            continue
+        if normalized_statuses and str(job.get("status") or "") not in normalized_statuses:
+            continue
+        matching.append(job)
+    return max(
+        matching,
+        key=lambda row: (
+            str(row.get("updatedAt") or row.get("createdAt") or ""),
+            str(row.get("createdAt") or ""),
+            str(row.get("id") or ""),
+        ),
+        default=None,
+    )
+
+
 def list_labor_worker_jobs() -> list[dict[str, Any]]:
     store = _postgres_store()
     if store:

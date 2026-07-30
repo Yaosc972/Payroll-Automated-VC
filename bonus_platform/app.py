@@ -10,6 +10,8 @@ import logging
 import mimetypes
 import os
 import re
+import threading
+import time
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -97,6 +99,7 @@ from .engine.labor.worker_jobs import (
     complete_labor_worker_job,
     complete_labor_worker_preflight_job,
     fail_labor_worker_job,
+    get_latest_labor_worker_job,
     get_labor_worker_job,
     heartbeat_labor_worker_job,
     list_labor_worker_jobs,
@@ -1021,16 +1024,9 @@ def _with_personal_worker_status(metadata: dict) -> dict:
         return metadata
     run_id = str(metadata.get("id") or "")
     current_generation = _labor_task_generation_id(metadata)
-    matching_jobs = [
-        row
-        for row in list_labor_worker_jobs()
-        if str(row.get("runId") or "") == run_id
-        and str(row.get("taskGenerationId") or "").strip() == current_generation
-    ]
-    job = max(
-        matching_jobs,
-        key=lambda row: str(row.get("updatedAt") or row.get("createdAt") or ""),
-        default=None,
+    job = get_latest_labor_worker_job(
+        run_id,
+        task_generation_id=current_generation,
     )
     if not job or job.get("status") == "succeeded":
         return metadata
@@ -1176,7 +1172,46 @@ def _labor_p1_required() -> bool:
     return _env_flag("SIGMA_LABOR_P1_REQUIRED", False)
 
 
-def _labor_p1_readiness_snapshot() -> dict:
+_LABOR_P1_READINESS_CACHE: dict[str, object] = {}
+_LABOR_P1_READINESS_CACHE_LOCK = threading.Lock()
+_LABOR_P1_READINESS_CACHE_ENV_KEYS = (
+    "SIGMA_LABOR_P1_REQUIRED",
+    "SIGMA_LABOR_AUTH_REQUIRED",
+    "SIGMA_LABOR_STATE_BACKEND",
+    "SIGMA_LABOR_JOB_BACKEND",
+    "SIGMA_LABOR_STORAGE_BACKEND",
+    "SIGMA_LABOR_STORAGE_ENV",
+    "SIGMA_LABOR_EXECUTION_MODE",
+    "SIGMA_LABOR_OPERATIONS_TOKEN",
+    "SIGMA_LABOR_EXTERNAL_AI_ENABLED",
+    "SIGMA_LABOR_REQUIRE_CLIENT_CONTRACT",
+    "SIGMA_LABOR_WORKER_TOKENS",
+    "SIGMA_LABOR_WORKER_UPDATE_MANIFEST",
+    "ADMIN_DATABASE_URL",
+    "SIGMA_LABOR_DATABASE_URL",
+    "SIGMA_LABOR_JOB_DATABASE_URL",
+    "FEISHU_APP_ID",
+    "FEISHU_REDIRECT_URI",
+    "SESSION_COOKIE_SECURE",
+)
+
+
+def _labor_p1_readiness_cache_key() -> tuple[object, ...]:
+    environment_fingerprint = hashlib.sha256(
+        "\0".join(os.environ.get(key, "") for key in _LABOR_P1_READINESS_CACHE_ENV_KEYS).encode("utf-8")
+    ).hexdigest()
+    return (
+        environment_fingerprint,
+        id(labor_worker_job_store_health),
+        id(labor_persistent_storage_health),
+        id(labor_worker_identity_health),
+        id(labor_auth_health),
+        id(labor_postgres_state_health),
+        id(_labor_build_snapshot),
+    )
+
+
+def _collect_labor_p1_readiness_snapshot() -> dict:
     try:
         queue_health = labor_worker_job_store_health()
     except Exception as exc:  # noqa: BLE001 - readiness must return a sanitized blocker.
@@ -1194,6 +1229,45 @@ def _labor_p1_readiness_snapshot() -> dict:
         storage_health=storage_health,
         worker_identity_health=worker_identity_health,
     )
+
+
+def _labor_p1_readiness_snapshot(*, force_refresh: bool = False) -> dict:
+    try:
+        configured_ttl = float(os.environ.get("SIGMA_LABOR_P1_READINESS_CACHE_SECONDS", "30"))
+    except ValueError:
+        configured_ttl = 30.0
+    ready_ttl = max(0.0, min(configured_ttl, 300.0))
+    cache_key = _labor_p1_readiness_cache_key()
+    now = time.monotonic()
+
+    if not force_refresh and ready_ttl > 0:
+        cached = _LABOR_P1_READINESS_CACHE.get("value")
+        checked_at = float(_LABOR_P1_READINESS_CACHE.get("checkedAt") or 0.0)
+        cached_key = _LABOR_P1_READINESS_CACHE.get("key")
+        cached_ready = bool(((cached or {}).get("p1") or {}).get("ready")) if isinstance(cached, dict) else False
+        cache_ttl = ready_ttl if cached_ready else min(ready_ttl, 5.0)
+        if isinstance(cached, dict) and cached_key == cache_key and now - checked_at < cache_ttl:
+            return dict(cached)
+
+    with _LABOR_P1_READINESS_CACHE_LOCK:
+        now = time.monotonic()
+        if not force_refresh and ready_ttl > 0:
+            cached = _LABOR_P1_READINESS_CACHE.get("value")
+            checked_at = float(_LABOR_P1_READINESS_CACHE.get("checkedAt") or 0.0)
+            cached_key = _LABOR_P1_READINESS_CACHE.get("key")
+            cached_ready = bool(((cached or {}).get("p1") or {}).get("ready")) if isinstance(cached, dict) else False
+            cache_ttl = ready_ttl if cached_ready else min(ready_ttl, 5.0)
+            if isinstance(cached, dict) and cached_key == cache_key and now - checked_at < cache_ttl:
+                return dict(cached)
+        result = _collect_labor_p1_readiness_snapshot()
+        _LABOR_P1_READINESS_CACHE.update(
+            {
+                "key": cache_key,
+                "checkedAt": now,
+                "value": dict(result),
+            }
+        )
+        return result
 
 
 def _labor_p1_gate_response(request: Request) -> Response | None:
@@ -2759,7 +2833,7 @@ def get_labor_production_readiness(x_admin_token: str = Header(default="")) -> d
     expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
     if not expected or x_admin_token != expected:
         raise HTTPException(status_code=401, detail="缺少有效的海外劳务运维访问令牌。")
-    return _labor_p1_readiness_snapshot()
+    return _labor_p1_readiness_snapshot(force_refresh=True)
 
 
 @app.post("/api/labor/worker/jobs/{job_id}/heartbeat")
@@ -4493,16 +4567,11 @@ def start_labor_mapping_preflight(request: Request, run_id: str) -> dict:
     )
     preflight = queued.get("mappingPreflight") if isinstance(queued.get("mappingPreflight"), dict) else {}
     current_generation = str(preflight.get("taskGenerationId") or generation).strip()
-    job = next(
-        (
-            item
-            for item in list_labor_worker_jobs()
-            if str(item.get("runId") or "") == run_id
-            and str(item.get("jobType") or "reconcile") == "mapping_preflight"
-            and str(item.get("taskGenerationId") or "") == current_generation
-            and str(item.get("status") or "") in {"queued", "running", "retry_wait"}
-        ),
-        None,
+    job = get_latest_labor_worker_job(
+        run_id,
+        task_generation_id=current_generation,
+        job_type="mapping_preflight",
+        statuses={"queued", "running", "retry_wait"},
     )
     if started:
         try:
@@ -4536,6 +4605,29 @@ def start_labor_mapping_preflight(request: Request, run_id: str) -> dict:
         "workerTask": _public_labor_worker_job(job),
         "started": started,
     }
+
+
+@app.get("/api/labor/runs/{run_id}/mapping-preflight-status")
+def get_labor_mapping_preflight_status(run_id: str) -> dict:
+    metadata = _labor_metadata_or_404(run_id)
+    preflight = metadata.get("mappingPreflight") if isinstance(metadata.get("mappingPreflight"), dict) else {}
+    public_fields = (
+        "status",
+        "statusLabel",
+        "message",
+        "taskGenerationId",
+        "requestedAt",
+        "completedAt",
+        "errorCode",
+        "errorMessage",
+    )
+    status = {
+        key: preflight.get(key)
+        for key in public_fields
+        if preflight.get(key) not in (None, "")
+    }
+    status.setdefault("status", "not_started")
+    return {"mappingPreflight": status}
 
 
 @app.get("/api/labor/runs/{run_id}/workbook-sheets")

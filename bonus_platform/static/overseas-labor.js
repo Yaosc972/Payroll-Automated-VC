@@ -1585,17 +1585,18 @@ async function ensureP1MappingPreflight() {
   const submittedPreflight = response.mappingPreflight || {};
   laborState.run = { ...laborState.run, mappingPreflight: submittedPreflight };
   if (submittedPreflight.status === "completed") return;
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
-    laborState.run = run;
-    const preflight = run.mappingPreflight || {};
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const statusResponse = await requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight-status`);
+    const preflight = statusResponse.mappingPreflight || {};
+    laborState.run = { ...laborState.run, mappingPreflight: preflight };
     if (preflight.status === "completed") return;
     if (preflight.status === "failed") {
       throw new Error(preflight.errorMessage || "本人核对助手读取 Excel 失败，请检查助手状态后重试。");
     }
     const message = preflight.message || "等待本人核对助手读取 Excel 工作表和列名…";
     labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(message)}</p>`;
-    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    const delayMs = attempt < 5 ? 1000 : attempt < 20 ? 2000 : 3000;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
   }
   throw new Error("字段预检等待超过 10 分钟，请确认本人核对助手已激活并在线后重试。");
 }

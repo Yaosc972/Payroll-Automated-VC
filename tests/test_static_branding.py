@@ -263,6 +263,17 @@ def test_overseas_labor_revalidates_completed_mapping_preflight_before_reuse():
     assert 'response.mappingPreflight' in preflight_block
 
 
+def test_overseas_labor_polls_lightweight_mapping_preflight_status():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    preflight_block = script[
+        script.index("async function ensureP1MappingPreflight"):
+        script.index("async function loadFieldSuggestions")
+    ]
+
+    assert 'requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight-status`)' in preflight_block
+    assert 'requestJson(`/api/labor/runs/${laborState.run.id}`)' not in preflight_block
+
+
 def test_overseas_labor_exposes_personal_worker_activation_without_persisting_token_in_dom():
     html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
     script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
