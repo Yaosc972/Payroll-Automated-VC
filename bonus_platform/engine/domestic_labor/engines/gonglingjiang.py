@@ -47,12 +47,12 @@ FBU_SENIORITY_CAP = 500
 FBU_SENIORITY_RATE = 100
 
 DEPARTMENT_MAP_WES = {
-    "华东枢纽": "操作",
-    "华东揽收组": "揽收",
     "东南枢纽": "操作",
-    "华西区操作部": "操作",
     "闽赣揽收组": "揽收",
-    "华东B2B枢纽": "操作",
+}
+
+NO_BONUS_DEPARTMENTS_WES = {
+    "华东枢纽", "华东揽收组", "华东B2B枢纽", "华西区操作部",
 }
 
 OPERATION_POSITIONS_WES = {
@@ -155,8 +155,8 @@ class GongLingJiangEngine(BaseEngine):
 
         Args:
             employee_data: 月考勤数据
-            hrbp_list: 东莞第四纵队揽收线工龄奖名单中的工号
-            region: 区域兼容口径（'wes'=华西/华东/东南，其他为莞深广珠）
+            hrbp_list: 第四纵队揽收线工龄奖名单中的工号
+            region: 区域兼容口径（'wes'=东南/闽赣，其他为莞深广珠）
         """
         employee_id = str(employee_data.get("工号", ""))
         employee_name = str(employee_data.get("姓名", ""))
@@ -184,7 +184,19 @@ class GongLingJiangEngine(BaseEngine):
 
         is_operation_department = department in OPERATION_DEPARTMENTS
 
-        if is_operation_department:
+        if department in NO_BONUS_DEPARTMENTS_WES:
+            dept_category = "华东/华西不发放"
+            standard = 0
+            cap = 0
+            zero_reason = "华东/华西指定二级部门无工龄奖"
+            zero_rule_name = "工龄奖二级部门判断"
+            zero_steps = [
+                f"二级部门名称为{department}",
+                "历史工资表确认该二级部门不发放工龄奖",
+                "工龄奖金额为0",
+            ]
+
+        elif is_operation_department:
             dept_category = "操作"
             standard = 0
             cap = DONGGUAN_SENIORITY_CAP
@@ -214,9 +226,9 @@ class GongLingJiangEngine(BaseEngine):
                     cap = WES_SENIORITY_CAP
                 else:
                     zero_reason = "工作地区未配置操作工龄奖规则"
-                    zero_steps = ["部门归属操作", "工作地区及历史兼容口径均未命中", "工龄奖金额为0"]
+                    zero_steps = ["部门归属操作", "工作地区及东南/闽赣兼容口径均未命中", "工龄奖金额为0"]
 
-        elif work_area == "东莞" and department == "第四纵队":
+        elif department == "第四纵队":
             dept_category = "揽收"
             cap = COLLECTION_SENIORITY_CAP
             standard = 0
@@ -234,12 +246,12 @@ class GongLingJiangEngine(BaseEngine):
                     "补充包含工号和姓名的本月揽收线工龄奖名单，或人工确认该员工不发放工龄奖。",
                 ))
                 zero_reason = "缺少揽收线工龄奖名单"
-                zero_steps = ["工作地区为东莞且二级部门为第四纵队", "未维护本月揽收线工龄奖名单", "工龄奖金额为0"]
+                zero_steps = ["二级部门为第四纵队", "未维护本月揽收线工龄奖名单", "工龄奖金额为0"]
             else:
                 zero_reason = "未命中揽收线工龄奖名单或岗位为组长"
-                zero_steps = ["工作地区为东莞且二级部门为第四纵队", "工号未命中名单或岗位包含组长", "工龄奖金额为0"]
+                zero_steps = ["二级部门为第四纵队", "工号未命中名单或岗位包含组长", "工龄奖金额为0"]
 
-        elif work_area == "东莞" and department == "头程运营部":
+        elif department == "头程运营部":
             dept_category = "FBU"
             standard = FBU_SENIORITY_RATE
             cap = FBU_SENIORITY_CAP

@@ -257,12 +257,12 @@ def _gonglingjiang_data() -> bytes:
     })
 
 
-def _gonglingjiang_collection_data() -> bytes:
-    """东莞第四纵队工龄奖名单校验数据"""
+def _gonglingjiang_collection_data(work_area: str = "东莞") -> bytes:
+    """第四纵队工龄奖名单校验数据"""
     return _create_test_excel({
         "月考勤": [
             ["工号", "姓名", "考勤月份", "工作地区", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "正班出勤天数", "事假时数", "病假时数", "旷工天数", "排休请假天数"],
-            ["OWHN001", "张三", "202606", "东莞", "第四纵队", "操作员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
+            ["OWHN001", "张三", "202606", work_area, "第四纵队", "操作员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
         ],
     })
 
@@ -334,7 +334,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.1.4"
+    assert package["version"] == "1.1.6"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie", "gonglingjiang"}
@@ -343,7 +343,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.1.4"
+    assert package["version_history"][0]["version"] == "1.1.6"
     assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie", "gonglingjiang"]
 
 
@@ -357,10 +357,12 @@ def test_rule_package_publishes_verified_seniority_but_not_attendance_bonus():
     assert "全勤奖" not in payload
     gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
     assert gongling["status"] == "已验证"
-    assert gongling["version"] == "DL-GONGLING.v1.0.3"
+    assert gongling["version"] == "DL-GONGLING.v1.0.5"
     assert "第四纵队" in str(gongling)
     assert "头程运营部" in str(gongling)
-    assert "华西 / 华东 / 东南兼容区域" in str(gongling)
+    assert "不限制工作地区" in str(gongling)
+    assert "东南 / 闽赣兼容区域" in str(gongling)
+    assert "华东 / 华西不发放部门" in str(gongling)
     assert gongling["pending_confirmations"]
     assert "OWHN2187" in gongling["pending_confirmations"][0]
 
@@ -376,6 +378,23 @@ def test_rule_package_supports_immutable_version_lookup():
     assert {subject["id"] for subject in published.json()["subjects"]} == {"canbu", "waisu_butie"}
     assert missing.status_code == 404
     assert missing.json()["detail"] == "规则包版本不存在: 9.9.9"
+
+
+def test_rule_package_preserves_dongguan_restriction_in_previous_version():
+    package = TestClient(app).get("/api/domestic-labor/rule-package", params={"version": "1.1.4"}).json()
+    gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
+
+    assert gongling["version"] == "DL-GONGLING.v1.0.3"
+    assert "仅识别到东莞第四纵队" in str(gongling)
+    assert "工作地区为东莞且二级部门为头程运营部" in str(gongling)
+
+
+def test_rule_package_preserves_broad_wes_route_in_previous_version():
+    package = TestClient(app).get("/api/domestic-labor/rule-package", params={"version": "1.1.5"}).json()
+    gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
+
+    assert gongling["version"] == "DL-GONGLING.v1.0.4"
+    assert "华西 / 华东 / 东南兼容区域" in str(gongling)
 
 
 def test_rule_package_preserves_operation_only_intermediate_version():
@@ -1429,12 +1448,12 @@ def test_gonglingjiang_api_rejects_invalid_hrbp_list():
     assert response.json()["detail"] == "揽收线工龄奖名单必须为人员列表"
 
 
-def test_gonglingjiang_api_requires_named_roster_only_for_fourth_column():
+def test_gonglingjiang_api_requires_named_roster_for_fourth_column_in_any_region():
     client = TestClient(app)
 
     missing_name = client.post(
         "/api/domestic-labor/runs",
-        files={"file": ("collection.xlsx", _gonglingjiang_collection_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        files={"file": ("collection.xlsx", _gonglingjiang_collection_data("深圳"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "engines": "gonglingjiang",
             "attendance_month": "202606",
@@ -1443,11 +1462,11 @@ def test_gonglingjiang_api_requires_named_roster_only_for_fourth_column():
     )
 
     assert missing_name.status_code == 400
-    assert missing_name.json()["detail"] == "已识别到东莞第四纵队，请维护包含工号和姓名的揽收线工龄奖名单"
+    assert missing_name.json()["detail"] == "已识别到第四纵队，请维护包含工号和姓名的揽收线工龄奖名单"
 
     accepted = client.post(
         "/api/domestic-labor/runs",
-        files={"file": ("collection.xlsx", _gonglingjiang_collection_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        files={"file": ("collection.xlsx", _gonglingjiang_collection_data("深圳"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={
             "engines": "gonglingjiang",
             "attendance_month": "202606",
@@ -2308,8 +2327,72 @@ def test_gonglingjiang_fourth_column_collection_requires_hrbp_list():
     assert result.details["exceptions"][0]["code"] == "MISSING_HRBP_LIST"
 
 
+@pytest.mark.parametrize(
+    ("employee_id", "employee_name", "work_area"),
+    [
+        ("OWHN11388", "夏雷", "深圳"),
+        ("OWHN6172", "邓军洋", "深圳"),
+        ("OWHN2248", "赖志强", "惠州"),
+        ("OWHN0474", "曾威", "深圳"),
+    ],
+)
+def test_gonglingjiang_fourth_column_roster_applies_in_any_region(employee_id, employee_name, work_area):
+    employee = {
+        **_gongling_employee(),
+        "工号": employee_id,
+        "姓名": employee_name,
+        "工作地区": work_area,
+        "二级部门名称": "第四纵队",
+        "岗位名称": "内勤专员",
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[employee_id])
+
+    assert result.amount == 450
+    assert result.details["部门类别"] == "揽收"
+    assert result.details["标准"] == 150
+    assert result.details["上限"] == 600
+
+
+def test_gonglingjiang_fourth_column_group_leader_remains_ineligible_outside_dongguan():
+    employee = {
+        **_gongling_employee(),
+        "工作地区": "深圳",
+        "二级部门名称": "第四纵队",
+        "岗位名称": "操作组长",
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=["OWHN001"])
+
+    assert result.amount == 0
+
+
 def test_gonglingjiang_headhaul_fbu_uses_fbu_rate_and_cap():
     employee = {**_gongling_employee(), "二级部门名称": "头程运营部"}
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 300
+    assert result.details["部门类别"] == "FBU"
+    assert result.details["标准"] == 100
+    assert result.details["上限"] == 500
+
+
+@pytest.mark.parametrize(
+    ("employee_id", "employee_name", "work_area"),
+    [
+        ("SFXNLS014", "黄亚博", "宁波"),
+        ("zt07308", "袁冲伟", "广州"),
+    ],
+)
+def test_gonglingjiang_headhaul_fbu_applies_in_any_region(employee_id, employee_name, work_area):
+    employee = {
+        **_gongling_employee(),
+        "工号": employee_id,
+        "姓名": employee_name,
+        "工作地区": work_area,
+        "二级部门名称": "头程运营部",
+    }
 
     result = GongLingJiangEngine().calculate(employee)
 
@@ -2323,13 +2406,34 @@ def test_gonglingjiang_headhaul_fbu_uses_fbu_rate_and_cap():
     ("department", "position"),
     [
         ("华东枢纽", "操作员"),
-        ("东南枢纽", "操作员"),
-        ("华西区操作部", "操作员"),
-        ("闽赣揽收组", "内勤专员"),
+        ("华东揽收组", "揽收操作员"),
         ("华东B2B枢纽", "操作员"),
+        ("华西区操作部", "操作员"),
     ],
 )
-def test_gonglingjiang_keeps_wes_compatibility_route(department, position):
+def test_gonglingjiang_east_west_departments_return_zero(department, position):
+    employee = {
+        **_gongling_employee(),
+        "工作地区": "",
+        "二级部门名称": department,
+        "岗位名称": position,
+    }
+
+    result = GongLingJiangEngine().calculate(employee, region="wes")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "华东/华西指定二级部门无工龄奖"
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖二级部门判断"
+
+
+@pytest.mark.parametrize(
+    ("department", "position"),
+    [
+        ("东南枢纽", "操作员"),
+        ("闽赣揽收组", "内勤专员"),
+    ],
+)
+def test_gonglingjiang_keeps_southeast_compatibility_route(department, position):
     employee = {
         **_gongling_employee(),
         "工作地区": "",
@@ -2544,8 +2648,8 @@ def test_gonglingjiang_dongguan_operation_excludes_non_allowed_position():
     assert result.details["audit_explanation"]["rule_name"] == "工龄奖资格判断"
 
 
-def test_gonglingjiang_jiashan_operation_has_no_seniority_bonus():
-    """嘉善操作区域无工龄奖"""
+def test_gonglingjiang_jiashan_east_hub_returns_zero_by_department():
+    """华东枢纽优先按二级部门返回0，不再进入嘉善地区判断"""
     employee = {
         **_operation_employee(),
         "工作地区": "嘉善",
@@ -2555,12 +2659,12 @@ def test_gonglingjiang_jiashan_operation_has_no_seniority_bonus():
     result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
 
     assert result.amount == 0
-    assert result.details["reason"] == "嘉善区域无工龄奖"
-    assert result.details["audit_explanation"]["rule_name"] == "工龄奖工作地区判断"
+    assert result.details["reason"] == "华东/华西指定二级部门无工龄奖"
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖二级部门判断"
 
 
-def test_gonglingjiang_yiwu_operation_has_no_seniority_bonus():
-    """义乌操作区域按跨月实际工资表不发工龄奖"""
+def test_gonglingjiang_yiwu_b2b_returns_zero_by_department():
+    """华东B2B枢纽优先按二级部门返回0，不再进入义乌地区判断"""
     employee = {
         **_operation_employee(),
         "工作地区": "义乌",
@@ -2570,7 +2674,8 @@ def test_gonglingjiang_yiwu_operation_has_no_seniority_bonus():
     result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="wes")
 
     assert result.amount == 0
-    assert result.details["reason"] == "义乌区域无工龄奖"
+    assert result.details["reason"] == "华东/华西指定二级部门无工龄奖"
+    assert result.details["audit_explanation"]["rule_name"] == "工龄奖二级部门判断"
 
 
 def test_gonglingjiang_jinjiang_operation_uses_50_rate_and_150_cap():

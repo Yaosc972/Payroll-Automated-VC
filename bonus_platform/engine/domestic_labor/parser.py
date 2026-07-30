@@ -728,8 +728,7 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
 
         collection_seniority_rows = [
             row for row in self.monthly.rows
-            if str(row.get("工作地区", "")).strip() == "东莞"
-            and str(row.get("二级部门名称", "")).strip() == "第四纵队"
+            if str(row.get("二级部门名称", "")).strip() == "第四纵队"
         ]
 
         summary = {

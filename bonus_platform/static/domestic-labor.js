@@ -65,7 +65,7 @@ const SUBJECT_WORKBENCH = {
     resultField: 'gonglingjiang',
     totalField: 'total_gonglingjiang',
     uploadTitle: '工龄奖数据 Excel',
-    uploadDescription: '工龄奖核算需要月考勤数据；仅识别到东莞第四纵队时要求确认揽收线工龄奖名单。',
+    uploadDescription: '工龄奖核算需要月考勤数据；识别到第四纵队时要求确认揽收线工龄奖名单。',
   },
 };
 
@@ -1224,7 +1224,7 @@ function renderCanbuStepContent(step, results = []) {
         </div>
         ${batch?.subject === 'gonglingjiang' ? `
         <details class="dl-parameter-panel dl-upload-parameter">
-          <summary><span>揽收线工龄奖名单</span><strong><span id="workbenchCollectionRosterCount">${collectionRoster.length}</span> 人</strong><span class="dl-badge">仅命中东莞第四纵队时要求</span></summary>
+          <summary><span>揽收线工龄奖名单</span><strong><span id="workbenchCollectionRosterCount">${collectionRoster.length}</span> 人</strong><span class="dl-badge">命中第四纵队时要求</span></summary>
           <div class="dl-upload-parameter-body">
             <div class="dl-roster-table-wrap">
               <table class="dl-roster-table">
@@ -1407,8 +1407,8 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
           ${renderFieldGroup('缺勤折算字段', ['事假时数', '病假时数', '旷工时数/天数', '排休请假时数/天数'])}
           ${renderFieldGroup('揽收线工龄奖名单', [
             requiresCollectionRoster
-              ? `已识别东莞第四纵队 ${collectionEmployeeCount} 人，已确认名单 ${rosterCount} 人`
-              : '未识别到东莞第四纵队，本批次无需维护名单',
+              ? `已识别第四纵队 ${collectionEmployeeCount} 人，已确认名单 ${rosterCount} 人`
+              : '未识别到第四纵队，本批次无需维护名单',
           ])}
         </div>
         <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看工龄、标准、折算过程和异常。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>

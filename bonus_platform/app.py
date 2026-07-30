@@ -13559,7 +13559,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         not collection_roster or any(not item["employee_name"] for item in collection_roster)
     ):
         shutil.rmtree(run_dir, ignore_errors=True)
-        raise HTTPException(400, "已识别到东莞第四纵队，请维护包含工号和姓名的揽收线工龄奖名单")
+        raise HTTPException(400, "已识别到第四纵队，请维护包含工号和姓名的揽收线工龄奖名单")
 
     hrbp = [item["employee_id"] for item in collection_roster]
 
