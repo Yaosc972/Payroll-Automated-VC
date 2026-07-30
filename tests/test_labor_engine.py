@@ -107,6 +107,117 @@ def test_ocr_expected_totals_use_high_confidence_invoice_total_page():
     ) == {"In291943.pdf": 13836.28}
 
 
+def test_local_ocr_grand_total_does_not_override_explicit_total_invoice_amount():
+    pdf_totals = [
+        {
+            "source_file": "CA 7 46292.pdf",
+            "total_amount": 54358.11,
+            "warehouse_id": "7",
+            "authoritative": True,
+            "evidence_status": "authoritative",
+            "total_page": 7,
+            "total_label": "TOTAL",
+            "page_evidence": [
+                {
+                    "page": 7,
+                    "role": "invoice_total",
+                    "role_confidence": 0.98,
+                    "total_amount": 54358.11,
+                    "evidence_text": "\n".join(
+                        [
+                            "TOTAL REG: 2089.21",
+                            "TOTAL OT: 104.73",
+                            "GRAND TOTAL: 2193.94",
+                            "TOTAL INVOICE AMOUNT: $54,358.11",
+                        ]
+                    ),
+                    "extraction_method": "text_explicit_total",
+                }
+            ],
+        }
+    ]
+    candidate = {
+        "pdfTotalEvidence": {
+            "CA 7 46292.pdf": {
+                "amount": 2193.94,
+                "page": 7,
+                "label": "GRAND TOTAL",
+                "evidenceText": "GRAND TOTAL: 2193.94",
+            }
+        }
+    }
+
+    merged = app_module._labor_apply_ocr_pdf_total_evidence(pdf_totals, candidate)
+
+    assert merged[0]["total_amount"] == 54358.11
+    assert merged[0]["evidence_status"] == "authoritative"
+    assert all(
+        page.get("source") != "local_ocr_explicit_total"
+        for page in merged[0]["page_evidence"]
+    )
+
+
+def test_local_ocr_grand_total_does_not_replace_authoritative_expected_total(
+    monkeypatch,
+    tmp_path,
+):
+    pdf_path = tmp_path / "CA 7 46292.pdf"
+    pdf_path.write_bytes(b"pdf")
+    captured = {}
+    monkeypatch.setattr(
+        app_module,
+        "run_ocr_candidate_command",
+        lambda *args, **kwargs: {
+            "status": "completed",
+            "rows": [],
+            "files": [
+                {
+                    "sourceFile": pdf_path.name,
+                    "explicitTotalAmount": 2193.94,
+                    "explicitTotalEvidence": {
+                        "page": 7,
+                        "label": "GRAND TOTAL",
+                        "evidenceText": "GRAND TOTAL: 2193.94",
+                    },
+                }
+            ],
+        },
+    )
+
+    def capture_expected_totals(ocr_result, excel_rows, expected_totals, **kwargs):
+        captured.update(expected_totals)
+        return {"decision": "needs_review", "safeToUse": False}
+
+    monkeypatch.setattr(
+        app_module,
+        "evaluate_ocr_candidate_result",
+        capture_expected_totals,
+    )
+
+    app_module._run_labor_auto_ocr_candidate(
+        "labor_test",
+        [pdf_path],
+        [],
+        [
+            {
+                "source_file": pdf_path.name,
+                "total_amount": 54358.11,
+                "authoritative": True,
+            }
+        ],
+        supplier="Voyage Employer Services",
+        period_start="2026-06-29",
+        period_end="2026-07-05",
+        currency="USD",
+        command="python worker.py",
+        timeout_seconds=30,
+        amount_tolerance=0.1,
+        hours_tolerance=0.1,
+    )
+
+    assert captured == {pdf_path.name: 54358.11}
+
+
 def test_detail_total_retry_is_skipped_after_auto_ocr_candidate_run():
     assert app_module._labor_should_retry_detail_totals(
         pdf_rows=[object()],

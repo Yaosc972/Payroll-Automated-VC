@@ -14,7 +14,7 @@ def test_worker_release_version_is_explicit_and_not_older_than_server_gate():
     package = json.loads((WORKER_DESKTOP / "package.json").read_text(encoding="utf-8"))
     lockfile = json.loads((WORKER_DESKTOP / "package-lock.json").read_text(encoding="utf-8"))
 
-    assert package["version"] == "0.3.14"
+    assert package["version"] == "0.3.15"
     assert lockfile["version"] == package["version"]
     assert lockfile["packages"][""]["version"] == package["version"]
     assert worker_version_at_least(package["version"], OVERSEAS_LABOR_REQUIRED_WORKER_VERSION)
@@ -115,3 +115,5 @@ def test_worker_release_workflow_requires_matching_native_mac_and_windows_packag
     assert "worker_platform:" in ci
     assert "WORKER_PLATFORM_RESULT" in ci
     assert "Worker runtime changed without a version bump" in ci
+    assert "bonus_platform/app\\.py" in ci
+    assert "bonus_platform/engine/labor/" in ci
