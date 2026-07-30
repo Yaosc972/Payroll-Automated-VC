@@ -521,12 +521,131 @@ _RULE_PACKAGE["version_history"] = [
 ]
 
 
+_RULE_PACKAGE_V1_1_4 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_4)
+_RULE_PACKAGE.update({
+    "version": "1.1.5",
+    "display_version": "DL-PAYROLL.v1.1.5",
+    "released_at": "2026-07-29",
+    "effective_from": "2026-07",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang["version"] = "DL-GONGLING.v1.0.4"
+_gonglingjiang["summary"] = "按地区、部门岗位、月初司龄和缺勤口径核算；第四纵队和头程运营部按部门识别，不限制工作地区。"
+_gonglingjiang["data_sources"] = [
+    item.replace("东莞第四纵队揽收线工龄奖名单", "第四纵队揽收线工龄奖名单")
+    for item in _gonglingjiang["data_sources"]
+]
+_gonglingjiang["common_rules"][0] = "当前平台开放操作线、第四纵队揽收、头程运营部/FBU及华西/华东/东南兼容区域工龄奖。"
+collection_region = next(region for region in _gonglingjiang["regions"] if region["name"] == "东莞第四纵队揽收")
+collection_region["name"] = "第四纵队揽收"
+collection_region["rule"] = "二级部门为第四纵队时要求维护揽收线工龄奖名单，不限制工作地区；工号命中名单且岗位不包含组长。"
+collection_region["details"] = [
+    "名单同时保存工号和姓名，工号参与计算、姓名用于人工复核。",
+    "未识别到第四纵队时无需维护名单；已识别但未维护完整名单时阻止提交。",
+    "工号未命中名单或岗位包含组长时按0处理。",
+]
+fbu_region = next(region for region in _gonglingjiang["regions"] if region["name"] == "东莞头程运营部/FBU")
+fbu_region["name"] = "头程运营部/FBU"
+fbu_region["rule"] = "二级部门为头程运营部时按FBU标准计算，不限制工作地区。"
+_gonglingjiang["verification"].insert(
+    0,
+    "2026年7月生产复核确认第四纵队深圳/惠州人员及头程运营部宁波/广州人员应按对应部门标准计算。",
+)
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.4",
+    "released_at": "2026-07-29",
+    "changes": "移除第四纵队和头程运营部的工作地区限制；普通操作线地区规则保持不变。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.5",
+        "display_version": "DL-PAYROLL.v1.1.5",
+        "status": "当前版本",
+        "released_at": "2026-07-29",
+        "effective_from": "2026-07",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "第四纵队和头程运营部改为按部门识别，不再限制工作地区。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_4["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_4["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_1_5 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_5)
+_RULE_PACKAGE.update({
+    "version": "1.1.6",
+    "display_version": "DL-PAYROLL.v1.1.6",
+    "released_at": "2026-07-30",
+    "effective_from": "2026-02",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang["version"] = "DL-GONGLING.v1.0.5"
+_gonglingjiang["summary"] = "按地区、二级部门、岗位、月初司龄和缺勤口径核算；华东/华西四个指定二级部门直接返回0。"
+_gonglingjiang["common_rules"][0] = (
+    "当前平台开放操作线、第四纵队揽收、头程运营部/FBU及东南/闽赣兼容区域工龄奖；"
+    "华东枢纽、华东揽收组、华东B2B枢纽、华西区操作部不发放。"
+)
+wes_region = next(region for region in _gonglingjiang["regions"] if region["name"] == "华西 / 华东 / 东南兼容区域")
+wes_region["name"] = "东南 / 闽赣兼容区域"
+wes_region["rule"] = "仅东南枢纽、闽赣揽收组按部门及岗位名单判断。"
+wes_region["details"] = [
+    "东南枢纽享有岗位：操作员、内勤专员、中转员、门禁员、安检员、操作文员。",
+    "闽赣揽收组享有岗位：揽收操作员、内勤专员。",
+    "组长、主管、经理及HRBP专员等非一线岗位不发放。",
+]
+_gonglingjiang["regions"].append({
+    "name": "华东 / 华西不发放部门",
+    "rule": "二级部门名称为华东枢纽、华东揽收组、华东B2B枢纽或华西区操作部时直接返回0。",
+    "formula": "0元",
+    "details": [
+        "不再根据工作地区、岗位或司龄进入工龄奖金额计算。",
+        "2026年2月、3月实际工资表中上述部门工龄奖均为0。",
+    ],
+})
+_gonglingjiang["verification"].insert(
+    0,
+    "2026年2月系统薪资复核：华东枢纽229人、华东揽收组67人、华西区操作部55人工龄奖均为0。",
+)
+_gonglingjiang["verification"].insert(
+    1,
+    "2026年3月系统薪资复核：华东枢纽270人、华东揽收组72人、华东B2B枢纽8人、华西区操作部56人工龄奖均为0。",
+)
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.5",
+    "released_at": "2026-07-30",
+    "changes": "华东枢纽、华东揽收组、华东B2B枢纽、华西区操作部改为按二级部门直接返回0；东南枢纽、闽赣揽收组保留原兼容口径。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.6",
+        "display_version": "DL-PAYROLL.v1.1.6",
+        "status": "当前版本",
+        "released_at": "2026-07-30",
+        "effective_from": "2026-02",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "按历史工资表纠正华东/华西工龄奖部门范围，保留东南/闽赣规则。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_5["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_5["version_history"][1:],
+]
+
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
     _RULE_PACKAGE_V1_1_0["version"]: _RULE_PACKAGE_V1_1_0,
     _RULE_PACKAGE_V1_1_1["version"]: _RULE_PACKAGE_V1_1_1,
     _RULE_PACKAGE_V1_1_2["version"]: _RULE_PACKAGE_V1_1_2,
     _RULE_PACKAGE_V1_1_3["version"]: _RULE_PACKAGE_V1_1_3,
+    _RULE_PACKAGE_V1_1_4["version"]: _RULE_PACKAGE_V1_1_4,
+    _RULE_PACKAGE_V1_1_5["version"]: _RULE_PACKAGE_V1_1_5,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 
