@@ -373,6 +373,55 @@ def test_bootstrap_identifier_auto_grants_system_admin(tmp_path, monkeypatch):
     assert current["roles"][0]["id"] == "admin"
 
 
+def test_get_current_user_builds_permission_snapshot_with_one_connection(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    admin_store._STORE_INITIALIZED = False
+    admin_store._STORE_INITIALIZED_TARGET = ""
+    admin_store.init_admin_store()
+
+    real_connect = admin_store._connect
+    calls = 0
+
+    def counted_connect(db_path=None):
+        nonlocal calls
+        calls += 1
+        return real_connect(db_path)
+
+    monkeypatch.setattr(admin_store, "_connect", counted_connect)
+
+    current = admin_store.get_current_user("overseasAdminUser")
+
+    assert current["user"]["id"] == "overseasAdminUser"
+    assert any(module["id"] == "overseas" and module["canEnter"] for module in current["modules"])
+    assert calls == 1
+
+
+def test_get_session_auth_context_uses_one_connection(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    admin_store._STORE_INITIALIZED = False
+    admin_store._STORE_INITIALIZED_TARGET = ""
+    admin_store.init_admin_store()
+    token = admin_store.create_session("overseasAdminUser")
+
+    real_connect = admin_store._connect
+    calls = 0
+
+    def counted_connect(db_path=None):
+        nonlocal calls
+        calls += 1
+        return real_connect(db_path)
+
+    monkeypatch.setattr(admin_store, "_connect", counted_connect)
+
+    user_id, permission_revision = admin_store.get_session_auth_context(token)
+
+    assert user_id == "overseasAdminUser"
+    assert len(permission_revision) == 64
+    assert calls == 1
+
+
 def test_feishu_callback_creates_session_for_pending_user(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)

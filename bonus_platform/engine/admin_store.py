@@ -623,26 +623,112 @@ def ensure_bootstrap_admin_for_user(user_id: str, db_path: Path | None = None) -
 
 
 def get_current_user(user_id: str = "payrollAdmin", db_path: Path | None = None) -> dict[str, Any]:
-    ensure_bootstrap_admin_for_user(user_id, db_path)
-    state = get_admin_state(db_path)
-    user = next((item for item in state["users"] if item["id"] == user_id), None)
-    if not user:
-        raise KeyError("user_not_found")
+    init_admin_store(db_path)
+    with _connect(db_path) as connection:
+        user_row = connection.execute(
+            """
+            SELECT id, name, email, avatar_url AS "avatarUrl",
+                   feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId", status
+            FROM admin_users
+            WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not user_row:
+            raise KeyError("user_not_found")
+        user = dict(user_row)
+
+        if _user_matches_bootstrap_admin(user) and not connection.execute(
+            "SELECT 1 FROM admin_user_roles WHERE user_id = ? AND role_id = ?",
+            (user_id, "admin"),
+        ).fetchone():
+            now = _now()
+            connection.execute(
+                "INSERT INTO admin_user_roles (user_id, role_id, created_at) VALUES (?, ?, ?)",
+                (user_id, "admin", now),
+            )
+            connection.execute(
+                "UPDATE admin_users SET status = 'active', updated_at = ? WHERE id = ?",
+                (now, user_id),
+            )
+            _insert_audit(connection, "system", "bootstrap_admin", "user", user_id, "admin")
+            connection.commit()
+            user["status"] = "active"
+
+        role_rows = connection.execute(
+            """
+            SELECT r.id, r.name, r.module_id AS "moduleId", r.is_system AS "isSystem"
+            FROM admin_roles r
+            JOIN admin_user_roles ur ON ur.role_id = r.id
+            WHERE ur.user_id = ?
+            ORDER BY r.is_system DESC, r.id
+            """,
+            (user_id,),
+        ).fetchall()
+        roles = [{**dict(row), "isSystem": bool(row["isSystem"])} for row in role_rows]
+        role_ids = [str(role["id"]) for role in roles]
+        user["roleIds"] = role_ids
+
+        module_rows = connection.execute(
+            """
+            SELECT m.id, m.name, m.href, m.enabled, m.development_status AS "developmentStatus",
+                   m.owner_role_id AS "ownerRoleId", r.name AS "ownerRoleName"
+            FROM admin_modules m
+            LEFT JOIN admin_roles r ON r.id = m.owner_role_id
+            ORDER BY CASE m.id
+              WHEN 'recruitment' THEN 1 WHEN 'employee' THEN 2 WHEN 'domestic' THEN 3
+              WHEN 'fbu' THEN 4 WHEN 'overseas' THEN 5 ELSE 99 END
+            """
+        ).fetchall()
+        modules = [
+            {
+                **dict(row),
+                "enabled": (
+                    row["id"] in OPEN_FOR_RELEASE_MODULE_IDS
+                    or (bool(row["enabled"]) and row["id"] not in CLOSED_UNTIL_RELEASE_MODULE_IDS)
+                ),
+            }
+            for row in module_rows
+        ]
+
+        module_access = {role_id: {} for role_id in role_ids}
+        role_permissions = {role_id: {} for role_id in role_ids}
+        if role_ids:
+            placeholders = ",".join("?" for _ in role_ids)
+            for row in connection.execute(
+                f"""
+                SELECT role_id, module_id, can_enter
+                FROM admin_role_module_permissions
+                WHERE role_id IN ({placeholders})
+                """,
+                role_ids,
+            ).fetchall():
+                module_access[str(row["role_id"])][str(row["module_id"])] = bool(row["can_enter"])
+            for row in connection.execute(
+                f"""
+                SELECT role_id, feature_id, enabled
+                FROM admin_role_feature_permissions
+                WHERE role_id IN ({placeholders})
+                """,
+                role_ids,
+            ).fetchall():
+                role_permissions[str(row["role_id"])][str(row["feature_id"])] = bool(row["enabled"])
+
     allowed_modules = []
-    for module in state["modules"]:
+    for module in modules:
         can_enter = module["enabled"] and any(
-            state["moduleAccess"].get(role_id, {}).get(module["id"])
-            and state["rolePermissions"].get(role_id, {}).get("enter")
-            for role_id in user["roleIds"]
+            module_access.get(role_id, {}).get(module["id"])
+            and role_permissions.get(role_id, {}).get("enter")
+            for role_id in role_ids
         )
         allowed_modules.append({**module, "canEnter": bool(can_enter)})
     return {
         "user": user,
-        "roles": [role for role in state["roles"] if role["id"] in user["roleIds"]],
+        "roles": roles,
         "modules": allowed_modules,
         "permissions": {
-            "moduleAccess": {role_id: state["moduleAccess"].get(role_id, {}) for role_id in user["roleIds"]},
-            "rolePermissions": {role_id: state["rolePermissions"].get(role_id, {}) for role_id in user["roleIds"]},
+            "moduleAccess": module_access,
+            "rolePermissions": role_permissions,
         },
     }
 
@@ -732,6 +818,59 @@ def get_session_user_id(token: str, db_path: Path | None = None) -> str:
     if not row:
         raise KeyError("session_not_found")
     return str(row["user_id"])
+
+
+def get_session_auth_context(token: str, db_path: Path | None = None) -> tuple[str, str]:
+    init_admin_store(db_path)
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT s.user_id,
+                   u.status AS user_status,
+                   u.updated_at AS user_updated_at,
+                   ur.role_id,
+                   m.id AS module_id,
+                   m.enabled AS module_enabled,
+                   m.updated_at AS module_updated_at,
+                   rmp.can_enter,
+                   rmp.updated_at AS module_permission_updated_at,
+                   rfp.feature_id,
+                   rfp.enabled AS feature_enabled,
+                   rfp.updated_at AS feature_permission_updated_at
+            FROM admin_sessions s
+            JOIN admin_users u ON u.id = s.user_id
+            CROSS JOIN admin_modules m
+            LEFT JOIN admin_user_roles ur ON ur.user_id = s.user_id
+            LEFT JOIN admin_role_module_permissions rmp
+              ON rmp.role_id = ur.role_id AND rmp.module_id = m.id
+            LEFT JOIN admin_role_feature_permissions rfp ON rfp.role_id = ur.role_id
+            WHERE s.token_hash = ? AND s.expires_at > ?
+            ORDER BY COALESCE(ur.role_id, ''), m.id, COALESCE(rfp.feature_id, '')
+            """,
+            (_hash_token(token), _now()),
+        ).fetchall()
+    if not rows:
+        raise KeyError("session_not_found")
+    revision_fields = (
+        "user_status",
+        "user_updated_at",
+        "role_id",
+        "module_id",
+        "module_enabled",
+        "module_updated_at",
+        "can_enter",
+        "module_permission_updated_at",
+        "feature_id",
+        "feature_enabled",
+        "feature_permission_updated_at",
+    )
+    revision = hashlib.sha256(
+        "\n".join(
+            "|".join(str(row[field] or "") for field in revision_fields)
+            for row in rows
+        ).encode("utf-8")
+    ).hexdigest()
+    return str(rows[0]["user_id"]), revision
 
 
 def delete_session(token: str, db_path: Path | None = None) -> None:

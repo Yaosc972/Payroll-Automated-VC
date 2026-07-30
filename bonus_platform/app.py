@@ -168,6 +168,7 @@ from .engine.admin_store import (
     delete_session,
     get_admin_state,
     get_current_user,
+    get_session_auth_context,
     get_session_user_id,
     init_admin_store,
     list_audit_logs,
@@ -195,20 +196,49 @@ OVERSEAS_LABOR_API_CONTRACT_VERSION = 2
 OVERSEAS_LABOR_REQUIRED_WORKER_VERSION = "0.3.12"
 _LABOR_BUILD_MONITOR = LaborBuildMonitor(PROJECT_ROOT)
 CURRENT_USER_CACHE_TTL_SECONDS = 60
-_CURRENT_USER_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CURRENT_USER_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
 
 
 def _clear_current_user_cache() -> None:
     _CURRENT_USER_CACHE.clear()
 
 
-def _get_cached_current_user(user_id: str) -> dict[str, Any]:
+def _get_cached_current_user(
+    user_id: str,
+    permission_revision: str | None = None,
+) -> dict[str, Any]:
     cached = _CURRENT_USER_CACHE.get(user_id)
     now = monotonic()
-    if cached and now - cached[0] < CURRENT_USER_CACHE_TTL_SECONDS:
-        return cached[1]
+    if (
+        cached
+        and now - cached[0] < CURRENT_USER_CACHE_TTL_SECONDS
+        and (permission_revision is None or cached[1] == permission_revision)
+    ):
+        return cached[2]
     current = get_current_user(user_id)
-    _CURRENT_USER_CACHE[user_id] = (now, current)
+    _CURRENT_USER_CACHE[user_id] = (now, permission_revision, current)
+    return current
+
+
+def _labor_current_user_from_request(request: Request) -> dict[str, Any] | None:
+    if getattr(request.state, "labor_auth_resolved", False):
+        current = getattr(request.state, "labor_current_user", None)
+        return current if isinstance(current, dict) else None
+
+    request.state.labor_auth_resolved = True
+    session_token = str(request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+    if not session_token:
+        return None
+    try:
+        user_id, permission_revision = get_session_auth_context(session_token)
+        current = _get_cached_current_user(user_id, permission_revision)
+    except KeyError:
+        return None
+    user = current.get("user") if isinstance(current, dict) else None
+    if not isinstance(user, dict) or user.get("status") not in {"active", "pending"}:
+        return None
+    request.state.labor_current_user = current
+    request.state.labor_user_id = user_id
     return current
 
 
@@ -1575,6 +1605,8 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
             """,
             status_code=403,
         )
+    if isinstance(getattr(request.state, "labor_current_user", None), dict):
+        return None
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
     user_id = None
     if session_token:
@@ -1883,7 +1915,7 @@ def _workbench_home_auth_response(request: Request) -> Response | None:
 def _labor_auth_access_response(request: Request) -> Response | None:
     if not labor_auth_required() or not _labor_browser_auth_path(request.url.path):
         return None
-    current = current_user_from_request(request)
+    current = _labor_current_user_from_request(request)
     if current is None:
         if request.url.path.startswith("/api/"):
             return JSONResponse(
@@ -1923,7 +1955,7 @@ def _labor_auth_access_response(request: Request) -> Response | None:
 def _labor_request_actor(request: Request) -> tuple[str, bool]:
     current = getattr(request.state, "labor_current_user", None)
     if not isinstance(current, dict):
-        current = current_user_from_request(request) if labor_auth_required() else None
+        current = _labor_current_user_from_request(request) if labor_auth_required() else None
     if not isinstance(current, dict):
         return "local-default", False
     user = current.get("user") if isinstance(current.get("user"), dict) else {}

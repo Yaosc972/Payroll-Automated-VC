@@ -56,6 +56,85 @@ def test_labor_p1_rejects_authenticated_user_without_overseas_role(p1_identity_e
     assert response.json()["detail"]["errorCode"] == "LABOR_MODULE_FORBIDDEN"
 
 
+def test_labor_p1_validates_session_each_request_but_reuses_permission_snapshot(
+    p1_identity_env,
+    monkeypatch,
+):
+    current = admin_store.get_current_user("overseasAdminUser")
+    calls = {"session": 0, "permissions": 0}
+
+    def resolve_session(_token):
+        calls["session"] += 1
+        return "overseasAdminUser", "permission-revision"
+
+    def resolve_permissions(_user_id):
+        calls["permissions"] += 1
+        return current
+
+    def legacy_current_user(_request):
+        calls["permissions"] += 1
+        return current
+
+    app_module._clear_current_user_cache()
+    monkeypatch.setattr(app_module, "get_session_auth_context", resolve_session)
+    monkeypatch.setattr(app_module, "get_current_user", resolve_permissions)
+    monkeypatch.setattr(app_module, "current_user_from_request", legacy_current_user)
+
+    with TestClient(app) as client:
+        client.cookies.set(app_module.SESSION_COOKIE_NAME, "test-session")
+        first = client.get("/api/labor/runs")
+        second = client.get("/api/labor/runs")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert calls == {"session": 2, "permissions": 1}
+
+
+def test_labor_p1_rejects_deleted_session_even_when_permissions_are_cached(p1_identity_env):
+    with TestClient(app) as client:
+        _login(client, "overseasAdminUser")
+        active = client.get("/api/labor/runs")
+        session_token = client.cookies.get(app_module.SESSION_COOKIE_NAME)
+        assert session_token
+
+        admin_store.delete_session(session_token)
+        revoked = client.get("/api/labor/runs")
+
+    assert active.status_code == 200
+    assert revoked.status_code == 401
+    assert revoked.json()["detail"]["errorCode"] == "LABOR_AUTH_REQUIRED"
+
+
+def test_labor_p1_observes_role_revocation_from_another_instance_before_cache_ttl(
+    p1_identity_env,
+):
+    with TestClient(app) as client:
+        _login(client, "overseasAdminUser")
+        active = client.get("/api/labor/runs")
+
+        admin_store.set_user_roles("overseasAdminUser", [])
+        revoked = client.get("/api/labor/runs")
+
+    assert active.status_code == 200
+    assert revoked.status_code == 403
+    assert revoked.json()["detail"]["errorCode"] == "LABOR_MODULE_FORBIDDEN"
+
+
+def test_labor_p1_observes_permission_revocation_from_another_instance_before_cache_ttl(
+    p1_identity_env,
+):
+    with TestClient(app) as client:
+        _login(client, "overseasAdminUser")
+        active = client.get("/api/labor/runs")
+
+        admin_store.set_module_role_access("overseas", "overseasAdmin", False)
+        revoked = client.get("/api/labor/runs")
+
+    assert active.status_code == 200
+    assert revoked.status_code == 403
+    assert revoked.json()["detail"]["errorCode"] == "LABOR_MODULE_FORBIDDEN"
+
+
 def test_labor_p1_binds_owner_to_session_and_hides_cross_owner_run(p1_identity_env):
     admin_store.init_admin_store()
     second_user = admin_store.upsert_feishu_user(

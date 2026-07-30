@@ -474,12 +474,16 @@ def test_admin_worker_release_waits_for_matching_platform_before_atomic_publish(
     monkeypatch.setattr(app_module, "labor_auth_required", lambda: True)
     monkeypatch.setattr(
         app_module,
-        "current_user_from_request",
-        lambda request: {"user": {"id": "admin-user"}, "roles": ["admin"]},
+        "get_current_user",
+        lambda user_id: {"user": {"id": user_id, "status": "active"}, "roles": [{"id": "admin"}], "modules": []},
     )
     monkeypatch.setattr(app_module, "user_can_enter_module", lambda current, module: True)
     monkeypatch.setattr(app_module, "_labor_request_actor", lambda request: ("admin-user", True))
-    monkeypatch.setattr(app_module, "get_session_user_id", lambda token: "admin-user")
+    monkeypatch.setattr(
+        app_module,
+        "get_session_auth_context",
+        lambda token: ("admin-user", "permission-revision"),
+    )
     monkeypatch.setattr(app_module, "_user_can_enter_module", lambda user_id, module: True)
     active_version = CURRENT_WORKER_VERSION
     release_version = "0.3.14"
