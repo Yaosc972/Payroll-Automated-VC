@@ -1692,7 +1692,6 @@ async function ensureP1MappingPreflight() {
   if (submittedPreflight.status === "completed") return submittedPreflight;
   let progressMessage = mappingPreflightProgressMessage(laborState.run);
   labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(progressMessage)}</p>`;
-  beginButtonLoading(labor.loadSheets, progressMessage);
   const deadline = Date.now() + (10 * 60 * 1000);
   for (let attempt = 0; Date.now() < deadline; attempt += 1) {
     const statusResponse = await requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight-status`);
@@ -1703,7 +1702,6 @@ async function ensureP1MappingPreflight() {
       throw new Error(preflight.errorMessage || "本人核对助手读取 Excel 失败，请检查助手状态后重试。");
     }
     progressMessage = preflight.message || mappingPreflightProgressMessage(laborState.run);
-    beginButtonLoading(labor.loadSheets, progressMessage);
     labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(progressMessage)}</p>`;
     const delayMs = attempt < 5 ? 1000 : attempt < 20 ? 2000 : 3000;
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));

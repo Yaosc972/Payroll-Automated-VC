@@ -243,10 +243,9 @@ class PersonalLaborWorker:
             self.logger.info("claimed job=%s run=%s attempt=%s", job_id, run_id, job.get("attempt"))
             is_mapping_preflight = str(job.get("jobType") or "reconcile") == "mapping_preflight"
             if is_mapping_preflight:
-                self._report_progress(job_id, progress_state, phase="claimed", message="Worker 已领取任务。")
+                self._update_progress_state(progress_state, phase="claimed", message="Worker 已领取任务。")
                 self._write_status("processing", "正在下载 Excel 工作表。", job=job)
-                self._report_progress(
-                    job_id,
+                self._update_progress_state(
                     progress_state,
                     phase="downloading_excel",
                     message="正在下载 Excel。",
@@ -254,8 +253,7 @@ class PersonalLaborWorker:
             self._download_input(job_id, run_id)
             if is_mapping_preflight:
                 self._write_status("processing", "正在读取 Excel 工作表和字段。", job=job)
-                self._report_progress(
-                    job_id,
+                self._update_progress_state(
                     progress_state,
                     phase="reading_workbook",
                     message="正在读取工作表。",
@@ -486,8 +484,7 @@ class PersonalLaborWorker:
     ) -> None:
         run_dir = self.data_root / "labor_runs" / run_id
         payload = _build_mapping_preflight_payload(run_dir)
-        self._report_progress(
-            job_id,
+        self._update_progress_state(
             progress_state,
             phase="uploading_result",
             message="正在回传结果。",
@@ -504,9 +501,8 @@ class PersonalLaborWorker:
         if lease_lost.is_set():
             raise LaborWorkerLeaseLost("Worker 任务租约已经失效。")
 
-    def _report_progress(
-        self,
-        job_id: str,
+    @staticmethod
+    def _update_progress_state(
         progress_state: dict[str, Any],
         *,
         phase: str,
@@ -525,15 +521,6 @@ class PersonalLaborWorker:
                 "message": str(message)[:160],
             }
         )
-        try:
-            response = self.client.post(
-                f"{self.api_url}/api/labor/worker/jobs/{job_id}/heartbeat",
-                headers=self.headers,
-                json={"progress": dict(progress_state)},
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            self.logger.warning("progress update failed job=%s phase=%s: %s", job_id, phase, exc)
 
     def _heartbeat_loop(
         self,

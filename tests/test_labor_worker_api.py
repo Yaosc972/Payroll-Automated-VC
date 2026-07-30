@@ -1079,6 +1079,45 @@ def test_mapping_preflight_status_endpoint_does_not_build_full_run_status(monkey
     }
 
 
+def test_completed_mapping_preflight_status_returns_sheets_on_first_poll(monkeypatch, tmp_path):
+    client = _configure(monkeypatch, tmp_path)
+    monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
+    monkeypatch.setattr(labor_runs, "LABOR_RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(app_module, "LABOR_RUNS_DIR", tmp_path / "runs")
+    run_dir = tmp_path / "runs" / "labor_preflight_completed"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "id": "labor_preflight_completed",
+                "ownerUserId": "user-1",
+                "status": "已上传文件",
+                "mappingPreflight": {
+                    "status": "completed",
+                    "statusLabel": "Excel 字段预检完成",
+                    "message": "等待用户确认字段映射。",
+                    "taskGenerationId": "generation-current",
+                    "completedAt": "2026-07-30T09:26:58Z",
+                    "sheets": ["员工账单明细", "汇总"],
+                    "workbooks": [{"fileId": "xlsx-1", "sheets": []}],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        "/api/labor/runs/labor_preflight_completed/mapping-preflight-status"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mappingPreflight"]["status"] == "completed"
+    assert response.json()["mappingPreflight"]["sheets"] == ["员工账单明细", "汇总"]
+    assert response.json()["mappingPreflight"]["workbooks"] == [
+        {"fileId": "xlsx-1", "sheets": []}
+    ]
+
+
 def test_personal_worker_status_is_visible_in_run_polling(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")

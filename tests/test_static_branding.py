@@ -382,6 +382,17 @@ def test_overseas_labor_polls_lightweight_mapping_preflight_status():
     assert 'requestJson(`/api/labor/runs/${laborState.run.id}`)' not in preflight_block
 
 
+def test_overseas_labor_keeps_mapping_progress_outside_the_fixed_width_button():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    preflight_block = script[
+        script.index("async function ensureP1MappingPreflight"):
+        script.index("async function loadFieldSuggestions")
+    ]
+
+    assert "labor.mappingPreview.innerHTML" in preflight_block
+    assert "beginButtonLoading(labor.loadSheets, progressMessage)" not in preflight_block
+
+
 def test_overseas_labor_exposes_personal_worker_activation_without_persisting_token_in_dom():
     html = OVERSEAS_LABOR_HTML.read_text(encoding="utf-8")
     script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")

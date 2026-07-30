@@ -428,9 +428,9 @@ def test_personal_worker_runs_mapping_preflight_without_reconcile_engine_or_resu
     }
     assert not any(path.endswith("/input-file") for _, path in calls)
     assert not any(path.endswith("/result") for _, path in calls)
-    assert progress_phases == ["claimed", "downloading_excel", "reading_workbook", "uploading_result"]
-    assert list(progress_timelines[-1]) == progress_phases
-    assert all(str(value).endswith("Z") for value in progress_timelines[-1].values())
+    assert progress_phases == []
+    assert progress_timelines == []
+    assert not any(path.endswith("/heartbeat") for _, path in calls)
 
 
 def test_personal_worker_reports_engine_failure(tmp_path):

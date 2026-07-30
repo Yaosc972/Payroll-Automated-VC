@@ -5572,6 +5572,15 @@ def get_labor_mapping_preflight_status(run_id: str) -> dict:
         if preflight.get(key) not in (None, "")
     }
     status.setdefault("status", "not_started")
+    if status["status"] == "completed":
+        sheets = preflight.get("sheets")
+        workbooks = preflight.get("workbooks")
+        status["sheets"] = [
+            str(sheet)
+            for sheet in (sheets if isinstance(sheets, list) else [])
+            if str(sheet).strip()
+        ]
+        status["workbooks"] = workbooks if isinstance(workbooks, list) else []
     return {"mappingPreflight": status}
 
 
