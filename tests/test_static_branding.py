@@ -297,7 +297,7 @@ def test_overseas_labor_revalidates_completed_mapping_preflight_before_reuse():
     assert 'response.mappingPreflight' in preflight_block
     assert "return submittedPreflight" in preflight_block
     assert "return preflight" in preflight_block
-    assert "const delayMs = Math.min(15000, 5000 + (attempt * 2500))" in preflight_block
+    assert "const delayMs = attempt < 5 ? 1000 : attempt < 20 ? 2000 : 3000" in preflight_block
 
 
 def test_overseas_labor_mapping_preflight_requires_current_environment_worker_and_shows_real_phase():
@@ -369,6 +369,17 @@ def test_overseas_labor_discards_stale_field_suggestion_responses():
     assert "requestId !== laborFieldSuggestionRequestId" in suggestion_block
     assert "labor.sheetSelect.value !== sheetName" in suggestion_block
     assert "laborState.run?.id !== runId" in suggestion_block
+
+
+def test_overseas_labor_polls_lightweight_mapping_preflight_status():
+    script = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+    preflight_block = script[
+        script.index("async function ensureP1MappingPreflight"):
+        script.index("async function loadFieldSuggestions")
+    ]
+
+    assert 'requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight-status`)' in preflight_block
+    assert 'requestJson(`/api/labor/runs/${laborState.run.id}`)' not in preflight_block
 
 
 def test_overseas_labor_exposes_personal_worker_activation_without_persisting_token_in_dom():

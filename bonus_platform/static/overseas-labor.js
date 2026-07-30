@@ -1695,18 +1695,18 @@ async function ensureP1MappingPreflight() {
   beginButtonLoading(labor.loadSheets, progressMessage);
   const deadline = Date.now() + (10 * 60 * 1000);
   for (let attempt = 0; Date.now() < deadline; attempt += 1) {
-    const delayMs = Math.min(15000, 5000 + (attempt * 2500));
-    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
-    const run = await requestJson(`/api/labor/runs/${laborState.run.id}`);
-    laborState.run = run;
-    const preflight = run.mappingPreflight || {};
+    const statusResponse = await requestJson(`/api/labor/runs/${laborState.run.id}/mapping-preflight-status`);
+    const preflight = statusResponse.mappingPreflight || {};
+    laborState.run = { ...laborState.run, mappingPreflight: preflight };
     if (preflight.status === "completed") return preflight;
     if (preflight.status === "failed") {
       throw new Error(preflight.errorMessage || "本人核对助手读取 Excel 失败，请检查助手状态后重试。");
     }
-    progressMessage = mappingPreflightProgressMessage(run);
+    progressMessage = preflight.message || mappingPreflightProgressMessage(laborState.run);
     beginButtonLoading(labor.loadSheets, progressMessage);
     labor.mappingPreview.innerHTML = `<p class="empty-state-text">${escapeHtml(progressMessage)}</p>`;
+    const delayMs = attempt < 5 ? 1000 : attempt < 20 ? 2000 : 3000;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
   }
   throw new Error("字段预检等待超过 10 分钟，请确认本人核对助手已激活并在线后重试。");
 }

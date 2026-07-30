@@ -83,6 +83,37 @@ def test_postgres_health_requires_existing_jobs_table():
     assert store.health() == {"backend": "postgres", "configured": True, "ready": False}
 
 
+def test_postgres_latest_job_query_is_scoped_to_run_generation_type_and_status():
+    connection = FakeConnection(
+        [
+            FakeResult(
+                row=_row(
+                    status="queued",
+                    task_generation_id="generation-current",
+                    job_type="mapping_preflight",
+                )
+            )
+        ]
+    )
+    store = PostgresLaborWorkerStore("postgres://test", connect=lambda: connection)
+
+    job = store.find_latest(
+        "labor-1",
+        task_generation_id="generation-current",
+        job_type="mapping_preflight",
+        statuses={"queued", "running", "retry_wait"},
+    )
+
+    sql, params = connection.queries[0]
+    assert "run_id=%s" in sql
+    assert "metadata_snapshot->>'taskGenerationId'" in sql
+    assert "job_type=%s" in sql
+    assert "status in" in sql
+    assert "limit 1" in sql.lower()
+    assert params[:3] == ("labor-1", "generation-current", "mapping_preflight")
+    assert job["id"] == "job-1"
+
+
 def test_postgres_job_store_health_never_returns_connection_secret():
     secret = "postgres://user:must-not-leak@example.invalid/database"
 

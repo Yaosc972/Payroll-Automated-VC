@@ -101,6 +101,52 @@ def test_p1_readiness_does_not_require_legacy_static_worker_tokens():
     assert result["p1"]["ready"] is True
 
 
+def test_p1_readiness_snapshot_reuses_recent_success_and_supports_forced_refresh(monkeypatch):
+    for key, value in _p1_env().items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("SIGMA_LABOR_P1_READINESS_CACHE_SECONDS", "30")
+    app_module._LABOR_P1_READINESS_CACHE.clear()
+    calls = {"queue": 0}
+
+    def queue_health():
+        calls["queue"] += 1
+        return {"backend": "postgres", "configured": True, "ready": True}
+
+    monkeypatch.setattr(app_module, "labor_p1_worker_job_store_health", queue_health)
+    monkeypatch.setattr(
+        app_module,
+        "labor_persistent_storage_info",
+        lambda: {"enabled": True, "backend": "supabase", "environment": "production"},
+    )
+    monkeypatch.setattr(
+        app_module,
+        "labor_persistent_storage_health",
+        lambda **_kwargs: {
+            "ready": True,
+            "private": True,
+            "directUpload": True,
+            "directDownload": True,
+        },
+    )
+    monkeypatch.setattr(app_module, "labor_worker_identity_health", lambda: {"ready": True, "backend": "postgres"})
+    monkeypatch.setattr(app_module, "labor_auth_health", lambda: {"ready": True})
+    monkeypatch.setattr(
+        app_module,
+        "labor_postgres_state_health",
+        lambda: {"backend": "postgres", "configured": True, "ready": True},
+    )
+    monkeypatch.setattr(app_module, "_labor_build_snapshot", _build_info)
+
+    first = app_module._labor_p1_readiness_snapshot()
+    second = app_module._labor_p1_readiness_snapshot()
+    refreshed = app_module._labor_p1_readiness_snapshot(force_refresh=True)
+
+    assert first["p1"]["ready"] is True
+    assert second == first
+    assert refreshed["p1"]["ready"] is True
+    assert calls["queue"] == 2
+
+
 def test_p1_auth_health_requires_feishu_postgres_secure_cookie_and_no_mock(monkeypatch):
     monkeypatch.setattr(
         auth_module,

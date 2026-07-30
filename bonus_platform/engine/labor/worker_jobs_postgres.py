@@ -420,6 +420,35 @@ class PostgresLaborWorkerStore:
             raise FileNotFoundError("海外劳务 Worker 任务不存在。")
         return self._row(dict(row))
 
+    def find_latest(
+        self,
+        run_id: str,
+        *,
+        task_generation_id: str | None = None,
+        job_type: str = "",
+        statuses: set[str] | None = None,
+    ) -> dict[str, Any] | None:
+        clauses = ["run_id=%s"]
+        params: list[Any] = [str(run_id)]
+        if task_generation_id is not None:
+            clauses.append("coalesce(metadata_snapshot->>'taskGenerationId','')=%s")
+            params.append(str(task_generation_id))
+        if job_type:
+            clauses.append("job_type=%s")
+            params.append(_job_type(job_type))
+        normalized_statuses = sorted({str(status) for status in (statuses or set()) if str(status)})
+        if normalized_statuses:
+            placeholders = ",".join("%s" for _ in normalized_statuses)
+            clauses.append(f"status in ({placeholders})")
+            params.extend(normalized_statuses)
+        sql = (
+            f"select * from labor_jobs where {' and '.join(clauses)} "
+            "order by updated_at desc, created_at desc limit 1"
+        )
+        with self._connect() as conn:
+            row = conn.execute(sql, tuple(params)).fetchone()
+        return self._row(dict(row)) if row else None
+
     def list(self, *, limit: int = 500) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("select * from labor_jobs order by updated_at desc limit %s", (max(1, limit),)).fetchall()
