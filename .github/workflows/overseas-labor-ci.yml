@@ -112,7 +112,7 @@ jobs:
             git diff --check "$BASE_SHA" "$HEAD_SHA"
           fi
           printf '%s\n' "$changed_paths"
-          worker_runtime_paths="$(printf '%s\n' "$changed_paths" | grep -E '^(bonus_platform/worker/|labor-worker-desktop/(main\.js|preload\.js|worker_entry\.py|pyinstaller-worker\.spec|requirements-worker\.txt|lib/|renderer/))' || true)"
+          worker_runtime_paths="$(printf '%s\n' "$changed_paths" | grep -E '^(bonus_platform/app\.py|bonus_platform/engine/labor/|bonus_platform/worker/|labor-worker-desktop/(main\.js|preload\.js|worker_entry\.py|pyinstaller-worker\.spec|requirements-worker\.txt|lib/|renderer/))' || true)"
           if [ -n "$worker_runtime_paths" ]; then
             base_package="$(git show "$BASE_SHA:labor-worker-desktop/package.json" 2>/dev/null || true)"
             base_version="$(printf '%s' "$base_package" | python3 -c 'import json,sys; payload=sys.stdin.read(); print(json.loads(payload).get("version", "") if payload else "")')"

@@ -495,9 +495,8 @@ def _run_labor_auto_ocr_candidate(
             "evidenceText": str(evidence.get("evidenceText") or ""),
         }
     expected_totals = dict(fallback_expected_totals)
-    expected_totals.update(
-        {source_file: evidence["amount"] for source_file, evidence in pdf_total_evidence.items()}
-    )
+    for source_file, evidence in pdf_total_evidence.items():
+        expected_totals.setdefault(source_file, evidence["amount"])
     candidate = evaluate_ocr_candidate_result(
         ocr_result,
         excel_rows,
@@ -525,6 +524,12 @@ def _labor_apply_ocr_pdf_total_evidence(
         source_file = str(total.get("source_file") or "").strip()
         evidence = evidence_by_source.get(source_file)
         if not isinstance(evidence, dict) or float(evidence.get("amount") or 0) <= 0:
+            merged.append(dict(total))
+            continue
+        if (
+            total.get("authoritative") is True
+            and float(total.get("total_amount") or 0) > 0
+        ):
             merged.append(dict(total))
             continue
         amount = round(float(evidence["amount"]), 2)
