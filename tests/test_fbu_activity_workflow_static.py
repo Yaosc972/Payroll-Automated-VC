@@ -85,6 +85,30 @@ def test_upload_entries_are_owned_by_exactly_one_step():
         assert copy in js
 
 
+def test_previous_attendance_upload_is_always_visible_as_optional_material():
+    js = _js()
+    material = js.split(
+        "{ materialKey: 'previousAttendance'", 1
+    )[1].split("},", 1)[0]
+
+    assert "required: false" in material
+    assert "conditional:" not in material
+
+
+def test_attendance_step_recovers_missing_rows_without_hiding_hourly_policy():
+    js = _js()
+    needs = js.split("function buildNeedsForStep", 1)[1].split(
+        "function renderNeedsPanel", 1
+    )[0]
+    policy = js.split("function renderHourlyRatePolicySection", 1)[1].split(
+        "async function", 1
+    )[0]
+
+    assert "activity.attendance_file && !hasUsableAttendanceView(activity)" in needs
+    assert "请重新上传考勤日报" in needs
+    assert "!hasUsableAttendanceView(activity) && !hasHourlyRatePolicyRows(activity)" in policy
+
+
 def test_upload_entries_use_inline_timeline_progress_not_react_stack():
     html = _html()
     js = _js()
@@ -727,7 +751,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=fbu-performance-v3-20260731" in html
+    assert "fbu-performance.js?v=fbu-performance-v4-20260731" in html
 
 
 def test_activity_list_uses_summary_without_detail_prefetch():

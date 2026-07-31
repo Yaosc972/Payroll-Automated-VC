@@ -122,7 +122,7 @@ const STEP_MATERIALS = {
   ],
   attendance: [
     { materialKey: 'attendance', label: '考勤日报', tag: '必传', hint: '上传OEHR当月考勤日报表', uploadType: 'attendance', fileField: 'attendance_file', required: true },
-    { materialKey: 'previousAttendance', label: '上月考勤', tag: '96工时制员工', hint: '上传OEHR上月考勤日报表', uploadType: 'previousAttendance', fileField: 'previous_attendance_file', required: false, conditional: 'needsPreviousAttendance' },
+    { materialKey: 'previousAttendance', label: '上月考勤', tag: '96工时制员工', hint: '上传OEHR上月考勤日报表', uploadType: 'previousAttendance', fileField: 'previous_attendance_file', required: false },
     { materialKey: 'supplementalLeave', label: '补充假勤', tag: '必传', hint: '上传线下sickpay与年假补充数据', uploadType: 'supplementalLeave', fileField: 'supplemental_leave_file', required: true },
   ],
   salary: [
@@ -363,15 +363,7 @@ function renderNameWithTags(row, activity = getWorkbenchActivity()) {
   `;
 }
 
-function needsPreviousAttendance(activity) {
-  const context = activity?.attendance_data?.summary?.attendance_context || {};
-  return Boolean(context.required || activity?.previous_attendance_file || state.workbenchPreviousAttendanceFile);
-}
-
 function getMaterialStatus(material, activity) {
-  if (material.conditional === 'needsPreviousAttendance' && !needsPreviousAttendance(activity)) {
-    return { visible: false };
-  }
   const fileName = activity?.[material.fileField] || '';
   if (fileName) {
     return { visible: true, tone: 'success', text: '已上传', fileName };
@@ -6574,6 +6566,16 @@ function getActivitySectionSummary(activity, field) {
   return summary && typeof summary === 'object' ? summary : {};
 }
 
+function hasUsableAttendanceView(activity) {
+  return Array.isArray(activity?.attendance_data?.employees)
+    && activity.attendance_data.employees.length > 0;
+}
+
+function hasHourlyRatePolicyRows(activity) {
+  return Array.isArray(activity?.hourly_rate_policy_data?.rows)
+    && activity.hourly_rate_policy_data.rows.length > 0;
+}
+
 function hasBaseOverrideRule(activity, ruleType, summaryKey) {
   const employees = activity?.base_override_data?.employees;
   if (Array.isArray(employees)) {
@@ -6602,6 +6604,16 @@ function buildNeedsForStep(stepKey, activity) {
   }
   if (stepKey === 'attendance') {
     if (!activity.attendance_file) push('attendance', '请上传考勤日报', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'attendance\')">上传</button>');
+    if (activity.attendance_file && !hasUsableAttendanceView(activity)) {
+      const attendanceViewLoaded = (activity.loaded_sections || []).includes('attendance_view_data');
+      if (attendanceViewLoaded) {
+        push(
+          'attendanceRecovery',
+          '考勤文件已上传，但工时明细未恢复，请重新上传考勤日报',
+          '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'attendance\')">重新上传</button>',
+        );
+      }
+    }
     if (!activity.supplemental_leave_file) push('supplementalLeave', '请上传补充假勤', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'supplementalLeave\')">上传</button>');
     if (!hasBaseOverrideRule(activity, '96工时制', 'work_hour_rule_count')) {
       push('workHourList', '请确认96工时制员工名单', '<button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(\'workHour\')">确认名单</button>');
@@ -7061,7 +7073,7 @@ async function addHourlyRatePolicyEmployee() {
 }
 
 function renderHourlyRatePolicySection(activity) {
-  if (!activity?.attendance_data?.employees?.length) return '';
+  if (!hasUsableAttendanceView(activity) && !hasHourlyRatePolicyRows(activity)) return '';
   const rows = getHourlyRatePolicyRows(activity);
   const pageInfo = getPaginatedRows('hourlyRatePolicy', rows);
   const summary = activity?.hourly_rate_policy_data?.summary || {};

@@ -138,7 +138,7 @@ def test_versioned_fbu_static_assets_are_immutable():
     client = TestClient(app_module.app)
 
     response = client.get(
-        "/fbu-performance.js?v=fbu-performance-v3-20260731",
+        "/fbu-performance.js?v=fbu-performance-v4-20260731",
         headers={"Accept-Encoding": "gzip"},
     )
 
@@ -311,7 +311,7 @@ def test_fbu_attendance_step_backfills_compact_view_for_legacy_runs(monkeypatch)
                     created_at="2026-07-31T10:00:00",
                     calc_month="2026-06",
                     status="completed",
-                    attendance_view_data={},
+                    attendance_view_data={"employees": []},
                 )
             return SimpleNamespace(
                 run_id=run_id,

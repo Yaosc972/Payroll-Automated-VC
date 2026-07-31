@@ -1,4 +1,7 @@
-from bonus_platform.engine.fbu_performance.runs import FBURunManager
+from bonus_platform.engine.fbu_performance.runs import (
+    FBURunManager,
+    build_attendance_view_data,
+)
 
 
 def test_saving_changed_input_invalidates_existing_results(tmp_path):
@@ -49,6 +52,12 @@ def test_attendance_save_builds_compact_view_without_mutating_source(tmp_path):
     assert "attendance_daily_rows" not in updated.attendance_view_data["employees"][0]
     assert updated.attendance_view_data["employees"][0]["total_base_hours"] == 80
     assert updated.attendance_view_data["summary"] == {"total_employees": 1}
+
+
+def test_empty_attendance_source_does_not_create_truthy_compact_view():
+    assert build_attendance_view_data({}) == {}
+    assert build_attendance_view_data({"employees": []}) == {}
+    assert build_attendance_view_data({"employees": [None]}) == {}
 
 
 def test_backfilling_hourly_rate_defaults_preserves_existing_results(tmp_path):

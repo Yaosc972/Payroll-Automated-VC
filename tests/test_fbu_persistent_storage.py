@@ -261,6 +261,46 @@ def test_v2_json_reads_reuse_short_lived_process_cache(monkeypatch):
     ]
 
 
+def test_v2_snapshot_recovers_attendance_section_hidden_by_stale_manifest(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    prefix = "fbu-performance-runs/production"
+    attendance_data = {
+        "summary": {"total_employees": 1},
+        "employees": [{"employee_id": "zt1", "total_base_hours": 80}],
+    }
+    stale_manifest = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "created_at": "2026-07-31T10:00:00",
+        "calc_month": "2026-06",
+        "status": "step1",
+        "attendance_file": "attendance.xlsx",
+    })
+    objects = {
+        f"{prefix}/run_123/summary.json": json.dumps(stale_manifest).encode("utf-8"),
+        f"{prefix}/run_123/sections/attendance_data.json": json.dumps(
+            attendance_data
+        ).encode("utf-8"),
+    }
+    reads: list[str] = []
+
+    def download(object_path: str) -> bytes | None:
+        reads.append(object_path)
+        return objects.get(object_path)
+
+    monkeypatch.setattr(fbu_storage, "_download_bytes", download)
+
+    restored = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"attendance_data"},
+    )
+
+    assert restored["attendance_data"] == attendance_data
+    assert reads == [
+        f"{prefix}/run_123/summary.json",
+        f"{prefix}/run_123/sections/attendance_data.json",
+    ]
+
+
 def test_v2_json_cache_refreshes_remote_data_after_ttl(monkeypatch):
     monkeypatch.setenv("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "2")
     object_path = "fbu-performance-runs/production/_runs-index.json"

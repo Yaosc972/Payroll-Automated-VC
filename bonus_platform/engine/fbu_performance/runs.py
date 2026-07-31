@@ -528,9 +528,27 @@ def build_results_view_data(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def has_attendance_employees(attendance_data: dict[str, Any]) -> bool:
+    return bool(
+        isinstance(attendance_data, dict)
+        and isinstance(attendance_data.get("employees"), list)
+        and any(
+            isinstance(employee, dict)
+            for employee in attendance_data["employees"]
+        )
+    )
+
+
 def build_attendance_view_data(attendance_data: dict[str, Any]) -> dict[str, Any]:
     """Build the attendance-step view without calculation-only daily rows."""
-    if not isinstance(attendance_data, dict):
+    if not has_attendance_employees(attendance_data):
+        return {}
+    employees = [
+        employee
+        for employee in (attendance_data.get("employees") or [])
+        if isinstance(employee, dict)
+    ]
+    if not employees:
         return {}
     view = {
         key: value
@@ -543,8 +561,7 @@ def build_attendance_view_data(attendance_data: dict[str, Any]) -> dict[str, Any
             for key, value in employee.items()
             if key != "attendance_daily_rows"
         }
-        for employee in (attendance_data.get("employees") or [])
-        if isinstance(employee, dict)
+        for employee in employees
     ]
     return view
 
@@ -895,7 +912,11 @@ class FBURunManager:
     def backfill_attendance_view_data(self, run_id: str, data: dict) -> None:
         """Persist a derived attendance view without changing calculation status."""
         run = self.get_run(run_id, sections={"attendance_view_data"})
-        if not run or run.attendance_view_data:
+        if (
+            not run
+            or has_attendance_employees(run.attendance_view_data)
+            or not has_attendance_employees(data)
+        ):
             return
         run.attendance_view_data = data
         self.runs[run_id] = run

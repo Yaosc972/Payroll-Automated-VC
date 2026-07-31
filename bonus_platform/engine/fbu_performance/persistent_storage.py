@@ -39,6 +39,11 @@ FBU_RUN_SECTION_FIELDS = frozenset({
     "results",
     "results_view_data",
 })
+_ATTENDANCE_RECOVERY_SECTION_FIELDS = frozenset({
+    "attendance_data",
+    "attendance_view_data",
+    "hourly_rate_policy_data",
+})
 _RUN_INDEX_LOCK = threading.RLock()
 _JSON_CACHE_LOCK = threading.RLock()
 _JSON_CACHE_MAX_ITEM_BYTES = 2 * 1024 * 1024
@@ -462,7 +467,11 @@ def load_fbu_run_snapshot_from_persistent(
 
     def load_section(field: str) -> tuple[str, Any]:
         section = (manifest.get("sections") or {}).get(field) or {}
-        if not section.get("present"):
+        attendance_recovery_expected = (
+            field in _ATTENDANCE_RECOVERY_SECTION_FIELDS
+            and bool((manifest.get("run") or {}).get("attendance_file"))
+        )
+        if not section.get("present") and not attendance_recovery_expected:
             return field, [] if field == "results" else {}
         value = _download_json(_object_path(run_id, _section_relative_path(field)))
         if value is None:

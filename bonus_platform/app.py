@@ -167,6 +167,7 @@ from .engine.fbu_performance.runs import (
     build_attendance_view_data,
     build_final_result_rows,
     build_results_view_data,
+    has_attendance_employees,
     FBURosterStore,
     FBURun,
     FBURunManager,
@@ -16633,7 +16634,11 @@ def get_fbu_performance_run(
         else {}
     )
     attendance_source_run = None
-    if sections is not None and "attendance_view_data" in sections and not attendance_view:
+    if (
+        sections is not None
+        and "attendance_view_data" in sections
+        and not has_attendance_employees(attendance_view)
+    ):
         attendance_source_run = (
             fbu_run_manager.get_run(run_id, sections={"attendance_data"})
             or run
@@ -16672,8 +16677,10 @@ def get_fbu_performance_run(
         )
         run = fbu_run_manager.get_run(run_id, sections=sections) or run
     raw_payload = vars(run).copy()
-    if attendance_view:
+    if has_attendance_employees(attendance_view):
         raw_payload["attendance_view_data"] = attendance_view
+    elif sections is not None and "attendance_view_data" in sections:
+        raw_payload["attendance_view_data"] = {}
     if sections is None:
         payload = raw_payload
         payload.pop("results_view_data", None)
