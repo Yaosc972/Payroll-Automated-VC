@@ -73,7 +73,7 @@ def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime()
     assert "upload-intents" in script
     assert "intent.signedUrl" in script
     assert "upload-intents/batch-finalize" in script
-    assert 'overseas-labor.js?v=38' in html
+    assert 'overseas-labor.js?v=39' in html
 
 
 def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
@@ -96,7 +96,7 @@ def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     assert "overflow: visible" in toolbench_css
     assert "addDays(picked, 6)" in script
     assert "periodPickerState.selectingEnd" in script
-    assert 'overseas-labor.js?v=38' in html
+    assert 'overseas-labor.js?v=39' in html
 
 
 def test_overseas_labor_async_actions_share_button_loading_transitions():
@@ -119,7 +119,7 @@ def test_overseas_labor_async_actions_share_button_loading_transitions():
     assert 'beginButtonLoading(labor.activateWorker, "正在连接")' in script
     assert 'beginButtonLoading(labor.deleteCurrentRun, "正在删除")' in script
     assert 'beginButtonLoading(button, "正在撤销")' in script
-    assert 'overseas-labor.js?v=38' in html
+    assert 'overseas-labor.js?v=39' in html
 
 
 def test_overseas_labor_uses_server_formal_task_gate_instead_of_hostname_guessing():
@@ -1149,7 +1149,7 @@ def test_overseas_labor_upload_shows_and_prevalidates_configured_workbook_limit(
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 
     assert "workbookUploadHint(0)" in js
-    assert 'overseas-labor.js?v=38' in html
+    assert 'overseas-labor.js?v=39' in html
     assert "access.uploadLimits?.maxWorkbookFiles" in js
     assert "existing.workbook + pendingWorkbookCount > maxWorkbookFiles" in js
     assert "最多选择 ${maxWorkbookFiles} 个 Excel 文件" in js
@@ -1250,6 +1250,24 @@ def test_overseas_labor_page_exposes_worker_download_and_update_status():
     assert "white-space: normal" in release_action_css
     assert "overflow-wrap: anywhere" in release_action_css
     assert "text-overflow: ellipsis" not in release_action_css
+
+
+def test_overseas_labor_windows_worker_download_is_chunked_retried_and_size_checked():
+    js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "const LABOR_WORKER_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024;" in js
+    assert "const LABOR_WORKER_DOWNLOAD_MAX_ATTEMPTS = 4;" in js
+    assert "window.showSaveFilePicker" in js
+    assert '"Range": `bytes=${startByte}-${endByte}`' in js
+    assert "response.status !== 206" in js
+    assert "response.headers.get(\"content-range\")" in js
+    assert "contentRange !== expectedContentRange" in js
+    assert "responseBytes.byteLength !== expectedChunkBytes" in js
+    assert "await writable.abort();" in js
+    assert "writtenBytes !== expectedSizeBytes" in js
+    assert "downloadLaborWorkerReleaseResilient" in js
+    assert "if (laborWorkerDownloadInProgress) return;" in js
+    assert "已校验" in js
 
 
 def test_overseas_labor_worker_status_opens_immediately_without_holding_header_button():

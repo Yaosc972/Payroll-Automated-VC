@@ -637,6 +637,7 @@ def test_browser_worker_release_selects_windows_x64_from_release_catalog(monkeyp
                         "signature": f"sha256:{digest}",
                         "blobPathname": "labor-runs/uat/owners/system/worker-releases/windows-x64/worker.exe",
                         "filename": "worker.exe",
+                        "sizeBytes": 198_404_005,
                     },
                 },
             }
@@ -649,6 +650,7 @@ def test_browser_worker_release_selects_windows_x64_from_release_catalog(monkeyp
     assert response.json()["available"] is True
     assert response.json()["platform"] == "windows-x64"
     assert response.json()["filename"] == "worker.exe"
+    assert response.json()["sizeBytes"] == 198_404_005
     assert response.json()["downloadUrl"] == "/api/labor/worker/release/download?platform=windows-x64"
 
 

@@ -1,5 +1,8 @@
 const LABOR_UI_MODULE_VERSION = "0.5-uat";
 const LABOR_UI_API_CONTRACT_VERSION = 2;
+const LABOR_WORKER_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+const LABOR_WORKER_DOWNLOAD_MAX_ATTEMPTS = 4;
+const LABOR_WORKER_DOWNLOAD_RETRY_DELAYS_MS = [0, 600, 1500, 3000];
 
 function detectLaborWorkerPlatform() {
   const platform = String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || "");
@@ -16,6 +19,114 @@ function laborWorkerStorageEnvironmentLabel(environment) {
   if (["preview", "staging", "uat"].includes(normalized)) return "UAT/预览环境";
   if (["local", "development", "dev", "test"].includes(normalized)) return "本地环境";
   return normalized ? `${normalized} 环境` : "当前环境";
+}
+
+function formatLaborWorkerDownloadBytes(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+function canUseResilientLaborWorkerDownload(release) {
+  return release?.platform === "windows-x64"
+    && Number(release?.sizeBytes || 0) > 0
+    && typeof window.showSaveFilePicker === "function";
+}
+
+function waitForLaborWorkerDownloadRetry(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function fetchLaborWorkerDownloadChunk(downloadUrl, startByte, endByte, expectedSizeBytes) {
+  const expectedChunkBytes = endByte - startByte + 1;
+  const expectedContentRange = `bytes ${startByte}-${endByte}/${expectedSizeBytes}`;
+  let lastError = null;
+  for (let attempt = 0; attempt < LABOR_WORKER_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
+    if (LABOR_WORKER_DOWNLOAD_RETRY_DELAYS_MS[attempt] > 0) {
+      await waitForLaborWorkerDownloadRetry(LABOR_WORKER_DOWNLOAD_RETRY_DELAYS_MS[attempt]);
+    }
+    try {
+      const response = await fetch(downloadUrl, {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        redirect: "follow",
+        headers: { "Range": `bytes=${startByte}-${endByte}` },
+      });
+      if (response.status !== 206) {
+        await response.body?.cancel?.();
+        throw new Error(`安装包分段下载返回异常状态 ${response.status}。`);
+      }
+      const contentRange = response.headers.get("content-range");
+      if (contentRange && contentRange !== expectedContentRange) {
+        await response.body?.cancel?.();
+        throw new Error(`安装包分段位置异常（预期 ${expectedContentRange}，实际 ${contentRange}）。`);
+      }
+      const responseBytes = new Uint8Array(await response.arrayBuffer());
+      if (responseBytes.byteLength !== expectedChunkBytes) {
+        throw new Error(
+          `安装包分段不完整（预期 ${expectedChunkBytes} 字节，实际 ${responseBytes.byteLength} 字节）。`,
+        );
+      }
+      return responseBytes;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("安装包分段下载失败。");
+}
+
+async function downloadLaborWorkerReleaseResilient(release, onProgress) {
+  const expectedSizeBytes = Number(release?.sizeBytes || 0);
+  const downloadUrl = String(release?.downloadUrl || "");
+  const filename = String(release?.filename || "Σ海外报账核对助手-windows-x64.exe");
+  if (!expectedSizeBytes || !downloadUrl) throw new Error("安装包发布信息不完整，请刷新页面后重试。");
+
+  const fileHandle = await window.showSaveFilePicker({
+    suggestedName: filename,
+    types: [
+      {
+        description: "Windows 安装程序",
+        accept: { "application/x-msdownload": [".exe"] },
+      },
+    ],
+  });
+  const writable = await fileHandle.createWritable();
+  let writtenBytes = 0;
+  try {
+    while (writtenBytes < expectedSizeBytes) {
+      const endByte = Math.min(
+        writtenBytes + LABOR_WORKER_DOWNLOAD_CHUNK_BYTES,
+        expectedSizeBytes,
+      ) - 1;
+      const responseBytes = await fetchLaborWorkerDownloadChunk(
+        downloadUrl,
+        writtenBytes,
+        endByte,
+        expectedSizeBytes,
+      );
+      await writable.write({
+        type: "write",
+        position: writtenBytes,
+        data: responseBytes,
+      });
+      writtenBytes += responseBytes.byteLength;
+      onProgress?.(writtenBytes, expectedSizeBytes);
+    }
+    if (writtenBytes !== expectedSizeBytes) {
+      throw new Error(
+        `安装包大小校验失败（预期 ${expectedSizeBytes} 字节，实际 ${writtenBytes} 字节）。`,
+      );
+    }
+    await writable.close();
+    return { writtenBytes, filename };
+  } catch (error) {
+    try {
+      await writable.abort();
+    } catch (_abortError) {
+      // The original download error is more useful than an abort failure.
+    }
+    throw error;
+  }
 }
 
 const laborState = {
@@ -39,6 +150,7 @@ const laborState = {
   selectedWorkbookFiles: [],
 };
 
+let laborWorkerDownloadInProgress = false;
 let laborFieldSuggestionRequestId = 0;
 let laborRunRestoreGeneration = 0;
 
@@ -495,17 +607,7 @@ function bindLaborEvents() {
   }
   if (labor.workerDevices) labor.workerDevices.addEventListener("click", handleLaborWorkerDeviceAction);
   if (labor.downloadWorker) {
-    labor.downloadWorker.addEventListener("click", (event) => {
-      if (labor.downloadWorker.classList.contains("disabled")) {
-        event.preventDefault();
-        return;
-      }
-      recordLaborTelemetry("labor.worker.download_clicked", {
-        step: "worker_download",
-        status: "clicked",
-        context: { version: laborState.workerRelease?.version || "" },
-      });
-    });
+    labor.downloadWorker.addEventListener("click", handleLaborWorkerDownload);
   }
   if (labor.workerReleasePlatform) {
     labor.workerReleasePlatform.addEventListener("change", () => {
@@ -526,6 +628,84 @@ function bindLaborEvents() {
         context: { path: labor.reportLink.getAttribute("href") || "" },
       });
     });
+  }
+}
+
+async function handleLaborWorkerDownload(event) {
+  if (labor.downloadWorker?.classList.contains("disabled") || laborWorkerDownloadInProgress) {
+    event.preventDefault();
+    return;
+  }
+  const release = laborState.workerRelease;
+  recordLaborTelemetry("labor.worker.download_clicked", {
+    step: "worker_download",
+    status: "clicked",
+    context: {
+      version: release?.version || "",
+      platform: release?.platform || laborState.workerPlatform,
+      sizeBytes: Number(release?.sizeBytes || 0),
+    },
+  });
+  if (!canUseResilientLaborWorkerDownload(release)) return;
+
+  event.preventDefault();
+  laborWorkerDownloadInProgress = true;
+  const buttonLabel = labor.downloadWorker.textContent;
+  labor.downloadWorker.classList.add("disabled");
+  labor.downloadWorker.setAttribute("aria-disabled", "true");
+  labor.downloadWorker.setAttribute("aria-busy", "true");
+  labor.downloadWorker.textContent = "准备安全下载";
+  labor.workerReleaseStatus.textContent = "请选择保存位置，随后系统会自动分段下载并校验。";
+  const startedAt = performance.now();
+  try {
+    const result = await downloadLaborWorkerReleaseResilient(
+      release,
+      (writtenBytes, expectedSizeBytes) => {
+        const progress = Math.min(100, Math.floor((writtenBytes / expectedSizeBytes) * 100));
+        labor.downloadWorker.textContent = `正在下载 ${progress}%`;
+        labor.workerReleaseStatus.textContent = (
+          `${formatLaborWorkerDownloadBytes(writtenBytes)} / `
+          + `${formatLaborWorkerDownloadBytes(expectedSizeBytes)}，断线会自动重试`
+        );
+      },
+    );
+    labor.downloadWorker.textContent = "下载已完成";
+    labor.workerReleaseStatus.textContent = (
+      `下载完成，已校验 ${formatLaborWorkerDownloadBytes(result.writtenBytes)}；请打开安装。`
+    );
+    recordLaborTelemetry("labor.worker.download_completed", {
+      step: "worker_download",
+      status: "completed",
+      durationMs: elapsedMs(startedAt),
+      context: {
+        version: release.version || "",
+        platform: release.platform || laborState.workerPlatform,
+        sizeBytes: result.writtenBytes,
+      },
+    });
+  } catch (error) {
+    const cancelled = error?.name === "AbortError";
+    labor.downloadWorker.textContent = cancelled ? buttonLabel : "重新下载";
+    labor.workerReleaseStatus.textContent = cancelled
+      ? "已取消下载，不会保存不完整安装包。"
+      : `下载未完成，系统已自动重试。${error?.message || "请再次点击下载。"}`;
+    if (!cancelled) {
+      recordLaborTelemetry("labor.worker.download_failed", {
+        step: "worker_download",
+        status: "failed",
+        durationMs: elapsedMs(startedAt),
+        errorMessage: error?.message || "worker_download_failed",
+        context: {
+          version: release?.version || "",
+          platform: release?.platform || laborState.workerPlatform,
+        },
+      });
+    }
+  } finally {
+    laborWorkerDownloadInProgress = false;
+    labor.downloadWorker.classList.remove("disabled");
+    labor.downloadWorker.removeAttribute("aria-disabled");
+    labor.downloadWorker.removeAttribute("aria-busy");
   }
 }
 
@@ -678,6 +858,7 @@ function renderLaborWorkerRelease() {
   if (!release || !labor.downloadWorker || !labor.workerReleaseStatus) return;
   if (labor.workerReleaseAdmin) labor.workerReleaseAdmin.hidden = release.canUpload !== true;
   renderLaborWorkerReleaseUploadHint();
+  if (laborWorkerDownloadInProgress) return;
   const version = String(release.version || "");
   const downloadUrl = String(release.downloadUrl || "");
   const platformLabel = laborWorkerPlatformLabel(release.platform || laborState.workerPlatform);
@@ -702,6 +883,9 @@ function renderLaborWorkerRelease() {
     : installedVersions.length
       ? `${platformLabel} 已是最新版本 ${version}`
       : `${platformLabel} 最新版本 ${version}`;
+  if (Number(release.sizeBytes || 0) > 0) {
+    labor.workerReleaseStatus.textContent += ` · ${formatLaborWorkerDownloadBytes(release.sizeBytes)}`;
+  }
 }
 
 function renderLaborWorkerReleaseUploadHint() {

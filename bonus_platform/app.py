@@ -3327,7 +3327,17 @@ def _labor_worker_release_config(platform: str = "macos-arm64") -> dict:
     manifest = _labor_worker_release_catalog().get(_labor_worker_release_platform(platform), {})
     return {
         key: manifest[key]
-        for key in ("version", "url", "sha256", "signature", "minimumVersion", "objectKey", "blobPathname", "filename")
+        for key in (
+            "version",
+            "url",
+            "sha256",
+            "signature",
+            "minimumVersion",
+            "objectKey",
+            "blobPathname",
+            "filename",
+            "sizeBytes",
+        )
         if key in manifest
     }
 
@@ -3352,6 +3362,10 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
     object_key = str(manifest.get("objectKey") or "").strip()
     blob_pathname = str(manifest.get("blobPathname") or "").strip()
     filename = str(manifest.get("filename") or _labor_worker_release_filename(platform, version)).strip()
+    try:
+        size_bytes = max(0, int(manifest.get("sizeBytes") or 0))
+    except (TypeError, ValueError):
+        size_bytes = 0
     complete = bool(
         version
         and str(manifest.get("sha256") or "").strip()
@@ -3368,6 +3382,7 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
         "sha256": str(manifest.get("sha256") or ""),
         "signature": str(manifest.get("signature") or ""),
         "filename": filename[:180],
+        "sizeBytes": size_bytes,
         "downloadUrl": (
             (
                 "/api/labor/worker/release/download"
