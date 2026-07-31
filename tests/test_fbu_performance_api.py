@@ -138,7 +138,7 @@ def test_versioned_fbu_static_assets_are_immutable():
     client = TestClient(app_module.app)
 
     response = client.get(
-        "/fbu-performance.js?v=fbu-performance-v4-20260731",
+        "/fbu-performance.js?v=fbu-performance-v5-20260731",
         headers={"Accept-Encoding": "gzip"},
     )
 
@@ -284,6 +284,101 @@ def test_fbu_attendance_step_reads_compact_view_without_daily_rows(monkeypatch):
     assert "attendance_view_data" not in response.json()
     assert response.json()["loaded_sections"] == ["attendance_view_data"]
     assert manager.requested_sections == [{"attendance_view_data"}]
+
+
+def test_fbu_core_detail_excludes_legacy_roster_payload(monkeypatch):
+    legacy_roster = {
+        "employees": [{"employee_id": f"zt{index:06d}"} for index in range(500)],
+        "summary": {"total_employees": 500},
+    }
+
+    class LegacyCoreManager:
+        def get_run(self, run_id, sections=None):
+            return SimpleNamespace(
+                run_id=run_id,
+                created_at="2026-07-31T10:00:00",
+                calc_month="2026-06",
+                status="step1",
+                current_step=1,
+                attendance_file="attendance.xlsx",
+                roster_file="roster.xlsx",
+                roster_source="base",
+                roster_data=legacy_roster,
+                attendance_view_data={},
+                hourly_rate_policy_data={},
+                total_employees=0,
+                total_bonus=0,
+                match_rate=0,
+                error="",
+            )
+
+    monkeypatch.setattr(app_module, "fbu_run_manager", LegacyCoreManager())
+    response = TestClient(app_module.app).get(
+        "/api/fbu-performance/runs/run_legacy",
+        params={"include": "core"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["roster_file"] == "roster.xlsx"
+    assert "roster_data" not in response.json()
+
+
+def test_fbu_hourly_rate_policy_detail_returns_visible_rows_and_hidden_employee_ids(
+    monkeypatch,
+):
+    policy_data = {
+        "rows": [
+            {
+                "row_id": "zt-visible|2026-06-01",
+                "employee_id": "zt-visible",
+                "shift_pattern": "全夜班",
+                "visible": True,
+            },
+            {
+                "row_id": "zt-hidden|2026-06-01",
+                "employee_id": "zt-hidden",
+                "shift_pattern": "全白班",
+                "visible": False,
+            },
+            {
+                "row_id": "zt-hidden|2026-06-15",
+                "employee_id": "zt-hidden",
+                "shift_pattern": "全白班",
+                "visible": False,
+            },
+        ],
+        "summary": {
+            "total_periods": 3,
+            "visible_count": 1,
+            "all_night_count": 1,
+            "mixed_count": 0,
+            "manual_count": 0,
+        },
+    }
+
+    class PolicyViewManager:
+        def get_run(self, run_id, sections=None):
+            return SimpleNamespace(
+                run_id=run_id,
+                created_at="2026-07-31T10:00:00",
+                calc_month="2026-06",
+                status="step1",
+                current_step=1,
+                attendance_view_data={},
+                hourly_rate_policy_data=policy_data,
+            )
+
+    monkeypatch.setattr(app_module, "fbu_run_manager", PolicyViewManager())
+    response = TestClient(app_module.app).get(
+        "/api/fbu-performance/runs/run_123",
+        params={"include": "core,hourly_rate_policy_data"},
+    )
+
+    assert response.status_code == 200
+    policy = response.json()["hourly_rate_policy_data"]
+    assert [row["employee_id"] for row in policy["rows"]] == ["zt-visible"]
+    assert policy["hidden_employee_ids"] == ["zt-hidden"]
+    assert policy["summary"]["total_periods"] == 3
 
 
 def test_fbu_attendance_step_backfills_compact_view_for_legacy_runs(monkeypatch):
@@ -968,6 +1063,7 @@ def test_fbu_generic_direct_upload_job_processes_salary_material_and_persists_st
         f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}/start",
     )
     assert start_response.status_code == 202, start_response.text
+    assert start_response.json()["job"]["status"] == "completed"
 
     status_response = client.get(
         f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}",
@@ -1021,7 +1117,7 @@ def test_fbu_upload_job_status_marks_stalled_processing_as_recoverable(monkeypat
     assert response.json()["job"]["canRetry"] is True
 
 
-def test_fbu_calculation_runs_as_persisted_background_job(monkeypatch, tmp_path):
+def test_fbu_calculation_runs_to_completion_inside_request_lifecycle(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
     client = TestClient(app_module.app)
@@ -1042,6 +1138,7 @@ def test_fbu_calculation_runs_as_persisted_background_job(monkeypatch, tmp_path)
     )
 
     assert start.status_code == 202, start.text
+    assert start.json()["job"]["status"] == "completed"
     job_id = start.json()["job"]["jobId"]
     status = client.get(
         f"/api/fbu-performance/runs/{run_id}/calculation-jobs/{job_id}",

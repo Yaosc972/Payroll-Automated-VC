@@ -64,3 +64,29 @@ def test_job_polling_skips_redundant_full_workbench_renders():
     assert "if (changed && state.currentPage === 'workbench')" in upload_updates
     assert "hasFbuJobUiStateChanged(state.calculationJobStatus, job)" in calculation_poll
     assert "await waitForFbuUploadPoll(1500)" in calculation_poll
+
+
+def test_upload_job_polling_runs_while_server_request_stays_open():
+    script = FBU_JS.read_text(encoding="utf-8")
+    upload_area = script.split("async function uploadWorkbenchFilesDirect", 1)[1].split(
+        "async function uploadWorkbenchAttendanceFilesDirect", 1
+    )[0]
+    resume_area = script.split("async function resumeFbuUploadJob", 1)[1].split(
+        "function restoreFbuUploadJobs", 1
+    )[0]
+
+    assert "const startRequest = apiJson" in upload_area
+    assert "const pollingRequest = pollFbuUploadJob(jobId);" in upload_area
+    assert upload_area.index("const pollingRequest") < upload_area.index("await startRequest")
+    assert "const resumeRequest = apiJson" in resume_area
+    assert "const pollingRequest = pollFbuUploadJob(jobId);" in resume_area
+    assert resume_area.index("const pollingRequest") < resume_area.index("await resumeRequest")
+
+    calculation_resume = script.split("async function resumeFbuCalculationJob", 1)[1].split(
+        "function restoreFbuCalculationJob", 1
+    )[0]
+    assert "const resumeRequest = apiJson" in calculation_resume
+    assert "const pollingRequest = pollFbuCalculationJob(metadata.jobId);" in calculation_resume
+    assert calculation_resume.index("const pollingRequest") < calculation_resume.index(
+        "await resumeRequest"
+    )

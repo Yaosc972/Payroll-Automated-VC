@@ -3782,11 +3782,13 @@ async function resumeFbuUploadJob(jobId) {
     canRetry: false,
   });
   try {
-    await apiJson(
+    const resumeRequest = apiJson(
       `${API_BASE}/runs/${metadata.runId}/uploads/${jobId}/resume`,
       { method: 'POST' },
     );
-    return pollFbuUploadJob(jobId);
+    const pollingRequest = pollFbuUploadJob(jobId);
+    await resumeRequest;
+    return pollingRequest;
   } catch (error) {
     updateFbuUploadJobMaterials(metadata, {
       status: 'failed',
@@ -3912,11 +3914,13 @@ async function resumeFbuCalculationJob() {
   };
   if (state.currentPage === 'workbench') renderWorkbench();
   try {
-    await apiJson(
+    const resumeRequest = apiJson(
       `${API_BASE}/runs/${metadata.runId}/calculation-jobs/${metadata.jobId}/resume`,
       { method: 'POST' },
     );
-    return pollFbuCalculationJob(metadata.jobId);
+    const pollingRequest = pollFbuCalculationJob(metadata.jobId);
+    await resumeRequest;
+    return pollingRequest;
   } catch (error) {
     state.calculationJobStatus = {
       status: 'failed',
@@ -4035,10 +4039,18 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
       message: '正在排队',
       canRetry: false,
     });
-    await apiJson(`${API_BASE}/runs/${activityId}/uploads/${jobId}/start`, {
+    const startRequest = apiJson(`${API_BASE}/runs/${activityId}/uploads/${jobId}/start`, {
       method: 'POST',
     });
-    return pollFbuUploadJob(jobId);
+    const pollingRequest = pollFbuUploadJob(jobId);
+    try {
+      await startRequest;
+    } catch (error) {
+      forgetFbuUploadJob(jobId);
+      await pollingRequest;
+      throw error;
+    }
+    return pollingRequest;
   } catch (error) {
     const directUnavailable = error.status === 409
       || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
@@ -6970,11 +6982,18 @@ function formatHourlyRatePolicyOption(policy, baseRate) {
 function summarizeHourlyRatePolicies(policyData) {
   const rows = policyData?.rows || [];
   const visibleRows = rows.filter(row => row.visible);
+  const previousSummary = policyData?.summary || {};
   policyData.summary = {
-    total_periods: rows.length,
+    total_periods: toNumber(previousSummary.total_periods, rows.length),
     visible_count: visibleRows.length,
-    all_night_count: rows.filter(row => row.shift_pattern === '全夜班').length,
-    mixed_count: rows.filter(row => row.shift_pattern === '白夜混合').length,
+    all_night_count: toNumber(
+      previousSummary.all_night_count,
+      rows.filter(row => row.shift_pattern === '全夜班').length,
+    ),
+    mixed_count: toNumber(
+      previousSummary.mixed_count,
+      rows.filter(row => row.shift_pattern === '白夜混合').length,
+    ),
     manual_count: rows.filter(row => row.manual_override).length,
   };
 }
@@ -7051,8 +7070,9 @@ function restoreHourlyRatePolicySuggestions() {
 
 async function addHourlyRatePolicyEmployee() {
   const activity = getWorkbenchActivity();
-  const allRows = getHourlyRatePolicyRows(activity, { visibleOnly: false });
-  const hiddenIds = [...new Set(allRows.filter(row => !row.visible).map(row => row.employee_id))];
+  const hiddenIds = [
+    ...new Set(activity?.hourly_rate_policy_data?.hidden_employee_ids || []),
+  ];
   if (!hiddenIds.length) {
     setInlineActionNote('hourlyRatePolicy', '当前所有有实际出勤的员工都已在建议区中。');
     return;

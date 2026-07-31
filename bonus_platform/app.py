@@ -14110,6 +14110,30 @@ _FBU_DIAGNOSTIC_SECTION_FIELDS = {
     "base_override_data",
 }
 
+_FBU_RUN_CORE_RESPONSE_FIELDS = frozenset({
+    "run_id",
+    "created_at",
+    "calc_month",
+    "status",
+    "current_step",
+    "attendance_file",
+    "previous_attendance_file",
+    "salary_file",
+    "previous_salary_file",
+    "current_salary_file",
+    "performance_file",
+    "adjustment_file",
+    "transfer_file",
+    "supplemental_leave_file",
+    "base_override_file",
+    "roster_file",
+    "roster_source",
+    "total_employees",
+    "total_bonus",
+    "match_rate",
+    "error",
+})
+
 
 def _fbu_run_diagnostics(run: FBURun) -> dict:
     """生成紧凑的数据匹配诊断。"""
@@ -14751,11 +14775,7 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
             fbu_logger.exception("Failed to persist FBU upload job failure %s", job_id)
 
 
-def _queue_fbu_upload_job(
-    run_id: str,
-    job_id: str,
-    background_tasks: BackgroundTasks,
-) -> dict:
+def _prepare_fbu_upload_job(run_id: str, job_id: str) -> tuple[dict, bool]:
     run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
@@ -14765,9 +14785,9 @@ def _queue_fbu_upload_job(
         raise HTTPException(404, "上传任务不存在")
     public = store.public(job)
     if job.get("status") == "completed":
-        return public
+        return public, False
     if job.get("status") in {"queued", "processing"} and not public["recoverable"]:
-        return public
+        return public, False
     job = store.update(
         run_id,
         job_id,
@@ -14778,8 +14798,7 @@ def _queue_fbu_upload_job(
         attempt=int(job.get("attempt") or 0) + 1,
         error="",
     )
-    background_tasks.add_task(_process_fbu_upload_job, run_id, job_id)
-    return store.public(job)
+    return store.public(job), True
 
 
 @app.post(
@@ -14790,15 +14809,20 @@ def _queue_fbu_upload_job(
     "/api/fbu-performance/runs/{run_id}/uploads/{job_id}/resume",
     status_code=202,
 )
-def start_fbu_upload_job(
+async def start_fbu_upload_job(
     run_id: str,
     job_id: str,
-    background_tasks: BackgroundTasks,
 ) -> dict:
     try:
-        job = _queue_fbu_upload_job(run_id, job_id, background_tasks)
+        job, should_process = _prepare_fbu_upload_job(run_id, job_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if should_process:
+        await _process_fbu_upload_job(run_id, job_id)
+        persisted = _fbu_upload_job_store().load(run_id, job_id)
+        if persisted is None:
+            raise HTTPException(500, "上传任务状态丢失，请重新上传。")
+        job = _fbu_upload_job_store().public(persisted)
     return {"job": job}
 
 
@@ -15207,6 +15231,32 @@ async def import_fbu_attendance(
             pending_roster_path.unlink(missing_ok=True)
 
 
+def _fbu_hourly_rate_policy_response(policy_data: dict | None) -> dict:
+    if not isinstance(policy_data, dict) or not policy_data:
+        return {}
+    rows = [
+        dict(row)
+        for row in policy_data.get("rows", [])
+        if isinstance(row, dict) and row.get("visible")
+    ]
+    hidden_employee_ids = sorted({
+        str(row.get("employee_id") or "").strip()
+        for row in policy_data.get("rows", [])
+        if (
+            isinstance(row, dict)
+            and not row.get("visible")
+            and str(row.get("employee_id") or "").strip()
+        )
+    })
+    summary = dict(policy_data.get("summary") or {})
+    summary["visible_count"] = len(rows)
+    return {
+        "rows": rows,
+        "hidden_employee_ids": hidden_employee_ids,
+        "summary": summary,
+    }
+
+
 @app.post("/api/fbu-performance/runs/{run_id}/hourly-rate-policies")
 def update_fbu_hourly_rate_policies(run_id: str, body: dict = Body(...)) -> dict:
     """Update non-blocking payroll-period hourly-rate suggestions."""
@@ -15229,7 +15279,11 @@ def update_fbu_hourly_rate_policies(run_id: str, body: dict = Body(...)) -> dict
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     fbu_run_manager.update_run(run_id, hourly_rate_policy_data=policy_data)
-    return {"success": True, "run_id": run_id, "hourly_rate_policy_data": policy_data}
+    return {
+        "success": True,
+        "run_id": run_id,
+        "hourly_rate_policy_data": _fbu_hourly_rate_policy_response(policy_data),
+    }
 
 
 def _build_period_adjustment_preview(rows: list[dict]) -> dict:
@@ -16453,11 +16507,7 @@ async def _process_fbu_calculation_job(run_id: str, job_id: str) -> None:
             fbu_logger.exception("Failed to persist calculation job failure %s", job_id)
 
 
-def _queue_fbu_calculation_job(
-    run_id: str,
-    job_id: str,
-    background_tasks: BackgroundTasks,
-) -> dict:
+def _prepare_fbu_calculation_job(run_id: str, job_id: str) -> tuple[dict, bool]:
     run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
@@ -16467,9 +16517,9 @@ def _queue_fbu_calculation_job(
         raise HTTPException(404, "核算任务不存在")
     public = store.public(job)
     if job.get("status") == "completed":
-        return public
+        return public, False
     if job.get("status") in {"queued", "processing"} and not public["recoverable"]:
-        return public
+        return public, False
     job = store.update(
         run_id,
         job_id,
@@ -16480,17 +16530,26 @@ def _queue_fbu_calculation_job(
         attempt=int(job.get("attempt") or 0) + 1,
         error="",
     )
-    background_tasks.add_task(_process_fbu_calculation_job, run_id, job_id)
-    return store.public(job)
+    return store.public(job), True
+
+
+async def _run_fbu_calculation_job_in_request(run_id: str, job_id: str) -> dict:
+    job, should_process = _prepare_fbu_calculation_job(run_id, job_id)
+    if should_process:
+        await _process_fbu_calculation_job(run_id, job_id)
+        persisted = _fbu_upload_job_store().load(run_id, job_id)
+        if persisted is None:
+            raise HTTPException(500, "核算任务状态丢失，请重新核算。")
+        job = _fbu_upload_job_store().public(persisted)
+    return job
 
 
 @app.post(
     "/api/fbu-performance/runs/{run_id}/calculation-jobs",
     status_code=202,
 )
-def create_fbu_calculation_job(
+async def create_fbu_calculation_job(
     run_id: str,
-    background_tasks: BackgroundTasks,
 ) -> dict:
     run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
@@ -16498,21 +16557,20 @@ def create_fbu_calculation_job(
     store = _fbu_upload_job_store()
     job = store.create(run_id, [])
     job = store.update(run_id, job["jobId"], kind="calculation")
-    queued = _queue_fbu_calculation_job(run_id, job["jobId"], background_tasks)
-    return {"job": queued}
+    completed = await _run_fbu_calculation_job_in_request(run_id, job["jobId"])
+    return {"job": completed}
 
 
 @app.post(
     "/api/fbu-performance/runs/{run_id}/calculation-jobs/{job_id}/resume",
     status_code=202,
 )
-def resume_fbu_calculation_job(
+async def resume_fbu_calculation_job(
     run_id: str,
     job_id: str,
-    background_tasks: BackgroundTasks,
 ) -> dict:
     try:
-        job = _queue_fbu_calculation_job(run_id, job_id, background_tasks)
+        job = await _run_fbu_calculation_job_in_request(run_id, job_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"job": job}
@@ -16695,13 +16753,17 @@ def get_fbu_performance_run(
         payload = {
             key: value
             for key, value in raw_payload.items()
-            if key not in FBU_RUN_SECTION_FIELDS
+            if key in _FBU_RUN_CORE_RESPONSE_FIELDS
         }
         for field_name in sections:
             payload[field_name] = raw_payload.get(field_name)
         loaded_sections = sorted(sections)
     if "attendance_view_data" in payload:
         payload["attendance_data"] = payload.pop("attendance_view_data")
+    if "hourly_rate_policy_data" in payload:
+        payload["hourly_rate_policy_data"] = _fbu_hourly_rate_policy_response(
+            payload.get("hourly_rate_policy_data")
+        )
     if "results" in loaded_sections and payload.get("results"):
         payload["results"] = build_final_result_rows(payload["results"])
         payload["total_employees"] = len(payload["results"])

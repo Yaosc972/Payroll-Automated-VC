@@ -176,6 +176,9 @@ def test_v2_snapshot_splits_large_sections_and_lists_from_single_index(monkeypat
         },
         "salary_data": {"employees": [{"employee_id": "zt1", "hourly_rate": 20}]},
         "results": [{"employee_id": "zt1", "performance_bonus": 100}],
+        "roster_data": {
+            "employees": [{"employee_id": f"zt{index:06d}"} for index in range(500)],
+        },
         "total_employees": 1,
         "total_bonus": 100,
     }
@@ -189,6 +192,7 @@ def test_v2_snapshot_splits_large_sections_and_lists_from_single_index(monkeypat
     assert json.loads(objects[f"{prefix}/run_123/sections/results.json"]) == payload["results"]
     assert "attendance_data" not in manifest["run"]
     assert "results" not in manifest["run"]
+    assert "roster_data" not in manifest["run"]
 
     fbu_storage._clear_fbu_json_cache()
     reads.clear()
@@ -208,6 +212,32 @@ def test_v2_snapshot_splits_large_sections_and_lists_from_single_index(monkeypat
         f"{prefix}/run_123/summary.json",
         f"{prefix}/run_123/sections/attendance_data.json",
     ]
+
+
+def test_v2_manifest_removes_legacy_embedded_roster_from_previous_summary():
+    previous = {
+        "run": {
+            "run_id": "run_legacy",
+            "calc_month": "2026-06",
+            "roster_data": {
+                "employees": [{"employee_id": f"zt{index:06d}"} for index in range(500)],
+            },
+        },
+        "sections": {},
+    }
+
+    manifest = fbu_storage.build_fbu_run_manifest(
+        {
+            "run_id": "run_legacy",
+            "calc_month": "2026-06",
+            "status": "step1",
+            "roster_data": previous["run"]["roster_data"],
+        },
+        previous=previous,
+        changed_fields={"status"},
+    )
+
+    assert "roster_data" not in manifest["run"]
 
 
 def test_v2_json_reads_reuse_short_lived_process_cache(monkeypatch):

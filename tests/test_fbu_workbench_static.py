@@ -69,6 +69,16 @@ def test_attendance_section_navigation_stays_compact_on_the_right():
     assert "@media (max-width: 760px)" in html
 
 
+def test_hourly_rate_policy_uses_compact_hidden_employee_index():
+    js = FBU_JS.read_text(encoding="utf-8")
+    add_employee = js.split("async function addHourlyRatePolicyEmployee", 1)[1].split(
+        "function renderHourlyRatePolicySection", 1
+    )[0]
+
+    assert "hidden_employee_ids" in add_employee
+    assert "allRows.filter(row => !row.visible)" not in add_employee
+
+
 def test_salary_step_has_optional_single_record_period_adjustment():
     html = FBU_HTML.read_text(encoding="utf-8")
     js = FBU_JS.read_text(encoding="utf-8")

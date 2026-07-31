@@ -256,11 +256,12 @@ def build_fbu_run_manifest(
     changed_fields: set[str] | None = None,
 ) -> dict[str, Any]:
     previous_run = dict((previous or {}).get("run") or {})
+    previous_run.pop("roster_data", None)
     previous_sections = dict((previous or {}).get("sections") or {})
     core_updates = {
         key: value
         for key, value in payload.items()
-        if key not in FBU_RUN_SECTION_FIELDS
+        if key not in FBU_RUN_SECTION_FIELDS and key != "roster_data"
     }
     previous_run.update(core_updates)
 

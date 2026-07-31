@@ -751,7 +751,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=fbu-performance-v4-20260731" in html
+    assert "fbu-performance.js?v=fbu-performance-v5-20260731" in html
 
 
 def test_activity_list_uses_summary_without_detail_prefetch():
