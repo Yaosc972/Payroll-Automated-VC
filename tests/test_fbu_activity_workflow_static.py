@@ -151,7 +151,7 @@ def test_workbench_upload_feedback_stays_inline_not_global_toast():
     assert "actionNote" in js
 
 
-def test_previous_attendance_upload_is_presented_as_selection_not_standalone_upload():
+def test_previous_attendance_waits_then_auto_uploads_after_current_attendance():
     js = _js()
 
     render_material_row = js.split("function renderMaterialRow", 1)[1].split(
@@ -160,12 +160,19 @@ def test_previous_attendance_upload_is_presented_as_selection_not_standalone_upl
     handle_upload_change = js.split("function handleWorkbenchUploadChange", 1)[1].split(
         "function clearWorkbenchUpload", 1
     )[0]
+    complete_upload_job = js.split("async function completeFbuUploadJob", 1)[1].split(
+        "async function pollFbuUploadJob", 1
+    )[0]
+    pending_upload = js.split(
+        "async function flushPendingPreviousAttendanceUpload", 1
+    )[1].split("async function completeFbuUploadJob", 1)[0]
 
     assert "material.uploadType === 'previousAttendance'" in render_material_row
     assert "? '选择文件'" in render_material_row
-    assert "将随当月考勤一起上传" in js
+    assert "等待当月考勤完成后自动上传" in js
     assert "state.workbenchPreviousAttendanceFile = file;" in handle_upload_change
-    assert 'previousAttendance\')">上传' not in render_material_row
+    assert "uploadWorkbenchPreviousAttendanceFile(file)" in pending_upload
+    assert "await flushPendingPreviousAttendanceUpload(metadata.runId)" in complete_upload_job
 
 
 def test_attendance_materials_place_current_and_previous_attendance_side_by_side():

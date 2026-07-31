@@ -44,6 +44,7 @@ _ATTENDANCE_RECOVERY_SECTION_FIELDS = frozenset({
     "attendance_view_data",
     "hourly_rate_policy_data",
 })
+_STALE_MANIFEST_RECOVERY_SECTION_FIELDS = frozenset({"base_override_data"})
 _RUN_INDEX_LOCK = threading.RLock()
 _JSON_CACHE_LOCK = threading.RLock()
 _JSON_CACHE_MAX_ITEM_BYTES = 2 * 1024 * 1024
@@ -166,7 +167,9 @@ def _upload_json(object_path: str, payload: Any) -> None:
     _cache_json(object_path, payload, len(content))
 
 
-def _download_json(object_path: str) -> Any:
+def _download_json(object_path: str, *, refresh: bool = False) -> Any:
+    if refresh:
+        _invalidate_fbu_json_cache_prefix(object_path)
     cached = _get_cached_json(object_path)
     if cached is not None:
         return cached
@@ -284,8 +287,15 @@ def build_fbu_run_manifest(
     }
 
 
-def _load_fbu_run_manifest(run_id: str) -> dict[str, Any] | None:
-    payload = _download_json(_object_path(run_id, "summary.json"))
+def _load_fbu_run_manifest(
+    run_id: str,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any] | None:
+    payload = _download_json(
+        _object_path(run_id, "summary.json"),
+        refresh=refresh,
+    )
     if not isinstance(payload, dict) or not isinstance(payload.get("run"), dict):
         return None
     return payload
@@ -401,11 +411,6 @@ def save_fbu_run_snapshot_to_persistent(
                 for field in FBU_RUN_SECTION_FIELDS
                 if field in legacy and bool(legacy.get(field))
             }
-    manifest = build_fbu_run_manifest(
-        payload,
-        previous=previous,
-        changed_fields=changed_fields,
-    )
     if changed_fields is None:
         section_fields = {
             field
@@ -436,6 +441,21 @@ def save_fbu_run_snapshot_to_persistent(
             max_workers=min(4, len(ordered_section_fields))
         ) as executor:
             list(executor.map(upload_section, ordered_section_fields))
+    latest = previous
+    if changed_fields is not None and previous is not None:
+        latest = _load_fbu_run_manifest(run_id, refresh=True) or previous
+    manifest_payload = payload
+    if changed_fields is not None and latest is not None:
+        manifest_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in changed_fields
+        }
+    manifest = build_fbu_run_manifest(
+        manifest_payload,
+        previous=latest,
+        changed_fields=changed_fields,
+    )
     _upload_json(_object_path(run_id, "summary.json"), manifest)
     _upsert_fbu_run_index(manifest)
     return manifest
@@ -468,11 +488,14 @@ def load_fbu_run_snapshot_from_persistent(
 
     def load_section(field: str) -> tuple[str, Any]:
         section = (manifest.get("sections") or {}).get(field) or {}
-        attendance_recovery_expected = (
-            field in _ATTENDANCE_RECOVERY_SECTION_FIELDS
-            and bool((manifest.get("run") or {}).get("attendance_file"))
+        recovery_expected = (
+            field in _STALE_MANIFEST_RECOVERY_SECTION_FIELDS
+            or (
+                field in _ATTENDANCE_RECOVERY_SECTION_FIELDS
+                and bool((manifest.get("run") or {}).get("attendance_file"))
+            )
         )
-        if not section.get("present") and not attendance_recovery_expected:
+        if not section.get("present") and not recovery_expected:
             return field, [] if field == "results" else {}
         value = _download_json(_object_path(run_id, _section_relative_path(field)))
         if value is None:

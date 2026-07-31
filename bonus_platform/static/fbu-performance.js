@@ -521,7 +521,7 @@ function getMaterialUploadView(material, status, activity) {
     return {
       fileName,
       statusText: '已选择',
-      detailText: uploadState.message || '将随当月考勤一起上传',
+      detailText: uploadState.message || '等待当月考勤完成后自动上传',
       actionNote: '已选择',
       tone: 'warning',
       progress: 100,
@@ -1643,7 +1643,7 @@ function renderWorkbenchPreviousAttendanceCard(activity) {
       <div>
         <div class="workbench-source-top">
           <div class="workbench-source-title">上月考勤</div>
-          <span class="status-badge ${hasPrevious ? 'success' : needsPrevious ? 'warning' : 'neutral'}">${hasPrevious ? '已覆盖' : needsPrevious ? '待随考勤上传' : '按需'}</span>
+          <span class="status-badge ${hasPrevious ? 'success' : needsPrevious ? 'warning' : 'neutral'}">${hasPrevious ? '已覆盖' : needsPrevious ? '待自动上传' : '按需'}</span>
         </div>
         <div class="workbench-source-file" title="${escapeHtml(fileLabel)}">${escapeHtml(fileLabel)}</div>
         <div class="workbench-source-meta">
@@ -3689,11 +3689,38 @@ function waitForFbuUploadPoll(delayMs = 900) {
   return new Promise(resolve => window.setTimeout(resolve, delayMs));
 }
 
+function getWorkbenchFileKey(file) {
+  if (!file) return '';
+  return [file.name || '', file.size || 0, file.lastModified || 0].join(':');
+}
+
+function clearMatchingPendingPreviousAttendance(entry) {
+  const pendingFile = state.workbenchPreviousAttendanceFile;
+  if (!pendingFile || !entry) return;
+  const matches = entry.fileKey
+    ? getWorkbenchFileKey(pendingFile) === entry.fileKey
+    : pendingFile.name === entry.fileName
+      && (!entry.fileSize || pendingFile.size === entry.fileSize);
+  if (matches) state.workbenchPreviousAttendanceFile = null;
+}
+
+async function flushPendingPreviousAttendanceUpload(runId) {
+  const file = state.workbenchPreviousAttendanceFile;
+  if (!file || state.currentActivity?.run_id !== runId) return;
+  if (!state.currentActivity.attendance_file) return;
+  await uploadWorkbenchPreviousAttendanceFile(file);
+}
+
 async function completeFbuUploadJob(metadata, job) {
   if (!state.activeFbuUploadJobs[metadata.jobId]) return job;
-  const refreshedAttendance = (metadata.entries || []).some(entry => (
+  const entries = metadata.entries || [];
+  const refreshedAttendance = entries.some(entry => (
     ['attendance', 'previousAttendance'].includes(entry.type)
   ));
+  const refreshedCurrentAttendance = entries.some(entry => entry.type === 'attendance');
+  entries
+    .filter(entry => entry.type === 'previousAttendance')
+    .forEach(clearMatchingPendingPreviousAttendance);
   if (refreshedAttendance) prioritizePendingSupplementalLeave();
   updateFbuUploadJobMaterials(metadata, {
     status: 'done',
@@ -3711,6 +3738,9 @@ async function completeFbuUploadJob(metadata, job) {
       preserveStep: true,
       refreshSections: true,
     });
+  }
+  if (refreshedCurrentAttendance) {
+    await flushPendingPreviousAttendanceUpload(metadata.runId);
   }
   return job;
 }
@@ -4052,6 +4082,8 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
       entries: entries.map(({ type, file }) => ({
         type,
         fileName: file.name,
+        fileSize: file.size,
+        fileKey: getWorkbenchFileKey(file),
       })),
     };
     rememberFbuUploadJob(jobId, metadata);
@@ -4174,7 +4206,11 @@ async function uploadWorkbenchFileMultipart(type, file) {
 
     if (type === 'attendance') {
       state.attendanceData = data.preview;
-      state.workbenchPreviousAttendanceFile = null;
+      clearMatchingPendingPreviousAttendance(previousAttendanceFile ? {
+        fileName: previousAttendanceFile.name,
+        fileSize: previousAttendanceFile.size,
+        fileKey: getWorkbenchFileKey(previousAttendanceFile),
+      } : null);
       prioritizePendingSupplementalLeave();
       if (previousAttendanceFile) {
         finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入', { render: false });
@@ -4197,6 +4233,9 @@ async function uploadWorkbenchFileMultipart(type, file) {
     if (type === 'supplementalLeave') Object.assign(activityPatch, { supplemental_leave_file: file.name, supplemental_leave_data: data.preview });
     applyCurrentActivityPatch(activityPatch, { invalidateResults: true });
     finishWorkbenchUploadProgress(type, file.name, '已解析');
+    if (type === 'attendance') {
+      await flushPendingPreviousAttendanceUpload(activityId);
+    }
   } catch (error) {
     failWorkbenchUploadProgress(type, file.name, error.message);
   }
@@ -4464,7 +4503,11 @@ async function uploadWorkbenchPreviousAttendanceFileMultipart(file) {
       current_step: 1,
       status: 'step1',
     }, { invalidateResults: true });
-    state.workbenchPreviousAttendanceFile = null;
+    clearMatchingPendingPreviousAttendance({
+      fileName: file.name,
+      fileSize: file.size,
+      fileKey: getWorkbenchFileKey(file),
+    });
     prioritizePendingSupplementalLeave();
     finishWorkbenchUploadProgress('previousAttendance', file.name, '已随考勤纳入');
   } catch (error) {
@@ -4488,17 +4531,17 @@ function handleWorkbenchUploadChange(type, event) {
       failWorkbenchUploadProgress(type, file.name, '仅支持 .xlsx / .xls');
       return;
     }
+    state.workbenchPreviousAttendanceFile = file;
     if (state.currentActivity?.attendance_file) {
       uploadWorkbenchPreviousAttendanceFile(file);
       return;
     }
-    state.workbenchPreviousAttendanceFile = file;
     setWorkbenchUploadState(type, {
       fileName: file.name,
       fileSize: file.size,
       status: 'selected',
       progress: 100,
-      message: '将随当月考勤一起上传',
+      message: '等待当月考勤完成后自动上传',
     });
     renderWorkbenchCurrentStep();
     return;

@@ -331,6 +331,103 @@ def test_v2_snapshot_recovers_attendance_section_hidden_by_stale_manifest(monkey
     ]
 
 
+def test_v2_snapshot_recovers_base_override_hidden_by_concurrent_manifest(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    prefix = "fbu-performance-runs/production"
+    base_override_data = {
+        "summary": {"work_hour_rule_count": 4},
+        "employees": [{"employee_id": "zt12979", "rule_type": "96工时制"}],
+    }
+    stale_manifest = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "created_at": "2026-07-31T10:00:00",
+        "calc_month": "2026-06",
+        "status": "step1",
+    })
+    objects = {
+        f"{prefix}/run_123/summary.json": json.dumps(stale_manifest).encode("utf-8"),
+        f"{prefix}/run_123/sections/base_override_data.json": json.dumps(
+            base_override_data
+        ).encode("utf-8"),
+    }
+
+    monkeypatch.setattr(
+        fbu_storage,
+        "_download_bytes",
+        lambda object_path: objects.get(object_path),
+    )
+
+    restored = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"base_override_data"},
+    )
+
+    assert restored["base_override_data"] == base_override_data
+
+
+def test_incremental_snapshot_merges_manifest_changed_during_section_upload(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    monkeypatch.setenv("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "2")
+    prefix = "fbu-performance-runs/production"
+    initial = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "created_at": "2026-07-31T10:00:00",
+        "calc_month": "2026-06",
+        "status": "step1",
+    })
+    base_override_data = {
+        "summary": {"work_hour_rule_count": 4},
+        "employees": [{"employee_id": "zt12979", "rule_type": "96工时制"}],
+    }
+    confirmed = fbu_storage.build_fbu_run_manifest(
+        {
+            "run_id": "run_123",
+            "base_override_file": "页面维护",
+            "base_override_data": base_override_data,
+        },
+        previous=initial,
+        changed_fields={"base_override_file", "base_override_data"},
+    )
+    objects: dict[str, bytes] = {
+        f"{prefix}/run_123/summary.json": json.dumps(initial).encode("utf-8"),
+    }
+
+    def upload(object_path: str, content: bytes, content_type: str) -> None:
+        objects[object_path] = content
+        if object_path.endswith("/sections/supplemental_leave_data.json"):
+            objects[f"{prefix}/run_123/sections/base_override_data.json"] = json.dumps(
+                base_override_data
+            ).encode("utf-8")
+            objects[f"{prefix}/run_123/summary.json"] = json.dumps(confirmed).encode(
+                "utf-8"
+            )
+
+    monkeypatch.setattr(fbu_storage, "_upload_bytes", upload)
+    monkeypatch.setattr(
+        fbu_storage,
+        "_download_bytes",
+        lambda object_path: objects.get(object_path),
+    )
+    monkeypatch.setattr(fbu_storage, "_upsert_fbu_run_index", lambda manifest: None)
+
+    manifest = fbu_storage.save_fbu_run_snapshot_to_persistent(
+        "run_123",
+        {
+            "run_id": "run_123",
+            "created_at": "2026-07-31T10:00:00",
+            "calc_month": "2026-06",
+            "status": "step1",
+            "base_override_file": "",
+            "supplemental_leave_file": "leave.xlsx",
+            "supplemental_leave_data": {"rows": [{"employee_id": "zt1"}]},
+        },
+        changed_fields={"supplemental_leave_file", "supplemental_leave_data"},
+    )
+
+    assert manifest["run"]["base_override_file"] == "页面维护"
+    assert manifest["sections"]["base_override_data"]["present"] is True
+
+
 def test_v2_json_cache_refreshes_remote_data_after_ttl(monkeypatch):
     monkeypatch.setenv("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "2")
     object_path = "fbu-performance-runs/production/_runs-index.json"
