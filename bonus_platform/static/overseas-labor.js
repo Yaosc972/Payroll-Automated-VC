@@ -1,6 +1,7 @@
 const LABOR_UI_MODULE_VERSION = "0.5-uat";
 const LABOR_UI_API_CONTRACT_VERSION = 2;
 const LABOR_WORKER_DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024;
+const LABOR_WORKER_DOWNLOAD_CONCURRENCY = 4;
 const LABOR_WORKER_DOWNLOAD_MAX_ATTEMPTS = 4;
 const LABOR_WORKER_DOWNLOAD_RETRY_DELAYS_MS = [0, 600, 1500, 3000];
 
@@ -75,6 +76,23 @@ async function fetchLaborWorkerDownloadChunk(downloadUrl, startByte, endByte, ex
   throw lastError || new Error("安装包分段下载失败。");
 }
 
+function buildLaborWorkerDownloadBatch(startByte, expectedSizeBytes) {
+  const batch = [];
+  let chunkStartByte = startByte;
+  while (
+    chunkStartByte < expectedSizeBytes
+    && batch.length < LABOR_WORKER_DOWNLOAD_CONCURRENCY
+  ) {
+    const chunkEndByte = Math.min(
+      chunkStartByte + LABOR_WORKER_DOWNLOAD_CHUNK_BYTES,
+      expectedSizeBytes,
+    ) - 1;
+    batch.push({ startByte: chunkStartByte, endByte: chunkEndByte });
+    chunkStartByte = chunkEndByte + 1;
+  }
+  return batch;
+}
+
 async function downloadLaborWorkerReleaseResilient(release, onProgress) {
   const expectedSizeBytes = Number(release?.sizeBytes || 0);
   const downloadUrl = String(release?.downloadUrl || "");
@@ -94,23 +112,27 @@ async function downloadLaborWorkerReleaseResilient(release, onProgress) {
   let writtenBytes = 0;
   try {
     while (writtenBytes < expectedSizeBytes) {
-      const endByte = Math.min(
-        writtenBytes + LABOR_WORKER_DOWNLOAD_CHUNK_BYTES,
-        expectedSizeBytes,
-      ) - 1;
-      const responseBytes = await fetchLaborWorkerDownloadChunk(
-        downloadUrl,
-        writtenBytes,
-        endByte,
-        expectedSizeBytes,
+      const batch = buildLaborWorkerDownloadBatch(writtenBytes, expectedSizeBytes);
+      const downloadedChunks = await Promise.all(
+        batch.map(async (chunk) => ({
+          ...chunk,
+          responseBytes: await fetchLaborWorkerDownloadChunk(
+            downloadUrl,
+            chunk.startByte,
+            chunk.endByte,
+            expectedSizeBytes,
+          ),
+        })),
       );
-      await writable.write({
-        type: "write",
-        position: writtenBytes,
-        data: responseBytes,
-      });
-      writtenBytes += responseBytes.byteLength;
-      onProgress?.(writtenBytes, expectedSizeBytes);
+      for (const chunk of downloadedChunks) {
+        await writable.write({
+          type: "write",
+          position: chunk.startByte,
+          data: chunk.responseBytes,
+        });
+        writtenBytes += chunk.responseBytes.byteLength;
+        onProgress?.(writtenBytes, expectedSizeBytes);
+      }
     }
     if (writtenBytes !== expectedSizeBytes) {
       throw new Error(
