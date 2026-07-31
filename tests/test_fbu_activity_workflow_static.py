@@ -59,6 +59,7 @@ def test_upload_entries_are_owned_by_exactly_one_step():
         "previousSalary",
         "currentSalary",
         "salaryAdjustments",
+        "transferHistory",
         "performance",
     ]:
         assert js.count(f"materialKey: '{key}'") == 1
@@ -66,10 +67,11 @@ def test_upload_entries_are_owned_by_exactly_one_step():
     assert "上月薪资档案" in js
     assert "当月薪资档案" in js
     assert "全量调薪流程" in js
-    assert "/import-salary-history" in js
-    assert "formData.append('previous_salary'" in js
-    assert "formData.append('current_salary'" in js
-    assert "formData.append('adjustments'" in js
+    assert "人事调动记录" in js
+    assert "/import-salary-history-material" in js
+    assert "formData.append('material_type', type)" in js
+    assert "formData.append('file', file)" in js
+    assert "/import-transfer-history" in js
 
     for copy in [
         "上传OEHR当月考勤日报表",
@@ -232,6 +234,30 @@ def test_maintained_lists_have_inline_editor_instead_of_placeholder():
     assert "<select" not in maintained_section
 
 
+def test_slow_form_actions_show_busy_state_and_prevent_duplicate_submits():
+    js = _js()
+
+    assert "maintainedRulePending: ''" in js
+    assert "salaryVerificationPendingIds: new Set()" in js
+    assert "if (state.maintainedRulePending)" in js
+    assert "state.salaryVerificationPendingIds.has(normalizedId)" in js
+    assert "确认中…" in js
+    assert "保存中…" in js
+    assert "处理中…" in js
+    assert 'aria-busy="true"' in js
+
+
+def test_attendance_step_requests_compact_view_instead_of_daily_detail():
+    js = _js()
+    sections = js.split("const ACTIVITY_STEP_SECTIONS", 1)[1].split(
+        "const SALARY_HISTORY_MATERIAL_FIELDS", 1
+    )[0]
+    attendance = sections.split("attendance:", 1)[1].split("salary:", 1)[0]
+
+    assert "'attendance_view_data'" in attendance
+    assert "'attendance_data'" not in attendance
+
+
 def test_performance_upload_and_leave_supplement_are_side_by_side():
     html = _html()
     js = _js()
@@ -312,9 +338,11 @@ def test_activity_table_search_uses_compact_svg_icon():
 
     assert "activity-search-icon-svg" in js
     assert "viewBox=\"0 0 16 16\"" in js
-    assert 'for="workbenchStepSearchInput"' in js
-    assert 'id="workbenchStepSearchInput"' in js
-    assert "placeholder=\"工号/姓名\"" in js
+    assert 'const inputId = `workbenchStepSearchInput-${type}`' in js
+    assert 'for="${escapeHtml(inputId)}"' in js
+    assert 'id="${escapeHtml(inputId)}"' in js
+    assert "placeholder = '搜索工号、姓名'" in js
+    assert "activity-table-search-clear" in js
     assert ".activity-table-search-icon::after" not in html
     assert "::-webkit-search-decoration" in html
     assert "::-webkit-search-cancel-button" in html
@@ -323,11 +351,13 @@ def test_activity_table_search_uses_compact_svg_icon():
     assert "restoreInputFocus(" in set_search
     assert "restoreInputFocus(focusSnapshot)" in set_search
 
-    search_style = re.search(r"\.activity-table-search\s*\{([^}]*)\}", html)
-    assert search_style, "activity table search style should exist"
-    style_block = search_style.group(1)
-    assert re.search(r"height\s*:\s*28px\s*;", style_block)
-    assert re.search(r"width\s*:\s*clamp\(160px,\s*16vw,\s*220px\)\s*;", style_block)
+    search_styles = re.findall(r"\.activity-table-search\s*\{([^}]*)\}", html)
+    assert search_styles, "activity table search style should exist"
+    assert any(re.search(r"height\s*:\s*28px\s*;", block) for block in search_styles)
+    assert any(
+        re.search(r"width\s*:\s*clamp\(160px,\s*16vw,\s*220px\)\s*;", block)
+        for block in search_styles
+    )
 
     icon_style = re.search(r"\.activity-table-search-icon\s*\{([^}]*)\}", html)
     assert icon_style, "activity table search icon style should exist"
@@ -339,27 +369,29 @@ def test_activity_table_search_uses_compact_svg_icon():
     assert re.search(r"z-index\s*:\s*1\s*;", input_style.group(1))
 
 
-def test_activity_table_search_renders_immediately_and_preserves_composition_events():
+def test_activity_table_search_debounces_and_preserves_composition_events():
     js = _js()
     section = js.split("function setWorkbenchStepSearch", 1)[1].split("function setCheckTab", 1)[0]
-    table_section = js.split("function renderCompactEmployeeTable", 1)[1].split("function renderPeopleTable", 1)[0]
+    search_markup = js.split("function renderWorkbenchTableSearch", 1)[1].split(
+        "function renderCompactEmployeeTable", 1
+    )[0]
 
-    assert "workbenchStepSearchTimer" in js
-    assert "composingWorkbenchStepSearch" in js
-    assert "getActiveWorkbenchTableType" in js
-    assert "getTablePagination(activeType).page = 1" in section
+    assert "filterTimers[`workbench:${type}`]" in section
+    assert "composingFilterInputs" in js
+    assert "getTablePagination(type).page = 1" in section
     assert "renderWorkbenchCurrentStep();" in section
     assert "restoreInputFocus(focusSnapshot);" in section
-    assert "window.setTimeout" not in section
-    assert "360" not in section
-    assert "handleWorkbenchStepSearchInput(event)" in table_section
-    assert "handleWorkbenchStepSearchCompositionStart()" in table_section
-    assert "handleWorkbenchStepSearchCompositionEnd(event)" in table_section
+    assert "window.setTimeout" in section
+    assert "260" in section
+    assert "handleWorkbenchStepSearchInput(event, ${formatJsArg(type)})" in search_markup
+    assert "handleWorkbenchStepSearchCompositionStart(event, ${formatJsArg(type)})" in search_markup
+    assert "handleWorkbenchStepSearchCompositionEnd(event, ${formatJsArg(type)})" in search_markup
+    assert "handleWorkbenchStepSearchKeydown(event, ${formatJsArg(type)})" in search_markup
     assert "event?.isComposing" in section
-    assert "window.clearTimeout(workbenchStepSearchTimer)" in section
-    assert 'type="text"' in table_section
-    assert 'type="search"' not in table_section
-    assert "oninput=\"setWorkbenchStepSearch(this.value)\"" not in table_section
+    assert "composingFilterInputs.has(input)" in section
+    assert 'type="search"' in search_markup
+    assert 'autocomplete="off"' in search_markup
+    assert "clearWorkbenchStepSearch" in search_markup
 
 
 def test_high_frequency_workbench_interactions_use_current_step_rendering():
@@ -370,7 +402,7 @@ def test_high_frequency_workbench_interactions_use_current_step_rendering():
         ("setWorkbenchUploadState", "function clearWorkbenchUploadState"),
         ("setActivityStep", "function getStepIndex"),
         ("setWorkbenchTaskFilter", "function setWorkbenchResultFilter"),
-        ("setWorkbenchResultFilter", "function getActiveWorkbenchTableType"),
+        ("setWorkbenchResultFilter", "function getWorkbenchStepSearch"),
         ("setCheckTab", "function toggleWorkbenchResultDetail"),
         ("toggleWorkbenchResultDetail", "function updateWorkbenchSupplementDraft"),
         ("setFinalResultSlice", "function isNinetySixHourResult"),
@@ -392,7 +424,7 @@ def test_compact_performance_supplement_and_calculation_responses_are_requested(
     assert "response_mode: 'employee'" in supplement
     assert "applyPerformanceSupplementCompactResult" in supplement
     assert "renderWorkbenchCurrentStep" in supplement
-    assert "response_mode=compact" in calculation
+    assert "/calculation-jobs" in calculation
     assert "renderWorkbenchCurrentStep" in calculation
 
 
@@ -482,6 +514,21 @@ def test_supplemental_leave_uses_compact_filter_and_bulk_bars():
     assert ".supplemental-bulk-bar" in html
 
 
+def test_supplemental_leave_moves_included_hours_into_the_title():
+    html = _html()
+    js = _js()
+    section = js.split("function renderSupplementalLeaveSection", 1)[1].split(
+        "function renderAttendanceSummaryTable", 1
+    )[0]
+
+    assert "supplemental-title-line" in section
+    assert "supplemental-title-hours" in section
+    assert 'data-summary-key="include_hours"' in section
+    assert "leave-summary-compact" not in section
+    assert "renderSupplementalSummaryItem(summary" not in section
+    assert ".supplemental-title-hours" in html
+
+
 def test_special_person_tags_are_rendered_near_name():
     js = _js()
 
@@ -536,13 +583,17 @@ def test_attendance_step_table_uses_calculation_hour_fields_not_rule_column():
     assert "96工时制" not in section
 
 
-def test_attendance_step_places_supplemental_leave_above_work_hour_table():
+def test_attendance_step_places_supplemental_leave_before_hourly_rate_and_work_hours():
     js = _js()
     attendance_step = js.split("function renderAttendanceStep", 1)[1].split("function renderSalaryStep", 1)[0]
     attendance_table = js.split("function renderAttendanceSummaryTable", 1)[1].split("function renderSalarySummaryTable", 1)[0]
 
     assert "renderSupplementalLeaveSection(activity)" in attendance_step
-    assert attendance_step.index("renderSupplementalLeaveSection(activity)") < attendance_step.index("renderAttendanceSummaryTable(activity)")
+    assert (
+        attendance_step.index("renderSupplementalLeaveSection(activity)")
+        < attendance_step.index("renderHourlyRatePolicySection(activity)")
+        < attendance_step.index("renderAttendanceSummaryTable(activity)")
+    )
     assert "renderSupplementalLeaveSection(activity)" not in attendance_table
 
 
@@ -560,6 +611,32 @@ def test_supplemental_leave_row_save_uses_visible_workbench_activity():
     assert save_handler.index("applyOptimisticSupplementalLeaveRow") < save_handler.index("await apiJson")
     assert "applySupplementalLeaveCompactResult" in save_handler
     assert "rollbackOptimisticSupplementalLeaveRow" in save_handler
+
+
+def test_attendance_step_has_compact_section_navigation():
+    js = _js()
+    attendance_step = js.split("function renderAttendanceStep", 1)[1].split(
+        "function renderSalaryStep", 1
+    )[0]
+    navigation = js.split("function renderAttendanceSectionNav", 1)[1].split(
+        "function scrollToAttendanceSection", 1
+    )[0]
+    scroll_handler = js.split("function scrollToAttendanceSection", 1)[1].split(
+        "function renderAttendanceStep", 1
+    )[0]
+
+    assert "renderAttendanceSectionNav()" in attendance_step
+    for target_id in [
+        "attendanceSupplementalSection",
+        "attendanceHourlyRateSection",
+        "attendanceWorkHoursSection",
+    ]:
+        assert f'id="{target_id}"' in attendance_step
+        assert f'aria-controls="{target_id}"' in navigation
+    for label in ["补充假勤", "周期时薪", "工时表"]:
+        assert label in navigation
+    assert "scrollIntoView" in scroll_handler
+    assert "prefers-reduced-motion: reduce" in scroll_handler
 
 
 def test_performance_supplement_inline_form_supports_name_and_continuous_entries():
@@ -646,31 +723,24 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert "activitiesBatchBar" in js.split("function setupActivityListInteractions", 1)[1]
     assert "setupActivityListInteractions();" in js
     assert "renderTablePagination('activities', pageInfo)" in js
-    assert "if (type === 'activities') {\n    renderActivities();\n    loadActivityListDetails();\n  }" in js
+    assert "if (type === 'activities') renderActivities();" in js
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=fbu-salary-history-missing-snapshot-v1-20260722" in html
+    assert "fbu-performance.js?v=fbu-performance-v3-20260731" in html
 
 
-def test_activity_list_detail_loading_is_current_page_only_and_limited():
+def test_activity_list_uses_summary_without_detail_prefetch():
     js = _js()
 
-    loader = js.split("async function loadActivityListDetails", 1)[1].split(
-        "function renderActivityDiagnostics", 1
-    )[0]
     render_by_type = js.split("function renderTableByType", 1)[1].split(
         "function applyTableFilter", 1
     )[0]
 
-    assert "getPaginatedRows('activities', state.activities)" in loader
-    assert "pageInfo.items.filter" in loader
-    assert "state.activities.filter" not in loader
-    assert "ACTIVITY_DETAIL_PREFETCH_CONCURRENCY" in js
-    assert "ACTIVITY_DETAIL_PREFETCH_LIMIT" in js
-    assert ".slice(0, ACTIVITY_DETAIL_PREFETCH_LIMIT)" in loader
-    assert "for (let index = 0; index < pendingActivities.length; index += ACTIVITY_DETAIL_PREFETCH_CONCURRENCY)" in loader
-    assert "if (type === 'activities') {\n    renderActivities();\n    loadActivityListDetails();\n  }" in render_by_type
+    assert "async function loadActivityListDetails" not in js
+    assert "ACTIVITY_DETAIL_PREFETCH_CONCURRENCY" not in js
+    assert "ACTIVITY_DETAIL_PREFETCH_LIMIT" not in js
+    assert "if (type === 'activities') renderActivities();" in render_by_type
 
 
 def test_salary_table_shows_full_employee_context_without_horizontal_scroll():
@@ -766,6 +836,31 @@ def test_final_results_have_summary_and_pagination():
     assert "results.map" not in section
 
 
+def test_final_results_support_search_with_category_pagination():
+    html = _html()
+    js = _js()
+    search_section = js.split("function rowMatchesFinalResultSearch", 1)[1].split(
+        "function isNinetySixHourResult", 1
+    )[0]
+    group_section = js.split("function renderFinalResultGroup", 1)[1].split(
+        "function renderFinalResultRow", 1
+    )[0]
+    setter_section = js.split("function setWorkbenchStepSearch", 1)[1].split(
+        "function queueWorkbenchStepSearch", 1
+    )[0]
+
+    assert "getDisplayPosition(result, activity)" in search_section
+    for field in ["employee_id", "name", "department", "area", "position"]:
+        assert f"result?.{field}" in search_section
+    assert "getFinalResultSearchRows(group.rows, activity)" in group_section
+    assert "renderWorkbenchTableSearch('finalResults'" in group_section
+    assert "搜索工号、姓名、部门或岗位" in group_section
+    assert "没有匹配的核算结果" in group_section
+    for pagination_key in ["resultsWarehouse", "resultsFunctional", "resultsDistrict"]:
+        assert pagination_key in setter_section
+    assert ".final-result-group-head .activity-table-search" in html
+
+
 def test_final_result_action_is_calculation_process():
     html = _html()
     js = _js()
@@ -809,6 +904,27 @@ def test_uploading_feedback_is_indeterminate_not_fake_percentage():
     assert "indeterminate: true" in upload_view
     assert "material-progress ${uploadView.indeterminate ? 'indeterminate' : ''}" in js
     assert ".material-progress.indeterminate span" in html
+
+
+def test_salary_history_materials_upload_immediately_then_auto_reconcile():
+    js = _js()
+    upload_section = js.split("async function uploadWorkbenchSalaryHistoryMaterial", 1)[1].split(
+        "async function confirmSalaryVerification", 1
+    )[0]
+    change_section = js.split("function handleWorkbenchUploadChange", 1)[1].split(
+        "function clearWorkbenchUpload", 1
+    )[0]
+
+    assert "startWorkbenchUploadProgress(type, file)" in upload_section
+    assert "/import-salary-history-material" in upload_section
+    assert "data.ready_for_reconciliation" in upload_section
+    assert "已上传，待补：" in upload_section
+    assert "Object.keys(SALARY_HISTORY_MATERIAL_FIELDS)" in upload_section
+    assert "'已核验'" in upload_section
+    assert "uploadWorkbenchSalaryHistoryMaterial(type, file)" in change_section
+    assert "集齐三份文件后自动核验" not in js
+    assert "workbenchSalaryHistoryFiles" not in js
+    assert "文件已解析，待补：" in js
 
 
 def test_activity_uploads_require_current_activity_except_roster():
@@ -867,13 +983,62 @@ def test_workbench_success_paths_do_not_call_removed_page_renderers():
 def test_upload_success_updates_current_activity_without_refetching_detail():
     js = _js()
 
-    upload_area = js.split("async function uploadWorkbenchFile", 1)[1].split("function handleWorkbenchUploadChange", 1)[0]
+    multipart_area = js.split("async function uploadWorkbenchFileMultipart", 1)[1].split(
+        "async function uploadWorkbenchSalaryHistoryMaterialMultipart", 1
+    )[0]
 
-    assert "applyCurrentActivityPatch" in upload_area
-    assert "await enterActivity" not in upload_area
+    assert "applyCurrentActivityPatch" in multipart_area
+    assert "await enterActivity" not in multipart_area
 
 
-def test_new_activity_uses_created_activity_payload_without_detail_refetch():
+def test_async_upload_refresh_discards_stale_empty_step_sections():
+    js = _js()
+
+    enter_activity_area = js.split("async function enterActivity", 1)[1].split(
+        "// ═══ New Activity ═══", 1
+    )[0]
+    upload_job_area = js.split("async function pollFbuUploadJob", 1)[1].split(
+        "async function resumeFbuUploadJob", 1
+    )[0]
+    salary_multipart_area = js.split(
+        "async function uploadWorkbenchSalaryHistoryMaterialMultipart", 1
+    )[1].split(
+        "async function uploadWorkbenchSalaryHistoryMaterial", 1
+    )[0]
+
+    assert "preserveStep = false" in enter_activity_area
+    assert "initialStep = ''" in enter_activity_area
+    assert "refreshSections = false" in enter_activity_area
+    assert "isDifferentActivity || refreshSections" in enter_activity_area
+    assert "state.currentActivity = null;" in enter_activity_area
+    assert "refreshSections: true" in upload_job_area
+    assert "refreshSections: true" in salary_multipart_area
+
+
+def test_attendance_import_defaults_supplemental_leave_to_pending():
+    js = _js()
+    helper_area = js.split("function prioritizePendingSupplementalLeave", 1)[1].split(
+        "function uploadFbuFileToSignedUrl", 1
+    )[0]
+    upload_job_area = js.split("async function pollFbuUploadJob", 1)[1].split(
+        "async function resumeFbuUploadJob", 1
+    )[0]
+    multipart_area = js.split("async function uploadWorkbenchFileMultipart", 1)[1].split(
+        "async function uploadWorkbenchSalaryHistoryMaterialMultipart", 1
+    )[0]
+    previous_attendance_area = js.split(
+        "async function uploadWorkbenchPreviousAttendanceFileMultipart", 1
+    )[1].split("function handleWorkbenchUploadChange", 1)[0]
+
+    assert "state.tableFilters.supplementalLeave = { quality: 'pending' };" in helper_area
+    assert "getTablePagination('supplementalLeave').page = 1;" in helper_area
+    assert "'attendance', 'previousAttendance'" in upload_job_area
+    assert "prioritizePendingSupplementalLeave();" in upload_job_area
+    assert "prioritizePendingSupplementalLeave();" in multipart_area
+    assert "prioritizePendingSupplementalLeave();" in previous_attendance_area
+
+
+def test_new_activity_opens_first_step_instead_of_auto_detected_step():
     js = _js()
 
     new_activity_area = js.split("el.btnNewActivity.addEventListener", 1)[1].split("// ═══ Delete Activity ═══", 1)[0]
@@ -887,11 +1052,7 @@ def test_new_activity_uses_created_activity_payload_without_detail_refetch():
 def test_activity_list_diagnostics_do_not_prefetch_full_run_details():
     js = _js()
 
-    detail_loader = js.split("async function loadActivityListDetails", 1)[1].split(
-        "function renderActivityDiagnostics", 1
-    )[0]
-
-    assert "!activity.diagnostics" in detail_loader
+    assert "async function loadActivityListDetails" not in js
 
 
 def test_salary_confirmation_updates_local_activity_without_detail_refetch():
@@ -918,12 +1079,13 @@ def test_salary_confirmation_updates_local_activity_without_detail_refetch():
 
 def test_salary_history_upload_requests_compact_response_and_restores_verification_rows():
     js = _js()
-    upload_area = js.split("async function uploadWorkbenchSalaryHistory", 1)[1].split(
+    upload_area = js.split("async function uploadWorkbenchSalaryHistoryMaterialMultipart", 1)[1].split(
         "function findSalaryVerificationRowElement", 1
     )[0]
 
-    assert "formData.append('response_mode', 'compact')" in upload_area
-    assert "employees: data.verification?.employees || data.preview?.employees || []" in upload_area
+    assert "/import-salary-history-material" in upload_area
+    assert "ready_for_reconciliation" in upload_area
+    assert "refreshSections: true" in upload_area
 
 
 def test_calculation_button_shows_loading_state_and_refreshes_results():
@@ -937,7 +1099,11 @@ def test_calculation_button_shows_loading_state_and_refreshes_results():
     assert "if (state.calculationPending) return" in calculation
     assert "state.calculationPending = true" in calculation
     assert "state.calculationPending = false" in calculation
-    assert "state.activityStep = 'export'" in calculation
+    assert "/calculation-jobs" in calculation
+    poller = js.split("async function pollFbuCalculationJob", 1)[1].split(
+        "async function resumeFbuCalculationJob", 1
+    )[0]
+    assert "initialStep: 'export'" in poller
     assert "renderWorkbenchCurrentStep" in calculation
 
 
@@ -945,9 +1111,12 @@ def test_existing_activity_opens_earliest_incomplete_input_step_before_check():
     js = _js()
     navigation = js.split("function getActivityStepFromActivity", 1)[1].split("function navigateTo", 1)[0]
 
-    assert "getFirstIncompleteInputStep(activity)" in navigation
-    assert "return incompleteStep || 'check'" in navigation
-    assert "activity.diagnostics || activity.base_override_data || activity.adjustment_data" not in navigation
+    assert "if (!activity.roster_file) return 'people'" in navigation
+    assert "if (!activity.attendance_file || !activity.supplemental_leave_file) return 'attendance'" in navigation
+    assert "!activity.previous_salary_file" in navigation
+    assert "if (!activity.performance_file) return 'performance'" in navigation
+    assert "return 'check'" in navigation
+    assert "getFirstIncompleteInputStep(activity)" not in navigation
 
 
 def test_check_step_shows_one_prerequisite_link_instead_of_duplicate_upload_tasks():
@@ -974,13 +1143,17 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
     assert "snapshotValue(row, 'current', 'hourly_rate'" in salary_review
     assert "snapshotValue(row, 'previous', 'ratio'" in salary_review
     assert "snapshotValue(row, 'current', 'ratio'" in salary_review
-    assert "confirmSalaryVerification" in salary_review
+    assert "renderSalaryVerificationButton" in salary_review
+    verification_button = js.split(
+        "function renderSalaryVerificationButton", 1
+    )[1].split("async function confirmSalaryVerification", 1)[0]
+    assert "confirmSalaryVerification" in verification_button
     assert "renderSalaryVerificationReview(activity)" in salary_step
     assert "getSalarySnapshotMonthLabels(activity?.calc_month)" in salary_review
     assert "${monthLabels.previous}时薪" in salary_review
     assert "${monthLabels.current}时薪" in salary_review
-    assert "'按' + monthLabels.previous + '值'" in salary_review
-    assert "'按' + monthLabels.current + '值'" in salary_review
+    assert "`按${monthLabels.previous}值`" in salary_review
+    assert "`按${monthLabels.current}值`" in salary_review
     assert 'id="salaryVerificationReview"' in salary_review
     assert 'data-employee-id="${escapeHtml(row.employee_id)}"' in salary_review
     assert "missing_current_snapshot" in salary_review
@@ -988,6 +1161,26 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
     assert 'status-badge danger">缺失' in salary_review
     assert "snapshotMissing(row, 'previous') ? ''" in salary_review
     assert "snapshotMissing(row, 'current') ? ''" in salary_review
+    assert "row.resolution === 'missing_current_snapshot'" in salary_review
+    assert "'ignore_current'" in salary_review
+    assert "${monthLabels.current}忽略不计" in salary_review
+    assert "后续重新上传" in salary_review
+
+
+def test_transfer_history_warning_is_visible_in_the_title_meta():
+    html = _html()
+    js = _js()
+    transfer_review = js.split("function renderTransferHistoryReview", 1)[1].split(
+        "function renderPeriodAdjustmentSection", 1
+    )[0]
+
+    assert 'class="transfer-history-head-meta"' in transfer_review
+    assert "material-action-note warning transfer-history-warning" in transfer_review
+    assert "已忽略审批中、已废弃或缺少生效日记录" in transfer_review
+    assert ".transfer-history-warning" in html
+    warning_css = html.split(".transfer-history-warning {", 1)[1].split("}", 1)[0]
+    assert "max-width: none;" in warning_css
+    assert "overflow: visible;" in warning_css
 
 
 def test_salary_snapshot_month_labels_handle_year_boundary():
@@ -1037,7 +1230,7 @@ def test_workbench_initial_activity_load_cannot_stay_on_reading_placeholder():
     assert "renderWorkbench();" in enter_activity_area.split("catch (error)", 1)[1]
 
 
-def test_background_activity_detail_load_preserves_activity_list_page():
+def test_activity_detail_load_preserves_activity_list_page_without_prefetch():
     js = _js()
 
     enter_activity_area = js.split("async function enterActivity", 1)[1].split("// ═══ New Activity ═══", 1)[0]
@@ -1045,21 +1238,114 @@ def test_background_activity_detail_load_preserves_activity_list_page():
     assert "if (preservePage && state.currentPage === 'activities')" in enter_activity_area
     assert "Keep list interactions stable while background activity details are loading." in enter_activity_area
     assert "renderActivities();" in enter_activity_area
-    assert "loadActivityListDetails();" in enter_activity_area
+    assert "loadActivityListDetails();" not in enter_activity_area
     assert "navigateTo(preservePage ? state.currentPage : 'workbench');" in enter_activity_area
     assert enter_activity_area.index("if (preservePage && state.currentPage === 'activities')") < enter_activity_area.index("navigateTo(preservePage ? state.currentPage : 'workbench');")
 
 
-def test_workbench_initial_load_enters_activity_before_activity_list_detail_prefetch():
+def test_workbench_initial_load_does_not_prefetch_activity_details():
     js = _js()
 
     load_activities_area = js.split("async function loadActivities", 1)[1].split(
         "function hasWorkbenchActivityPayload", 1
     )[0]
 
-    assert "loadActivityListDetails();" in load_activities_area
-    assert load_activities_area.index("await enterActivity(defaultActivity.run_id") < load_activities_area.index("loadActivityListDetails();")
-    assert "if (state.currentPage === 'activities') {\n      loadActivityListDetails();\n    }" in load_activities_area
+    assert "await enterActivity(defaultActivity.run_id" in load_activities_area
+    assert "loadActivityListDetails();" not in load_activities_area
+
+
+def test_workbench_loads_activity_core_then_only_the_active_step_sections():
+    js = _js()
+
+    enter_activity_area = js.split("async function enterActivity", 1)[1].split(
+        "// ═══ New Activity ═══", 1
+    )[0]
+    step_loader = js.split("async function ensureActivityStepData", 1)[1].split(
+        "async function enterActivity", 1
+    )[0]
+
+    assert "?include=core" in enter_activity_area
+    assert "ensureActivityStepData(state.activityStep" in enter_activity_area
+    assert "ACTIVITY_STEP_SECTIONS" in js
+    assert "loaded_sections" in js
+    assert "include=${encodeURIComponent(include)}" in step_loader
+
+
+def test_initial_workbench_overlaps_rule_list_and_activity_core_requests():
+    js = _js()
+    load_rule_lists = js.split("async function loadRuleLists", 1)[1].split(
+        "function getWorkbenchSourceKey", 1
+    )[0]
+    enter_activity = js.split("async function enterActivity", 1)[1].split(
+        "// ═══ New Activity ═══", 1
+    )[0]
+
+    assert "state.ruleListsRequest" in load_rule_lists
+    assert "if (state.ruleListsRequest) return state.ruleListsRequest;" in load_rule_lists
+    request_start = "const ruleListsRequest = ("
+    assert request_start in enter_activity
+    assert "? loadRuleLists()" in enter_activity
+    assert enter_activity.index(request_start) < enter_activity.index("?include=core")
+    assert enter_activity.index("await ruleListsRequest;") > enter_activity.index(
+        "?include=core"
+    )
+
+
+def test_lazy_step_status_uses_manifest_summaries_after_refresh():
+    js = _js()
+    needs = js.split("function buildNeedsForStep", 1)[1].split(
+        "function renderNeedsPanel", 1
+    )[0]
+
+    assert "function getActivitySectionSummary" in js
+    assert "state.activities.find(item => item.run_id === activity?.run_id)" in js
+    assert "work_hour_rule_count" in needs
+    assert "fixed_base_count" in needs
+    assert "suggested_count" in needs
+    assert "getSalaryVerificationBlockingCount(activity)" in needs
+
+
+def test_final_results_use_server_pagination_and_search_instead_of_full_detail():
+    js = _js()
+
+    loader = js.split("async function loadFinalResultsPage", 1)[1].split(
+        "function getFinalResultGroupKey", 1
+    )[0]
+    step_sections = js.split("const ACTIVITY_STEP_SECTIONS", 1)[1].split("};", 1)[0]
+
+    assert "export: []" in step_sections
+    assert "/results?" in loader
+    assert "page_size" in loader
+    assert "encodeURIComponent(query)" in loader
+    assert "group=${encodeURIComponent(group)}" in loader
+    assert "finalResultsRemote" in js
+    assert "loadFinalResultsPage({ page: 1" in js
+    assert "remote.pagination" in js
+
+
+def test_check_step_uses_compact_diagnostics_and_server_paged_results():
+    js = _js()
+    step_sections = js.split("const ACTIVITY_STEP_SECTIONS", 1)[1].split("};", 1)[0]
+    check_sections = step_sections.split("check:", 1)[1].split("],", 1)[0]
+    loader = js.split("async function loadCheckResultsPage", 1)[1].split(
+        "async function loadFinalResultsPage", 1
+    )[0]
+
+    assert "'diagnostics'" in check_sections
+    assert "'salary_verification_data'" in check_sections
+    assert "'base_override_data'" in check_sections
+    assert "'supplemental_leave_data'" in check_sections
+    for large_section in [
+        "'attendance_data'",
+        "'salary_data'",
+        "'performance_data'",
+        "'results'",
+    ]:
+        assert large_section not in check_sections
+    assert "/results?" in loader
+    assert "group=all" in loader
+    assert "checkResultsRemote" in js
+    assert "loadCheckResultsPage({ page: 1" in js
 
 
 def test_export_button_only_appears_in_final_step_renderer():

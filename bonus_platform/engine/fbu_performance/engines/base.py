@@ -10,6 +10,7 @@ FIXED_BASE_OVERRIDE_PATH = "线下固定基数覆盖路径"
 NINETY_SIX_HOUR_FIXED_BASE_PATH = "96工时制固定基数覆盖路径"
 NINETY_SIX_HOUR_AUTO_BASE_PATH = "96工时制自动基数路径"
 ADJUSTMENT_SPLIT_PATH = "调薪/转正拆分路径"
+TRANSFER_SPLIT_PATH = "岗位调动生效日拆分路径"
 STANDARD_PERFORMANCE_BASE_PATH = "标准绩效基数路径"
 
 
@@ -22,6 +23,9 @@ class CalculationSegment:
     performance_ratio: float
     performance_coefficient: float
     performance_bonus: float = 0.0
+    department: str = ""
+    position: str = ""
+    job_type: str = ""
 
 
 @dataclass
@@ -75,6 +79,10 @@ class EmployeeData:
     annual_leave_pay: float = 0.0
     holiday_pay: float = 0.0
     performance_base: float = 0.0
+    system_performance_base: float = 0.0
+    period_adjustment: float = 0.0
+    period_adjustment_source_month: str = ""
+    period_adjustment_reason: str = ""
     performance_coefficient: float = 0.0
     performance_bonus: float = 0.0
     is_deferred: bool = False
@@ -101,6 +109,8 @@ def get_calculation_path(emp: EmployeeData) -> str:
         return FIXED_BASE_OVERRIDE_PATH
     if "96" in str(emp.work_hour_rule or ""):
         return NINETY_SIX_HOUR_AUTO_BASE_PATH
+    if any(segment.position for segment in emp.calculation_segments):
+        return TRANSFER_SPLIT_PATH
     if emp.calculation_segments:
         return ADJUSTMENT_SPLIT_PATH
     return STANDARD_PERFORMANCE_BASE_PATH

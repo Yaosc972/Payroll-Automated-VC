@@ -4,7 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FBU美洲绩效奖金核算 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <script>
+      if (window.location.protocol === 'file:') {
+        window.location.replace(`http://127.0.0.1:8003/fbu-performance.html${window.location.hash}`);
+      }
+    </script>
+    <link rel="icon" type="image/png" href="assets/sigma-platform-logo-20260731.png" />
     <link rel="stylesheet" href="styles.css?v=31" />
     <script src="permission-guard.js?v=9"></script>
     <style>
@@ -1818,6 +1823,7 @@
       .final-result-group-head {
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
         gap: 12px;
         padding: 10px 14px;
         border-bottom: 1px solid var(--border);
@@ -1836,6 +1842,11 @@
         font-family: var(--mono);
         font-size: 12px;
         font-weight: 750;
+      }
+
+      .final-result-group-head .activity-table-search {
+        width: clamp(220px, 28vw, 360px);
+        margin-left: auto;
       }
 
       .final-result-table .highlight-base {
@@ -6219,10 +6230,247 @@
 	        font-size: 13px;
 	      }
 
+	      .workbench-inline-field.has-error input {
+	        border-color: #d92d20;
+	        box-shadow: 0 0 0 1px rgba(217, 45, 32, 0.12);
+	      }
+
+	      .workbench-field-error {
+	        color: #b42318;
+	        font-size: 11px;
+	        line-height: 1.35;
+	      }
+
 	      .workbench-inline-form .btn {
 	        align-self: end;
 	        min-height: 32px;
 	        border-radius: 6px;
+	      }
+
+	      .period-adjustment-section {
+	        padding: 0;
+	        overflow: hidden;
+	        border: 1px solid #e2e8f0;
+	        border-radius: 8px;
+	        background: #fff;
+	      }
+
+	      .period-adjustment-compact {
+	        min-width: 0;
+	      }
+
+	      .period-adjustment-toggle {
+	        display: grid;
+	        grid-template-columns: auto minmax(0, 1fr) auto;
+	        gap: 8px;
+	        align-items: center;
+	        min-height: 42px;
+	        padding: 7px 10px;
+	        list-style: none;
+	        cursor: pointer;
+	      }
+
+	      .period-adjustment-toggle::-webkit-details-marker {
+	        display: none;
+	      }
+
+	      .period-adjustment-toggle::before {
+	        color: #667085;
+	        content: "›";
+	        font-size: 17px;
+	        line-height: 1;
+	      }
+
+	      .period-adjustment-section[open] > .period-adjustment-toggle::before {
+	        transform: rotate(90deg);
+	      }
+
+	      .period-adjustment-toggle:hover {
+	        background: #f8fafc;
+	      }
+
+	      .period-adjustment-toggle:focus-visible {
+	        outline: 2px solid rgba(21, 94, 239, 0.24);
+	        outline-offset: -2px;
+	      }
+
+	      .period-adjustment-toggle-copy,
+	      .period-adjustment-summary {
+	        display: flex;
+	        align-items: baseline;
+	        min-width: 0;
+	        gap: 6px;
+	      }
+
+	      .period-adjustment-toggle-copy > strong {
+	        color: #101828;
+	        font-size: 12px;
+	        font-weight: 800;
+	      }
+
+	      .period-adjustment-summary {
+	        color: #64748b;
+	        font-size: 11px;
+	        white-space: nowrap;
+	      }
+
+	      .period-adjustment-summary strong {
+	        color: #0f172a;
+	        font-family: var(--mono);
+	        font-size: 12px;
+	      }
+
+	      .period-adjustment-toggle-action {
+	        color: #155eef;
+	        font-weight: 750;
+	      }
+
+	      .period-adjustment-body {
+	        border-top: 1px solid #e2e8f0;
+	      }
+
+	      .period-adjustment-guidance {
+	        margin: 0;
+	        padding: 8px 10px 0;
+	        color: #667085;
+	        font-size: 11px;
+	        line-height: 1.4;
+	      }
+
+	      .workbench-inline-form.period-adjustment-form {
+	        grid-template-columns: repeat(2, minmax(0, 1fr));
+	        padding: 8px 10px 10px;
+	        border-top: 0;
+	      }
+
+	      .period-adjustment-form input[readonly] {
+	        color: #475569;
+	        background: #eef2f7;
+	      }
+
+	      .period-adjustment-dependency {
+	        margin: 8px 10px 0;
+	        padding: 7px 8px;
+	        border: 1px solid #fedf89;
+	        border-radius: 6px;
+	        background: #fffaeb;
+	        color: #854a0e;
+	        font-size: 12px;
+	        line-height: 1.45;
+	      }
+
+	      .period-adjustment-form input:disabled {
+	        color: #98a2b3;
+	        background: #f2f4f7;
+	        cursor: not-allowed;
+	      }
+
+	      .period-adjustment-form-actions {
+	        display: flex;
+	        grid-column: 1 / -1;
+	        gap: 6px;
+	        justify-content: flex-end;
+	        align-items: end;
+	      }
+
+	      .salary-support-stack {
+	        display: grid;
+	        gap: 10px;
+	        min-width: 0;
+	        align-content: start;
+	      }
+
+	      .salary-support-stack .maintained-list {
+	        min-height: 0;
+	      }
+
+	      .period-adjustment-records {
+	        display: grid;
+	        border-top: 1px solid #e2e8f0;
+	      }
+
+	      .period-adjustment-record {
+	        display: grid;
+	        grid-template-columns: minmax(0, 1fr) auto auto;
+	        gap: 8px;
+	        align-items: center;
+	        padding: 7px 10px;
+	      }
+
+	      .period-adjustment-record + .period-adjustment-record {
+	        border-top: 1px solid #edf1f5;
+	      }
+
+	      .period-adjustment-record-copy {
+	        min-width: 0;
+	      }
+
+	      .period-adjustment-record-copy > div {
+	        display: flex;
+	        gap: 6px;
+	        align-items: baseline;
+	        min-width: 0;
+	      }
+
+	      .period-adjustment-record-copy strong,
+	      .period-adjustment-record-copy span,
+	      .period-adjustment-record-copy p {
+	        overflow: hidden;
+	        text-overflow: ellipsis;
+	        white-space: nowrap;
+	      }
+
+	      .period-adjustment-record-copy strong {
+	        color: #101828;
+	        font-family: var(--mono);
+	        font-size: 11px;
+	      }
+
+	      .period-adjustment-record-copy span,
+	      .period-adjustment-record-copy p {
+	        color: #64748b;
+	        font-size: 11px;
+	      }
+
+	      .period-adjustment-record-copy p {
+	        margin: 2px 0 0;
+	      }
+
+	      .period-adjustment-record-amount {
+	        color: #101828;
+	        font-family: var(--mono);
+	        font-size: 12px;
+	        white-space: nowrap;
+	      }
+
+	      .period-adjustment-record-amount.negative-amount {
+	        color: #b42318;
+	      }
+
+	      .period-adjustment-record-actions {
+	        display: flex;
+	        gap: 4px;
+	      }
+
+	      .period-adjustment-record-actions .btn {
+	        min-height: 26px;
+	        padding: 3px 6px;
+	        font-size: 11px;
+	      }
+
+	      @media (max-width: 520px) {
+	        .workbench-inline-form.period-adjustment-form {
+	          grid-template-columns: 1fr;
+	        }
+
+	        .period-adjustment-record {
+	          grid-template-columns: minmax(0, 1fr) auto;
+	        }
+
+	        .period-adjustment-record-actions {
+	          grid-column: 1 / -1;
+	          justify-content: flex-end;
+	        }
 	      }
 
 	      .performance-supplement-list {
@@ -6295,6 +6543,49 @@
 	        border: 1px solid #e2e8f0;
 	        border-radius: 8px;
 	        background: #fff;
+	      }
+
+	      .step-data-loading {
+	        display: grid;
+	        gap: 12px;
+	        min-height: 112px;
+	        align-content: center;
+	      }
+
+	      .step-data-loading-copy {
+	        display: grid;
+	        gap: 3px;
+	      }
+
+	      .step-data-loading-copy strong {
+	        color: #101828;
+	        font-size: 13px;
+	      }
+
+	      .step-data-loading-copy span {
+	        color: #667085;
+	        font-size: 12px;
+	      }
+
+	      .step-data-loading-track {
+	        height: 4px;
+	        overflow: hidden;
+	        border-radius: 999px;
+	        background: #e2e8f0;
+	      }
+
+	      .step-data-loading-track span {
+	        display: block;
+	        width: 34%;
+	        height: 100%;
+	        border-radius: inherit;
+	        background: #4f46e5;
+	        animation: stepDataLoading 1.05s ease-in-out infinite;
+	      }
+
+	      @keyframes stepDataLoading {
+	        0% { transform: translateX(-120%); }
+	        100% { transform: translateX(320%); }
 	      }
 
 	      .material-list,
@@ -6562,6 +6853,34 @@
 	        color: #b42318;
 	      }
 
+	      .transfer-history-head-meta {
+	        display: flex;
+	        flex-wrap: wrap;
+	        align-items: center;
+	        justify-content: flex-end;
+	        gap: 6px 10px;
+	        max-width: 68%;
+	      }
+
+	      .transfer-history-warning {
+	        max-width: none;
+	        overflow: visible;
+	        text-overflow: clip;
+	        white-space: nowrap;
+	      }
+
+	      .btn.btn-secondary.salary-ignore-snapshot-btn {
+	        border-color: #f0c36d;
+	        background: #fffbeb;
+	        color: #92400e;
+	      }
+
+	      .btn.btn-secondary.salary-ignore-snapshot-btn:hover {
+	        border-color: #dca83e;
+	        background: #fff7d6;
+	        color: #78350f;
+	      }
+
 	      .material-clear-btn {
 	        display: inline-flex;
 	        align-items: center;
@@ -6599,6 +6918,31 @@
 	        margin-top: 3px;
 	        color: #64748b;
 	        font-size: 11px;
+	      }
+
+	      .supplemental-title-line {
+	        display: flex;
+	        flex-wrap: wrap;
+	        align-items: baseline;
+	        gap: 10px;
+	      }
+
+	      .supplemental-title-hours {
+	        display: inline-flex;
+	        align-items: baseline;
+	        gap: 5px;
+	        color: #667085;
+	        font-size: 11px;
+	        font-weight: 650;
+	        white-space: nowrap;
+	      }
+
+	      .supplemental-title-hours strong {
+	        color: #101828;
+	        font-family: var(--mono);
+	        font-size: 14px;
+	        font-weight: 850;
+	        font-variant-numeric: tabular-nums;
 	      }
 
 	      .section-actions {
@@ -6650,6 +6994,328 @@
 
 	      .compact-list-table .data-table {
 	        min-width: 540px;
+	      }
+
+	      .attendance-review-layout {
+	        display: grid;
+	        grid-template-columns: minmax(0, 1fr) 86px;
+	        gap: 10px;
+	        align-items: start;
+	        min-width: 0;
+	      }
+
+	      .attendance-review-sections {
+	        grid-column: 1;
+	        grid-row: 1;
+	        display: grid;
+	        gap: 12px;
+	        min-width: 0;
+	      }
+
+	      .attendance-anchor-target {
+	        min-width: 0;
+	        scroll-margin-top: 72px;
+	      }
+
+	      .attendance-section-nav {
+	        position: sticky;
+	        top: 72px;
+	        grid-column: 2;
+	        grid-row: 1;
+	        display: grid;
+	        width: 86px;
+	        padding: 4px 0 4px 10px;
+	        border-left: 1px solid #cbd5e1;
+	      }
+
+	      .attendance-section-nav-button {
+	        position: relative;
+	        min-height: 28px;
+	        padding: 0 6px 0 8px;
+	        border: 0;
+	        border-radius: 6px;
+	        background: transparent;
+	        color: #667085;
+	        font-size: 11px;
+	        font-weight: 750;
+	        line-height: 1;
+	        text-align: left;
+	        white-space: nowrap;
+	        cursor: pointer;
+	      }
+
+	      .attendance-section-nav-button::before {
+	        position: absolute;
+	        top: 50%;
+	        left: -14px;
+	        width: 7px;
+	        height: 7px;
+	        border: 1px solid #94a3b8;
+	        border-radius: 999px;
+	        background: #ffffff;
+	        content: "";
+	        transform: translateY(-50%);
+	      }
+
+	      .attendance-section-nav-button:hover {
+	        background: #eef2ff;
+	        color: #312e81;
+	      }
+
+	      .attendance-section-nav-button:hover::before {
+	        border-color: #4f46e5;
+	        background: #4f46e5;
+	      }
+
+	      .attendance-section-nav-button:focus-visible {
+	        background: #eef2ff;
+	        color: #312e81;
+	        outline: 2px solid rgba(79, 70, 229, 0.28);
+	        outline-offset: 1px;
+	      }
+
+	      .attendance-section-nav-button:focus-visible::before {
+	        border-color: #4f46e5;
+	        background: #4f46e5;
+	      }
+
+	      @media (max-width: 760px) {
+	        .transfer-history-head-meta {
+	          max-width: 100%;
+	          justify-content: flex-start;
+	        }
+
+	        .transfer-history-warning {
+	          white-space: normal;
+	        }
+
+	        .attendance-review-layout {
+	          display: block;
+	        }
+
+	        .attendance-section-nav {
+	          top: 8px;
+	          z-index: 10;
+	          display: flex;
+	          width: fit-content;
+	          margin: 0 0 8px auto;
+	          padding: 3px;
+	          border: 1px solid #dbe3ef;
+	          border-radius: 7px;
+	          background: rgba(255, 255, 255, 0.96);
+	          box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+	        }
+
+	        .attendance-section-nav-button {
+	          min-height: 26px;
+	          padding: 0 7px;
+	        }
+
+	        .attendance-section-nav-button::before {
+	          display: none;
+	        }
+	      }
+
+	      .hourly-rate-policy-section {
+	        display: grid;
+	        gap: 10px;
+	      }
+
+	      .hourly-rate-policy-head {
+	        align-items: center;
+	      }
+
+	      .hourly-rate-policy-summary {
+	        display: flex;
+	        align-items: center;
+	        flex-wrap: wrap;
+	        gap: 8px 18px;
+	        min-height: 30px;
+	        padding: 6px 10px;
+	        border: 1px solid #dbe3ef;
+	        border-radius: 6px;
+	        background: #f8fafc;
+	        color: #475569;
+	        font-size: 12px;
+	      }
+
+	      .hourly-rate-policy-summary strong {
+	        margin-left: 4px;
+	        color: #0f172a;
+	        font-variant-numeric: tabular-nums;
+	      }
+
+	      .hourly-rate-policy-filterbar {
+	        display: flex;
+	        align-items: center;
+	        justify-content: space-between;
+	        gap: 12px;
+	        min-height: 38px;
+	        padding: 5px 8px;
+	        border: 1px solid #dbe3ef;
+	        border-radius: 6px;
+	        background: #ffffff;
+	      }
+
+	      .hourly-rate-policy-filter-count {
+	        color: #667085;
+	        font-size: 12px;
+	        white-space: nowrap;
+	      }
+
+	      .hourly-rate-policy-filter-count strong {
+	        color: #101828;
+	        font-family: var(--mono);
+	      }
+
+	      .hourly-rate-policy-filter-controls {
+	        display: flex;
+	        align-items: center;
+	        gap: 8px;
+	      }
+
+	      .hourly-rate-policy-filter-controls .activity-table-search {
+	        width: 240px;
+	      }
+
+	      .hourly-rate-policy-shift-filter {
+	        display: inline-flex;
+	        align-items: center;
+	        gap: 6px;
+	        height: 28px;
+	        color: #667085;
+	        font-size: 12px;
+	        white-space: nowrap;
+	      }
+
+	      .hourly-rate-policy-shift-filter select {
+	        min-width: 112px;
+	        height: 28px;
+	        padding: 0 26px 0 8px;
+	        border: 1px solid #d7e0ee;
+	        border-radius: 6px;
+	        background: #ffffff;
+	        color: #344054;
+	        font-size: 12px;
+	      }
+
+	      .hourly-rate-policy-shift-filter select:focus-visible {
+	        border-color: #155eef;
+	        box-shadow: 0 0 0 2px rgba(21, 94, 239, 0.10);
+	        outline: none;
+	      }
+
+	      .hourly-rate-policy-table {
+	        min-width: 980px !important;
+	      }
+
+	      .hourly-rate-policy-table .cell-note {
+	        display: block;
+	        margin-top: 3px;
+	        color: #64748b;
+	        font-size: 11px;
+	        font-weight: 500;
+	      }
+
+	      .hourly-rate-policy-options {
+	        display: flex;
+	        align-items: center;
+	        gap: 5px;
+	        min-width: 190px;
+	      }
+
+	      .hourly-rate-policy-options .workbench-segment {
+	        min-height: 30px;
+	        padding: 0 9px;
+	        border: 1px solid #cbd5e1;
+	        border-radius: 6px;
+	        background: #ffffff;
+	        color: #334155;
+	        white-space: nowrap;
+	      }
+
+	      .hourly-rate-policy-options .workbench-segment:hover {
+	        border-color: #155eef;
+	        background: #f5f8ff;
+	        color: #155eef;
+	      }
+
+	      .hourly-rate-policy-options .workbench-segment.active {
+	        border-color: #155eef;
+	        background: #eaf1ff;
+	        color: #155eef;
+	        box-shadow: inset 0 0 0 1px rgba(21, 94, 239, 0.08);
+	      }
+
+	      .hourly-rate-policy-heading {
+	        display: inline-flex;
+	        align-items: center;
+	        gap: 6px;
+	        white-space: nowrap;
+	      }
+
+	      .hourly-rate-policy-help {
+	        position: relative;
+	        display: inline-flex;
+	        align-items: center;
+	      }
+
+	      .hourly-rate-policy-help-trigger {
+	        display: inline-flex;
+	        align-items: center;
+	        justify-content: center;
+	        width: 18px;
+	        height: 18px;
+	        padding: 0;
+	        border: 1px solid #94a3b8;
+	        border-radius: 50%;
+	        background: #ffffff;
+	        color: #475569;
+	        font-family: var(--mono);
+	        font-size: 11px;
+	        font-weight: 800;
+	        line-height: 1;
+	        cursor: help;
+	      }
+
+	      .hourly-rate-policy-help-trigger:hover,
+	      .hourly-rate-policy-help-trigger:focus-visible {
+	        border-color: #155eef;
+	        color: #155eef;
+	        outline: none;
+	      }
+
+	      .hourly-rate-policy-help-content {
+	        position: absolute;
+	        z-index: 30;
+	        top: calc(100% + 8px);
+	        right: 0;
+	        display: none;
+	        width: 320px;
+	        padding: 10px 12px;
+	        border: 1px solid #cbd5e1;
+	        border-radius: 6px;
+	        background: #ffffff;
+	        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+	        color: #334155;
+	        font-size: 12px;
+	        font-weight: 500;
+	        line-height: 1.55;
+	        text-align: left;
+	        white-space: normal;
+	      }
+
+	      .hourly-rate-policy-help:hover .hourly-rate-policy-help-content,
+	      .hourly-rate-policy-help:focus-within .hourly-rate-policy-help-content {
+	        display: block;
+	      }
+
+	      .hourly-rate-policy-help-line {
+	        display: block;
+	      }
+
+	      .hourly-rate-policy-help-line + .hourly-rate-policy-help-line {
+	        margin-top: 6px;
 	      }
 
 	      .check-review-section {
@@ -8248,6 +8914,30 @@
 	        -webkit-appearance: none;
 	      }
 
+	      .activity-table-search-clear {
+	        display: inline-flex;
+	        align-items: center;
+	        justify-content: center;
+	        width: 20px;
+	        height: 20px;
+	        padding: 0;
+	        border: none;
+	        border-radius: 4px;
+	        background: transparent;
+	        color: #667085;
+	        font-size: 16px;
+	        line-height: 1;
+	        cursor: pointer;
+	        flex: 0 0 auto;
+	      }
+
+	      .activity-table-search-clear:hover,
+	      .activity-table-search-clear:focus-visible {
+	        background: #eef4ff;
+	        color: #155eef;
+	        outline: none;
+	      }
+
 	      .table-section .data-table-container {
 	        border-top-left-radius: 0;
 	        border-top-right-radius: 0;
@@ -8674,7 +9364,7 @@
         <header class="top-bar">
           <div class="top-bar-left">
             <a class="top-module-copy top-title-lockup" href="/" aria-label="返回西格玛工作台首页">
-              <img class="top-title-logo" src="assets/bonus-logo-header-blue.png" alt="" />
+              <img class="top-title-logo" src="assets/sigma-platform-logo-20260731.png" alt="" />
               <h1 class="top-bar-title">FBU美洲绩效核算</h1>
             </a>
             <nav class="top-module-nav" aria-label="平台模块">
@@ -8717,6 +9407,7 @@
               <input id="workbenchUploadPreviousSalary" type="file" accept=".xlsx,.xls" />
               <input id="workbenchUploadCurrentSalary" type="file" accept=".xlsx,.xls" />
               <input id="workbenchUploadSalaryAdjustments" type="file" accept=".xlsx,.xls" />
+              <input id="workbenchUploadTransferHistory" type="file" accept=".xlsx,.xls" />
               <input id="workbenchUploadPerformance" type="file" accept=".xlsx,.xls" />
               <input id="workbenchUploadSupplementalLeave" type="file" accept=".xlsx,.xls" />
             </div>
@@ -8851,6 +9542,6 @@
 
     <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
 
-    <script src="fbu-performance.js?v=fbu-salary-history-missing-snapshot-v1-20260722"></script>
+    <script src="fbu-performance.js?v=fbu-performance-v3-20260731"></script>
   </body>
 </html>

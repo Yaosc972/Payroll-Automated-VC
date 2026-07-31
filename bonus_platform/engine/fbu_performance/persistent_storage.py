@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import gzip
+from collections import OrderedDict
+import copy
+from datetime import datetime
 import json
 import mimetypes
 import os
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from http.client import RemoteDisconnected
@@ -16,6 +20,31 @@ from urllib.request import Request, urlopen
 
 
 FBU_RUN_PREFIX = "fbu-performance-runs"
+FBU_RUN_SCHEMA_VERSION = 2
+FBU_RUN_INDEX_FILENAME = "_runs-index.json"
+FBU_RUN_SECTION_FIELDS = frozenset({
+    "attendance_data",
+    "attendance_view_data",
+    "salary_data",
+    "previous_salary_data",
+    "current_salary_data",
+    "salary_verification_data",
+    "performance_data",
+    "adjustment_data",
+    "transfer_data",
+    "supplemental_leave_data",
+    "base_override_data",
+    "hourly_rate_policy_data",
+    "period_adjustment_data",
+    "results",
+    "results_view_data",
+})
+_RUN_INDEX_LOCK = threading.RLock()
+_JSON_CACHE_LOCK = threading.RLock()
+_JSON_CACHE_MAX_ITEM_BYTES = 2 * 1024 * 1024
+_JSON_CACHE_MAX_TOTAL_BYTES = 16 * 1024 * 1024
+_JSON_CACHE: OrderedDict[str, tuple[float, int, Any]] = OrderedDict()
+_JSON_CACHE_TOTAL_BYTES = 0
 
 
 class FBUStorageStatusError(RuntimeError):
@@ -62,33 +91,408 @@ def fbu_supabase_bucket() -> str:
     ).strip()
 
 
-def save_fbu_run_metadata_to_persistent(run_id: str, payload: dict[str, Any]) -> None:
-    content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    _upload_bytes(
-        _object_path(run_id, "metadata.json"),
-        gzip.compress(content, compresslevel=6),
-        content_type="application/gzip",
-    )
+def _json_bytes(payload: Any) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def load_fbu_run_metadata_from_persistent(run_id: str) -> dict[str, Any] | None:
-    content = _download_bytes(_object_path(run_id, "metadata.json"))
+def _fbu_json_cache_ttl_seconds() -> float:
+    raw = os.environ.get("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "2")
+    try:
+        return min(30.0, max(0.0, float(raw)))
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def _clear_fbu_json_cache() -> None:
+    global _JSON_CACHE_TOTAL_BYTES
+    with _JSON_CACHE_LOCK:
+        _JSON_CACHE.clear()
+        _JSON_CACHE_TOTAL_BYTES = 0
+
+
+def _invalidate_fbu_json_cache_prefix(prefix: str) -> None:
+    global _JSON_CACHE_TOTAL_BYTES
+    with _JSON_CACHE_LOCK:
+        for key in [key for key in _JSON_CACHE if key.startswith(prefix)]:
+            _, size, _ = _JSON_CACHE.pop(key)
+            _JSON_CACHE_TOTAL_BYTES -= size
+
+
+def _get_cached_json(object_path: str) -> Any | None:
+    global _JSON_CACHE_TOTAL_BYTES
+    now = time.monotonic()
+    with _JSON_CACHE_LOCK:
+        cached = _JSON_CACHE.get(object_path)
+        if cached is None:
+            return None
+        expires_at, size, payload = cached
+        if expires_at <= now:
+            _JSON_CACHE.pop(object_path, None)
+            _JSON_CACHE_TOTAL_BYTES -= size
+            return None
+        _JSON_CACHE.move_to_end(object_path)
+        return copy.deepcopy(payload)
+
+
+def _cache_json(object_path: str, payload: Any, encoded_size: int) -> None:
+    global _JSON_CACHE_TOTAL_BYTES
+    ttl_seconds = _fbu_json_cache_ttl_seconds()
+    if ttl_seconds <= 0 or encoded_size > _JSON_CACHE_MAX_ITEM_BYTES:
+        _invalidate_fbu_json_cache_prefix(object_path)
+        return
+    with _JSON_CACHE_LOCK:
+        previous = _JSON_CACHE.pop(object_path, None)
+        if previous:
+            _JSON_CACHE_TOTAL_BYTES -= previous[1]
+        _JSON_CACHE[object_path] = (
+            time.monotonic() + ttl_seconds,
+            encoded_size,
+            copy.deepcopy(payload),
+        )
+        _JSON_CACHE_TOTAL_BYTES += encoded_size
+        while _JSON_CACHE_TOTAL_BYTES > _JSON_CACHE_MAX_TOTAL_BYTES and _JSON_CACHE:
+            _, (_, size, _) = _JSON_CACHE.popitem(last=False)
+            _JSON_CACHE_TOTAL_BYTES -= size
+
+
+def _upload_json(object_path: str, payload: Any) -> None:
+    content = _json_bytes(payload)
+    _upload_bytes(object_path, content, content_type="application/json")
+    _cache_json(object_path, payload, len(content))
+
+
+def _download_json(object_path: str) -> Any:
+    cached = _get_cached_json(object_path)
+    if cached is not None:
+        return cached
+    content = _download_bytes(object_path)
     if content is None:
         return None
     if content.startswith(b"\x1f\x8b"):
         content = gzip.decompress(content)
     payload = json.loads(content.decode("utf-8"))
+    _cache_json(object_path, payload, len(content))
+    return payload
+
+
+def _run_index_object_path() -> str:
+    return f"{_environment_prefix()}/{FBU_RUN_INDEX_FILENAME}"
+
+
+def _section_relative_path(field: str) -> str:
+    if field not in FBU_RUN_SECTION_FIELDS:
+        raise ValueError(f"FBU 活动区块名称无效：{field}")
+    return f"sections/{field}.json"
+
+
+def _section_count(value: Any) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if not isinstance(value, dict):
+        return 0
+    for key in ("employees", "rows", "events", "results", "items"):
+        rows = value.get(key)
+        if isinstance(rows, list):
+            return len(rows)
+    return 0
+
+
+def _bounded_summary(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    summary = value.get("summary")
+    if not isinstance(summary, dict):
+        return {}
+
+    def compact(item: Any, depth: int = 0) -> Any:
+        if depth >= 2:
+            return None
+        if isinstance(item, (str, int, float, bool)) or item is None:
+            return item
+        if isinstance(item, dict):
+            return {
+                str(key): normalized
+                for key, raw in list(item.items())[:60]
+                if (normalized := compact(raw, depth + 1)) is not None
+            }
+        if isinstance(item, list) and len(item) <= 20:
+            normalized_rows = [compact(raw, depth + 1) for raw in item]
+            return [raw for raw in normalized_rows if raw is not None]
+        return None
+
+    normalized = compact(summary)
+    if not isinstance(normalized, dict):
+        return {}
+    encoded = _json_bytes(normalized)
+    if len(encoded) <= 16_384:
+        return normalized
+    return {
+        key: raw
+        for key, raw in normalized.items()
+        if isinstance(raw, (str, int, float, bool)) or raw is None
+    }
+
+
+def _section_manifest(field: str, value: Any) -> dict[str, Any]:
+    present = bool(value)
+    return {
+        "path": _section_relative_path(field),
+        "present": present,
+        "count": _section_count(value),
+        "bytes": len(_json_bytes(value)) if present else 0,
+        "summary": _bounded_summary(value),
+    }
+
+
+def build_fbu_run_manifest(
+    payload: dict[str, Any],
+    *,
+    previous: dict[str, Any] | None = None,
+    changed_fields: set[str] | None = None,
+) -> dict[str, Any]:
+    previous_run = dict((previous or {}).get("run") or {})
+    previous_sections = dict((previous or {}).get("sections") or {})
+    core_updates = {
+        key: value
+        for key, value in payload.items()
+        if key not in FBU_RUN_SECTION_FIELDS
+    }
+    previous_run.update(core_updates)
+
+    if changed_fields is None:
+        section_fields = {
+            field
+            for field in FBU_RUN_SECTION_FIELDS
+            if field in payload
+        }
+    else:
+        section_fields = set(changed_fields).intersection(FBU_RUN_SECTION_FIELDS)
+    for field in section_fields:
+        previous_sections[field] = _section_manifest(field, payload.get(field))
+
+    return {
+        "schemaVersion": FBU_RUN_SCHEMA_VERSION,
+        "updatedAt": datetime.now().isoformat(),
+        "run": previous_run,
+        "sections": previous_sections,
+    }
+
+
+def _load_fbu_run_manifest(run_id: str) -> dict[str, Any] | None:
+    payload = _download_json(_object_path(run_id, "summary.json"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("run"), dict):
+        return None
+    return payload
+
+
+def _load_fbu_run_index() -> list[dict[str, Any]] | None:
+    payload = _download_json(_run_index_object_path())
+    if payload is None:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("runs"), list):
+        return []
+    return [
+        row
+        for row in payload["runs"]
+        if isinstance(row, dict) and isinstance(row.get("run"), dict)
+    ]
+
+
+def _save_fbu_run_index(rows: list[dict[str, Any]]) -> None:
+    ordered = sorted(
+        rows,
+        key=lambda row: str((row.get("run") or {}).get("created_at") or ""),
+        reverse=True,
+    )
+    _upload_json(
+        _run_index_object_path(),
+        {
+            "schemaVersion": FBU_RUN_SCHEMA_VERSION,
+            "updatedAt": datetime.now().isoformat(),
+            "runs": ordered,
+        },
+    )
+
+
+def _load_legacy_fbu_run_metadata(run_id: str) -> dict[str, Any] | None:
+    payload = _download_json(_object_path(run_id, "metadata.json"))
     return payload if isinstance(payload, dict) else None
 
 
-def list_fbu_run_metadata_from_persistent() -> list[dict[str, Any]]:
+def list_fbu_run_summaries_from_persistent() -> list[dict[str, Any]]:
+    indexed = _load_fbu_run_index()
+    if indexed is not None:
+        return sorted(
+            indexed,
+            key=lambda row: str((row.get("run") or {}).get("created_at") or ""),
+            reverse=True,
+        )
+
     prefix = _environment_prefix()
     rows: list[dict[str, Any]] = []
     for entry in _list_objects(prefix):
         run_id = str(entry.get("name") or "").strip()
         if not re.fullmatch(r"[0-9A-Za-z_-]+", run_id) or run_id.startswith("_"):
             continue
-        payload = load_fbu_run_metadata_from_persistent(run_id)
+        manifest = _load_fbu_run_manifest(run_id)
+        if not manifest:
+            legacy = _load_legacy_fbu_run_metadata(run_id)
+            if legacy:
+                manifest = build_fbu_run_manifest(legacy)
+        if manifest:
+            rows.append(manifest)
+    if rows:
+        _save_fbu_run_index(rows)
+    return sorted(
+        rows,
+        key=lambda row: str((row.get("run") or {}).get("created_at") or ""),
+        reverse=True,
+    )
+
+
+def _upsert_fbu_run_index(manifest: dict[str, Any]) -> None:
+    run_id = str((manifest.get("run") or {}).get("run_id") or "")
+    if not run_id:
+        raise ValueError("FBU 活动摘要缺少活动编号")
+    with _RUN_INDEX_LOCK:
+        rows = list_fbu_run_summaries_from_persistent()
+        by_id = {
+            str((row.get("run") or {}).get("run_id") or ""): row
+            for row in rows
+        }
+        by_id[run_id] = manifest
+        _save_fbu_run_index(list(by_id.values()))
+
+
+def _remove_fbu_run_from_index(run_id: str) -> None:
+    with _RUN_INDEX_LOCK:
+        rows = _load_fbu_run_index()
+        if rows is None:
+            return
+        filtered = [
+            row
+            for row in rows
+            if str((row.get("run") or {}).get("run_id") or "") != run_id
+        ]
+        _save_fbu_run_index(filtered)
+
+
+def save_fbu_run_snapshot_to_persistent(
+    run_id: str,
+    payload: dict[str, Any],
+    *,
+    changed_fields: set[str] | None = None,
+) -> dict[str, Any]:
+    previous = _load_fbu_run_manifest(run_id)
+    legacy: dict[str, Any] | None = None
+    migration_fields: set[str] = set()
+    if previous is None:
+        legacy = _load_legacy_fbu_run_metadata(run_id)
+        if legacy:
+            previous = build_fbu_run_manifest(legacy)
+            migration_fields = {
+                field
+                for field in FBU_RUN_SECTION_FIELDS
+                if field in legacy and bool(legacy.get(field))
+            }
+    manifest = build_fbu_run_manifest(
+        payload,
+        previous=previous,
+        changed_fields=changed_fields,
+    )
+    if changed_fields is None:
+        section_fields = {
+            field
+            for field in FBU_RUN_SECTION_FIELDS
+            if field in payload
+            and (
+                bool(payload.get(field))
+                or bool(((previous or {}).get("sections") or {}).get(field, {}).get("present"))
+            )
+        }
+    else:
+        section_fields = set(changed_fields).intersection(FBU_RUN_SECTION_FIELDS)
+    section_fields.update(migration_fields)
+
+    def upload_section(field: str) -> None:
+        value = payload.get(field) if field in payload else (legacy or {}).get(field)
+        _upload_json(
+            _object_path(run_id, _section_relative_path(field)),
+            value,
+        )
+
+    ordered_section_fields = sorted(section_fields)
+    if len(ordered_section_fields) <= 1:
+        for field in ordered_section_fields:
+            upload_section(field)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(4, len(ordered_section_fields))
+        ) as executor:
+            list(executor.map(upload_section, ordered_section_fields))
+    _upload_json(_object_path(run_id, "summary.json"), manifest)
+    _upsert_fbu_run_index(manifest)
+    return manifest
+
+
+def load_fbu_run_snapshot_from_persistent(
+    run_id: str,
+    *,
+    sections: set[str] | None = None,
+) -> dict[str, Any] | None:
+    manifest = _load_fbu_run_manifest(run_id)
+    if not manifest:
+        legacy = _load_legacy_fbu_run_metadata(run_id)
+        if legacy is None:
+            return None
+        if sections is None:
+            return legacy
+        return {
+            key: value
+            for key, value in legacy.items()
+            if key not in FBU_RUN_SECTION_FIELDS or key in sections
+        }
+
+    payload = dict(manifest["run"])
+    requested = (
+        set(FBU_RUN_SECTION_FIELDS)
+        if sections is None
+        else set(sections).intersection(FBU_RUN_SECTION_FIELDS)
+    )
+
+    def load_section(field: str) -> tuple[str, Any]:
+        section = (manifest.get("sections") or {}).get(field) or {}
+        if not section.get("present"):
+            return field, [] if field == "results" else {}
+        value = _download_json(_object_path(run_id, _section_relative_path(field)))
+        if value is None:
+            return field, [] if field == "results" else {}
+        return field, value
+
+    if len(requested) <= 1:
+        loaded = [load_section(field) for field in sorted(requested)]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(requested))) as executor:
+            loaded = list(executor.map(load_section, sorted(requested)))
+    payload.update(dict(loaded))
+    return payload
+
+
+def save_fbu_run_metadata_to_persistent(run_id: str, payload: dict[str, Any]) -> None:
+    """Compatibility wrapper for callers that still persist a complete run payload."""
+    save_fbu_run_snapshot_to_persistent(run_id, payload)
+
+
+def load_fbu_run_metadata_from_persistent(run_id: str) -> dict[str, Any] | None:
+    """Compatibility wrapper that reconstructs the complete run payload."""
+    return load_fbu_run_snapshot_from_persistent(run_id)
+
+
+def list_fbu_run_metadata_from_persistent() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for manifest in list_fbu_run_summaries_from_persistent():
+        run_id = str((manifest.get("run") or {}).get("run_id") or "")
+        payload = load_fbu_run_snapshot_from_persistent(run_id)
         if payload:
             rows.append(payload)
     return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)
@@ -177,20 +581,23 @@ def delete_fbu_files_from_persistent(run_id: str, relative_paths: Iterable[str])
         headers=_headers({"content-type": "application/json"}),
         content=json.dumps({"prefixes": object_paths}).encode("utf-8"),
     )
+    for object_path in object_paths:
+        _invalidate_fbu_json_cache_prefix(object_path)
 
 
 def delete_fbu_run_from_persistent(run_id: str) -> None:
     prefix = f"{_environment_prefix()}/{_safe_run_id(run_id)}"
     object_paths = [f"{prefix}/{entry['name']}" for entry in _list_objects(prefix) if entry.get("name")]
-    if not object_paths:
-        return
-    url = _storage_url(f"object/{fbu_supabase_bucket()}")
-    _request(
-        "DELETE",
-        url,
-        headers=_headers({"content-type": "application/json"}),
-        content=json.dumps({"prefixes": object_paths}).encode("utf-8"),
-    )
+    if object_paths:
+        url = _storage_url(f"object/{fbu_supabase_bucket()}")
+        _request(
+            "DELETE",
+            url,
+            headers=_headers({"content-type": "application/json"}),
+            content=json.dumps({"prefixes": object_paths}).encode("utf-8"),
+        )
+    _invalidate_fbu_json_cache_prefix(f"{prefix}/")
+    _remove_fbu_run_from_index(run_id)
 
 
 def _normalized_paths(relative_paths: Iterable[str]) -> list[str]:

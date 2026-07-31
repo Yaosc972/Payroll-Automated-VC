@@ -1,0 +1,803 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="FBU美洲绩效奖金核算平台AI大赛展示页：从多源薪酬数据到可审计奖金结果。" />
+    <link rel="icon" href="assets/fbu-showcase/sigma-logo-latest.png" />
+    <title>FBU美洲绩效奖金核算 · AI大赛展示</title>
+    <style>
+      :root {
+        --ink: #101828;
+        --ink-soft: #344054;
+        --muted: #667085;
+        --paper: #ffffff;
+        --canvas: #f2f4f7;
+        --navy: #102a43;
+        --navy-deep: #071a2c;
+        --blue: #155eef;
+        --cyan: #19c3c8;
+        --lime: #b8e630;
+        --coral: #ff7657;
+        --gold: #f6b73c;
+        --line: #d0d5dd;
+        --line-dark: rgba(255, 255, 255, 0.2);
+        --shadow: 0 18px 60px rgba(16, 42, 67, 0.14);
+        --page: min(1240px, calc(100% - 48px));
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--paper);
+        font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      button, a { font: inherit; }
+      img { display: block; max-width: 100%; }
+      a { color: inherit; }
+
+      .topbar {
+        position: fixed;
+        z-index: 50;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 68px;
+        display: flex;
+        align-items: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+        color: #fff;
+        transition: background-color 180ms ease, border-color 180ms ease;
+      }
+      .topbar.scrolled {
+        background: rgba(7, 26, 44, 0.96);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+      .topbar-inner {
+        width: var(--page);
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        text-decoration: none;
+        font-size: 15px;
+        font-weight: 750;
+      }
+      .brand img { width: 36px; height: 36px; object-fit: contain; }
+      .topnav { display: flex; align-items: center; gap: 26px; }
+      .topnav a {
+        color: rgba(255,255,255,.78);
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .topnav a:hover { color: #fff; }
+      .nav-cta {
+        display: inline-flex !important;
+        align-items: center;
+        gap: 7px;
+        min-height: 38px;
+        padding: 0 14px;
+        border: 1px solid rgba(255,255,255,.35);
+        background: rgba(255,255,255,.08);
+      }
+
+      .hero {
+        position: relative;
+        min-height: 88vh;
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        color: #fff;
+        background-color: var(--navy-deep);
+        background-image: url("assets/fbu-showcase/results.png");
+        background-repeat: no-repeat;
+        background-position: 74% 54%;
+        background-size: cover;
+      }
+      .hero::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: rgba(7, 26, 44, 0.74);
+      }
+      .hero::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: 57%;
+        background: rgba(7, 26, 44, 0.86);
+      }
+      .hero-inner {
+        position: relative;
+        z-index: 2;
+        width: var(--page);
+        margin: 0 auto;
+        padding: 118px 0 72px;
+      }
+      .hero-copy { max-width: 720px; }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 0 24px;
+        color: var(--lime);
+        font-family: "DIN Alternate", "Avenir Next", sans-serif;
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+      .eyebrow::before { content: ""; width: 42px; height: 2px; background: var(--lime); }
+      h1, h2, h3, p { margin-top: 0; }
+      .hero h1 {
+        max-width: 720px;
+        margin-bottom: 24px;
+        font-family: "DIN Condensed", "Arial Narrow", "PingFang SC", sans-serif;
+        font-size: 72px;
+        line-height: 1.02;
+        font-weight: 850;
+        letter-spacing: 0;
+      }
+      .hero-lead {
+        max-width: 660px;
+        margin-bottom: 34px;
+        color: rgba(255,255,255,.8);
+        font-size: 19px;
+        line-height: 1.75;
+      }
+      .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 9px;
+        min-height: 48px;
+        padding: 0 20px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 750;
+        cursor: pointer;
+      }
+      .button-primary { color: var(--navy-deep); background: var(--lime); }
+      .button-secondary { color: #fff; border-color: rgba(255,255,255,.34); background: rgba(255,255,255,.08); }
+      .button:hover { transform: translateY(-1px); }
+      .hero-facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        margin-top: 54px;
+        border-top: 1px solid var(--line-dark);
+        width: min(720px, 100%);
+      }
+      .hero-fact {
+        min-width: 150px;
+        padding: 22px 28px 0 0;
+        margin-right: 28px;
+        border-right: 1px solid var(--line-dark);
+      }
+      .hero-fact:last-child { border-right: 0; }
+      .hero-fact strong {
+        display: block;
+        margin-bottom: 4px;
+        color: #fff;
+        font-family: "DIN Alternate", monospace;
+        font-size: 30px;
+        font-variant-numeric: tabular-nums;
+      }
+      .hero-fact span { color: rgba(255,255,255,.62); font-size: 12px; }
+      .hero-stamp {
+        position: absolute;
+        right: 34px;
+        bottom: 34px;
+        z-index: 3;
+        width: 146px;
+        height: 146px;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(255,255,255,.38);
+        border-radius: 50%;
+        color: rgba(255,255,255,.76);
+        text-align: center;
+        font-family: "DIN Alternate", sans-serif;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 1.6;
+        text-transform: uppercase;
+        transform: rotate(8deg);
+      }
+
+      .section { padding: 104px 0; }
+      .section-inner { width: var(--page); margin: 0 auto; }
+      .section-kicker {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+      .section-kicker i { width: 17px; height: 17px; }
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1.65fr) minmax(280px, .75fr);
+        gap: 52px;
+        align-items: end;
+        margin-bottom: 48px;
+      }
+      .section h2 {
+        margin-bottom: 0;
+        font-family: "DIN Condensed", "Arial Narrow", "PingFang SC", sans-serif;
+        font-size: 42px;
+        line-height: 1.08;
+        font-weight: 820;
+        letter-spacing: 0;
+        white-space: nowrap;
+      }
+      .section-intro { margin: 0; color: var(--muted); font-size: 16px; line-height: 1.8; }
+
+      .problem-band { background: var(--canvas); }
+      .pipeline {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 84px minmax(0, .72fr) 84px minmax(0, 1fr);
+        align-items: stretch;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .pipeline-stage { padding: 34px 0; }
+      .pipeline-stage h3 { margin-bottom: 18px; font-size: 18px; }
+      .source-list { display: flex; flex-wrap: wrap; gap: 8px; }
+      .source-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: var(--ink-soft);
+        font-size: 12px;
+      }
+      .source-chip i { width: 15px; height: 15px; color: var(--blue); }
+      .pipeline-arrow { display: grid; place-items: center; color: var(--muted); }
+      .pipeline-arrow i { width: 28px; height: 28px; }
+      .engine-box {
+        min-height: 150px;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        border: 1px solid var(--navy);
+        background: var(--navy);
+        color: #fff;
+        text-align: center;
+      }
+      .engine-box i { width: 34px; height: 34px; color: var(--lime); margin-bottom: 12px; }
+      .engine-box strong { display: block; margin-bottom: 6px; font-size: 16px; }
+      .engine-box small { color: rgba(255,255,255,.64); line-height: 1.5; }
+      .output-list { display: grid; gap: 10px; }
+      .output-row { display: flex; align-items: center; gap: 12px; color: var(--ink-soft); font-size: 13px; }
+      .output-row span { width: 25px; height: 25px; display: grid; place-items: center; background: var(--lime); color: var(--navy); }
+
+      .workflow { background: var(--navy-deep); color: #fff; }
+      .workflow .section-kicker { color: var(--cyan); }
+      .workflow .section-intro { color: rgba(255,255,255,.62); }
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        border-top: 1px solid var(--line-dark);
+        border-bottom: 1px solid var(--line-dark);
+      }
+      .step {
+        position: relative;
+        min-height: 238px;
+        padding: 28px 18px 24px;
+        border-right: 1px solid var(--line-dark);
+      }
+      .step:last-child { border-right: 0; }
+      .step-number { color: rgba(255,255,255,.34); font-family: "DIN Alternate", monospace; font-size: 12px; }
+      .step-icon { width: 42px; height: 42px; margin: 34px 0 24px; color: var(--cyan); }
+      .step:nth-child(3n+2) .step-icon { color: var(--lime); }
+      .step:nth-child(3n) .step-icon { color: var(--coral); }
+      .step h3 { margin-bottom: 10px; font-size: 16px; }
+      .step p { margin-bottom: 0; color: rgba(255,255,255,.58); font-size: 12px; line-height: 1.65; }
+
+      .rules { background: #fff; }
+      .rule-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .rule-card {
+        min-height: 200px;
+        padding: 25px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #fff;
+        transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+      }
+      .rule-card:hover { transform: translateY(-3px); border-color: var(--blue); box-shadow: var(--shadow); }
+      .rule-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; }
+      .rule-card i { width: 26px; height: 26px; color: var(--blue); }
+      .rule-tag { color: var(--muted); font-family: "DIN Alternate", monospace; font-size: 11px; }
+      .rule-card h3 { margin-bottom: 10px; font-size: 17px; }
+      .rule-card p { margin-bottom: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+
+      .formula-band { margin-top: 42px; padding: 38px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+      .formula-label { margin-bottom: 18px; color: var(--muted); font-size: 12px; font-weight: 750; }
+      .formula {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-family: "DIN Alternate", "Avenir Next", sans-serif;
+        font-size: 20px;
+        font-weight: 750;
+      }
+      .formula-token { padding: 11px 14px; border: 1px solid var(--line); background: var(--canvas); }
+      .formula-token.highlight { border-color: var(--blue); color: var(--blue); background: #eef4ff; }
+      .formula-token.result { border-color: var(--navy); color: #fff; background: var(--navy); }
+      .operator { color: var(--coral); }
+
+      .screens { background: var(--canvas); }
+      .screen-stage {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 28px;
+        align-items: start;
+      }
+      .screen-tabs { display: grid; gap: 8px; }
+      .screen-tab {
+        width: 100%;
+        min-height: 72px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        background: #fff;
+        color: var(--ink-soft);
+        text-align: left;
+        cursor: pointer;
+      }
+      .screen-tab strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: 14px; }
+      .screen-tab span { font-size: 11px; color: var(--muted); }
+      .screen-tab.active { border-color: var(--navy); background: var(--navy); color: #fff; }
+      .screen-tab.active strong, .screen-tab.active span { color: #fff; }
+      .screen-display {
+        position: relative;
+        min-width: 0;
+        border: 1px solid #b8c0cc;
+        background: #dfe3e8;
+        box-shadow: var(--shadow);
+      }
+      .screen-bar { height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 12px; border-bottom: 1px solid #b8c0cc; background: #fff; }
+      .screen-dot { width: 8px; height: 8px; border-radius: 50%; background: #c7cdd6; }
+      .screen-display button {
+        display: block;
+        width: 100%;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: zoom-in;
+      }
+      .screen-display img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; }
+      .screen-caption {
+        position: absolute;
+        left: 18px;
+        bottom: 18px;
+        padding: 9px 12px;
+        background: rgba(7,26,44,.9);
+        color: #fff;
+        font-size: 11px;
+        pointer-events: none;
+      }
+
+      .ai-band { background: var(--coral); color: var(--navy-deep); }
+      .ai-grid {
+        display: grid;
+        grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr);
+        gap: 80px;
+        align-items: center;
+      }
+      .ai-mark {
+        width: 260px;
+        height: 260px;
+        display: grid;
+        place-items: center;
+        border: 2px solid var(--navy-deep);
+        border-radius: 50%;
+        font-family: "DIN Condensed", "Arial Narrow", sans-serif;
+        font-size: 92px;
+        font-weight: 850;
+      }
+      .ai-copy h2 { margin-bottom: 22px; font-size: 42px; white-space: nowrap; }
+      .ai-copy > p { max-width: 680px; margin-bottom: 30px; font-size: 17px; line-height: 1.8; }
+      .ai-points { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid rgba(7,26,44,.35); }
+      .ai-point { padding: 20px 22px 0 0; }
+      .ai-point strong { display: block; margin-bottom: 7px; font-size: 14px; }
+      .ai-point span { font-size: 12px; line-height: 1.6; }
+
+      .proof { background: #fff; }
+      .proof-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+      .proof-item { padding: 34px 24px 34px 0; border-right: 1px solid var(--line); }
+      .proof-item:not(:first-child) { padding-left: 24px; }
+      .proof-item:last-child { border-right: 0; }
+      .proof-item strong { display: block; margin-bottom: 8px; color: var(--navy); font-family: "DIN Alternate", monospace; font-size: 36px; font-variant-numeric: tabular-nums; }
+      .proof-item span { color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+      .closing { position: relative; overflow: hidden; padding: 106px 0; background: var(--navy-deep); color: #fff; }
+      .closing-inner { width: var(--page); margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 32px; align-items: end; }
+      .closing h2 { margin-bottom: 18px; font-family: "DIN Condensed", "Arial Narrow", "PingFang SC", sans-serif; font-size: 46px; line-height: 1.08; letter-spacing: 0; white-space: nowrap; }
+      .closing .button { justify-self: start; }
+      .closing p { margin-bottom: 0; color: rgba(255,255,255,.62); font-size: 16px; }
+      footer { padding: 24px 0; background: #04111e; color: rgba(255,255,255,.48); font-size: 11px; }
+      .footer-inner { width: var(--page); margin: 0 auto; display: flex; justify-content: space-between; gap: 20px; }
+
+      dialog {
+        width: min(1480px, calc(100% - 40px));
+        max-width: none;
+        padding: 0;
+        border: 1px solid rgba(255,255,255,.2);
+        border-radius: 4px;
+        background: #0a1725;
+        color: #fff;
+        box-shadow: 0 30px 100px rgba(0,0,0,.48);
+      }
+      dialog::backdrop { background: rgba(3,12,22,.84); }
+      .dialog-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid rgba(255,255,255,.14); }
+      .dialog-head strong { font-size: 13px; }
+      .icon-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.2); border-radius: 4px; background: transparent; color: #fff; cursor: pointer; }
+      .icon-button i { width: 18px; height: 18px; }
+      dialog img { width: 100%; max-height: 82vh; object-fit: contain; background: #eef1f5; }
+
+      .reveal { opacity: 0; transform: translateY(22px); transition: opacity 620ms ease, transform 620ms ease; }
+      .reveal.visible { opacity: 1; transform: translateY(0); }
+
+      @media (max-width: 980px) {
+        :root { --page: min(100% - 32px, 760px); }
+        .topnav a:not(.nav-cta) { display: none; }
+        .hero { min-height: 82vh; background-position: 62% center; }
+        .hero::after { width: 100%; background: rgba(7,26,44,.8); }
+        .hero h1 { font-size: 54px; }
+        .hero-stamp { display: none; }
+        .section { padding: 76px 0; }
+        .section-head, .ai-grid, .closing-inner { grid-template-columns: 1fr; gap: 28px; }
+        .section h2, .ai-copy h2 { font-size: 34px; }
+        .pipeline { grid-template-columns: 1fr; }
+        .pipeline-arrow { min-height: 54px; transform: rotate(90deg); }
+        .steps { grid-template-columns: repeat(3, 1fr); }
+        .step:nth-child(3) { border-right: 0; }
+        .step:nth-child(-n+3) { border-bottom: 1px solid var(--line-dark); }
+        .rule-grid { grid-template-columns: repeat(2, 1fr); }
+        .screen-stage { grid-template-columns: 1fr; }
+        .screen-tabs { grid-template-columns: repeat(3, 1fr); }
+        .proof-grid { grid-template-columns: repeat(2, 1fr); }
+        .proof-item:nth-child(2) { border-right: 0; }
+        .proof-item:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      }
+
+      @media (max-width: 640px) {
+        :root { --page: calc(100% - 24px); }
+        .topbar { height: 58px; }
+        .brand span { font-size: 13px; }
+        .nav-cta { min-height: 34px; padding: 0 10px; }
+        .hero { min-height: 86vh; background-position: 68% center; }
+        .hero-inner { padding: 96px 0 54px; }
+        .hero h1 { font-size: 44px; }
+        .hero-lead { font-size: 16px; }
+        .hero-fact { min-width: calc(50% - 16px); margin-right: 16px; padding-right: 14px; }
+        .section { padding: 62px 0; }
+        .hero h1 { font-size: 34px; white-space: nowrap; }
+        .section h2, .ai-copy h2, .closing h2 { font-size: 22px; white-space: nowrap; }
+        .section-head { margin-bottom: 32px; }
+        .steps { grid-template-columns: repeat(2, 1fr); }
+        .step, .step:nth-child(3) { min-height: 210px; border-right: 1px solid var(--line-dark); border-bottom: 1px solid var(--line-dark); }
+        .step:nth-child(2n) { border-right: 0; }
+        .rule-grid { grid-template-columns: 1fr; }
+        .formula { font-size: 16px; gap: 8px; }
+        .screen-tabs { grid-template-columns: 1fr; }
+        .screen-display img { aspect-ratio: 4 / 3; }
+        .ai-mark { width: 160px; height: 160px; font-size: 60px; }
+        .ai-points, .proof-grid { grid-template-columns: 1fr; }
+        .proof-item, .proof-item:not(:first-child) { padding: 24px 0; border-right: 0; border-bottom: 1px solid var(--line); }
+        .closing .button { width: 100%; }
+        .footer-inner { flex-direction: column; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        *, *::before, *::after { animation: none !important; transition: none !important; }
+        .reveal { opacity: 1; transform: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar" id="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#top">
+          <img src="assets/fbu-showcase/sigma-logo-header.png" alt="西格玛工作台 Logo" />
+          <span>西格玛工作台</span>
+        </a>
+        <nav class="topnav" aria-label="页面导航">
+          <a href="#workflow">核算流程</a>
+          <a href="#rules">规则引擎</a>
+          <a href="#screens">产品实景</a>
+          <a class="nav-cta" href="https://sigma-workbench.vercel.app/" target="_blank" rel="noopener"><i data-lucide="external-link"></i>进入平台</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-inner">
+          <div class="hero-copy reveal">
+            <p class="eyebrow">AI CONTEST · PAYROLL INTELLIGENCE</p>
+            <h1 id="hero-title">FBU美洲绩效奖金核算</h1>
+            <p class="hero-lead">把跨系统、多口径、高风险的月度奖金核算，变成一条可追溯、可核验、可复算的数据流水线。</p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#screens"><i data-lucide="scan-search"></i>查看产品实景</a>
+              <a class="button button-secondary" href="https://sigma-workbench.vercel.app/" target="_blank" rel="noopener"><i data-lucide="play"></i>打开核算平台</a>
+            </div>
+            <div class="hero-facts" aria-label="示例批次关键数据">
+              <div class="hero-fact"><strong data-count="297">297</strong><span>示例批次核算人数</span></div>
+              <div class="hero-fact"><strong data-count="1124">1,124</strong><span>薪资档案记录</span></div>
+              <div class="hero-fact"><strong data-count="6">6</strong><span>端到端核算步骤</span></div>
+              <div class="hero-fact"><strong data-count="199">199</strong><span>自动化测试通过</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="hero-stamp">AI协同构建<br />规则确定性执行<br />2026</div>
+      </section>
+
+      <section class="section problem-band" id="challenge">
+        <div class="section-inner">
+          <div class="section-head reveal">
+            <div>
+              <p class="section-kicker"><i data-lucide="network"></i>FROM FILES TO FLOW</p>
+              <h2>从散落表格，到一条核算链路</h2>
+            </div>
+            <p class="section-intro">考勤、假勤、薪资、调薪、绩效、特殊名单不再靠人工拼接。平台保留每一份来源、每一个规则判断和每一次人工确认。</p>
+          </div>
+
+          <div class="pipeline reveal">
+            <div class="pipeline-stage">
+              <h3>多源业务数据</h3>
+              <div class="source-list">
+                <span class="source-chip"><i data-lucide="calendar-days"></i>考勤日报</span>
+                <span class="source-chip"><i data-lucide="badge-dollar-sign"></i>薪资档案</span>
+                <span class="source-chip"><i data-lucide="git-compare-arrows"></i>调薪流程</span>
+                <span class="source-chip"><i data-lucide="chart-no-axes-combined"></i>绩效结果</span>
+                <span class="source-chip"><i data-lucide="briefcase-medical"></i>假勤补充</span>
+                <span class="source-chip"><i data-lucide="list-checks"></i>特殊名单</span>
+              </div>
+            </div>
+            <div class="pipeline-arrow"><i data-lucide="arrow-right"></i></div>
+            <div class="pipeline-stage">
+              <div class="engine-box">
+                <div>
+                  <i data-lucide="cpu"></i>
+                  <strong>可审计规则引擎</strong>
+                  <small>统一员工主键 · 按日拆分 · 异常阻断 · 规则留痕</small>
+                </div>
+              </div>
+            </div>
+            <div class="pipeline-arrow"><i data-lucide="arrow-right"></i></div>
+            <div class="pipeline-stage">
+              <h3>可交付核算结果</h3>
+              <div class="output-list">
+                <div class="output-row"><span>01</span>员工级奖金明细</div>
+                <div class="output-row"><span>02</span>核算路径与计算过程</div>
+                <div class="output-row"><span>03</span>仓库 / 非仓 / 区长分组汇总</div>
+                <div class="output-row"><span>04</span>标准化 Excel 导出</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section workflow" id="workflow">
+        <div class="section-inner">
+          <div class="section-head reveal">
+            <div>
+              <p class="section-kicker"><i data-lucide="route"></i>END-TO-END WORKFLOW</p>
+              <h2>六步走完一个核算月</h2>
+            </div>
+            <p class="section-intro">每一步都有明确的输入、状态和处理动作。资料不完整、规则未确认或历史薪资存在疑点时，系统先阻断，再给出处理入口。</p>
+          </div>
+
+          <div class="steps reveal">
+            <article class="step"><span class="step-number">STEP 01</span><i class="step-icon" data-lucide="users-round"></i><h3>人员核对</h3><p>锁定活动花名册和人员口径，识别岗位与人员状态。</p></article>
+            <article class="step"><span class="step-number">STEP 02</span><i class="step-icon" data-lucide="clock-3"></i><h3>考勤工时</h3><p>解析日级工时、跨月考勤、白夜班和补充假勤。</p></article>
+            <article class="step"><span class="step-number">STEP 03</span><i class="step-icon" data-lucide="wallet-cards"></i><h3>薪资数据</h3><p>核验相邻月份时薪、绩效比例和调薪生效日期。</p></article>
+            <article class="step"><span class="step-number">STEP 04</span><i class="step-icon" data-lucide="gauge"></i><h3>绩效数据</h3><p>匹配得分、等级与系数，覆盖离职人员补录场景。</p></article>
+            <article class="step"><span class="step-number">STEP 05</span><i class="step-icon" data-lucide="shield-check"></i><h3>核算检查</h3><p>汇总异常、特殊基数和核算路径，核算前自主复核。</p></article>
+            <article class="step"><span class="step-number">STEP 06</span><i class="step-icon" data-lucide="file-down"></i><h3>确认导出</h3><p>输出最终奖金、分组切面和员工级计算过程。</p></article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section rules" id="rules">
+        <div class="section-inner">
+          <div class="section-head reveal">
+            <div>
+              <p class="section-kicker"><i data-lucide="braces"></i>DETERMINISTIC RULE ENGINE</p>
+              <h2>复杂规则，被翻译成确定性计算</h2>
+            </div>
+            <p class="section-intro">AI协助理解业务、梳理边界和生成测试；真正影响薪资的每一步，由可解释、可复算的规则引擎执行。</p>
+          </div>
+
+          <div class="rule-grid reveal">
+            <article class="rule-card"><div class="rule-card-top"><i data-lucide="moon-star"></i><span class="rule-tag">SHIFT</span></div><h3>白夜班自动拆分</h3><p>按申请时间识别班次，跨天记录按起止时间拆分；夜班时薪在档案时薪基础上自动 +1。</p></article>
+            <article class="rule-card"><div class="rule-card-top"><i data-lucide="timer-reset"></i><span class="rule-tag">96 HOURS</span></div><h3>96 工时制路径</h3><p>跨月取数、固定周期和特殊基数独立计算，不受普通班次重分类影响。</p></article>
+            <article class="rule-card"><div class="rule-card-top"><i data-lucide="calendar-sync"></i><span class="rule-tag">EFFECTIVE DATE</span></div><h3>调薪生效日拆分</h3><p>对比相邻月薪资快照，结合调薪流程生效日期，按日切分新旧时薪和绩效比例。</p></article>
+            <article class="rule-card"><div class="rule-card-top"><i data-lucide="heart-pulse"></i><span class="rule-tag">LEAVE</span></div><h3>假勤与节日补贴</h3><p>病假、年假、离职结算和节日补贴进入同一核验链路，保留建议与人工确认记录。</p></article>
+            <article class="rule-card"><div class="rule-card-top"><i data-lucide="landmark"></i><span class="rule-tag">FIXED BASE</span></div><h3>特殊固定基数</h3><p>区长、96 工时制及例外人员走独立基数路径，并在核算检查中单独汇总。</p></article>
+            <article class="rule-card"><div class="rule-card-top"><i data-lucide="triangle-alert"></i><span class="rule-tag">GUARDRAIL</span></div><h3>异常先阻断</h3><p>月份不符、薪资历史无法解释、资料缺失时不静默计算；先提示原因，再由用户处理。</p></article>
+          </div>
+
+          <div class="formula-band reveal">
+            <div class="formula-label">核心计算链路</div>
+            <div class="formula" aria-label="绩效奖金计算公式">
+              <span class="formula-token">有效工时</span><span class="operator">×</span>
+              <span class="formula-token">适用时薪</span><span class="operator">→</span>
+              <span class="formula-token highlight">绩效基数</span><span class="operator">×</span>
+              <span class="formula-token">绩效比例</span><span class="operator">×</span>
+              <span class="formula-token">绩效系数</span><span class="operator">=</span>
+              <span class="formula-token result">最终奖金</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section screens" id="screens">
+        <div class="section-inner">
+          <div class="section-head reveal">
+            <div>
+              <p class="section-kicker"><i data-lucide="panels-top-left"></i>REAL PRODUCT SCREENS</p>
+              <h2>不是概念图，是已经跑通的产品</h2>
+            </div>
+            <p class="section-intro">以下截图来自真实完成批次，人员信息已脱敏。选择不同视图，查看数据上传、核算检查和最终结果。</p>
+          </div>
+
+          <div class="screen-stage reveal">
+            <div class="screen-tabs" role="tablist" aria-label="产品截图">
+              <button class="screen-tab active" type="button" data-screen="salary" role="tab" aria-selected="true"><strong>薪资历史核验</strong><span>三份依据 · 生效日比对</span></button>
+              <button class="screen-tab" type="button" data-screen="check" role="tab" aria-selected="false"><strong>核算前检查</strong><span>路径汇总 · 特殊基数</span></button>
+              <button class="screen-tab" type="button" data-screen="results" role="tab" aria-selected="false"><strong>最终核算结果</strong><span>分组汇总 · 计算过程</span></button>
+            </div>
+            <div class="screen-display">
+              <div class="screen-bar"><span class="screen-dot"></span><span class="screen-dot"></span><span class="screen-dot"></span></div>
+              <button type="button" id="openScreen" aria-label="放大查看产品截图">
+                <img id="screenImage" src="assets/fbu-showcase/salary.png" alt="FBU薪资历史核验界面" />
+              </button>
+              <span class="screen-caption" id="screenCaption">薪资历史核验 · 真实界面脱敏展示</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section ai-band" id="ai-value">
+        <div class="section-inner ai-grid reveal">
+          <div class="ai-mark" aria-hidden="true">AI</div>
+          <div class="ai-copy">
+            <p class="section-kicker"><i data-lucide="sparkles"></i>HUMAN × AI × RULES</p>
+            <h2>AI协同构建，规则确定性执行</h2>
+            <p>这是一个由业务专家与 AI 共同完成的核算系统：AI负责加速需求拆解、规则建模、异常归因和测试覆盖，业务专家负责确认口径；核心薪资结果始终由确定性规则计算，避免黑盒决策。</p>
+            <div class="ai-points">
+              <div class="ai-point"><strong>更快理解复杂口径</strong><span>把会议、规则文档和线下表格转成可验证的场景清单。</span></div>
+              <div class="ai-point"><strong>更稳覆盖边界场景</strong><span>持续生成回归测试，用真实月份数据端到端回放。</span></div>
+              <div class="ai-point"><strong>更清楚解释差异</strong><span>从员工、工时、薪资、系数逐层定位平台与线下差异。</span></div>
+              <div class="ai-point"><strong>更安全交付结果</strong><span>异常阻断、人工确认、结果失效和审计链路共同兜底。</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section proof" id="proof">
+        <div class="section-inner">
+          <div class="section-head reveal">
+            <div>
+              <p class="section-kicker"><i data-lucide="badge-check"></i>VERIFIED DELIVERY</p>
+              <h2>从真实数据里验证，不停在 Demo</h2>
+            </div>
+            <p class="section-intro">平台已经完成 4 月、5 月真实数据回放，并围绕复杂工时、薪资历史、特殊基数、补充假勤和工作流持续建立自动化测试。</p>
+          </div>
+          <div class="proof-grid reveal">
+            <div class="proof-item"><strong>2</strong><span>真实核算月份端到端验证</span></div>
+            <div class="proof-item"><strong>297</strong><span>示例完成批次员工结果</span></div>
+            <div class="proof-item"><strong>199</strong><span>FBU 自动化测试通过</span></div>
+            <div class="proof-item"><strong>100%</strong><span>员工级核算路径可追溯</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing">
+        <div class="closing-inner reveal">
+          <div>
+            <p class="eyebrow">SIGMA WORKBENCH · FBU AMERICAS</p>
+            <h2>每一笔奖金，都经得起复算。</h2>
+            <p>FBU美洲绩效奖金核算 · AI驱动的薪酬数字化实践</p>
+          </div>
+          <a class="button button-primary" href="https://sigma-workbench.vercel.app/" target="_blank" rel="noopener"><i data-lucide="arrow-up-right"></i>进入核算平台</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-inner"><span>© 2026 西格玛工作台 · FBU美洲绩效奖金核算</span><span>AI大赛展示版本 · 截图数据已脱敏</span></div>
+    </footer>
+
+    <dialog id="screenDialog" aria-labelledby="dialogTitle">
+      <div class="dialog-head">
+        <strong id="dialogTitle">产品截图</strong>
+        <button class="icon-button" type="button" id="closeDialog" aria-label="关闭截图预览"><i data-lucide="x"></i></button>
+      </div>
+      <img id="dialogImage" src="assets/fbu-showcase/salary.png" alt="FBU核算平台产品截图放大预览" />
+    </dialog>
+
+    <script src="assets/fbu-showcase/lucide.min.js"></script>
+    <script>
+      const screens = {
+        salary: { src: 'assets/fbu-showcase/salary.png', alt: 'FBU薪资历史核验界面', caption: '薪资历史核验 · 真实界面脱敏展示' },
+        check: { src: 'assets/fbu-showcase/check.png', alt: 'FBU核算前检查界面', caption: '核算前检查 · 规则路径与特殊基数汇总' },
+        results: { src: 'assets/fbu-showcase/results.png', alt: 'FBU最终核算结果界面', caption: '最终结果 · 分组奖金与员工级计算过程' },
+      };
+
+      const topbar = document.getElementById('topbar');
+      const screenImage = document.getElementById('screenImage');
+      const screenCaption = document.getElementById('screenCaption');
+      const screenDialog = document.getElementById('screenDialog');
+      const dialogImage = document.getElementById('dialogImage');
+      const dialogTitle = document.getElementById('dialogTitle');
+
+      window.addEventListener('scroll', () => topbar.classList.toggle('scrolled', window.scrollY > 36), { passive: true });
+
+      document.querySelectorAll('.screen-tab').forEach(button => {
+        button.addEventListener('click', () => {
+          const screen = screens[button.dataset.screen];
+          document.querySelectorAll('.screen-tab').forEach(tab => {
+            const selected = tab === button;
+            tab.classList.toggle('active', selected);
+            tab.setAttribute('aria-selected', String(selected));
+          });
+          screenImage.src = screen.src;
+          screenImage.alt = screen.alt;
+          screenCaption.textContent = screen.caption;
+        });
+      });
+
+      document.getElementById('openScreen').addEventListener('click', () => {
+        dialogImage.src = screenImage.src;
+        dialogImage.alt = screenImage.alt;
+        dialogTitle.textContent = screenCaption.textContent;
+        screenDialog.showModal();
+      });
+      document.getElementById('closeDialog').addEventListener('click', () => screenDialog.close());
+      screenDialog.addEventListener('click', event => {
+        if (event.target === screenDialog) screenDialog.close();
+      });
+
+      const observer = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 });
+      document.querySelectorAll('.reveal').forEach(element => observer.observe(element));
+
+      if (window.lucide) lucide.createIcons();
+    </script>
+  </body>
+</html>

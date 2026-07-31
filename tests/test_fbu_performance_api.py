@@ -1,4 +1,8 @@
+import asyncio
 from io import BytesIO
+import json
+import time
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -65,6 +69,423 @@ def _attendance_bytes_for_rows(rows: list[tuple[str, float]]) -> bytes:
         row[117] = base_hours
         sheet.append(row)
     return _workbook_bytes(workbook)
+
+
+def test_fbu_run_list_uses_lightweight_summary_manager(monkeypatch):
+    class SummaryOnlyManager:
+        def list_run_summaries(self):
+            return [{
+                "run_id": "run_123",
+                "created_at": "2026-07-30T10:00:00",
+                "calc_month": "2026-06",
+                "status": "completed",
+                "current_step": 5,
+                "total_employees": 303,
+                "total_bonus": 109290.74,
+                "roster_file": "roster.xlsx",
+                "roster_source": "base",
+                "sections": {"results": {"present": True, "count": 303}},
+            }]
+
+    monkeypatch.setattr(app_module, "fbu_run_manager", SummaryOnlyManager())
+    client = TestClient(app_module.app)
+
+    response = client.get("/api/fbu-performance/runs")
+
+    assert response.status_code == 200
+    assert response.json()["runs"] == [{
+        "run_id": "run_123",
+        "created_at": "2026-07-30T10:00:00",
+        "calc_month": "2026-06",
+        "status": "completed",
+        "current_step": 5,
+        "total_employees": 303,
+        "total_bonus": 109290.74,
+        "roster_file": "roster.xlsx",
+        "roster_source": "base",
+        "sections": {"results": {"present": True, "count": 303}},
+    }]
+    assert response.headers["server-timing"].startswith("fbu;dur=")
+    assert response.headers["x-sigma-request-id"]
+
+
+def test_fbu_large_json_responses_are_gzipped(monkeypatch):
+    class LargeSummaryManager:
+        def list_run_summaries(self):
+            return [{
+                "run_id": "run_123",
+                "created_at": "2026-07-30T10:00:00",
+                "calc_month": "2026-06",
+                "status": "completed",
+                "padding": "x" * 5_000,
+            }]
+
+    monkeypatch.setattr(app_module, "fbu_run_manager", LargeSummaryManager())
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        "/api/fbu-performance/runs",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert "Accept-Encoding" in response.headers["vary"]
+    assert response.json()["runs"][0]["run_id"] == "run_123"
+
+
+def test_versioned_fbu_static_assets_are_immutable():
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        "/fbu-performance.js?v=fbu-performance-v3-20260731",
+        headers={"Accept-Encoding": "gzip"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+
+
+def test_fbu_result_pages_read_precomputed_view_instead_of_full_results(monkeypatch):
+    result_row = {
+        "employee_id": "zt1",
+        "source_employee_id": "zt1",
+        "name": "Test User",
+        "department": "FBU-新泽西",
+        "position": "Picker",
+        "job_type": "warehouse",
+        "calculation_path": "标准绩效基数路径",
+        "performance_base": 1_000,
+        "performance_ratio": 0.1,
+        "performance_coefficient": 1,
+        "performance_bonus": 100,
+    }
+
+    class ResultViewManager:
+        def __init__(self):
+            self.requested_sections = []
+
+        def get_run(self, run_id, sections=None):
+            self.requested_sections.append(sections)
+            return SimpleNamespace(
+                run_id=run_id,
+                status="completed",
+                results=[result_row],
+                results_view_data={"rows": [result_row]},
+            )
+
+    manager = ResultViewManager()
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        "/api/fbu-performance/runs/run_123/results",
+        params={"page": 1, "page_size": 50, "group": "all"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["employee_id"] == "zt1"
+    assert manager.requested_sections == [{"results_view_data"}]
+
+
+def test_fbu_result_pages_backfill_compact_view_for_legacy_runs(monkeypatch):
+    result_row = {
+        "employee_id": "zt1",
+        "name": "Legacy User",
+        "department": "FBU-新泽西",
+        "position": "Picker",
+        "job_type": "warehouse",
+        "performance_base": 1_000,
+        "performance_ratio": 0.1,
+        "performance_coefficient": 1,
+        "performance_bonus": 100,
+    }
+
+    class LegacyResultManager:
+        def __init__(self):
+            self.requested_sections = []
+            self.backfilled = []
+
+        def get_run(self, run_id, sections=None):
+            self.requested_sections.append(sections)
+            if sections == {"results_view_data"}:
+                return SimpleNamespace(
+                    run_id=run_id,
+                    status="completed",
+                    results=[],
+                    results_view_data={},
+                )
+            return SimpleNamespace(
+                run_id=run_id,
+                status="completed",
+                results=[result_row],
+                results_view_data={},
+            )
+
+        def backfill_results_view_data(self, run_id, results_view_data):
+            self.backfilled.append((run_id, results_view_data))
+
+    manager = LegacyResultManager()
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        "/api/fbu-performance/runs/run_legacy/results",
+        params={"page": 1, "page_size": 50, "group": "all"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["employee_id"] == "zt1"
+    assert manager.requested_sections == [
+        {"results_view_data"},
+        {"results"},
+    ]
+    assert manager.backfilled[0][0] == "run_legacy"
+    assert manager.backfilled[0][1]["rows"][0]["employee_id"] == "zt1"
+
+
+def test_fbu_attendance_step_reads_compact_view_without_daily_rows(monkeypatch):
+    attendance_view = {
+        "employees": [{
+            "employee_id": "zt1",
+            "name": "Test User",
+            "total_base_hours": 80,
+        }],
+        "summary": {"total_employees": 1},
+    }
+
+    class AttendanceViewManager:
+        def __init__(self):
+            self.requested_sections = []
+
+        def get_run(self, run_id, sections=None):
+            self.requested_sections.append(sections)
+            return SimpleNamespace(
+                run_id=run_id,
+                created_at="2026-07-31T10:00:00",
+                calc_month="2026-06",
+                status="completed",
+                attendance_view_data=attendance_view,
+                hourly_rate_policy_data={"rows": []},
+            )
+
+    manager = AttendanceViewManager()
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        "/api/fbu-performance/runs/run_123",
+        params={"include": "core,attendance_view_data"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["attendance_data"] == attendance_view
+    assert "attendance_view_data" not in response.json()
+    assert response.json()["loaded_sections"] == ["attendance_view_data"]
+    assert manager.requested_sections == [{"attendance_view_data"}]
+
+
+def test_fbu_attendance_step_backfills_compact_view_for_legacy_runs(monkeypatch):
+    attendance = {
+        "employees": [{
+            "employee_id": "zt1",
+            "total_base_hours": 80,
+            "attendance_daily_rows": [
+                {"date": "2026-06-01", "base_hours": 8},
+            ],
+        }],
+        "summary": {"total_employees": 1},
+    }
+
+    class LegacyAttendanceManager:
+        def __init__(self):
+            self.requested_sections = []
+            self.backfilled = []
+
+        def get_run(self, run_id, sections=None):
+            self.requested_sections.append(sections)
+            if sections == {"attendance_view_data"}:
+                return SimpleNamespace(
+                    run_id=run_id,
+                    created_at="2026-07-31T10:00:00",
+                    calc_month="2026-06",
+                    status="completed",
+                    attendance_view_data={},
+                )
+            return SimpleNamespace(
+                run_id=run_id,
+                created_at="2026-07-31T10:00:00",
+                calc_month="2026-06",
+                status="completed",
+                attendance_data=attendance,
+            )
+
+        def backfill_attendance_view_data(self, run_id, attendance_view_data):
+            self.backfilled.append((run_id, attendance_view_data))
+
+    manager = LegacyAttendanceManager()
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        "/api/fbu-performance/runs/run_legacy",
+        params={"include": "core,attendance_view_data"},
+    )
+
+    assert response.status_code == 200
+    employee = response.json()["attendance_data"]["employees"][0]
+    assert "attendance_daily_rows" not in employee
+    assert manager.requested_sections == [
+        {"attendance_view_data"},
+        {"attendance_data"},
+    ]
+    assert manager.backfilled[0][0] == "run_legacy"
+    assert "attendance_daily_rows" not in manager.backfilled[0][1]["employees"][0]
+
+
+def test_fbu_upload_parsing_does_not_block_request_event_loop():
+    async def blocking_parser():
+        time.sleep(0.08)
+        return {"success": True}
+
+    async def scenario():
+        task = asyncio.create_task(
+            app_module._run_fbu_upload_operation(blocking_parser())
+        )
+        started = time.perf_counter()
+        await asyncio.sleep(0.01)
+        event_loop_delay = time.perf_counter() - started
+        result = await task
+        return event_loop_delay, result
+
+    loop = asyncio.new_event_loop()
+    try:
+        event_loop_delay, result = loop.run_until_complete(scenario())
+    finally:
+        loop.close()
+
+    assert event_loop_delay < 0.04
+    assert result == {"success": True}
+
+
+def test_fbu_run_detail_can_include_only_requested_sections(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    run = manager.create_run("2026-06")
+    manager.save_step_data(
+        run.run_id,
+        1,
+        {"summary": {"total_employees": 1}, "employees": [{"employee_id": "zt1"}]},
+    )
+    manager.save_step_data(
+        run.run_id,
+        2,
+        {"summary": {"total_employees": 1}, "employees": [{"employee_id": "zt1", "hourly_rate": 20}]},
+    )
+
+    client = TestClient(app_module.app)
+    response = client.get(
+        f"/api/fbu-performance/runs/{run.run_id}",
+        params={"include": "attendance_data"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == run.run_id
+    assert payload["attendance_data"]["employees"][0]["employee_id"] == "zt1"
+    assert "salary_data" not in payload
+    assert "results" not in payload
+    assert payload["loaded_sections"] == ["attendance_data"]
+
+
+def test_fbu_results_endpoint_supports_server_pagination_search_and_group(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    run = manager.create_run("2026-06")
+    manager.update_run(
+        run.run_id,
+        status="completed",
+        current_step=5,
+        total_employees=3,
+        total_bonus=600,
+        results=[
+            {
+                "employee_id": "zt1",
+                "source_employee_id": "zt1",
+                "name": "Ana",
+                "department": "Warehouse",
+                "area": "New Jersey",
+                "job_type": "warehouse",
+                "calculation_path": "标准绩效基数路径",
+                "performance_base": 1000,
+                "performance_bonus": 100,
+            },
+            {
+                "employee_id": "zt2",
+                "source_employee_id": "zt2",
+                "name": "Alex",
+                "department": "Warehouse",
+                "area": "New Jersey",
+                "job_type": "warehouse",
+                "calculation_path": "96工时制自动基数路径",
+                "performance_base": 2000,
+                "performance_bonus": 200,
+            },
+            {
+                "employee_id": "zt3",
+                "source_employee_id": "zt3",
+                "name": "Beth",
+                "department": "HR",
+                "area": "New Jersey",
+                "job_type": "functional",
+                "calculation_path": "标准绩效基数路径",
+                "performance_base": 3000,
+                "performance_bonus": 300,
+            },
+        ],
+    )
+    client = TestClient(app_module.app)
+
+    response = client.get(
+        f"/api/fbu-performance/runs/{run.run_id}/results",
+        params={"page": 1, "page_size": 1, "q": "a", "group": "warehouse"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pagination"] == {
+        "page": 1,
+        "page_size": 1,
+        "total": 2,
+        "pages": 2,
+    }
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["employee_id"] == "zt1"
+    assert payload["summary"]["total_employees"] == 3
+    assert payload["summary"]["groups"]["warehouse"] == {
+        "count": 2,
+        "total_bonus": 300.0,
+    }
+    assert payload["summary"]["total_performance_base"] == 6000.0
+    assert payload["summary"]["special_base_count"] == 1
+    assert payload["summary"]["calculation_paths"] == [
+        {
+            "path": "标准绩效基数路径",
+            "count": 2,
+            "total_base": 4000.0,
+            "total_bonus": 400.0,
+        },
+        {
+            "path": "96工时制自动基数路径",
+            "count": 1,
+            "total_base": 2000.0,
+            "total_bonus": 200.0,
+        },
+    ]
 
 
 def _adjustment_bytes() -> bytes:
@@ -191,7 +612,8 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     listed = client.get("/api/fbu-performance/runs")
     assert listed.status_code == 200
     listed_run = next(row for row in listed.json()["runs"] if row["run_id"] == run_id)
-    assert "summary" in listed_run["diagnostics"]
+    assert "diagnostics" not in listed_run
+    assert "sections" in listed_run
 
     run_detail = client.get(f"/api/fbu-performance/runs/{run_id}")
     assert run_detail.status_code == 200
@@ -500,6 +922,135 @@ def test_fbu_attendance_direct_upload_plan_accepts_file_above_vercel_limit(monke
     assert payload["uploads"][0]["size"] == 5_799_733
     assert payload["uploads"][0]["kind"] == "attendance"
     assert payload["uploads"][0]["signedUrl"].startswith("https://example.supabase.co/")
+
+
+def test_fbu_generic_direct_upload_job_processes_salary_material_and_persists_status(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_salary_preview",
+        lambda self, path: {
+            "employees": [{"employee_id": "E001", "hourly_rate": 18, "ratio": 0.05}],
+            "summary": {"total_employees": 1},
+        },
+    )
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-06"}).json()["run_id"]
+    content = b"salary-file"
+    plan_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/uploads/plan",
+        json={
+            "files": [{
+                "kind": "previousSalary",
+                "fileName": "may-salary.xlsx",
+                "fileSize": len(content),
+                "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }],
+        },
+    )
+
+    assert plan_response.status_code == 200, plan_response.text
+    plan = plan_response.json()
+    assert plan["job"]["status"] == "uploading"
+    assert plan["uploads"][0]["kind"] == "previousSalary"
+    upload_path = tmp_path / run_id / plan["uploads"][0]["relativePath"]
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(content)
+
+    start_response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}/start",
+    )
+    assert start_response.status_code == 202, start_response.text
+
+    status_response = client.get(
+        f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}",
+    )
+    assert status_response.status_code == 200
+    status = status_response.json()["job"]
+    assert status["status"] == "completed"
+    assert status["stage"] == "completed"
+    assert status["progress"] == 100
+    assert status["result"]["step"] == "salary"
+
+    run = app_module.fbu_run_manager.get_run(
+        run_id,
+        sections={"previous_salary_data"},
+    )
+    assert run.previous_salary_file == "may-salary.xlsx"
+    assert run.previous_salary_data["employees"][0]["employee_id"] == "E001"
+
+
+def test_fbu_upload_job_status_marks_stalled_processing_as_recoverable(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-06"}).json()["run_id"]
+    plan = client.post(
+        f"/api/fbu-performance/runs/{run_id}/uploads/plan",
+        json={
+            "files": [{
+                "kind": "performance",
+                "fileName": "performance.xlsx",
+                "fileSize": 10,
+            }],
+        },
+    ).json()
+    job_path = tmp_path / run_id / "jobs" / f"{plan['job']['jobId']}.json"
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job.update({
+        "status": "processing",
+        "stage": "parsing",
+        "updatedAt": "2026-01-01T00:00:00",
+    })
+    job_path.write_text(json.dumps(job), encoding="utf-8")
+
+    response = client.get(
+        f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["recoverable"] is True
+    assert response.json()["job"]["canRetry"] is True
+
+
+def test_fbu_calculation_runs_as_persisted_background_job(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-06"}).json()["run_id"]
+    monkeypatch.setattr(
+        app_module,
+        "calculate_fbu_performance",
+        lambda target_run_id: {
+            "success": True,
+            "run_id": target_run_id,
+            "total_employees": 303,
+            "total_bonus": 109290.74,
+        },
+    )
+
+    start = client.post(
+        f"/api/fbu-performance/runs/{run_id}/calculation-jobs",
+    )
+
+    assert start.status_code == 202, start.text
+    job_id = start.json()["job"]["jobId"]
+    status = client.get(
+        f"/api/fbu-performance/runs/{run_id}/calculation-jobs/{job_id}",
+    )
+    assert status.status_code == 200
+    job = status.json()["job"]
+    assert job["status"] == "completed"
+    assert job["result"]["total_employees"] == 303
+    assert job["result"]["total_bonus"] == 109290.74
 
 
 def test_fbu_attendance_direct_upload_completion_materializes_and_parses_file(monkeypatch, tmp_path):
@@ -1014,9 +1565,9 @@ def test_fbu_salary_verification_batches_multiple_rows_and_is_idempotent(monkeyp
     save_calls: list[str] = []
     original_save = app_module.fbu_run_manager._save_runs
 
-    def capture_save(changed_run_id=None):
+    def capture_save(changed_run_id=None, changed_fields=None):
         save_calls.append(changed_run_id)
-        return original_save(changed_run_id)
+        return original_save(changed_run_id, changed_fields)
 
     monkeypatch.setattr(app_module.fbu_run_manager, "_save_runs", capture_save)
     response = client.post(
@@ -1042,6 +1593,76 @@ def test_fbu_salary_verification_batches_multiple_rows_and_is_idempotent(monkeyp
     )
     assert duplicate.status_code == 200
     assert duplicate.json()["employee"]["resolution"] == "manual_use_previous"
+
+
+def test_fbu_salary_history_materials_upload_individually_and_reconcile_when_complete(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    def parse_salary_preview(_self, path):
+        if str(path).endswith("previous_salary.xlsx"):
+            return {
+                "employees": [{"employee_id": "E001", "hourly_rate": 18, "ratio": 0.05}],
+                "summary": {"source": "previous"},
+            }
+        return {
+            "employees": [{"employee_id": "E001", "hourly_rate": 21, "ratio": 0.09}],
+            "summary": {"source": "current"},
+        }
+
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_salary_preview",
+        parse_salary_preview,
+    )
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_adjustments_preview",
+        lambda self, path: {"employees": [], "events": [], "summary": {"total_events": 0}},
+    )
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-05"}).json()["run_id"]
+
+    previous_response = client.post(
+        "/api/fbu-performance/import-salary-history-material",
+        data={"run_id": run_id, "material_type": "previousSalary"},
+        files={"file": ("april.xlsx", b"previous", "application/octet-stream")},
+    )
+    assert previous_response.status_code == 200
+    previous_payload = previous_response.json()
+    assert previous_payload["ready_for_reconciliation"] is False
+    assert previous_payload["missing_materials"] == ["currentSalary", "salaryAdjustments"]
+    assert previous_payload["preview"] == {}
+
+    current_response = client.post(
+        "/api/fbu-performance/import-salary-history-material",
+        data={"run_id": run_id, "material_type": "currentSalary"},
+        files={"file": ("may.xlsx", b"current", "application/octet-stream")},
+    )
+    assert current_response.status_code == 200
+    current_payload = current_response.json()
+    assert current_payload["ready_for_reconciliation"] is False
+    assert current_payload["missing_materials"] == ["salaryAdjustments"]
+
+    adjustments_response = client.post(
+        "/api/fbu-performance/import-salary-history-material",
+        data={"run_id": run_id, "material_type": "salaryAdjustments"},
+        files={"file": ("adjustments.xlsx", b"adjustments", "application/octet-stream")},
+    )
+    assert adjustments_response.status_code == 200
+    adjustments_payload = adjustments_response.json()
+    assert adjustments_payload["ready_for_reconciliation"] is True
+    assert adjustments_payload["missing_materials"] == []
+    assert adjustments_payload["verification"]["summary"]["blocking_count"] == 1
+
+    run = app_module.fbu_run_manager.get_run(run_id)
+    assert run.previous_salary_file == "april.xlsx"
+    assert run.current_salary_file == "may.xlsx"
+    assert run.salary_file == "may.xlsx"
+    assert run.adjustment_file == "adjustments.xlsx"
+    assert run.salary_data["employees"][0]["verification_status"] == "blocking"
 
 
 def test_fbu_salary_verification_rejects_choice_for_missing_snapshot(monkeypatch, tmp_path):
@@ -1083,6 +1704,100 @@ def test_fbu_salary_verification_rejects_choice_for_missing_snapshot(monkeypatch
     )
     assert valid.status_code == 200
     assert valid.json()["preview"]["employees"][0]["hourly_rate"] == 23
+
+
+def test_fbu_salary_verification_can_ignore_missing_current_as_zero_and_reimport_wins(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    run = app_module.fbu_run_manager.create_run(calc_month="2026-06")
+    blocked = {
+        "employee_id": "E001",
+        "name": "测试员工",
+        "hourly_rate": 23,
+        "ratio": 0.13,
+        "previous_hourly_rate": 23,
+        "previous_ratio": 0.13,
+        "current_hourly_rate": None,
+        "current_ratio": None,
+        "verification_status": "blocking",
+        "resolution": "missing_current_snapshot",
+        "effective_segments": [],
+    }
+    verification = {
+        "employees": [blocked],
+        "issues": [{"employee_id": "E001", "reason": "当月薪资档案缺少该员工"}],
+        "summary": {"total_employees": 1, "resolved_count": 0, "blocking_count": 1},
+    }
+    app_module.fbu_run_manager.update_run(
+        run.run_id,
+        previous_salary_file="may.xlsx",
+        current_salary_file="june.xlsx",
+        salary_file="june.xlsx",
+        adjustment_file="adjustments.xlsx",
+        previous_salary_data={
+            "employees": [{"employee_id": "E001", "hourly_rate": 23, "ratio": 0.13}],
+            "summary": {"total_employees": 1},
+        },
+        current_salary_data={"employees": [], "summary": {"total_employees": 0}},
+        adjustment_data={
+            "events": [{
+                "employee_id": "E001",
+                "approval_status": "已完成",
+                "effective_date": "2026-06-01",
+                "hourly_rate": 25,
+                "performance_ratio": 0.15,
+            }],
+            "summary": {"total_events": 1},
+        },
+        salary_verification_data=verification,
+        salary_data={"employees": [blocked], "summary": verification["summary"]},
+    )
+
+    client = TestClient(app_module.app)
+    ignored = client.post(
+        f"/api/fbu-performance/runs/{run.run_id}/salary-verification/confirm",
+        json={"employee_id": "E001", "choice": "ignore_current"},
+    )
+
+    assert ignored.status_code == 200
+    ignored_row = ignored.json()["preview"]["employees"][0]
+    assert ignored_row["hourly_rate"] == 0
+    assert ignored_row["ratio"] == 0
+    assert ignored_row["current_hourly_rate"] is None
+    assert ignored_row["current_ratio"] is None
+    assert ignored_row["verification_status"] == "resolved"
+    assert ignored_row["resolution"] == "manual_ignore_current_missing"
+    assert ignored.json()["verification"]["summary"]["blocking_count"] == 0
+
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_salary_preview",
+        lambda self, path: {
+            "employees": [{
+                "employee_id": "E001",
+                "name": "测试员工",
+                "hourly_rate": 25,
+                "ratio": 0.15,
+            }],
+            "summary": {"total_employees": 1},
+        },
+    )
+    supplemented = client.post(
+        "/api/fbu-performance/import-salary-history-material",
+        data={"run_id": run.run_id, "material_type": "currentSalary"},
+        files={"file": ("june-supplement.xlsx", b"supplement", "application/octet-stream")},
+    )
+
+    assert supplemented.status_code == 200
+    supplemented_row = supplemented.json()["preview"]["employees"][0]
+    assert supplemented_row["hourly_rate"] == 25
+    assert supplemented_row["ratio"] == 0.15
+    assert supplemented_row["verification_status"] == "resolved"
+    assert supplemented_row["resolution"] == "effective_before_month_use_current"
 
 
 def test_fbu_adjustment_template_download_returns_workbook(monkeypatch, tmp_path):
@@ -1197,7 +1912,7 @@ def test_fbu_results_export_marks_district_manager_fixed_base_path(monkeypatch, 
     values_by_header = dict(zip(headers, row))
     assert values_by_header["岗位"] == "区域经理"
     assert values_by_header["绩效奖金基数"] == 3000
-    assert sheet["L4"].value is None
+    assert sheet["N4"].value is None
     assert values_by_header["绩效基数计算过程"].startswith("区长固定基数路径：$3,000.00")
     assert "$3,000.00 × 1.35 = $4,050.00" in values_by_header["奖金计算过程"]
     assert "0.0%" not in values_by_header["奖金计算过程"]
@@ -1286,11 +2001,13 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
     assert summary["D3"].value == 257.98
     sheet = workbook["1.仓库管理人员"]
     assert sheet["A2"].value == "员工信息"
-    assert sheet["J2"].value == "本月绩效考核结果(OEHR)"
-    assert sheet["M2"].value == "本月应发绩效工资"
+    assert sheet["L2"].value == "本月绩效考核结果(OEHR)"
+    assert sheet["O2"].value == "本月应发绩效工资"
     headers = [cell.value for cell in sheet[3]]
     assert "时薪($)" not in headers
     assert "绩效得分" in headers
+    assert "系统计算绩效基数" in headers
+    assert "Period adjustment" in headers
     assert "4月绩效基数" in headers
     assert headers[-2:] == ["绩效基数计算过程", "奖金计算过程"]
     rows = list(sheet.iter_rows(min_row=4, max_row=4, values_only=True))
@@ -1299,7 +2016,7 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
     assert values_by_header["职位"] == "仓库组长"
     assert values_by_header["绩效得分"] == 107.3
     assert values_by_header["4月绩效基数"] == 4127.59
-    assert sheet["N4"].value == "白夜班拆分行已合并"
+    assert sheet["P4"].value == "白夜班拆分行已合并"
     assert sheet.freeze_panes == "A4"
     assert "计算时薪：$18.0000" in values_by_header["绩效基数计算过程"]
     assert "计算时薪：$19.0000" in values_by_header["绩效基数计算过程"]
@@ -1307,7 +2024,7 @@ def test_fbu_results_merge_shift_split_rows_for_final_view_and_export(monkeypatc
     assert "$610.66 × 5.0% × 1.25 = $38.17" in values_by_header["奖金计算过程"]
     assert "4月" not in values_by_header["奖金计算过程"]
     assert sheet.row_dimensions[4].height <= 72
-    assert sheet["M4"].value == 257.98
+    assert sheet["O4"].value == 257.98
 
 
 def test_fbu_results_export_backfills_position_from_uploaded_roster_preview(monkeypatch, tmp_path):
@@ -1472,9 +2189,9 @@ def test_fbu_calculate_uses_saved_rule_lists_even_when_current_step_is_behind(mo
     save_calls: list[str] = []
     original_save = app_module.fbu_run_manager._save_runs
 
-    def capture_save(changed_run_id=None):
+    def capture_save(changed_run_id=None, changed_fields=None):
         save_calls.append(changed_run_id)
-        return original_save(changed_run_id)
+        return original_save(changed_run_id, changed_fields)
 
     monkeypatch.setattr(app_module.fbu_run_manager, "_save_runs", capture_save)
 

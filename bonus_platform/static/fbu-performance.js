@@ -16,19 +16,34 @@ const state = {
   supplementalLeaveData: null,
   baseOverrideData: null,
   ruleLists: null,
+  ruleListsRequest: null,
   diagnosticsData: null,
   resultsData: null,
   baseRoster: null,
   lastImportResult: null,
   foundationRunDetails: {},
   foundationLoadingRunId: '',
-  activityListLoadingRunIds: new Set(),
+  activitySectionsLoading: new Set(),
   selectedActivityIds: new Set(),
   workbenchSelectedResult: '',
   finalResultSlice: 'warehouse',
+  finalResultsRemote: {
+    runId: '',
+    group: 'warehouse',
+    query: '',
+    rows: [],
+    pagination: null,
+    summary: null,
+  },
+  checkResultsRemote: {
+    runId: '',
+    rows: [],
+    pagination: null,
+    summary: null,
+  },
   checkTab: 'base',
   workbenchResultFilter: 'all',
-  workbenchStepSearch: '',
+  workbenchStepSearch: {},
   hiddenStepNotices: {},
   workbenchTaskFilter: 'open',
   workbenchSupplementDraft: {
@@ -37,20 +52,34 @@ const state = {
     coefficient: '',
     note: '',
   },
+  periodAdjustmentDraft: {
+    employeeId: '',
+    amount: '',
+    sourceMonth: '',
+    reason: '',
+  },
+  periodAdjustmentErrors: {},
+  periodAdjustmentSubmitting: false,
+  periodAdjustmentExpanded: false,
   maintainedRuleEditor: '',
   maintainedRuleDrafts: {
     workHour: [],
     fixedBase: [],
   },
+  maintainedRulePending: '',
+  salaryVerificationPendingEmployee: '',
+  salaryVerificationPendingChoice: '',
   inlineActionNotes: {},
   workbenchPreviousAttendanceFile: null,
-  workbenchSalaryHistoryFiles: {},
   workbenchUploadStates: {},
   salaryVerificationQueue: [],
   salaryVerificationPendingIds: new Set(),
   salaryVerificationFlushTimer: null,
   salaryVerificationFlushing: false,
   calculationPending: false,
+  activeFbuUploadJobs: {},
+  activeCalculationJob: null,
+  calculationJobStatus: null,
   tableFilters: {
     attendance: {},
     salary: {},
@@ -100,6 +129,7 @@ const STEP_MATERIALS = {
     { materialKey: 'previousSalary', label: '上月薪资档案', tag: '必传', hint: '上传OEHR上月薪资档案（含离职）', uploadType: 'previousSalary', fileField: 'previous_salary_file', required: true },
     { materialKey: 'currentSalary', label: '当月薪资档案', tag: '必传', hint: '上传OEHR当月最新薪资档案（含离职）', uploadType: 'currentSalary', fileField: 'salary_file', required: true },
     { materialKey: 'salaryAdjustments', label: '全量调薪流程', tag: '必传', hint: '上传新泽西区全量调薪管理导出', uploadType: 'salaryAdjustments', fileField: 'adjustment_file', required: true },
+    { materialKey: 'transferHistory', label: '人事调动记录', tag: '必传', hint: '上传覆盖核算月及相邻生效日的新泽西区调动记录', uploadType: 'transferHistory', fileField: 'transfer_file', required: true },
   ],
   performance: [
     { materialKey: 'performance', label: '绩效报表', tag: '必传', hint: '上传OEHR当月绩效报表', uploadType: 'performance', fileField: 'performance_file', required: true },
@@ -108,13 +138,46 @@ const STEP_MATERIALS = {
   export: [],
 };
 
+const SALARY_HISTORY_MATERIAL_FIELDS = {
+  previousSalary: 'previous_salary_file',
+  currentSalary: 'salary_file',
+  salaryAdjustments: 'adjustment_file',
+};
+
 // ═══ API Base ═══
 
 const API_BASE = '/api/fbu-performance';
 const TABLE_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const DEFAULT_TABLE_PAGE_SIZE = 50;
-const ACTIVITY_DETAIL_PREFETCH_CONCURRENCY = 3;
-const ACTIVITY_DETAIL_PREFETCH_LIMIT = 8;
+
+const ACTIVITY_STEP_SECTIONS = {
+  people: ['roster_data'],
+  attendance: [
+    'attendance_view_data',
+    'supplemental_leave_data',
+    'base_override_data',
+    'hourly_rate_policy_data',
+  ],
+  salary: [
+    'salary_data',
+    'previous_salary_data',
+    'current_salary_data',
+    'salary_verification_data',
+    'adjustment_data',
+    'transfer_data',
+    'base_override_data',
+    'hourly_rate_policy_data',
+    'period_adjustment_data',
+  ],
+  performance: ['performance_data'],
+  check: [
+    'salary_verification_data',
+    'supplemental_leave_data',
+    'base_override_data',
+    'diagnostics',
+  ],
+  export: [],
+};
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -380,7 +443,7 @@ function startWorkbenchUploadProgress(type, file) {
     status: 'uploading',
     progress: 100,
     indeterminate: true,
-    message: '解析中',
+    message: '正在上传并解析',
   });
 }
 
@@ -407,11 +470,23 @@ function failWorkbenchUploadProgress(type, fileName, message = '上传失败', {
 function getMaterialUploadView(material, status, activity) {
   const uploadState = getWorkbenchUploadState(material.uploadType, activity);
   const uploadedFile = status.fileName || '';
+  const missingSalaryMaterials = Object.entries(SALARY_HISTORY_MATERIAL_FIELDS)
+    .filter(([, fileField]) => !activity?.[fileField])
+    .map(([type]) => uploadTypeLabels[type] || type);
+  const waitsForSalaryMaterials = Boolean(
+    uploadedFile
+    && SALARY_HISTORY_MATERIAL_FIELDS[material.uploadType]
+    && missingSalaryMaterials.length,
+  );
   const baseView = {
     fileName: uploadedFile,
     statusText: status.text,
-    detailText: uploadedFile ? '文件已解析' : material.hint,
-    actionNote: uploadedFile ? '已解析' : '',
+    detailText: uploadedFile
+      ? waitsForSalaryMaterials
+        ? `文件已解析，待补：${missingSalaryMaterials.join('、')}`
+        : '文件已解析'
+      : material.hint,
+    actionNote: uploadedFile ? (waitsForSalaryMaterials ? '待补齐' : '已解析') : '',
     tone: status.tone || 'neutral',
     progress: uploadedFile ? 100 : 0,
     showProgress: false,
@@ -429,7 +504,21 @@ function getMaterialUploadView(material, status, activity) {
       detailText: uploadState.message || '上传中',
       actionNote: uploadState.message || '上传中',
       tone: 'uploading',
-      progress: 100,
+      progress: toNumber(uploadState.progress, 100),
+      indeterminate: uploadState.indeterminate !== false,
+      showProgress: true,
+      busy: true,
+      clearable: false,
+    };
+  }
+  if (uploadState.status === 'processing') {
+    return {
+      fileName,
+      statusText: '处理中',
+      detailText: uploadState.message || '正在解析',
+      actionNote: uploadState.message || '正在解析',
+      tone: 'uploading',
+      progress: toNumber(uploadState.progress, 100),
       indeterminate: true,
       showProgress: true,
       busy: true,
@@ -460,6 +549,8 @@ function getMaterialUploadView(material, status, activity) {
       showProgress: true,
       busy: false,
       clearable: true,
+      canRetry: Boolean(uploadState.canRetry && uploadState.jobId),
+      jobId: uploadState.jobId || '',
     };
   }
   if (uploadState.status === 'done') {
@@ -488,7 +579,10 @@ function renderMaterialRow(material, activity) {
   const statusTone = safeTone === 'uploading' ? 'warning' : safeTone;
   const hasFile = Boolean(uploadView.fileName);
   const isPreviousAttendance = material.uploadType === 'previousAttendance';
-  const actionText = uploadView.busy
+  const canRetry = Boolean(uploadView.canRetry && uploadView.jobId);
+  const actionText = canRetry
+    ? '重试解析'
+    : uploadView.busy
     ? '上传中'
     : isPreviousAttendance && hasFile
       ? '重选'
@@ -520,7 +614,12 @@ function renderMaterialRow(material, activity) {
         ` : ''}
       </div>
       <div class="material-actions">
-        <button class="btn btn-secondary btn-sm ${isPreviousAttendance ? 'btn-quiet' : ''}" type="button" onclick="openWorkbenchUpload(${formatJsArg(material.uploadType)})" ${uploadView.busy ? 'disabled' : ''}>${actionText}</button>
+        <button class="btn btn-secondary btn-sm ${isPreviousAttendance ? 'btn-quiet' : ''}"
+                type="button"
+                onclick="${canRetry
+                  ? `resumeFbuUploadJob(${formatJsArg(uploadView.jobId)})`
+                  : `openWorkbenchUpload(${formatJsArg(material.uploadType)})`}"
+                ${uploadView.busy ? 'disabled' : ''}>${actionText}</button>
         ${uploadView.actionNote ? `<span class="material-action-note ${escapeHtml(statusTone)}">${escapeHtml(uploadView.actionNote)}</span>` : ''}
         ${uploadView.clearable ? `<button class="material-clear-btn" type="button" aria-label="清除${escapeHtml(material.label)}文件" onclick="clearWorkbenchUpload(${formatJsArg(material.uploadType)})">×</button>` : ''}
       </div>
@@ -904,6 +1003,7 @@ const el = {
   workbenchUploadPreviousSalary: document.getElementById('workbenchUploadPreviousSalary'),
   workbenchUploadCurrentSalary: document.getElementById('workbenchUploadCurrentSalary'),
   workbenchUploadSalaryAdjustments: document.getElementById('workbenchUploadSalaryAdjustments'),
+  workbenchUploadTransferHistory: document.getElementById('workbenchUploadTransferHistory'),
   workbenchUploadPerformance: document.getElementById('workbenchUploadPerformance'),
   workbenchUploadSupplementalLeave: document.getElementById('workbenchUploadSupplementalLeave'),
 
@@ -977,10 +1077,8 @@ const FOCUSABLE_SELECTOR = [
 let activeModal = null;
 let modalReturnFocus = null;
 const filterTimers = {};
-let composingFilterInput = null;
-let pendingCompositionFilter = null;
-let workbenchStepSearchTimer = null;
-let composingWorkbenchStepSearch = false;
+const composingFilterInputs = new WeakSet();
+const pendingCompositionFilters = new WeakMap();
 
 function getFocusableElements(container) {
   if (!container) return [];
@@ -1038,13 +1136,10 @@ function trapModalFocus(event) {
 }
 
 function queueFilter(filterName, event = null) {
-  if (event?.isComposing || (event?.target && event.target === composingFilterInput)) {
-    pendingCompositionFilter = filterName;
-    return;
-  }
-
-  if (composingFilterInput) {
-    pendingCompositionFilter = filterName;
+  const input = event?.target;
+  if (input instanceof HTMLInputElement
+      && (event?.isComposing || composingFilterInputs.has(input))) {
+    pendingCompositionFilters.set(input, filterName);
     return;
   }
 
@@ -1056,15 +1151,17 @@ function queueFilter(filterName, event = null) {
 
 document.addEventListener('compositionstart', (event) => {
   if (event.target instanceof HTMLInputElement) {
-    composingFilterInput = event.target;
-    pendingCompositionFilter = null;
+    composingFilterInputs.add(event.target);
+    pendingCompositionFilters.delete(event.target);
   }
 });
 
-document.addEventListener('compositionend', () => {
-  const filterName = pendingCompositionFilter;
-  composingFilterInput = null;
-  pendingCompositionFilter = null;
+document.addEventListener('compositionend', (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const filterName = pendingCompositionFilters.get(input);
+  composingFilterInputs.delete(input);
+  pendingCompositionFilters.delete(input);
   if (filterName) queueFilter(filterName);
 });
 
@@ -1330,11 +1427,9 @@ function setSidebarCollapsed(collapsed) {
 
 function setActivityStep(stepKey) {
   if (!ACTIVITY_STEPS.some(step => step.key === stepKey)) return;
-  if (state.activityStep !== stepKey) {
-    state.workbenchStepSearch = '';
-  }
   state.activityStep = stepKey;
   renderWorkbenchCurrentStep();
+  ensureActivityStepData(stepKey);
 }
 
 function getStepIndex(stepKey) {
@@ -1350,8 +1445,18 @@ function getFirstIncompleteInputStep(activity = state.currentActivity) {
 function getActivityStepFromActivity(activity = state.currentActivity) {
   if (!activity) return 'people';
   if (activity.status === 'completed') return 'export';
-  const incompleteStep = getFirstIncompleteInputStep(activity);
-  return incompleteStep || 'check';
+  if (!activity.roster_file) return 'people';
+  if (!activity.attendance_file || !activity.supplemental_leave_file) return 'attendance';
+  if (
+    !activity.previous_salary_file
+    || !activity.salary_file
+    || !activity.adjustment_file
+    || !activity.transfer_file
+  ) {
+    return 'salary';
+  }
+  if (!activity.performance_file) return 'performance';
+  return 'check';
 }
 
 function navigateTo(page) {
@@ -1413,11 +1518,13 @@ el.btnToggleSidebar?.addEventListener('click', () => {
 async function loadActivities() {
   try {
     const data = await apiJson(`${API_BASE}/runs`);
+    const ruleListsRequest = (
+      state.currentPage === 'workbench'
+        ? loadRuleLists()
+        : null
+    );
 
     state.activities = data.runs || [];
-    if (state.currentPage === 'workbench') {
-      await loadRuleLists();
-    }
     renderActivities();
     updateActivityKPIs();
     if (state.currentPage === 'workbench') {
@@ -1429,10 +1536,9 @@ async function loadActivities() {
           renderWorkbench();
         }
       } else {
+        if (ruleListsRequest) await ruleListsRequest;
         renderWorkbench();
       }
-    } else if (state.currentPage === 'activities') {
-      loadActivityListDetails();
     }
   } catch (error) {
     console.error('加载活动列表失败:', error);
@@ -1477,9 +1583,16 @@ function getWorkbenchSupplementalRows(activity = getWorkbenchActivity()) {
 
 async function loadRuleLists() {
   if (state.ruleLists) return state.ruleLists;
-  const data = await apiJson(`${API_BASE}/rule-lists`);
-  state.ruleLists = data;
-  return data;
+  if (state.ruleListsRequest) return state.ruleListsRequest;
+  state.ruleListsRequest = apiJson(`${API_BASE}/rule-lists`)
+    .then((data) => {
+      state.ruleLists = data;
+      return data;
+    })
+    .finally(() => {
+      state.ruleListsRequest = null;
+    });
+  return state.ruleListsRequest;
 }
 
 function getWorkbenchSourceKey(label) {
@@ -1565,6 +1678,8 @@ function renderMaintainedRuleList(kind, activity) {
   const confirmed = isWorkHour
     ? (activity?.base_override_data?.employees || []).some(row => row.rule_type === '96工时制')
     : (activity?.base_override_data?.employees || []).some(row => row.rule_type === '线下固定基数覆盖');
+  const confirmPending = state.maintainedRulePending === `confirm:${kind}`;
+  const actionsDisabled = Boolean(state.maintainedRulePending);
   return `
     <section class="step-section maintained-list">
       <div class="section-head compact">
@@ -1574,8 +1689,8 @@ function renderMaintainedRuleList(kind, activity) {
         </div>
         <div class="section-actions">
           <span class="status-badge ${confirmed ? 'success' : 'warning'}">${confirmed ? '已确认' : '未确认'}</span>
-          <button class="btn btn-secondary btn-sm" type="button" onclick="openMaintainedRuleDialog(${formatJsArg(kind)})">编辑名单</button>
-          <button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(${formatJsArg(kind)})">确认名单</button>
+          <button class="btn btn-secondary btn-sm" type="button" ${actionsDisabled ? 'disabled' : ''} onclick="openMaintainedRuleDialog(${formatJsArg(kind)})">编辑名单</button>
+          <button class="btn btn-primary btn-sm" type="button" ${actionsDisabled ? 'disabled' : ''} ${confirmPending ? 'aria-busy="true"' : ''} onclick="confirmMaintainedRuleList(${formatJsArg(kind)})">${confirmPending ? '确认中…' : '确认名单'}</button>
           ${renderInlineActionNote(`ruleList-${kind}`)}
         </div>
       </div>
@@ -1618,6 +1733,7 @@ function renderMaintainedRuleEditor(kind) {
   if (state.maintainedRuleEditor !== kind) return '';
   const isWorkHour = kind === 'workHour';
   const rows = state.maintainedRuleDrafts?.[kind] || [];
+  const saving = state.maintainedRulePending === `save:${kind}`;
   return `
     <div class="maintained-editor" data-maintained-editor="${escapeHtml(kind)}">
       <div class="maintained-editor-head">
@@ -1643,7 +1759,7 @@ function renderMaintainedRuleEditor(kind) {
       </div>
       <div class="maintained-editor-actions">
         <button class="btn btn-secondary btn-sm" type="button" onclick="closeMaintainedRuleDialog()">取消</button>
-        <button class="btn btn-primary btn-sm" type="button" onclick="saveMaintainedRuleList(${formatJsArg(kind)})">保存名单</button>
+        <button class="btn btn-primary btn-sm" type="button" ${saving ? 'disabled aria-busy="true"' : ''} onclick="saveMaintainedRuleList(${formatJsArg(kind)})">${saving ? '保存中…' : '保存名单'}</button>
       </div>
     </div>
   `;
@@ -1768,17 +1884,27 @@ function renderWorkbenchTasks(activity) {
 
 async function confirmMaintainedRuleList(kind) {
   if (!state.currentActivity?.run_id) return;
-  if (!state.ruleLists) await loadRuleLists();
-  const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/rule-lists/confirm`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(state.ruleLists),
-  });
-  state.baseOverrideData = data.preview;
-  state.currentActivity.base_override_file = '页面维护';
-  state.currentActivity.base_override_data = data.preview;
-  setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success', { render: false });
+  if (state.maintainedRulePending) return;
+  state.maintainedRulePending = `confirm:${kind}`;
+  setInlineActionNote(`ruleList-${kind}`, '确认中…', 'warning', { render: false });
   renderWorkbenchCurrentStep();
+  try {
+    if (!state.ruleLists) await loadRuleLists();
+    const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/rule-lists/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state.ruleLists),
+    });
+    state.baseOverrideData = data.preview;
+    state.currentActivity.base_override_file = '页面维护';
+    state.currentActivity.base_override_data = data.preview;
+    setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success', { render: false });
+  } catch (error) {
+    setInlineActionNote(`ruleList-${kind}`, `名单确认失败：${error.message}`, 'warning', { render: false });
+  } finally {
+    state.maintainedRulePending = '';
+    renderWorkbenchCurrentStep();
+  }
 }
 
 function toggleMaintainedRuleEditor(kind) {
@@ -1848,25 +1974,36 @@ function normalizeMaintainedRuleRows(kind) {
 }
 
 async function saveMaintainedRuleList(kind) {
-  if (!state.ruleLists) await loadRuleLists();
-  const payload = {
-    work_hour_employees: kind === 'workHour'
-      ? normalizeMaintainedRuleRows('workHour')
-      : (state.ruleLists.work_hour_employees || []),
-    fixed_base_employees: kind === 'fixedBase'
-      ? normalizeMaintainedRuleRows('fixedBase')
-      : (state.ruleLists.fixed_base_employees || []),
-  };
-  const data = await apiJson(`${API_BASE}/rule-lists`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  state.ruleLists = data;
-  state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
-  setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已保存' : '固定基数名单已保存', 'success', { render: false });
-  closeMaintainedRuleDialog();
-  renderWorkbenchCurrentStep();
+  if (state.maintainedRulePending) return;
+  state.maintainedRulePending = `save:${kind}`;
+  renderMaintainedRuleDialogBody();
+  try {
+    if (!state.ruleLists) await loadRuleLists();
+    const payload = {
+      work_hour_employees: kind === 'workHour'
+        ? normalizeMaintainedRuleRows('workHour')
+        : (state.ruleLists.work_hour_employees || []),
+      fixed_base_employees: kind === 'fixedBase'
+        ? normalizeMaintainedRuleRows('fixedBase')
+        : (state.ruleLists.fixed_base_employees || []),
+    };
+    const data = await apiJson(`${API_BASE}/rule-lists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    state.ruleLists = data;
+    state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
+    setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已保存' : '固定基数名单已保存', 'success', { render: false });
+    closeMaintainedRuleDialog();
+    renderWorkbenchCurrentStep();
+  } catch (error) {
+    setInlineActionNote(`ruleList-${kind}`, `名单保存失败：${error.message}`, 'warning', { render: false });
+    showNotification(`名单保存失败：${error.message}`, 'error');
+  } finally {
+    state.maintainedRulePending = '';
+    renderMaintainedRuleDialogBody();
+  }
 }
 
 function renderWorkbenchPerformanceSupplement() {
@@ -2058,7 +2195,8 @@ function renderWorkbenchAudit(activity) {
 }
 
 function renderCalculateButton(canCalculate) {
-  const isPending = state.calculationPending;
+  const isPending = state.calculationPending
+    || ['queued', 'processing'].includes(state.calculationJobStatus?.status);
   const disabled = !canCalculate || isPending;
   return `
     <button class="btn btn-primary btn-sm" type="button" onclick="executeCalculate()"
@@ -2094,6 +2232,9 @@ function renderWorkbench() {
   }
   const activeStep = ACTIVITY_STEPS.find(step => step.key === state.activityStep) || ACTIVITY_STEPS[0];
   const canCalculate = buildNeedsForStep('check', activity).length === 0;
+  const calculationBusy = ['queued', 'processing'].includes(state.calculationJobStatus?.status);
+  const readinessDisabled = canCalculate ? '' : 'disabled';
+  const calculationDisabled = calculationBusy ? 'disabled' : readinessDisabled;
   el.workbenchContent.innerHTML = `
     <section class="activity-titlebar activity-page-titlebar">
       <div class="activity-title-main">
@@ -2277,47 +2418,14 @@ function getActivityDetail(activity) {
   return state.foundationRunDetails[activity.run_id] || activity;
 }
 
-async function loadActivityListDetails() {
-  if (state.currentPage !== 'activities') return;
-  const pageInfo = getPaginatedRows('activities', state.activities);
-  const pendingActivities = pageInfo.items.filter(activity => activity.run_id
-    && state.currentActivity?.run_id !== activity.run_id
-    && !activity.diagnostics
-    && !state.foundationRunDetails[activity.run_id]
-    && !state.activityListLoadingRunIds.has(activity.run_id))
-    .slice(0, ACTIVITY_DETAIL_PREFETCH_LIMIT);
-
-  if (!pendingActivities.length) return;
-
-  pendingActivities.forEach(activity => state.activityListLoadingRunIds.add(activity.run_id));
-  renderActivities();
-
-  for (let index = 0; index < pendingActivities.length; index += ACTIVITY_DETAIL_PREFETCH_CONCURRENCY) {
-    const batch = pendingActivities.slice(index, index + ACTIVITY_DETAIL_PREFETCH_CONCURRENCY);
-    await Promise.allSettled(batch.map(async activity => {
-      try {
-        const detail = await apiJson(`${API_BASE}/runs/${activity.run_id}`);
-        state.foundationRunDetails[activity.run_id] = detail;
-      } finally {
-        state.activityListLoadingRunIds.delete(activity.run_id);
-      }
-    }));
-  }
-
-  if (state.currentPage === 'activities') {
-    renderActivities();
-  }
-}
-
 function renderActivityDiagnostics(activity) {
   const detail = getActivityDetail(activity);
-  const summary = detail?.diagnostics?.summary;
-  const isLoading = state.activityListLoadingRunIds.has(activity.run_id);
+  const summary = detail?.diagnostics?.summary || detail?.diagnostics_summary;
 
   if (!summary) {
     return `
       <div class="activity-diagnostics">
-        <span class="activity-diagnostics-muted">${isLoading ? '检查加载中' : '未生成检查'}</span>
+        <span class="activity-diagnostics-muted">进入活动后查看</span>
         <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">需要处理</button>
       </div>
     `;
@@ -2396,7 +2504,17 @@ async function loadFoundationActivityDetail(activity = getFoundationActivity()) 
 
   state.foundationLoadingRunId = activity.run_id;
   try {
-    const detail = await apiJson(`${API_BASE}/runs/${activity.run_id}`);
+    const include = [
+      'attendance_view_data',
+      'salary_data',
+      'performance_data',
+      'adjustment_data',
+      'supplemental_leave_data',
+      'base_override_data',
+    ].join(',');
+    const detail = await apiJson(
+      `${API_BASE}/runs/${activity.run_id}?include=${encodeURIComponent(include)}`,
+    );
     state.foundationRunDetails[activity.run_id] = detail;
     if (state.currentPage === 'foundation') {
       renderFoundationData();
@@ -2961,24 +3079,214 @@ async function openActivityPage(activityId, page) {
     exceptions: 'check',
     results: 'export',
   };
-  await enterActivity(activityId, {
-    initialStep: stepMap[page] || '',
+  const targetStep = stepMap[page] || '';
+  await enterActivity(activityId, { preservePage: true, initialStep: targetStep });
+  setActivityStep(targetStep || getActivityStepFromActivity(state.currentActivity));
+  navigateTo('workbench');
+}
+
+function resetCurrentActivitySections() {
+  state.attendanceData = null;
+  state.salaryData = null;
+  state.performanceData = null;
+  state.adjustmentData = null;
+  state.supplementalLeaveData = null;
+  state.baseOverrideData = null;
+  state.diagnosticsData = null;
+  state.resultsData = null;
+  state.finalResultsRemote = {
+    runId: '',
+    group: 'warehouse',
+    query: '',
+    rows: [],
+    pagination: null,
+    summary: null,
+  };
+  state.checkResultsRemote = {
+    runId: '',
+    rows: [],
+    pagination: null,
+    summary: null,
+  };
+  state.activeCalculationJob = null;
+  state.calculationJobStatus = null;
+}
+
+function clearRemoteResultViews(runId = '') {
+  if (!runId || state.finalResultsRemote.runId === runId) {
+    state.finalResultsRemote = {
+      runId: '',
+      group: 'warehouse',
+      query: '',
+      rows: [],
+      pagination: null,
+      summary: null,
+    };
+  }
+  if (!runId || state.checkResultsRemote.runId === runId) {
+    state.checkResultsRemote = {
+      runId: '',
+      rows: [],
+      pagination: null,
+      summary: null,
+    };
+  }
+}
+
+function mergeCurrentActivityPayload(payload) {
+  if (!payload?.run_id) return state.currentActivity;
+  const current = state.currentActivity?.run_id === payload.run_id
+    ? state.currentActivity
+    : {};
+  const loadedSections = new Set([
+    ...(current.loaded_sections || []),
+    ...(payload.loaded_sections || []),
+  ]);
+  ['roster_data', 'diagnostics'].forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(payload, field)) loadedSections.add(field);
   });
+  const activity = {
+    ...current,
+    ...payload,
+    loaded_sections: [...loadedSections],
+  };
+  if (payload.status && payload.status !== 'completed') {
+    state.resultsData = [];
+    clearRemoteResultViews(payload.run_id);
+  }
+  state.currentActivity = activity;
+  state.foundationRunDetails[activity.run_id] = activity;
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'attendance_data')) {
+    state.attendanceData = payload.attendance_data || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'salary_data')) {
+    state.salaryData = payload.salary_data || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'performance_data')) {
+    state.performanceData = payload.performance_data || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'adjustment_data')) {
+    state.adjustmentData = payload.adjustment_data || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'supplemental_leave_data')) {
+    state.supplementalLeaveData = payload.supplemental_leave_data || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'base_override_data')) {
+    state.baseOverrideData = payload.base_override_data || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'diagnostics')) {
+    state.diagnosticsData = payload.diagnostics || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'results')) {
+    state.resultsData = Array.isArray(payload.results) ? payload.results : [];
+  }
+  return activity;
+}
+
+function activityStepLoadingKey(stepKey, activity = state.currentActivity) {
+  return `${activity?.run_id || ''}:${stepKey || ''}`;
+}
+
+async function ensureActivityStepData(stepKey, options = {}) {
+  const { render = true, force = false } = options;
+  const activity = state.currentActivity;
+  if (!activity?.run_id) return null;
+  if (stepKey === 'export') {
+    const remote = state.finalResultsRemote;
+    if (
+      !force
+      && remote.runId === activity.run_id
+      && remote.group === state.finalResultSlice
+      && remote.pagination
+    ) {
+      return activity;
+    }
+    await loadFinalResultsPage({ page: 1, render });
+    return state.currentActivity;
+  }
+  const required = ACTIVITY_STEP_SECTIONS[stepKey] || [];
+  const loaded = new Set(activity.loaded_sections || []);
+  const missing = force ? required : required.filter(field => !loaded.has(field));
+  if (!missing.length) {
+    if (
+      stepKey === 'check'
+      && activity.status === 'completed'
+      && (
+        force
+        || state.checkResultsRemote.runId !== activity.run_id
+        || !state.checkResultsRemote.pagination
+      )
+    ) {
+      await loadCheckResultsPage({ page: 1, render });
+    }
+    return activity;
+  }
+
+  const loadingKey = activityStepLoadingKey(stepKey, activity);
+  if (state.activitySectionsLoading.has(loadingKey)) return activity;
+  state.activitySectionsLoading.add(loadingKey);
+  if (render && state.currentPage === 'workbench') renderWorkbench();
+
+  try {
+    const include = ['core', ...missing].join(',');
+    const payload = await apiJson(
+      `${API_BASE}/runs/${activity.run_id}?include=${encodeURIComponent(include)}`,
+    );
+    if (state.currentActivity?.run_id !== activity.run_id) return null;
+    const merged = mergeCurrentActivityPayload(payload);
+    if (stepKey === 'check' && merged?.status === 'completed') {
+      await loadCheckResultsPage({ page: 1, render: false });
+    }
+    return merged;
+  } catch (error) {
+    console.error(`加载活动${stepKey}区块失败:`, error);
+    showNotification(`加载当前步骤数据失败：${error.message}`, 'error');
+    return null;
+  } finally {
+    state.activitySectionsLoading.delete(loadingKey);
+    if (render && state.currentPage === 'workbench') renderWorkbench();
+  }
 }
 
 async function enterActivity(activityId, options = {}) {
-  const { preservePage = false, preserveStep = false, initialStep = '' } = options;
+  const {
+    preservePage = false,
+    preserveStep = false,
+    initialStep = '',
+    refreshSections = false,
+  } = options;
   const previousStep = state.activityStep;
 
   try {
+    const ruleListsRequest = (
+      state.currentPage === 'workbench'
+        ? loadRuleLists()
+        : null
+    );
     const isDifferentActivity = state.currentActivity?.run_id !== activityId;
-    const activity = await apiJson(`${API_BASE}/runs/${activityId}`);
+    let activity = await apiJson(`${API_BASE}/runs/${activityId}?include=core`);
 
     if (isDifferentActivity) {
       resetTableControls();
     }
+    if (isDifferentActivity || refreshSections) {
+      resetCurrentActivitySections();
+      state.currentActivity = null;
+    }
+    if (isDifferentActivity) {
+      state.periodAdjustmentDraft = {
+        employeeId: '',
+        amount: '',
+        sourceMonth: activity.calc_month || '',
+        reason: '',
+      };
+      state.periodAdjustmentErrors = {};
+      state.periodAdjustmentSubmitting = false;
+      state.periodAdjustmentExpanded = false;
+    }
 
-    state.currentActivity = activity;
+    activity = mergeCurrentActivityPayload(activity);
     if (preserveStep && !isDifferentActivity && ACTIVITY_STEPS.some(step => step.key === previousStep)) {
       state.activityStep = previousStep;
     } else if (ACTIVITY_STEPS.some(step => step.key === initialStep)) {
@@ -2986,34 +3294,15 @@ async function enterActivity(activityId, options = {}) {
     } else {
       state.activityStep = getActivityStepFromActivity(activity);
     }
-    state.foundationRunDetails[activity.run_id] = activity;
-    state.diagnosticsData = activity.diagnostics || null;
-    if (state.currentPage === 'workbench') {
-      await loadRuleLists();
-    }
+    if (ruleListsRequest) await ruleListsRequest;
+    await ensureActivityStepData(state.activityStep, { render: false });
+    activity = state.currentActivity;
+    restoreFbuUploadJobs(activity.run_id);
+    restoreFbuCalculationJob(activity.run_id);
 
-    // Load data if available
-    if (activity.attendance_data) {
-      state.attendanceData = activity.attendance_data;
-    }
-    if (activity.salary_data) {
-      state.salaryData = activity.salary_data;
-    }
-    if (activity.performance_data) {
-      state.performanceData = activity.performance_data;
-    }
-    if (activity.adjustment_data) {
-      state.adjustmentData = activity.adjustment_data;
-    }
-    state.supplementalLeaveData = activity.supplemental_leave_data || null;
-    state.baseOverrideData = activity.base_override_data || null;
-    if (activity.results) {
-      state.resultsData = activity.results;
-    }
     if (preservePage && state.currentPage === 'activities') {
       // Keep list interactions stable while background activity details are loading.
       renderActivities();
-      loadActivityListDetails();
       return activity;
     }
     navigateTo(preservePage ? state.currentPage : 'workbench');
@@ -3109,7 +3398,6 @@ async function deleteActivitiesByIds(ids, options = {}) {
   runIds.forEach(id => {
     state.selectedActivityIds.delete(id);
     delete state.foundationRunDetails[id];
-    state.activityListLoadingRunIds.delete(id);
   });
   updateActivityKPIs();
   if (state.currentPage === 'activities') {
@@ -3261,6 +3549,7 @@ const uploadTypeLabels = {
   previousSalary: '上月薪资档案',
   currentSalary: '当月薪资档案',
   salaryAdjustments: '全量调薪流程',
+  transferHistory: '人事调动记录',
   performance: '绩效报表',
   supplementalLeave: '补充假勤表',
 };
@@ -3273,6 +3562,7 @@ function getWorkbenchUploadInput(type) {
     previousSalary: el.workbenchUploadPreviousSalary,
     currentSalary: el.workbenchUploadCurrentSalary,
     salaryAdjustments: el.workbenchUploadSalaryAdjustments,
+    transferHistory: el.workbenchUploadTransferHistory,
     performance: el.workbenchUploadPerformance,
     supplementalLeave: el.workbenchUploadSupplementalLeave,
   };
@@ -3326,6 +3616,346 @@ function isLocalFbuHost() {
   return ['', 'localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 }
 
+const LEGACY_ATTENDANCE_DIRECT_PLAN_ENDPOINT = '/attendance-direct-upload-plan';
+const LEGACY_ATTENDANCE_DIRECT_COMPLETE_ENDPOINT = '/attendance-direct-upload-complete';
+const FBU_UPLOAD_JOBS_STORAGE_KEY = 'sigma-fbu-active-upload-jobs-v1';
+const FBU_CALCULATION_JOB_STORAGE_KEY = 'sigma-fbu-active-calculation-job-v1';
+const fbuUploadJobPollers = new Set();
+const fbuCalculationJobPollers = new Set();
+
+function persistActiveFbuUploadJobs() {
+  try {
+    localStorage.setItem(
+      FBU_UPLOAD_JOBS_STORAGE_KEY,
+      JSON.stringify(state.activeFbuUploadJobs || {}),
+    );
+  } catch (error) {
+    console.warn('保存上传任务状态失败:', error);
+  }
+}
+
+function loadPersistedFbuUploadJobs() {
+  try {
+    const payload = JSON.parse(localStorage.getItem(FBU_UPLOAD_JOBS_STORAGE_KEY) || '{}');
+    state.activeFbuUploadJobs = payload && typeof payload === 'object' ? payload : {};
+  } catch (error) {
+    console.warn('读取上传任务状态失败:', error);
+    state.activeFbuUploadJobs = {};
+  }
+}
+
+function rememberFbuUploadJob(jobId, metadata) {
+  state.activeFbuUploadJobs = {
+    ...state.activeFbuUploadJobs,
+    [jobId]: { ...metadata, jobId },
+  };
+  persistActiveFbuUploadJobs();
+}
+
+function forgetFbuUploadJob(jobId) {
+  const jobs = { ...state.activeFbuUploadJobs };
+  delete jobs[jobId];
+  state.activeFbuUploadJobs = jobs;
+  persistActiveFbuUploadJobs();
+}
+
+const FBU_JOB_UI_FIELDS = [
+  'status',
+  'stage',
+  'progress',
+  'indeterminate',
+  'message',
+  'canRetry',
+  'error',
+  'fileName',
+  'jobId',
+];
+
+function hasFbuJobUiStateChanged(currentState, nextState) {
+  const current = currentState || {};
+  const next = nextState || {};
+  return FBU_JOB_UI_FIELDS.some(field => current[field] !== next[field]);
+}
+
+function updateFbuUploadJobMaterials(metadata, nextState) {
+  let changed = false;
+  (metadata?.entries || []).forEach(entry => {
+    const currentState = state.workbenchUploadStates[entry.type] || {};
+    const candidate = {
+      fileName: entry.fileName,
+      jobId: metadata.jobId,
+      ...nextState,
+    };
+    if (!hasFbuJobUiStateChanged(currentState, candidate)) return;
+    changed = true;
+    setWorkbenchUploadState(entry.type, candidate, { render: false });
+  });
+  if (changed && state.currentPage === 'workbench') renderWorkbench();
+}
+
+function waitForFbuUploadPoll(delayMs = 900) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs));
+}
+
+async function pollFbuUploadJob(jobId) {
+  const metadata = state.activeFbuUploadJobs[jobId];
+  if (!metadata || fbuUploadJobPollers.has(jobId)) return null;
+  fbuUploadJobPollers.add(jobId);
+  try {
+    while (state.activeFbuUploadJobs[jobId]) {
+      const data = await apiJson(
+        `${API_BASE}/runs/${metadata.runId}/uploads/${jobId}`,
+      );
+      const job = data.job || {};
+      if (job.status === 'completed') {
+        const refreshedAttendance = (metadata.entries || []).some(entry => (
+          ['attendance', 'previousAttendance'].includes(entry.type)
+        ));
+        if (refreshedAttendance) prioritizePendingSupplementalLeave();
+        updateFbuUploadJobMaterials(metadata, {
+          status: 'done',
+          progress: 100,
+          indeterminate: false,
+          message: job.result?.readyForReconciliation
+            ? '已解析并完成核验'
+            : '已上传并解析',
+          canRetry: false,
+        });
+        forgetFbuUploadJob(jobId);
+        if (state.currentActivity?.run_id === metadata.runId) {
+          await enterActivity(metadata.runId, {
+            preservePage: true,
+            preserveStep: true,
+            refreshSections: true,
+          });
+        }
+        return job;
+      }
+      if (job.status === 'failed') {
+        updateFbuUploadJobMaterials(metadata, {
+          status: 'failed',
+          progress: 100,
+          indeterminate: false,
+          message: job.error || job.message || '解析失败',
+          canRetry: Boolean(job.canRetry),
+        });
+        return job;
+      }
+      if (job.recoverable) {
+        updateFbuUploadJobMaterials(metadata, {
+          status: 'failed',
+          progress: 100,
+          indeterminate: false,
+          message: job.message || '处理任务已中断，可点击重试',
+          canRetry: true,
+        });
+        return job;
+      }
+      updateFbuUploadJobMaterials(metadata, {
+        status: 'processing',
+        progress: toNumber(job.progress, 5),
+        indeterminate: true,
+        message: job.stage === 'queued'
+          ? '正在排队'
+          : job.stage === 'materializing'
+            ? '正在读取已上传文件'
+            : '正在解析',
+        canRetry: false,
+      });
+      await waitForFbuUploadPoll(job.stage === 'queued' ? 700 : 1500);
+    }
+    return null;
+  } catch (error) {
+    updateFbuUploadJobMaterials(metadata, {
+      status: 'processing',
+      progress: 100,
+      indeterminate: true,
+      message: '状态确认中断，刷新页面后会继续检查',
+      canRetry: false,
+    });
+    return null;
+  } finally {
+    fbuUploadJobPollers.delete(jobId);
+  }
+}
+
+async function resumeFbuUploadJob(jobId) {
+  const metadata = state.activeFbuUploadJobs[jobId];
+  if (!metadata) return;
+  updateFbuUploadJobMaterials(metadata, {
+    status: 'processing',
+    progress: 5,
+    indeterminate: true,
+    message: '正在排队',
+    canRetry: false,
+  });
+  try {
+    await apiJson(
+      `${API_BASE}/runs/${metadata.runId}/uploads/${jobId}/resume`,
+      { method: 'POST' },
+    );
+    return pollFbuUploadJob(jobId);
+  } catch (error) {
+    updateFbuUploadJobMaterials(metadata, {
+      status: 'failed',
+      progress: 100,
+      indeterminate: false,
+      message: error.message || '重试失败',
+      canRetry: true,
+    });
+  }
+}
+
+function restoreFbuUploadJobs(runId) {
+  loadPersistedFbuUploadJobs();
+  Object.values(state.activeFbuUploadJobs)
+    .filter(job => job?.runId === runId)
+    .forEach(job => {
+      updateFbuUploadJobMaterials(job, {
+        status: 'processing',
+        progress: 100,
+        indeterminate: true,
+        message: '正在确认上传任务状态',
+        canRetry: false,
+      });
+      pollFbuUploadJob(job.jobId);
+    });
+}
+
+function persistActiveFbuCalculationJob() {
+  try {
+    if (state.activeCalculationJob?.jobId) {
+      localStorage.setItem(
+        FBU_CALCULATION_JOB_STORAGE_KEY,
+        JSON.stringify(state.activeCalculationJob),
+      );
+    } else {
+      localStorage.removeItem(FBU_CALCULATION_JOB_STORAGE_KEY);
+    }
+  } catch (error) {
+    console.warn('保存核算任务状态失败:', error);
+  }
+}
+
+function loadPersistedFbuCalculationJob() {
+  try {
+    const payload = JSON.parse(
+      localStorage.getItem(FBU_CALCULATION_JOB_STORAGE_KEY) || 'null',
+    );
+    state.activeCalculationJob = payload?.jobId && payload?.runId ? payload : null;
+  } catch (error) {
+    console.warn('读取核算任务状态失败:', error);
+    state.activeCalculationJob = null;
+  }
+}
+
+function rememberFbuCalculationJob(runId, jobId) {
+  state.activeCalculationJob = { runId, jobId };
+  persistActiveFbuCalculationJob();
+}
+
+function forgetFbuCalculationJob() {
+  state.activeCalculationJob = null;
+  persistActiveFbuCalculationJob();
+}
+
+async function pollFbuCalculationJob(jobId) {
+  const metadata = state.activeCalculationJob;
+  if (
+    !metadata
+    || metadata.jobId !== jobId
+    || fbuCalculationJobPollers.has(jobId)
+  ) {
+    return null;
+  }
+  fbuCalculationJobPollers.add(jobId);
+  try {
+    while (state.activeCalculationJob?.jobId === jobId) {
+      const data = await apiJson(
+        `${API_BASE}/runs/${metadata.runId}/calculation-jobs/${jobId}`,
+      );
+      const job = data.job || {};
+      const statusChanged = hasFbuJobUiStateChanged(state.calculationJobStatus, job);
+      state.calculationJobStatus = job;
+      if (statusChanged && state.currentPage === 'workbench') renderWorkbench();
+
+      if (job.status === 'completed') {
+        forgetFbuCalculationJob();
+        if (state.currentActivity?.run_id === metadata.runId) {
+          await enterActivity(metadata.runId, {
+            preservePage: true,
+            initialStep: 'export',
+            refreshSections: true,
+          });
+        }
+        return job;
+      }
+      if (job.status === 'failed' || job.recoverable) {
+        return job;
+      }
+      await waitForFbuUploadPoll(1500);
+    }
+    return null;
+  } catch (error) {
+    state.calculationJobStatus = {
+      status: 'failed',
+      canRetry: true,
+      message: '核算状态确认中断，可点击重试继续。',
+      error: error.message || '',
+    };
+    if (state.currentPage === 'workbench') renderWorkbench();
+    return null;
+  } finally {
+    fbuCalculationJobPollers.delete(jobId);
+  }
+}
+
+async function resumeFbuCalculationJob() {
+  const metadata = state.activeCalculationJob;
+  if (!metadata?.jobId || !metadata?.runId) return null;
+  state.calculationJobStatus = {
+    status: 'queued',
+    progress: 5,
+    message: '正在排队',
+  };
+  if (state.currentPage === 'workbench') renderWorkbench();
+  try {
+    await apiJson(
+      `${API_BASE}/runs/${metadata.runId}/calculation-jobs/${metadata.jobId}/resume`,
+      { method: 'POST' },
+    );
+    return pollFbuCalculationJob(metadata.jobId);
+  } catch (error) {
+    state.calculationJobStatus = {
+      status: 'failed',
+      canRetry: true,
+      message: error.message || '核算任务重试失败',
+    };
+    if (state.currentPage === 'workbench') renderWorkbench();
+    return null;
+  }
+}
+
+function restoreFbuCalculationJob(runId) {
+  loadPersistedFbuCalculationJob();
+  const metadata = state.activeCalculationJob;
+  if (!metadata || metadata.runId !== runId) {
+    state.calculationJobStatus = null;
+    return;
+  }
+  state.calculationJobStatus = {
+    status: 'processing',
+    progress: 5,
+    message: '正在确认核算任务状态',
+  };
+  pollFbuCalculationJob(metadata.jobId);
+}
+
+function prioritizePendingSupplementalLeave() {
+  state.tableFilters.supplementalLeave = { quality: 'pending' };
+  getTablePagination('supplementalLeave').page = 1;
+}
+
 function uploadFbuFileToSignedUrl(upload, file, onProgress) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
@@ -3342,10 +3972,10 @@ function uploadFbuFileToSignedUrl(upload, file, onProgress) {
         return;
       }
       const detail = request.responseText ? ` ${request.responseText.slice(0, 160)}` : '';
-      reject(new Error(`直传考勤文件失败（HTTP ${request.status}）${detail}`));
+      reject(new Error(`直传文件失败（HTTP ${request.status}）${detail}`));
     };
-    request.onerror = () => reject(new Error('直传考勤文件失败，请检查网络后重试。'));
-    request.ontimeout = () => reject(new Error('直传考勤文件超时，请检查网络后重试。'));
+    request.onerror = () => reject(new Error('直传文件失败，请检查网络后重试。'));
+    request.ontimeout = () => reject(new Error('直传文件超时，请检查网络后重试。'));
     const body = new FormData();
     body.append('cacheControl', '3600');
     body.append('', file);
@@ -3353,17 +3983,12 @@ function uploadFbuFileToSignedUrl(upload, file, onProgress) {
   });
 }
 
-async function uploadWorkbenchAttendanceFilesDirect(attendanceFile, previousAttendanceFile) {
-  if (!state.currentActivity || (!attendanceFile && !previousAttendanceFile)) return;
+async function uploadWorkbenchFilesDirect(entries, options = {}) {
+  if (!state.currentActivity || !entries?.length) return;
   const activityId = state.currentActivity.run_id;
-  const entries = [
-    attendanceFile ? { kind: 'attendance', type: 'attendance', file: attendanceFile } : null,
-    previousAttendanceFile ? { kind: 'previous_attendance', type: 'previousAttendance', file: previousAttendanceFile } : null,
-  ].filter(Boolean);
-
   entries.forEach(({ type, file }) => startWorkbenchUploadProgress(type, file));
   try {
-    const plan = await apiJson(`${API_BASE}/runs/${activityId}/attendance-direct-upload-plan`, {
+    const plan = await apiJson(`${API_BASE}/runs/${activityId}/uploads/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3377,13 +4002,13 @@ async function uploadWorkbenchAttendanceFilesDirect(attendanceFile, previousAtte
     });
     const uploads = Array.isArray(plan.uploads) ? plan.uploads : [];
     if (uploads.length !== entries.length) {
-      throw new Error('考勤上传计划与所选文件数量不一致，请重新选择文件。');
+      throw new Error('上传计划与所选文件数量不一致，请重新选择文件。');
     }
     const uploadByKind = new Map(uploads.map(upload => [upload.kind, upload]));
     await Promise.all(entries.map(async ({ kind, type, file }) => {
       const upload = uploadByKind.get(kind);
       if (!upload?.signedUrl) {
-        throw new Error(`未生成${uploadTypeLabels[type] || '考勤'}直传地址。`);
+        throw new Error(`未生成${uploadTypeLabels[type] || '文件'}直传地址。`);
       }
       await uploadFbuFileToSignedUrl(upload, file, (progress) => {
         setWorkbenchUploadState(type, {
@@ -3394,62 +4019,65 @@ async function uploadWorkbenchAttendanceFilesDirect(attendanceFile, previousAtte
         });
       });
       setWorkbenchUploadState(type, {
-        status: 'uploading',
+        status: 'processing',
         progress: 100,
         indeterminate: true,
-        message: '已上传，正在解析',
+        message: '已上传，正在排队',
       });
     }));
-
-    const data = await apiJson(`${API_BASE}/runs/${activityId}/attendance-direct-upload-complete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planId: plan.planId }),
-    });
-    if (!data.success) {
-      throw new Error(data.detail || '考勤文件解析失败');
-    }
-
-    state.attendanceData = data.preview;
-    state.workbenchPreviousAttendanceFile = null;
-    const primaryFile = attendanceFile || previousAttendanceFile;
-    state.lastImportResult = {
-      type: attendanceFile ? 'attendance' : 'previousAttendance',
-      hasResultFile: Boolean(data.result_file),
-      filename: primaryFile.name,
-      summary: data.preview?.summary || {},
-      context: data.preview?.summary?.attendance_context || null,
-      at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    const jobId = plan.job?.jobId;
+    if (!jobId) throw new Error('上传任务编号缺失，请重新上传。');
+    const metadata = {
+      jobId,
+      runId: activityId,
+      entries: entries.map(({ type, file }) => ({
+        type,
+        fileName: file.name,
+      })),
     };
-    if (attendanceFile) {
-      finishWorkbenchUploadProgress('attendance', attendanceFile.name, '已解析');
-    }
-    if (previousAttendanceFile) {
-      finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入');
-    }
-    const refreshedActivity = await enterActivity(activityId, { preservePage: true, preserveStep: true });
-    if (!refreshedActivity) {
-      throw new Error('文件已解析，但活动详情刷新失败，请重新进入活动后确认');
-    }
-    renderWorkbench();
+    rememberFbuUploadJob(jobId, metadata);
+    updateFbuUploadJobMaterials(metadata, {
+      status: 'processing',
+      progress: 5,
+      indeterminate: true,
+      message: '正在排队',
+      canRetry: false,
+    });
+    await apiJson(`${API_BASE}/runs/${activityId}/uploads/${jobId}/start`, {
+      method: 'POST',
+    });
+    return pollFbuUploadJob(jobId);
   } catch (error) {
     const directUnavailable = error.status === 409
       || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
-    if (isLocalFbuHost() && directUnavailable) {
-      if (attendanceFile) {
-        return uploadWorkbenchFileMultipart('attendance', attendanceFile);
-      }
-      return uploadWorkbenchPreviousAttendanceFileMultipart(previousAttendanceFile);
+    if (isLocalFbuHost() && directUnavailable && typeof options.fallback === 'function') {
+      return options.fallback();
     }
     entries.forEach(({ type, file }) => failWorkbenchUploadProgress(type, file.name, error.message));
   }
+}
+
+async function uploadWorkbenchAttendanceFilesDirect(attendanceFile, previousAttendanceFile) {
+  if (!state.currentActivity || (!attendanceFile && !previousAttendanceFile)) return;
+  const entries = [
+    attendanceFile ? { kind: 'attendance', type: 'attendance', file: attendanceFile } : null,
+    previousAttendanceFile ? { kind: 'previousAttendance', type: 'previousAttendance', file: previousAttendanceFile } : null,
+  ].filter(Boolean);
+  return uploadWorkbenchFilesDirect(entries, {
+    fallback: () => attendanceFile
+      ? uploadWorkbenchFileMultipart('attendance', attendanceFile)
+      : uploadWorkbenchPreviousAttendanceFileMultipart(previousAttendanceFile),
+  });
 }
 
 async function uploadWorkbenchFile(type, file) {
   if (type === 'attendance') {
     return uploadWorkbenchAttendanceFilesDirect(file, state.workbenchPreviousAttendanceFile);
   }
-  return uploadWorkbenchFileMultipart(type, file);
+  return uploadWorkbenchFilesDirect(
+    [{ kind: type, type, file }],
+    { fallback: () => uploadWorkbenchFileMultipart(type, file) },
+  );
 }
 
 async function uploadWorkbenchFileMultipart(type, file) {
@@ -3480,6 +4108,9 @@ async function uploadWorkbenchFileMultipart(type, file) {
   } else if (type === 'adjustments') {
     formData.append('run_id', state.currentActivity.run_id);
     endpoint = `${API_BASE}/import-adjustments`;
+  } else if (type === 'transferHistory') {
+    formData.append('run_id', state.currentActivity.run_id);
+    endpoint = `${API_BASE}/import-transfer-history`;
   } else if (type === 'supplementalLeave') {
     formData.append('run_id', state.currentActivity.run_id);
     endpoint = `${API_BASE}/import-supplemental-leave`;
@@ -3512,6 +4143,7 @@ async function uploadWorkbenchFileMultipart(type, file) {
     if (type === 'attendance') {
       state.attendanceData = data.preview;
       state.workbenchPreviousAttendanceFile = null;
+      prioritizePendingSupplementalLeave();
       if (previousAttendanceFile) {
         finishWorkbenchUploadProgress('previousAttendance', previousAttendanceFile.name, '已随考勤纳入', { render: false });
       }
@@ -3538,54 +4170,88 @@ async function uploadWorkbenchFileMultipart(type, file) {
   }
 }
 
-async function uploadWorkbenchSalaryHistory() {
-  const files = state.workbenchSalaryHistoryFiles;
-  if (!state.currentActivity || !files.previousSalary || !files.currentSalary || !files.salaryAdjustments) return;
-
+async function uploadWorkbenchSalaryHistoryMaterialMultipart(type, file) {
+  if (!state.currentActivity || !file) return;
+  const activityId = state.currentActivity.run_id;
   const formData = new FormData();
-  formData.append('run_id', state.currentActivity.run_id);
-  formData.append('previous_salary', files.previousSalary);
-  formData.append('current_salary', files.currentSalary);
-  formData.append('adjustments', files.salaryAdjustments);
-  formData.append('response_mode', 'compact');
+  formData.append('run_id', activityId);
+  formData.append('material_type', type);
+  formData.append('file', file);
+  startWorkbenchUploadProgress(type, file);
   try {
-    const data = await apiJson(`${API_BASE}/import-salary-history`, { method: 'POST', body: formData });
-    const verification = {
-      ...(data.verification || {}),
-      employees: data.verification?.employees || data.preview?.employees || [],
-    };
-    state.salaryData = data.preview;
-    state.adjustmentData = data.adjustment_preview || null;
+    const data = await apiJson(`${API_BASE}/import-salary-history-material`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!data.success) {
+      failWorkbenchUploadProgress(type, file.name, data.detail || '上传失败');
+      return;
+    }
+
+    const missingLabels = (data.missing_materials || [])
+      .map(materialType => uploadTypeLabels[materialType] || materialType);
+    if (data.ready_for_reconciliation) {
+      state.salaryData = data.preview;
+      const completedFileNames = {
+        previousSalary: state.currentActivity?.previous_salary_file,
+        currentSalary: state.currentActivity?.salary_file,
+        salaryAdjustments: state.currentActivity?.adjustment_file,
+        [type]: file.name,
+      };
+      Object.keys(SALARY_HISTORY_MATERIAL_FIELDS).forEach(materialType => {
+        finishWorkbenchUploadProgress(
+          materialType,
+          completedFileNames[materialType] || '',
+          '已核验',
+        );
+      });
+    } else {
+      finishWorkbenchUploadProgress(
+        type,
+        file.name,
+        missingLabels.length ? `已上传，待补：${missingLabels.join('、')}` : '已上传并解析',
+      );
+    }
     state.lastImportResult = {
-      type: 'salary',
+      type,
       hasResultFile: Boolean(data.result_file),
-      filename: files.currentSalary.name,
-      summary: verification.summary || data.preview?.summary || {},
+      filename: file.name,
+      summary: data.verification?.summary || data.material_preview?.summary || {},
       at: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     };
-    ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
-      finishWorkbenchUploadProgress(type, files[type].name, '已核验', { render: false });
+    const refreshedActivity = await enterActivity(activityId, {
+      preservePage: true,
+      preserveStep: true,
+      refreshSections: true,
     });
-    state.workbenchSalaryHistoryFiles = {};
-    applyCurrentActivityPatch({
-      run_id: state.currentActivity.run_id,
-      previous_salary_file: files.previousSalary.name,
-      current_salary_file: files.currentSalary.name,
-      salary_file: files.currentSalary.name,
-      adjustment_file: files.salaryAdjustments.name,
-      salary_data: data.preview,
-      salary_verification_data: verification,
-      adjustment_data: data.adjustment_preview,
-      current_step: 2,
-      status: 'step2',
-    }, { invalidateResults: true });
+    if (!refreshedActivity) {
+      throw new Error('文件已上传，但活动详情刷新失败，请重新进入活动后确认');
+    }
     renderWorkbenchCurrentStep();
   } catch (error) {
-    ['previousSalary', 'currentSalary', 'salaryAdjustments'].forEach(type => {
-      failWorkbenchUploadProgress(type, files[type]?.name || '', error.message, { render: false });
-    });
-    renderWorkbenchCurrentStep();
+    failWorkbenchUploadProgress(type, file.name, error.message);
   }
+}
+
+async function uploadWorkbenchSalaryHistoryMaterial(type, file) {
+  if (!state.currentActivity || !file) return;
+  return uploadWorkbenchFilesDirect(
+    [{ kind: type, type, file }],
+    { fallback: () => uploadWorkbenchSalaryHistoryMaterialMultipart(type, file) },
+  );
+}
+
+function renderSalaryVerificationButton(employeeId, choice, label, tone = 'secondary', title = '') {
+  const isPending = state.salaryVerificationPendingIds.has(String(employeeId || ''));
+  return `
+    <button class="btn btn-sm btn-${escapeHtml(tone)}"
+            type="button"
+            ${title ? `title="${escapeHtml(title)}"` : ''}
+            ${isPending ? 'disabled aria-busy="true"' : ''}
+            onclick="confirmSalaryVerification(${formatJsArg(employeeId)}, ${formatJsArg(choice)})">
+      ${isPending ? '处理中…' : escapeHtml(label)}
+    </button>
+  `;
 }
 
 function findSalaryVerificationRowElement(employeeId) {
@@ -3767,6 +4433,7 @@ async function uploadWorkbenchPreviousAttendanceFileMultipart(file) {
       status: 'step1',
     }, { invalidateResults: true });
     state.workbenchPreviousAttendanceFile = null;
+    prioritizePendingSupplementalLeave();
     finishWorkbenchUploadProgress('previousAttendance', file.name, '已随考勤纳入');
   } catch (error) {
     failWorkbenchUploadProgress('previousAttendance', file.name, error.message);
@@ -3781,16 +4448,7 @@ function handleWorkbenchUploadChange(type, event) {
       failWorkbenchUploadProgress(type, file.name, '仅支持 .xlsx / .xls');
       return;
     }
-    state.workbenchSalaryHistoryFiles[type] = file;
-    setWorkbenchUploadState(type, {
-      fileName: file.name,
-      fileSize: file.size,
-      status: 'selected',
-      progress: 100,
-      message: '已选择，集齐三份文件后自动核验',
-    });
-    renderWorkbenchCurrentStep();
-    uploadWorkbenchSalaryHistory();
+    uploadWorkbenchSalaryHistoryMaterial(type, file);
     return;
   }
   if (type === 'previousAttendance') {
@@ -3834,50 +4492,82 @@ function setWorkbenchResultFilter(filter) {
   renderWorkbenchCurrentStep();
 }
 
-function getActiveWorkbenchTableType() {
-  return {
-    people: 'people',
-    attendance: 'attendance',
-    salary: 'salary',
-    performance: 'performance',
-    results: 'results',
-  }[state.activityStep] || '';
+function getWorkbenchStepSearch(type) {
+  return String(state.workbenchStepSearch?.[type] || '');
 }
 
-function setWorkbenchStepSearch(value = '') {
+function setWorkbenchStepSearch(type, value = '') {
   const focusSnapshot = captureInputFocus();
-  state.workbenchStepSearch = value || '';
-  if (workbenchStepSearchTimer) {
-    window.clearTimeout(workbenchStepSearchTimer);
-    workbenchStepSearchTimer = null;
-  }
-  const activeType = getActiveWorkbenchTableType();
-  if (activeType) {
-    getTablePagination(activeType).page = 1;
+  state.workbenchStepSearch = {
+    ...state.workbenchStepSearch,
+    [type]: value || '',
+  };
+  window.clearTimeout(filterTimers[`workbench:${type}`]);
+  if (type === 'finalResults') {
+    ['resultsWarehouse', 'resultsFunctional', 'resultsDistrict'].forEach(paginationKey => {
+      getTablePagination(paginationKey).page = 1;
+    });
+    renderWorkbench();
+    restoreInputFocus(focusSnapshot);
+    loadFinalResultsPage({ page: 1 });
+    return;
+  } else {
+    getTablePagination(type).page = 1;
   }
   renderWorkbenchCurrentStep();
   restoreInputFocus(focusSnapshot);
 }
 
-function handleWorkbenchStepSearchInput(event) {
-  const input = event?.target;
-  if (!(input instanceof HTMLInputElement)) return;
-  state.workbenchStepSearch = input.value || '';
-  if (composingWorkbenchStepSearch || event?.isComposing) return;
-  setWorkbenchStepSearch(input.value);
+function queueWorkbenchStepSearch(type, input) {
+  window.clearTimeout(filterTimers[`workbench:${type}`]);
+  filterTimers[`workbench:${type}`] = window.setTimeout(() => {
+    setWorkbenchStepSearch(type, input.value);
+  }, 260);
 }
 
-function handleWorkbenchStepSearchCompositionStart() {
-  composingWorkbenchStepSearch = true;
-  if (workbenchStepSearchTimer) {
-    window.clearTimeout(workbenchStepSearchTimer);
-    workbenchStepSearchTimer = null;
+function handleWorkbenchStepSearchInput(event, type) {
+  const input = event?.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  state.workbenchStepSearch = {
+    ...state.workbenchStepSearch,
+    [type]: input.value || '',
+  };
+  if (event?.isComposing || composingFilterInputs.has(input)) return;
+  queueWorkbenchStepSearch(type, input);
+}
+
+function handleWorkbenchStepSearchCompositionStart(event, type) {
+  const input = event?.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  composingFilterInputs.add(input);
+  window.clearTimeout(filterTimers[`workbench:${type}`]);
+}
+
+function handleWorkbenchStepSearchCompositionEnd(event, type) {
+  const input = event?.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  composingFilterInputs.delete(input);
+  state.workbenchStepSearch = {
+    ...state.workbenchStepSearch,
+    [type]: input.value || '',
+  };
+  queueWorkbenchStepSearch(type, input);
+}
+
+function handleWorkbenchStepSearchKeydown(event, type) {
+  if (event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault();
+    window.clearTimeout(filterTimers[`workbench:${type}`]);
+    setWorkbenchStepSearch(type, event.currentTarget.value);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    clearWorkbenchStepSearch(type);
   }
 }
 
-function handleWorkbenchStepSearchCompositionEnd(event) {
-  composingWorkbenchStepSearch = false;
-  handleWorkbenchStepSearchInput(event);
+function clearWorkbenchStepSearch(type) {
+  window.clearTimeout(filterTimers[`workbench:${type}`]);
+  setWorkbenchStepSearch(type, '');
 }
 
 function setCheckTab(tab = 'base') {
@@ -3999,6 +4689,7 @@ el.workbenchUploadPreviousAttendance?.addEventListener('change', event => handle
 el.workbenchUploadPreviousSalary?.addEventListener('change', event => handleWorkbenchUploadChange('previousSalary', event));
 el.workbenchUploadCurrentSalary?.addEventListener('change', event => handleWorkbenchUploadChange('currentSalary', event));
 el.workbenchUploadSalaryAdjustments?.addEventListener('change', event => handleWorkbenchUploadChange('salaryAdjustments', event));
+el.workbenchUploadTransferHistory?.addEventListener('change', event => handleWorkbenchUploadChange('transferHistory', event));
 el.workbenchUploadPerformance?.addEventListener('change', event => handleWorkbenchUploadChange('performance', event));
 el.workbenchUploadSupplementalLeave?.addEventListener('change', event => handleWorkbenchUploadChange('supplementalLeave', event));
 function downloadAdjustmentsTemplate() {
@@ -4470,7 +5161,7 @@ function renderSalaryData() {
               <td>${toNumber(emp.fixed_performance_base) > 0 ? formatCurrency(emp.fixed_performance_base) : '-'}</td>
               <td>${renderSalaryQualityStatus(emp)}</td>
               <td>${emp.verification_status === 'blocking'
-                ? `<div class="table-actions"><button class="btn btn-sm btn-secondary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'previous')" ${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? 'disabled' : ''}>${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? '确认中…' : '按上月'}</button><button class="btn btn-sm btn-primary" onclick="confirmSalaryVerification('${escapeHtml(emp.employee_id)}', 'current')" ${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? 'disabled' : ''}>${state.salaryVerificationPendingIds.has(String(emp.employee_id)) ? '确认中…' : '按当月'}</button></div>`
+                ? `<div class="table-actions">${renderSalaryVerificationButton(emp.employee_id, 'previous', '按上月')}${renderSalaryVerificationButton(emp.employee_id, 'current', '按当月', 'primary')}</div>`
                 : escapeHtml(emp.resolution || '已核验')}</td>
             </tr>
           `).join('') : renderEmptyTableRow(12, '没有匹配的薪资记录')}
@@ -4957,7 +5648,9 @@ function applySupplementalLeavePreview(activity, preview) {
 }
 
 function updateSupplementalLeaveSummary(summary = state.supplementalLeaveData?.summary || {}) {
-  document.querySelectorAll('.leave-summary-compact [data-summary-key]').forEach(item => {
+  document.querySelectorAll(
+    '.leave-summary-compact [data-summary-key], .supplemental-title-hours[data-summary-key]',
+  ).forEach(item => {
     const key = item.dataset.summaryKey;
     const value = item.querySelector('strong');
     if (value) value.textContent = renderSupplementalSummaryValue(summary, key);
@@ -5417,6 +6110,9 @@ function renderResultsData() {
 async function executeCalculate() {
   if (!state.currentActivity) return;
   if (state.calculationPending) return;
+  if (['queued', 'processing'].includes(state.calculationJobStatus?.status)) {
+    return pollFbuCalculationJob(state.activeCalculationJob?.jobId);
+  }
 
   const summary = state.diagnosticsData?.summary;
   if (summary?.error_count > 0) {
@@ -5433,25 +6129,37 @@ async function executeCalculate() {
   state.calculationPending = true;
   renderWorkbenchCurrentStep();
   try {
-    const data = await apiJson(`${API_BASE}/calculate/${state.currentActivity.run_id}?response_mode=compact`, {
+    if (
+      state.activeCalculationJob?.runId === state.currentActivity.run_id
+      && (state.calculationJobStatus?.canRetry || state.calculationJobStatus?.recoverable)
+    ) {
+      return resumeFbuCalculationJob();
+    }
+    const runId = state.currentActivity.run_id;
+    state.resultsData = [];
+    clearRemoteResultViews(runId);
+    state.calculationJobStatus = {
+      status: 'queued',
+      progress: 5,
+      message: '正在排队',
+    };
+    renderWorkbenchCurrentStep();
+    const data = await apiJson(`${API_BASE}/runs/${runId}/calculation-jobs`, {
       method: 'POST',
     });
-
-    if (data.success) {
-      showNotification('核算完成', 'success');
-      applyCurrentActivityPatch(data.activity || {
-        run_id: state.currentActivity.run_id,
-        status: 'completed',
-        current_step: 5,
-        total_employees: data.total_employees,
-        total_bonus: data.total_bonus,
-      });
-      state.diagnosticsData = state.currentActivity.diagnostics || null;
-      state.activityStep = 'export';
-    } else {
-      showNotification('核算失败: ' + (data.detail || '未知错误'), 'error');
+    const jobId = data.job?.jobId;
+    if (!jobId) {
+      throw new Error('核算任务未返回任务编号');
     }
+    rememberFbuCalculationJob(runId, jobId);
+    return pollFbuCalculationJob(jobId);
   } catch (error) {
+    state.calculationJobStatus = {
+      status: 'failed',
+      canRetry: Boolean(state.activeCalculationJob?.jobId),
+      message: error.message || '核算任务创建失败',
+    };
+    renderWorkbenchCurrentStep();
     showNotification('核算失败: ' + error.message, 'error');
   } finally {
     state.calculationPending = false;
@@ -5562,10 +6270,7 @@ function renderTableByType(type, focusSnapshot = null) {
   if (type === 'supplementalLeave') renderSupplementalLeaveData();
   if (type === 'results') renderResultsData();
   if (type === 'exceptions') renderExceptionQueue();
-  if (type === 'activities') {
-    renderActivities();
-    loadActivityListDetails();
-  }
+  if (type === 'activities') renderActivities();
   restoreInputFocus(focusSnapshot);
 }
 
@@ -5583,6 +6288,17 @@ function resetTableFilter(type) {
 
 function changeTablePage(type, page) {
   getTablePagination(type).page = Number(page) || 1;
+  if (state.activityStep === 'check' && type === 'baseSummary') {
+    loadCheckResultsPage({ page: getTablePagination(type).page });
+    return;
+  }
+  if (
+    state.activityStep === 'export'
+    && ['resultsWarehouse', 'resultsFunctional', 'resultsDistrict'].includes(type)
+  ) {
+    loadFinalResultsPage({ page: getTablePagination(type).page });
+    return;
+  }
   renderTableByType(type);
 }
 
@@ -5591,6 +6307,17 @@ function changeTablePageSize(type, pageSize) {
   const pagination = getTablePagination(type);
   pagination.pageSize = TABLE_PAGE_SIZE_OPTIONS.includes(size) ? size : DEFAULT_TABLE_PAGE_SIZE;
   pagination.page = 1;
+  if (state.activityStep === 'check' && type === 'baseSummary') {
+    loadCheckResultsPage({ page: 1, pageSize: pagination.pageSize });
+    return;
+  }
+  if (
+    state.activityStep === 'export'
+    && ['resultsWarehouse', 'resultsFunctional', 'resultsDistrict'].includes(type)
+  ) {
+    loadFinalResultsPage({ page: 1, pageSize: pagination.pageSize });
+    return;
+  }
   renderTableByType(type);
 }
 
@@ -5751,11 +6478,14 @@ function getStepStatus(stepKey, activity) {
   if (stepKey === 'people') return activity?.roster_file ? '已完成' : '未完成';
   if (stepKey === 'attendance') return activity?.attendance_file && activity?.supplemental_leave_file ? '已完成' : '未完成';
   if (stepKey === 'salary') {
-    return activity?.previous_salary_file && activity?.salary_file && activity?.adjustment_file ? '已完成' : '未完成';
+    return activity?.previous_salary_file && activity?.salary_file && activity?.adjustment_file && activity?.transfer_file ? '已完成' : '未完成';
   }
   if (stepKey === 'performance') return activity?.performance_file || activity?.performance_data?.employees?.length ? '已完成' : '未完成';
-  if (stepKey === 'check') return activity?.results?.length ? '已完成' : '未开始';
-  if (stepKey === 'export') return activity?.results?.length ? '已完成' : '未开始';
+  if (stepKey === 'check' || stepKey === 'export') {
+    return activity?.status === 'completed' || toNumber(activity?.total_employees) > 0
+      ? '已完成'
+      : '未开始';
+  }
   return '未开始';
 }
 
@@ -5800,7 +6530,7 @@ function getStepInfoText(stepKey) {
   const notices = {
     people: '上传花名册后，系统自动核对本月参与核算人员。',
     attendance: '上传当月考勤和补充假勤后，系统自动计算本月工时。',
-    salary: '上传上月和当月薪资档案及全量调薪流程后，系统按生效日核验时薪和绩效比例。',
+    salary: '上传相邻薪资档案、调薪流程和人事调动记录后，系统按生效日核验时薪、绩效比例及岗位。',
     performance: '上传绩效报表后，缺少绩效数据的离职人员可在本步骤补充系数。',
     check: '确认没有需要继续处理的事项后，开始本月核算。',
     export: '确认最终结果后，导出本月绩效奖金表。',
@@ -5835,6 +6565,33 @@ function renderStepInfoStrip(stepKey, activity = getWorkbenchActivity()) {
   `;
 }
 
+function getActivitySectionSummary(activity, field) {
+  const listedActivity = state.activities.find(item => item.run_id === activity?.run_id);
+  const summary = (
+    activity?.sections?.[field]?.summary
+    || listedActivity?.sections?.[field]?.summary
+  );
+  return summary && typeof summary === 'object' ? summary : {};
+}
+
+function hasBaseOverrideRule(activity, ruleType, summaryKey) {
+  const employees = activity?.base_override_data?.employees;
+  if (Array.isArray(employees)) {
+    return employees.some(row => row.rule_type === ruleType);
+  }
+  return toNumber(getActivitySectionSummary(activity, 'base_override_data')?.[summaryKey]) > 0;
+}
+
+function getSalaryVerificationBlockingCount(activity) {
+  const summary = activity?.salary_verification_data?.summary;
+  if (summary && typeof summary === 'object') {
+    return toNumber(summary.blocking_count);
+  }
+  return toNumber(
+    getActivitySectionSummary(activity, 'salary_verification_data')?.blocking_count,
+  );
+}
+
 function buildNeedsForStep(stepKey, activity) {
   const needs = [];
   const push = (id, text, action = '') => needs.push({ id, text, action });
@@ -5846,25 +6603,42 @@ function buildNeedsForStep(stepKey, activity) {
   if (stepKey === 'attendance') {
     if (!activity.attendance_file) push('attendance', '请上传考勤日报', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'attendance\')">上传</button>');
     if (!activity.supplemental_leave_file) push('supplementalLeave', '请上传补充假勤', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'supplementalLeave\')">上传</button>');
-    if (!activity.base_override_data?.employees?.some(row => row.rule_type === '96工时制')) {
+    if (!hasBaseOverrideRule(activity, '96工时制', 'work_hour_rule_count')) {
       push('workHourList', '请确认96工时制员工名单', '<button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(\'workHour\')">确认名单</button>');
     }
-    getSupplementalSuggestionRows(getWorkbenchSupplementalRows(activity)).slice(0, 5).forEach(row => {
-      push(
-        `leave-${row.row_id}`,
-        `${row.employee_id} ${row.name || ''} 补充假勤请确认`,
-        `<button class="btn btn-primary btn-sm" type="button" onclick="applyWorkbenchSupplementalSuggestion(${formatJsArg(row.row_id)}, ${getSupplementalSuggestedHours(row)})">计入建议小时</button>`,
+    const supplementalRows = getWorkbenchSupplementalRows(activity);
+    const supplementalRowsLoaded = (
+      Array.isArray(activity?.supplemental_leave_data?.rows)
+      || Array.isArray(state.supplementalLeaveData?.rows)
+      || (activity.loaded_sections || []).includes('supplemental_leave_data')
+    );
+    if (supplementalRowsLoaded) {
+      getSupplementalSuggestionRows(supplementalRows).slice(0, 5).forEach(row => {
+        push(
+          `leave-${row.row_id}`,
+          `${row.employee_id} ${row.name || ''} 补充假勤请确认`,
+          `<button class="btn btn-primary btn-sm" type="button" onclick="applyWorkbenchSupplementalSuggestion(${formatJsArg(row.row_id)}, ${getSupplementalSuggestedHours(row)})">计入建议小时</button>`,
+        );
+      });
+    } else {
+      const suggestedCount = toNumber(
+        getActivitySectionSummary(activity, 'supplemental_leave_data')?.suggested_count,
       );
-    });
+      if (suggestedCount > 0) {
+        push('leave-suggestions', `请处理 ${suggestedCount} 条补充假勤建议`);
+      }
+    }
   }
   if (stepKey === 'salary') {
     if (!activity.previous_salary_file) push('previousSalary', '请上传上月薪资档案', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'previousSalary\')">上传</button>');
     if (!activity.salary_file) push('currentSalary', '请上传当月薪资档案', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'currentSalary\')">上传</button>');
     if (!activity.adjustment_file) push('salaryAdjustments', '请上传全量调薪流程', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'salaryAdjustments\')">上传</button>');
-    if (toNumber(activity.salary_verification_data?.summary?.blocking_count) > 0) {
-      push('salaryVerification', `请处理 ${toNumber(activity.salary_verification_data.summary.blocking_count)} 条薪资历史差异`);
+    if (!activity.transfer_file) push('transferHistory', '请上传人事调动记录', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'transferHistory\')">上传</button>');
+    const salaryBlockingCount = getSalaryVerificationBlockingCount(activity);
+    if (salaryBlockingCount > 0) {
+      push('salaryVerification', `请处理 ${salaryBlockingCount} 条薪资历史差异`);
     }
-    if (!activity.base_override_data?.employees?.some(row => row.rule_type === '线下固定基数覆盖')) {
+    if (!hasBaseOverrideRule(activity, '线下固定基数覆盖', 'fixed_base_count')) {
       push('fixedBaseList', '请确认固定基数人员名单', '<button class="btn btn-primary btn-sm" type="button" onclick="confirmMaintainedRuleList(\'fixedBase\')">确认名单</button>');
     }
   }
@@ -5875,7 +6649,7 @@ function buildNeedsForStep(stepKey, activity) {
     const incompleteStep = getFirstIncompleteInputStep(activity);
     if (incompleteStep) {
       const stepLabel = ACTIVITY_STEPS.find(step => step.key === incompleteStep)?.label || '前置步骤';
-      const salaryBlockingCount = toNumber(activity.salary_verification_data?.summary?.blocking_count);
+      const salaryBlockingCount = getSalaryVerificationBlockingCount(activity);
       const incompleteMessage = incompleteStep === 'salary' && salaryBlockingCount > 0
         ? `薪资历史核验还有 ${salaryBlockingCount} 条差异待确认`
         : `请先完成“${stepLabel}”后再进行核算前检查`;
@@ -5947,18 +6721,53 @@ function rowMatchesWorkbenchStepSearch(row, term) {
   return values.some(value => normalizeSearch(value).includes(term));
 }
 
-function getWorkbenchStepRows(rows) {
-  const term = normalizeSearch(state.workbenchStepSearch);
+function getWorkbenchStepRows(type, rows) {
+  const term = normalizeSearch(getWorkbenchStepSearch(type));
   if (!term) return rows;
   return rows.filter(row => rowMatchesWorkbenchStepSearch(row, term));
 }
 
+function renderWorkbenchTableSearch(type, {
+  placeholder = '搜索工号、姓名',
+  ariaLabel = '搜索工号或姓名',
+} = {}) {
+  const searchValue = getWorkbenchStepSearch(type);
+  const inputId = `workbenchStepSearchInput-${type}`;
+  return `
+    <label class="activity-table-search" for="${escapeHtml(inputId)}">
+      <span class="activity-table-search-icon" aria-hidden="true">
+        <svg class="activity-search-icon-svg" viewBox="0 0 16 16" fill="none" focusable="false">
+          <circle cx="7" cy="7" r="4.6"></circle>
+          <path d="M10.4 10.4L14 14"></path>
+        </svg>
+      </span>
+      <input id="${escapeHtml(inputId)}"
+             class="activity-table-search-input"
+             type="search"
+             value="${escapeHtml(searchValue)}"
+             placeholder="${escapeHtml(placeholder)}"
+             autocomplete="off"
+             spellcheck="false"
+             oninput="handleWorkbenchStepSearchInput(event, ${formatJsArg(type)})"
+             onkeydown="handleWorkbenchStepSearchKeydown(event, ${formatJsArg(type)})"
+             oncompositionstart="handleWorkbenchStepSearchCompositionStart(event, ${formatJsArg(type)})"
+             oncompositionend="handleWorkbenchStepSearchCompositionEnd(event, ${formatJsArg(type)})"
+             aria-label="${escapeHtml(ariaLabel)}">
+      ${searchValue ? `
+        <button class="activity-table-search-clear"
+                type="button"
+                aria-label="清空搜索"
+                onclick="event.preventDefault(); clearWorkbenchStepSearch(${formatJsArg(type)})">×</button>
+      ` : ''}
+    </label>
+  `;
+}
+
 function renderCompactEmployeeTable(title, type, rows, headers, cellsForRow, activity) {
-  const filteredRows = getWorkbenchStepRows(rows);
+  const filteredRows = getWorkbenchStepRows(type, rows);
   const pageInfo = getPaginatedRows(type, filteredRows);
   const visibleRows = pageInfo.items;
   const rowCountLabel = `${pageInfo.total}/${rows.length}`;
-  const searchValue = escapeHtml(state.workbenchStepSearch || '');
   return `
     <section class="step-section table-section">
       <div class="activity-table-toolbar">
@@ -5966,15 +6775,7 @@ function renderCompactEmployeeTable(title, type, rows, headers, cellsForRow, act
           <h3>${escapeHtml(title)}</h3>
           <span>${escapeHtml(rowCountLabel)}</span>
         </div>
-        <label class="activity-table-search" for="workbenchStepSearchInput">
-          <span class="activity-table-search-icon" aria-hidden="true">
-            <svg class="activity-search-icon-svg" viewBox="0 0 16 16" fill="none" focusable="false">
-              <circle cx="7" cy="7" r="4.6"></circle>
-              <path d="M10.4 10.4L14 14"></path>
-            </svg>
-          </span>
-          <input id="workbenchStepSearchInput" class="activity-table-search-input" type="text" value="${searchValue}" placeholder="工号/姓名" oninput="handleWorkbenchStepSearchInput(event)" oncompositionstart="handleWorkbenchStepSearchCompositionStart()" oncompositionend="handleWorkbenchStepSearchCompositionEnd(event)" aria-label="搜索工号或姓名">
-        </label>
+        ${renderWorkbenchTableSearch(type)}
       </div>
       <div class="data-table-container">
         <table class="data-table activity-table ${escapeHtml(type)}-activity-table">
@@ -6022,20 +6823,18 @@ function renderSupplementalLeaveSection(activity) {
     <section class="step-section">
       <div class="section-head compact">
         <div>
-          <h3>补充假勤确认</h3>
+          <div class="supplemental-title-line">
+            <h3>补充假勤确认</h3>
+            <span class="supplemental-title-hours" data-summary-key="include_hours">
+              <span>计入小时</span>
+              <strong>${escapeHtml(renderSupplementalSummaryValue(summary, 'include_hours'))}</strong>
+            </span>
+          </div>
           <p>普通病假、年假默认确认；离职病假结算需要在这里继续处理。</p>
         </div>
         <div class="section-actions">
           <button class="btn btn-primary btn-sm" type="button" onclick="applyAllSupplementalLeaveSuggestions()" ${suggestionRows.length ? '' : 'disabled'}>应用全部建议计入${suggestionRows.length ? `(${suggestionRows.length})` : ''}</button>
         </div>
-      </div>
-      <div class="leave-summary-compact">
-        ${renderSupplementalSummaryItem(summary, 'total_rows', '解析')}
-        ${renderSupplementalSummaryItem(summary, 'pending_count', '待确认')}
-        ${renderSupplementalSummaryItem(summary, 'include_count', '确认计入', 'success')}
-        ${renderSupplementalSummaryItem(summary, 'excluded_count', '已排除')}
-        ${renderSupplementalSummaryItem(summary, 'attendance_unmatched_count', '未匹配考勤')}
-        ${renderSupplementalSummaryItem(summary, 'include_hours', '计入小时')}
       </div>
       ${renderSupplementalLeaveFilterBar(rows, filteredRows)}
       ${renderSupplementalLeaveBulkBar(calcMonth)}
@@ -6083,6 +6882,292 @@ function renderAttendanceSummaryTable(activity) {
     ], activity);
 }
 
+const HOURLY_RATE_POLICY_LABELS = {
+  base: '全周期基础时薪',
+  night: '全周期基础+1',
+  by_shift: '按班次（夜班+1）',
+};
+const HOURLY_RATE_POLICY_BUTTON_LABELS = {
+  base: '统一用白班时薪',
+  night: '统一用夜班时薪',
+  by_shift: '按实际班次',
+};
+
+function getHourlyRatePolicyRows(activity, { visibleOnly = true } = {}) {
+  const rows = activity?.hourly_rate_policy_data?.rows || [];
+  const visibleRows = visibleOnly ? rows.filter(row => row.visible) : rows;
+  if (!visibleOnly) return visibleRows;
+
+  const term = normalizeSearch(getWorkbenchStepSearch('hourlyRatePolicy'));
+  const shiftFilter = String(getTableFilter('hourlyRatePolicy').shift || 'all');
+  return visibleRows.filter(row => {
+    const matchesTerm = !term || [
+      row.employee_id,
+      row.name,
+      row.department,
+      row.position,
+      row.period_start,
+      row.period_end,
+      row.shift_pattern,
+    ].some(value => normalizeSearch(value).includes(term));
+    const matchesShift = shiftFilter === 'all'
+      || (shiftFilter === 'manual' ? Boolean(row.manual_override) : row.shift_pattern === shiftFilter);
+    return matchesTerm && matchesShift;
+  });
+}
+
+function setHourlyRatePolicyShiftFilter(value) {
+  state.tableFilters.hourlyRatePolicy = {
+    ...getTableFilter('hourlyRatePolicy'),
+    shift: value || 'all',
+  };
+  getTablePagination('hourlyRatePolicy').page = 1;
+  renderWorkbench();
+}
+
+function getSalaryRateForPolicyRow(activity, policyRow) {
+  const rows = activity?.salary_data?.employees || [];
+  const employee = rows.find(
+    row => String(row.employee_id || '') === String(policyRow?.employee_id || ''),
+  );
+  const segments = employee?.effective_segments || [];
+  if (segments.length) {
+    const policyStart = String(policyRow?.overlap_start || policyRow?.period_start || '');
+    const policyEnd = String(policyRow?.overlap_end || policyRow?.period_end || '');
+    const rates = [...new Set(
+      segments
+        .filter(segment => String(segment.period_end || '') >= policyStart
+          && String(segment.period_start || '') <= policyEnd)
+        .map(segment => toNumber(segment.hourly_rate))
+        .filter(rate => rate > 0)
+    )];
+    if (rates.length === 1) return rates[0];
+    if (rates.length > 1) return null;
+  }
+  return employee && toNumber(employee.hourly_rate) > 0 ? toNumber(employee.hourly_rate) : null;
+}
+
+function formatHourlyRatePolicyOption(policy, baseRate) {
+  const label = HOURLY_RATE_POLICY_LABELS[policy] || policy;
+  if (baseRate === null) return label;
+  if (policy === 'night') return `${label}（${formatCurrency(baseRate + 1)}）`;
+  if (policy === 'base') return `${label}（${formatCurrency(baseRate)}）`;
+  return `${label}（${formatCurrency(baseRate)} / ${formatCurrency(baseRate + 1)}）`;
+}
+
+function summarizeHourlyRatePolicies(policyData) {
+  const rows = policyData?.rows || [];
+  const visibleRows = rows.filter(row => row.visible);
+  policyData.summary = {
+    total_periods: rows.length,
+    visible_count: visibleRows.length,
+    all_night_count: rows.filter(row => row.shift_pattern === '全夜班').length,
+    mixed_count: rows.filter(row => row.shift_pattern === '白夜混合').length,
+    manual_count: rows.filter(row => row.manual_override).length,
+  };
+}
+
+function applyHourlyRatePolicyOptimistically(activity, action, payload) {
+  const policyData = activity?.hourly_rate_policy_data;
+  if (!policyData?.rows?.length) return false;
+
+  if (action === 'update') {
+    const row = policyData.rows.find(item => item.row_id === payload.row_id);
+    if (!row) return false;
+    row.selected_policy = payload.selected_policy;
+    row.manual_override = payload.selected_policy !== row.suggested_policy;
+    row.visible = true;
+  } else if (action === 'restore_all') {
+    policyData.rows.forEach(row => {
+      row.selected_policy = row.suggested_policy || 'by_shift';
+      row.manual_override = false;
+      row.visible = row.shift_pattern !== '全白班';
+    });
+  } else {
+    return false;
+  }
+
+  summarizeHourlyRatePolicies(policyData);
+  return true;
+}
+
+async function updateHourlyRatePolicy(action, payload = {}) {
+  const activity = getWorkbenchActivity();
+  if (!activity?.run_id) return;
+  const previousPolicyData = JSON.parse(JSON.stringify(activity.hourly_rate_policy_data || {}));
+  const updatedImmediately = applyHourlyRatePolicyOptimistically(activity, action, payload);
+  if (updatedImmediately) {
+    setInlineActionNote('hourlyRatePolicy', '保存中…', 'warning', { render: false });
+    renderWorkbench();
+  }
+  try {
+    const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/hourly-rate-policies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    activity.hourly_rate_policy_data = data.hourly_rate_policy_data;
+    activity.results = [];
+    activity.total_employees = 0;
+    activity.total_bonus = 0;
+    activity.match_rate = 0;
+    state.resultsData = [];
+    clearRemoteResultViews(activity.run_id);
+    state.foundationRunDetails[activity.run_id] = activity;
+    const activitySummary = state.activities.find(item => item.run_id === activity.run_id);
+    if (activitySummary) {
+      activitySummary.total_employees = 0;
+      activitySummary.total_bonus = 0;
+      activitySummary.match_rate = 0;
+    }
+    setInlineActionNote('hourlyRatePolicy', '已保存', 'success', { render: false });
+    renderWorkbench();
+  } catch (error) {
+    activity.hourly_rate_policy_data = previousPolicyData;
+    renderWorkbench();
+    setInlineActionNote('hourlyRatePolicy', `周期时薪更新失败：${error.message}`, 'warning');
+  }
+}
+
+function setHourlyRatePolicy(rowId, selectedPolicy) {
+  return updateHourlyRatePolicy('update', { row_id: rowId, selected_policy: selectedPolicy });
+}
+
+function restoreHourlyRatePolicySuggestions() {
+  return updateHourlyRatePolicy('restore_all');
+}
+
+async function addHourlyRatePolicyEmployee() {
+  const activity = getWorkbenchActivity();
+  const allRows = getHourlyRatePolicyRows(activity, { visibleOnly: false });
+  const hiddenIds = [...new Set(allRows.filter(row => !row.visible).map(row => row.employee_id))];
+  if (!hiddenIds.length) {
+    setInlineActionNote('hourlyRatePolicy', '当前所有有实际出勤的员工都已在建议区中。');
+    return;
+  }
+  const result = await openAppDialog({
+    title: '添加特殊时薪人员',
+    message: '适用于白班出勤但需要按夜班时薪核算的员工。添加后可按工资周期修改。',
+    confirmText: '添加',
+    input: {
+      label: '员工工号',
+      placeholder: '例如 zt0020091',
+      help: '只支持本月有实际出勤、当前未展示的员工。',
+      validate: value => hiddenIds.includes(value.trim()) ? '' : '未找到该员工可调整的工资周期',
+    },
+  });
+  if (!result?.confirmed) return;
+  await updateHourlyRatePolicy('add_employee', { employee_id: result.value });
+}
+
+function renderHourlyRatePolicySection(activity) {
+  if (!activity?.attendance_data?.employees?.length) return '';
+  const rows = getHourlyRatePolicyRows(activity);
+  const pageInfo = getPaginatedRows('hourlyRatePolicy', rows);
+  const summary = activity?.hourly_rate_policy_data?.summary || {};
+  const shiftFilter = String(getTableFilter('hourlyRatePolicy').shift || 'all');
+  return `
+    <section class="step-section hourly-rate-policy-section">
+      <div class="section-head compact hourly-rate-policy-head">
+        <div>
+          <h3>周期适用时薪</h3>
+          <p>系统建议已默认用于核算；点击右侧按钮即可修改。上传薪资档案后会自动显示具体时薪金额。</p>
+        </div>
+        <div class="table-actions">
+          ${toNumber(summary.manual_count) ? '<button class="btn btn-sm btn-secondary" type="button" onclick="restoreHourlyRatePolicySuggestions()">恢复全部建议</button>' : ''}
+          <button class="btn btn-sm btn-secondary" type="button" onclick="addHourlyRatePolicyEmployee()">添加特殊人员</button>
+        </div>
+      </div>
+      <div class="hourly-rate-policy-summary">
+        <span>全夜班 <strong>${toNumber(summary.all_night_count)}</strong></span>
+        <span>白夜混合 <strong>${toNumber(summary.mixed_count)}</strong></span>
+        <span>人工调整 <strong>${toNumber(summary.manual_count)}</strong></span>
+        ${renderInlineActionNote('hourlyRatePolicy')}
+      </div>
+      <div class="hourly-rate-policy-filterbar">
+        <span class="hourly-rate-policy-filter-count">显示 <strong>${rows.length}</strong> / ${toNumber(summary.visible_count)} 条</span>
+        <div class="hourly-rate-policy-filter-controls">
+          ${renderWorkbenchTableSearch('hourlyRatePolicy', {
+            placeholder: '搜索工号、姓名、部门',
+            ariaLabel: '搜索周期时薪人员',
+          })}
+          <label class="hourly-rate-policy-shift-filter">
+            <span>类型</span>
+            <select aria-label="筛选出勤类型" onchange="setHourlyRatePolicyShiftFilter(this.value)">
+              ${[
+                ['all', '全部'],
+                ['全夜班', '全夜班'],
+                ['白夜混合', '白夜混合'],
+                ['manual', '人工调整'],
+              ].map(([value, label]) => `
+                <option value="${escapeHtml(value)}" ${shiftFilter === value ? 'selected' : ''}>${escapeHtml(label)}</option>
+              `).join('')}
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="compact-list-table">
+        <table class="data-table hourly-rate-policy-table">
+          <thead>
+            <tr>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>工资周期</th>
+              <th>出勤构成</th>
+              <th>系统建议</th>
+              <th>
+                <span class="hourly-rate-policy-heading">
+                  核算口径（点击修改）
+                  <span class="hourly-rate-policy-help">
+                    <button class="hourly-rate-policy-help-trigger" type="button" aria-label="查看核算口径说明" aria-describedby="hourly-rate-policy-help-text">i</button>
+                    <span class="hourly-rate-policy-help-content" id="hourly-rate-policy-help-text" role="tooltip">
+                      <span class="hourly-rate-policy-help-line"><strong>按实际班次：</strong>白班用白班时薪，夜班用夜班时薪。</span>
+                      <span class="hourly-rate-policy-help-line"><strong>统一用白班时薪：</strong>整周期均不加 $1。</span>
+                      <span class="hourly-rate-policy-help-line"><strong>统一用夜班时薪：</strong>整周期均加 $1。</span>
+                      <span class="hourly-rate-policy-help-line"><strong>其他计薪：</strong>OT 按所选时薪乘相应倍数，病假、年假也按所选时薪计算。</span>
+                    </span>
+                  </span>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            ${pageInfo.items.length ? pageInfo.items.map(row => {
+              const baseRate = getSalaryRateForPolicyRow(activity, row);
+              return `
+                <tr>
+                  <td>${escapeHtml(row.employee_id || '-')}</td>
+                  <td>${escapeHtml(row.name || '-')}</td>
+                  <td>${escapeHtml(`${row.period_start || '-'} 至 ${row.period_end || '-'}`)}</td>
+                  <td>${escapeHtml(`${row.shift_pattern || '-'} · 白班${formatHours(row.day_work_hours)} · 夜班${formatHours(row.night_work_hours)}`)}</td>
+                  <td>
+                    <strong>${escapeHtml(formatHourlyRatePolicyOption(row.suggested_policy, baseRate))}</strong>
+                    <span class="cell-note">${escapeHtml(row.suggestion_reason || '')}</span>
+                  </td>
+                  <td>
+                    <div class="hourly-rate-policy-options" role="group" aria-label="${escapeHtml(row.name || row.employee_id)}适用时薪">
+                      ${['by_shift', 'base', 'night'].map(policy => `
+                        <button class="workbench-segment ${row.selected_policy === policy ? 'active' : ''}"
+                                type="button"
+                                aria-pressed="${row.selected_policy === policy ? 'true' : 'false'}"
+                                title="${escapeHtml(formatHourlyRatePolicyOption(policy, baseRate))}"
+                                onclick="setHourlyRatePolicy(${formatJsArg(row.row_id)}, ${formatJsArg(policy)})">
+                          ${row.selected_policy === policy ? '✓ ' : ''}${escapeHtml(HOURLY_RATE_POLICY_BUTTON_LABELS[policy])}
+                        </button>
+                      `).join('')}
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('') : renderEmptyTableRow(6, '当前没有需要关注的周期时薪建议')}
+          </tbody>
+        </table>
+      </div>
+      ${rows.length ? renderTablePagination('hourlyRatePolicy', pageInfo) : ''}
+    </section>
+  `;
+}
+
 function getSalarySnapshotMonthLabels(calcMonth) {
   const match = String(calcMonth || '').match(/^(\d{4})-(\d{1,2})$/);
   if (!match) return { previous: '上月', current: '当月' };
@@ -6123,7 +7208,10 @@ function renderSalaryVerificationReview(activity) {
           <h3>薪资历史差异确认</h3>
           <p>以下员工存在${monthLabels.previous}与${monthLabels.current}薪资字段变化或相邻月份快照缺失。请根据薪酬依据选择核算值。</p>
         </div>
-        <span class="status-badge warning">${rows.length}条待确认</span>
+        <div class="section-actions">
+          ${renderInlineActionNote('salary')}
+          <span class="status-badge warning">${rows.length}条待确认</span>
+        </div>
       </div>
       <div class="compact-list-table">
         <table class="data-table">
@@ -6153,8 +7241,17 @@ function renderSalaryVerificationReview(activity) {
                 <td>${escapeHtml(verificationResult(row))}</td>
                 <td>
                   <div class="table-actions">
-                    ${snapshotMissing(row, 'previous') ? '' : `<button class="btn btn-sm btn-secondary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'previous')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.previous + '值'}</button>`}
-                    ${snapshotMissing(row, 'current') ? '' : `<button class="btn btn-sm btn-primary" type="button" onclick="confirmSalaryVerification(${formatJsArg(row.employee_id)}, 'current')" ${isPending ? 'disabled' : ''}>${isPending ? '确认中…' : '按' + monthLabels.current + '值'}</button>`}
+                    ${snapshotMissing(row, 'previous') ? '' : renderSalaryVerificationButton(row.employee_id, 'previous', `按${monthLabels.previous}值`)}
+                    ${snapshotMissing(row, 'current') ? '' : renderSalaryVerificationButton(row.employee_id, 'current', `按${monthLabels.current}值`, 'primary')}
+                    ${row.resolution === 'missing_current_snapshot'
+                      ? renderSalaryVerificationButton(
+                        row.employee_id,
+                        'ignore_current',
+                        `${monthLabels.current}忽略不计`,
+                        'secondary salary-ignore-snapshot-btn',
+                        `本次按0处理；后续重新上传${monthLabels.current}薪资后会重新核验`,
+                      )
+                      : ''}
                   </div>
                 </td>
               </tr>
@@ -6164,6 +7261,391 @@ function renderSalaryVerificationReview(activity) {
         </table>
       </div>
     </section>
+  `;
+}
+
+function renderTransferHistoryReview(activity) {
+  const data = activity?.transfer_data || {};
+  const summary = data.summary || {};
+  const events = data.events || [];
+  if (!activity?.transfer_file) return '';
+  const monthMatch = String(activity.calc_month || '').match(/^(\d{4})-(\d{2})$/);
+  const monthStart = monthMatch ? `${monthMatch[1]}-${monthMatch[2]}-01` : '';
+  const monthEnd = monthMatch
+    ? `${monthMatch[1]}-${monthMatch[2]}-${String(new Date(Number(monthMatch[1]), Number(monthMatch[2]), 0).getDate()).padStart(2, '0')}`
+    : '';
+  const applicationLabel = (event) => {
+    const effectiveDate = String(event.effective_date || '');
+    if (monthStart && effectiveDate < monthStart) return '整月按调动后岗位';
+    if (monthEnd && effectiveDate > monthEnd) return '整月按调动前岗位';
+    return '按生效日拆分';
+  };
+  const relevantEvents = events
+    .filter(event => event.effective_date)
+    .sort((left, right) => String(left.effective_date).localeCompare(String(right.effective_date)));
+  return `
+    <section class="step-section transfer-history-review">
+      <div class="section-head compact">
+        <div>
+          <h3>岗位历史核验</h3>
+          <p>仅采用审批状态为“已完成”的记录；调动日期作为正式生效日期，生效日前按调动前岗位，生效日起按调动后岗位。</p>
+        </div>
+        <div class="transfer-history-head-meta">
+          <div class="period-adjustment-summary">
+            <span>有效 ${toNumber(summary.completed_count)} 条</span>
+            <strong>月内拆分 ${toNumber(summary.in_month_employee_count)} 人</strong>
+          </div>
+          ${toNumber(summary.ignored_count) ? `<span class="material-action-note warning transfer-history-warning">已忽略审批中、已废弃或缺少生效日记录 ${toNumber(summary.ignored_count)} 条</span>` : ''}
+        </div>
+      </div>
+      <div class="compact-list-table">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>工号</th>
+              <th>姓名</th>
+              <th>生效日期</th>
+              <th>调动前岗位</th>
+              <th>调动后岗位</th>
+              <th>本月处理</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${relevantEvents.map(event => `
+              <tr>
+                <td>${escapeHtml(event.employee_id || '-')}</td>
+                <td>${escapeHtml(event.name || '-')}</td>
+                <td>${escapeHtml(event.effective_date || '-')}</td>
+                <td title="${escapeHtml(event.before_position || '')}">${escapeHtml(event.before_position || '-')}</td>
+                <td title="${escapeHtml(event.after_position || '')}">${escapeHtml(event.after_position || '-')}</td>
+                <td><span class="status-badge ${applicationLabel(event) === '按生效日拆分' ? 'warning' : 'neutral'}">${escapeHtml(applicationLabel(event))}</span></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function getPeriodAdjustmentDraft(activity) {
+  const draft = state.periodAdjustmentDraft;
+  if (!draft.sourceMonth) draft.sourceMonth = activity?.calc_month || '';
+  return draft;
+}
+
+function updatePeriodAdjustmentDraft(field, value) {
+  const fieldMap = {
+    employeeId: 'employeeId',
+    amount: 'amount',
+    sourceMonth: 'sourceMonth',
+    reason: 'reason',
+  };
+  const target = fieldMap[field];
+  if (!target) return;
+  state.periodAdjustmentDraft[target] = value;
+  if (state.periodAdjustmentErrors[target]) {
+    delete state.periodAdjustmentErrors[target];
+    const input = document.getElementById(`period-adjustment-${target === 'employeeId' ? 'employee' : target === 'sourceMonth' ? 'month' : target}`);
+    input?.removeAttribute('aria-invalid');
+    input?.closest('.workbench-inline-field')?.classList.remove('has-error');
+    const error = document.getElementById(`period-adjustment-${target}-error`);
+    if (error) error.remove();
+  }
+}
+
+function setPeriodAdjustmentExpanded(expanded) {
+  state.periodAdjustmentExpanded = Boolean(expanded);
+}
+
+function resetPeriodAdjustmentDraft(activity = getWorkbenchActivity()) {
+  state.periodAdjustmentDraft = {
+    employeeId: '',
+    amount: '',
+    sourceMonth: activity?.calc_month || '',
+    reason: '',
+  };
+  state.periodAdjustmentErrors = {};
+  state.periodAdjustmentExpanded = true;
+  renderWorkbench();
+}
+
+function editPeriodAdjustment(employeeId) {
+  const activity = getWorkbenchActivity();
+  const row = (activity?.period_adjustment_data?.rows || [])
+    .find(item => item.employee_id === employeeId);
+  if (!row) return;
+  state.periodAdjustmentDraft = {
+    employeeId: row.employee_id || '',
+    amount: String(row.amount ?? ''),
+    sourceMonth: row.source_month || activity?.calc_month || '',
+    reason: row.reason || '',
+  };
+  state.periodAdjustmentErrors = {};
+  state.periodAdjustmentExpanded = true;
+  renderWorkbench();
+  document.getElementById('period-adjustment-amount')?.focus();
+}
+
+function validatePeriodAdjustmentDraft(activity, draft) {
+  const errors = {};
+  const employeeId = draft.employeeId.trim();
+  const salaryRows = activity?.salary_data?.employees || [];
+  const normalizedEmployeeId = sourceEmployeeId({ employee_id: employeeId });
+  const salaryEmployeeExists = salaryRows.some(row => sourceEmployeeId(row) === normalizedEmployeeId);
+
+  if (!employeeId) {
+    errors.employeeId = '请输入员工工号';
+  } else if (!salaryEmployeeExists) {
+    errors.employeeId = '当月薪资档案中未找到该工号';
+  }
+  if (draft.amount === '') {
+    errors.amount = '请输入基数调整额';
+  } else if (!Number.isFinite(Number(draft.amount))) {
+    errors.amount = '调整额必须为数字';
+  } else if (Number(draft.amount) === 0) {
+    errors.amount = '调整额不能为 0';
+  }
+  if (!draft.sourceMonth) errors.sourceMonth = '请选择归属月份';
+  if (!draft.reason.trim()) errors.reason = '请填写调整原因';
+  return errors;
+}
+
+function focusFirstPeriodAdjustmentError(errors) {
+  const inputIds = {
+    employeeId: 'period-adjustment-employee',
+    amount: 'period-adjustment-amount',
+    sourceMonth: 'period-adjustment-month',
+    reason: 'period-adjustment-reason',
+  };
+  const firstField = ['employeeId', 'amount', 'sourceMonth', 'reason']
+    .find(field => errors[field]);
+  if (!firstField) return;
+  requestAnimationFrame(() => {
+    const input = document.getElementById(inputIds[firstField]);
+    input?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    input?.focus({ preventScroll: true });
+  });
+}
+
+function setPeriodAdjustmentBackendError(message) {
+  const text = String(message || '');
+  let field = '';
+  if (text.includes('工号') || text.includes('薪资档案')) field = 'employeeId';
+  else if (text.includes('调整额')) field = 'amount';
+  else if (text.includes('归属月份')) field = 'sourceMonth';
+  else if (text.includes('原因')) field = 'reason';
+  if (!field) return false;
+  state.periodAdjustmentErrors = { [field]: text };
+  state.periodAdjustmentExpanded = true;
+  renderWorkbench();
+  focusFirstPeriodAdjustmentError(state.periodAdjustmentErrors);
+  return true;
+}
+
+async function savePeriodAdjustment() {
+  const activity = getWorkbenchActivity();
+  const draft = getPeriodAdjustmentDraft(activity);
+  const button = document.getElementById('period-adjustment-save');
+  const editing = (activity?.period_adjustment_data?.rows || [])
+    .some(row => row.employee_id === draft.employeeId);
+  if (state.periodAdjustmentSubmitting) return;
+  const errors = validatePeriodAdjustmentDraft(activity, draft);
+  if (Object.keys(errors).length) {
+    state.periodAdjustmentErrors = errors;
+    state.periodAdjustmentExpanded = true;
+    renderWorkbench();
+    focusFirstPeriodAdjustmentError(errors);
+    return;
+  }
+  state.periodAdjustmentErrors = {};
+  state.periodAdjustmentSubmitting = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = '保存中…';
+  }
+  try {
+    const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/period-adjustments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'upsert',
+        employee_id: draft.employeeId.trim(),
+        amount: draft.amount,
+        source_month: draft.sourceMonth,
+        reason: draft.reason.trim(),
+      }),
+    });
+    activity.period_adjustment_data = data.period_adjustment_data;
+    activity.results = [];
+    activity.total_employees = 0;
+    activity.total_bonus = 0;
+    activity.match_rate = 0;
+    state.resultsData = [];
+    clearRemoteResultViews(activity.run_id);
+    state.foundationRunDetails[activity.run_id] = activity;
+    state.periodAdjustmentDraft = {
+      employeeId: '',
+      amount: '',
+      sourceMonth: activity.calc_month || '',
+      reason: '',
+    };
+    state.periodAdjustmentErrors = {};
+    state.periodAdjustmentExpanded = false;
+    renderWorkbench();
+    showNotification('Period adjustment 已保存，请重新核算', 'success');
+  } catch (error) {
+    const message = error.message || 'Period adjustment 保存失败';
+    if (!setPeriodAdjustmentBackendError(message)) showNotification(message, 'error');
+  } finally {
+    state.periodAdjustmentSubmitting = false;
+    const currentButton = document.getElementById('period-adjustment-save');
+    if (currentButton) {
+      currentButton.disabled = false;
+      currentButton.textContent = editing ? '更新' : '保存';
+    }
+  }
+}
+
+async function deletePeriodAdjustment(employeeId) {
+  const activity = getWorkbenchActivity();
+  const result = await openAppDialog({
+    title: '删除基数调整',
+    message: `将删除 ${employeeId} 的 Period adjustment。`,
+    confirmText: '删除',
+    cancelText: '保留',
+    tone: 'danger',
+  });
+  if (!result?.confirmed) return;
+  try {
+    const data = await apiJson(`${API_BASE}/runs/${activity.run_id}/period-adjustments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', employee_id: employeeId }),
+    });
+    activity.period_adjustment_data = data.period_adjustment_data;
+    activity.results = [];
+    activity.total_employees = 0;
+    activity.total_bonus = 0;
+    activity.match_rate = 0;
+    state.resultsData = [];
+    clearRemoteResultViews(activity.run_id);
+    state.foundationRunDetails[activity.run_id] = activity;
+    if (state.periodAdjustmentDraft.employeeId === employeeId) {
+      state.periodAdjustmentDraft = {
+        employeeId: '',
+        amount: '',
+        sourceMonth: activity.calc_month || '',
+        reason: '',
+      };
+      state.periodAdjustmentErrors = {};
+    }
+    renderWorkbench();
+    showNotification('Period adjustment 已删除，请重新核算', 'success');
+  } catch (error) {
+    showNotification(error.message || 'Period adjustment 删除失败', 'error');
+  }
+}
+
+function renderPeriodAdjustmentSection(activity) {
+  const rows = activity?.period_adjustment_data?.rows || [];
+  const summary = activity?.period_adjustment_data?.summary || {};
+  const salaryRows = activity?.salary_data?.employees || [];
+  const salaryReady = salaryRows.length > 0;
+  const draft = getPeriodAdjustmentDraft(activity);
+  const errors = state.periodAdjustmentErrors || {};
+  const editing = rows.some(row => row.employee_id === draft.employeeId);
+  const fieldError = (field) => errors[field]
+    ? `<span class="workbench-field-error" id="period-adjustment-${field}-error">${escapeHtml(errors[field])}</span>`
+    : '';
+  const invalidAttribute = field => errors[field]
+    ? `aria-invalid="true" aria-describedby="period-adjustment-${field}-error"`
+    : '';
+  const disabledAttribute = salaryReady ? '' : 'disabled';
+  const expanded = state.periodAdjustmentExpanded || editing || Object.keys(errors).length > 0;
+  return `
+    <details class="period-adjustment-section period-adjustment-compact"
+             ${expanded ? 'open' : ''}
+             ontoggle="setPeriodAdjustmentExpanded(this.open)">
+      <summary class="period-adjustment-toggle">
+        <span class="period-adjustment-toggle-copy">
+          <strong>绩效基数补发差额</strong>
+          <span class="status-badge neutral">选填</span>
+        </span>
+        <span class="period-adjustment-summary">
+          <span>${rows.length} 条</span>
+          <strong>${formatCurrency(summary.total_amount || 0)}</strong>
+          <span class="period-adjustment-toggle-action">维护</span>
+        </span>
+      </summary>
+      <div class="period-adjustment-body">
+        <p class="period-adjustment-guidance">
+          正数补发、负数扣回；奖金统一按本次核算月比例和系数计算。
+        </p>
+        ${salaryReady ? '' : `
+          <div class="period-adjustment-dependency" role="status">
+            请先上传当月薪资档案，系统需据此校验工号和本月绩效比例。
+          </div>
+        `}
+        <div class="workbench-inline-form period-adjustment-form">
+          <div class="workbench-inline-field ${errors.employeeId ? 'has-error' : ''}">
+            <label for="period-adjustment-employee">员工工号</label>
+            <input id="period-adjustment-employee" value="${escapeHtml(draft.employeeId)}"
+                   ${editing ? 'readonly' : ''} ${disabledAttribute} ${invalidAttribute('employeeId')}
+                   placeholder="例如 zt0017777"
+                   oninput="updatePeriodAdjustmentDraft('employeeId', this.value)">
+            ${fieldError('employeeId')}
+          </div>
+          <div class="workbench-inline-field ${errors.amount ? 'has-error' : ''}">
+            <label for="period-adjustment-amount">基数调整额</label>
+            <input id="period-adjustment-amount" type="number" step="0.01"
+                   value="${escapeHtml(draft.amount)}" placeholder="正数补发，负数扣回" ${disabledAttribute} ${invalidAttribute('amount')}
+                   oninput="updatePeriodAdjustmentDraft('amount', this.value)">
+            ${fieldError('amount')}
+          </div>
+          <div class="workbench-inline-field ${errors.sourceMonth ? 'has-error' : ''}">
+            <label for="period-adjustment-month">归属月份</label>
+            <input id="period-adjustment-month" type="month"
+                   value="${escapeHtml(draft.sourceMonth)}" ${disabledAttribute} ${invalidAttribute('sourceMonth')}
+                   oninput="updatePeriodAdjustmentDraft('sourceMonth', this.value)">
+            ${fieldError('sourceMonth')}
+          </div>
+          <div class="workbench-inline-field wide ${errors.reason ? 'has-error' : ''}">
+            <label for="period-adjustment-reason">调整原因</label>
+            <input id="period-adjustment-reason" value="${escapeHtml(draft.reason)}" ${disabledAttribute} ${invalidAttribute('reason')}
+                   placeholder="例如 补发5月绩效基数差额"
+                   oninput="updatePeriodAdjustmentDraft('reason', this.value)">
+            ${fieldError('reason')}
+          </div>
+          <div class="period-adjustment-form-actions">
+            ${editing ? '<button class="btn btn-secondary btn-sm" type="button" onclick="resetPeriodAdjustmentDraft()">取消</button>' : ''}
+            <button class="btn btn-primary btn-sm" id="period-adjustment-save" type="button"
+                    ${disabledAttribute} onclick="savePeriodAdjustment()">${editing ? '更新' : '保存'}</button>
+          </div>
+        </div>
+        ${rows.length ? `
+          <div class="period-adjustment-records">
+            ${rows.map(row => `
+              <div class="period-adjustment-record">
+                <div class="period-adjustment-record-copy">
+                  <div>
+                    <strong>${escapeHtml(row.employee_id || '-')}</strong>
+                    <span>${escapeHtml(row.name || '-')}</span>
+                    <span>${escapeHtml(row.source_month || '-')}</span>
+                  </div>
+                  <p title="${escapeHtml(row.reason || '-')}">${escapeHtml(row.reason || '-')}</p>
+                </div>
+                <strong class="period-adjustment-record-amount ${toNumber(row.amount) < 0 ? 'negative-amount' : ''}">${formatCurrency(row.amount)}</strong>
+                <div class="period-adjustment-record-actions">
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="editPeriodAdjustment(${formatJsArg(row.employee_id)})">编辑</button>
+                  <button class="btn btn-danger btn-sm" type="button" onclick="deletePeriodAdjustment(${formatJsArg(row.employee_id)})">删除</button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    </details>
   `;
 }
 
@@ -6250,16 +7732,54 @@ function getPerformanceBaseGroups(results) {
 
 function renderPerformanceBaseSummary(activity) {
   const results = getWorkbenchResults(activity);
-  const pageInfo = getPaginatedRows('baseSummary', results);
-  const groups = getPerformanceBaseGroups(results);
-  const totalBase = results.reduce((sum, result) => sum + toNumber(result.performance_base), 0);
-  const totalBonus = results.reduce((sum, result) => sum + toNumber(result.performance_bonus), 0);
-  const specialCount = results.filter(result => getBasePathLabel(result) !== '标准绩效基数路径').length;
+  const remote = state.checkResultsRemote.runId === activity?.run_id
+    ? state.checkResultsRemote
+    : null;
+  const remotePagination = remote?.pagination || {};
+  const pageInfo = remote?.pagination
+    ? {
+        items: remote.rows || [],
+        page: toNumber(remotePagination.page) || 1,
+        pageSize: toNumber(remotePagination.page_size) || DEFAULT_TABLE_PAGE_SIZE,
+        total: toNumber(remotePagination.total),
+        totalPages: toNumber(remotePagination.pages) || 1,
+        start: toNumber(remotePagination.total)
+          ? ((toNumber(remotePagination.page) || 1) - 1)
+            * (toNumber(remotePagination.page_size) || DEFAULT_TABLE_PAGE_SIZE) + 1
+          : 0,
+        end: Math.min(
+          (toNumber(remotePagination.page) || 1)
+            * (toNumber(remotePagination.page_size) || DEFAULT_TABLE_PAGE_SIZE),
+          toNumber(remotePagination.total),
+        ),
+      }
+    : getPaginatedRows('baseSummary', results);
+  const summary = remote?.summary || {};
+  const groups = Array.isArray(summary.calculation_paths)
+    ? summary.calculation_paths.map(group => ({
+        path: group.path,
+        count: toNumber(group.count),
+        totalBase: toNumber(group.total_base),
+        totalBonus: toNumber(group.total_bonus),
+      }))
+    : getPerformanceBaseGroups(results);
+  const resultCount = remote
+    ? toNumber(summary.total_employees)
+    : results.length;
+  const totalBase = remote
+    ? toNumber(summary.total_performance_base)
+    : results.reduce((sum, result) => sum + toNumber(result.performance_base), 0);
+  const totalBonus = remote
+    ? toNumber(summary.total_bonus)
+    : results.reduce((sum, result) => sum + toNumber(result.performance_bonus), 0);
+  const specialCount = remote
+    ? toNumber(summary.special_base_count)
+    : results.filter(result => getBasePathLabel(result) !== '标准绩效基数路径').length;
 
   return `
     <div class="check-tab-panel">
       ${renderImportSummary([
-        { label: '结果人数', value: results.length, mono: true },
+        { label: '结果人数', value: resultCount, mono: true },
         { label: '绩效基数合计', value: formatCurrency(totalBase), mono: true },
         { label: '特殊基数', value: `${specialCount}人`, mono: true, tone: specialCount ? 'warning' : 'success' },
         { label: '奖金总额', value: formatCurrency(totalBonus), mono: true },
@@ -6321,7 +7841,7 @@ function renderPerformanceBaseSummary(activity) {
           </tbody>
         </table>
       </div>
-      ${results.length ? renderTablePagination('baseSummary', pageInfo) : ''}
+      ${resultCount ? renderTablePagination('baseSummary', pageInfo) : ''}
     </div>
   `;
 }
@@ -6333,6 +7853,9 @@ function renderCheckIssuesPanel(activity) {
   const pageInfo = getPaginatedRows('check', issues);
   const readyCount = toNumber(summary.can_calculate_count);
   const totalCount = toNumber(summary.attendance_count);
+  const resultCount = state.checkResultsRemote.runId === activity?.run_id
+    ? toNumber(state.checkResultsRemote.summary?.total_employees)
+    : getWorkbenchResults(activity).length;
   const severityLabel = { error: '严重', warning: '提醒', info: '信息' };
 
   return `
@@ -6341,7 +7864,7 @@ function renderCheckIssuesPanel(activity) {
         { label: '严重', value: toNumber(summary.error_count), mono: true, tone: toNumber(summary.error_count) ? 'danger' : 'success' },
         { label: '提醒', value: toNumber(summary.warning_count), mono: true, tone: toNumber(summary.warning_count) ? 'warning' : 'success' },
         { label: '可继续计算', value: `${readyCount}/${totalCount}`, mono: true },
-        { label: '结果人数', value: getWorkbenchResults(activity).length, mono: true },
+        { label: '结果人数', value: resultCount, mono: true },
       ])}
       <div class="compact-list-table">
         <table class="data-table">
@@ -6382,6 +7905,109 @@ function renderExportStep(activity) {
   return `${renderFinalResults(activity)}`;
 }
 
+async function loadCheckResultsPage(options = {}) {
+  const activity = state.currentActivity;
+  if (!activity?.run_id || activity.status !== 'completed') {
+    state.checkResultsRemote = {
+      runId: '',
+      rows: [],
+      pagination: null,
+      summary: null,
+    };
+    return null;
+  }
+  const pagination = getTablePagination('baseSummary');
+  const page = Math.max(1, Number(options.page || pagination.page || 1));
+  const pageSize = TABLE_PAGE_SIZE_OPTIONS.includes(Number(options.pageSize || pagination.pageSize))
+    ? Number(options.pageSize || pagination.pageSize)
+    : DEFAULT_TABLE_PAGE_SIZE;
+  const render = options.render !== false;
+  const loadingKey = activityStepLoadingKey('check-results', activity);
+  state.activitySectionsLoading.add(loadingKey);
+  if (render && state.currentPage === 'workbench') renderWorkbench();
+
+  try {
+    const payload = await apiJson(
+      `${API_BASE}/runs/${activity.run_id}/results?`
+      + `page=${page}&page_size=${pageSize}&q=&group=all`,
+    );
+    if (state.currentActivity?.run_id !== activity.run_id) return null;
+    const remotePagination = payload.pagination || {};
+    pagination.page = Number(remotePagination.page || page);
+    pagination.pageSize = Number(remotePagination.page_size || pageSize);
+    state.checkResultsRemote = {
+      runId: activity.run_id,
+      rows: Array.isArray(payload.results) ? payload.results : [],
+      pagination: remotePagination,
+      summary: payload.summary || {},
+    };
+    return state.checkResultsRemote;
+  } catch (error) {
+    console.error('加载核验结果失败:', error);
+    showNotification(`加载核验结果失败：${error.message}`, 'error');
+    return null;
+  } finally {
+    state.activitySectionsLoading.delete(loadingKey);
+    if (render && state.currentPage === 'workbench') renderWorkbench();
+  }
+}
+
+async function loadFinalResultsPage(options = {}) {
+  const activity = state.currentActivity;
+  if (!activity?.run_id || activity.status !== 'completed') return null;
+  const group = options.group || state.finalResultSlice || 'warehouse';
+  const paginationKey = {
+    warehouse: 'resultsWarehouse',
+    functional: 'resultsFunctional',
+    district: 'resultsDistrict',
+  }[group] || 'resultsWarehouse';
+  const pagination = getTablePagination(paginationKey);
+  const page = Math.max(1, Number(options.page || pagination.page || 1));
+  const pageSize = TABLE_PAGE_SIZE_OPTIONS.includes(Number(options.pageSize || pagination.pageSize))
+    ? Number(options.pageSize || pagination.pageSize)
+    : DEFAULT_TABLE_PAGE_SIZE;
+  const query = String(
+    options.query === undefined
+      ? getWorkbenchStepSearch('finalResults')
+      : options.query,
+  ).trim();
+  const render = options.render !== false;
+  const loadingKey = activityStepLoadingKey('export', activity);
+  state.activitySectionsLoading.add(loadingKey);
+  if (render && state.currentPage === 'workbench') renderWorkbench();
+
+  try {
+    const payload = await apiJson(
+      `${API_BASE}/runs/${activity.run_id}/results?`
+      + `page=${page}&page_size=${pageSize}`
+      + `&q=${encodeURIComponent(query)}`
+      + `&group=${encodeURIComponent(group)}`,
+    );
+    if (state.currentActivity?.run_id !== activity.run_id) return null;
+    const remotePagination = payload.pagination || {};
+    pagination.page = Number(remotePagination.page || page);
+    pagination.pageSize = Number(remotePagination.page_size || pageSize);
+    state.finalResultSlice = group;
+    state.resultsData = Array.isArray(payload.results) ? payload.results : [];
+    state.finalResultsRemote = {
+      runId: activity.run_id,
+      group,
+      query,
+      rows: state.resultsData,
+      pagination: remotePagination,
+      summary: payload.summary || {},
+    };
+    return state.finalResultsRemote;
+  } catch (error) {
+    console.error('加载最终结果失败:', error);
+    showNotification(`加载最终结果失败：${error.message}`, 'error');
+    return null;
+  } finally {
+    state.activitySectionsLoading.delete(loadingKey);
+    if (render && state.currentPage === 'workbench') renderWorkbench();
+  }
+}
+
 function getFinalResultGroupKey(result) {
   if (result?.job_type === 'district_manager') return 'district';
   if (result?.job_type === 'functional') return 'functional';
@@ -6394,6 +8020,16 @@ function getFinalResultGroups(results) {
     { key: 'functional', paginationKey: 'resultsFunctional', label: '非仓人员', rows: [] },
     { key: 'district', paginationKey: 'resultsDistrict', label: '区长', rows: [] },
   ];
+  const remote = state.finalResultsRemote;
+  if (remote.runId === state.currentActivity?.run_id && remote.summary?.groups) {
+    groups.forEach(group => {
+      const meta = remote.summary.groups[group.key] || {};
+      group.count = toNumber(meta.count);
+      group.totalBonus = toNumber(meta.total_bonus);
+      group.rows = remote.group === group.key ? (remote.rows || []) : [];
+    });
+    return groups;
+  }
   const byKey = Object.fromEntries(groups.map(group => [group.key, group]));
   results.forEach(result => {
     byKey[getFinalResultGroupKey(result)]?.rows.push(result);
@@ -6402,6 +8038,12 @@ function getFinalResultGroups(results) {
 }
 
 function getFinalResultGroupMeta(group) {
+  if (group.count !== undefined) {
+    return {
+      count: toNumber(group.count),
+      totalBonus: toNumber(group.totalBonus),
+    };
+  }
   const totalBonus = group.rows.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
   return {
     count: group.rows.length,
@@ -6411,7 +8053,33 @@ function getFinalResultGroupMeta(group) {
 
 function setFinalResultSlice(sliceKey) {
   state.finalResultSlice = sliceKey || 'warehouse';
+  getTablePagination({
+    warehouse: 'resultsWarehouse',
+    functional: 'resultsFunctional',
+    district: 'resultsDistrict',
+  }[state.finalResultSlice] || 'resultsWarehouse').page = 1;
   renderWorkbenchCurrentStep();
+  loadFinalResultsPage({ page: 1, group: state.finalResultSlice });
+}
+
+function rowMatchesFinalResultSearch(result, activity, term) {
+  if (!term) return true;
+  const values = [
+    result?.employee_id,
+    result?.source_employee_id,
+    result?.name,
+    result?.department,
+    result?.area,
+    result?.position,
+    getDisplayPosition(result, activity),
+  ];
+  return values.some(value => normalizeSearch(value).includes(term));
+}
+
+function getFinalResultSearchRows(rows, activity) {
+  const term = normalizeSearch(getWorkbenchStepSearch('finalResults'));
+  if (!term) return rows;
+  return rows.filter(result => rowMatchesFinalResultSearch(result, activity, term));
 }
 
 function isNinetySixHourResult(result) {
@@ -6425,17 +8093,25 @@ function renderFinalResults(activity) {
   const groups = getFinalResultGroups(results);
   const activeGroup = groups.find(group => group.key === state.finalResultSlice) || groups[0];
   state.finalResultSlice = activeGroup?.key || 'warehouse';
-  const totalBonus = results.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
+  const remote = state.finalResultsRemote.runId === activity?.run_id
+    ? state.finalResultsRemote
+    : null;
+  const resultCount = remote?.summary
+    ? toNumber(remote.summary.total_employees)
+    : results.length;
+  const totalBonus = remote?.summary
+    ? toNumber(remote.summary.total_bonus)
+    : results.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
   return `
     <section class="step-section final-results">
       <div class="section-head compact">
         <h3>最终结果</h3>
-        <button class="btn btn-primary btn-sm" type="button" onclick="exportData('results')" ${results.length ? '' : 'disabled'}>导出结果</button>
+        <button class="btn btn-primary btn-sm" type="button" onclick="exportData('results')" ${resultCount ? '' : 'disabled'}>导出结果</button>
       </div>
       <div class="result-summary-bar compact">
         <div class="result-summary-item">
           <span>结果人数</span>
-          <span>${results.length}</span>
+          <span>${resultCount}</span>
         </div>
         <div class="result-summary-item">
           <span>奖金总额</span>
@@ -6465,14 +8141,42 @@ function renderFinalResults(activity) {
 }
 
 function renderFinalResultGroup(group, activity) {
-  const pageInfo = getPaginatedRows(group.paginationKey, group.rows);
-  const groupBonus = group.rows.reduce((sum, row) => sum + toNumber(row.performance_bonus), 0);
+  const remote = state.finalResultsRemote.runId === activity?.run_id
+    && state.finalResultsRemote.group === group.key
+    ? state.finalResultsRemote
+    : null;
+  const filteredRows = remote ? group.rows : getFinalResultSearchRows(group.rows, activity);
+  const remotePagination = remote?.pagination;
+  const pageInfo = remotePagination ? {
+    items: group.rows,
+    page: toNumber(remotePagination.page, 1),
+    pageSize: toNumber(remotePagination.page_size, DEFAULT_TABLE_PAGE_SIZE),
+    total: toNumber(remotePagination.total),
+    totalPages: toNumber(remotePagination.pages, 1),
+    start: toNumber(remotePagination.total)
+      ? ((toNumber(remotePagination.page, 1) - 1) * toNumber(remotePagination.page_size, DEFAULT_TABLE_PAGE_SIZE)) + 1
+      : 0,
+    end: Math.min(
+      toNumber(remotePagination.page, 1) * toNumber(remotePagination.page_size, DEFAULT_TABLE_PAGE_SIZE),
+      toNumber(remotePagination.total),
+    ),
+  } : getPaginatedRows(group.paginationKey, filteredRows);
+  const groupMeta = getFinalResultGroupMeta(group);
+  const groupBonus = groupMeta.totalBonus;
+  const searchValue = getWorkbenchStepSearch('finalResults');
+  const countLabel = searchValue
+    ? `${pageInfo.total}/${groupMeta.count}人`
+    : `${groupMeta.count}人`;
   return `
     <section class="final-result-group">
       <div class="final-result-group-head">
         <h4>${escapeHtml(group.label)}</h4>
-        <span>${group.rows.length}人</span>
+        <span>${escapeHtml(countLabel)}</span>
         <span>${formatCurrency(groupBonus)}</span>
+        ${renderWorkbenchTableSearch('finalResults', {
+          placeholder: '搜索工号、姓名、部门或岗位',
+          ariaLabel: '搜索最终结果',
+        })}
       </div>
       <div class="data-table-container">
         <table class="data-table final-result-table">
@@ -6491,11 +8195,13 @@ function renderFinalResultGroup(group, activity) {
             </tr>
           </thead>
           <tbody>
-            ${pageInfo.items.length ? pageInfo.items.map(result => renderFinalResultRow(result, activity)).join('') : renderEmptyTableRow(10, '当前切面暂无结果')}
+            ${pageInfo.items.length
+              ? pageInfo.items.map(result => renderFinalResultRow(result, activity)).join('')
+              : renderEmptyTableRow(10, group.rows.length ? '没有匹配的核算结果' : '当前切面暂无结果')}
           </tbody>
         </table>
       </div>
-      ${group.rows.length ? renderTablePagination(group.paginationKey, pageInfo) : ''}
+      ${pageInfo.total ? renderTablePagination(group.paginationKey, pageInfo) : ''}
     </section>
   `;
 }
@@ -6606,7 +8312,7 @@ function renderFinalBaseCalculationDetail(result) {
 }
 
 function renderBonusCalculationFormula(row, result) {
-  if (result?.job_type === 'district_manager') {
+  if (result?.job_type === 'district_manager' && !row?.is_period_adjustment) {
     return `${formatCurrency(row.performance_base)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}`;
   }
   return `${formatCurrency(row.performance_base)} × ${formatPercent(row.performance_ratio)} × ${formatCoefficient(row.performance_coefficient)} = ${formatCurrency(row.performance_bonus)}`;
@@ -6631,8 +8337,13 @@ function renderFinalResultExplanation(result) {
   const isNinetySixHour = isNinetySixHourResult(result);
   const isDistrictManager = result?.job_type === 'district_manager';
   const formulaText = renderBonusCalculationFormula(result, result);
+  const hasPeriodAdjustment = Math.abs(toNumber(result.period_adjustment)) > 0.0001;
   const fields = [
-    ['绩效基数', '按该员工核算路径得到的本月奖金基数。96工时制员工使用跨周期规则，页面和导出会标红。', formatCurrency(result.performance_base)],
+    ...(hasPeriodAdjustment ? [
+      ['系统计算绩效基数', '根据考勤、时薪和适用基数规则计算，不含补发或扣回差额。', formatCurrency(result.system_performance_base)],
+      ['Period adjustment', '薪酬组提供的绩效基数差额；正数补发，负数扣回。', formatCurrency(result.period_adjustment)],
+    ] : []),
+    [hasPeriodAdjustment ? '最终绩效基数' : '绩效基数', '按该员工核算路径得到的本月奖金基数。96工时制员工使用跨周期规则，页面和导出会标红。', formatCurrency(result.performance_base)],
     ['绩效比例', '薪资档案或调薪拆分后适用的月度绩效奖金比例。', formatPercent(result.performance_ratio)],
     ['绩效系数', '由绩效得分或绩效等级换算；有人工补录时以补录值为准。', formatCoefficient(result.performance_coefficient)],
     ['最终奖金', isDistrictManager
@@ -6692,6 +8403,17 @@ function closeFinalResultExplanation() {
 
 function renderStepContent(activity) {
   const stepKey = state.activityStep;
+  if (state.activitySectionsLoading.has(activityStepLoadingKey(stepKey, activity))) {
+    return `
+      <section class="step-section step-data-loading" role="status" aria-live="polite">
+        <div class="step-data-loading-copy">
+          <strong>正在加载当前步骤</strong>
+          <span>只读取本步骤需要的数据，请稍候。</span>
+        </div>
+        <div class="step-data-loading-track" aria-hidden="true"><span></span></div>
+      </section>
+    `;
+  }
   if (stepKey === 'people') return renderPeopleStep(activity);
   if (stepKey === 'attendance') return renderAttendanceStep(activity);
   if (stepKey === 'salary') return renderSalaryStep(activity);
@@ -6705,6 +8427,26 @@ function renderPeopleStep(activity) {
   return `${renderStepMaterials('people', activity)}${renderNeedsPanel('people', activity)}${renderPeopleTable(activity)}`;
 }
 
+function renderAttendanceSectionNav() {
+  return `
+    <nav class="attendance-section-nav" aria-label="考勤内容定位">
+      <button class="attendance-section-nav-button" type="button" aria-controls="attendanceSupplementalSection" title="定位到补充假勤" onclick="scrollToAttendanceSection('attendanceSupplementalSection')">补充假勤</button>
+      <button class="attendance-section-nav-button" type="button" aria-controls="attendanceHourlyRateSection" title="定位到周期时薪" onclick="scrollToAttendanceSection('attendanceHourlyRateSection')">周期时薪</button>
+      <button class="attendance-section-nav-button" type="button" aria-controls="attendanceWorkHoursSection" title="定位到工时表" onclick="scrollToAttendanceSection('attendanceWorkHoursSection')">工时表</button>
+    </nav>
+  `;
+}
+
+function scrollToAttendanceSection(sectionId) {
+  const section = document.getElementById(sectionId);
+  if (!section) return;
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  section.scrollIntoView({
+    behavior: prefersReducedMotion ? 'auto' : 'smooth',
+    block: 'start',
+  });
+}
+
 function renderAttendanceStep(activity) {
   return `
     <div class="step-rule-grid">
@@ -6712,8 +8454,20 @@ function renderAttendanceStep(activity) {
       ${renderMaintainedRuleList('workHour', activity)}
     </div>
     ${renderNeedsPanel('attendance', activity)}
-    ${renderSupplementalLeaveSection(activity)}
-    ${renderAttendanceSummaryTable(activity)}
+    <div class="attendance-review-layout">
+      ${renderAttendanceSectionNav()}
+      <div class="attendance-review-sections">
+        <div class="attendance-anchor-target" id="attendanceSupplementalSection">
+          ${renderSupplementalLeaveSection(activity)}
+        </div>
+        <div class="attendance-anchor-target" id="attendanceHourlyRateSection">
+          ${renderHourlyRatePolicySection(activity)}
+        </div>
+        <div class="attendance-anchor-target" id="attendanceWorkHoursSection">
+          ${renderAttendanceSummaryTable(activity)}
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -6721,10 +8475,14 @@ function renderSalaryStep(activity) {
   return `
     <div class="step-rule-grid">
       ${renderStepMaterials('salary', activity)}
-      ${renderMaintainedRuleList('fixedBase', activity)}
+      <div class="salary-support-stack">
+        ${renderMaintainedRuleList('fixedBase', activity)}
+        ${renderPeriodAdjustmentSection(activity)}
+      </div>
     </div>
     ${renderNeedsPanel('salary', activity)}
     ${renderSalaryVerificationReview(activity)}
+    ${renderTransferHistoryReview(activity)}
     ${renderSalarySummaryTable(activity)}
   `;
 }
@@ -6741,7 +8499,41 @@ function renderPerformanceStep(activity) {
 }
 
 function renderCheckStep(activity) {
-  return `${renderNeedsPanel('check', activity)}${renderCheckPreview(activity)}`;
+  return `${renderCalculationJobStatus()}${renderNeedsPanel('check', activity)}${renderCheckPreview(activity)}`;
+}
+
+function renderCalculationJobStatus() {
+  const job = state.calculationJobStatus;
+  if (!job?.status) return '';
+  const isBusy = ['queued', 'processing'].includes(job.status) && !job.recoverable;
+  if (isBusy) {
+    const label = job.stage === 'queued' || job.status === 'queued'
+      ? '核算任务正在排队'
+      : '正在核算绩效奖金';
+    return `
+      <section class="step-section step-data-loading" role="status" aria-live="polite">
+        <div class="step-data-loading-copy">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(job.message || '任务在后台执行，离开页面后也可继续。')}</span>
+        </div>
+        <div class="step-data-loading-track" aria-hidden="true"><span></span></div>
+      </section>
+    `;
+  }
+  if (job.status === 'failed' || job.recoverable) {
+    return `
+      <section class="step-section step-data-loading" role="alert">
+        <div class="step-data-loading-copy">
+          <strong>核算任务未完成</strong>
+          <span>${escapeHtml(job.error || job.message || '可重试继续核算。')}</span>
+        </div>
+        ${job.canRetry || job.recoverable
+          ? '<div><button class="btn btn-primary btn-sm" type="button" onclick="resumeFbuCalculationJob()">重试核算</button></div>'
+          : ''}
+      </section>
+    `;
+  }
+  return '';
 }
 
 function renderStepHeader(step, activity) {
@@ -6774,9 +8566,14 @@ function showNotification(message, type = 'info', options = {}) {
   const duration = options.duration ?? (type === 'error' ? null : 3600);
   const region = el.toastRegion || document.getElementById('toastRegion');
   if (!region) return;
+  const toastKey = `${type}|${title}|${message}`;
+  const duplicateToast = [...region.querySelectorAll('.toast')]
+    .find(item => item.dataset.toastKey === toastKey && !item.classList.contains('is-leaving'));
+  if (duplicateToast) return;
 
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
+  toast.dataset.toastKey = toastKey;
   toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
   toast.innerHTML = `
     <div class="toast-icon" aria-hidden="true">${escapeHtml(config.icon)}</div>

@@ -22,6 +22,7 @@ from .engines.base import (
 from .engines.attendance import AttendanceProcessor
 from .engines.salary import SalaryProcessor
 from .engines.bonus import BonusCalculator
+from .engines.coefficient import CoefficientCalculator
 
 
 def _cell(row, index: int, default=None):
@@ -240,7 +241,10 @@ def _is_night_daily_row(row: dict) -> bool:
 def _daily_rows_performance_base(rows: list[dict], hourly_rate: float) -> float:
     amount = 0.0
     for row in rows:
-        row_rate = hourly_rate + 1 if _is_night_daily_row(row) else hourly_rate
+        rate_delta = row.get("hourly_rate_delta")
+        if rate_delta is None:
+            rate_delta = 1 if _is_night_daily_row(row) else 0
+        row_rate = hourly_rate + safe_float(rate_delta)
         amount += row_rate * (
             _daily_row_number(row, "base_hours", "计薪出勤")
             + _daily_row_number(row, "ot15_hours", "OT1.5") * 1.5
@@ -251,6 +255,220 @@ def _daily_rows_performance_base(rows: list[dict], hourly_rate: float) -> float:
             + _daily_row_number(row, "holiday_hours", "节假日")
         )
     return round(amount, 2)
+
+
+HOURLY_RATE_POLICY_BASE = "base"
+HOURLY_RATE_POLICY_NIGHT = "night"
+HOURLY_RATE_POLICY_BY_SHIFT = "by_shift"
+HOURLY_RATE_POLICY_CHOICES = {
+    HOURLY_RATE_POLICY_BASE,
+    HOURLY_RATE_POLICY_NIGHT,
+    HOURLY_RATE_POLICY_BY_SHIFT,
+}
+
+
+def _actual_work_hours(row: dict) -> float:
+    return (
+        _daily_row_number(row, "base_hours", "计薪出勤")
+        + _daily_row_number(row, "ot15_hours", "OT1.5")
+        + _daily_row_number(row, "ot20_hours", "OT2.0")
+    )
+
+
+def _hourly_rate_policy_row_id(employee_id: str, period_start: str) -> str:
+    return f"{normalize_shift_employee_id(employee_id)}|{period_start}"
+
+
+def build_hourly_rate_policy_data(
+    attendance_preview: dict | None,
+    calc_month: str | None,
+    existing: dict | None = None,
+) -> dict:
+    """Build non-blocking payroll-period rate suggestions from attendance facts."""
+    employees = (attendance_preview or {}).get("employees", [])
+    existing_rows = {
+        str(row.get("row_id") or ""): row
+        for row in (existing or {}).get("rows", [])
+        if row.get("row_id")
+    }
+    periods = _iter_96_hour_full_periods(calc_month)
+    grouped: dict[str, dict] = {}
+    for employee in employees:
+        source_id = normalize_shift_employee_id(
+            employee.get("source_employee_id") or employee.get("employee_id")
+        )
+        if not source_id:
+            continue
+        target = grouped.setdefault(source_id, {
+            "employee_id": source_id,
+            "name": employee.get("name", ""),
+            "department": employee.get("department", ""),
+            "position": employee.get("position", ""),
+            "daily_rows": [],
+        })
+        target["daily_rows"].extend(employee.get("attendance_daily_rows") or [])
+
+    rows = []
+    for employee in grouped.values():
+        for period in periods:
+            start = _to_date(period.get("period_start"))
+            end = _to_date(period.get("period_end"))
+            if not start or not end:
+                continue
+            period_rows = [
+                row for row in employee["daily_rows"]
+                if (row_date := _daily_row_date(row)) and start <= row_date <= end
+            ]
+            day_hours = round(sum(
+                _actual_work_hours(row) for row in period_rows if not _is_night_daily_row(row)
+            ), 2)
+            night_hours = round(sum(
+                _actual_work_hours(row) for row in period_rows if _is_night_daily_row(row)
+            ), 2)
+            if day_hours <= 0 and night_hours <= 0:
+                continue
+
+            if night_hours > 0 and day_hours <= 0:
+                suggested_policy = HOURLY_RATE_POLICY_NIGHT
+                suggestion_reason = "该工资周期仅识别到夜班实际出勤"
+                shift_pattern = "全夜班"
+            elif day_hours > 0 and night_hours > 0:
+                suggested_policy = HOURLY_RATE_POLICY_BY_SHIFT
+                suggestion_reason = "该工资周期同时识别到白班和夜班实际出勤"
+                shift_pattern = "白夜混合"
+            else:
+                suggested_policy = HOURLY_RATE_POLICY_BASE
+                suggestion_reason = "该工资周期仅识别到白班实际出勤"
+                shift_pattern = "全白班"
+
+            row_id = _hourly_rate_policy_row_id(employee["employee_id"], period["period_start"])
+            previous = existing_rows.get(row_id, {})
+            manual_override = bool(previous.get("manual_override"))
+            selected_policy = (
+                previous.get("selected_policy")
+                if manual_override and previous.get("selected_policy") in HOURLY_RATE_POLICY_CHOICES
+                else suggested_policy
+            )
+            rows.append({
+                "row_id": row_id,
+                "employee_id": employee["employee_id"],
+                "name": employee["name"],
+                "department": employee["department"],
+                "position": employee["position"],
+                "period_start": period["period_start"],
+                "period_end": period["period_end"],
+                "overlap_start": period["overlap_start"],
+                "overlap_end": period["overlap_end"],
+                "day_work_hours": day_hours,
+                "night_work_hours": night_hours,
+                "shift_pattern": shift_pattern,
+                "suggested_policy": suggested_policy,
+                "selected_policy": selected_policy,
+                "suggestion_reason": suggestion_reason,
+                "manual_override": manual_override,
+                "visible": shift_pattern != "全白班" or manual_override,
+            })
+
+    visible_rows = [row for row in rows if row["visible"]]
+    return {
+        "rows": rows,
+        "summary": {
+            "total_periods": len(rows),
+            "visible_count": len(visible_rows),
+            "all_night_count": sum(row["shift_pattern"] == "全夜班" for row in rows),
+            "mixed_count": sum(row["shift_pattern"] == "白夜混合" for row in rows),
+            "manual_count": sum(bool(row["manual_override"]) for row in rows),
+        },
+    }
+
+
+def update_hourly_rate_policy_data(
+    policy_data: dict | None,
+    *,
+    action: str,
+    row_id: str = "",
+    employee_id: str = "",
+    selected_policy: str = "",
+) -> dict:
+    data = {
+        "rows": [dict(row) for row in (policy_data or {}).get("rows", [])],
+        "summary": dict((policy_data or {}).get("summary", {})),
+    }
+    if action == "restore_all":
+        for row in data["rows"]:
+            row["selected_policy"] = row.get("suggested_policy", HOURLY_RATE_POLICY_BY_SHIFT)
+            row["manual_override"] = False
+            row["visible"] = row.get("shift_pattern") != "全白班"
+    elif action == "add_employee":
+        source_id = normalize_shift_employee_id(employee_id)
+        matches = [row for row in data["rows"] if row.get("employee_id") == source_id]
+        if not matches:
+            raise ValueError("未找到该员工有实际出勤的工资周期")
+        for row in matches:
+            row["visible"] = True
+    elif action == "update":
+        if selected_policy not in HOURLY_RATE_POLICY_CHOICES:
+            raise ValueError("无效的适用时薪选项")
+        target = next((row for row in data["rows"] if row.get("row_id") == row_id), None)
+        if not target:
+            raise ValueError("未找到工资周期时薪记录")
+        target["selected_policy"] = selected_policy
+        target["manual_override"] = selected_policy != target.get("suggested_policy")
+        target["visible"] = True
+    else:
+        raise ValueError("无效操作")
+
+    visible_rows = [row for row in data["rows"] if row.get("visible")]
+    data["summary"] = {
+        "total_periods": len(data["rows"]),
+        "visible_count": len(visible_rows),
+        "all_night_count": sum(row.get("shift_pattern") == "全夜班" for row in data["rows"]),
+        "mixed_count": sum(row.get("shift_pattern") == "白夜混合" for row in data["rows"]),
+        "manual_count": sum(bool(row.get("manual_override")) for row in data["rows"]),
+    }
+    return data
+
+
+def apply_hourly_rate_policies(
+    attendance_data: list[dict],
+    policy_data: dict | None,
+) -> None:
+    """Annotate daily rows with the rate delta selected for their payroll period."""
+    if not (policy_data or {}).get("rows"):
+        return
+    policies_by_employee: dict[str, list[tuple[date, date, str]]] = defaultdict(list)
+    for policy_row in (policy_data or {}).get("rows", []):
+        start = _to_date(policy_row.get("period_start"))
+        end = _to_date(policy_row.get("period_end"))
+        employee_id = normalize_shift_employee_id(policy_row.get("employee_id"))
+        if not employee_id or not start or not end:
+            continue
+        policies_by_employee[employee_id].append((
+            start,
+            end,
+            str(policy_row.get("selected_policy") or HOURLY_RATE_POLICY_BY_SHIFT),
+        ))
+    for employee in attendance_data:
+        source_id = normalize_shift_employee_id(
+            employee.get("source_employee_id") or employee.get("employee_id")
+        )
+        for row in employee.get("attendance_daily_rows") or []:
+            row_date = _daily_row_date(row)
+            if not row_date:
+                continue
+            selected_policy = None
+            for start, end, policy in policies_by_employee.get(source_id, []):
+                if start and end and start <= row_date <= end:
+                    selected_policy = policy
+                    break
+            if selected_policy == HOURLY_RATE_POLICY_BASE:
+                delta = 0
+            elif selected_policy == HOURLY_RATE_POLICY_NIGHT:
+                delta = 1
+            else:
+                delta = 1 if _is_night_daily_row(row) else 0
+            row["hourly_rate_delta"] = delta
+            row["hourly_rate_policy"] = selected_policy or HOURLY_RATE_POLICY_BY_SHIFT
 
 
 def _is_auto_adjustment_event(event: dict) -> bool:
@@ -918,6 +1136,12 @@ class FBUPerformanceParser:
 
         employees = []
         month_start = _calc_month_start(calc_month)
+        ninety_six_hour_ids = {
+            normalize_shift_employee_id(row.get("employee_id"))
+            for row in (base_override_data or {}).get("employees", [])
+            if row.get("include_in_calculation")
+            and "96" in str(row.get("rule_type") or "")
+        }
 
         for emp_id, hours in attendance_data.items():
             source_emp_id = normalize_shift_employee_id(emp_id)
@@ -969,7 +1193,11 @@ class FBUPerformanceParser:
                 ratio=ratio,
                 coefficient=uploaded_coefficient,
             )
-            if adjustment_segments and "未匹配绩效报表" in exceptions:
+            if (
+                adjustment_segments
+                and all(segment.performance_coefficient > 0 for segment in adjustment_segments)
+                and "未匹配绩效报表" in exceptions
+            ):
                 exceptions.remove("未匹配绩效报表")
 
             def make_employee(
@@ -1017,6 +1245,54 @@ class FBUPerformanceParser:
                     for key in ['计薪出勤', 'OT1.5', 'OT2.0', '病假', '病假清算', '年假', '节假日']
                 }
                 employees.append(make_employee(emp_id, combined_hours, False, hourly_rate, hours.get('daily_rows', [])))
+                continue
+
+            annotated_rows = [
+                row for row in hours.get("daily_rows", [])
+                if row.get("hourly_rate_delta") is not None
+                and (
+                    not month_start
+                    or ((row_date := _daily_row_date(row)) and _same_month(row_date, month_start))
+                )
+            ]
+            if annotated_rows and source_emp_id not in ninety_six_hour_ids:
+                rows_by_delta: dict[int, list[dict]] = defaultdict(list)
+                for row in annotated_rows:
+                    delta = 1 if safe_float(row.get("hourly_rate_delta")) >= 0.5 else 0
+                    rows_by_delta[delta].append(row)
+
+                def summarize_daily_rows(daily_rows: list[dict]) -> dict:
+                    return {
+                        "计薪出勤": sum(_daily_row_number(row, "base_hours", "计薪出勤") for row in daily_rows),
+                        "OT1.5": sum(_daily_row_number(row, "ot15_hours", "OT1.5") for row in daily_rows),
+                        "OT2.0": sum(_daily_row_number(row, "ot20_hours", "OT2.0") for row in daily_rows),
+                        "病假": sum(_daily_row_number(row, "sick_hours", "病假") for row in daily_rows),
+                        "病假清算": sum(
+                            _daily_row_number(row, "sick_settlement_hours", "病假清算")
+                            for row in daily_rows
+                        ),
+                        "年假": sum(_daily_row_number(row, "annual_hours", "年假") for row in daily_rows),
+                        "节假日": sum(_daily_row_number(row, "holiday_hours", "节假日") for row in daily_rows),
+                    }
+
+                split_rates = len(rows_by_delta) > 1
+                for delta in sorted(rows_by_delta):
+                    rate_rows = rows_by_delta[delta]
+                    rate_hours = summarize_daily_rows(rate_rows)
+                    if not has_shift_hours(rate_hours):
+                        continue
+                    rate_employee_id = (
+                        f"{source_emp_id}-1"
+                        if split_rates and delta == 0
+                        else source_emp_id
+                    )
+                    employees.append(make_employee(
+                        rate_employee_id,
+                        rate_hours,
+                        all(_is_night_daily_row(row) for row in rate_rows),
+                        hourly_rate + delta,
+                        rate_rows,
+                    ))
                 continue
 
             has_day_hours = has_shift_hours(hours['白班'])
@@ -1623,16 +1899,331 @@ class FBUPerformanceParser:
             segment_ratio = _to_float(raw.get("performance_ratio"), None)
             if segment_ratio is None:
                 segment_ratio = 0.0 if "前" in reason else ratio
+            segment_coefficient = _to_float(raw.get("performance_coefficient"), None)
+            if segment_coefficient is None:
+                segment_coefficient = effective_coefficient
             segments.append(
                 CalculationSegment(
                     period=str(raw.get("period", "")).strip(),
                     reason=reason,
                     performance_base=_to_float(raw.get("performance_base"), 0) or 0.0,
                     performance_ratio=segment_ratio,
-                    performance_coefficient=effective_coefficient,
+                    performance_coefficient=segment_coefficient,
+                    department=str(raw.get("department") or "").strip(),
+                    position=str(raw.get("position") or "").strip(),
+                    job_type=str(raw.get("job_type") or "").strip(),
                 )
             )
         return segments
+
+    def parse_transfer_history_preview(self, filepath: str, calc_month: str | None = None) -> dict:
+        """解析人事调动记录；调动日期按正式生效日期处理。"""
+        wb = self.load_excel(filepath)
+        ws = wb[wb.sheetnames[0]]
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            raise ValueError("人事调动记录为空")
+
+        header_index = None
+        headers = ()
+        for index, row in enumerate(rows[:20]):
+            if (
+                _find_column(row, ["工号", "员工工号"]) is not None
+                and _find_column(row, ["调动日期"]) is not None
+            ):
+                header_index = index
+                headers = row
+                break
+        if header_index is None:
+            raise ValueError("未识别人事调动记录表头，请确认包含工号和调动日期")
+
+        col_map = {
+            "employee_id": _find_column(headers, ["工号", "员工工号"]),
+            "name": _find_column(headers, ["姓名", "员工姓名"]),
+            "effective_date": _find_column(headers, ["调动日期"]),
+            "approval_status": _find_column(headers, ["审批状态"]),
+            "transfer_type": _find_column(headers, ["异动类型", "调动类型"]),
+            "transfer_reason": _find_column(headers, ["异动原因", "调动原因"]),
+            "before_department": _find_column(headers, ["调动前部门"]),
+            "before_department_levels": [
+                _find_column(headers, [f"调动前{level}部门"])
+                for level in ("二级", "三级", "四级", "五级", "六级", "七级", "八级")
+            ],
+            "before_position": _find_column(headers, ["调动前职位", "调动前岗位"]),
+            "before_area": _find_column(headers, ["调动前划分区域"]),
+            "before_cost_owner": _find_column(headers, ["调动前成本中心", "调动前成本归属"]),
+            "after_department": _find_column(headers, ["调动后部门"]),
+            "after_department_levels": [
+                _find_column(headers, [f"调动后{level}部门"])
+                for level in ("二级", "三级", "四级", "五级", "六级", "七级", "八级")
+            ],
+            "after_position": _find_column(headers, ["调动后职位", "调动后岗位"]),
+            "after_area": _find_column(headers, ["调动后划分区域"]),
+            "after_cost_owner": _find_column(headers, ["调动后成本中心", "调动后成本归属"]),
+            "note": _find_column(headers, ["备注"]),
+        }
+        required = (
+            "employee_id",
+            "effective_date",
+            "before_department",
+            "before_position",
+            "after_department",
+            "after_position",
+        )
+        missing = [key for key in required if col_map[key] is None]
+        if missing:
+            raise ValueError("人事调动记录缺少调动前后部门或职位字段")
+
+        month_start = _calc_month_start(calc_month)
+        month_end = _calc_month_end(month_start)
+        all_rows = []
+        events = []
+        status_counts: dict[str, int] = defaultdict(int)
+        for source_row, row in enumerate(rows[header_index + 1:], start=header_index + 2):
+            employee_id = str(_cell(row, col_map["employee_id"]) or "").strip()
+            if not employee_id or not employee_id.lower().startswith("zt"):
+                continue
+            effective_date = _to_date(_cell(row, col_map["effective_date"]))
+            approval_status = str(_cell(row, col_map["approval_status"]) or "").strip()
+            status_counts[approval_status or "未填写"] += 1
+            before_department_parts = [
+                str(_cell(row, index) or "").strip()
+                for index in col_map["before_department_levels"]
+                if index is not None and str(_cell(row, index) or "").strip()
+            ]
+            after_department_parts = [
+                str(_cell(row, index) or "").strip()
+                for index in col_map["after_department_levels"]
+                if index is not None and str(_cell(row, index) or "").strip()
+            ]
+            before_department = str(_cell(row, col_map["before_department"]) or "").strip()
+            after_department = str(_cell(row, col_map["after_department"]) or "").strip()
+            if before_department and (not before_department_parts or before_department_parts[-1] != before_department):
+                before_department_parts.append(before_department)
+            if after_department and (not after_department_parts or after_department_parts[-1] != after_department):
+                after_department_parts.append(after_department)
+            parsed = {
+                "row_id": f"{ws.title}:{source_row}",
+                "source_sheet": ws.title,
+                "source_row": source_row,
+                "employee_id": normalize_shift_employee_id(employee_id),
+                "name": str(_cell(row, col_map["name"]) or "").strip(),
+                "effective_date": effective_date.isoformat() if effective_date else "",
+                "approval_status": approval_status,
+                "transfer_type": str(_cell(row, col_map["transfer_type"]) or "").strip(),
+                "transfer_reason": str(_cell(row, col_map["transfer_reason"]) or "").strip(),
+                "before_department": "-".join(before_department_parts) or before_department,
+                "before_position": str(_cell(row, col_map["before_position"]) or "").strip(),
+                "before_area": str(_cell(row, col_map["before_area"]) or "").strip(),
+                "before_cost_owner": str(_cell(row, col_map["before_cost_owner"]) or "").strip(),
+                "after_department": "-".join(after_department_parts) or after_department,
+                "after_position": str(_cell(row, col_map["after_position"]) or "").strip(),
+                "after_area": str(_cell(row, col_map["after_area"]) or "").strip(),
+                "after_cost_owner": str(_cell(row, col_map["after_cost_owner"]) or "").strip(),
+                "note": str(_cell(row, col_map["note"]) or "").strip(),
+            }
+            all_rows.append(parsed)
+            if approval_status in {"已完成", "completed"} and effective_date:
+                events.append(parsed)
+
+        events.sort(key=lambda item: (item["employee_id"], item["effective_date"], item["source_row"]))
+        affected_in_month = {
+            row["employee_id"]
+            for row in events
+            if month_start and month_end and month_start <= _to_date(row["effective_date"]) <= month_end
+        }
+        future_evidence = {
+            row["employee_id"]
+            for row in events
+            if month_end and _to_date(row["effective_date"]) > month_end
+        }
+        return {
+            "events": events,
+            "rows": all_rows,
+            "summary": {
+                "total_rows": len(all_rows),
+                "completed_count": len(events),
+                "ignored_count": len(all_rows) - len(events),
+                "affected_employee_count": len({row["employee_id"] for row in events}),
+                "in_month_employee_count": len(affected_in_month),
+                "future_evidence_employee_count": len(future_evidence),
+                "status_counts": dict(status_counts),
+            },
+        }
+
+    @staticmethod
+    def _transfer_assignment(event: dict, prefix: str) -> dict:
+        department = str(event.get(f"{prefix}_department") or "").strip()
+        return {
+            "department": department,
+            "position": str(event.get(f"{prefix}_position") or "").strip(),
+            "area": str(event.get(f"{prefix}_area") or "").strip(),
+            "cost_owner": str(event.get(f"{prefix}_cost_owner") or "").strip(),
+            "job_type": classify_job_type(event.get("employee_id", ""), department),
+        }
+
+    @classmethod
+    def _assignment_on_date(cls, events: list[dict], target_date: date) -> dict:
+        assignment = cls._transfer_assignment(events[0], "before")
+        for event in events:
+            effective_date = _to_date(event.get("effective_date"))
+            if effective_date and effective_date <= target_date:
+                assignment = cls._transfer_assignment(event, "after")
+            elif effective_date and effective_date > target_date:
+                break
+        return assignment
+
+    @staticmethod
+    def _salary_on_date(salary_info: dict, target_date: date) -> tuple[float, float]:
+        for segment in salary_info.get("effective_segments") or []:
+            start = _to_date(segment.get("period_start"))
+            end = _to_date(segment.get("period_end"))
+            if start and end and start <= target_date <= end:
+                return (
+                    _to_float(segment.get("hourly_rate"), 0) or 0.0,
+                    _to_float(segment.get("performance_ratio"), 0) or 0.0,
+                )
+        return (
+            _to_float(salary_info.get("hourly_rate"), 0) or 0.0,
+            _to_float(salary_info.get("ratio"), 0) or 0.0,
+        )
+
+    @classmethod
+    def _apply_transfer_history(
+        cls,
+        transfer_data: dict | None,
+        attendance_dict: dict,
+        salary_dict: dict,
+        performance_dict: dict,
+        employee_info: dict,
+        adjustment_dict: dict,
+        calc_month: str | None,
+    ) -> None:
+        """用已完成调动记录恢复历史岗位，并按实际出勤日拆分月内调动。"""
+        month_start = _calc_month_start(calc_month)
+        month_end = _calc_month_end(month_start)
+        if not month_start or not month_end:
+            return
+
+        events_by_id: dict[str, list[dict]] = defaultdict(list)
+        for event in (transfer_data or {}).get("events", []):
+            employee_id = normalize_shift_employee_id(event.get("employee_id"))
+            effective_date = _to_date(event.get("effective_date"))
+            if (
+                employee_id
+                and effective_date
+                and str(event.get("approval_status") or "").strip() in {"已完成", "completed"}
+            ):
+                events_by_id[employee_id].append(event)
+
+        for employee_id, events in events_by_id.items():
+            if employee_id not in employee_info:
+                continue
+            events.sort(key=lambda item: (_to_date(item.get("effective_date")), item.get("source_row", 0)))
+            month_assignment = cls._assignment_on_date(events, month_end)
+            info = employee_info[employee_id]
+            for field in ("department", "position", "area", "job_type"):
+                if month_assignment.get(field):
+                    info[field] = month_assignment[field]
+
+            in_month_events = [
+                event for event in events
+                if month_start <= _to_date(event.get("effective_date")) <= month_end
+            ]
+            if not in_month_events:
+                continue
+
+            daily_rows = [
+                row for row in attendance_dict.get(employee_id, {}).get("daily_rows", [])
+                if (row_date := _daily_row_date(row)) and month_start <= row_date <= month_end
+            ]
+            if not daily_rows:
+                continue
+
+            performance = performance_dict.get(employee_id, {})
+            salary_info = salary_dict.get(employee_id, {})
+            personnel_status = info.get("personnel_status", "")
+            confirmation_date = info.get("confirmation_date")
+            has_performance_result = bool(performance)
+            grouped: list[dict] = []
+            for daily_row in sorted(daily_rows, key=lambda row: _daily_row_date(row) or month_start):
+                row_date = _daily_row_date(daily_row)
+                if not row_date:
+                    continue
+                assignment = cls._assignment_on_date(events, row_date)
+                hourly_rate, performance_ratio = cls._salary_on_date(salary_info, row_date)
+                override_reason = default_coefficient_reason(
+                    assignment.get("position", ""),
+                    personnel_status,
+                    confirmation_date=confirmation_date,
+                    calc_month_start=month_start,
+                    has_performance_result=has_performance_result,
+                )
+                if override_reason:
+                    coefficient = DEFAULT_COEFFICIENT_VALUE
+                elif performance.get("coefficient") is not None:
+                    coefficient = _to_float(performance.get("coefficient"), 0) or 0.0
+                else:
+                    coefficient = CoefficientCalculator.calculate(
+                        job_type=assignment.get("job_type") or "warehouse",
+                        score=performance.get("score"),
+                        level=performance.get("level"),
+                    )
+                key = (
+                    assignment.get("department", ""),
+                    assignment.get("position", ""),
+                    assignment.get("job_type", ""),
+                    round(hourly_rate, 6),
+                    round(performance_ratio, 6),
+                    round(coefficient, 6),
+                )
+                if not grouped or grouped[-1]["key"] != key:
+                    grouped.append({
+                        "key": key,
+                        "start": row_date,
+                        "end": row_date,
+                        "rows": [daily_row],
+                        "assignment": assignment,
+                        "hourly_rate": hourly_rate,
+                        "performance_ratio": performance_ratio,
+                        "performance_coefficient": coefficient,
+                        "override_reason": override_reason,
+                    })
+                else:
+                    grouped[-1]["end"] = row_date
+                    grouped[-1]["rows"].append(daily_row)
+
+            if len(grouped) == 1:
+                only_assignment = grouped[0]["assignment"]
+                for field in ("department", "position", "area", "job_type"):
+                    if only_assignment.get(field):
+                        info[field] = only_assignment[field]
+                continue
+            segments = []
+            for group in grouped:
+                performance_base = _daily_rows_performance_base(
+                    group["rows"],
+                    group["hourly_rate"],
+                )
+                if performance_base <= 0:
+                    continue
+                assignment = group["assignment"]
+                position = assignment.get("position") or "未填写岗位"
+                reason = f"岗位调动：{position}"
+                if group["override_reason"]:
+                    reason = f"{reason}；{group['override_reason']}"
+                segments.append({
+                    "period": _period_label(group["start"], group["end"]),
+                    "reason": reason,
+                    "performance_base": performance_base,
+                    "performance_ratio": group["performance_ratio"],
+                    "performance_coefficient": group["performance_coefficient"],
+                    "department": assignment.get("department", ""),
+                    "position": assignment.get("position", ""),
+                    "job_type": assignment.get("job_type", ""),
+                })
+            if len(segments) > 1:
+                adjustment_dict[employee_id] = segments
 
     @staticmethod
     def _apply_oehr_adjustment_events(
@@ -3132,9 +3723,12 @@ class FBUPerformanceParser:
         salary_data: list,
         performance_data: list,
         adjustment_data: list | dict = None,
+        transfer_data: dict | None = None,
         calc_month: str | None = None,
         supplemental_leave_data: dict | None = None,
         base_override_data: dict | None = None,
+        hourly_rate_policy_data: dict | None = None,
+        period_adjustment_data: dict | None = None,
     ) -> FBUPerformanceEngine:
         """
         从分步数据计算最终结果
@@ -3144,6 +3738,7 @@ class FBUPerformanceParser:
             salary_data: 薪资预览数据中的employees列表
             performance_data: 绩效预览数据中的employees列表
             adjustment_data: 调薪拆分预览数据，可传employees列表或完整preview
+            transfer_data: 已完成人事调动记录，调动日期视为正式生效日期
 
         Returns:
             计算完成的引擎实例
@@ -3157,9 +3752,12 @@ class FBUPerformanceParser:
 
         # 转换为字典格式，并保存员工信息
         employee_info = {}  # 保存员工基本信息
+        apply_hourly_rate_policies(attendance_data, hourly_rate_policy_data)
         attendance_dict = {}
         for emp in attendance_data:
-            emp_id = emp['employee_id']
+            emp_id = normalize_shift_employee_id(
+                emp.get("source_employee_id") or emp["employee_id"]
+            )
             attendance_daily_rows = list(emp.get('attendance_daily_rows') or emp.get('daily_rows') or [])
             row_shift_type = emp.get('shift_type')
             if attendance_daily_rows and row_shift_type:
@@ -3175,15 +3773,28 @@ class FBUPerformanceParser:
                 row for row in attendance_daily_rows
                 if str(row.get("shift_type") or row_shift_type or "") == "夜班"
             ]
-            attendance_dict[emp_id] = {
+            attendance = attendance_dict.setdefault(emp_id, {
                 'name': emp.get('name', ''),
-                '白班': emp['day_shift'],
-                '夜班': emp['night_shift'],
-                'has_night_shift': emp['has_night_shift'],
-                'daily_rows': attendance_daily_rows,
-                '白班_daily_rows': day_daily_rows,
-                '夜班_daily_rows': night_daily_rows,
-            }
+                '白班': {
+                    '计薪出勤': 0, 'OT1.5': 0, 'OT2.0': 0, '病假': 0,
+                    '病假清算': 0, '年假': 0, '节假日': 0,
+                },
+                '夜班': {
+                    '计薪出勤': 0, 'OT1.5': 0, 'OT2.0': 0, '病假': 0,
+                    '病假清算': 0, '年假': 0, '节假日': 0,
+                },
+                'has_night_shift': False,
+                'daily_rows': [],
+                '白班_daily_rows': [],
+                '夜班_daily_rows': [],
+            })
+            for shift_key, source in (('白班', emp['day_shift']), ('夜班', emp['night_shift'])):
+                for hour_key in attendance[shift_key]:
+                    attendance[shift_key][hour_key] += safe_float(source.get(hour_key))
+            attendance['has_night_shift'] = attendance['has_night_shift'] or bool(emp['has_night_shift'])
+            attendance['daily_rows'].extend(attendance_daily_rows)
+            attendance['白班_daily_rows'].extend(day_daily_rows)
+            attendance['夜班_daily_rows'].extend(night_daily_rows)
             # 保存员工信息
             employee_info[emp_id] = {
                 'name': emp.get('name', ''),
@@ -3235,6 +3846,15 @@ class FBUPerformanceParser:
             adjustment_dict,
             calc_month,
         )
+        self._apply_transfer_history(
+            transfer_data,
+            attendance_dict,
+            salary_dict,
+            performance_dict,
+            employee_info,
+            adjustment_dict,
+            calc_month,
+        )
 
         # 构建员工数据
         employees = self.build_employees(
@@ -3252,5 +3872,52 @@ class FBUPerformanceParser:
         for emp in employees:
             BonusCalculator.calculate(emp)
             self.engine.add_employee(emp)
+        self._apply_period_adjustments(employees, period_adjustment_data)
 
         return self.engine
+
+    @staticmethod
+    def _apply_period_adjustments(
+        employees: list[EmployeeData],
+        period_adjustment_data: dict | None,
+    ) -> None:
+        """Apply each employee's base adjustment once after split-row calculation."""
+        rows = (period_adjustment_data or {}).get("rows", [])
+        adjustments = {
+            normalize_shift_employee_id(row.get("employee_id")): row
+            for row in rows
+            if normalize_shift_employee_id(row.get("employee_id"))
+        }
+        grouped: dict[str, list[EmployeeData]] = {}
+        for employee in employees:
+            source_id = normalize_shift_employee_id(
+                employee.source_employee_id or employee.employee_id
+            )
+            grouped.setdefault(source_id, []).append(employee)
+
+        for source_id, employee_rows in grouped.items():
+            for employee in employee_rows:
+                employee.system_performance_base = employee.performance_base
+            adjustment = adjustments.get(source_id)
+            if not adjustment:
+                continue
+
+            amount = safe_float(adjustment.get("amount"))
+            target = next(
+                (employee for employee in employee_rows if employee.employee_id == source_id),
+                employee_rows[0],
+            )
+            final_base = target.performance_base + amount
+            if final_base < 0:
+                raise ValueError(
+                    f"{source_id} 的 Period adjustment 使最终绩效基数小于0，请检查调整额"
+                )
+            target.period_adjustment = amount
+            target.period_adjustment_source_month = str(adjustment.get("source_month") or "")
+            target.period_adjustment_reason = str(adjustment.get("reason") or "")
+            target.performance_base = final_base
+            target.performance_bonus += (
+                amount
+                * target.performance_ratio
+                * target.performance_coefficient
+            )

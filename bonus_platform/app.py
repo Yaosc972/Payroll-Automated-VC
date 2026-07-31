@@ -27,7 +27,7 @@ from pathlib import Path
 from dataclasses import replace
 import shutil
 from tempfile import NamedTemporaryFile, gettempdir
-from time import monotonic
+from time import monotonic, perf_counter
 from typing import Any, Callable, Optional
 from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
@@ -40,6 +40,8 @@ logger = logging.getLogger("bonus_platform.labor")
 fbu_logger = logging.getLogger("bonus_platform.fbu")
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import MutableHeaders
+from starlette.middleware.gzip import GZipMiddleware
 
 from .auth import (
     current_user_from_request,
@@ -155,9 +157,16 @@ from .engine.fbu_performance.engines.base import (
     STANDARD_PERFORMANCE_BASE_PATH,
 )
 from .engine.fbu_performance.engines.attendance import AttendanceProcessor
-from .engine.fbu_performance.parser import FBUPerformanceParser, normalize_shift_employee_id
+from .engine.fbu_performance.parser import (
+    FBUPerformanceParser,
+    build_hourly_rate_policy_data,
+    normalize_shift_employee_id,
+    update_hourly_rate_policy_data,
+)
 from .engine.fbu_performance.runs import (
+    build_attendance_view_data,
     build_final_result_rows,
+    build_results_view_data,
     FBURosterStore,
     FBURun,
     FBURunManager,
@@ -179,9 +188,11 @@ from .engine.admin_store import (
     upsert_feishu_user,
 )
 from .engine.fbu_performance.persistent_storage import (
+    FBU_RUN_SECTION_FIELDS,
     create_fbu_signed_upload,
     fbu_persistent_storage_enabled,
 )
+from .engine.fbu_performance.upload_jobs import FBUUploadJobStore
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -2130,6 +2141,70 @@ async def overseas_labor_access_gate(request: Request, call_next):
         build = _labor_build_snapshot()
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Sigma-Labor-Build"] = str(build["buildId"])[:64]
+    return response
+
+
+class _FBUGZipMiddleware:
+    """Compress only the FBU API and its large text assets."""
+
+    def __init__(self, app, *, minimum_size: int = 1024, compresslevel: int = 5):
+        self.app = app
+        self.compressed_app = GZipMiddleware(
+            app,
+            minimum_size=minimum_size,
+            compresslevel=compresslevel,
+        )
+
+    async def __call__(self, scope, receive, send):
+        path = str(scope.get("path") or "")
+        should_compress = (
+            path.startswith("/api/fbu-performance")
+            or path in {
+                "/fbu-performance.html",
+                "/fbu-performance.js",
+                "/styles.css",
+            }
+        )
+        should_cache = (
+            bool(scope.get("query_string"))
+            and path in {"/fbu-performance.js", "/styles.css"}
+        ) or path == "/assets/sigma-platform-logo-20260731.png"
+
+        async def send_with_cache_headers(message):
+            if should_cache and message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            await send(message)
+
+        target = self.compressed_app if should_compress else self.app
+        await target(scope, receive, send_with_cache_headers)
+
+
+app.add_middleware(_FBUGZipMiddleware, minimum_size=1024, compresslevel=5)
+
+
+@app.middleware("http")
+async def add_fbu_request_timing(request: Request, call_next):
+    if not request.url.path.startswith("/api/fbu-performance"):
+        return await call_next(request)
+    request_id = (
+        str(request.headers.get("x-sigma-request-id") or "").strip()
+        or secrets.token_hex(8)
+    )
+    started = perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"fbu;dur={elapsed_ms:.1f}"
+    response.headers["X-Sigma-Request-ID"] = request_id
+    fbu_logger.info(
+        "FBU request id=%s method=%s path=%s status=%s duration_ms=%.1f bytes=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms,
+        response.headers.get("content-length", ""),
+    )
     return response
 
 
@@ -14026,6 +14101,15 @@ def _append_fbu_previous_attendance_context_to_preview(
     return preview
 
 
+_FBU_DIAGNOSTIC_SECTION_FIELDS = {
+    "attendance_data",
+    "salary_data",
+    "performance_data",
+    "adjustment_data",
+    "base_override_data",
+}
+
+
 def _fbu_run_diagnostics(run: FBURun) -> dict:
     """生成紧凑的数据匹配诊断。"""
     attendance_employees = run.attendance_data.get("employees", []) if run.attendance_data else []
@@ -14252,7 +14336,7 @@ def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path 
     if roster_path is None:
         roster_path = fbu_roster_store.copy_active_to_run(run_id)
         if roster_path:
-            run = fbu_run_manager.get_run(run_id)
+            run = fbu_run_manager.get_run(run_id, sections=set())
             metadata = fbu_roster_store.get_metadata()
             if run:
                 fbu_run_manager.update_run(
@@ -14347,7 +14431,7 @@ def save_fbu_rule_lists(body: dict = Body(...)) -> dict:
 
 @app.post("/api/fbu-performance/runs/{run_id}/rule-lists/confirm")
 def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
     try:
@@ -14370,6 +14454,363 @@ def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
 
 
 _FBU_ATTENDANCE_DIRECT_UPLOAD_KINDS = {"attendance", "previous_attendance"}
+_FBU_UPLOAD_JOB_KINDS = {
+    "attendance",
+    "previousAttendance",
+    "previousSalary",
+    "currentSalary",
+    "salaryAdjustments",
+    "transferHistory",
+    "supplementalLeave",
+    "performance",
+    "adjustments",
+    "baseOverrides",
+}
+
+
+def _fbu_upload_job_store() -> FBUUploadJobStore:
+    return FBUUploadJobStore(FBU_PERFORMANCE_RUNS_DIR, fbu_run_manager)
+
+
+def _fbu_upload_job_specs(payload: dict, job_id: str) -> list[dict]:
+    raw_files = payload.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        raise HTTPException(400, "请至少选择一份上传文件。")
+    if len(raw_files) > 2:
+        raise HTTPException(400, "单次最多上传两份文件。")
+
+    specs = []
+    seen_kinds = set()
+    total_size = 0
+    for raw in raw_files:
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "上传文件信息格式不正确。")
+        kind = str(raw.get("kind") or "").strip()
+        if kind not in _FBU_UPLOAD_JOB_KINDS:
+            raise HTTPException(400, f"不支持的上传材料类型：{kind or '未知'}")
+        if kind in seen_kinds:
+            raise HTTPException(400, "同类材料不能重复上传。")
+        seen_kinds.add(kind)
+
+        original_name = Path(str(raw.get("fileName") or "").replace("\\", "/")).name
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in {".xlsx", ".xls"}:
+            raise HTTPException(400, f"请上传 .xlsx 或 .xls 格式文件：{original_name or '未知文件'}")
+        try:
+            file_size = int(raw.get("fileSize") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"上传文件大小无效：{original_name}") from exc
+        if file_size <= 0:
+            raise HTTPException(400, f"上传文件不能为空：{original_name}")
+        total_size += file_size
+        specs.append({
+            "kind": kind,
+            "originalFilename": original_name,
+            "relativePath": f"direct_uploads/{job_id}_{kind}{suffix}",
+            "size": file_size,
+            "contentType": str(raw.get("contentType") or "application/octet-stream"),
+        })
+
+    attendance_kinds = {"attendance", "previousAttendance"}
+    if len(specs) > 1 and not seen_kinds.issubset(attendance_kinds):
+        raise HTTPException(400, "除当月与上月考勤外，请逐份上传材料。")
+    max_bytes = _fbu_attendance_direct_upload_max_bytes()
+    if total_size > max_bytes:
+        raise HTTPException(413, f"上传文件总大小超过当前上限 {max_bytes} 字节。")
+    return specs
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/uploads/plan")
+def create_fbu_upload_job_plan(run_id: str, payload: dict = Body(...)) -> dict:
+    if not fbu_persistent_storage_enabled():
+        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    job_id = secrets.token_hex(12)
+    specs = _fbu_upload_job_specs(payload, job_id)
+    try:
+        uploads = [
+            {**create_fbu_signed_upload(run_id, spec["relativePath"]), **spec}
+            for spec in specs
+        ]
+        job = _fbu_upload_job_store().create(run_id, specs, job_id=job_id)
+    except Exception as exc:
+        fbu_logger.exception("Failed to create FBU upload job %s", job_id)
+        raise HTTPException(503, "生成文件直传任务失败，请稍后重试。") from exc
+    return {
+        "runId": run_id,
+        "job": _fbu_upload_job_store().public(job),
+        "uploads": uploads,
+    }
+
+
+def _fbu_upload_job_result(step: str, result: dict) -> dict:
+    summary = (
+        (result.get("preview") or {}).get("summary")
+        or (result.get("verification") or {}).get("summary")
+        or (result.get("material_preview") or {}).get("summary")
+        or {}
+    )
+    return {
+        "success": bool(result.get("success", True)),
+        "step": step,
+        "summary": summary,
+        "readyForReconciliation": bool(result.get("ready_for_reconciliation")),
+        "missingMaterials": list(result.get("missing_materials") or []),
+    }
+
+
+async def _run_fbu_upload_operation(operation):
+    """Run parser-heavy async imports on a worker thread, not the request loop."""
+    return await asyncio.to_thread(asyncio.run, operation)
+
+
+async def _await_fbu_job_with_heartbeat(
+    awaitable,
+    *,
+    store: FBUUploadJobStore,
+    run_id: str,
+    job_id: str,
+    stage: str,
+    progress: int,
+    message: str,
+):
+    """Keep durable job timestamps fresh while one parse/calculation is running."""
+    task = asyncio.ensure_future(awaitable)
+    while True:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=20.0)
+        except asyncio.TimeoutError:
+            try:
+                await asyncio.to_thread(
+                    store.update,
+                    run_id,
+                    job_id,
+                    status="processing",
+                    stage=stage,
+                    progress=progress,
+                    message=message,
+                )
+            except Exception:
+                fbu_logger.exception("Failed to persist FBU job heartbeat %s", job_id)
+
+
+async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
+    store = _fbu_upload_job_store()
+    job = store.load(run_id, job_id)
+    if not job:
+        return
+    try:
+        await asyncio.to_thread(
+            store.update,
+            run_id,
+            job_id,
+            status="processing",
+            stage="materializing",
+            progress=10,
+            message="正在读取已上传文件",
+            error="",
+        )
+        uploads = job.get("uploads")
+        if not isinstance(uploads, list) or not uploads:
+            raise ValueError("上传任务没有待处理文件")
+
+        materialized: dict[str, tuple[dict, Path]] = {}
+        for item in uploads:
+            kind = str(item.get("kind") or "")
+            relative_path = str(item.get("relativePath") or "")
+            path = await asyncio.to_thread(
+                fbu_run_manager.materialize_file,
+                run_id,
+                relative_path,
+            )
+            if not path or not path.is_file():
+                raise ValueError(f"未找到已上传文件：{item.get('originalFilename') or kind}")
+            expected_size = int(item.get("size") or 0)
+            if expected_size and path.stat().st_size != expected_size:
+                raise ValueError(f"上传文件大小不一致：{item.get('originalFilename') or kind}")
+            materialized[kind] = (item, path)
+
+        await asyncio.to_thread(
+            store.update,
+            run_id,
+            job_id,
+            status="processing",
+            stage="parsing",
+            progress=55,
+            message="正在解析并核验数据",
+        )
+
+        result: dict = {}
+        step = ""
+        with ExitStack() as stack:
+            upload_files = {
+                kind: UploadFile(
+                    file=stack.enter_context(path.open("rb")),
+                    filename=str(item.get("originalFilename") or path.name),
+                )
+                for kind, (item, path) in materialized.items()
+            }
+            if set(upload_files).issubset({"attendance", "previousAttendance"}):
+                run = fbu_run_manager.get_run(run_id, sections=set())
+                if not run:
+                    raise ValueError("任务不存在")
+                operation = import_fbu_attendance(
+                    file=upload_files.get("attendance"),
+                    previous_attendance=upload_files.get("previousAttendance"),
+                    calc_month=run.calc_month,
+                    roster=None,
+                    run_id=run_id,
+                )
+                result = await _await_fbu_job_with_heartbeat(
+                    _run_fbu_upload_operation(operation),
+                    store=store,
+                    run_id=run_id,
+                    job_id=job_id,
+                    stage="parsing",
+                    progress=55,
+                    message="正在解析并核验数据",
+                )
+                step = "attendance"
+            else:
+                kind = next(iter(upload_files))
+                upload = upload_files[kind]
+                if kind in {"previousSalary", "currentSalary", "salaryAdjustments"}:
+                    operation = import_fbu_salary_history_material(
+                        run_id=run_id, material_type=kind, file=upload
+                    )
+                    step = "salary"
+                elif kind == "transferHistory":
+                    operation = import_fbu_transfer_history(run_id=run_id, file=upload)
+                    step = "salary"
+                elif kind == "supplementalLeave":
+                    operation = import_fbu_supplemental_leave(run_id=run_id, file=upload)
+                    step = "attendance"
+                elif kind == "performance":
+                    operation = import_fbu_performance(run_id=run_id, file=upload)
+                    step = "performance"
+                elif kind == "adjustments":
+                    operation = import_fbu_adjustments(run_id=run_id, file=upload)
+                    step = "salary"
+                elif kind == "baseOverrides":
+                    operation = import_fbu_base_overrides(run_id=run_id, file=upload)
+                    step = "salary"
+                else:
+                    raise ValueError(f"不支持的上传材料类型：{kind}")
+                result = await _await_fbu_job_with_heartbeat(
+                    _run_fbu_upload_operation(operation),
+                    store=store,
+                    run_id=run_id,
+                    job_id=job_id,
+                    stage="parsing",
+                    progress=55,
+                    message="正在解析并核验数据",
+                )
+
+        await asyncio.to_thread(
+            store.update,
+            run_id,
+            job_id,
+            status="completed",
+            stage="completed",
+            progress=100,
+            message="上传并解析完成",
+            result=_fbu_upload_job_result(step, result),
+            completedAt=datetime.now().isoformat(),
+            error="",
+        )
+        temporary_paths = [str(item.get("relativePath") or "") for item in uploads]
+        try:
+            await asyncio.to_thread(
+                fbu_run_manager.delete_persisted_files,
+                run_id,
+                temporary_paths,
+            )
+            for _, path in materialized.values():
+                path.unlink(missing_ok=True)
+        except Exception:
+            fbu_logger.exception("Failed to clean FBU upload job files %s", job_id)
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        fbu_logger.exception("FBU upload job failed run=%s job=%s", run_id, job_id)
+        try:
+            await asyncio.to_thread(
+                store.update,
+                run_id,
+                job_id,
+                status="failed",
+                stage="failed",
+                progress=100,
+                message="文件解析失败",
+                error=str(detail or "未知错误"),
+            )
+        except Exception:
+            fbu_logger.exception("Failed to persist FBU upload job failure %s", job_id)
+
+
+def _queue_fbu_upload_job(
+    run_id: str,
+    job_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    store = _fbu_upload_job_store()
+    job = store.load(run_id, job_id)
+    if not job:
+        raise HTTPException(404, "上传任务不存在")
+    public = store.public(job)
+    if job.get("status") == "completed":
+        return public
+    if job.get("status") in {"queued", "processing"} and not public["recoverable"]:
+        return public
+    job = store.update(
+        run_id,
+        job_id,
+        status="queued",
+        stage="queued",
+        progress=5,
+        message="正在排队",
+        attempt=int(job.get("attempt") or 0) + 1,
+        error="",
+    )
+    background_tasks.add_task(_process_fbu_upload_job, run_id, job_id)
+    return store.public(job)
+
+
+@app.post(
+    "/api/fbu-performance/runs/{run_id}/uploads/{job_id}/start",
+    status_code=202,
+)
+@app.post(
+    "/api/fbu-performance/runs/{run_id}/uploads/{job_id}/resume",
+    status_code=202,
+)
+def start_fbu_upload_job(
+    run_id: str,
+    job_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    try:
+        job = _queue_fbu_upload_job(run_id, job_id, background_tasks)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"job": job}
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/uploads/{job_id}")
+def get_fbu_upload_job(run_id: str, job_id: str) -> dict:
+    try:
+        store = _fbu_upload_job_store()
+        job = store.load(run_id, job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not job:
+        raise HTTPException(404, "上传任务不存在")
+    return {"job": store.public(job)}
 
 
 def _fbu_attendance_direct_upload_max_bytes() -> int:
@@ -14463,7 +14904,7 @@ def _fbu_attendance_direct_result(run: FBURun) -> dict:
 def create_fbu_attendance_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> dict:
     if not fbu_persistent_storage_enabled():
         raise HTTPException(409, "当前环境未启用 Supabase 直传。")
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -14506,14 +14947,14 @@ def create_fbu_attendance_direct_upload_plan(run_id: str, payload: dict = Body(.
 async def complete_fbu_attendance_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
     if not fbu_persistent_storage_enabled():
         raise HTTPException(409, "当前环境未启用 Supabase 直传。")
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
     plan_id = str(payload.get("planId") or "").strip()
     plan, plan_path = _load_fbu_attendance_direct_plan(run_id, plan_id)
     if plan.get("status") == "completed":
-        refreshed_run = fbu_run_manager.get_run(run_id)
+        refreshed_run = fbu_run_manager.get_run(run_id, sections={"attendance_data"})
         if not refreshed_run or not refreshed_run.attendance_data:
             raise HTTPException(409, "考勤直传已登记，但活动结果尚未就绪，请稍后重试。")
         return _fbu_attendance_direct_result(refreshed_run)
@@ -14606,7 +15047,10 @@ async def import_fbu_attendance(
     """Step 1: 导入考勤日报表"""
     # 获取或创建运行记录
     if run_id:
-        run = fbu_run_manager.get_run(run_id)
+        run = fbu_run_manager.get_run(
+            run_id,
+            sections={"attendance_data", "hourly_rate_policy_data"},
+        )
         if not run:
             raise HTTPException(404, "任务不存在")
     else:
@@ -14664,6 +15108,11 @@ async def import_fbu_attendance(
                 1,
                 preview,
                 previous_attendance_file=previous_attendance_filename,
+                hourly_rate_policy_data=build_hourly_rate_policy_data(
+                    preview,
+                    calc_month,
+                    run.hourly_rate_policy_data,
+                ),
             )
             fbu_run_manager.persist_files(run.run_id, [previous_path.name])
             result_file = _fbu_result_file_payload(run.run_id, "attendance")
@@ -14724,6 +15173,11 @@ async def import_fbu_attendance(
         }
         if roster:
             metadata.update(roster_file=roster.filename, roster_source="activity")
+        metadata["hourly_rate_policy_data"] = build_hourly_rate_policy_data(
+            preview,
+            calc_month,
+            run.hourly_rate_policy_data,
+        )
         fbu_run_manager.save_step_data(run.run_id, 1, preview, **metadata)
         persisted_files = ["attendance.xlsx"]
         if previous_path and previous_path.exists():
@@ -14752,13 +15206,135 @@ async def import_fbu_attendance(
             pending_roster_path.unlink(missing_ok=True)
 
 
+@app.post("/api/fbu-performance/runs/{run_id}/hourly-rate-policies")
+def update_fbu_hourly_rate_policies(run_id: str, body: dict = Body(...)) -> dict:
+    """Update non-blocking payroll-period hourly-rate suggestions."""
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections={"attendance_data", "hourly_rate_policy_data"},
+    )
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    if not run.attendance_data:
+        raise HTTPException(409, "请先上传考勤日报")
+    try:
+        policy_data = update_hourly_rate_policy_data(
+            run.hourly_rate_policy_data,
+            action=str(body.get("action") or ""),
+            row_id=str(body.get("row_id") or ""),
+            employee_id=str(body.get("employee_id") or ""),
+            selected_policy=str(body.get("selected_policy") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    fbu_run_manager.update_run(run_id, hourly_rate_policy_data=policy_data)
+    return {"success": True, "run_id": run_id, "hourly_rate_policy_data": policy_data}
+
+
+def _build_period_adjustment_preview(rows: list[dict]) -> dict:
+    normalized_rows = sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("source_month") or ""),
+            str(row.get("employee_id") or ""),
+        ),
+    )
+    return {
+        "rows": normalized_rows,
+        "summary": {
+            "count": len(normalized_rows),
+            "total_amount": round(
+                sum(float(row.get("amount") or 0) for row in normalized_rows),
+                2,
+            ),
+        },
+    }
+
+
+@app.post("/api/fbu-performance/runs/{run_id}/period-adjustments")
+def update_fbu_period_adjustments(run_id: str, body: dict = Body(...)) -> dict:
+    """Maintain the optional employee-level performance-base difference."""
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections={"salary_data", "period_adjustment_data"},
+    )
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    if not run.salary_data:
+        raise HTTPException(409, "请先上传当月薪资档案")
+
+    action = str(body.get("action") or "").strip()
+    employee_id = normalize_shift_employee_id(body.get("employee_id"))
+    if not employee_id:
+        raise HTTPException(400, "请输入员工工号")
+
+    existing_rows = [
+        dict(row) for row in (run.period_adjustment_data or {}).get("rows", [])
+    ]
+    row_index = next(
+        (
+            index for index, row in enumerate(existing_rows)
+            if normalize_shift_employee_id(row.get("employee_id")) == employee_id
+        ),
+        None,
+    )
+
+    if action == "delete":
+        if row_index is None:
+            raise HTTPException(404, "未找到该员工的 Period adjustment")
+        existing_rows.pop(row_index)
+    elif action == "upsert":
+        try:
+            amount = round(float(body.get("amount")), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "调整额必须为数字")
+        if amount == 0:
+            raise HTTPException(400, "调整额不能为0")
+
+        source_month = str(body.get("source_month") or "").strip()
+        if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", source_month):
+            raise HTTPException(400, "归属月份格式应为YYYY-MM")
+        reason = str(body.get("reason") or "").strip()
+        if not reason:
+            raise HTTPException(400, "请填写调整原因")
+
+        salary_lookup = {
+            normalize_shift_employee_id(row.get("source_employee_id") or row.get("employee_id")): row
+            for row in (run.salary_data or {}).get("employees", [])
+        }
+        salary_row = salary_lookup.get(employee_id)
+        if not salary_row:
+            raise HTTPException(400, "当月薪资档案中未找到该工号")
+        normalized = {
+            "employee_id": employee_id,
+            "name": str(salary_row.get("name") or body.get("name") or "").strip(),
+            "amount": amount,
+            "source_month": source_month,
+            "reason": reason,
+        }
+        if row_index is None:
+            existing_rows.append(normalized)
+        else:
+            existing_rows[row_index] = normalized
+    else:
+        raise HTTPException(400, "操作类型无效")
+
+    preview = _build_period_adjustment_preview(existing_rows)
+    fbu_run_manager.update_run(run_id, period_adjustment_data=preview)
+    return {
+        "success": True,
+        "run_id": run_id,
+        "period_adjustment_data": preview,
+    }
+
+
 @app.post("/api/fbu-performance/import-salary")
 async def import_fbu_salary(
     run_id: str = Body(...),
     file: UploadFile = File(...),
 ) -> dict:
     """Step 2: 导入薪资档案"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -14796,6 +15372,147 @@ async def import_fbu_salary(
         raise HTTPException(500, f"薪资数据解析失败: {str(e)}")
 
 
+_FBU_SALARY_HISTORY_MATERIALS = {
+    "previousSalary": {
+        "path": "previous_salary.xlsx",
+        "file_field": "previous_salary_file",
+        "data_field": "previous_salary_data",
+        "label": "上月薪资档案",
+        "parser": "salary",
+    },
+    "currentSalary": {
+        "path": "salary.xlsx",
+        "file_field": "current_salary_file",
+        "data_field": "current_salary_data",
+        "label": "当月薪资档案",
+        "parser": "salary",
+    },
+    "salaryAdjustments": {
+        "path": "adjustments.xlsx",
+        "file_field": "adjustment_file",
+        "data_field": "adjustment_data",
+        "label": "全量调薪流程",
+        "parser": "adjustments",
+    },
+}
+
+
+def _reconcile_fbu_salary_history(run_id: str, parser: FBUPerformanceParser) -> tuple[dict, dict]:
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections={"previous_salary_data", "current_salary_data", "adjustment_data"},
+    )
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    previous_preview = run.previous_salary_data or {}
+    current_preview = run.current_salary_data or {}
+    adjustment_preview = run.adjustment_data or {}
+    verification = parser.reconcile_salary_history(
+        previous_preview.get("employees", []),
+        current_preview.get("employees", []),
+        adjustment_preview.get("events", []),
+        run.calc_month,
+        roster_by_id=parser.employee_roster,
+    )
+    resolved_salary = {
+        "employees": verification["employees"],
+        "summary": {
+            **current_preview.get("summary", {}),
+            **verification["summary"],
+        },
+    }
+    fbu_run_manager.update_run(
+        run_id,
+        salary_verification_data=verification,
+        error="",
+    )
+    fbu_run_manager.save_step_data(run_id, 2, resolved_salary)
+    return resolved_salary, verification
+
+
+@app.post("/api/fbu-performance/import-salary-history-material")
+async def import_fbu_salary_history_material(
+    run_id: str = Form(...),
+    material_type: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """Upload and parse one salary-history material, then reconcile when all three exist."""
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    material = _FBU_SALARY_HISTORY_MATERIALS.get(material_type)
+    if not material:
+        raise HTTPException(400, "不支持的薪资材料类型")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    file_path = run_dir / material["path"]
+    with open(file_path, "wb") as file_handle:
+        file_handle.write(await file.read())
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        if material["parser"] == "adjustments":
+            material_preview = parser.parse_adjustments_preview(str(file_path))
+        else:
+            material_preview = parser.parse_salary_preview(str(file_path))
+
+        update_fields = {
+            material["file_field"]: file.filename,
+            material["data_field"]: material_preview,
+            "salary_verification_data": {},
+            "salary_data": {},
+            "error": "",
+        }
+        if material_type == "currentSalary":
+            update_fields["salary_file"] = file.filename
+        fbu_run_manager.update_run(run_id, **update_fields)
+        fbu_run_manager.persist_files(run_id, [material["path"]])
+
+        refreshed_run = fbu_run_manager.get_run(
+            run_id,
+            sections={"previous_salary_data", "current_salary_data", "adjustment_data"},
+        )
+        missing_materials = [
+            key
+            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+            if not getattr(refreshed_run, config["file_field"], "")
+            or not getattr(refreshed_run, config["data_field"], {})
+        ]
+        ready_for_reconciliation = not missing_materials
+        resolved_salary = {}
+        verification = {}
+        if ready_for_reconciliation:
+            resolved_salary, verification = _reconcile_fbu_salary_history(run_id, parser)
+
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 2,
+            "material_type": material_type,
+            "material_label": material["label"],
+            "material_preview": material_preview,
+            "ready_for_reconciliation": ready_for_reconciliation,
+            "missing_materials": missing_materials,
+            "preview": resolved_salary,
+            "verification": verification,
+            "result_file": (
+                _fbu_result_file_payload(run_id, "salary")
+                if ready_for_reconciliation
+                else None
+            ),
+        }
+    except ValueError as exc:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(exc))
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(exc))
+        raise HTTPException(500, f"{material['label']}解析失败: {str(exc)}")
+
+
 @app.post("/api/fbu-performance/import-salary-history")
 async def import_fbu_salary_history(
     run_id: str = Form(...),
@@ -14805,7 +15522,7 @@ async def import_fbu_salary_history(
     response_mode: str = Form(""),
 ) -> dict:
     """Step 2: import adjacent salary snapshots and the full adjustment export."""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -14880,13 +15597,55 @@ async def import_fbu_salary_history(
         raise HTTPException(500, f"薪资历史核验失败: {str(exc)}")
 
 
+@app.post("/api/fbu-performance/import-transfer-history")
+async def import_fbu_transfer_history(
+    run_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> dict:
+    """导入人事调动记录；调动日期视为正式生效日期。"""
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        raise HTTPException(404, "任务不存在")
+
+    run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    file_path = run_dir / "transfer_history.xlsx"
+    with open(file_path, "wb") as file_handle:
+        file_handle.write(await file.read())
+
+    try:
+        parser = FBUPerformanceParser()
+        _load_fbu_roster_for_run(parser, run_id)
+        preview = parser.parse_transfer_history_preview(str(file_path), run.calc_month)
+        fbu_run_manager.update_run(
+            run_id,
+            transfer_file=file.filename,
+            transfer_data=preview,
+            status="step2",
+            error="",
+        )
+        fbu_run_manager.persist_files(run_id, ["transfer_history.xlsx"])
+        return {
+            "success": True,
+            "run_id": run_id,
+            "step": 2,
+            "preview": preview,
+        }
+    except ValueError as exc:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(exc))
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(exc))
+        raise HTTPException(500, f"人事调动记录解析失败: {str(exc)}")
+
+
 @app.post("/api/fbu-performance/import-performance")
 async def import_fbu_performance(
     run_id: str = Body(...),
     file: UploadFile = File(...),
 ) -> dict:
     """Step 3: 导入绩效报表"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections={"performance_data"})
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -14933,7 +15692,10 @@ async def import_fbu_performance(
 @app.post("/api/fbu-performance/runs/{run_id}/salary-verification/confirm")
 def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict:
     """Resolve one or more salary snapshot differences using explicit snapshot choices."""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections={"salary_verification_data", "salary_data"},
+    )
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -14949,8 +15711,8 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
     for confirmation in confirmations:
         employee_id = str(confirmation.get("employee_id") or "").strip()
         choice = str(confirmation.get("choice") or "").strip()
-        if not employee_id or choice not in {"previous", "current"}:
-            raise HTTPException(400, "请选择按上月值或按当月值")
+        if not employee_id or choice not in {"previous", "current", "ignore_current"}:
+            raise HTTPException(400, "请选择按上月值、按当月值或忽略当月缺失")
         normalized_confirmations[employee_id] = {
             "employee_id": employee_id,
             "choice": choice,
@@ -14968,21 +15730,38 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
             missing_employee_ids.append(employee_id)
             continue
         choice = confirmation["choice"]
-        prefix = "previous" if choice == "previous" else "current"
-        if target.get(f"{prefix}_hourly_rate") is None:
-            snapshot_label = "上月" if choice == "previous" else "当月"
-            raise HTTPException(400, f"{snapshot_label}薪资快照缺失，不能选择该值")
-        target["hourly_rate"] = target.get(f"{prefix}_hourly_rate", target.get("hourly_rate", 0))
-        target["ratio"] = target.get(f"{prefix}_ratio", target.get("ratio", 0))
+        if choice == "ignore_current":
+            if (
+                target.get("resolution") != "missing_current_snapshot"
+                or target.get("current_hourly_rate") is not None
+            ):
+                raise HTTPException(400, "仅当当月薪资快照缺失时可忽略")
+            target["hourly_rate"] = 0.0
+            target["ratio"] = 0.0
+            target["resolution"] = "manual_ignore_current_missing"
+            target["manual_note"] = (
+                confirmation["note"]
+                or "当月薪资档案缺失，本次按0处理；后续重新上传当月薪资后重新核验"
+            )
+        else:
+            prefix = "previous" if choice == "previous" else "current"
+            if target.get(f"{prefix}_hourly_rate") is None:
+                snapshot_label = "上月" if choice == "previous" else "当月"
+                raise HTTPException(400, f"{snapshot_label}薪资快照缺失，不能选择该值")
+            target["hourly_rate"] = target.get(f"{prefix}_hourly_rate", target.get("hourly_rate", 0))
+            target["ratio"] = target.get(f"{prefix}_ratio", target.get("ratio", 0))
+            target["resolution"] = f"manual_use_{choice}"
+            target["manual_note"] = confirmation["note"]
         target["verification_status"] = "resolved"
-        target["resolution"] = f"manual_use_{choice}"
-        target["manual_note"] = confirmation["note"]
         updated_employees.append(target)
 
     if not updated_employees:
         raise HTTPException(404, "未找到该员工的薪资差异记录，请刷新后重试")
 
-    confirmed_ids = set(normalized_confirmations) - set(missing_employee_ids)
+    confirmed_ids = {
+        str(employee.get("employee_id") or "")
+        for employee in updated_employees
+    }
     issues = [issue for issue in verification.get("issues", []) if issue.get("employee_id") not in confirmed_ids]
     summary = dict(verification.get("summary", {}))
     blocking_count = sum(row.get("verification_status") == "blocking" for row in employees)
@@ -15022,7 +15801,7 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
 @app.post("/api/fbu-performance/runs/{run_id}/performance-supplement")
 def add_fbu_performance_supplement(run_id: str, body: dict = Body(...)) -> dict:
     """页面录入离职/线下绩效补录。"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections={"performance_data"})
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -15096,7 +15875,7 @@ async def import_fbu_adjustments(
     file: UploadFile = File(...),
 ) -> dict:
     """可选：导入调薪/转正拆分表"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -15133,7 +15912,7 @@ async def import_fbu_supplemental_leave(
     file: UploadFile = File(...),
 ) -> dict:
     """导入薪酬补充 sickpay&年假表，并生成待确认清单。"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections={"attendance_data"})
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -15183,7 +15962,7 @@ async def import_fbu_base_overrides(
     file: UploadFile = File(...),
 ) -> dict:
     """导入96工时制标记/线下固定绩效基数例外表。"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -15220,7 +15999,7 @@ async def import_fbu_base_overrides(
 @app.post("/api/fbu-performance/runs/{run_id}/supplemental-leave/batch")
 def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
     """批量更新补充假勤确认状态。"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections={"supplemental_leave_data"})
     if not run:
         raise HTTPException(404, "任务不存在")
     if not run.supplemental_leave_data:
@@ -15529,8 +16308,11 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
                 salary_data=run.salary_data.get('employees', []),
                 performance_data=run.performance_data.get('employees', []),
                 adjustment_data=run.adjustment_data,
+                transfer_data=run.transfer_data,
                 supplemental_leave_data=run.supplemental_leave_data,
                 base_override_data=run.base_override_data,
+                hourly_rate_policy_data=run.hourly_rate_policy_data,
+                period_adjustment_data=run.period_adjustment_data,
                 calc_month=run.calc_month,
             )
         else:
@@ -15566,7 +16348,7 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
                     persist=False,
                 )
         fbu_run_manager.save_results(run_id, employees)
-        completed_run = fbu_run_manager.runs.get(run_id) or fbu_run_manager.get_run(run_id)
+        completed_run = fbu_run_manager.get_run(run_id, sections={"results"})
         final_results = build_final_result_rows(completed_run.results)
 
         total_bonus_by_source_employee = {}
@@ -15611,6 +16393,140 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
         raise HTTPException(500, f"计算失败: {str(e)}")
+
+
+async def _process_fbu_calculation_job(run_id: str, job_id: str) -> None:
+    store = _fbu_upload_job_store()
+    try:
+        await asyncio.to_thread(
+            store.update,
+            run_id,
+            job_id,
+            status="processing",
+            stage="calculating",
+            progress=35,
+            message="正在核算绩效奖金",
+            error="",
+        )
+        result = await _await_fbu_job_with_heartbeat(
+            asyncio.to_thread(calculate_fbu_performance, run_id),
+            store=store,
+            run_id=run_id,
+            job_id=job_id,
+            stage="calculating",
+            progress=35,
+            message="正在核算绩效奖金",
+        )
+        await asyncio.to_thread(
+            store.update,
+            run_id,
+            job_id,
+            status="completed",
+            stage="completed",
+            progress=100,
+            message="核算完成",
+            result={
+                "success": bool(result.get("success")),
+                "run_id": run_id,
+                "total_employees": int(result.get("total_employees") or 0),
+                "total_bonus": float(result.get("total_bonus") or 0),
+            },
+            completedAt=datetime.now().isoformat(),
+            error="",
+        )
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        fbu_logger.exception("FBU calculation job failed run=%s job=%s", run_id, job_id)
+        try:
+            await asyncio.to_thread(
+                store.update,
+                run_id,
+                job_id,
+                status="failed",
+                stage="failed",
+                progress=100,
+                message="核算失败",
+                error=str(detail or "未知错误"),
+            )
+        except Exception:
+            fbu_logger.exception("Failed to persist calculation job failure %s", job_id)
+
+
+def _queue_fbu_calculation_job(
+    run_id: str,
+    job_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    store = _fbu_upload_job_store()
+    job = store.load(run_id, job_id)
+    if not job or job.get("kind") != "calculation":
+        raise HTTPException(404, "核算任务不存在")
+    public = store.public(job)
+    if job.get("status") == "completed":
+        return public
+    if job.get("status") in {"queued", "processing"} and not public["recoverable"]:
+        return public
+    job = store.update(
+        run_id,
+        job_id,
+        status="queued",
+        stage="queued",
+        progress=5,
+        message="正在排队",
+        attempt=int(job.get("attempt") or 0) + 1,
+        error="",
+    )
+    background_tasks.add_task(_process_fbu_calculation_job, run_id, job_id)
+    return store.public(job)
+
+
+@app.post(
+    "/api/fbu-performance/runs/{run_id}/calculation-jobs",
+    status_code=202,
+)
+def create_fbu_calculation_job(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        raise HTTPException(404, "任务不存在")
+    store = _fbu_upload_job_store()
+    job = store.create(run_id, [])
+    job = store.update(run_id, job["jobId"], kind="calculation")
+    queued = _queue_fbu_calculation_job(run_id, job["jobId"], background_tasks)
+    return {"job": queued}
+
+
+@app.post(
+    "/api/fbu-performance/runs/{run_id}/calculation-jobs/{job_id}/resume",
+    status_code=202,
+)
+def resume_fbu_calculation_job(
+    run_id: str,
+    job_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    try:
+        job = _queue_fbu_calculation_job(run_id, job_id, background_tasks)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"job": job}
+
+
+@app.get("/api/fbu-performance/runs/{run_id}/calculation-jobs/{job_id}")
+def get_fbu_calculation_job(run_id: str, job_id: str) -> dict:
+    try:
+        store = _fbu_upload_job_store()
+        job = store.load(run_id, job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not job or job.get("kind") != "calculation":
+        raise HTTPException(404, "核算任务不存在")
+    return {"job": store.public(job)}
 
 
 @app.post("/api/fbu-performance/runs")
@@ -15680,68 +16596,281 @@ def create_fbu_performance_run(body: dict) -> dict:
 @app.get("/api/fbu-performance/runs")
 def list_fbu_performance_runs() -> dict:
     """获取FBU绩效核算任务列表"""
-    runs = fbu_run_manager.list_runs()
-    return {
-        "runs": [
-            {
-                "run_id": r.run_id,
-                "created_at": r.created_at,
-                "calc_month": r.calc_month,
-                "status": r.status,
-                "current_step": r.current_step,
-                "total_employees": r.total_employees,
-                "total_bonus": r.total_bonus,
-                "roster_file": r.roster_file,
-                "roster_source": r.roster_source,
-                "diagnostics": {"summary": _fbu_run_diagnostics(r)["summary"]},
-            }
-            for r in runs
-        ]
+    return {"runs": fbu_run_manager.list_run_summaries()}
+
+
+def _parse_fbu_run_detail_include(include: str) -> tuple[set[str] | None, set[str]]:
+    raw = str(include or "").strip()
+    if not raw or raw == "all":
+        return None, {"roster_data", "diagnostics"}
+    requested = {
+        value.strip()
+        for value in raw.split(",")
+        if value.strip() and value.strip() != "core"
     }
+    extras = requested.intersection({"roster_data", "diagnostics"})
+    sections = requested.difference(extras)
+    invalid = sections.difference(FBU_RUN_SECTION_FIELDS)
+    if invalid:
+        raise HTTPException(400, f"不支持的活动详情区块：{', '.join(sorted(invalid))}")
+    return sections, extras
 
 
 @app.get("/api/fbu-performance/runs/{run_id}")
-def get_fbu_performance_run(run_id: str) -> dict:
+def get_fbu_performance_run(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    include: str = "all",
+) -> dict:
     """获取FBU绩效核算任务详情"""
-    run = fbu_run_manager.get_run(run_id)
+    sections, extras = _parse_fbu_run_detail_include(include)
+    run = fbu_run_manager.get_run(run_id, sections=sections)
     if not run:
         raise HTTPException(404, "任务不存在")
-    roster_data = run.roster_data or _fbu_roster_preview_for_run(run_id)
-    run = fbu_run_manager.runs.get(run_id) or run
-    payload = vars(run).copy()
-    if payload.get("results"):
+    attendance_view = (
+        getattr(run, "attendance_view_data", {})
+        if isinstance(getattr(run, "attendance_view_data", {}), dict)
+        else {}
+    )
+    attendance_source_run = None
+    if sections is not None and "attendance_view_data" in sections and not attendance_view:
+        attendance_source_run = (
+            fbu_run_manager.get_run(run_id, sections={"attendance_data"})
+            or run
+        )
+        attendance_view = build_attendance_view_data(
+            attendance_source_run.attendance_data
+        )
+        if attendance_view:
+            background_tasks.add_task(
+                fbu_run_manager.backfill_attendance_view_data,
+                run_id,
+                attendance_view,
+            )
+    should_backfill_hourly_policy = (
+        sections is None
+        or {"attendance_data", "hourly_rate_policy_data"}.issubset(sections)
+        or {"attendance_view_data", "hourly_rate_policy_data"}.issubset(sections)
+    )
+    if should_backfill_hourly_policy and not getattr(run, "hourly_rate_policy_data", {}):
+        attendance_source_run = attendance_source_run or (
+            fbu_run_manager.get_run(run_id, sections={"attendance_data"})
+            or run
+        )
+    if (
+        should_backfill_hourly_policy
+        and attendance_source_run
+        and attendance_source_run.attendance_data
+        and not getattr(run, "hourly_rate_policy_data", {})
+    ):
+        fbu_run_manager.backfill_hourly_rate_policy_data(
+            run_id,
+            build_hourly_rate_policy_data(
+                attendance_source_run.attendance_data,
+                run.calc_month,
+            ),
+        )
+        run = fbu_run_manager.get_run(run_id, sections=sections) or run
+    raw_payload = vars(run).copy()
+    if attendance_view:
+        raw_payload["attendance_view_data"] = attendance_view
+    if sections is None:
+        payload = raw_payload
+        payload.pop("results_view_data", None)
+        payload.pop("attendance_view_data", None)
+        loaded_sections = sorted(
+            FBU_RUN_SECTION_FIELDS.difference({
+                "attendance_view_data",
+                "results_view_data",
+            })
+        )
+    else:
+        payload = {
+            key: value
+            for key, value in raw_payload.items()
+            if key not in FBU_RUN_SECTION_FIELDS
+        }
+        for field_name in sections:
+            payload[field_name] = raw_payload.get(field_name)
+        loaded_sections = sorted(sections)
+    if "attendance_view_data" in payload:
+        payload["attendance_data"] = payload.pop("attendance_view_data")
+    if "results" in loaded_sections and payload.get("results"):
         payload["results"] = build_final_result_rows(payload["results"])
         payload["total_employees"] = len(payload["results"])
-    payload["roster_data"] = roster_data
-    payload["diagnostics"] = _fbu_run_diagnostics(run)
+    if sections is None or "roster_data" in extras:
+        payload["roster_data"] = _fbu_roster_preview_for_run(run_id)
+    if sections is None or "diagnostics" in extras:
+        diagnostics_run = run
+        if sections is not None:
+            diagnostics_run = (
+                fbu_run_manager.get_run(
+                    run_id,
+                    sections=_FBU_DIAGNOSTIC_SECTION_FIELDS,
+                )
+                or run
+            )
+        payload["diagnostics"] = _fbu_run_diagnostics(diagnostics_run)
+    payload["loaded_sections"] = loaded_sections
     return payload
 
 
 @app.get("/api/fbu-performance/runs/{run_id}/diagnostics")
 def get_fbu_performance_diagnostics(run_id: str) -> dict:
     """获取FBU数据匹配诊断"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections=_FBU_DIAGNOSTIC_SECTION_FIELDS,
+    )
     if not run:
         raise HTTPException(404, "任务不存在")
     return _fbu_run_diagnostics(run)
 
 
 @app.get("/api/fbu-performance/runs/{run_id}/results")
-def get_fbu_performance_results(run_id: str) -> dict:
+def get_fbu_performance_results(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    page: int = 1,
+    page_size: int = 0,
+    q: str = "",
+    group: str = "all",
+) -> dict:
     """获取FBU绩效核算结果"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections={"results_view_data"})
     if not run:
         raise HTTPException(404, "任务不存在")
     if run.status != "completed":
         raise HTTPException(400, "任务未完成")
-    return {"results": build_final_result_rows(run.results)}
+    results_view = (
+        run.results_view_data
+        if isinstance(run.results_view_data, dict)
+        else {}
+    )
+    results = (
+        list(results_view.get("rows") or [])
+        if isinstance(results_view.get("rows"), list)
+        else []
+    )
+    if not results:
+        full_run = fbu_run_manager.get_run(run_id, sections={"results"}) or run
+        results = build_final_result_rows(full_run.results)
+        run = full_run
+        if results:
+            background_tasks.add_task(
+                fbu_run_manager.backfill_results_view_data,
+                run_id,
+                build_results_view_data(full_run.results),
+            )
+
+    def group_key(row: dict) -> str:
+        if row.get("job_type") == "district_manager":
+            return "district"
+        if row.get("job_type") == "functional":
+            return "functional"
+        return "warehouse"
+
+    groups = {
+        key: {
+            "count": len(rows),
+            "total_bonus": round(
+                sum(float(row.get("performance_bonus") or 0) for row in rows),
+                2,
+            ),
+        }
+        for key in ("warehouse", "functional", "district")
+        for rows in [[row for row in results if group_key(row) == key]]
+    }
+    calculation_paths: dict[str, dict] = {}
+    for row in results:
+        path = str(row.get("calculation_path") or STANDARD_PERFORMANCE_BASE_PATH)
+        bucket = calculation_paths.setdefault(
+            path,
+            {
+                "path": path,
+                "count": 0,
+                "total_base": 0.0,
+                "total_bonus": 0.0,
+            },
+        )
+        bucket["count"] += 1
+        bucket["total_base"] += float(row.get("performance_base") or 0)
+        bucket["total_bonus"] += float(row.get("performance_bonus") or 0)
+    calculation_path_rows = [
+        {
+            **bucket,
+            "total_base": round(bucket["total_base"], 2),
+            "total_bonus": round(bucket["total_bonus"], 2),
+        }
+        for bucket in calculation_paths.values()
+    ]
+    selected = results
+    if group in groups:
+        selected = [row for row in selected if group_key(row) == group]
+    normalized_query = str(q or "").strip().casefold()
+    if normalized_query:
+        selected = [
+            row
+            for row in selected
+            if any(
+                normalized_query in str(row.get(field_name) or "").casefold()
+                for field_name in (
+                    "employee_id",
+                    "source_employee_id",
+                    "name",
+                    "department",
+                    "area",
+                    "position",
+                )
+            )
+        ]
+
+    total = len(selected)
+    normalized_page = max(1, int(page or 1))
+    normalized_page_size = max(0, min(200, int(page_size or 0)))
+    if normalized_page_size:
+        pages = max(1, (total + normalized_page_size - 1) // normalized_page_size)
+        normalized_page = min(normalized_page, pages)
+        start = (normalized_page - 1) * normalized_page_size
+        page_rows = selected[start:start + normalized_page_size]
+    else:
+        pages = 1
+        page_rows = selected
+    return {
+        "results": page_rows,
+        "pagination": {
+            "page": normalized_page,
+            "page_size": normalized_page_size or total,
+            "total": total,
+            "pages": pages,
+        },
+        "summary": {
+            "total_employees": len(results),
+            "total_bonus": round(
+                sum(float(row.get("performance_bonus") or 0) for row in results),
+                2,
+            ),
+            "total_performance_base": round(
+                sum(float(row.get("performance_base") or 0) for row in results),
+                2,
+            ),
+            "special_base_count": sum(
+                1
+                for row in results
+                if str(row.get("calculation_path") or STANDARD_PERFORMANCE_BASE_PATH)
+                != STANDARD_PERFORMANCE_BASE_PATH
+            ),
+            "calculation_paths": calculation_path_rows,
+            "groups": groups,
+        },
+    }
 
 
 @app.get("/api/fbu-performance/runs/{run_id}/export")
 def export_fbu_performance(run_id: str) -> dict:
     """导出FBU绩效核算结果"""
     # 检查任务是否存在
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -15869,6 +16998,14 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             if detail.get("note"):
                 lines.append(str(detail["note"]))
             blocks.append("\n".join(lines))
+        period_adjustment = float(item.get("period_adjustment") or 0)
+        if period_adjustment:
+            summary_lines = [
+                f"系统计算绩效基数：${format_process_number(item.get('system_performance_base'), 2)}",
+                f"Period adjustment：${format_process_number(period_adjustment, 2)}",
+                f"最终绩效基数：${format_process_number(item.get('performance_base'), 2)}",
+            ]
+            blocks.insert(0, "\n".join(summary_lines))
         if blocks:
             return "\n\n".join(blocks)
         return f"绩效基数：${format_process_number(item.get('performance_base'), 2)}"
@@ -15882,7 +17019,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             performance_ratio = float(segment.get("performance_ratio") or 0)
             coefficient = format_process_number(segment.get("performance_coefficient"), 2)
             performance_bonus = format_process_number(segment.get("performance_bonus"), 2)
-            if item.get("job_type") == "district_manager":
+            if item.get("job_type") == "district_manager" and not segment.get("is_period_adjustment"):
                 formula = f"${performance_base} × {coefficient} = ${performance_bonus}"
             else:
                 formula = (
@@ -15920,8 +17057,20 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             enriched.append(item)
         return enriched
 
-    # 检查任务是否存在
-    run = fbu_run_manager.get_run(run_id)
+    export_sections = {
+        "attendance": {"attendance_data"},
+        "salary": {"salary_data"},
+        "performance": {"performance_data"},
+        "adjustments": {"adjustment_data"},
+        "base_overrides": {"base_override_data"},
+        "diagnostics": _FBU_DIAGNOSTIC_SECTION_FIELDS,
+        "results": {"results", "attendance_data", "salary_data"},
+    }
+    # 只读取当前导出类型需要的数据。
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections=export_sections.get(type, set()),
+    )
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -16083,7 +17232,9 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 ("姓名", "name", 14, "text"),
                 ("员工工号", "employee_id", 14, "text"),
                 ("职位", "position", 34, "text"),
-                (f"{month_label(run.calc_month)}绩效基数", "performance_base", 15, "money"),
+                ("系统计算绩效基数", "system_performance_base", 16, "money"),
+                ("Period adjustment", "period_adjustment", 16, "money"),
+                (f"{month_label(run.calc_month)}绩效基数", "performance_base", 16, "money"),
                 ("绩效比例", "performance_ratio", 11, "percent"),
                 ("绩效得分", "performance_score", 12, "number"),
                 ("绩效等级", "performance_level", 12, "text"),
@@ -16094,24 +17245,24 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 ("奖金计算过程", "bonus_calculation_process", 48, "process"),
             ]
             write_title(sheet, f"新泽西区绩效考核与奖金核算——{sheet_title.split('.', 1)[-1]}", len(columns))
-            sheet.merge_cells("A2:I2")
-            sheet.merge_cells("J2:L2")
-            sheet.merge_cells("M2:M3")
-            sheet.merge_cells("N2:N3")
-            sheet.merge_cells("O2:P2")
+            sheet.merge_cells("A2:K2")
+            sheet.merge_cells("L2:N2")
+            sheet.merge_cells("O2:O3")
+            sheet.merge_cells("P2:P3")
+            sheet.merge_cells("Q2:R2")
             group_headers = {
                 "A2": "员工信息",
-                "J2": "本月绩效考核结果(OEHR)",
-                "M2": "本月应发绩效工资",
-                "N2": "备注",
-                "O2": "计算过程",
+                "L2": "本月绩效考核结果(OEHR)",
+                "O2": "本月应发绩效工资",
+                "P2": "备注",
+                "Q2": "计算过程",
             }
             for address, value in group_headers.items():
                 style_result_header_cell(sheet[address])
                 sheet[address] = safe_excel_value(value)
             for col_idx, (header, _, width, _) in enumerate(columns, 1):
                 sheet.column_dimensions[get_column_letter(col_idx)].width = width
-                if col_idx in (13, 14):
+                if col_idx in (15, 16):
                     continue
                 cell = sheet.cell(row=3, column=col_idx, value=safe_excel_value(header))
                 style_result_header_cell(cell)
@@ -16128,6 +17279,8 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     "name": item.get("name", ""),
                     "employee_id": item.get("employee_id", ""),
                     "position": item.get("position") or format_fbu_job_type(item.get("job_type", "")),
+                    "system_performance_base": item.get("system_performance_base", item.get("performance_base", 0)),
+                    "period_adjustment": item.get("period_adjustment", 0),
                     "performance_base": item.get("performance_base", 0),
                     "performance_ratio": item.get("performance_ratio", 0),
                     "performance_score": item.get("performance_score", ""),
@@ -16150,7 +17303,7 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 )
                 sheet.row_dimensions[row_idx].height = min(80, max(24, process_line_count * 8))
             sheet.freeze_panes = "A4"
-            sheet.auto_filter.ref = f"A3:P{max(3, 3 + len(rows))}"
+            sheet.auto_filter.ref = f"A3:R{max(3, 3 + len(rows))}"
             if sheet.sheet_view.selection:
                 sheet.sheet_view.selection[0].activeCell = "A3"
                 sheet.sheet_view.selection[0].sqref = "A3"
@@ -16165,7 +17318,9 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 ("绩效得分", "performance_score", 12, "number"),
                 ("绩效等级", "performance_level", 12, "text"),
                 ("绩效申诉", "appeal", 12, "text"),
-                ("绩效奖金基数", "performance_base", 14, "money"),
+                ("系统计算绩效基数", "system_performance_base", 16, "money"),
+                ("Period adjustment", "period_adjustment", 16, "money"),
+                ("绩效奖金基数", "performance_base", 16, "money"),
                 ("绩效系数", "performance_coefficient", 12, "number"),
                 ("绩效奖金", "performance_bonus", 12, "money"),
                 ("备注", "note", 26, "text"),
@@ -16175,22 +17330,22 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
             write_title(sheet, "海外区长-绩效奖金核算", len(columns))
             sheet.merge_cells("A2:D2")
             sheet.merge_cells("E2:H2")
-            sheet.merge_cells("I2:K2")
-            sheet.merge_cells("L2:L3")
-            sheet.merge_cells("M2:N2")
+            sheet.merge_cells("I2:M2")
+            sheet.merge_cells("N2:N3")
+            sheet.merge_cells("O2:P2")
             group_headers = {
                 "A2": "区长/副区长/商务负责人信息",
                 "E2": "绩效考核结果",
                 "I2": "绩效奖金核算（美元）",
-                "L2": "备注",
-                "M2": "计算过程",
+                "N2": "备注",
+                "O2": "计算过程",
             }
             for address, value in group_headers.items():
                 style_result_header_cell(sheet[address])
                 sheet[address] = safe_excel_value(value)
             for col_idx, (header, _, width, _) in enumerate(columns, 1):
                 sheet.column_dimensions[get_column_letter(col_idx)].width = width
-                if col_idx == 12:
+                if col_idx == 14:
                     continue
                 cell = sheet.cell(row=3, column=col_idx, value=safe_excel_value(header))
                 style_result_header_cell(cell)
@@ -16207,6 +17362,8 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                     "performance_score": item.get("performance_score", ""),
                     "performance_level": item.get("performance_level", ""),
                     "appeal": "无",
+                    "system_performance_base": item.get("system_performance_base", item.get("performance_base", 0)),
+                    "period_adjustment": item.get("period_adjustment", 0),
                     "performance_base": item.get("performance_base", 0),
                     "performance_coefficient": item.get("performance_coefficient", 0),
                     "performance_bonus": item.get("performance_bonus", 0),
@@ -16224,16 +17381,16 @@ def export_fbu_excel(run_id: str, type: str = "attendance") -> dict:
                 sheet.row_dimensions[row_idx].height = min(80, max(24, process_line_count * 8))
             total_row = 4 + len(rows)
             sheet.cell(row=total_row, column=1, value="合计")
-            sheet.cell(row=total_row, column=11, value=sum(float(item.get("performance_bonus") or 0) for item in rows))
+            sheet.cell(row=total_row, column=13, value=sum(float(item.get("performance_bonus") or 0) for item in rows))
             for col_idx in range(1, len(columns) + 1):
                 cell = sheet.cell(row=total_row, column=col_idx)
                 cell.border = thin_border
                 cell.font = Font(bold=True)
                 cell.alignment = Alignment(horizontal="center", vertical="center")
-                if col_idx == 11:
+                if col_idx == 13:
                     cell.number_format = '"$"#,##0.00'
             sheet.freeze_panes = "A4"
-            sheet.auto_filter.ref = f"A3:N{max(3, total_row)}"
+            sheet.auto_filter.ref = f"A3:P{max(3, total_row)}"
 
         summary = wb.active
         summary.title = "汇总表"
@@ -16523,7 +17680,7 @@ def bulk_delete_fbu_performance_runs(body: dict = Body(...)) -> dict:
     deleted_ids: list[str] = []
     missing_ids: list[str] = []
     for run_id in dict.fromkeys(run_ids):
-        run = fbu_run_manager.get_run(run_id)
+        run = fbu_run_manager.get_run(run_id, sections=set())
         if not run:
             missing_ids.append(run_id)
             continue
@@ -16545,7 +17702,7 @@ def bulk_delete_fbu_performance_runs(body: dict = Body(...)) -> dict:
 def delete_fbu_performance_run(run_id: str) -> dict:
     """删除FBU绩效核算任务"""
     # 检查任务是否存在
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
 
