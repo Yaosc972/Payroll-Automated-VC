@@ -14650,6 +14650,7 @@ async def _await_fbu_job_with_heartbeat(
 
 
 async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
+    processing_started = perf_counter()
     store = _fbu_upload_job_store()
     job = store.load(run_id, job_id)
     if not job:
@@ -14668,7 +14669,10 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
         uploads = job.get("uploads")
         if not isinstance(uploads, list) or not uploads:
             raise ValueError("上传任务没有待处理文件")
+        upload_kinds = [str(item.get("kind") or "") for item in uploads]
+        total_bytes = sum(int(item.get("size") or 0) for item in uploads)
 
+        materialize_started = perf_counter()
         materialized: dict[str, tuple[dict, Path]] = {}
         for item in uploads:
             kind = str(item.get("kind") or "")
@@ -14684,6 +14688,7 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
             if expected_size and path.stat().st_size != expected_size:
                 raise ValueError(f"上传文件大小不一致：{item.get('originalFilename') or kind}")
             materialized[kind] = (item, path)
+        materialize_ms = (perf_counter() - materialize_started) * 1000
 
         await asyncio.to_thread(
             store.update,
@@ -14697,6 +14702,7 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
 
         result: dict = {}
         step = ""
+        parse_started = perf_counter()
         with ExitStack() as stack:
             upload_files = {
                 kind: UploadFile(
@@ -14761,6 +14767,7 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
                     message="正在解析并核验数据",
                 )
 
+        parse_ms = (perf_counter() - parse_started) * 1000
         await asyncio.to_thread(
             store.update,
             run_id,
@@ -14784,6 +14791,17 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
                 path.unlink(missing_ok=True)
         except Exception:
             fbu_logger.exception("Failed to clean FBU upload job files %s", job_id)
+        fbu_logger.info(
+            "FBU upload processing run=%s job=%s kinds=%s bytes=%d "
+            "materialize_ms=%.1f parse_ms=%.1f total_ms=%.1f",
+            run_id,
+            job_id,
+            ",".join(upload_kinds),
+            total_bytes,
+            materialize_ms,
+            parse_ms,
+            (perf_counter() - processing_started) * 1000,
+        )
     except Exception as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
         fbu_logger.exception("FBU upload job failed run=%s job=%s", run_id, job_id)
@@ -14839,7 +14857,10 @@ def _prepare_fbu_upload_job(run_id: str, job_id: str) -> tuple[dict, bool]:
 async def start_fbu_upload_job(
     run_id: str,
     job_id: str,
+    request: Request,
+    payload: dict = Body(default=None),
 ) -> dict:
+    request_started = perf_counter()
     try:
         job, should_process = _prepare_fbu_upload_job(run_id, job_id)
     except ValueError as exc:
@@ -14850,6 +14871,27 @@ async def start_fbu_upload_job(
         if persisted is None:
             raise HTTPException(500, "上传任务状态丢失，请重新上传。")
         job = _fbu_upload_job_store().public(persisted)
+    uploads = job.get("uploads") if isinstance(job.get("uploads"), list) else []
+    client_upload_ms = 0.0
+    try:
+        client_upload_ms = min(
+            3_600_000.0,
+            max(0.0, float((payload or {}).get("clientUploadMs") or 0)),
+        )
+    except (TypeError, ValueError):
+        client_upload_ms = 0.0
+    fbu_logger.info(
+        "FBU upload request run=%s job=%s action=%s kinds=%s bytes=%d "
+        "client_upload_ms=%.1f processing_ms=%.1f status=%s",
+        run_id,
+        job_id,
+        "resume" if request.url.path.endswith("/resume") else "start",
+        ",".join(str(item.get("kind") or "") for item in uploads),
+        sum(int(item.get("size") or 0) for item in uploads),
+        client_upload_ms,
+        (perf_counter() - request_started) * 1000,
+        job.get("status") or "",
+    )
     return {"job": job}
 
 
@@ -14857,7 +14899,7 @@ async def start_fbu_upload_job(
 def get_fbu_upload_job(run_id: str, job_id: str) -> dict:
     try:
         store = _fbu_upload_job_store()
-        job = store.load(run_id, job_id)
+        job = store.load(run_id, job_id, refresh=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if not job:
@@ -16607,7 +16649,7 @@ async def resume_fbu_calculation_job(
 def get_fbu_calculation_job(run_id: str, job_id: str) -> dict:
     try:
         store = _fbu_upload_job_store()
-        job = store.load(run_id, job_id)
+        job = store.load(run_id, job_id, refresh=True)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if not job or job.get("kind") != "calculation":

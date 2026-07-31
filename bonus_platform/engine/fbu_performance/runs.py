@@ -21,6 +21,7 @@ from .persistent_storage import (
     list_fbu_run_summaries_from_persistent,
     load_fbu_file_from_persistent,
     load_fbu_run_snapshot_from_persistent,
+    read_fbu_file_from_persistent,
     save_fbu_files_to_persistent,
     save_fbu_run_snapshot_to_persistent,
 )
@@ -1125,6 +1126,13 @@ class FBURunManager:
         if not fbu_persistent_storage_enabled():
             return None
         return load_fbu_file_from_persistent(run_id, self.data_dir / run_id, relative_path)
+
+    def read_persisted_file(self, run_id: str, relative_path: str) -> bytes | None:
+        """Read current durable bytes without overwriting a warm instance's local cache."""
+        if fbu_persistent_storage_enabled():
+            return read_fbu_file_from_persistent(run_id, relative_path)
+        target = self.data_dir / run_id / relative_path
+        return target.read_bytes() if target.is_file() else None
 
     def delete_persisted_files(self, run_id: str, relative_paths: list[str]) -> None:
         if fbu_persistent_storage_enabled():

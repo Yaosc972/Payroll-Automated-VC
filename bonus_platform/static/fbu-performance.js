@@ -3689,6 +3689,32 @@ function waitForFbuUploadPoll(delayMs = 900) {
   return new Promise(resolve => window.setTimeout(resolve, delayMs));
 }
 
+async function completeFbuUploadJob(metadata, job) {
+  if (!state.activeFbuUploadJobs[metadata.jobId]) return job;
+  const refreshedAttendance = (metadata.entries || []).some(entry => (
+    ['attendance', 'previousAttendance'].includes(entry.type)
+  ));
+  if (refreshedAttendance) prioritizePendingSupplementalLeave();
+  updateFbuUploadJobMaterials(metadata, {
+    status: 'done',
+    progress: 100,
+    indeterminate: false,
+    message: job.result?.readyForReconciliation
+      ? '已解析并完成核验'
+      : '已上传并解析',
+    canRetry: false,
+  });
+  forgetFbuUploadJob(metadata.jobId);
+  if (state.currentActivity?.run_id === metadata.runId) {
+    await enterActivity(metadata.runId, {
+      preservePage: true,
+      preserveStep: true,
+      refreshSections: true,
+    });
+  }
+  return job;
+}
+
 async function pollFbuUploadJob(jobId) {
   const metadata = state.activeFbuUploadJobs[jobId];
   if (!metadata || fbuUploadJobPollers.has(jobId)) return null;
@@ -3698,30 +3724,10 @@ async function pollFbuUploadJob(jobId) {
       const data = await apiJson(
         `${API_BASE}/runs/${metadata.runId}/uploads/${jobId}`,
       );
+      if (!state.activeFbuUploadJobs[jobId]) return null;
       const job = data.job || {};
       if (job.status === 'completed') {
-        const refreshedAttendance = (metadata.entries || []).some(entry => (
-          ['attendance', 'previousAttendance'].includes(entry.type)
-        ));
-        if (refreshedAttendance) prioritizePendingSupplementalLeave();
-        updateFbuUploadJobMaterials(metadata, {
-          status: 'done',
-          progress: 100,
-          indeterminate: false,
-          message: job.result?.readyForReconciliation
-            ? '已解析并完成核验'
-            : '已上传并解析',
-          canRetry: false,
-        });
-        forgetFbuUploadJob(jobId);
-        if (state.currentActivity?.run_id === metadata.runId) {
-          await enterActivity(metadata.runId, {
-            preservePage: true,
-            preserveStep: true,
-            refreshSections: true,
-          });
-        }
-        return job;
+        return completeFbuUploadJob(metadata, job);
       }
       if (job.status === 'failed') {
         updateFbuUploadJobMaterials(metadata, {
@@ -3787,7 +3793,10 @@ async function resumeFbuUploadJob(jobId) {
       { method: 'POST' },
     );
     const pollingRequest = pollFbuUploadJob(jobId);
-    await resumeRequest;
+    const resumed = await resumeRequest;
+    if (resumed.job?.status === 'completed') {
+      return completeFbuUploadJob(metadata, resumed.job);
+    }
     return pollingRequest;
   } catch (error) {
     updateFbuUploadJobMaterials(metadata, {
@@ -3853,6 +3862,22 @@ function forgetFbuCalculationJob() {
   persistActiveFbuCalculationJob();
 }
 
+async function completeFbuCalculationJob(metadata, job) {
+  if (state.activeCalculationJob?.jobId !== metadata.jobId) return job;
+  const statusChanged = hasFbuJobUiStateChanged(state.calculationJobStatus, job);
+  state.calculationJobStatus = job;
+  if (statusChanged && state.currentPage === 'workbench') renderWorkbench();
+  forgetFbuCalculationJob();
+  if (state.currentActivity?.run_id === metadata.runId) {
+    await enterActivity(metadata.runId, {
+      preservePage: true,
+      initialStep: 'export',
+      refreshSections: true,
+    });
+  }
+  return job;
+}
+
 async function pollFbuCalculationJob(jobId) {
   const metadata = state.activeCalculationJob;
   if (
@@ -3868,21 +3893,14 @@ async function pollFbuCalculationJob(jobId) {
       const data = await apiJson(
         `${API_BASE}/runs/${metadata.runId}/calculation-jobs/${jobId}`,
       );
+      if (state.activeCalculationJob?.jobId !== jobId) return null;
       const job = data.job || {};
       const statusChanged = hasFbuJobUiStateChanged(state.calculationJobStatus, job);
       state.calculationJobStatus = job;
       if (statusChanged && state.currentPage === 'workbench') renderWorkbench();
 
       if (job.status === 'completed') {
-        forgetFbuCalculationJob();
-        if (state.currentActivity?.run_id === metadata.runId) {
-          await enterActivity(metadata.runId, {
-            preservePage: true,
-            initialStep: 'export',
-            refreshSections: true,
-          });
-        }
-        return job;
+        return completeFbuCalculationJob(metadata, job);
       }
       if (job.status === 'failed' || job.recoverable) {
         return job;
@@ -3919,7 +3937,10 @@ async function resumeFbuCalculationJob() {
       { method: 'POST' },
     );
     const pollingRequest = pollFbuCalculationJob(metadata.jobId);
-    await resumeRequest;
+    const resumed = await resumeRequest;
+    if (resumed.job?.status === 'completed') {
+      return completeFbuCalculationJob(metadata, resumed.job);
+    }
     return pollingRequest;
   } catch (error) {
     state.calculationJobStatus = {
@@ -4001,6 +4022,7 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
       throw new Error('上传计划与所选文件数量不一致，请重新选择文件。');
     }
     const uploadByKind = new Map(uploads.map(upload => [upload.kind, upload]));
+    const directUploadStartedAt = performance.now();
     await Promise.all(entries.map(async ({ kind, type, file }) => {
       const upload = uploadByKind.get(kind);
       if (!upload?.signedUrl) {
@@ -4021,6 +4043,7 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
         message: '已上传，正在排队',
       });
     }));
+    const clientUploadMs = Math.max(0, Math.round(performance.now() - directUploadStartedAt));
     const jobId = plan.job?.jobId;
     if (!jobId) throw new Error('上传任务编号缺失，请重新上传。');
     const metadata = {
@@ -4041,10 +4064,15 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
     });
     const startRequest = apiJson(`${API_BASE}/runs/${activityId}/uploads/${jobId}/start`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientUploadMs }),
     });
     const pollingRequest = pollFbuUploadJob(jobId);
     try {
-      await startRequest;
+      const started = await startRequest;
+      if (started.job?.status === 'completed') {
+        return completeFbuUploadJob(metadata, started.job);
+      }
     } catch (error) {
       forgetFbuUploadJob(jobId);
       await pollingRequest;
@@ -6156,6 +6184,9 @@ async function executeCalculate() {
       throw new Error('核算任务未返回任务编号');
     }
     rememberFbuCalculationJob(runId, jobId);
+    if (data.job?.status === 'completed') {
+      return completeFbuCalculationJob(state.activeCalculationJob, data.job);
+    }
     return pollFbuCalculationJob(jobId);
   } catch (error) {
     state.calculationJobStatus = {

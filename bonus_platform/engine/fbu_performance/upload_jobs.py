@@ -78,16 +78,28 @@ class FBUUploadJobStore:
         self.save(run_id, payload)
         return payload
 
-    def load(self, run_id: str, job_id: str) -> dict[str, Any] | None:
+    def load(
+        self,
+        run_id: str,
+        job_id: str,
+        *,
+        refresh: bool = False,
+    ) -> dict[str, Any] | None:
         relative_path = self.relative_path(job_id)
-        path = self.path(run_id, job_id)
-        if not path.is_file():
-            path = self.run_manager.materialize_file(run_id, relative_path) or path
-        if not path.is_file():
-            return None
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            if refresh:
+                content = self.run_manager.read_persisted_file(run_id, relative_path)
+                if content is None:
+                    return None
+                payload = json.loads(content.decode("utf-8"))
+            else:
+                path = self.path(run_id, job_id)
+                if not path.is_file():
+                    path = self.run_manager.materialize_file(run_id, relative_path) or path
+                if not path.is_file():
+                    return None
+                payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return None
         if (
             not isinstance(payload, dict)

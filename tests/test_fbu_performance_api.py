@@ -138,7 +138,7 @@ def test_versioned_fbu_static_assets_are_immutable():
     client = TestClient(app_module.app)
 
     response = client.get(
-        "/fbu-performance.js?v=fbu-performance-v5-20260731",
+        "/fbu-performance.js?v=fbu-performance-v6-20260731",
         headers={"Accept-Encoding": "gzip"},
     )
 
@@ -152,7 +152,7 @@ def test_fbu_html_ignores_stale_validators_and_is_never_cached():
     initial = client.get("/fbu-performance.html")
 
     assert initial.status_code == 200
-    assert "fbu-performance-v5-20260731" in initial.text
+    assert "fbu-performance-v6-20260731" in initial.text
 
     stale_headers = {
         "If-None-Match": initial.headers.get("etag", '"stale-fbu-html"'),
@@ -166,7 +166,7 @@ def test_fbu_html_ignores_stale_validators_and_is_never_cached():
     assert refreshed.status_code == 200
     assert refreshed.headers["cache-control"] == "no-store"
     assert refreshed.headers["pragma"] == "no-cache"
-    assert "fbu-performance-v5-20260731" in refreshed.text
+    assert "fbu-performance-v6-20260731" in refreshed.text
 
 
 def test_fbu_result_pages_read_precomputed_view_instead_of_full_results(monkeypatch):
@@ -1042,9 +1042,11 @@ def test_fbu_attendance_direct_upload_plan_accepts_file_above_vercel_limit(monke
 
 
 def test_fbu_generic_direct_upload_job_processes_salary_material_and_persists_status(
+    caplog,
     monkeypatch,
     tmp_path,
 ):
+    caplog.set_level("INFO", logger="bonus_platform.fbu")
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
     monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
@@ -1083,9 +1085,22 @@ def test_fbu_generic_direct_upload_job_processes_salary_material_and_persists_st
 
     start_response = client.post(
         f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}/start",
+        json={"clientUploadMs": 1234},
     )
     assert start_response.status_code == 202, start_response.text
     assert start_response.json()["job"]["status"] == "completed"
+    assert any(
+        "FBU upload request" in record.message
+        and "client_upload_ms=1234.0" in record.message
+        and f"bytes={len(content)}" in record.message
+        for record in caplog.records
+    )
+    assert any(
+        "FBU upload processing" in record.message
+        and "materialize_ms=" in record.message
+        and "parse_ms=" in record.message
+        for record in caplog.records
+    )
 
     status_response = client.get(
         f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}",

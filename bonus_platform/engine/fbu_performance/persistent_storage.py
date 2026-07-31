@@ -534,10 +534,15 @@ def save_fbu_files_to_persistent(run_id: str, run_dir: Path, relative_paths: Ite
         list(executor.map(upload, uploads))
 
 
+def read_fbu_file_from_persistent(run_id: str, relative_path: str) -> bytes | None:
+    normalized = _normalize_relative_path(relative_path)
+    return _download_bytes(_object_path(run_id, normalized))
+
+
 def load_fbu_file_from_persistent(run_id: str, run_dir: Path, relative_path: str) -> Path | None:
     normalized = _normalize_relative_path(relative_path)
     target = run_dir / normalized
-    content = _download_bytes(_object_path(run_id, normalized))
+    content = read_fbu_file_from_persistent(run_id, normalized)
     if content is None:
         return None
     target.parent.mkdir(parents=True, exist_ok=True)

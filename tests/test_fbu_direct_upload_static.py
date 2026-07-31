@@ -90,3 +90,46 @@ def test_upload_job_polling_runs_while_server_request_stays_open():
     assert calculation_resume.index("const pollingRequest") < calculation_resume.index(
         "await resumeRequest"
     )
+
+
+def test_upload_start_response_finishes_ui_without_waiting_for_stale_polling():
+    script = FBU_JS.read_text(encoding="utf-8")
+    completion_area = script.split("async function completeFbuUploadJob", 1)[1].split(
+        "async function pollFbuUploadJob", 1
+    )[0]
+    upload_area = script.split("async function uploadWorkbenchFilesDirect", 1)[1].split(
+        "async function uploadWorkbenchAttendanceFilesDirect", 1
+    )[0]
+    resume_area = script.split("async function resumeFbuUploadJob", 1)[1].split(
+        "function restoreFbuUploadJobs", 1
+    )[0]
+
+    assert "if (!state.activeFbuUploadJobs[metadata.jobId]) return job;" in completion_area
+    assert "const started = await startRequest;" in upload_area
+    assert "if (started.job?.status === 'completed')" in upload_area
+    assert "return completeFbuUploadJob(metadata, started.job);" in upload_area
+    assert "const directUploadStartedAt = performance.now();" in upload_area
+    assert "body: JSON.stringify({ clientUploadMs })" in upload_area
+    assert "const resumed = await resumeRequest;" in resume_area
+    assert "if (resumed.job?.status === 'completed')" in resume_area
+    assert "return completeFbuUploadJob(metadata, resumed.job);" in resume_area
+
+
+def test_calculation_response_finishes_ui_without_waiting_for_stale_polling():
+    script = FBU_JS.read_text(encoding="utf-8")
+    completion_area = script.split("async function completeFbuCalculationJob", 1)[1].split(
+        "async function pollFbuCalculationJob", 1
+    )[0]
+    resume_area = script.split("async function resumeFbuCalculationJob", 1)[1].split(
+        "function restoreFbuCalculationJob", 1
+    )[0]
+    calculate_area = script.split("async function executeCalculate", 1)[1].split(
+        "el.btnCalculate", 1
+    )[0]
+
+    assert "if (state.activeCalculationJob?.jobId !== metadata.jobId) return job;" in completion_area
+    assert "const resumed = await resumeRequest;" in resume_area
+    assert "if (resumed.job?.status === 'completed')" in resume_area
+    assert "return completeFbuCalculationJob(metadata, resumed.job);" in resume_area
+    assert "if (data.job?.status === 'completed')" in calculate_area
+    assert "return completeFbuCalculationJob(state.activeCalculationJob, data.job);" in calculate_area

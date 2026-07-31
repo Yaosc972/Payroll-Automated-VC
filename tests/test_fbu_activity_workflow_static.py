@@ -751,7 +751,7 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=fbu-performance-v5-20260731" in html
+    assert "fbu-performance.js?v=fbu-performance-v6-20260731" in html
 
 
 def test_activity_list_uses_summary_without_detail_prefetch():
@@ -1021,7 +1021,7 @@ def test_async_upload_refresh_discards_stale_empty_step_sections():
     enter_activity_area = js.split("async function enterActivity", 1)[1].split(
         "// ═══ New Activity ═══", 1
     )[0]
-    upload_job_area = js.split("async function pollFbuUploadJob", 1)[1].split(
+    upload_job_area = js.split("async function completeFbuUploadJob", 1)[1].split(
         "async function resumeFbuUploadJob", 1
     )[0]
     salary_multipart_area = js.split(
@@ -1044,7 +1044,7 @@ def test_attendance_import_defaults_supplemental_leave_to_pending():
     helper_area = js.split("function prioritizePendingSupplementalLeave", 1)[1].split(
         "function uploadFbuFileToSignedUrl", 1
     )[0]
-    upload_job_area = js.split("async function pollFbuUploadJob", 1)[1].split(
+    upload_job_area = js.split("async function completeFbuUploadJob", 1)[1].split(
         "async function resumeFbuUploadJob", 1
     )[0]
     multipart_area = js.split("async function uploadWorkbenchFileMultipart", 1)[1].split(
@@ -1124,10 +1124,14 @@ def test_calculation_button_shows_loading_state_and_refreshes_results():
     assert "state.calculationPending = true" in calculation
     assert "state.calculationPending = false" in calculation
     assert "/calculation-jobs" in calculation
+    completion = js.split("async function completeFbuCalculationJob", 1)[1].split(
+        "async function pollFbuCalculationJob", 1
+    )[0]
     poller = js.split("async function pollFbuCalculationJob", 1)[1].split(
         "async function resumeFbuCalculationJob", 1
     )[0]
-    assert "initialStep: 'export'" in poller
+    assert "initialStep: 'export'" in completion
+    assert "return completeFbuCalculationJob(metadata, job);" in poller
     assert "renderWorkbenchCurrentStep" in calculation
 
 
