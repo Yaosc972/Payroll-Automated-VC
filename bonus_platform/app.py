@@ -2158,6 +2158,14 @@ class _FBUGZipMiddleware:
 
     async def __call__(self, scope, receive, send):
         path = str(scope.get("path") or "")
+        should_refresh_html = path == "/fbu-performance.html"
+        if should_refresh_html:
+            scope = dict(scope)
+            scope["headers"] = [
+                (name, value)
+                for name, value in scope.get("headers", [])
+                if name.lower() not in {b"if-none-match", b"if-modified-since"}
+            ]
         should_compress = (
             path.startswith("/api/fbu-performance")
             or path in {
@@ -2172,9 +2180,13 @@ class _FBUGZipMiddleware:
         ) or path == "/assets/sigma-platform-logo-20260731.png"
 
         async def send_with_cache_headers(message):
-            if should_cache and message["type"] == "http.response.start":
+            if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                if should_cache:
+                    headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                elif should_refresh_html:
+                    headers["Cache-Control"] = "no-store"
+                    headers["Pragma"] = "no-cache"
             await send(message)
 
         target = self.compressed_app if should_compress else self.app

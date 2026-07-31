@@ -147,6 +147,28 @@ def test_versioned_fbu_static_assets_are_immutable():
     assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
+def test_fbu_html_ignores_stale_validators_and_is_never_cached():
+    client = TestClient(app_module.app)
+    initial = client.get("/fbu-performance.html")
+
+    assert initial.status_code == 200
+    assert "fbu-performance-v5-20260731" in initial.text
+
+    stale_headers = {
+        "If-None-Match": initial.headers.get("etag", '"stale-fbu-html"'),
+        "If-Modified-Since": initial.headers.get(
+            "last-modified",
+            "Thu, 30 Jul 2026 00:00:00 GMT",
+        ),
+    }
+    refreshed = client.get("/fbu-performance.html", headers=stale_headers)
+
+    assert refreshed.status_code == 200
+    assert refreshed.headers["cache-control"] == "no-store"
+    assert refreshed.headers["pragma"] == "no-cache"
+    assert "fbu-performance-v5-20260731" in refreshed.text
+
+
 def test_fbu_result_pages_read_precomputed_view_instead_of_full_results(monkeypatch):
     result_row = {
         "employee_id": "zt1",
