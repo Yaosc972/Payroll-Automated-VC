@@ -13897,9 +13897,30 @@ fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
 fbu_rule_list_store = FBURuleListStore(str(FBU_PERFORMANCE_RUNS_DIR))
 
 
-def _fbu_result_file_payload(run_id: str, result_type: str) -> dict:
-    export_payload = export_fbu_excel(run_id, type=result_type)
-    filename = export_payload["filename"]
+def _fbu_result_file_payload(
+    run_id: str,
+    result_type: str,
+    calc_month: str | None = None,
+) -> dict:
+    """Return the lazy export link without generating the workbook during import."""
+    filename_prefixes = {
+        "attendance": "考勤汇总",
+        "salary": "薪资匹配",
+        "performance": "绩效明细",
+        "adjustments": "调薪拆分",
+        "base_overrides": "工时规则与固定基数例外",
+        "diagnostics": "数据诊断",
+        "results": "核算结果",
+    }
+    prefix = filename_prefixes.get(result_type)
+    if not prefix:
+        raise HTTPException(400, f"不支持的导出类型: {result_type}")
+    if not calc_month:
+        run = fbu_run_manager.get_run(run_id, sections=set())
+        if not run:
+            raise HTTPException(404, "任务不存在")
+        calc_month = run.calc_month
+    filename = f"{prefix}_{calc_month}_{run_id}.xlsx"
     return {
         "type": result_type,
         "filename": filename,
@@ -13964,6 +13985,17 @@ def _parse_fbu_attendance_date(value) -> date | None:
             except ValueError:
                 continue
     return None
+
+
+def _fbu_attendance_dates_from_preview(preview: dict) -> set[date]:
+    """Reuse normalized parser output instead of reopening the attendance workbook."""
+    available_dates = set()
+    for employee in preview.get("employees", []):
+        for row in employee.get("attendance_daily_rows", []):
+            parsed_date = _parse_fbu_attendance_date(row.get("date"))
+            if parsed_date:
+                available_dates.add(parsed_date)
+    return available_dates
 
 
 def _fbu_96_previous_context_window(calc_month: str) -> tuple[date, date, date, date] | None:
@@ -14704,13 +14736,14 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
         step = ""
         parse_started = perf_counter()
         with ExitStack() as stack:
-            upload_files = {
-                kind: UploadFile(
+            upload_files = {}
+            for kind, (item, path) in materialized.items():
+                upload = UploadFile(
                     file=stack.enter_context(path.open("rb")),
                     filename=str(item.get("originalFilename") or path.name),
                 )
-                for kind, (item, path) in materialized.items()
-            }
+                upload._fbu_persisted_relative_path = str(item.get("relativePath") or "")
+                upload_files[kind] = upload
             if set(upload_files).issubset({"attendance", "previousAttendance"}):
                 run = fbu_run_manager.get_run(run_id, sections=set())
                 if not run:
@@ -14990,7 +15023,11 @@ def _fbu_attendance_direct_result(run: FBURun) -> dict:
         "run_id": run.run_id,
         "step": 1,
         "preview": run.attendance_data,
-        "result_file": _fbu_result_file_payload(run.run_id, "attendance"),
+        "result_file": _fbu_result_file_payload(
+            run.run_id,
+            "attendance",
+            run.calc_month,
+        ),
     }
 
 
@@ -15094,12 +15131,14 @@ async def complete_fbu_attendance_direct_upload(run_id: str, payload: dict = Bod
                 file=stack.enter_context(path.open("rb")),
                 filename=str(item.get("originalFilename") or path.name),
             )
+            attendance_upload._fbu_persisted_relative_path = str(item.get("relativePath") or "")
         if "previous_attendance" in materialized:
             item, path = materialized["previous_attendance"]
             previous_upload = UploadFile(
                 file=stack.enter_context(path.open("rb")),
                 filename=str(item.get("originalFilename") or path.name),
             )
+            previous_upload._fbu_persisted_relative_path = str(item.get("relativePath") or "")
         result = await import_fbu_attendance(
             file=attendance_upload,
             previous_attendance=previous_upload,
@@ -15130,6 +15169,57 @@ async def complete_fbu_attendance_direct_upload(run_id: str, payload: dict = Bod
     return result
 
 
+def _persist_fbu_uploaded_file(
+    run_id: str,
+    upload: UploadFile,
+    destination_relative_path: str,
+) -> None:
+    """Reuse a direct-upload object when available, with byte upload as the fallback."""
+    source_relative_path = str(
+        getattr(upload, "_fbu_persisted_relative_path", "") or ""
+    ).strip()
+    if source_relative_path:
+        if fbu_run_manager.promote_persisted_file(
+            run_id,
+            source_relative_path,
+            destination_relative_path,
+        ):
+            return
+        fbu_logger.warning(
+            "FBU direct upload promotion fallback run=%s source=%s destination=%s",
+            run_id,
+            source_relative_path,
+            destination_relative_path,
+        )
+    fbu_run_manager.persist_files(run_id, [destination_relative_path])
+
+
+def _log_fbu_attendance_import(
+    run_id: str,
+    mode: str,
+    uploaded_bytes: int,
+    timings: dict[str, float],
+    started_at: float,
+) -> None:
+    fbu_logger.info(
+        "FBU attendance import run=%s mode=%s bytes=%d "
+        "run_load_ms=%.1f stage_ms=%.1f roster_ms=%.1f workbook_ms=%.1f "
+        "context_ms=%.1f state_ms=%.1f file_ms=%.1f result_ms=%.1f total_ms=%.1f",
+        run_id,
+        mode,
+        uploaded_bytes,
+        timings.get("run_load_ms", 0.0),
+        timings.get("stage_ms", 0.0),
+        timings.get("roster_ms", 0.0),
+        timings.get("workbook_ms", 0.0),
+        timings.get("context_ms", 0.0),
+        timings.get("state_ms", 0.0),
+        timings.get("file_ms", 0.0),
+        timings.get("result_ms", 0.0),
+        (perf_counter() - started_at) * 1000,
+    )
+
+
 @app.post("/api/fbu-performance/import-attendance")
 async def import_fbu_attendance(
     file: UploadFile = File(None),
@@ -15139,18 +15229,35 @@ async def import_fbu_attendance(
     run_id: str = Body(None),
 ) -> dict:
     """Step 1: 导入考勤日报表"""
+    import_started = perf_counter()
+    timings: dict[str, float] = {}
+    mode = (
+        "current+previous"
+        if file and previous_attendance
+        else "current"
+        if file
+        else "previous"
+        if previous_attendance
+        else "existing"
+    )
     # 获取或创建运行记录
+    phase_started = perf_counter()
     if run_id:
+        run_sections = {"hourly_rate_policy_data"}
+        if file is None:
+            run_sections.add("attendance_data")
         run = fbu_run_manager.get_run(
             run_id,
-            sections={"attendance_data", "hourly_rate_policy_data"},
+            sections=run_sections,
         )
         if not run:
             raise HTTPException(404, "任务不存在")
     else:
         run = fbu_run_manager.create_run(calc_month=calc_month)
+    timings["run_load_ms"] = (perf_counter() - phase_started) * 1000
 
     # 先解析临时文件，成功后再替换活动正式文件。
+    phase_started = perf_counter()
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -15187,19 +15294,27 @@ async def import_fbu_attendance(
         roster_path = run_dir / f"roster{roster_suffix}"
         pending_roster_path = run_dir / f".roster-upload{roster_suffix}"
         pending_roster_path.write_bytes(await roster.read())
+    timings["stage_ms"] = (perf_counter() - phase_started) * 1000
+    uploaded_bytes = sum(
+        path.stat().st_size
+        for path in (pending_file_path, pending_previous_path, pending_roster_path)
+        if path and path.is_file()
+    )
 
     if previous_attendance and not file and run.attendance_data and pending_previous_path is not None:
         try:
+            phase_started = perf_counter()
             preview = _append_fbu_previous_attendance_context_to_preview(
                 dict(run.attendance_data),
                 pending_previous_path,
                 calc_month,
                 previous_attendance_filename,
             )
+            timings["workbook_ms"] = (perf_counter() - phase_started) * 1000
+            phase_started = perf_counter()
             pending_previous_path.replace(previous_path)
-            fbu_run_manager.save_step_data(
+            fbu_run_manager.save_attendance_import(
                 run.run_id,
-                1,
                 preview,
                 previous_attendance_file=previous_attendance_filename,
                 hourly_rate_policy_data=build_hourly_rate_policy_data(
@@ -15208,8 +15323,28 @@ async def import_fbu_attendance(
                     run.hourly_rate_policy_data,
                 ),
             )
-            fbu_run_manager.persist_files(run.run_id, [previous_path.name])
-            result_file = _fbu_result_file_payload(run.run_id, "attendance")
+            timings["state_ms"] = (perf_counter() - phase_started) * 1000
+            phase_started = perf_counter()
+            _persist_fbu_uploaded_file(
+                run.run_id,
+                previous_attendance,
+                previous_path.name,
+            )
+            timings["file_ms"] = (perf_counter() - phase_started) * 1000
+            phase_started = perf_counter()
+            result_file = _fbu_result_file_payload(
+                run.run_id,
+                "attendance",
+                run.calc_month,
+            )
+            timings["result_ms"] = (perf_counter() - phase_started) * 1000
+            _log_fbu_attendance_import(
+                run.run_id,
+                mode,
+                uploaded_bytes,
+                timings,
+                import_started,
+            )
             return {
                 "success": True,
                 "run_id": run.run_id,
@@ -15228,17 +15363,22 @@ async def import_fbu_attendance(
         parser = FBUPerformanceParser()
 
         # 加载本活动花名册；没有时自动引用当前基础花名册
+        phase_started = perf_counter()
         if pending_roster_path and pending_roster_path.exists():
             parser.load_roster(str(pending_roster_path))
         else:
             _load_fbu_roster_for_run(parser, run.run_id)
+        timings["roster_ms"] = (perf_counter() - phase_started) * 1000
 
+        phase_started = perf_counter()
         preview = parser.parse_attendance_preview(str(attendance_parse_path), target_month)
+        timings["workbook_ms"] = (perf_counter() - phase_started) * 1000
         if not preview.get("employees"):
             raise HTTPException(
                 400,
                 f"考勤日报未包含 {calc_month} 的数据，请确认活动月份或重新上传文件",
             )
+        phase_started = perf_counter()
         if previous_attendance and pending_previous_path is not None:
             preview = _append_fbu_previous_attendance_context_to_preview(
                 preview,
@@ -15253,7 +15393,9 @@ async def import_fbu_attendance(
                 previous_attendance_filename,
                 available_dates=_fbu_attendance_dates_from_preview(preview),
             )
+        timings["context_ms"] = (perf_counter() - phase_started) * 1000
 
+        phase_started = perf_counter()
         if file:
             pending_file_path.replace(file_path)
         if pending_previous_path and previous_path:
@@ -15272,14 +15414,34 @@ async def import_fbu_attendance(
             calc_month,
             run.hourly_rate_policy_data,
         )
-        fbu_run_manager.save_step_data(run.run_id, 1, preview, **metadata)
-        persisted_files = ["attendance.xlsx"]
-        if previous_path and previous_path.exists():
-            persisted_files.append(previous_path.name)
-        if roster_path and roster_path.exists():
-            persisted_files.append(roster_path.name)
-        fbu_run_manager.persist_files(run.run_id, persisted_files)
-        result_file = _fbu_result_file_payload(run.run_id, "attendance")
+        fbu_run_manager.save_attendance_import(run.run_id, preview, **metadata)
+        timings["state_ms"] = (perf_counter() - phase_started) * 1000
+        phase_started = perf_counter()
+        if file:
+            _persist_fbu_uploaded_file(run.run_id, file, "attendance.xlsx")
+        if previous_attendance and previous_path and previous_path.exists():
+            _persist_fbu_uploaded_file(
+                run.run_id,
+                previous_attendance,
+                previous_path.name,
+            )
+        if roster and roster_path and roster_path.exists():
+            _persist_fbu_uploaded_file(run.run_id, roster, roster_path.name)
+        timings["file_ms"] = (perf_counter() - phase_started) * 1000
+        phase_started = perf_counter()
+        result_file = _fbu_result_file_payload(
+            run.run_id,
+            "attendance",
+            run.calc_month,
+        )
+        timings["result_ms"] = (perf_counter() - phase_started) * 1000
+        _log_fbu_attendance_import(
+            run.run_id,
+            mode,
+            uploaded_bytes,
+            timings,
+            import_started,
+        )
 
         return {
             "success": True,

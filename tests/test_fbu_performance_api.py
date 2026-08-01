@@ -707,6 +707,7 @@ def _performance_supplement_bytes() -> bytes:
 
 def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "EXPORT_DIR", tmp_path / "exports")
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
     monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
 
@@ -755,9 +756,12 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     assert employee["roster_matched"] is True
     assert attendance_payload["result_file"]["type"] == "attendance"
     assert attendance_payload["result_file"]["filename"].startswith("考勤汇总_2026-04_")
+    result_path = app_module.EXPORT_DIR / attendance_payload["result_file"]["filename"]
+    assert not result_path.exists()
     download_response = client.get(attendance_payload["result_file"]["download_url"])
     assert download_response.status_code == 200
     assert download_response.content[:2] == b"PK"
+    assert result_path.exists()
 
 
 def test_fbu_bulk_delete_removes_selected_runs(monkeypatch, tmp_path):
@@ -994,6 +998,158 @@ def test_fbu_attendance_upload_reports_missing_previous_context_dates(monkeypatc
     assert "缺少上一月 2026-03-29 至 2026-03-31 考勤" in context["message"]
 
 
+def test_fbu_attendance_upload_reuses_parsed_dates_for_context_summary(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+
+    original_load_workbook = app_module.load_workbook
+    reopened_workbooks = []
+
+    def track_second_workbook_scan(*args, **kwargs):
+        reopened_workbooks.append(args[0])
+        return original_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(app_module, "load_workbook", track_second_workbook_scan)
+    response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={
+            "file": (
+                "attendance-202604.xlsx",
+                _attendance_bytes_for_rows([("2026-04-01", 8)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["preview"]["summary"]["attendance_context"]["status"] == "missing"
+    assert reopened_workbooks == []
+
+
+def test_fbu_current_attendance_upload_does_not_load_previous_attendance_section(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    requested_sections = []
+    original_get_run = manager.get_run
+
+    def get_run(target_run_id, sections=None):
+        requested_sections.append(None if sections is None else set(sections))
+        return original_get_run(target_run_id, sections=sections)
+
+    monkeypatch.setattr(manager, "get_run", get_run)
+    response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={
+            "file": (
+                "attendance-202604.xlsx",
+                _attendance_bytes_for_rows([("2026-04-01", 8)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert all(
+        sections is not None and "attendance_data" not in sections
+        for sections in requested_sections
+    )
+
+
+def test_fbu_attendance_upload_logs_granular_stage_timings(caplog, monkeypatch, tmp_path):
+    caplog.set_level("INFO", logger="bonus_platform.fbu")
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={
+            "file": (
+                "attendance-202604.xlsx",
+                _attendance_bytes_for_rows([("2026-04-01", 8)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    performance_records = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith("FBU attendance import ")
+    ]
+    assert len(performance_records) == 1
+    message = performance_records[0]
+    for field in (
+        "mode=current",
+        "bytes=",
+        "run_load_ms=",
+        "stage_ms=",
+        "roster_ms=",
+        "workbook_ms=",
+        "context_ms=",
+        "state_ms=",
+        "file_ms=",
+        "result_ms=",
+        "total_ms=",
+    ):
+        assert field in message
+
+
+def test_fbu_attendance_upload_persists_run_state_once(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    save_calls = []
+    original_save_runs = manager._save_runs
+
+    def save_runs(changed_run_id=None, changed_fields=None):
+        save_calls.append((changed_run_id, set(changed_fields or [])))
+        return original_save_runs(changed_run_id, changed_fields)
+
+    monkeypatch.setattr(manager, "_save_runs", save_runs)
+    response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={
+            "file": (
+                "attendance-202604.xlsx",
+                _attendance_bytes_for_rows([("2026-04-01", 8)]),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(save_calls) == 1
+    assert {
+        "attendance_file",
+        "attendance_data",
+        "attendance_view_data",
+        "hourly_rate_policy_data",
+        "current_step",
+        "status",
+    }.issubset(save_calls[0][1])
+
+
 def _enable_fake_fbu_direct_upload(monkeypatch):
     monkeypatch.setattr(
         app_module,
@@ -1118,6 +1274,58 @@ def test_fbu_generic_direct_upload_job_processes_salary_material_and_persists_st
     )
     assert run.previous_salary_file == "may-salary.xlsx"
     assert run.previous_salary_data["employees"][0]["employee_id"] == "E001"
+
+
+def test_fbu_attendance_upload_job_promotes_direct_object_without_reupload(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    _enable_fake_fbu_direct_upload(monkeypatch)
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    content = _attendance_bytes_for_rows([("2026-04-01", 8)])
+    plan = client.post(
+        f"/api/fbu-performance/runs/{run_id}/uploads/plan",
+        json={
+            "files": [{
+                "kind": "attendance",
+                "fileName": "attendance-202604.xlsx",
+                "fileSize": len(content),
+                "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }],
+        },
+    ).json()
+    upload = plan["uploads"][0]
+    upload_path = tmp_path / run_id / upload["relativePath"]
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(content)
+
+    promoted = []
+    persisted = []
+    original_persist_files = manager.persist_files
+
+    def promote_persisted_file(target_run_id, source_relative_path, destination_relative_path):
+        promoted.append((target_run_id, source_relative_path, destination_relative_path))
+        return True
+
+    def persist_files(target_run_id, relative_paths):
+        persisted.extend(relative_paths)
+        return original_persist_files(target_run_id, relative_paths)
+
+    monkeypatch.setattr(manager, "promote_persisted_file", promote_persisted_file, raising=False)
+    monkeypatch.setattr(manager, "persist_files", persist_files)
+
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/uploads/{plan['job']['jobId']}/start",
+        json={"clientUploadMs": 100},
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["job"]["status"] == "completed"
+    assert promoted == [(run_id, upload["relativePath"], "attendance.xlsx")]
+    assert "attendance.xlsx" not in persisted
 
 
 def test_fbu_upload_job_status_marks_stalled_processing_as_recoverable(monkeypatch, tmp_path):

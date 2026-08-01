@@ -15,6 +15,7 @@ from .exporter import FBUPerformanceExporter
 from .persistent_storage import (
     FBU_RUN_SECTION_FIELDS,
     build_fbu_run_manifest,
+    copy_fbu_file_in_persistent,
     delete_fbu_files_from_persistent,
     delete_fbu_run_from_persistent,
     fbu_persistent_storage_enabled,
@@ -892,6 +893,35 @@ class FBURunManager:
             if persist:
                 self._save_runs(run_id, changed_fields)
 
+    def save_attendance_import(self, run_id: str, data: dict, **metadata) -> None:
+        """Persist attendance metadata and parsed sections in one durable snapshot."""
+        run = self.get_run(run_id, sections=set())
+        if not run:
+            return
+        self._invalidate_results(run)
+        for key, value in metadata.items():
+            setattr(run, key, value)
+        run.attendance_data = data
+        run.attendance_view_data = build_attendance_view_data(data)
+        run.current_step = 1
+        run.status = "step1"
+        changed_fields = set(metadata).union({
+            "attendance_data",
+            "attendance_view_data",
+            "current_step",
+            "status",
+            "results",
+            "results_view_data",
+            "total_employees",
+            "total_bonus",
+            "match_rate",
+        })
+        self.runs[run_id] = run
+        self._loaded_sections.setdefault(run_id, set()).update(
+            changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
+        )
+        self._save_runs(run_id, changed_fields)
+
     def backfill_hourly_rate_policy_data(self, run_id: str, data: dict) -> None:
         """Persist generated defaults for legacy runs without invalidating saved results."""
         run = self.get_run(run_id, sections={"hourly_rate_policy_data"})
@@ -1118,6 +1148,26 @@ class FBURunManager:
     def persist_files(self, run_id: str, relative_paths: list[str]) -> None:
         if fbu_persistent_storage_enabled():
             save_fbu_files_to_persistent(run_id, self.data_dir / run_id, relative_paths)
+
+    def promote_persisted_file(
+        self,
+        run_id: str,
+        source_relative_path: str,
+        destination_relative_path: str,
+    ) -> bool:
+        """Promote a direct-upload object; return False so the caller can fall back."""
+        if not fbu_persistent_storage_enabled():
+            return False
+        try:
+            delete_fbu_files_from_persistent(run_id, [destination_relative_path])
+            copy_fbu_file_in_persistent(
+                run_id,
+                source_relative_path,
+                destination_relative_path,
+            )
+            return True
+        except Exception:
+            return False
 
     def materialize_file(self, run_id: str, relative_path: str) -> Optional[Path]:
         target = self.data_dir / run_id / relative_path

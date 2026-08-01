@@ -557,6 +557,29 @@ def save_fbu_files_to_persistent(run_id: str, run_dir: Path, relative_paths: Ite
         list(executor.map(upload, uploads))
 
 
+def copy_fbu_file_in_persistent(
+    run_id: str,
+    source_relative_path: str,
+    destination_relative_path: str,
+) -> None:
+    """Promote an already uploaded object without downloading and uploading it again."""
+    source_path = _object_path(run_id, source_relative_path)
+    destination_path = _object_path(run_id, destination_relative_path)
+    if source_path == destination_path:
+        return
+    _request(
+        "POST",
+        _storage_url("object/copy"),
+        headers=_headers({"content-type": "application/json"}),
+        content=json.dumps({
+            "bucketId": fbu_supabase_bucket(),
+            "sourceKey": source_path,
+            "destinationKey": destination_path,
+        }).encode("utf-8"),
+    )
+    _invalidate_fbu_json_cache_prefix(destination_path)
+
+
 def read_fbu_file_from_persistent(run_id: str, relative_path: str) -> bytes | None:
     normalized = _normalize_relative_path(relative_path)
     return _download_bytes(_object_path(run_id, normalized))

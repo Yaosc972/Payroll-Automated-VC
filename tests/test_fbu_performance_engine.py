@@ -1620,6 +1620,39 @@ def test_attendance_preview_uses_attendance_name_when_roster_is_missing(tmp_path
     assert preview["summary"]["roster_missing"] == 1
 
 
+def test_attendance_preview_opens_large_workbook_in_read_only_mode(monkeypatch, tmp_path):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "sheet1"
+    sheet.append(["header"] * 118)
+    row = [""] * 118
+    row[0] = "2026-04-01"
+    row[1] = "Ana Attendance"
+    row[2] = "E001"
+    row[21] = "08:00"
+    row[117] = 8
+    sheet.append(row)
+    path = tmp_path / "attendance.xlsx"
+    workbook.save(path)
+
+    parser = FBUPerformanceParser()
+    original_load_excel = parser.load_excel
+    opened_modes = []
+
+    def load_excel(filepath, password=None, *, read_only=False):
+        opened_modes.append(read_only)
+        return original_load_excel(filepath, password, read_only=read_only)
+
+    monkeypatch.setattr(parser, "load_excel", load_excel)
+
+    preview = parser.parse_attendance_preview(str(path), target_month=4)
+
+    assert preview["summary"]["total_employees"] == 1
+    assert opened_modes == [True]
+
+
 def test_attendance_preview_daily_rows_keep_each_attendance_date(tmp_path):
     from openpyxl import Workbook
 

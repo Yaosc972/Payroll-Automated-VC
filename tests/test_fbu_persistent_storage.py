@@ -147,6 +147,35 @@ def test_create_fbu_signed_upload_uses_run_scoped_object_path(monkeypatch):
     }
 
 
+def test_copy_fbu_file_in_persistent_uses_server_side_copy(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role")
+    monkeypatch.setenv("SIGMA_FBU_SUPABASE_BUCKET", "sigma-runs")
+    captured = {}
+
+    def fake_request(method, url, *, headers, content=None):
+        captured.update(method=method, url=url, headers=headers, content=content)
+        return b"{}"
+
+    monkeypatch.setattr(fbu_storage, "_request", fake_request)
+
+    fbu_storage.copy_fbu_file_in_persistent(
+        "run_123",
+        "direct_uploads/job_attendance.xlsx",
+        "attendance.xlsx",
+    )
+
+    assert captured["method"] == "POST"
+    assert captured["url"] == "https://example.supabase.co/storage/v1/object/copy"
+    assert captured["headers"]["content-type"] == "application/json"
+    assert json.loads(captured["content"]) == {
+        "bucketId": "sigma-runs",
+        "sourceKey": "fbu-performance-runs/production/run_123/direct_uploads/job_attendance.xlsx",
+        "destinationKey": "fbu-performance-runs/production/run_123/attendance.xlsx",
+    }
+
+
 def test_v2_snapshot_splits_large_sections_and_lists_from_single_index(monkeypatch):
     monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
     objects: dict[str, bytes] = {}
@@ -762,6 +791,39 @@ def test_run_file_can_be_materialized_in_another_instance(monkeypatch, tmp_path)
 
     assert restored_path is not None
     assert restored_path.read_bytes() == b"attendance-content"
+
+
+def test_run_manager_promotes_direct_upload_before_job_cleanup(monkeypatch, tmp_path):
+    manager = fbu_runs.FBURunManager(str(tmp_path))
+    calls = []
+    monkeypatch.setattr(fbu_runs, "fbu_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(
+        fbu_runs,
+        "delete_fbu_files_from_persistent",
+        lambda run_id, paths: calls.append(("delete", run_id, list(paths))),
+    )
+    monkeypatch.setattr(
+        fbu_runs,
+        "copy_fbu_file_in_persistent",
+        lambda run_id, source, destination: calls.append(("copy", run_id, source, destination)),
+    )
+
+    promoted = manager.promote_persisted_file(
+        "run_123",
+        "direct_uploads/job_attendance.xlsx",
+        "attendance.xlsx",
+    )
+
+    assert promoted is True
+    assert calls == [
+        ("delete", "run_123", ["attendance.xlsx"]),
+        (
+            "copy",
+            "run_123",
+            "direct_uploads/job_attendance.xlsx",
+            "attendance.xlsx",
+        ),
+    ]
 
 
 def test_local_manager_does_not_require_persistent_backend(monkeypatch, tmp_path):

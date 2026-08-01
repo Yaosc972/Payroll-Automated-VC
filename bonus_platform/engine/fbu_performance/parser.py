@@ -967,9 +967,17 @@ class FBUPerformanceParser:
                 decrypted = io.BytesIO()
                 ms_file.decrypt(decrypted)
                 decrypted.seek(0)
-                return openpyxl.load_workbook(decrypted, data_only=True, read_only=read_only)
+                return openpyxl.load_workbook(
+                    decrypted,
+                    data_only=True,
+                    read_only=read_only,
+                )
         else:
-            return openpyxl.load_workbook(filepath, data_only=True, read_only=read_only)
+            return openpyxl.load_workbook(
+                filepath,
+                data_only=True,
+                read_only=read_only,
+            )
 
     def load_roster(self, filepath: str) -> dict:
         """
@@ -1074,15 +1082,17 @@ class FBUPerformanceParser:
     def parse_attendance(self, filepath: str, target_month: int) -> dict:
         """解析考勤数据"""
         wb = self.load_excel(filepath, read_only=True)
-        ws = wb['sheet1']
-        headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        try:
+            ws = wb['sheet1']
+            headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
 
-        # 读取数据行
-        rows = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if _cell(row, 0) is not None:
-                rows.append(row)
-        wb.close()
+            # 读取数据行
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if _cell(row, 0) is not None:
+                    rows.append(row)
+        finally:
+            wb.close()
 
         # 处理考勤数据
         return self.attendance_processor.process(rows, target_month, headers=headers)
@@ -2483,15 +2493,17 @@ class FBUPerformanceParser:
             预览数据 {员工明细列表, 汇总统计}
         """
         wb = self.load_excel(filepath, read_only=True)
-        ws = wb['sheet1']
-        headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        try:
+            ws = wb['sheet1']
+            headers = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
 
-        # 读取数据行
-        rows = []
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if _cell(row, 0) is not None:
-                rows.append(row)
-        wb.close()
+            # 读取数据行
+            rows = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if _cell(row, 0) is not None:
+                    rows.append(row)
+        finally:
+            wb.close()
 
         # 处理考勤数据
         attendance_data = self.attendance_processor.process(rows, target_month, headers=headers)
