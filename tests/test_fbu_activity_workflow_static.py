@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 import re
 
@@ -13,6 +14,12 @@ def _html() -> str:
 
 def _js() -> str:
     return FBU_JS.read_text(encoding="utf-8")
+
+
+def test_fbu_html_javascript_version_matches_content_hash():
+    digest = hashlib.sha256(FBU_JS.read_bytes()).hexdigest()[:12]
+
+    assert f'fbu-performance.js?v={digest}' in _html()
 
 
 def test_activity_navigation_does_not_treat_stale_results_as_completed():
@@ -758,7 +765,6 @@ def test_activities_list_supports_pagination_and_batch_delete():
     assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
     assert "activity-select-cell" in html
-    assert "fbu-performance.js?v=fbu-performance-v6-20260731" in html
 
 
 def test_activity_list_uses_summary_without_detail_prefetch():

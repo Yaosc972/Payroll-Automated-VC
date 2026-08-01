@@ -138,7 +138,7 @@ def test_versioned_fbu_static_assets_are_immutable():
     client = TestClient(app_module.app)
 
     response = client.get(
-        "/fbu-performance.js?v=fbu-performance-v6-20260731",
+        "/fbu-performance.js?v=versioned-test-asset",
         headers={"Accept-Encoding": "gzip"},
     )
 
@@ -152,7 +152,7 @@ def test_fbu_html_ignores_stale_validators_and_is_never_cached():
     initial = client.get("/fbu-performance.html")
 
     assert initial.status_code == 200
-    assert "fbu-performance-v6-20260731" in initial.text
+    assert "fbu-performance.js?v=" in initial.text
 
     stale_headers = {
         "If-None-Match": initial.headers.get("etag", '"stale-fbu-html"'),
@@ -166,7 +166,7 @@ def test_fbu_html_ignores_stale_validators_and_is_never_cached():
     assert refreshed.status_code == 200
     assert refreshed.headers["cache-control"] == "no-store"
     assert refreshed.headers["pragma"] == "no-cache"
-    assert "fbu-performance-v6-20260731" in refreshed.text
+    assert "fbu-performance.js?v=" in refreshed.text
 
 
 def test_fbu_result_pages_read_precomputed_view_instead_of_full_results(monkeypatch):
