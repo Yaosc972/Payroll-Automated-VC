@@ -115,6 +115,20 @@ def test_upload_start_response_finishes_ui_without_waiting_for_stale_polling():
     assert "return completeFbuUploadJob(metadata, resumed.job);" in resume_area
 
 
+def test_upload_completion_merges_authoritative_core_before_rendering_success():
+    script = FBU_JS.read_text(encoding="utf-8")
+    completion_area = script.split("async function completeFbuUploadJob", 1)[1].split(
+        "async function pollFbuUploadJob", 1
+    )[0]
+
+    assert "const coreUpdates = job.result?.coreUpdates" in completion_area
+    assert "mergeCurrentActivityPayload" in completion_area
+    assert completion_area.index("mergeCurrentActivityPayload") < completion_area.index(
+        "status: 'done'"
+    )
+    assert completion_area.count("mergeCurrentActivityPayload") >= 2
+
+
 def test_calculation_response_finishes_ui_without_waiting_for_stale_polling():
     script = FBU_JS.read_text(encoding="utf-8")
     completion_area = script.split("async function completeFbuCalculationJob", 1)[1].split(

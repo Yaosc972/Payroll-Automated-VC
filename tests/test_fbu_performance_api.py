@@ -71,6 +71,23 @@ def _attendance_bytes_for_rows(rows: list[tuple[str, float]]) -> bytes:
     return _workbook_bytes(workbook)
 
 
+def test_upload_job_result_exposes_authoritative_material_core_fields():
+    result = app_module._fbu_upload_job_result(
+        "salary",
+        {"success": True},
+        [
+            {"kind": "currentSalary", "originalFilename": "june.xlsx"},
+            {"kind": "transferHistory", "originalFilename": "transfers.xlsx"},
+        ],
+    )
+
+    assert result["coreUpdates"] == {
+        "current_salary_file": "june.xlsx",
+        "salary_file": "june.xlsx",
+        "transfer_file": "transfers.xlsx",
+    }
+
+
 def test_fbu_run_list_uses_lightweight_summary_manager(monkeypatch):
     class SummaryOnlyManager:
         def list_run_summaries(self):

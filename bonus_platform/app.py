@@ -14550,6 +14550,18 @@ _FBU_UPLOAD_JOB_KINDS = {
     "adjustments",
     "baseOverrides",
 }
+_FBU_UPLOAD_JOB_CORE_FIELDS = {
+    "attendance": ("attendance_file",),
+    "previousAttendance": ("previous_attendance_file",),
+    "previousSalary": ("previous_salary_file",),
+    "currentSalary": ("current_salary_file", "salary_file"),
+    "salaryAdjustments": ("adjustment_file",),
+    "transferHistory": ("transfer_file",),
+    "supplementalLeave": ("supplemental_leave_file",),
+    "performance": ("performance_file",),
+    "adjustments": ("adjustment_file",),
+    "baseOverrides": ("base_override_file",),
+}
 
 
 def _fbu_upload_job_store() -> FBUUploadJobStore:
@@ -14630,19 +14642,30 @@ def create_fbu_upload_job_plan(run_id: str, payload: dict = Body(...)) -> dict:
     }
 
 
-def _fbu_upload_job_result(step: str, result: dict) -> dict:
+def _fbu_upload_job_result(step: str, result: dict, uploads: list[dict]) -> dict:
     summary = (
         (result.get("preview") or {}).get("summary")
         or (result.get("verification") or {}).get("summary")
         or (result.get("material_preview") or {}).get("summary")
         or {}
     )
+    core_updates = {}
+    for upload in uploads:
+        filename = str(upload.get("originalFilename") or "").strip()
+        if not filename:
+            continue
+        for field_name in _FBU_UPLOAD_JOB_CORE_FIELDS.get(
+            str(upload.get("kind") or ""),
+            (),
+        ):
+            core_updates[field_name] = filename
     return {
         "success": bool(result.get("success", True)),
         "step": step,
         "summary": summary,
         "readyForReconciliation": bool(result.get("ready_for_reconciliation")),
         "missingMaterials": list(result.get("missing_materials") or []),
+        "coreUpdates": core_updates,
     }
 
 
@@ -14809,7 +14832,7 @@ async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
             stage="completed",
             progress=100,
             message="上传并解析完成",
-            result=_fbu_upload_job_result(step, result),
+            result=_fbu_upload_job_result(step, result, uploads),
             completedAt=datetime.now().isoformat(),
             error="",
         )

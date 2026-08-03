@@ -3714,6 +3714,19 @@ async function flushPendingPreviousAttendanceUpload(runId) {
 async function completeFbuUploadJob(metadata, job) {
   if (!state.activeFbuUploadJobs[metadata.jobId]) return job;
   const entries = metadata.entries || [];
+  const coreUpdates = job.result?.coreUpdates;
+  const authoritativeCore = coreUpdates && typeof coreUpdates === 'object'
+    ? coreUpdates
+    : {};
+  const activitySnapshot = state.currentActivity?.run_id === metadata.runId
+    ? { ...state.currentActivity }
+    : null;
+  if (activitySnapshot && Object.keys(authoritativeCore).length) {
+    mergeCurrentActivityPayload({
+      run_id: metadata.runId,
+      ...authoritativeCore,
+    });
+  }
   const refreshedAttendance = entries.some(entry => (
     ['attendance', 'previousAttendance'].includes(entry.type)
   ));
@@ -3738,6 +3751,17 @@ async function completeFbuUploadJob(metadata, job) {
       preserveStep: true,
       refreshSections: true,
     });
+  }
+  if (Object.keys(authoritativeCore).length) {
+    mergeCurrentActivityPayload({
+      ...(state.currentActivity?.run_id === metadata.runId
+        ? state.currentActivity
+        : activitySnapshot || {}),
+      run_id: metadata.runId,
+      ...authoritativeCore,
+    });
+    entries.forEach(entry => clearWorkbenchUploadState(entry.type, { render: false }));
+    if (state.currentPage === 'workbench') renderWorkbench();
   }
   if (refreshedCurrentAttendance) {
     await flushPendingPreviousAttendanceUpload(metadata.runId);
