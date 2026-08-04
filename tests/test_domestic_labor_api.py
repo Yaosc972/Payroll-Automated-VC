@@ -334,7 +334,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.1.6"
+    assert package["version"] == "1.1.7"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie", "gonglingjiang"}
@@ -343,7 +343,7 @@ def test_rule_package_only_publishes_verified_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.1.6"
+    assert package["version_history"][0]["version"] == "1.1.7"
     assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie", "gonglingjiang"]
 
 
@@ -357,10 +357,14 @@ def test_rule_package_publishes_verified_seniority_but_not_attendance_bonus():
     assert "全勤奖" not in payload
     gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
     assert gongling["status"] == "已验证"
-    assert gongling["version"] == "DL-GONGLING.v1.0.5"
+    assert gongling["version"] == "DL-GONGLING.v1.0.6"
     assert "第四纵队" in str(gongling)
     assert "头程运营部" in str(gongling)
     assert "不限制工作地区" in str(gongling)
+    assert "FBU不设56小时门槛" in str(gongling)
+    assert "FBU折算不包含排休请假" in str(gongling)
+    assert "FBU不使用正班出勤为0的通用归零特例" in str(gongling)
+    assert "工龄奖标准/排班天数" in str(gongling)
     assert "东南 / 闽赣兼容区域" in str(gongling)
     assert "华东 / 华西不发放部门" in str(gongling)
     assert gongling["pending_confirmations"]
@@ -2400,6 +2404,78 @@ def test_gonglingjiang_headhaul_fbu_applies_in_any_region(employee_id, employee_
     assert result.details["部门类别"] == "FBU"
     assert result.details["标准"] == 100
     assert result.details["上限"] == 500
+
+
+def test_gonglingjiang_headhaul_fbu_prorates_absence_without_56_hour_threshold():
+    employee = {
+        **_gongling_employee(),
+        "二级部门名称": "头程运营部",
+        "入职日期": date(2019, 8, 15),
+        "考勤月份": "202602",
+        "排班天数": 21,
+        "实际在职工作日天数": 21,
+        "事假时数": 37,
+    }
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 389.88
+
+
+def test_gonglingjiang_headhaul_fbu_does_not_count_rest_leave_as_absence():
+    employee = {
+        **_gongling_employee(),
+        "二级部门名称": "头程运营部",
+        "排休请假时数": 80,
+    }
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 300
+
+
+def test_gonglingjiang_headhaul_fbu_combines_reported_entry_exit_absence_once():
+    employee = {
+        **_gongling_employee(),
+        "二级部门名称": "头程运营部",
+        "入职日期": date(2024, 10, 1),
+        "考勤月份": "202602",
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+        "入离职缺勤时数": 72,
+    }
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 55
+
+
+def test_gonglingjiang_headhaul_fbu_uses_absenteeism_days_times_eight():
+    employee = {
+        **_gongling_employee(),
+        "二级部门名称": "头程运营部",
+        "旷工天数": 1,
+        "旷工时数": 80,
+    }
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 288.46
+
+
+def test_gonglingjiang_headhaul_fbu_does_not_use_full_month_leave_override():
+    employee = {
+        **_gongling_employee(),
+        "二级部门名称": "头程运营部",
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+        "正班出勤天数": 0,
+        "事假时数": 8,
+    }
+
+    result = GongLingJiangEngine().calculate(employee)
+
+    assert result.amount == 285
 
 
 @pytest.mark.parametrize(
