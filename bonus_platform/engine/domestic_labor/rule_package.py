@@ -638,6 +638,74 @@ _RULE_PACKAGE["version_history"] = [
 ]
 
 
+_RULE_PACKAGE_V1_1_6 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE.update({
+    "version": "1.1.7",
+    "display_version": "DL-PAYROLL.v1.1.7",
+    "released_at": "2026-08-04",
+    "effective_from": "2026-02",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang["version"] = "DL-GONGLING.v1.0.6"
+_gonglingjiang["summary"] = "按地区、二级部门、岗位、月初司龄和缺勤口径核算；头程运营部/FBU使用独立缺勤折算公式。"
+_gonglingjiang["common_rules"][3] = (
+    "除FBU外，事假、病假、旷工和排休请假合计达到56小时后按排班天数折算；"
+    "旷工、排休请假优先读取小时字段，缺失时按天数×8。"
+)
+_gonglingjiang["common_rules"][4] = (
+    "FBU不设56小时门槛，入离职缺勤、事假、病假和旷工合并折算一次且不包含排休请假；"
+    "其他范围的入离职缺勤按通用规则另行扣减。"
+)
+_gonglingjiang["common_rules"][5] = (
+    "FBU不使用正班出勤为0的通用归零特例，始终按FBU独立公式计算；"
+    "其他范围正班出勤天数为0且存在事假时按线下工资表结果归零。"
+)
+fbu_region = next(region for region in _gonglingjiang["regions"] if region["name"] == "头程运营部/FBU")
+fbu_region["formula"] = (
+    "工龄奖标准/排班天数×（排班天数-（入离职缺勤时数+事假时数+病假时数+旷工天数×8）/8）"
+)
+fbu_region["details"] = [
+    "工龄奖标准为100元×完整司龄，封顶500元。",
+    "FBU不设56小时门槛，发生公式内缺勤即按小时折算。",
+    "FBU折算不包含排休请假，入离职缺勤与其他缺勤合并计算一次。",
+    "最终结果按Excel ROUND保留2位小数。",
+]
+_gonglingjiang["verification"] = [
+    item
+    for item in _gonglingjiang["verification"]
+    if "莞深广珠FBU实际工资表" not in item
+]
+_gonglingjiang["verification"].insert(
+    0,
+    "2026年2月头程运营部/FBU工龄奖计算表逐行一致；系统薪资12人中11人一致，雷一鸣计算表55元、系统薪资100元。",
+)
+_gonglingjiang["verification"].insert(
+    1,
+    "2026年3月头程运营部/FBU系统薪资12人逐行一致。",
+)
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.6",
+    "released_at": "2026-08-04",
+    "changes": "FBU改用无56小时门槛的独立公式，不计排休请假，并将入离职缺勤与事假、病假、旷工合并折算一次。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.7",
+        "display_version": "DL-PAYROLL.v1.1.7",
+        "status": "当前版本",
+        "released_at": "2026-08-04",
+        "effective_from": "2026-02",
+        "subject_ids": ["canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "FBU工龄奖改用独立缺勤折算公式，移除56小时门槛和排休请假。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_6["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_6["version_history"][1:],
+]
+
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
     _RULE_PACKAGE_V1_1_0["version"]: _RULE_PACKAGE_V1_1_0,
@@ -646,6 +714,7 @@ _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_1_3["version"]: _RULE_PACKAGE_V1_1_3,
     _RULE_PACKAGE_V1_1_4["version"]: _RULE_PACKAGE_V1_1_4,
     _RULE_PACKAGE_V1_1_5["version"]: _RULE_PACKAGE_V1_1_5,
+    _RULE_PACKAGE_V1_1_6["version"]: _RULE_PACKAGE_V1_1_6,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 

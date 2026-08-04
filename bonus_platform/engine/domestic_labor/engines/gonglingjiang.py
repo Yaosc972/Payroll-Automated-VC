@@ -465,29 +465,54 @@ class GongLingJiangEngine(BaseEngine):
 
         # F8: 入离职缺勤时数
         actual_days = float(employee_data.get("实际在职工作日天数", 0) or 0)
-        ruli_hours = (paiban - actual_days) * 8
+        reported_entry_exit_hours = employee_data.get("入离职缺勤时数")
+        if dept_category == "FBU" and reported_entry_exit_hours not in (None, ""):
+            ruli_hours = safe_float(reported_entry_exit_hours)
+        else:
+            ruli_hours = (paiban - actual_days) * 8
 
         # F9: 最终工龄奖
         day_rate = yingfa / paiban
-        after_spk = day_rate * (paiban - spk_hours / 8) if spk_hours >= 56 else yingfa
-        after_ruli = after_spk - day_rate * (ruli_hours / 8)
+        proration_absence_hours = (
+            personal_leave_hours + sick_leave_hours + absenteeism_days * 8
+            if dept_category == "FBU"
+            else spk_hours
+        )
+        after_spk = (
+            day_rate * (paiban - proration_absence_hours / 8)
+            if dept_category == "FBU" or spk_hours >= 56
+            else yingfa
+        )
+        if dept_category == "FBU":
+            combined_absence_hours = ruli_hours + proration_absence_hours
+            after_ruli = day_rate * (paiban - combined_absence_hours / 8)
+        else:
+            combined_absence_hours = ruli_hours + proration_absence_hours
+            after_ruli = after_spk - day_rate * (ruli_hours / 8)
         full_month_personal_leave = (
-            regular_attendance_days is not None
+            dept_category != "FBU"
+            and regular_attendance_days is not None
             and safe_float(regular_attendance_days) == 0
             and personal_leave_hours > 0
         )
         final = 0 if full_month_personal_leave else _excel_round(after_ruli)
 
-        absence_step = (
-            f"事病旷排休合计{spk_hours}小时，达到56小时门槛，按出勤天数比例折算"
-            if spk_hours >= 56
-            else f"事病旷排休合计{spk_hours}小时，未达到56小时门槛，应发金额全额保留"
-        )
-        ruli_step = (
-            f"入离职缺勤时数{ruli_hours}小时，按天比例扣减"
-            if ruli_hours > 0
-            else "入离职缺勤时数为0，不额外扣减"
-        )
+        if dept_category == "FBU":
+            absence_step = f"FBU缺勤合计{proration_absence_hours}小时，不含排休且不设56小时门槛，按缺勤时数直接折算"
+        else:
+            absence_step = (
+                f"事病旷排休合计{spk_hours}小时，达到56小时门槛，按出勤天数比例折算"
+                if spk_hours >= 56
+                else f"事病旷排休合计{spk_hours}小时，未达到56小时门槛，应发金额全额保留"
+            )
+        if dept_category == "FBU":
+            ruli_step = f"FBU将入离职缺勤{ruli_hours}小时与其他折算缺勤合并计算一次"
+        else:
+            ruli_step = (
+                f"入离职缺勤时数{ruli_hours}小时，按天比例扣减"
+                if ruli_hours > 0
+                else "入离职缺勤时数为0，不额外扣减"
+            )
         final_step = (
             "正班出勤天数为0且存在事假，按线下工资表人工归零口径处理"
             if full_month_personal_leave
@@ -512,7 +537,11 @@ class GongLingJiangEngine(BaseEngine):
                 "audit_explanation": _audit_explanation(
                     amount=final,
                     rule_name="工龄奖标准与缺勤折算",
-                    formula="min(标准 × 工龄, 上限) → 按请假与入离职缺勤折算",
+                    formula=(
+                        "工龄奖标准/排班天数 × (排班天数-(入离职缺勤时数+事假时数+病假时数+旷工天数×8)/8)"
+                        if dept_category == "FBU"
+                        else "min(标准 × 工龄, 上限) → 按请假与入离职缺勤折算"
+                    ),
                     inputs={
                         **input_snapshot,
                         "部门类别": dept_category,
@@ -533,12 +562,15 @@ class GongLingJiangEngine(BaseEngine):
                         "旷工时数": absenteeism_hours,
                         "旷工字段口径": absenteeism_source,
                         "旷工折算时数": absenteeism_hours,
+                        "FBU旷工天数折算时数": absenteeism_days * 8 if dept_category == "FBU" else "不适用",
                         "排休请假天数": rest_leave_days,
                         "排休请假时数": rest_leave_hours,
                         "排休字段口径": rest_leave_source,
                         "排休请假折算时数": rest_leave_hours,
                         "事病旷排休时数": spk_hours,
+                        "折算缺勤时数": proration_absence_hours,
                         "入离职缺勤时数": ruli_hours,
+                        "合并折算缺勤时数": combined_absence_hours,
                         "全月事假未出勤归零": full_month_personal_leave,
                         "请假折算后金额": _excel_round(after_spk),
                         "入离职折算后金额": _excel_round(after_ruli),
@@ -549,7 +581,11 @@ class GongLingJiangEngine(BaseEngine):
                         f"岗位{position}匹配工龄奖资格",
                         f"按{ref_date.isoformat()}计算工龄为{years}年",
                         f"应发金额=min({standard}×{years}, {cap})={yingfa}",
-                        "事病旷排休时数=事假时数+病假时数+旷工时数+排休请假时数（天数字段按8小时折算）",
+                        (
+                            "FBU折算缺勤时数=入离职缺勤时数+事假时数+病假时数+旷工天数×8（不含排休）"
+                            if dept_category == "FBU"
+                            else "事病旷排休时数=事假时数+病假时数+旷工时数+排休请假时数（天数字段按8小时折算）"
+                        ),
                         absence_step,
                         ruli_step,
                         final_step,
