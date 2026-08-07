@@ -11,6 +11,7 @@ SUBJECT = "gonglingjiang"
 
 DEPARTMENT_MAP_GSDG = {
     "中国操作部": "操作",
+    "B操作部": "操作",
     "第四纵队": "揽收",
     "头程运营部": "FBU",
 }
@@ -22,7 +23,7 @@ OPERATION_POSITIONS_GSDG = {
 
 # 操作归属部门按月考勤字段逐行判断，工作地区明确时优先套用地区规则。
 OPERATION_DEPARTMENTS = {
-    "东南枢纽", "华东B2B枢纽", "华东枢纽", "中国操作部",
+    "东南枢纽", "华东B2B枢纽", "华东枢纽", "中国操作部", "B操作部",
 }
 
 DONGGUAN_OPERATION_POSITIONS = {
@@ -68,6 +69,13 @@ NO_BONUS_POSITIONS_WES = {
 
 WES_SENIORITY_CAP = 150
 WES_SENIORITY_RATE = 50
+
+
+def _position_is_eligible(position: str, eligible_positions: set) -> bool:
+    """岗位精确命中，或规则包含安检员且岗位名称含“安检员”。"""
+    return position in eligible_positions or (
+        "安检员" in eligible_positions and "安检员" in position
+    )
 
 
 def _excel_round(value: float, digits: int = 2) -> float:
@@ -202,7 +210,7 @@ class GongLingJiangEngine(BaseEngine):
             cap = DONGGUAN_SENIORITY_CAP
 
             if work_area == "东莞":
-                if position in DONGGUAN_OPERATION_POSITIONS and position not in DONGGUAN_EXCLUDED_POSITIONS:
+                if _position_is_eligible(position, DONGGUAN_OPERATION_POSITIONS) and position not in DONGGUAN_EXCLUDED_POSITIONS:
                     standard = DONGGUAN_SENIORITY_RATE
                 else:
                     zero_reason = "东莞操作岗位不享有工龄奖"
@@ -213,15 +221,15 @@ class GongLingJiangEngine(BaseEngine):
                 zero_steps = [f"工作地区为{work_area}", f"{work_area}区域无工龄奖", "工龄奖金额为0"]
             elif work_area == "晋江":
                 cap = JINJIANG_SENIORITY_CAP
-                if position in JINJIANG_OPERATION_POSITIONS:
+                if _position_is_eligible(position, JINJIANG_OPERATION_POSITIONS):
                     standard = JINJIANG_SENIORITY_RATE
                 else:
                     zero_reason = "晋江操作岗位不享有工龄奖"
                     zero_steps = ["工作地区为晋江，部门归属操作", "岗位不是晋江一线操作员", "工龄奖金额为0"]
             else:
-                if department in DEPARTMENT_MAP_GSDG and position in OPERATION_POSITIONS_GSDG:
+                if department in DEPARTMENT_MAP_GSDG and _position_is_eligible(position, OPERATION_POSITIONS_GSDG):
                     standard = DONGGUAN_SENIORITY_RATE
-                elif region == "wes" and department in DEPARTMENT_MAP_WES and position in OPERATION_POSITIONS_WES:
+                elif region == "wes" and department in DEPARTMENT_MAP_WES and _position_is_eligible(position, OPERATION_POSITIONS_WES):
                     standard = WES_SENIORITY_RATE
                     cap = WES_SENIORITY_CAP
                 else:
@@ -261,9 +269,9 @@ class GongLingJiangEngine(BaseEngine):
             standard = 0
             cap = WES_SENIORITY_CAP
 
-            if dept_category == "操作" and position in OPERATION_POSITIONS_WES:
+            if dept_category == "操作" and _position_is_eligible(position, OPERATION_POSITIONS_WES):
                 standard = WES_SENIORITY_RATE
-            elif dept_category == "揽收" and position in COLLECTION_POSITIONS_WES:
+            elif dept_category == "揽收" and _position_is_eligible(position, COLLECTION_POSITIONS_WES):
                 standard = WES_SENIORITY_RATE
 
             if position in NO_BONUS_POSITIONS_WES:

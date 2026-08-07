@@ -334,30 +334,37 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.1.7"
+    assert package["version"] == "1.1.9"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
-    assert {subject["id"] for subject in package["subjects"]} == {"canbu", "waisu_butie", "gonglingjiang"}
+    assert {subject["id"] for subject in package["subjects"]} == {"quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"}
     assert all(subject["status"] == "已验证" for subject in package["subjects"])
     assert all(subject["version"].startswith("DL-") for subject in package["subjects"])
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.1.7"
-    assert package["version_history"][0]["subject_ids"] == ["canbu", "waisu_butie", "gonglingjiang"]
+    assert package["version_history"][0]["version"] == "1.1.9"
+    assert package["version_history"][0]["subject_ids"] == ["quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"]
 
 
-def test_rule_package_publishes_verified_seniority_but_not_attendance_bonus():
+def test_rule_package_publishes_verified_attendance_bonus_and_seniority():
     client = TestClient(app)
 
     package = client.get("/api/domestic-labor/rule-package").json()
     payload = str(package)
 
-    assert "quanqinjiang" not in payload
-    assert "全勤奖" not in payload
+    quanqin = next(subject for subject in package["subjects"] if subject["id"] == "quanqinjiang")
+    assert quanqin["status"] == "已验证"
+    assert quanqin["version"] == "DL-QUANQIN.v1.0.0"
+    assert "2,807" in str(quanqin)
+    assert "OWHN9535" in str(quanqin)
+    assert "OWHN9353" in str(quanqin)
+    assert "OWHX0190" in str(quanqin)
     gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
     assert gongling["status"] == "已验证"
-    assert gongling["version"] == "DL-GONGLING.v1.0.6"
+    assert gongling["version"] == "DL-GONGLING.v1.0.7"
+    assert "B操作部" in str(gongling)
+    assert "包含“安检员”" in str(gongling)
     assert "第四纵队" in str(gongling)
     assert "头程运营部" in str(gongling)
     assert "不限制工作地区" in str(gongling)
@@ -2678,6 +2685,36 @@ def test_gonglingjiang_dongguan_operation_uses_work_area_position_rules():
     assert explanation["inputs"]["工作地区"] == "东莞"
     assert explanation["intermediate_values"]["标准"] == 150
     assert explanation["intermediate_values"]["上限"] == 600
+
+
+def test_gonglingjiang_b_operation_department_uses_china_operation_rules():
+    """B操作部与中国操作部使用同一套工龄奖规则"""
+    employee = {
+        **_operation_employee(),
+        "二级部门名称": "B操作部",
+        "工作地区": "东莞",
+        "岗位名称": "操作员",
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 450
+    assert result.details["audit_explanation"]["intermediate_values"]["标准"] == 150
+
+
+@pytest.mark.parametrize("position", ["内部初级安检员", "民航中级安检员", "内部高级安检员"])
+def test_gonglingjiang_security_inspector_position_uses_contains_match(position):
+    """岗位名称包含“安检员”字样即按安检员资格判断"""
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": position,
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 450
+    assert result.details["audit_explanation"]["intermediate_values"]["标准"] == 150
 
 
 @pytest.mark.parametrize("position", ["理货员", "揽收充电司机"])

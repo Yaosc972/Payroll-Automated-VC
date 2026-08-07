@@ -94,6 +94,8 @@ class QuanQinJiangEngine(BaseEngine):
         input_snapshot = {
             "工号": employee_id,
             "姓名": employee_name,
+            "工作地区": str(employee_data.get("工作地区", "")),
+            "岗位名称": str(employee_data.get("岗位名称", employee_data.get("岗位", ""))),
             "考勤月份": str(employee_data.get("考勤月份", "")),
             "入职日期": str(employee_data.get("入职日期", "")),
             "最后工作日": str(employee_data.get("最后工作日", "")),
@@ -117,7 +119,7 @@ class QuanQinJiangEngine(BaseEngine):
                         ["员工在特殊排除名单中", "全勤奖金额为0"],
                     ),
                 },
-                warnings=[f"员工{employee_id}在特殊排除名单中"]
+                warnings=[]
             )
 
         # 获取考勤月份

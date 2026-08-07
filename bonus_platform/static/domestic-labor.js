@@ -43,6 +43,14 @@ const CANBU_STEPS = [
 ];
 
 const SUBJECT_WORKBENCH = {
+  quanqinjiang: {
+    name: '全勤奖',
+    batchNoun: '全勤奖批次',
+    resultField: 'quanqinjiang',
+    totalField: 'total_quanqinjiang',
+    uploadTitle: '全勤奖数据 Excel',
+    uploadDescription: '全勤奖核算需要月考勤数据；日考勤用于识别月初入职前是否存在工作日。',
+  },
   canbu: {
     name: '餐补',
     batchNoun: '餐补批次',
@@ -514,8 +522,9 @@ function bindEvents() {
   el.subjectCardGrid?.addEventListener('click', (event) => {
     const card = event.target.closest('[data-subject-entry]');
     if (!card) return;
+    if (card.disabled || card.getAttribute('aria-disabled') === 'true') return;
     const subject = card.dataset.subjectEntry;
-    if (subject === 'canbu' || subject === 'waisu_butie' || subject === 'gonglingjiang') {
+    if (subject === 'quanqinjiang' || subject === 'canbu' || subject === 'waisu_butie' || subject === 'gonglingjiang') {
       state.activeWorkbenchSubject = subject;
       state.activeCanbuBatchId = '';
       showView('canbuBatches');
@@ -985,6 +994,7 @@ function renderCanbuWorkbench(step = 'upload') {
   if (batchIsComplete && state.activeCanbuOperation?.batchId === batch.id) {
     state.activeCanbuOperation = null;
   }
+  if (step !== 'upload' && !batch.runId) step = 'upload';
   state.activeWorkbenchSubject = batch.subject || 'canbu';
   const config = getWorkbenchConfig(batch.subject);
   syncWorkbenchChrome(batch);
@@ -1144,13 +1154,14 @@ function renderCanbuStepper(activeStep, batch) {
       ${CANBU_STEPS.map((stepItem) => {
         const active = stepItem.key === activeStep;
         const done = completed.has(stepItem.key);
+        const available = stepItem.key === 'upload' || Boolean(batch?.runId);
         const index = CANBU_STEPS.indexOf(stepItem) + 1;
         const status = done ? '已完成' : active ? '进行中' : '未开始';
         const icon = active
           ? `<span class="dl-stepper-index active-pin">${renderStepperPin(index)}</span>`
           : `<span class="dl-stepper-index">${done ? '✓' : index}</span>`;
         return `
-          <button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" type="button">
+          <button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" type="button" ${available ? '' : 'disabled aria-disabled="true"'}>
             ${icon}
             <span class="dl-stepper-label">${stepItem.key === 'results' ? `${escapeHtml(config.name)}核算` : stepItem.label}</span>
             <span class="dl-stepper-status ${done ? 'success' : ''}">${status}</span>
@@ -1207,12 +1218,12 @@ function renderCanbuStepContent(step, results = []) {
         <div class="dl-upload-list">
           <div class="dl-upload-row">
             <strong>日考勤数据</strong>
-            <span>${batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : batch?.subject === 'gonglingjiang' ? '工龄奖不依赖日考勤明细' : '东莞餐补逐日计算'}</span>
-            <span class="dl-badge ${batch?.subject === 'gonglingjiang' ? 'ok' : 'warn'}">${batch?.subject === 'gonglingjiang' ? '非必需' : '随 Excel 上传'}</span>
+            <span>${batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : batch?.subject === 'gonglingjiang' ? '工龄奖不依赖日考勤明细' : batch?.subject === 'quanqinjiang' ? '月初入职前工作日识别' : '东莞餐补逐日计算'}</span>
+            <span class="dl-badge ${batch?.subject === 'gonglingjiang' ? 'ok' : 'warn'}">${batch?.subject === 'gonglingjiang' ? '非必需' : batch?.subject === 'quanqinjiang' ? '建议上传' : '随 Excel 上传'}</span>
           </div>
           <div class="dl-upload-row">
             <strong>月考勤数据</strong>
-            <span>${batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : batch?.subject === 'gonglingjiang' ? '地区、部门、岗位、入职日期和缺勤字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
+            <span>${batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : batch?.subject === 'gonglingjiang' ? '地区、部门、岗位、入职日期和缺勤字段' : batch?.subject === 'quanqinjiang' ? '入离职、缺勤、迟到早退和签卡字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>
           ${batch?.subject === 'waisu_butie' ? `
@@ -1270,7 +1281,8 @@ function renderCanbuStepContent(step, results = []) {
 
   root.innerHTML = '<section class="dl-panel"><div id="resultsTable" class="dl-table-wrap"></div></section>';
   el.resultsTable = document.querySelector('#resultsTable');
-  if (batch?.subject === 'waisu_butie') renderWaisuResults(results);
+  if (batch?.subject === 'quanqinjiang') renderQuanqinResults(results);
+  else if (batch?.subject === 'waisu_butie') renderWaisuResults(results);
   else if (batch?.subject === 'gonglingjiang') renderGonglingResults(results);
   else renderCanbuResults(results);
 }
@@ -1379,6 +1391,21 @@ function bindCanbuUploadEvents() {
 function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
   const validationSummary = renderInputValidationSummary();
   const inputSummary = state.currentRun?.inputSummary || state.currentRun?.input_summary || {};
+  if (subject === 'quanqinjiang') {
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">字段检查按入离职、缺勤和异常考勤口径分组展示。</p></div></div>
+        ${validationSummary}
+        <div class="dl-field-groups">
+          ${renderFieldGroup('基础员工字段', ['工号', '姓名', '考勤月份', '入职日期', '最后工作日'])}
+          ${renderFieldGroup('全勤判断字段', ['旷工天数', '正班迟到次数', '早退次数', '签卡次数', '迟到早退30分钟内扣款'])}
+          ${renderFieldGroup('请假与缺勤字段', ['工伤假天数', '事假时数', '病假时数', '入离职缺勤时数'])}
+          ${renderFieldGroup('月初入职辅助字段', ['出勤日期', '工作状态（有日考勤时优先使用）'])}
+        </div>
+        <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看发放结果和判断原因。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+      </section>
+    `;
+  }
   if (subject === 'waisu_butie') {
     return `
       <section class="dl-panel">
@@ -1482,6 +1509,112 @@ function renderCanbuCalculatingState(batch) {
       </div>
     </section>
   `;
+}
+
+function renderQuanqinResults(results = []) {
+  const root = document.querySelector('#canbuStepContent');
+  if (!root) return;
+  const rows = Array.isArray(results) ? results : [];
+  const total = sumField(rows, 'quanqinjiang');
+  const awardedCount = rows.filter(row => Number(row.quanqinjiang || 0) === 100).length;
+  const zeroCount = rows.filter(row => Number(row.quanqinjiang || 0) === 0).length;
+  const warnings = countSubjectWarnings(rows, 'quanqinjiang');
+  root.innerHTML = `
+    <section class="dl-panel">
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">全勤奖核算</h2><p class="dl-panel-sub">按固定100元标准，复核入离职、缺勤、迟到早退和签卡判断结果。</p></div></div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
+        <div class="dl-result-stat"><span>员工数</span><strong>${rows.length}</strong></div>
+        <div class="dl-result-stat"><span>发放人数</span><strong>${awardedCount}</strong></div>
+        <div class="dl-result-stat"><span>不发放人数</span><strong>${zeroCount}</strong></div>
+        <div class="dl-result-stat warning"><span>需处理</span><strong>${warnings}</strong></div>
+      </div>
+      <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
+        <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门" aria-label="筛选全勤奖结果">
+        <select class="dl-select" id="reviewStatusFilter" aria-label="筛选异常状态"><option value="all">全部状态</option><option value="review">只看异常</option><option value="pass">只看通过</option></select>
+        <select class="dl-select" id="amountFilter" aria-label="筛选金额状态"><option value="all">全部金额</option><option value="positive">发放100元</option><option value="zero">不发放</option></select>
+        <span class="dl-result-count" id="resultCountText">—</span>
+      </div></div>
+      <div id="resultsTable" class="dl-table-wrap"></div><div class="dl-pagination" id="canbuPagination"></div>
+    </section>
+  `;
+  el.resultsTable = document.querySelector('#resultsTable');
+  el.resultSearchInput = document.querySelector('#resultSearchInput');
+  el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
+  el.amountFilter = document.querySelector('#amountFilter');
+  el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
+  if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
+  if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
+  if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
+  bindQuanqinResultFilters();
+  renderQuanqinResultsTable(rows);
+  renderExceptionQueue(rows);
+}
+
+function filterQuanqinResults(results) {
+  const keyword = state.resultSearch.trim().toLowerCase();
+  return results.filter(row => {
+    const issue = hasSubjectReviewIssue(row, 'quanqinjiang');
+    if (state.reviewStatusFilter === 'review' && !issue) return false;
+    if (state.reviewStatusFilter === 'pass' && issue) return false;
+    const amount = Number(row.quanqinjiang || 0);
+    if (state.amountFilter === 'positive' && amount <= 0) return false;
+    if (state.amountFilter === 'zero' && amount !== 0) return false;
+    if (!keyword) return true;
+    const detail = getSubjectDetail(row, 'quanqinjiang');
+    const inputs = detail?.audit_explanation?.inputs || {};
+    return [row.employee_id, row.employee_name, row.department, inputs['工作地区'], detail?.details?.reason, getEffectiveWarningText(row)]
+      .map(value => String(value || '').toLowerCase()).join(' ').includes(keyword);
+  });
+}
+
+function renderQuanqinResultsTable(results) {
+  if (!el.resultsTable) return;
+  const filtered = filterQuanqinResults(results);
+  updateResultCount(results.length, filtered.length);
+  const pages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  state.canbuPage = Math.min(Math.max(state.canbuPage, 1), pages);
+  const start = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(start, start + state.canbuPageSize);
+  if (!filtered.length) {
+    el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无全勤奖核算结果。</p></div>';
+    renderQuanqinPagination(0, 0, 0);
+    return;
+  }
+  el.resultsTable.innerHTML = `
+    <table class="dl-table dl-result-table"><thead><tr>
+      <th class="sticky-col id-col">工号</th><th class="sticky-col name-col">姓名</th><th>工作地区</th><th>部门</th><th>考勤月份</th><th>入职日期</th><th>最后工作日</th><th>判断结果</th><th class="dl-num">应发全勤奖</th><th>状态</th><th>解释</th>
+    </tr></thead><tbody>${pageRows.map(row => {
+      const detail = getSubjectDetail(row, 'quanqinjiang');
+      const inputs = detail?.audit_explanation?.inputs || {};
+      const issue = hasSubjectReviewIssue(row, 'quanqinjiang');
+      const rowIndex = results.indexOf(row);
+      return `<tr>
+        <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id)}</td><td class="sticky-col name-col">${escapeHtml(row.employee_name)}</td>
+        <td>${escapeHtml(displayValue(inputs['工作地区'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(row.department, '—'))}</td><td>${escapeHtml(displayValue(inputs['考勤月份'], '—'))}</td>
+        <td>${escapeHtml(displayValue(inputs['入职日期'], '—'))}</td><td>${escapeHtml(displayValue(inputs['最后工作日'], '—'))}</td><td>${escapeHtml(displayValue(detail?.details?.reason, '—'))}</td>
+        <td class="dl-num dl-strong">${formatMoney(row.quanqinjiang)}</td><td><span class="dl-badge ${issue ? 'warn' : 'ok'}">${issue ? '需关注' : '通过'}</span></td><td><button class="dl-segment compact" data-quanqin-explain-index="${rowIndex}" type="button">计算过程</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+  `;
+  el.resultsTable.querySelectorAll('[data-quanqin-explain-index]').forEach(button => button.addEventListener('click', () => openExplainDrawer(results[Number(button.dataset.quanqinExplainIndex)])));
+  renderQuanqinPagination(filtered.length, start + 1, Math.min(start + pageRows.length, filtered.length));
+}
+
+function bindQuanqinResultFilters() {
+  const rerender = () => { state.canbuPage = 1; renderQuanqinResultsTable(state.currentResults); };
+  el.resultSearchInput?.addEventListener('input', () => { state.resultSearch = el.resultSearchInput.value.trim(); rerender(); });
+  el.reviewStatusFilter?.addEventListener('change', () => { state.reviewStatusFilter = el.reviewStatusFilter.value; rerender(); });
+  el.amountFilter?.addEventListener('change', () => { state.amountFilter = el.amountFilter.value; rerender(); });
+}
+
+function renderQuanqinPagination(total, start, end) {
+  if (!el.canbuPagination) return;
+  if (!total) { el.canbuPagination.innerHTML = ''; return; }
+  const pages = Math.max(1, Math.ceil(total / state.canbuPageSize));
+  el.canbuPagination.innerHTML = `<span>${start}-${end} / ${total}</span><div class="dl-pagination-actions"><button class="dl-segment compact" data-quanqin-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button><strong>${state.canbuPage} / ${pages}</strong><button class="dl-segment compact" data-quanqin-page="next" type="button" ${state.canbuPage >= pages ? 'disabled' : ''}>下一页</button></div>`;
+  el.canbuPagination.querySelectorAll('[data-quanqin-page]').forEach(button => button.addEventListener('click', () => { state.canbuPage += button.dataset.quanqinPage === 'prev' ? -1 : 1; renderQuanqinResultsTable(state.currentResults); }));
 }
 
 function renderCanbuResults(results = []) {
@@ -2175,6 +2308,7 @@ function bindCanbuWorkbenchEvents() {
   document.querySelector('#btnGoCanbuResults')?.addEventListener('click', () => renderCanbuWorkbench('results'));
   document.querySelectorAll('[data-canbu-step]').forEach((button) => {
     button.addEventListener('click', () => {
+      if (button.disabled || button.getAttribute('aria-disabled') === 'true') return;
       const nextStep = button.dataset.canbuStep;
       renderCanbuWorkbench(nextStep === 'results' ? 'results' : nextStep);
     });

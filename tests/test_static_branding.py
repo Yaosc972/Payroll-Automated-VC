@@ -929,9 +929,9 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
-    assert "当前开放餐补、外宿补贴与工龄奖核算" in html
+    assert "当前开放全勤奖、餐费补贴、外宿补贴与工龄奖核算" in html
     assert "外宿补贴核算" in html
-    assert "Housing Allowance · 已开放" in html
+    assert '<span class="dl-subject-kicker">Housing Allowance</span>' in html
     assert 'class="dl-subject-card primary" data-subject-entry="waisu_butie"' in html
     assert "按实际入住、退宿日期和缺勤口径核算" in html
     assert "subject === 'canbu' || subject === 'waisu_butie'" in js
@@ -946,10 +946,77 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
 
 def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    card_grid = html.split('id="subjectCardGrid"', 1)[1].split('</div>', 1)[0]
 
-    assert html.count('class="dl-subject-line-tag">操作线</span>') == 3
-    assert html.count('class="dl-subject-line-tag">全区域</span>') == 1
+    assert html.count('class="dl-subject-line-tag">操作线</span>') == 5
+    assert html.count('class="dl-subject-line-tag">全区域</span>') == 2
+    assert "全勤奖核算" in html
+    assert "餐费补贴核算" in html
+    assert "岗位补贴核算" in html
+    assert "高温补贴核算" in html
+    assert "夜班补贴核算" in html
+    assert "外宿补贴核算" in html
+    assert "工龄奖核算" in html
+    assert html.count('disabled aria-disabled="true"') == 3
+    assert 'data-subject-entry="gangwei_butie"' in html
+    assert 'data-subject-entry="gaowen_butie"' in html
+    assert 'data-subject-entry="yeban_butie"' in html
     assert ".dl-subject-line-tag" in html
+    assert "· 已开放" not in card_grid
+    assert "· 待开发" not in card_grid
+    assert "· 待确认规则" not in card_grid
+
+    subject_order = [
+        "canbu",
+        "quanqinjiang",
+        "waisu_butie",
+        "gonglingjiang",
+        "gangwei_butie",
+        "gaowen_butie",
+        "yeban_butie",
+    ]
+    positions = [html.index(f'data-subject-entry="{subject}"') for subject in subject_order]
+    assert positions == sorted(positions)
+
+
+def test_domestic_labor_home_description_stays_on_one_line_on_desktop():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    desktop_rule = html.split(".dl-subject-desc {", 1)[1].split("}", 1)[0]
+    responsive_rule = html.split("@media (max-width: 1180px)", 1)[1].split("@media (max-width: 760px)", 1)[0]
+
+    assert "max-width: none" in desktop_rule
+    assert "white-space: nowrap" in desktop_rule
+    assert ".dl-subject-desc { white-space: normal; }" in responsive_rule
+
+
+def test_domestic_labor_attendance_bonus_workbench_is_available():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'class="dl-subject-card primary" data-subject-entry="quanqinjiang"' in html
+    assert '<span class="dl-subject-kicker">Attendance Bonus</span>' in html
+    assert "subject === 'quanqinjiang'" in js
+    assert "全勤奖数据 Excel" in js
+    assert "全勤判断字段" in js
+    assert "renderQuanqinResults" in js
+    assert "应发全勤奖" in js
+
+
+def test_domestic_labor_does_not_show_identified_fields_before_upload():
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "if (step !== 'upload' && !batch.runId) step = 'upload';" in js
+    assert "const available = stepItem.key === 'upload' || Boolean(batch?.runId);" in js
+    assert "disabled aria-disabled=\"true\"" in js
+    assert "if (button.disabled || button.getAttribute('aria-disabled') === 'true') return;" in js
+
+
+def test_domestic_labor_uses_current_workbench_logo_for_browser_icon():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+
+    assert 'rel="icon" type="image/png" sizes="512x512" href="assets/workbench-logo-2026.png?v=20260806"' in html
+    assert 'rel="apple-touch-icon" href="assets/workbench-logo-2026.png?v=20260806"' in html
+    assert 'href="assets/bonus-logo-dark.png"' not in html
 
 
 def test_domestic_labor_home_exposes_versioned_verified_rule_package():
@@ -961,14 +1028,14 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     assert 'id="rulePackageView"' in html
     assert 'id="rulePackageCategoryTabs"' in html
     assert 'id="rulePackageVersionSelect"' in html
-    assert "DL-PAYROLL.v1.1.1" in html
-    assert "已验证科目 3" in html
+    assert "DL-PAYROLL.v1.1.9" in html
+    assert "已验证科目 4" in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js
     assert "data-rule-category" in js
     assert "data-rule-subject" in js
     assert "核算规则包" in html
-    assert "当前版本 1.1.1" in html
+    assert "当前版本 1.1.9" in html
     assert "RULE PACKAGE · CURRENT" not in html
     assert "position: absolute" in html.split(".dl-rule-package-entry {", 1)[1].split("}", 1)[0]
 

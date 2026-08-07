@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>劳务工薪酬核算 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="assets/workbench-logo-2026.png?v=20260806" />
+    <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png?v=20260806" />
     <link rel="stylesheet" href="styles.css?v=30" />
     <script src="permission-guard.js?v=9"></script>
     <style>
@@ -33,7 +34,7 @@
         --dl-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
         --dl-shadow-lg: 0 16px 32px rgba(16, 24, 40, 0.10);
         margin: 0;
-        background: var(--dl-bg);
+        background: linear-gradient(180deg, #e8f0f8 0, var(--dl-bg) 420px);
         color: var(--dl-ink);
         font-family: Inter, Geist, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
         font-variant-numeric: tabular-nums;
@@ -372,6 +373,15 @@
         font-weight: 800;
       }
 
+      .btn-primary:disabled,
+      .btn-primary-lg:disabled {
+        cursor: not-allowed;
+        border-color: var(--dl-line);
+        background: #E8EEF7;
+        color: #94A3B8;
+        box-shadow: none;
+      }
+
       .btn-download.disabled {
         opacity: 0.4;
         pointer-events: none;
@@ -557,7 +567,7 @@
         padding: 16px;
       }
 
-      .dl-main-full { width: 100%; padding: 16px 20px 24px; }
+      .dl-main-full { width: 100%; padding: 20px 28px 32px; }
 
       .dl-shell-subject { grid-template-columns: 1fr; }
 
@@ -575,18 +585,18 @@
         margin-top: 16px;
       }
 
-      .dl-subject-hero {
+      .dl-panel.dl-subject-hero {
         position: relative;
         overflow: hidden;
-        min-height: 460px;
-        margin-bottom: 18px;
-        padding: 42px 44px 46px;
-        border-color: rgba(191, 219, 254, 0.62);
+        min-height: 0;
+        margin-bottom: 16px;
+        padding: 30px 36px 34px;
+        border-color: rgba(148, 163, 184, 0.34);
+        border-radius: 20px;
         background:
-          radial-gradient(circle at 18% 12%, rgba(34, 211, 238, 0.26), transparent 34%),
-          radial-gradient(circle at 88% 18%, rgba(109, 40, 217, 0.16), transparent 34%),
-          linear-gradient(115deg, rgba(239, 246, 255, 0.94), rgba(255, 255, 255, 0.96) 46%, rgba(245, 243, 255, 0.9));
-        box-shadow: 0 20px 50px rgba(30, 58, 138, 0.08);
+          radial-gradient(circle at 14% 4%, rgba(37, 99, 235, 0.13), transparent 34%),
+          linear-gradient(135deg, #eaf3ff 0%, #f4f8fc 52%, #e8eff8 100%);
+        box-shadow: 0 12px 30px rgba(30, 58, 138, 0.07);
       }
 
       .dl-subject-hero::before {
@@ -605,16 +615,16 @@
         display: grid;
         grid-template-columns: 1fr;
         align-items: start;
-        gap: 34px;
+        gap: 18px;
         max-width: 1320px;
-        min-height: 360px;
+        min-height: 0;
       }
 
       .dl-subject-copy {
         display: grid;
         align-content: start;
-        gap: 16px;
-        max-width: 900px;
+        gap: 10px;
+        max-width: none;
       }
 
       .dl-subject-eyebrow {
@@ -628,41 +638,44 @@
       .dl-subject-title {
         margin: 0;
         color: #0F172A;
-        font-size: clamp(34px, 4vw, 56px);
+        font-size: clamp(34px, 3vw, 46px);
         font-weight: 900;
         line-height: 1.04;
         letter-spacing: -0.01em;
       }
 
       .dl-subject-desc {
-        max-width: 720px;
+        max-width: none;
         margin: 0;
         color: #536179;
-        font-size: 17px;
-        line-height: 1.8;
+        font-size: 15px;
+        line-height: 1.6;
+        white-space: nowrap;
       }
 
       .dl-subject-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 18px;
-        margin-top: 24px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 10px;
+        padding-top: 18px;
+        border-top: 1px solid rgba(148, 163, 184, 0.28);
       }
 
       .dl-subject-card {
         position: relative;
-        min-height: 178px;
-        padding: 24px;
+        min-height: 160px;
+        padding: 20px;
         border: 1px solid rgba(203, 213, 225, 0.7);
-        border-radius: 20px;
-        background: rgba(255, 255, 255, 0.78);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.9);
         color: var(--dl-ink);
         text-align: left;
         display: flex;
         flex-direction: column;
         gap: 12px;
         cursor: pointer;
-        box-shadow: 0 10px 30px rgba(30, 58, 138, 0.07);
+        box-shadow: 0 6px 18px rgba(30, 58, 138, 0.06);
         backdrop-filter: blur(14px);
         transition: border-color .2s ease, box-shadow .2s ease, background .2s ease, transform .2s ease;
       }
@@ -670,19 +683,31 @@
       .dl-subject-card.primary {
         border-color: rgba(147, 197, 253, 0.92);
         background:
-          linear-gradient(180deg, rgba(255,255,255,.9), rgba(239,246,255,.82)),
-          radial-gradient(circle at 78% 84%, rgba(37,99,235,.18), transparent 36%);
+          linear-gradient(180deg, #ffffff, #f2f7ff),
+          radial-gradient(circle at 78% 84%, rgba(37,99,235,.14), transparent 36%);
       }
 
       .dl-subject-card.primary::after {
         content: none;
       }
 
-      .dl-subject-card:hover {
+      .dl-subject-card:not(:disabled):hover {
         border-color: var(--dl-accent);
         box-shadow: 0 18px 42px rgba(37, 99, 235, 0.16);
         background: rgba(255, 255, 255, 0.94);
         transform: translateY(-2px);
+      }
+
+      .dl-subject-card:disabled {
+        cursor: not-allowed;
+        box-shadow: none;
+        border-color: rgba(203, 213, 225, 0.78);
+        background: rgba(226, 232, 240, 0.5);
+      }
+
+      .dl-subject-card:disabled strong,
+      .dl-subject-card:disabled span {
+        color: #7B8799;
       }
 
       .dl-subject-card strong {
@@ -751,8 +776,9 @@
         display: none;
       }
 
-      .dl-subject-recent {
-        background: rgba(255, 255, 255, 0.9);
+      .dl-panel.dl-subject-recent {
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.94);
       }
 
       .dl-rule-package-entry {
@@ -2258,6 +2284,11 @@
         color: #079455;
       }
 
+      .dl-stepper-item:disabled {
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+
       .dl-stepper-pin {
         display: block;
         width: 34px;
@@ -2492,15 +2523,16 @@
 
       /* ═══ 响应式超宽屏/窄屏体验调优 ═══ */
       @media (max-width: 1180px) {
-        .dl-subject-hero { min-height: auto; padding: 32px; }
+        .dl-panel.dl-subject-hero { min-height: auto; padding: 28px; }
         .dl-subject-hero-layout { grid-template-columns: 1fr; gap: 24px; }
+        .dl-subject-desc { white-space: normal; }
         .dl-subject-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .dl-grid-workbench { grid-template-columns: 1fr; }
       }
 
       @media (max-width: 760px) {
         .dl-main-full { padding: 16px; }
-        .dl-subject-hero { padding: 24px 18px; border-radius: 20px; }
+        .dl-panel.dl-subject-hero { padding: 24px 18px; border-radius: 20px; }
         .dl-subject-hero-layout { min-height: 0; }
         .dl-subject-title { font-size: 34px; }
         .dl-subject-desc { font-size: 15px; }
@@ -2589,7 +2621,7 @@
       </div>
       <div class="dl-topbar-right">
         <span class="dl-top-meta">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
-        <span class="dl-top-meta">规则包 <strong>当前版 1.1.1</strong></span>
+        <span class="dl-top-meta">规则包 <strong>当前版 1.1.9</strong></span>
         <span class="dl-top-meta is-warn" id="batchStatusText">草稿</span>
         <span class="dl-top-meta" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
       </div>
@@ -2603,8 +2635,8 @@
             <button class="dl-rule-package-entry" id="rulePackageEntry" type="button">
               <span class="dl-rule-entry-copy">
                 <span>核算规则包</span>
-                <strong>当前版本 1.1.1</strong>
-                <span>补贴类、奖金类 · 已验证科目 3</span>
+                <strong>当前版本 1.1.9</strong>
+                <span>补贴类、奖金类 · 已验证科目 4</span>
               </span>
               <span class="dl-rule-entry-action">查看规则 →</span>
             </button>
@@ -2612,38 +2644,57 @@
               <div class="dl-subject-copy">
                 <span class="dl-subject-eyebrow">DOMESTIC LABOR PAYROLL</span>
                 <h1 class="dl-subject-title">国内劳务薪酬核算</h1>
-                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放餐补、外宿补贴与工龄奖核算，全勤奖待完成线下验证后接入。</p>
+                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放全勤奖、餐费补贴、外宿补贴与工龄奖核算，岗位、高温和夜班补贴暂不可进入。</p>
                 <div class="dl-subject-grid" id="subjectCardGrid">
                   <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
                     <span class="dl-subject-line-tag">操作线</span>
-                    <span class="dl-subject-kicker">Meal Allowance · 已开放</span>
-                    <strong>餐补核算</strong>
+                    <span class="dl-subject-kicker">Meal Allowance</span>
+                    <strong>餐费补贴核算</strong>
                     <span>支持东莞逐日餐补、嘉善/义乌月度口径、批次留存和导出归档。</span>
                     <em>进入核算 →</em>
                   </button>
-                  <div class="dl-subject-secondary">
-                    <button class="dl-subject-card primary" data-subject-entry="gonglingjiang" type="button">
-                      <span class="dl-subject-line-tag">全区域</span>
-                      <span class="dl-subject-kicker">工龄奖 · 已开放</span>
-                      <strong>工龄奖核算</strong>
-                      <span>按地区、岗位、工龄和缺勤口径核算，支持当月发放名单复核。</span>
-                      <em>进入核算 →</em>
-                    </button>
-                    <button class="dl-subject-card" data-subject-entry="quanqinjiang" type="button">
-                      <span class="dl-subject-line-tag">操作线</span>
-                      <span class="dl-subject-kicker">Attendance Bonus</span>
-                      <strong>全勤奖</strong>
-                      <span>按出勤、迟到、旷工规则核算。</span>
-                      <em>待接入</em>
-                    </button>
-                    <button class="dl-subject-card primary" data-subject-entry="waisu_butie" type="button">
-                      <span class="dl-subject-line-tag">操作线</span>
-                      <span class="dl-subject-kicker">Housing Allowance · 已开放</span>
-                      <strong>外宿补贴核算</strong>
-                      <span>按实际入住、退宿日期和缺勤口径核算。</span>
-                      <em>进入核算 →</em>
-                    </button>
-                  </div>
+                  <button class="dl-subject-card primary" data-subject-entry="quanqinjiang" type="button">
+                    <span class="dl-subject-line-tag">全区域</span>
+                    <span class="dl-subject-kicker">Attendance Bonus</span>
+                    <strong>全勤奖核算</strong>
+                    <span>按入离职、缺勤、迟到早退和签卡口径核算，固定标准100元。</span>
+                    <em>进入核算 →</em>
+                  </button>
+                  <button class="dl-subject-card primary" data-subject-entry="waisu_butie" type="button">
+                    <span class="dl-subject-line-tag">操作线</span>
+                    <span class="dl-subject-kicker">Housing Allowance</span>
+                    <strong>外宿补贴核算</strong>
+                    <span>按实际入住、退宿日期和缺勤口径核算。</span>
+                    <em>进入核算 →</em>
+                  </button>
+                  <button class="dl-subject-card primary" data-subject-entry="gonglingjiang" type="button">
+                    <span class="dl-subject-line-tag">全区域</span>
+                    <span class="dl-subject-kicker">Seniority Bonus</span>
+                    <strong>工龄奖核算</strong>
+                    <span>按地区、岗位、工龄和缺勤口径核算，支持当月发放名单复核。</span>
+                    <em>进入核算 →</em>
+                  </button>
+                  <button class="dl-subject-card" data-subject-entry="gangwei_butie" type="button" disabled aria-disabled="true">
+                    <span class="dl-subject-line-tag">操作线</span>
+                    <span class="dl-subject-kicker">Position Allowance</span>
+                    <strong>岗位补贴核算</strong>
+                    <span>按岗位范围与补贴标准核算。</span>
+                    <em>暂未开放</em>
+                  </button>
+                  <button class="dl-subject-card" data-subject-entry="gaowen_butie" type="button" disabled aria-disabled="true">
+                    <span class="dl-subject-line-tag">操作线</span>
+                    <span class="dl-subject-kicker">High-temperature Allowance</span>
+                    <strong>高温补贴核算</strong>
+                    <span>按适用地区、月份与出勤口径核算。</span>
+                    <em>暂未开放</em>
+                  </button>
+                  <button class="dl-subject-card" data-subject-entry="yeban_butie" type="button" disabled aria-disabled="true">
+                    <span class="dl-subject-line-tag">操作线</span>
+                    <span class="dl-subject-kicker">Night Shift Allowance</span>
+                    <strong>夜班补贴核算</strong>
+                    <span>待薪酬组确认班次休息与适用人员口径。</span>
+                    <em>暂未开放</em>
+                  </button>
                 </div>
               </div>
             </div>
@@ -2673,7 +2724,7 @@
                   <label class="dl-rule-version-control">
                     <span>规则包版本</span>
                     <select id="rulePackageVersionSelect" aria-label="选择规则包版本">
-                      <option>DL-PAYROLL.v1.1.1 · 当前</option>
+                      <option>DL-PAYROLL.v1.1.9 · 当前</option>
                     </select>
                   </label>
                   <button class="dl-btn" id="btnBackFromRules" type="button">返回科目首页</button>
