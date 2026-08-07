@@ -13308,6 +13308,16 @@ def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> N
     result["exceptions"].extend(subject_detail["exceptions"])
 
 
+def _domestic_labor_region_for_department(department: str) -> str:
+    """按员工自己的二级部门选择工龄奖兼容区域。"""
+    if any(keyword in department for keyword in (
+        "华东枢纽", "华东揽收组", "东南枢纽", "华西区操作部",
+        "华西枢纽", "华西揽收组", "闽赣揽收组", "华东B2B枢纽",
+    )):
+        return "wes"
+    return "default"
+
+
 def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
                               hrbp_list: list = None,
@@ -13377,21 +13387,13 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
 
-            region = "default"
-            if monthly.rows:
-                dept2 = str(monthly.rows[0].get("二级部门名称", ""))
-                if any(k in dept2 for k in (
-                    "华东枢纽", "华东揽收组", "东南枢纽", "华西区操作部",
-                    "华西枢纽", "华西揽收组", "闽赣揽收组", "华东B2B枢纽",
-                )):
-                    region = "wes"
-
             engine_started = monotonic()
             results = []
             for row in monthly.rows:
                 emp_id = str(row.get("工号", ""))
                 emp_name = str(row.get("姓名", ""))
                 dept = str(row.get("二级部门名称", ""))
+                region = _domestic_labor_region_for_department(dept)
                 r = {"employee_id": emp_id, "employee_name": emp_name, "department": dept,
                      "quanqinjiang": 0, "canbu": 0, "waisu_butie": 0, "gonglingjiang": 0,
                      "total": 0, "warnings": [], "exceptions": [], "subject_details": {}}

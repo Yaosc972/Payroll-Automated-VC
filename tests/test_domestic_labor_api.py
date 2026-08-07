@@ -257,6 +257,17 @@ def _gonglingjiang_data() -> bytes:
     })
 
 
+def _gonglingjiang_mixed_region_data() -> bytes:
+    """首行不是东南/闽赣部门，后续仍包含符合条件的闽赣员工。"""
+    return _create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份", "工作地区", "二级部门名称", "岗位名称", "入职日期", "排班天数", "实际在职工作日天数", "正班出勤天数", "事假时数", "病假时数", "旷工天数", "排休请假天数"],
+            ["TEST001", "首行员工", "202607", "广州", "其他部门", "专员", "2023-01-01", 26, 26, 26, 0, 0, 0, 0],
+            ["OWDN0053", "林乾凯", "202607", "福州", "闽赣揽收组", "揽收操作员", "2019-01-01", 26, 26, 26, 0, 0, 0, 0],
+        ],
+    })
+
+
 def _gonglingjiang_collection_data(work_area: str = "东莞") -> bytes:
     """第四纵队工龄奖名单校验数据"""
     return _create_test_excel({
@@ -1438,6 +1449,34 @@ def test_gonglingjiang_api_exposes_subject_details_and_audit_explanation():
     assert explanation["subject"] == "gonglingjiang"
     assert explanation["intermediate_values"]["工龄(年)"] == 3
     assert row["exceptions"] == []
+
+    client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_gonglingjiang_api_routes_each_employee_by_own_department():
+    """混合地区表不能用首行部门决定整批员工的工龄奖口径。"""
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("mixed-region.xlsx", _gonglingjiang_mixed_region_data(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"engines": "gonglingjiang", "attendance_month": "202607"},
+    )
+    assert create_response.status_code == 200
+    run_id = create_response.json()["run_id"]
+
+    import time
+    for _ in range(20):
+        time.sleep(0.5)
+        metadata = client.get(f"/api/domestic-labor/runs/{run_id}").json()
+        if metadata["status"] in ["已完成", "失败"]:
+            break
+
+    assert metadata["status"] == "已完成"
+    row = next(item for item in metadata["results"] if item["employee_id"] == "OWDN0053")
+    assert row["department"] == "闽赣揽收组"
+    assert row["gonglingjiang"] == 150
+    assert row["subject_details"]["gonglingjiang"]["audit_explanation"]["rule_name"] == "工龄奖标准与缺勤折算"
 
     client.delete(f"/api/domestic-labor/runs/{run_id}")
 
