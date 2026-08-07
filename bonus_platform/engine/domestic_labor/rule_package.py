@@ -706,6 +706,135 @@ _RULE_PACKAGE["version_history"] = [
 ]
 
 
+_RULE_PACKAGE_V1_1_7 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_7)
+_RULE_PACKAGE.update({
+    "version": "1.1.8",
+    "display_version": "DL-PAYROLL.v1.1.8",
+    "released_at": "2026-08-06",
+    "effective_from": "2026-02",
+})
+_bonus_category = next(category for category in _RULE_PACKAGE["categories"] if category["id"] == "bonus")
+_bonus_category["subject_ids"].insert(0, "quanqinjiang")
+_RULE_PACKAGE["subjects"].append({
+    "id": "quanqinjiang",
+    "name": "全勤奖",
+    "english_name": "Attendance Bonus",
+    "category_id": "bonus",
+    "version": "DL-QUANQIN.v1.0.0",
+    "status": "已验证",
+    "effective_from": "2026-02",
+    "summary": "全区域固定标准100元，按入离职、缺勤、迟到早退和签卡条件判断是否发放。",
+    "data_sources": [
+        "月考勤：工号、姓名、考勤月份、入职日期、最后工作日及全勤判断字段",
+        "日考勤：出勤日期、工作状态，用于判断月初至入职日前是否存在工作日",
+    ],
+    "common_rules": [
+        "满足全部条件时发放100元，否则为0元。",
+        "旷工天数、工伤假天数、事假时数、病假时数、入离职缺勤时数或迟到早退30分钟内扣款任一大于0时不发放。",
+        "正班迟到次数与早退次数合计不超过3次；签卡次数不超过3次。",
+        "休年假和排休请假不单独影响全勤奖。",
+        "月初至入职日前存在工作日时不发放；有日考勤时按工作状态判断，缺失时按周一至周五判断。",
+        "最后工作日为空或不早于月末时可发放；最后工作日早于月末时不发放。",
+        "OWHN9535、OWHN9353、OWHX0190为长期特殊排除名单，固定不发放。",
+    ],
+    "regions": [
+        {
+            "name": "全区域",
+            "rule": "各地区使用相同的固定金额和全勤判断条件。",
+            "formula": "满足全部发放条件 ? 100元 : 0元",
+            "details": [
+                "不按地区、部门或岗位设置不同金额。",
+                "特殊排除名单属于长期规则，不作为待处理异常。",
+            ],
+        }
+    ],
+    "verification": [
+        "2026年2月莞深广珠FBU月报869人逐行一致。",
+        "2026年3月莞深广珠FBU月报1,004人逐行一致。",
+        "2026年2月华西华东东南月报439人逐行一致。",
+        "2026年3月华西华东东南月报495人逐行一致。",
+        "四份真实月报合计2,807人，平台金额与线下结果差异0人。",
+    ],
+    "pending_confirmations": [],
+    "change_log": [
+        {
+            "version": "DL-QUANQIN.v1.0.0",
+            "released_at": "2026-08-06",
+            "changes": "首次发布：固定100元标准、缺勤与异常考勤门槛、入离职边界及长期特殊排除名单。",
+        }
+    ],
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.8",
+        "display_version": "DL-PAYROLL.v1.1.8",
+        "status": "当前版本",
+        "released_at": "2026-08-06",
+        "effective_from": "2026-02",
+        "subject_ids": ["quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "新增经四份真实月报2,807人逐行验证的全勤奖科目。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_7["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_7["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_1_8 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_1_8)
+_RULE_PACKAGE.update({
+    "version": "1.1.9",
+    "display_version": "DL-PAYROLL.v1.1.9",
+    "released_at": "2026-08-07",
+    "effective_from": "2026-02",
+})
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang["version"] = "DL-GONGLING.v1.0.7"
+_gonglingjiang["summary"] = (
+    "按地区、二级部门、岗位、月初司龄和缺勤口径核算；B操作部与中国操作部使用相同规则，"
+    "安检员岗位按名称包含匹配。"
+)
+dongguan_operation = next(region for region in _gonglingjiang["regions"] if region["name"] == "东莞操作")
+dongguan_operation["rule"] = "中国操作部、B操作部按已验证一线操作岗位发放。"
+dongguan_operation["details"][0] = (
+    "操作享有岗位：安检员、操作文员、操作员、叉车司机、揽收充电司机、查验员、监察员、理货员；"
+    "岗位名称包含“安检员”字样即按安检员判断。"
+)
+wes_region = next(region for region in _gonglingjiang["regions"] if region["name"] == "东南 / 闽赣兼容区域")
+wes_region["details"][0] = (
+    "东南枢纽享有岗位：操作员、内勤专员、中转员、门禁员、安检员、操作文员；"
+    "岗位名称包含“安检员”字样即按安检员判断。"
+)
+_gonglingjiang["verification"].insert(
+    0,
+    "最新线下核算截图确认B操作部操作员按中国操作部规则发放，并存在内部初级、内部高级、民航中级安检员等岗位名称。",
+)
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.7",
+    "released_at": "2026-08-07",
+    "changes": "B操作部新增为操作归属部门并沿用中国操作部规则；岗位名称包含安检员字样时按安检员资格判断。",
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.1.9",
+        "display_version": "DL-PAYROLL.v1.1.9",
+        "status": "当前版本",
+        "released_at": "2026-08-07",
+        "effective_from": "2026-02",
+        "subject_ids": ["quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"],
+        "summary": "工龄奖增加B操作部，并支持安检员岗位名称包含匹配。",
+    },
+    {
+        **_RULE_PACKAGE_V1_1_8["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_1_8["version_history"][1:],
+]
+
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
     _RULE_PACKAGE_V1_1_0["version"]: _RULE_PACKAGE_V1_1_0,
@@ -715,6 +844,8 @@ _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_1_4["version"]: _RULE_PACKAGE_V1_1_4,
     _RULE_PACKAGE_V1_1_5["version"]: _RULE_PACKAGE_V1_1_5,
     _RULE_PACKAGE_V1_1_6["version"]: _RULE_PACKAGE_V1_1_6,
+    _RULE_PACKAGE_V1_1_7["version"]: _RULE_PACKAGE_V1_1_7,
+    _RULE_PACKAGE_V1_1_8["version"]: _RULE_PACKAGE_V1_1_8,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 
