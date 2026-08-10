@@ -130,8 +130,8 @@ const STEP_MATERIALS = {
   salary: [
     { materialKey: 'previousSalary', label: '上月薪资档案', tag: '必传', hint: '上传OEHR上月薪资档案（含离职）', uploadType: 'previousSalary', fileField: 'previous_salary_file', required: true },
     { materialKey: 'currentSalary', label: '当月薪资档案', tag: '必传', hint: '上传OEHR当月最新薪资档案（含离职）', uploadType: 'currentSalary', fileField: 'salary_file', required: true },
-    { materialKey: 'salaryAdjustments', label: '全量调薪流程', tag: '必传', hint: '上传新泽西区全量调薪管理导出', uploadType: 'salaryAdjustments', fileField: 'adjustment_file', required: true },
-    { materialKey: 'transferHistory', label: '人事调动记录', tag: '必传', hint: '上传覆盖核算月及相邻生效日的新泽西区调动记录', uploadType: 'transferHistory', fileField: 'transfer_file', required: true },
+    { materialKey: 'salaryAdjustments', label: '全量调薪流程', tag: '必传', hint: '上传当前划分区域全量调薪管理导出', uploadType: 'salaryAdjustments', fileField: 'adjustment_file', required: true },
+    { materialKey: 'transferHistory', label: '人事调动记录', tag: '必传', hint: '上传覆盖核算月及相邻生效日的当前划分区域调动记录', uploadType: 'transferHistory', fileField: 'transfer_file', required: true },
   ],
   performance: [
     { materialKey: 'performance', label: '绩效报表', tag: '必传', hint: '上传OEHR当月绩效报表', uploadType: 'performance', fileField: 'performance_file', required: true },

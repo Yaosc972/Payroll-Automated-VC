@@ -86,7 +86,8 @@ def test_upload_entries_are_owned_by_exactly_one_step():
         "上传线下sickpay与年假补充数据",
         "上传OEHR上月薪资档案（含离职）",
         "上传OEHR当月最新薪资档案（含离职）",
-        "上传新泽西区全量调薪管理导出",
+        "上传当前划分区域全量调薪管理导出",
+        "上传覆盖核算月及相邻生效日的当前划分区域调动记录",
         "上传OEHR当月绩效报表",
     ]:
         assert copy in js
