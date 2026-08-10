@@ -1,10 +1,12 @@
-module.exports = function handleFeishuEvent(request, response) {
-  const payload = request.body && typeof request.body === "object" ? request.body : {};
+export const config = { runtime: "edge" };
+
+export default async function handleFeishuEvent(request) {
+  const payload = await request.json().catch(() => ({}));
   const challenge = payload.challenge;
 
   if (payload.type === "url_verification" && typeof challenge === "string") {
-    return response.status(200).json({ challenge });
+    return Response.json({ challenge });
   }
 
-  return response.status(200).json({ code: 0 });
-};
+  return Response.json({ code: 0 });
+}
