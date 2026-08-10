@@ -8,6 +8,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/feishu/events",
+      "destination": "/api/feishu-events"
+    },
+    {
       "source": "/(.*)",
       "destination": "/api/index.py"
     }
