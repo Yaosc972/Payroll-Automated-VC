@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timedelta
 import hashlib
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -91,6 +92,21 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   expires_at TEXT NOT NULL,
   FOREIGN KEY (user_id) REFERENCES admin_users(id)
 );
+
+CREATE TABLE IF NOT EXISTS admin_notification_outbox (
+  id TEXT PRIMARY KEY,
+  event_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  recipient_open_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  message_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sent_at TEXT
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -170,6 +186,21 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   FOREIGN KEY (user_id) REFERENCES admin_users(id)
+);
+
+CREATE TABLE IF NOT EXISTS admin_notification_outbox (
+  id TEXT PRIMARY KEY,
+  event_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  recipient_open_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  message_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  sent_at TEXT
 );
 """
 
@@ -495,6 +526,167 @@ def _rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _notification_from_row(row: Any) -> dict[str, Any]:
+    data = dict(row)
+    try:
+        payload = json.loads(str(data.get("payload_json") or "{}"))
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "id": str(data.get("id") or ""),
+        "eventKey": str(data.get("event_key") or ""),
+        "kind": str(data.get("kind") or ""),
+        "recipientOpenId": str(data.get("recipient_open_id") or ""),
+        "payload": payload if isinstance(payload, dict) else {},
+        "status": str(data.get("status") or "pending"),
+        "attemptCount": int(data.get("attempt_count") or 0),
+        "lastError": str(data.get("last_error") or ""),
+        "messageId": str(data.get("message_id") or ""),
+        "createdAt": str(data.get("created_at") or ""),
+        "updatedAt": str(data.get("updated_at") or ""),
+        "sentAt": str(data.get("sent_at") or ""),
+    }
+
+
+def enqueue_admin_notification(
+    *,
+    event_key: str,
+    kind: str,
+    recipient_open_id: str,
+    payload: dict[str, Any],
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    """Persist a deduplicated notification before attempting external delivery."""
+    init_admin_store(db_path)
+    now = _now()
+    notification_id = secrets.token_hex(16)
+    with _connect(db_path) as connection:
+        _insert_seed(
+            connection,
+            "admin_notification_outbox",
+            [
+                "id", "event_key", "kind", "recipient_open_id", "payload_json",
+                "status", "attempt_count", "created_at", "updated_at",
+            ],
+            ["event_key"],
+            {
+                "id": notification_id,
+                "event_key": event_key,
+                "kind": kind,
+                "recipient_open_id": recipient_open_id,
+                "payload_json": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                "status": "pending",
+                "attempt_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        row = connection.execute(
+            "SELECT * FROM admin_notification_outbox WHERE event_key = ?",
+            (event_key,),
+        ).fetchone()
+        connection.commit()
+    if not row:
+        raise RuntimeError("notification_outbox_insert_failed")
+    return _notification_from_row(row)
+
+
+def get_admin_notification(notification_id: str, db_path: Path | None = None) -> dict[str, Any]:
+    init_admin_store(db_path)
+    with _connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT * FROM admin_notification_outbox WHERE id = ?",
+            (notification_id,),
+        ).fetchone()
+    if not row:
+        raise KeyError("notification_not_found")
+    return _notification_from_row(row)
+
+
+def list_pending_admin_notifications(
+    limit: int = 3,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    init_admin_store(db_path)
+    safe_limit = max(1, min(int(limit or 1), 20))
+    stale_before = (
+        datetime.utcnow().replace(microsecond=0) - timedelta(minutes=5)
+    ).isoformat() + "Z"
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM admin_notification_outbox
+            WHERE status = 'pending'
+               OR (status = 'sending' AND updated_at < ?)
+            ORDER BY created_at, id
+            LIMIT ?
+            """,
+            (stale_before, safe_limit),
+        ).fetchall()
+    return [_notification_from_row(row) for row in rows]
+
+
+def claim_admin_notification(notification_id: str, db_path: Path | None = None) -> bool:
+    """Atomically lease one outbox row so concurrent requests cannot double-send it."""
+    init_admin_store(db_path)
+    now = _now()
+    stale_before = (
+        datetime.utcnow().replace(microsecond=0) - timedelta(minutes=5)
+    ).isoformat() + "Z"
+    with _connect(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE admin_notification_outbox
+            SET status = 'sending', updated_at = ?
+            WHERE id = ?
+              AND (status = 'pending' OR (status = 'sending' AND updated_at < ?))
+            """,
+            (now, notification_id, stale_before),
+        )
+        claimed = bool(cursor.rowcount)
+        connection.commit()
+    return claimed
+
+
+def mark_admin_notification_failed(
+    notification_id: str,
+    error: str,
+    db_path: Path | None = None,
+) -> None:
+    init_admin_store(db_path)
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE admin_notification_outbox
+            SET status = 'pending', attempt_count = attempt_count + 1,
+                last_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (str(error or "notification_failed").replace("\n", " ")[:500], _now(), notification_id),
+        )
+        connection.commit()
+
+
+def mark_admin_notification_sent(
+    notification_id: str,
+    message_id: str,
+    db_path: Path | None = None,
+) -> None:
+    init_admin_store(db_path)
+    now = _now()
+    with _connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE admin_notification_outbox
+            SET status = 'sent', attempt_count = attempt_count + 1,
+                last_error = NULL, message_id = ?, updated_at = ?, sent_at = ?
+            WHERE id = ?
+            """,
+            (message_id, now, now, notification_id),
+        )
+        connection.commit()
+
+
 def list_roles(db_path: Path | None = None) -> list[dict[str, Any]]:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
@@ -802,7 +994,9 @@ def upsert_feishu_user(
         _insert_audit(connection, user_id, "feishu_user_upsert", "user", user_id, email or feishu_open_id)
         connection.commit()
     ensure_bootstrap_admin_for_user(user_id, db_path)
-    return next(user for user in list_users(db_path) if user["id"] == user_id)
+    result = next(user for user in list_users(db_path) if user["id"] == user_id)
+    result["_created"] = not bool(existing)
+    return result
 
 
 def get_session_user_id(token: str, db_path: Path | None = None) -> str:

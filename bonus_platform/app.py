@@ -176,19 +176,30 @@ from .engine.fbu_performance.runs import (
 )
 from .engine.fbu_performance.runs import FBURuleListStore
 from .engine.admin_store import (
+    claim_admin_notification,
     create_session,
     delete_session,
+    enqueue_admin_notification,
     get_admin_state,
     get_current_user,
     get_session_auth_context,
     get_session_user_id,
     init_admin_store,
     list_audit_logs,
+    list_pending_admin_notifications,
+    mark_admin_notification_failed,
+    mark_admin_notification_sent,
     set_feature_permission,
     set_module_enabled,
     set_module_role_access,
     set_user_roles,
     upsert_feishu_user,
+)
+from .permission_notifications import (
+    admin_user_url,
+    build_new_user_card,
+    build_permission_change_card,
+    build_permission_change_payload,
 )
 from .engine.fbu_performance.persistent_storage import (
     FBU_RUN_SECTION_FIELDS,
@@ -211,6 +222,11 @@ OVERSEAS_LABOR_REQUIRED_WORKER_VERSION = "0.3.12"
 _LABOR_BUILD_MONITOR = LaborBuildMonitor(PROJECT_ROOT)
 CURRENT_USER_CACHE_TTL_SECONDS = 60
 _CURRENT_USER_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
+PERMISSION_NOTIFICATION_CONFIG = {
+    "admin_open_id": str(os.environ.get("FEISHU_PERMISSION_ADMIN_OPEN_ID") or "").strip(),
+    "public_url": str(os.environ.get("SIGMA_WORKBENCH_PUBLIC_URL") or "").strip().rstrip("/"),
+}
+permission_notification_logger = logging.getLogger("bonus_platform.permission_notifications")
 
 
 def _clear_current_user_cache() -> None:
@@ -956,6 +972,128 @@ def _get_feishu_tenant_access_token() -> str:
     if not token:
         raise HTTPException(status_code=502, detail="飞书 tenant_access_token 为空。")
     return token
+
+
+def _permission_notification_public_url() -> str:
+    configured = str(PERMISSION_NOTIFICATION_CONFIG.get("public_url") or "").strip().rstrip("/")
+    if configured:
+        return configured
+    vercel_host = str(
+        os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
+        or os.environ.get("VERCEL_URL")
+        or ""
+    ).strip().strip("/")
+    return f"https://{vercel_host}" if vercel_host else "http://localhost:8000"
+
+
+def _send_feishu_permission_card(notification: dict[str, Any]) -> str:
+    public_url = _permission_notification_public_url()
+    kind = str(notification.get("kind") or "")
+    payload = dict(notification.get("payload") or {})
+    if kind == "new_user_pending":
+        card = build_new_user_card(
+            payload,
+            admin_user_url(public_url, str(payload.get("userId") or "")),
+        )
+    elif kind == "permission_changed":
+        card = build_permission_change_card(payload, f"{public_url}/")
+    else:
+        raise ValueError("unsupported_permission_notification_kind")
+
+    result = _feishu_post_json(
+        "/im/v1/messages?receive_id_type=open_id",
+        {
+            "receive_id": str(notification.get("recipientOpenId") or ""),
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False, separators=(",", ":")),
+        },
+        token=_get_feishu_tenant_access_token(),
+    )
+    if result.get("code") != 0:
+        raise _feishu_api_error("发送飞书权限卡片", result)
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    message_id = str(data.get("message_id") or "").strip()
+    if not message_id:
+        raise RuntimeError("feishu_permission_card_message_id_missing")
+    return message_id
+
+
+def _dispatch_pending_permission_notifications() -> None:
+    """Best-effort delivery; queued rows preserve retries without blocking auth or grants."""
+    try:
+        notifications = list_pending_admin_notifications(limit=3)
+    except Exception as exc:  # noqa: BLE001 - notification failures must not break core flows.
+        permission_notification_logger.warning("permission notification outbox unavailable: %s", type(exc).__name__)
+        return
+    for notification in notifications:
+        if not claim_admin_notification(notification["id"]):
+            continue
+        try:
+            message_id = _send_feishu_permission_card(notification)
+            mark_admin_notification_sent(notification["id"], message_id)
+        except Exception as exc:  # noqa: BLE001 - external messaging is isolated from auth/permissions.
+            try:
+                mark_admin_notification_failed(notification["id"], str(exc))
+            except Exception:
+                permission_notification_logger.warning(
+                    "permission notification delivery and status update failed: %s",
+                    type(exc).__name__,
+                )
+
+
+def _queue_new_user_permission_notification(user: dict[str, Any]) -> dict[str, Any] | None:
+    recipient_open_id = str(PERMISSION_NOTIFICATION_CONFIG.get("admin_open_id") or "").strip()
+    if (
+        not recipient_open_id
+        or not user.get("_created")
+        or user.get("status") != "pending"
+        or list(user.get("roleIds") or [])
+    ):
+        return None
+    try:
+        return enqueue_admin_notification(
+            event_key=f"new-user:{user['id']}",
+            kind="new_user_pending",
+            recipient_open_id=recipient_open_id,
+            payload={
+                "userId": user["id"],
+                "userName": user.get("name") or "未命名用户",
+                "name": user.get("name") or "未命名用户",
+                "email": user.get("email") or "",
+                "createdAt": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - login must succeed if notification enqueue fails.
+        permission_notification_logger.warning("new user notification enqueue failed: %s", type(exc).__name__)
+        return None
+
+
+def _queue_permission_change_notification(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    actor: dict[str, Any],
+) -> dict[str, Any] | None:
+    payload = build_permission_change_payload(before, after, actor)
+    if not payload["recipientOpenId"]:
+        return None
+    changed_fields = (
+        payload["addedRoles"],
+        payload["removedRoles"],
+        payload["addedModules"],
+        payload["removedModules"],
+    )
+    if not any(changed_fields):
+        return None
+    try:
+        return enqueue_admin_notification(
+            event_key=f"permission-change:{payload['userId']}:{uuid4().hex}",
+            kind="permission_changed",
+            recipient_open_id=payload["recipientOpenId"],
+            payload=payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - grants must commit even if notification enqueue fails.
+        permission_notification_logger.warning("permission change notification enqueue failed: %s", type(exc).__name__)
+        return None
 
 
 def _get_feishu_user_access_token(code: str, app_access_token: str) -> dict[str, Any]:
@@ -2319,6 +2457,7 @@ def api_auth_feishu_login() -> RedirectResponse:
 
 @app.get("/api/auth/feishu/callback")
 def api_auth_feishu_callback(
+    background_tasks: BackgroundTasks,
     response: Response,
     code: str = "",
     state: str = "",
@@ -2342,6 +2481,9 @@ def api_auth_feishu_callback(
             identity["avatar_url"] = None
     user = upsert_feishu_user(**identity)
     session_token = create_session(user["id"], action="feishu_login")
+    notification = _queue_new_user_permission_notification(user)
+    if notification:
+        background_tasks.add_task(_dispatch_pending_permission_notifications)
     _clear_current_user_cache()
 
     redirect = RedirectResponse("/", status_code=302)
@@ -2376,6 +2518,7 @@ def api_admin_users(actor_user_id: str = Depends(_require_admin_user)) -> dict:
 @app.put("/api/admin/users/{user_id}/roles")
 def api_set_user_roles(
     user_id: str,
+    background_tasks: BackgroundTasks,
     payload: dict = Body(...),
     actor_user_id: str = Depends(_require_admin_user),
 ) -> dict:
@@ -2385,7 +2528,13 @@ def api_set_user_roles(
         if not isinstance(role_ids, list) or len(role_ids) > 20:
             raise HTTPException(status_code=400, detail="无效的角色列表。")
         role_ids = [_validate_safe_id(str(role_id), "role_id") for role_id in role_ids]
+        before = get_current_user(user_id)
         result = {"user": set_user_roles(user_id, role_ids, actor_user_id=actor_user_id)}
+        after = get_current_user(user_id)
+        actor = get_current_user(actor_user_id)["user"]
+        notification = _queue_permission_change_notification(before, after, actor)
+        if notification:
+            background_tasks.add_task(_dispatch_pending_permission_notifications)
         _clear_current_user_cache()
         return result
     except ValueError as exc:
