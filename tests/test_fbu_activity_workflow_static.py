@@ -716,55 +716,80 @@ def test_activity_step_tables_render_all_rows_with_pagination():
     assert "slice(0, 80)" not in section
 
 
-def test_activities_list_supports_pagination_and_batch_delete():
+def test_activities_list_is_compact_user_scoped_and_paginated():
     html = _html()
     js = _js()
-    section = js.split("function renderActivities", 1)[1].split("function updateActivityKPIs", 1)[0]
+    section = js.split("function renderActivities", 1)[1].split("function getActivityStatusMeta", 1)[0]
 
-    assert "selectedActivityIds: new Set()" in js
+    assert "currentPage: 'activities'" in js
+    assert "activityOwnerFilter: 'mine'" in js
     assert "activities: { page: 1, pageSize: 50 }" in js
-    assert "getPaginatedRows('activities', state.activities)" in section
+    assert "state.activities.filter(isMyActivity)" in section
+    assert "getPaginatedRows('activities', filteredActivities)" in section
     assert "pageInfo.items.map" in section
     assert "el.activitiesBody.innerHTML = state.activities.map" not in section
-    assert "renderActivitiesBatchBar(pageInfo)" in section
+    assert "renderActivityResumeAction()" in section
+    assert "renderActivityOwnerFilters()" in section
     assert "renderActivitiesPagination(pageInfo)" in section
-    assert "toggleActivitySelection" in js
-    assert "toggleActivityPageSelection" in js
+    assert '<th>绩效周期</th>' in html
+    assert "function formatPerformancePeriod(calcMonth)" in js
+    assert "formatPerformancePeriod(activity.calc_month)" in section
+    assert "renderEmptyTableRow(5, message)" in section
     assert "deleteActivitiesByIds" in js
-    delete_activity_area = js.split("async function deleteActivity", 1)[1].split(
-        "function toggleActivitySelection", 1
-    )[0]
-    delete_shared_area = js.split("async function deleteActivitiesByIds", 1)[1].split(
-        "function toggleActivitySelection", 1
-    )[0]
+    delete_activity_area = js.split("async function deleteActivity", 1)[1].split("async function deleteActivitiesByIds", 1)[0]
+    delete_shared_area = js.split("async function deleteActivitiesByIds", 1)[1].split("// ═══ Base Roster", 1)[0]
     assert "await deleteActivitiesByIds([activityId]" in delete_activity_area
     assert "`${API_BASE}/runs/bulk-delete`" in delete_shared_area
     assert "JSON.stringify({ run_ids: runIds })" in delete_shared_area
     assert "state.activities = state.activities.filter(activity => !runIds.includes(activity.run_id));" in delete_shared_area
     assert "delete state.foundationRunDetails[id];" in delete_shared_area
     assert "renderActivities();" in delete_shared_area
-    assert "deleteSelectedActivities" in js
-    delete_selected_area = js.split("async function deleteSelectedActivities", 1)[1].split(
-        "function setupActivityListInteractions", 1
-    )[0]
-    assert "await deleteActivitiesByIds(ids" in delete_selected_area
-    assert "method: 'DELETE'" not in delete_selected_area
-    assert "批量删除" in js
-    assert "activity-row-check" in js
-    assert "data-activity-id" in section
-    assert "data-activity-page-select" in section
-    assert "data-activity-bulk-delete" in section
-    assert "deleteSelectedActivities()" in section
-    assert "event.stopPropagation()" in section
-    assert "function setupActivityListInteractions" in js
-    assert "activitiesTable" in js.split("function setupActivityListInteractions", 1)[1]
-    assert "activitiesBatchBar" in js.split("function setupActivityListInteractions", 1)[1]
-    assert "setupActivityListInteractions();" in js
+    assert "批量删除" not in js
+    assert "activity-row-check" not in js
+    assert "activitiesBatchBar" not in f"{html}\n{js}"
     assert "renderTablePagination('activities', pageInfo)" in js
     assert "if (type === 'activities') renderActivities();" in js
-    assert 'id="activitiesBatchBar"' in html
     assert 'id="activitiesPagination"' in html
-    assert "activity-select-cell" in html
+    assert 'id="activityResumeButton"' in html
+    assert 'id="activityResumePanel"' not in html
+    assert ".activity-resume-button[hidden]" in html
+    assert "从一个新活动开始" not in js
+    assert "创建我的活动" not in js
+    assert "button.hidden = true;" in section
+    assert "`继续上次 · ${step.label}`" in section
+    assert 'data-activity-owner-filter="mine"' in html
+    assert "总活动数" not in html
+    assert "异常数" not in html
+
+
+def test_activity_creation_and_header_expose_region_creator_and_default_avatar():
+    html = _html()
+    js = _js()
+
+    assert "DEFAULT_USER_AVATAR = 'assets/sigma-user-avatar-default.png'" in js
+    assert "created_by_user_id" in js
+    assert "created_by_name" in js
+    assert "created_by_avatar_url" in js
+    assert "activity.region_name || DEFAULT_FBU_REGION.name" in js
+    assert "activity-creator-card" in f"{html}\n{js}"
+    assert "同月同区域可创建多个活动" in js
+    assert "region_code: regionCode" in js
+    assert "活动名称：绩效奖金核算-" in js
+    assert 'id="appDialogSelect"' in html
+    assert 'id="appDialogPreview"' in html
+
+
+def test_fbu_entry_never_auto_opens_another_users_activity():
+    js = _js()
+    load_section = js.split("async function loadActivities", 1)[1].split("function getWorkbenchActivity", 1)[0]
+    init_section = js.split("DOMContentLoaded", 1)[1]
+
+    assert "getWorkbenchDefaultActivity" not in js
+    assert "await enterActivity(defaultActivity.run_id" not in load_section
+    assert "navigateTo('activities');" in init_section
+    assert "loadActivities();" not in init_section
+    assert "sigma:fbu:last-owned-activity:" in js
+    assert "if (!activity?.run_id || !isMyActivity(activity)) return;" in js
 
 
 def test_activity_list_uses_summary_without_detail_prefetch():
@@ -1284,14 +1309,15 @@ def test_activity_detail_load_preserves_activity_list_page_without_prefetch():
     assert enter_activity_area.index("if (preservePage && state.currentPage === 'activities')") < enter_activity_area.index("navigateTo(preservePage ? state.currentPage : 'workbench');")
 
 
-def test_workbench_initial_load_does_not_prefetch_activity_details():
+def test_activity_hub_initial_load_does_not_prefetch_activity_details():
     js = _js()
 
     load_activities_area = js.split("async function loadActivities", 1)[1].split(
-        "function hasWorkbenchActivityPayload", 1
+        "function getWorkbenchActivity", 1
     )[0]
 
-    assert "await enterActivity(defaultActivity.run_id" in load_activities_area
+    assert "enterActivity(" not in load_activities_area
+    assert "navigateTo('activities')" in load_activities_area
     assert "loadActivityListDetails();" not in load_activities_area
 
 
@@ -1323,9 +1349,8 @@ def test_initial_workbench_overlaps_rule_list_and_activity_core_requests():
 
     assert "state.ruleListsRequest" in load_rule_lists
     assert "if (state.ruleListsRequest) return state.ruleListsRequest;" in load_rule_lists
-    request_start = "const ruleListsRequest = ("
+    request_start = "const ruleListsRequest = state.ruleLists ? null : loadRuleLists();"
     assert request_start in enter_activity
-    assert "? loadRuleLists()" in enter_activity
     assert enter_activity.index(request_start) < enter_activity.index("?include=core")
     assert enter_activity.index("await ruleListsRequest;") > enter_activity.index(
         "?include=core"

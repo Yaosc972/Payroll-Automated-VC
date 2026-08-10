@@ -1,4 +1,5 @@
 from datetime import date
+import json
 
 import openpyxl
 from openpyxl import Workbook
@@ -9,6 +10,29 @@ from bonus_platform.engine.fbu_performance.engines.coefficient import Coefficien
 from bonus_platform.engine.fbu_performance.engines.salary import SalaryProcessor
 from bonus_platform.engine.fbu_performance.parser import FBUPerformanceParser
 from bonus_platform.engine.fbu_performance.runs import FBURosterStore, FBURunManager, build_final_result_rows
+
+
+def test_legacy_fbu_activity_defaults_to_new_jersey_and_historical_creator(tmp_path):
+    (tmp_path / "runs.json").write_text(
+        json.dumps([{
+            "run_id": "legacy01",
+            "created_at": "2026-07-31T10:30:00",
+            "calc_month": "2026-06",
+        }]),
+        encoding="utf-8",
+    )
+
+    manager = FBURunManager(str(tmp_path))
+    run = manager.get_run("legacy01", sections=set())
+    summary = manager.list_run_summaries()[0]
+
+    assert run.region_code == "us_nj"
+    assert run.region_name == "FBU新泽西区"
+    assert run.activity_name == "绩效奖金核算-202606-FBU新泽西区"
+    assert run.created_by_user_id == "legacy"
+    assert run.created_by_name == "历史活动"
+    assert summary["region_name"] == "FBU新泽西区"
+    assert summary["activity_name"] == "绩效奖金核算-202606-FBU新泽西区"
 
 
 def test_warehouse_coefficient_boundaries():

@@ -164,6 +164,8 @@ from .engine.fbu_performance.parser import (
     update_hourly_rate_policy_data,
 )
 from .engine.fbu_performance.runs import (
+    DEFAULT_FBU_REGION_CODE,
+    FBU_AMERICAS_REGIONS,
     build_attendance_view_data,
     build_final_result_rows,
     build_results_view_data,
@@ -13901,6 +13903,40 @@ fbu_roster_store = FBURosterStore(str(FBU_PERFORMANCE_RUNS_DIR))
 fbu_rule_list_store = FBURuleListStore(str(FBU_PERFORMANCE_RUNS_DIR))
 
 
+def _fbu_current_user(request: Request) -> dict[str, str]:
+    """Resolve the production session user while keeping local FBU development standalone."""
+    current: dict | None = None
+    try:
+        from .auth import current_user_from_request
+
+        candidate = current_user_from_request(request)
+        if isinstance(candidate, dict):
+            user_profile = candidate.get("user")
+            current = {
+                **candidate,
+                **(user_profile if isinstance(user_profile, dict) else {}),
+            }
+    except (ImportError, KeyError, RuntimeError):
+        current = None
+
+    if not current:
+        return {
+            "id": "local-fbu-user",
+            "name": "本地用户",
+            "avatarUrl": "",
+        }
+
+    return {
+        "id": str(current.get("id") or current.get("userId") or "local-fbu-user").strip(),
+        "name": str(current.get("name") or current.get("email") or "西格玛用户").strip(),
+        "avatarUrl": str(
+            current.get("avatarUrl")
+            or current.get("avatar_url")
+            or ""
+        ).strip(),
+    }
+
+
 def _fbu_result_file_payload(
     run_id: str,
     result_type: str,
@@ -14177,6 +14213,12 @@ _FBU_RUN_CORE_RESPONSE_FIELDS = frozenset({
     "run_id",
     "created_at",
     "calc_month",
+    "activity_name",
+    "region_code",
+    "region_name",
+    "created_by_user_id",
+    "created_by_name",
+    "created_by_avatar_url",
     "status",
     "current_step",
     "attendance_file",
@@ -16847,7 +16889,7 @@ def get_fbu_calculation_job(run_id: str, job_id: str) -> dict:
 
 
 @app.post("/api/fbu-performance/runs")
-def create_fbu_performance_run(body: dict) -> dict:
+def create_fbu_performance_run(request: Request, body: dict) -> dict:
     """创建新的月度核算活动"""
     calc_month = body.get("calc_month")
     if not calc_month:
@@ -16866,7 +16908,20 @@ def create_fbu_performance_run(body: dict) -> dict:
     except ValueError:
         raise HTTPException(400, "核算月份格式无效")
 
-    run = fbu_run_manager.create_run(calc_month=calc_month, persist=False)
+    region_code = str(body.get("region_code") or DEFAULT_FBU_REGION_CODE).strip()
+    valid_region_codes = {region["code"] for region in FBU_AMERICAS_REGIONS}
+    if region_code not in valid_region_codes:
+        raise HTTPException(400, "请选择有效的FBU美洲划分区域")
+
+    actor = _fbu_current_user(request)
+    run = fbu_run_manager.create_run(
+        calc_month=calc_month,
+        region_code=region_code,
+        created_by_user_id=actor["id"],
+        created_by_name=actor["name"],
+        created_by_avatar_url=actor["avatarUrl"],
+        persist=False,
+    )
     metadata = fbu_roster_store.get_metadata()
     roster_path = fbu_roster_store.copy_active_to_run(run.run_id, metadata=metadata)
     roster_data = None
@@ -16903,6 +16958,12 @@ def create_fbu_performance_run(body: dict) -> dict:
         "success": True,
         "run_id": run.run_id,
         "calc_month": run.calc_month,
+        "activity_name": run.activity_name,
+        "region_code": run.region_code,
+        "region_name": run.region_name,
+        "created_by_user_id": run.created_by_user_id,
+        "created_by_name": run.created_by_name,
+        "created_by_avatar_url": run.created_by_avatar_url,
         "status": run.status,
         "roster_file": run.roster_file,
         "roster_source": run.roster_source,
@@ -16911,9 +16972,13 @@ def create_fbu_performance_run(body: dict) -> dict:
 
 
 @app.get("/api/fbu-performance/runs")
-def list_fbu_performance_runs() -> dict:
+def list_fbu_performance_runs(request: Request) -> dict:
     """获取FBU绩效核算任务列表"""
-    return {"runs": fbu_run_manager.list_run_summaries()}
+    return {
+        "runs": fbu_run_manager.list_run_summaries(),
+        "regions": [dict(region) for region in FBU_AMERICAS_REGIONS],
+        "current_user": _fbu_current_user(request),
+    }
 
 
 def _parse_fbu_run_detail_include(include: str) -> tuple[set[str] | None, set[str]]:

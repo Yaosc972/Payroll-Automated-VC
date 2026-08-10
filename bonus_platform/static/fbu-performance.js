@@ -5,10 +5,13 @@
 // ═══ State ═══
 
 const state = {
-  currentPage: 'workbench',
+  currentPage: 'activities',
   activityStep: 'people',
   currentActivity: null,
   activities: [],
+  currentUser: { id: 'local-fbu-user', name: '本地用户', avatarUrl: '' },
+  activityRegions: [],
+  activityOwnerFilter: 'mine',
   attendanceData: null,
   salaryData: null,
   performanceData: null,
@@ -24,7 +27,6 @@ const state = {
   foundationRunDetails: {},
   foundationLoadingRunId: '',
   activitySectionsLoading: new Set(),
-  selectedActivityIds: new Set(),
   workbenchSelectedResult: '',
   finalResultSlice: 'warehouse',
   finalResultsRemote: {
@@ -147,6 +149,8 @@ const SALARY_HISTORY_MATERIAL_FIELDS = {
 // ═══ API Base ═══
 
 const API_BASE = '/api/fbu-performance';
+const DEFAULT_FBU_REGION = { code: 'us_nj', name: 'FBU新泽西区' };
+const DEFAULT_USER_AVATAR = 'assets/sigma-user-avatar-default.png';
 const TABLE_PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
 const DEFAULT_TABLE_PAGE_SIZE = 50;
 
@@ -186,6 +190,71 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function normalizeCurrentUser(user) {
+  return {
+    id: String(user?.id || user?.userId || 'local-fbu-user').trim(),
+    name: String(user?.name || user?.email || '本地用户').trim(),
+    avatarUrl: String(user?.avatarUrl || user?.avatar_url || '').trim(),
+  };
+}
+
+function getActivityCreator(activity) {
+  return {
+    id: String(activity?.created_by_user_id || 'legacy').trim(),
+    name: String(activity?.created_by_name || '历史活动').trim(),
+    avatarUrl: String(activity?.created_by_avatar_url || '').trim(),
+  };
+}
+
+function isMyActivity(activity) {
+  const creatorId = getActivityCreator(activity).id;
+  return Boolean(creatorId && creatorId !== 'legacy' && creatorId === state.currentUser.id);
+}
+
+function getActivityDisplayName(activity) {
+  if (activity?.activity_name) return String(activity.activity_name);
+  const monthToken = String(activity?.calc_month || '').replace('-', '') || '未指定月份';
+  const regionName = activity?.region_name || DEFAULT_FBU_REGION.name;
+  return `绩效奖金核算-${monthToken}-${regionName}`;
+}
+
+function formatPerformancePeriod(calcMonth) {
+  const match = String(calcMonth || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return String(calcMonth || '-');
+  return `${match[1]}年${Number(match[2])}月`;
+}
+
+function renderUserAvatar(user, className = '') {
+  const avatarUrl = String(user?.avatarUrl || '').trim() || DEFAULT_USER_AVATAR;
+  const safeClassName = String(className || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  return `<img class="user-avatar ${safeClassName}" src="${escapeHtml(avatarUrl)}" alt="" loading="lazy" onerror="this.onerror=null;this.src='${DEFAULT_USER_AVATAR}'">`;
+}
+
+function getUserActivityStorageKey() {
+  return `sigma:fbu:last-owned-activity:${state.currentUser.id || 'local-fbu-user'}`;
+}
+
+function readLastOwnedActivityPreference() {
+  try {
+    return JSON.parse(localStorage.getItem(getUserActivityStorageKey()) || 'null') || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function rememberOwnedActivity(activity = state.currentActivity, step = state.activityStep) {
+  if (!activity?.run_id || !isMyActivity(activity)) return;
+  try {
+    localStorage.setItem(getUserActivityStorageKey(), JSON.stringify({
+      runId: activity.run_id,
+      step: ACTIVITY_STEPS.some(item => item.key === step) ? step : getActivityStepFromActivity(activity),
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (error) {
+    // Browser privacy settings can disable storage; the activity list remains usable.
+  }
 }
 
 function formatJobType(jobType) {
@@ -1017,6 +1086,8 @@ const el = {
 
   // Tables
   activitiesBody: document.getElementById('activitiesBody'),
+  activityResumeButton: document.getElementById('activityResumeButton'),
+  activityListMeta: document.getElementById('activityListMeta'),
 
   // Content areas
   foundationLeadMeta: document.getElementById('foundationLeadMeta'),
@@ -1042,6 +1113,12 @@ const el = {
   appDialogInput: document.getElementById('appDialogInput'),
   appDialogInputHelp: document.getElementById('appDialogInputHelp'),
   appDialogInputError: document.getElementById('appDialogInputError'),
+  appDialogSelectField: document.getElementById('appDialogSelectField'),
+  appDialogSelectLabel: document.getElementById('appDialogSelectLabel'),
+  appDialogSelect: document.getElementById('appDialogSelect'),
+  appDialogSelectHelp: document.getElementById('appDialogSelectHelp'),
+  appDialogSelectError: document.getElementById('appDialogSelectError'),
+  appDialogPreview: document.getElementById('appDialogPreview'),
   appDialogMonthPicker: document.getElementById('appDialogMonthPicker'),
   appDialogMonthYear: document.getElementById('appDialogMonthYear'),
   appDialogMonthGrid: document.getElementById('appDialogMonthGrid'),
@@ -1161,6 +1238,8 @@ document.addEventListener('compositionend', (event) => {
 
 let appDialogResolve = null;
 let appDialogValidate = null;
+let appDialogSelectValidate = null;
+let appDialogPreviewRenderer = null;
 let appDialogInputKind = 'text';
 let appDialogMonthYear = new Date().getFullYear();
 
@@ -1215,6 +1294,17 @@ function setAppDialogMonthValue(year, month) {
   el.appDialogInput.value = `${safeYear}-${String(safeMonth).padStart(2, '0')}`;
   el.appDialogInputError.textContent = '';
   renderAppDialogMonthPicker();
+  updateAppDialogPreview();
+}
+
+function updateAppDialogPreview() {
+  if (!el.appDialogPreview) return;
+  const preview = appDialogPreviewRenderer?.({
+    value: el.appDialogInput?.value?.trim() || '',
+    selectValue: el.appDialogSelect?.value || '',
+  });
+  el.appDialogPreview.textContent = preview || '';
+  el.appDialogPreview.hidden = !preview;
 }
 
 function setDialogTone(tone = 'primary') {
@@ -1240,11 +1330,15 @@ function openAppDialog(options = {}) {
     cancelText = '取消',
     tone = 'primary',
     input = null,
+    select = null,
+    preview = null,
   } = options;
 
   return new Promise(resolve => {
     appDialogResolve = resolve;
     appDialogValidate = input?.validate || null;
+    appDialogSelectValidate = select?.validate || null;
+    appDialogPreviewRenderer = typeof preview === 'function' ? preview : null;
 
     setDialogTone(tone);
     el.appDialogTitle.textContent = title;
@@ -1252,6 +1346,7 @@ function openAppDialog(options = {}) {
     el.btnConfirmAppDialog.textContent = confirmText;
     el.btnCancelAppDialog.textContent = cancelText;
     el.appDialogInputError.textContent = '';
+    if (el.appDialogSelectError) el.appDialogSelectError.textContent = '';
 
     if (input) {
       const isMonthPicker = input.kind === 'month';
@@ -1298,6 +1393,26 @@ function openAppDialog(options = {}) {
       el.appDialogMonthPicker.hidden = true;
     }
 
+    if (select && el.appDialogSelectField && el.appDialogSelect) {
+      el.appDialogSelectField.hidden = false;
+      el.appDialogSelectLabel.textContent = select.label || '';
+      el.appDialogSelectHelp.textContent = select.help || '';
+      const options = (select.options || []).map(option => {
+        const element = document.createElement('option');
+        element.value = String(option.value || '');
+        element.textContent = String(option.label || option.value || '');
+        return element;
+      });
+      el.appDialogSelect.replaceChildren(...options);
+      el.appDialogSelect.value = select.value || options[0]?.value || '';
+    } else if (el.appDialogSelectField && el.appDialogSelect) {
+      el.appDialogSelectField.hidden = true;
+      el.appDialogSelect.replaceChildren();
+      el.appDialogSelectHelp.textContent = '';
+    }
+
+    updateAppDialogPreview();
+
     const focusTarget = appDialogInputKind === 'month'
       ? el.appDialogMonthGrid?.querySelector('.month-picker-option.selected')
       : input
@@ -1317,6 +1432,8 @@ function closeAppDialog(result) {
   const resolve = appDialogResolve;
   appDialogResolve = null;
   appDialogValidate = null;
+  appDialogSelectValidate = null;
+  appDialogPreviewRenderer = null;
   if (resolve) resolve(result);
 }
 
@@ -1330,7 +1447,16 @@ function confirmAppDialog() {
       return;
     }
   }
-  closeAppDialog({ confirmed: true, value });
+  const selectValue = el.appDialogSelect?.value || '';
+  if (!el.appDialogSelectField?.hidden && appDialogSelectValidate) {
+    const validation = appDialogSelectValidate(selectValue);
+    if (validation !== true) {
+      el.appDialogSelectError.textContent = validation || '请选择有效选项';
+      el.appDialogSelect.focus();
+      return;
+    }
+  }
+  closeAppDialog({ confirmed: true, value, selectValue });
 }
 
 el.btnCloseAppDialog?.addEventListener('click', () => closeAppDialog({ confirmed: false }));
@@ -1341,6 +1467,11 @@ el.appDialog?.addEventListener('click', (event) => {
 });
 el.appDialogInput?.addEventListener('input', () => {
   el.appDialogInputError.textContent = '';
+  updateAppDialogPreview();
+});
+el.appDialogSelect?.addEventListener('change', () => {
+  el.appDialogSelectError.textContent = '';
+  updateAppDialogPreview();
 });
 el.appDialogInput?.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') confirmAppDialog();
@@ -1420,6 +1551,7 @@ function setSidebarCollapsed(collapsed) {
 function setActivityStep(stepKey) {
   if (!ACTIVITY_STEPS.some(step => step.key === stepKey)) return;
   state.activityStep = stepKey;
+  rememberOwnedActivity(state.currentActivity, stepKey);
   renderWorkbenchCurrentStep();
   ensureActivityStepData(stepKey);
 }
@@ -1452,7 +1584,10 @@ function getActivityStepFromActivity(activity = state.currentActivity) {
 }
 
 function navigateTo(page) {
-  const targetPage = page in el.pages ? page : 'workbench';
+  let targetPage = page in el.pages ? page : 'activities';
+  if (targetPage === 'workbench' && !state.currentActivity) {
+    targetPage = 'activities';
+  }
   state.currentPage = targetPage;
 
   // Update nav items
@@ -1473,7 +1608,7 @@ function navigateTo(page) {
 
   // Update title
   const titles = {
-    workbench: { title: 'FBU美洲绩效核算', subtitle: state.currentActivity?.calc_month || '' },
+    workbench: { title: 'FBU美洲绩效核算', subtitle: getActivityDisplayName(state.currentActivity) },
     activities: { title: 'FBU美洲绩效核算', subtitle: '活动列表' },
   };
 
@@ -1510,52 +1645,27 @@ el.btnToggleSidebar?.addEventListener('click', () => {
 async function loadActivities() {
   try {
     const data = await apiJson(`${API_BASE}/runs`);
-    const ruleListsRequest = (
-      state.currentPage === 'workbench'
-        ? loadRuleLists()
-        : null
-    );
-
+    state.currentUser = normalizeCurrentUser(data.current_user);
+    state.activityRegions = Array.isArray(data.regions) && data.regions.length
+      ? data.regions
+      : [DEFAULT_FBU_REGION];
     state.activities = data.runs || [];
     renderActivities();
-    updateActivityKPIs();
-    if (state.currentPage === 'workbench') {
-      if (!state.currentActivity) {
-        const defaultActivity = getWorkbenchDefaultActivity();
-        if (defaultActivity?.run_id) {
-          await enterActivity(defaultActivity.run_id, { preservePage: true, silent: true });
-        } else {
-          renderWorkbench();
-        }
-      } else {
-        if (ruleListsRequest) await ruleListsRequest;
-        renderWorkbench();
-      }
+    if (state.currentPage === 'workbench' && state.currentActivity) {
+      renderWorkbench();
+    } else if (state.currentPage !== 'activities') {
+      navigateTo('activities');
     }
   } catch (error) {
     console.error('加载活动列表失败:', error);
-    if (state.currentPage === 'workbench') {
-      state.currentActivity = null;
-      state.activities = [];
-      renderWorkbench();
-    }
+    state.activities = [];
+    if (state.currentPage !== 'activities') navigateTo('activities');
+    renderActivities();
   }
 }
 
-function hasWorkbenchActivityPayload(activity) {
-  return activity?.status === 'completed'
-    || toNumber(activity?.current_step) > 0
-    || toNumber(activity?.total_employees) > 0
-    || toNumber(activity?.total_bonus) > 0;
-}
-
-function getWorkbenchDefaultActivity() {
-  const activities = [...state.activities];
-  return activities.find(hasWorkbenchActivityPayload) || getLatestActivity();
-}
-
 function getWorkbenchActivity() {
-  return state.currentActivity || getWorkbenchDefaultActivity();
+  return state.currentActivity;
 }
 
 function getWorkbenchResults(activity = getWorkbenchActivity()) {
@@ -2223,24 +2333,31 @@ function renderWorkbench() {
     return;
   }
   const activeStep = ACTIVITY_STEPS.find(step => step.key === state.activityStep) || ACTIVITY_STEPS[0];
+  const creator = getActivityCreator(activity);
   const canCalculate = buildNeedsForStep('check', activity).length === 0;
-  const calculationBusy = ['queued', 'processing'].includes(state.calculationJobStatus?.status);
-  const readinessDisabled = canCalculate ? '' : 'disabled';
-  const calculationDisabled = calculationBusy ? 'disabled' : readinessDisabled;
   el.workbenchContent.innerHTML = `
     <section class="activity-titlebar activity-page-titlebar">
       <div class="activity-title-main">
         <div class="activity-title-line">
-          <h2>${escapeHtml(activity.calc_month || '-')} FBU美洲绩效核算</h2>
+          <h2>${escapeHtml(getActivityDisplayName(activity))}</h2>
         </div>
         <div class="activity-title-meta">
           <span>活动 ${escapeHtml(activity.run_id || '-')}</span>
           <span>${escapeHtml(activeStep.label || '-')}</span>
         </div>
       </div>
-      <div class="activity-title-actions">
-        ${state.activityStep === 'check' ? renderCalculateButton(canCalculate) : ''}
-        <button class="btn btn-secondary btn-sm activity-return-button" type="button" onclick="navigateTo('activities')">返回</button>
+      <div class="activity-title-context">
+        <div class="activity-creator-card">
+          ${renderUserAvatar(creator, 'activity-creator-avatar')}
+          <div>
+            <strong>${escapeHtml(creator.name)}</strong>
+            <span>${escapeHtml(activity.region_name || DEFAULT_FBU_REGION.name)} · ${escapeHtml(formatDateTime(activity.created_at))}</span>
+          </div>
+        </div>
+        <div class="activity-title-actions">
+          ${state.activityStep === 'check' ? renderCalculateButton(canCalculate) : ''}
+          <button class="btn btn-secondary btn-sm activity-return-button" type="button" onclick="navigateTo('activities')">活动列表</button>
+        </div>
       </div>
     </section>
     ${renderActivityStepper(activity)}
@@ -2283,78 +2400,73 @@ function renderWorkbenchCurrentStep({ preserveScroll = true } = {}) {
 }
 
 function renderActivities() {
-  const validIds = new Set(state.activities.map(activity => activity.run_id).filter(Boolean));
-  state.selectedActivityIds = new Set([...state.selectedActivityIds].filter(id => validIds.has(id)));
+  renderActivityResumeAction();
+  renderActivityOwnerFilters();
+  const filteredActivities = state.activityOwnerFilter === 'mine'
+    ? state.activities.filter(isMyActivity)
+    : state.activities;
 
-  if (!state.activities.length) {
-    el.activitiesBody.innerHTML = renderEmptyTableRow(8, '暂无月度活动');
-    renderActivitiesBatchBar();
+  if (!filteredActivities.length) {
+    const message = state.activityOwnerFilter === 'mine'
+      ? '你还没有创建活动，可点击右上角新建活动'
+      : '暂无活动';
+    el.activitiesBody.innerHTML = renderEmptyTableRow(5, message);
     renderActivitiesPagination(null);
     return;
   }
 
-  const pageInfo = getPaginatedRows('activities', state.activities);
-  renderActivitiesBatchBar(pageInfo);
+  const pageInfo = getPaginatedRows('activities', filteredActivities);
   renderActivitiesPagination(pageInfo);
 
   el.activitiesBody.innerHTML = pageInfo.items.map(activity => {
     const statusMeta = getActivityStatusMeta(activity);
-    const completedSteps = getActivityCompletedSteps(activity);
-    const progress = `${completedSteps}/${activityStepLabels.length}`;
-    const stageCaption = getActivityStageCaption(activity, completedSteps);
-    const totalEmployees = activity.total_employees ?? '-';
-    const totalBonus = activity.total_bonus === null
-      || activity.total_bonus === undefined
-      || (activity.status !== 'completed' && toNumber(activity.total_bonus) === 0)
-      ? '-'
-      : formatCurrency(activity.total_bonus);
-    const primaryAction = statusMeta.page
-      ? `openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg(statusMeta.page)})`
-      : `enterActivity(${formatJsArg(activity.run_id)})`;
+    const stepKey = getActivityStepFromActivity(activity);
+    const activeStep = ACTIVITY_STEPS.find(step => step.key === stepKey) || ACTIVITY_STEPS[0];
+    const completedSteps = activity.status === 'completed'
+      ? ACTIVITY_STEPS.length
+      : Math.max(0, getStepIndex(stepKey));
+    const creator = getActivityCreator(activity);
 
     return `
       <tr class="activity-row ${statusMeta.rowClass}" data-activity-row-id="${escapeHtml(activity.run_id || '')}">
-        <td class="activity-select-cell">
-          <input class="activity-row-check"
-                 type="checkbox"
-                 value="${escapeHtml(activity.run_id || '')}"
-                 data-activity-id="${escapeHtml(activity.run_id || '')}"
-                 aria-label="选择活动 ${escapeHtml(activity.run_id || '')}"
-                 ${state.selectedActivityIds.has(activity.run_id) ? 'checked' : ''}>
-        </td>
         <td>
           <div class="activity-task">
             <div class="activity-task-main">
-              <span class="activity-month">${escapeHtml(activity.calc_month || '-')}</span>
+              <span class="activity-name">${escapeHtml(getActivityDisplayName(activity))}</span>
               <span class="status-badge ${statusMeta.className}">${statusMeta.text}</span>
             </div>
-            <div class="activity-task-meta">活动 ID ${escapeHtml(activity.run_id || '-')}</div>
+            <div class="activity-task-meta">活动 ${escapeHtml(activity.run_id || '-')}</div>
+          </div>
+        </td>
+        <td>
+          <span class="activity-period">${escapeHtml(formatPerformancePeriod(activity.calc_month))}</span>
+        </td>
+        <td>
+          <div class="activity-owner">
+            ${renderUserAvatar(creator, 'activity-list-avatar')}
+            <div>
+              <strong>${escapeHtml(creator.name)}</strong>
+              <span>${escapeHtml(formatDateTime(activity.created_at))}</span>
+            </div>
           </div>
         </td>
         <td>
           <div class="activity-stage">
             <div class="activity-stage-head">
-              <span class="activity-stage-caption">${escapeHtml(stageCaption)}</span>
-              <span class="activity-progress-value">${escapeHtml(progress)}</span>
+              <span class="activity-stage-caption">${activity.status === 'completed' ? '核算完成' : `当前：${activeStep.label}`}</span>
+              <span class="activity-progress-value">${completedSteps}/${ACTIVITY_STEPS.length}</span>
             </div>
-            <div class="activity-progress-track" aria-label="核算进度 ${escapeHtml(progress)}">
+            <div class="activity-progress-track" aria-label="核算进度 ${completedSteps}/${ACTIVITY_STEPS.length}">
               ${renderActivityProgress(completedSteps)}
             </div>
           </div>
         </td>
         <td>
-          <div class="activity-metric">
-            <span class="activity-metric-label">员工</span>
-            <span class="activity-metric-value">${escapeHtml(totalEmployees)}</span>
-          </div>
-        </td>
-        <td>${renderActivityDiagnostics(activity)}</td>
-        <td><span class="money-cell">${escapeHtml(totalBonus)}</span></td>
-        <td>${escapeHtml(formatDateOnly(activity.created_at))}</td>
-        <td>
           <div class="activity-action-cell">
-            <button class="btn btn-secondary btn-sm" onclick="${primaryAction}">${escapeHtml(statusMeta.action)}</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteActivity(${formatJsArg(activity.run_id)})">删除</button>
+            <button class="btn btn-primary btn-sm" onclick="enterActivity(${formatJsArg(activity.run_id)})">${activity.status === 'completed' ? '查看' : '进入'}</button>
+            <button class="activity-delete-button" type="button" title="删除活动" aria-label="删除活动 ${escapeHtml(activity.run_id || '')}" onclick="deleteActivity(${formatJsArg(activity.run_id)})">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2m-6 0 1 10h6l1-10M8.5 9v4m3-4v4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
           </div>
         </td>
       </tr>
@@ -2362,29 +2474,56 @@ function renderActivities() {
   }).join('');
 }
 
-function renderActivitiesBatchBar(pageInfo = null) {
-  const bar = document.getElementById('activitiesBatchBar');
-  if (!bar) return;
-  const selectedCount = state.selectedActivityIds.size;
-  const pageIds = (pageInfo?.items || []).map(activity => activity.run_id).filter(Boolean);
-  const pageSelected = pageIds.length > 0 && pageIds.every(id => state.selectedActivityIds.has(id));
-  bar.innerHTML = `
-    <label class="activity-bulk-check">
-      <input type="checkbox"
-             data-activity-page-select
-             ${pageSelected ? 'checked' : ''}
-             ${pageIds.length ? '' : 'disabled'}>
-      <span>当前页全选</span>
-    </label>
-    <span class="activity-bulk-count">已选 ${selectedCount} 项</span>
-    <button class="btn btn-danger btn-sm"
-            type="button"
-            ${selectedCount ? '' : 'disabled'}
-            data-activity-bulk-delete
-            onclick="event.preventDefault(); event.stopPropagation(); deleteSelectedActivities()">
-      批量删除
-    </button>
-  `;
+function renderActivityResumeAction() {
+  const button = el.activityResumeButton;
+  if (!button) return;
+  const myActivities = state.activities.filter(isMyActivity);
+  const preference = readLastOwnedActivityPreference();
+  const activity = myActivities.find(item => item.run_id === preference?.runId)
+    || myActivities[0]
+    || null;
+
+  if (!activity) {
+    button.hidden = true;
+    button.textContent = '';
+    button.removeAttribute('title');
+    button.onclick = null;
+    return;
+  }
+
+  const preferredStep = preference?.runId === activity.run_id ? preference.step : '';
+  const stepKey = ACTIVITY_STEPS.some(step => step.key === preferredStep)
+    ? preferredStep
+    : getActivityStepFromActivity(activity);
+  const step = ACTIVITY_STEPS.find(item => item.key === stepKey) || ACTIVITY_STEPS[0];
+  button.hidden = false;
+  button.textContent = activity.status === 'completed'
+    ? '查看上次活动'
+    : `继续上次 · ${step.label}`;
+  button.title = `${getActivityDisplayName(activity)} · 活动 ${activity.run_id}`;
+  button.onclick = () => enterActivity(activity.run_id);
+}
+
+function renderActivityOwnerFilters() {
+  const mineCount = state.activities.filter(isMyActivity).length;
+  const allCount = state.activities.length;
+  document.querySelectorAll('[data-activity-owner-filter]').forEach(button => {
+    const filter = button.dataset.activityOwnerFilter;
+    button.classList.toggle('active', filter === state.activityOwnerFilter);
+    button.setAttribute('aria-pressed', filter === state.activityOwnerFilter ? 'true' : 'false');
+    const count = filter === 'mine' ? mineCount : allCount;
+    button.querySelector('[data-filter-count]')?.replaceChildren(String(count));
+  });
+  if (el.activityListMeta) {
+    el.activityListMeta.textContent = `${mineCount} 个我的活动 · ${allCount} 个全部活动`;
+  }
+}
+
+function setActivityOwnerFilter(filter) {
+  if (!['mine', 'all'].includes(filter)) return;
+  state.activityOwnerFilter = filter;
+  state.tablePagination.activities.page = 1;
+  renderActivities();
 }
 
 function renderActivitiesPagination(pageInfo) {
@@ -2393,53 +2532,6 @@ function renderActivitiesPagination(pageInfo) {
   wrap.innerHTML = pageInfo && pageInfo.total
     ? renderTablePagination('activities', pageInfo)
     : '';
-}
-
-function updateActivityKPIs() {
-  el.kpiTotalActivities.textContent = state.activities.length;
-  el.kpiCompleted.textContent = state.activities.filter(a => a.status === 'completed').length;
-  el.kpiInProgress.textContent = state.activities.filter(a => a.status !== 'completed' && a.status !== 'failed').length;
-  el.kpiErrors.textContent = state.activities.filter(a => a.status === 'failed').length;
-}
-
-const activityStepLabels = ['考勤汇总', '薪资匹配', '绩效明细', '核算结果'];
-
-function getActivityDetail(activity) {
-  if (!activity) return null;
-  if (state.currentActivity?.run_id === activity.run_id) return state.currentActivity;
-  return state.foundationRunDetails[activity.run_id] || activity;
-}
-
-function renderActivityDiagnostics(activity) {
-  const detail = getActivityDetail(activity);
-  const summary = detail?.diagnostics?.summary || detail?.diagnostics_summary;
-
-  if (!summary) {
-    return `
-      <div class="activity-diagnostics">
-        <span class="activity-diagnostics-muted">进入活动后查看</span>
-        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">需要处理</button>
-      </div>
-    `;
-  }
-
-  const errorCount = toNumber(summary.error_count);
-  const warningCount = toNumber(summary.warning_count);
-  const issueCount = toNumber(summary.issue_count);
-  const badgeClass = errorCount ? 'danger' : warningCount ? 'warning' : 'success';
-  const badgeText = errorCount ? `${errorCount}严重` : warningCount ? `${warningCount}提醒` : '无阻断';
-
-  return `
-    <div class="activity-diagnostics">
-      <div class="activity-diagnostics-line">
-        <span class="status-badge ${badgeClass}">${escapeHtml(badgeText)}</span>
-        <button class="activity-link-btn" type="button" onclick="openActivityPage(${formatJsArg(activity.run_id)}, ${formatJsArg('exceptions')})">需要处理</button>
-      </div>
-      <div class="activity-diagnostics-meta">
-        ${escapeHtml(`${issueCount}项 · 可算 ${toNumber(summary.can_calculate_count)}/${toNumber(summary.attendance_count)}`)}
-      </div>
-    </div>
-  `;
 }
 
 function getActivityStatusMeta(activity) {
@@ -2452,21 +2544,9 @@ function getActivityStatusMeta(activity) {
   return { className: 'warning', text: '进行中', rowClass: 'running', action: '继续处理', page: '' };
 }
 
-function getActivityCompletedSteps(activity) {
-  if (activity.status === 'completed') return activityStepLabels.length;
-  return Math.min(Math.max(toNumber(activity.current_step), 0), activityStepLabels.length);
-}
-
-function getActivityStageCaption(activity, completedSteps) {
-  if (activity.status === 'completed') return '核算完成';
-  if (activity.status === 'failed') return '需要处理';
-  const nextStep = activityStepLabels[Math.min(completedSteps, activityStepLabels.length - 1)];
-  return `下一步：${nextStep}`;
-}
-
 function renderActivityProgress(completedSteps) {
-  return activityStepLabels.map((label, index) => `
-    <span class="activity-progress-segment ${index < completedSteps ? 'done' : ''}" title="${escapeHtml(label)}"></span>
+  return ACTIVITY_STEPS.map((step, index) => `
+    <span class="activity-progress-segment ${index < completedSteps ? 'done' : ''}" title="${escapeHtml(step.label)}"></span>
   `).join('');
 }
 
@@ -3251,11 +3331,8 @@ async function enterActivity(activityId, options = {}) {
   const previousStep = state.activityStep;
 
   try {
-    const ruleListsRequest = (
-      state.currentPage === 'workbench'
-        ? loadRuleLists()
-        : null
-    );
+    const ruleListsRequest = state.ruleLists ? null : loadRuleLists();
+    if (!state.baseRoster) loadBaseRoster();
     const isDifferentActivity = state.currentActivity?.run_id !== activityId;
     let activity = await apiJson(`${API_BASE}/runs/${activityId}?include=core`);
 
@@ -3279,13 +3356,22 @@ async function enterActivity(activityId, options = {}) {
     }
 
     activity = mergeCurrentActivityPayload(activity);
+    const ownedPreference = readLastOwnedActivityPreference();
+    const preferredOwnedStep = isMyActivity(activity)
+      && ownedPreference?.runId === activity.run_id
+      && ACTIVITY_STEPS.some(step => step.key === ownedPreference.step)
+      ? ownedPreference.step
+      : '';
     if (preserveStep && !isDifferentActivity && ACTIVITY_STEPS.some(step => step.key === previousStep)) {
       state.activityStep = previousStep;
     } else if (ACTIVITY_STEPS.some(step => step.key === initialStep)) {
       state.activityStep = initialStep;
+    } else if (preferredOwnedStep) {
+      state.activityStep = preferredOwnedStep;
     } else {
       state.activityStep = getActivityStepFromActivity(activity);
     }
+    rememberOwnedActivity(activity, state.activityStep);
     if (ruleListsRequest) await ruleListsRequest;
     await ensureActivityStepData(state.activityStep, { render: false });
     activity = state.currentActivity;
@@ -3313,9 +3399,10 @@ async function enterActivity(activityId, options = {}) {
 // ═══ New Activity ═══
 
 el.btnNewActivity.addEventListener('click', async () => {
+  const regions = state.activityRegions.length ? state.activityRegions : [DEFAULT_FBU_REGION];
   const dialogResult = await openAppDialog({
-    title: '新建月度活动',
-    message: '为本月绩效奖金创建一个独立核算空间。',
+    title: '新建绩效奖金核算活动',
+    message: '同月同区域可创建多个活动，创建人和时间会自动记录。',
     confirmText: '创建活动',
     cancelText: '取消',
     input: {
@@ -3331,31 +3418,51 @@ el.btnNewActivity.addEventListener('click', async () => {
         return true;
       },
     },
+    select: {
+      label: '划分区域',
+      value: state.currentActivity?.region_code || DEFAULT_FBU_REGION.code,
+      help: '当前仅开放FBU美洲区域。',
+      options: regions.map(region => ({ value: region.code, label: region.name })),
+      validate: value => regions.some(region => region.code === value) || '请选择划分区域',
+    },
+    preview: ({ value, selectValue }) => {
+      const region = regions.find(item => item.code === selectValue) || DEFAULT_FBU_REGION;
+      return `活动名称：绩效奖金核算-${String(value || '').replace('-', '')}-${region.name}`;
+    },
   });
 
   if (!dialogResult.confirmed) return;
   const calcMonth = dialogResult.value;
+  const regionCode = dialogResult.selectValue;
 
   try {
     const data = await apiJson(`${API_BASE}/runs`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ calc_month: calcMonth }),
+      body: JSON.stringify({ calc_month: calcMonth, region_code: regionCode }),
     });
 
     if (data.run_id) {
-      showNotification('月度活动创建成功', 'success');
-      applyCurrentActivityPatch(data.activity || {
+      showNotification('活动创建成功', 'success');
+      const activity = applyCurrentActivityPatch(data.activity || {
         run_id: data.run_id,
         calc_month: data.calc_month,
+        activity_name: data.activity_name,
+        region_code: data.region_code,
+        region_name: data.region_name,
+        created_by_user_id: data.created_by_user_id,
+        created_by_name: data.created_by_name,
+        created_by_avatar_url: data.created_by_avatar_url,
         status: data.status,
         current_step: 0,
         roster_file: data.roster_file,
         roster_source: data.roster_source,
       });
       state.activityStep = 'people';
+      rememberOwnedActivity(activity, state.activityStep);
       resetTableControls();
       navigateTo('workbench');
+      renderWorkbench();
     }
   } catch (error) {
     console.error('创建活动失败:', error);
@@ -3368,8 +3475,8 @@ el.btnNewActivity.addEventListener('click', async () => {
 async function deleteActivity(activityId) {
   const activity = state.activities.find(item => item.run_id === activityId);
   const dialogResult = await openAppDialog({
-    title: '删除月度活动',
-    message: `将删除 ${activity?.calc_month || '该月度'} 的活动记录和已导入数据。`,
+    title: '删除活动',
+    message: `将删除“${getActivityDisplayName(activity)}”及其全部已导入数据。`,
     confirmText: '删除',
     cancelText: '保留',
     tone: 'danger',
@@ -3388,10 +3495,8 @@ async function deleteActivitiesByIds(ids, options = {}) {
 
   state.activities = state.activities.filter(activity => !runIds.includes(activity.run_id));
   runIds.forEach(id => {
-    state.selectedActivityIds.delete(id);
     delete state.foundationRunDetails[id];
   });
-  updateActivityKPIs();
   if (state.currentPage === 'activities') {
     renderActivities();
   }
@@ -3408,70 +3513,6 @@ async function deleteActivitiesByIds(ids, options = {}) {
     showNotification(options.failureMessage || '删除失败', 'error');
     await loadActivities();
   }
-}
-
-function toggleActivitySelection(activityId, checked) {
-  if (!activityId) return;
-  if (checked) {
-    state.selectedActivityIds.add(activityId);
-  } else {
-    state.selectedActivityIds.delete(activityId);
-  }
-  renderActivities();
-}
-
-function toggleActivityPageSelection(checked) {
-  const pageInfo = getPaginatedRows('activities', state.activities);
-  pageInfo.items.forEach(activity => {
-    if (!activity.run_id) return;
-    if (checked) {
-      state.selectedActivityIds.add(activity.run_id);
-    } else {
-      state.selectedActivityIds.delete(activity.run_id);
-    }
-  });
-  renderActivities();
-}
-
-async function deleteSelectedActivities() {
-  const ids = [...state.selectedActivityIds].filter(Boolean);
-  if (!ids.length) return;
-  const dialogResult = await openAppDialog({
-    title: '批量删除月度活动',
-    message: `将删除已选择的 ${ids.length} 个活动记录和已导入数据。`,
-    confirmText: '删除',
-    cancelText: '保留',
-    tone: 'danger',
-  });
-  if (!dialogResult.confirmed) return;
-
-  await deleteActivitiesByIds(ids, {
-    successMessage: `已删除 ${ids.length} 个活动`,
-    failureMessage: '批量删除失败',
-  });
-}
-
-function setupActivityListInteractions() {
-  const table = document.getElementById('activitiesTable');
-  const batchBar = document.getElementById('activitiesBatchBar');
-
-  table?.addEventListener('change', event => {
-    const checkbox = event.target?.closest?.('.activity-row-check');
-    if (!checkbox) return;
-    toggleActivitySelection(checkbox.dataset.activityId || checkbox.value, checkbox.checked);
-  });
-
-  batchBar?.addEventListener('change', event => {
-    const checkbox = event.target?.closest?.('[data-activity-page-select]');
-    if (!checkbox) return;
-    toggleActivityPageSelection(checkbox.checked);
-  });
-
-  batchBar?.addEventListener('click', event => {
-    const button = event.target?.closest?.('[data-activity-bulk-delete]');
-    if (!button || button.disabled) return;
-    deleteSelectedActivities();
-  });
 }
 
 // ═══ Base Roster ═══
@@ -8731,7 +8772,5 @@ function showNotification(message, type = 'info', options = {}) {
 
 document.addEventListener('DOMContentLoaded', () => {
   setSidebarCollapsed(false);
-  setupActivityListInteractions();
-  loadBaseRoster();
-  loadActivities();
+  navigateTo('activities');
 });

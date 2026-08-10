@@ -28,6 +28,39 @@ from .persistent_storage import (
 )
 
 
+DEFAULT_FBU_REGION_CODE = "us_nj"
+DEFAULT_FBU_REGION_NAME = "FBU新泽西区"
+FBU_AMERICAS_REGIONS = (
+    {"code": "us_nj", "name": "FBU新泽西区"},
+    {"code": "us_ca", "name": "FBU加州区"},
+    {"code": "us_atlanta", "name": "FBU亚特兰大区"},
+    {"code": "ca_toronto", "name": "FBU加拿大多伦多区"},
+    {"code": "us_chicago", "name": "FBU芝加哥区"},
+    {"code": "ca_vancouver", "name": "FBU加拿大温哥华区"},
+    {"code": "us_indiana", "name": "FBU印第安纳区"},
+    {"code": "mx", "name": "FBU墨西哥区"},
+    {"code": "us_savannah", "name": "FBU萨凡纳区"},
+    {"code": "us_dallas", "name": "FBU达拉斯区"},
+    {"code": "us_florida", "name": "FBU佛罗里达区"},
+    {"code": "us_miami", "name": "FBU迈阿密区"},
+    {"code": "us_houston", "name": "FBU休斯顿区"},
+    {"code": "ca_calgary", "name": "FBU加拿大卡尔加里区"},
+)
+
+
+def fbu_region_name(region_code: str | None) -> str:
+    normalized = str(region_code or "").strip()
+    for region in FBU_AMERICAS_REGIONS:
+        if region["code"] == normalized:
+            return region["name"]
+    return DEFAULT_FBU_REGION_NAME
+
+
+def build_fbu_activity_name(calc_month: str, region_name: str) -> str:
+    month_token = str(calc_month or "").replace("-", "") or "未指定月份"
+    return f"绩效奖金核算-{month_token}-{region_name or DEFAULT_FBU_REGION_NAME}"
+
+
 _FINAL_RESULT_SUM_FIELDS = {
     "base_hours",
     "ot15_hours",
@@ -572,6 +605,12 @@ FBU_RUN_LIST_FIELDS = (
     "run_id",
     "created_at",
     "calc_month",
+    "activity_name",
+    "region_code",
+    "region_name",
+    "created_by_user_id",
+    "created_by_name",
+    "created_by_avatar_url",
     "status",
     "current_step",
     "total_employees",
@@ -622,6 +661,12 @@ class FBURun:
     run_id: str
     created_at: str
     calc_month: str
+    activity_name: str = ""
+    region_code: str = DEFAULT_FBU_REGION_CODE
+    region_name: str = DEFAULT_FBU_REGION_NAME
+    created_by_user_id: str = "legacy"
+    created_by_name: str = "历史活动"
+    created_by_avatar_url: str = ""
     status: str = "pending"  # pending / step1 / step2 / step3 / processing / completed / failed
     current_step: int = 0  # 当前步骤 (0=未开始, 1=考勤, 2=薪资, 3=绩效, 4=计算中, 5=完成)
     attendance_file: str = ""
@@ -693,11 +738,35 @@ class FBURunManager:
 
     @classmethod
     def _run_from_payload(cls, payload: dict[str, Any]) -> FBURun:
-        return FBURun(**{
+        normalized = {
             key: value
             for key, value in payload.items()
             if key in cls._run_fields()
-        })
+        }
+        normalized["region_code"] = str(
+            normalized.get("region_code") or DEFAULT_FBU_REGION_CODE
+        ).strip()
+        normalized["region_name"] = str(
+            normalized.get("region_name")
+            or fbu_region_name(normalized["region_code"])
+        ).strip()
+        normalized["activity_name"] = str(
+            normalized.get("activity_name")
+            or build_fbu_activity_name(
+                normalized.get("calc_month", ""),
+                normalized["region_name"],
+            )
+        ).strip()
+        normalized["created_by_user_id"] = str(
+            normalized.get("created_by_user_id") or "legacy"
+        ).strip()
+        normalized["created_by_name"] = str(
+            normalized.get("created_by_name") or "历史活动"
+        ).strip()
+        normalized["created_by_avatar_url"] = str(
+            normalized.get("created_by_avatar_url") or ""
+        ).strip()
+        return FBURun(**normalized)
 
     @staticmethod
     def _write_json_atomic(path: Path, payload: Any) -> None:
@@ -854,12 +923,24 @@ class FBURunManager:
         salary_file: str = "",
         performance_file: str = "",
         persist: bool = True,
+        *,
+        region_code: str = DEFAULT_FBU_REGION_CODE,
+        created_by_user_id: str = "local-fbu-user",
+        created_by_name: str = "本地用户",
+        created_by_avatar_url: str = "",
     ) -> FBURun:
         """创建新的运行"""
+        region_name = fbu_region_name(region_code)
         run = FBURun(
             run_id=str(uuid.uuid4())[:8],
             created_at=datetime.now().isoformat(),
             calc_month=calc_month,
+            activity_name=build_fbu_activity_name(calc_month, region_name),
+            region_code=region_code,
+            region_name=region_name,
+            created_by_user_id=created_by_user_id,
+            created_by_name=created_by_name,
+            created_by_avatar_url=created_by_avatar_url,
             attendance_file=attendance_file,
             salary_file=salary_file,
             performance_file=performance_file,
@@ -1129,7 +1210,16 @@ class FBURunManager:
         """Return list-safe run data without materializing large sections."""
         rows = []
         for run in self.list_runs():
-            manifest = self._manifests.get(run.run_id) or build_fbu_run_manifest(vars(run))
+            manifest = dict(
+                self._manifests.get(run.run_id)
+                or build_fbu_run_manifest(vars(run))
+            )
+            manifest_run = dict(manifest.get("run") or {})
+            manifest_run.update({
+                field_name: getattr(run, field_name)
+                for field_name in FBU_RUN_LIST_FIELDS
+            })
+            manifest["run"] = manifest_run
             rows.append(build_fbu_run_list_summary(manifest))
         return rows
 

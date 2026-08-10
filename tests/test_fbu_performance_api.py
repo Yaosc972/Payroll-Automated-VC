@@ -1,8 +1,9 @@
 import asyncio
 from io import BytesIO
 import json
+import sys
 import time
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -779,6 +780,73 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     assert download_response.status_code == 200
     assert download_response.content[:2] == b"PK"
     assert result_path.exists()
+
+
+def test_fbu_activities_record_creator_region_and_allow_duplicate_month_region(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    monkeypatch.setattr(
+        app_module,
+        "_fbu_current_user",
+        lambda request: {
+            "id": "ou_zhangsan",
+            "name": "张三",
+            "avatarUrl": "https://example.test/zhangsan.png",
+        },
+    )
+
+    client = TestClient(app_module.app)
+    payload = {"calc_month": "2026-05", "region_code": "us_nj"}
+    first = client.post("/api/fbu-performance/runs", json=payload)
+    second = client.post("/api/fbu-performance/runs", json=payload)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["run_id"] != second.json()["run_id"]
+    assert first.json()["activity_name"] == "绩效奖金核算-202605-FBU新泽西区"
+    assert first.json()["region_name"] == "FBU新泽西区"
+    assert first.json()["created_by_user_id"] == "ou_zhangsan"
+    assert first.json()["created_by_name"] == "张三"
+
+    listing = client.get("/api/fbu-performance/runs").json()
+    assert listing["current_user"]["id"] == "ou_zhangsan"
+    assert any(region["name"] == "FBU加州区" for region in listing["regions"])
+    assert len(listing["runs"]) == 2
+
+
+def test_fbu_current_user_reads_nested_production_session_profile(monkeypatch):
+    auth_module = ModuleType("bonus_platform.auth")
+    auth_module.current_user_from_request = lambda _request: {
+        "user": {
+            "id": "ou_lisi",
+            "name": "李四",
+            "email": "lisi@example.com",
+            "avatarUrl": "https://example.com/lisi.png",
+        },
+        "modules": [],
+    }
+    monkeypatch.setitem(sys.modules, "bonus_platform.auth", auth_module)
+
+    assert app_module._fbu_current_user(SimpleNamespace()) == {
+        "id": "ou_lisi",
+        "name": "李四",
+        "avatarUrl": "https://example.com/lisi.png",
+    }
+
+
+def test_fbu_activity_rejects_non_americas_region(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    response = TestClient(app_module.app).post(
+        "/api/fbu-performance/runs",
+        json={"calc_month": "2026-05", "region_code": "uk"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "请选择有效的FBU美洲划分区域"
 
 
 def test_fbu_bulk_delete_removes_selected_runs(monkeypatch, tmp_path):
