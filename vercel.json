@@ -4,6 +4,9 @@
     "api/index.py": {
       "regions": ["pdx1"],
       "maxDuration": 300
+    },
+    "api/feishu-events.js": {
+      "regions": ["hkg1"]
     }
   },
   "rewrites": [
