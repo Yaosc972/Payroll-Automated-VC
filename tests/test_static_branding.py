@@ -749,7 +749,11 @@ def test_admin_console_is_static_permission_management_shell():
     assert 'data-admin-only="true"' in html
     assert "permission-guard.js" in html
     assert 'id="activeAdminUser"' in html
-    assert 'src="admin.js?v=3163497ca0c2"' in html
+    assert 'src="admin.js?v=33b7cdde7558"' in html
+    assert 'href="admin-directory.css?v=20260810-1"' in html
+    assert 'id="adminUserSearch"' in html
+    assert 'id="adminUserStatusFilter"' in html
+    assert 'id="adminUserPagination"' in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
     assert "rolePermissions" in js
@@ -760,6 +764,10 @@ def test_admin_console_is_static_permission_management_shell():
     assert "admin-user-avatar" in js
     assert "avatarUrl" in js
     assert "admin-role-dropdown" in js
+    assert "filteredUsers" in js
+    assert "adminUserPageSize" in js
+    assert "data-user-page" in js
+    assert "admin-summary-tags" in js
     assert "save-user-roles" in js
     assert "默认权限：无模块权限" in js
     assert "更新用户角色" in js
@@ -778,6 +786,9 @@ def test_admin_console_is_static_permission_management_shell():
     assert ".admin-user-avatar" in css
     assert ".admin-role-dropdown" in css
     assert ".admin-role-menu" in css
+    assert ".admin-user-toolbar" in css
+    assert ".admin-user-pagination" in css
+    assert ".admin-summary-tags" in css
     assert ".admin-feature-table" in css
     assert ".admin-console-section" in css
     assert ".admin-module-access-grid" in css

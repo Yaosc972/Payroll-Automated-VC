@@ -82,6 +82,13 @@
   let apiBacked = false;
   let currentActorId = "";
   const requestedUserId = new URLSearchParams(window.location.search).get("user");
+  const userListUi = {
+    query: "",
+    status: "all",
+    page: 1,
+    pageSize: 10,
+  };
+  let requestedUserFocused = false;
 
   const mergeApiState = (apiState) => {
     const roleNameById = Object.fromEntries((apiState.roles || []).map(role => [role.id, role.name]));
@@ -229,6 +236,13 @@
     return labels[status] || status || "待授权";
   };
 
+  const getStatusKey = (status) => {
+    const normalized = getStatusLabel(status);
+    if (normalized === "启用") return "active";
+    if (normalized === "停用") return "disabled";
+    return "pending";
+  };
+
   const saveState = (message = "本地草稿已保存") => {
     localStorage.setItem(storageKey, JSON.stringify(state));
     const saveStateEl = document.getElementById("adminSaveState");
@@ -264,11 +278,72 @@
     return `<span class="admin-user-avatar fallback" aria-hidden="true">${escapeHtml(getUserInitials(user))}</span>`;
   };
 
+  const getUserRoleNames = (user) => user.roleIds
+    .map(roleId => getRole(roleId)?.name)
+    .filter(Boolean);
+
+  const getUserModuleNames = (user) => {
+    if (user.roleIds.includes("admin")) return ["全模块"];
+    return Array.from(new Set(user.roleIds
+      .map(roleId => getRole(roleId)?.moduleId)
+      .filter(Boolean)
+      .map(moduleId => getModule(moduleId)?.name)
+      .filter(Boolean)));
+  };
+
+  const adminTagListMarkup = (items, emptyLabel) => {
+    const values = items.length ? items : [emptyLabel];
+    return `<div class="admin-summary-tags ${items.length ? "" : "is-empty"}">
+      ${values.map(item => `<span>${escapeHtml(item)}</span>`).join("")}
+    </div>`;
+  };
+
+  const filteredUsers = () => {
+    const query = userListUi.query.trim().toLocaleLowerCase("zh-CN");
+    return state.users.filter(user => {
+      if (userListUi.status !== "all" && getStatusKey(user.status) !== userListUi.status) return false;
+      if (!query) return true;
+      const searchable = [
+        user.name,
+        user.email,
+        user.id,
+        ...getUserRoleNames(user),
+        ...getUserModuleNames(user),
+        getStatusLabel(user.status),
+      ].filter(Boolean).join(" ").toLocaleLowerCase("zh-CN");
+      return searchable.includes(query);
+    });
+  };
+
+  const userPaginationMarkup = (total, totalPages) => {
+    if (!total) return "";
+    return `
+      <div class="admin-pagination-count">第 ${userListUi.page} / ${totalPages} 页</div>
+      <div class="admin-pagination-actions">
+        <button type="button" data-user-page="prev" ${userListUi.page <= 1 ? "disabled" : ""}>上一页</button>
+        <button type="button" data-user-page="next" ${userListUi.page >= totalPages ? "disabled" : ""}>下一页</button>
+      </div>
+      <label class="admin-page-size">
+        <span>每页</span>
+        <select id="adminUserPageSize">
+          ${[10, 20, 50].map(size => `<option value="${size}" ${size === userListUi.pageSize ? "selected" : ""}>${size} 条</option>`).join("")}
+        </select>
+      </label>
+    `;
+  };
+
   const renderUsers = () => {
     const list = document.getElementById("userRoleList");
     if (!list) return;
-    const rows = state.users.map(user => {
-      const roleNames = getRoleNames(user.roleIds) || "默认权限：无模块权限";
+    const users = filteredUsers();
+    const totalPages = Math.max(1, Math.ceil(users.length / userListUi.pageSize));
+    userListUi.page = Math.min(Math.max(1, userListUi.page), totalPages);
+    const pageStart = (userListUi.page - 1) * userListUi.pageSize;
+    const pageUsers = users.slice(pageStart, pageStart + userListUi.pageSize);
+    const rows = pageUsers.map(user => {
+      const roleNames = getUserRoleNames(user);
+      const moduleNames = getUserModuleNames(user);
+      const statusKey = getStatusKey(user.status);
       return `
         <tr>
           <td>
@@ -280,9 +355,9 @@
               </div>
             </div>
           </td>
-          <td><span class="admin-role-summary">${escapeHtml(roleNames)}</span></td>
-          <td>${escapeHtml(getUserScope(user))}</td>
-          <td><span class="admin-status-pill">${escapeHtml(getStatusLabel(user.status))}</span></td>
+          <td>${adminTagListMarkup(roleNames, "未配置角色")}</td>
+          <td>${adminTagListMarkup(moduleNames, "未配置模块")}</td>
+          <td><span class="admin-status-pill is-${statusKey}">${escapeHtml(getStatusLabel(user.status))}</span></td>
           <td>
             <details class="admin-role-dropdown" data-role-dropdown data-user="${escapeHtml(user.id)}">
               <summary>
@@ -297,9 +372,25 @@
           </td>
         </tr>
       `;
-    }).join("");
+    }).join("") || `
+      <tr>
+        <td colspan="5">
+          <div class="admin-user-empty">
+            <strong>没有匹配的用户</strong>
+            <span>请调整搜索词或账号状态筛选。</span>
+          </div>
+        </td>
+      </tr>
+    `;
     list.innerHTML = `
       <table class="admin-user-table">
+        <colgroup>
+          <col class="admin-user-column" />
+          <col class="admin-role-column" />
+          <col class="admin-scope-column" />
+          <col class="admin-status-column" />
+          <col class="admin-action-column" />
+        </colgroup>
         <thead>
           <tr>
             <th>用户</th>
@@ -312,6 +403,14 @@
         <tbody>${rows}</tbody>
       </table>
     `;
+    const resultSummary = document.getElementById("adminUserListSummary");
+    if (resultSummary) {
+      const visibleStart = users.length ? pageStart + 1 : 0;
+      const visibleEnd = Math.min(pageStart + userListUi.pageSize, users.length);
+      resultSummary.innerHTML = `<strong>${users.length}</strong><span>位用户</span><small>当前 ${visibleStart}–${visibleEnd}</small>`;
+    }
+    const pagination = document.getElementById("adminUserPagination");
+    if (pagination) pagination.innerHTML = userPaginationMarkup(users.length, totalPages);
   };
 
   const renderModules = () => {
@@ -415,13 +514,17 @@
   };
 
   const focusRequestedUser = () => {
-    if (!requestedUserId || !state.users.some(user => user.id === requestedUserId)) return;
+    if (requestedUserFocused || !requestedUserId || !state.users.some(user => user.id === requestedUserId)) return;
     state.selectedUserId = requestedUserId;
+    const requestedIndex = filteredUsers().findIndex(user => user.id === requestedUserId);
+    if (requestedIndex >= 0) userListUi.page = Math.floor(requestedIndex / userListUi.pageSize) + 1;
+    renderUsers();
     requestAnimationFrame(() => {
       const dropdown = Array.from(document.querySelectorAll("[data-role-dropdown]")).find(
         dropdown => dropdown instanceof HTMLDetailsElement && dropdown.dataset.user === requestedUserId,
       );
       if (!dropdown) return;
+      requestedUserFocused = true;
       dropdown.open = true;
       dropdown.scrollIntoView({ behavior: "smooth", block: "center" });
       dropdown.querySelector("summary")?.focus({ preventScroll: true });
@@ -441,6 +544,20 @@
   document.addEventListener("change", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+
+    if (target.id === "adminUserStatusFilter") {
+      userListUi.status = target.value;
+      userListUi.page = 1;
+      renderUsers();
+      return;
+    }
+
+    if (target.id === "adminUserPageSize") {
+      userListUi.pageSize = Number(target.value) || 10;
+      userListUi.page = 1;
+      renderUsers();
+      return;
+    }
 
     if (target.dataset.type === "module") {
       const module = state.modules.find(item => item.id === target.dataset.id);
@@ -529,6 +646,14 @@
   });
 
   document.addEventListener("click", async (event) => {
+    const pageButton = event.target.closest("[data-user-page]");
+    if (pageButton && !pageButton.disabled) {
+      userListUi.page += pageButton.dataset.userPage === "next" ? 1 : -1;
+      renderUsers();
+      document.getElementById("usersRoles")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
     const roleSummary = event.target.closest(".admin-role-dropdown summary");
     if (roleSummary) {
       document.querySelectorAll(".admin-role-dropdown[open]").forEach(dropdown => {
@@ -609,6 +734,12 @@
     apiBacked = false;
     saveState("已重置为默认静态配置");
     render();
+  });
+
+  document.getElementById("adminUserSearch")?.addEventListener("input", event => {
+    userListUi.query = event.target.value;
+    userListUi.page = 1;
+    renderUsers();
   });
 
   render();

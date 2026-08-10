@@ -6,7 +6,8 @@
     <title>后台管理 · 西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=admin-1" />
+    <link rel="stylesheet" href="styles.css?v=admin-users-20260810" />
+    <link rel="stylesheet" href="admin-directory.css?v=20260810-1" />
     <script src="permission-guard.js?v=9"></script>
   </head>
   <body class="portal-shell dashboard-shell admin-console-shell">
@@ -103,7 +104,26 @@
             <button class="admin-secondary-action" type="button" data-log-action="新增用户草稿">新增用户</button>
           </div>
 
+          <div class="admin-user-toolbar" aria-label="用户列表筛选">
+            <label class="admin-user-search">
+              <span class="admin-user-search-icon" aria-hidden="true"></span>
+              <span class="sr-only">搜索用户</span>
+              <input id="adminUserSearch" type="search" autocomplete="off" placeholder="搜索姓名、邮箱、角色或模块" />
+            </label>
+            <label class="admin-user-filter">
+              <span>账号状态</span>
+              <select id="adminUserStatusFilter">
+                <option value="all">全部状态</option>
+                <option value="active">启用</option>
+                <option value="pending">待授权</option>
+                <option value="disabled">停用</option>
+              </select>
+            </label>
+            <div class="admin-user-list-summary" id="adminUserListSummary" aria-live="polite"></div>
+          </div>
+
           <div class="admin-user-table-wrap" id="userRoleList"></div>
+          <div class="admin-user-pagination" id="adminUserPagination" aria-label="用户列表分页"></div>
         </section>
 
         <section id="modulePermissions" class="admin-console-section" aria-labelledby="modulePermissionsTitle">
@@ -184,6 +204,6 @@
       </main>
     </div>
 
-    <script src="admin.js?v=3163497ca0c2"></script>
+    <script src="admin.js?v=33b7cdde7558"></script>
   </body>
 </html>
