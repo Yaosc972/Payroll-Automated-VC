@@ -749,7 +749,7 @@ def test_admin_console_is_static_permission_management_shell():
     assert 'data-admin-only="true"' in html
     assert "permission-guard.js" in html
     assert 'id="activeAdminUser"' in html
-    assert 'src="admin.js?v=62f23e4eacc5"' in html
+    assert 'src="admin.js?v=3163497ca0c2"' in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
     assert "rolePermissions" in js

@@ -106,6 +106,7 @@ def test_admin_card_deep_link_selects_and_expands_target_user():
     assert 'dropdown.dataset.user === requestedUserId' in js
     assert "dropdown.open = true" in js
     assert "scrollIntoView" in js
+    assert "requestedUserHandled" not in js
 
 
 def test_notification_outbox_deduplicates_and_tracks_delivery(tmp_path, monkeypatch):

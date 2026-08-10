@@ -82,7 +82,6 @@
   let apiBacked = false;
   let currentActorId = "";
   const requestedUserId = new URLSearchParams(window.location.search).get("user");
-  let requestedUserHandled = !requestedUserId;
 
   const mergeApiState = (apiState) => {
     const roleNameById = Object.fromEntries((apiState.roles || []).map(role => [role.id, role.name]));
@@ -416,9 +415,8 @@
   };
 
   const focusRequestedUser = () => {
-    if (requestedUserHandled || !state.users.some(user => user.id === requestedUserId)) return;
+    if (!requestedUserId || !state.users.some(user => user.id === requestedUserId)) return;
     state.selectedUserId = requestedUserId;
-    requestedUserHandled = true;
     requestAnimationFrame(() => {
       const dropdown = Array.from(document.querySelectorAll("[data-role-dropdown]")).find(
         dropdown => dropdown instanceof HTMLDetailsElement && dropdown.dataset.user === requestedUserId,
