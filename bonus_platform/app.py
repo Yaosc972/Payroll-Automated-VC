@@ -2367,6 +2367,21 @@ def health() -> dict:
     return {"status": "ok", "rule_workbook": str(DEFAULT_RULE_WORKBOOK)}
 
 
+@app.post("/api/feishu/events")
+def api_feishu_events(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Acknowledge Feishu bot events without handling user messages.
+
+    The bot only uses its custom menu as a navigation surface.  Feishu still
+    requires a receive-message subscription before rendering that menu in the
+    chat input area, so this endpoint completes URL verification and promptly
+    acknowledges subsequent deliveries without producing automated replies.
+    """
+    challenge = payload.get("challenge")
+    if payload.get("type") == "url_verification" and isinstance(challenge, str):
+        return {"challenge": challenge}
+    return {"code": 0}
+
+
 @app.get("/api/auth/mock-users")
 def api_auth_mock_users() -> dict:
     if not _mock_auth_enabled():
