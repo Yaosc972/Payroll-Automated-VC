@@ -461,7 +461,11 @@ function localIneligibleReason(row) {
 function localNonPayableReason(row) {
   if (!localIsWorkday(row)) return cleanCell(row._sourceType) === "wx" ? "班次为休息或非工作日" : "日期类型不是工作日";
   if (cleanCell(row._sourceType) !== "wx" && !localIsEligibleShift(row)) return "当前班次不在餐补班次范围";
-  if (localLastPunchQualifies(row) || localRemarkHasApprovedTrip(row)) return "";
+  if (localLastPunchQualifies(row)) {
+    if (!parseLocalTime(row["首打卡(含补签)"])) return "首打卡(含补签)缺失，属于考勤异常";
+    return "";
+  }
+  if (localRemarkHasApprovedTrip(row)) return "";
   return "末打卡(含补签)不在21:00-次日08:00范围";
 }
 

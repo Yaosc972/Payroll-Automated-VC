@@ -372,6 +372,12 @@ def _last_punch_qualifies(row: dict[str, Any]) -> bool:
     return punch_time >= time(21, 0) or punch_time <= time(8, 0)
 
 
+def _has_first_punch(row: dict[str, Any]) -> bool:
+    if _clean(row.get("_sourceType")) == "wx":
+        return _parse_time(row.get("首打卡(含补签)")) is not None
+    return _parse_datetime(row.get("首打卡(含补签)")) is not None
+
+
 def _remark_has_approved_business_trip(row: dict[str, Any]) -> bool:
     remark = _clean(row.get("备注"))
     if not ("公出" in remark or "出差" in remark):
@@ -398,6 +404,8 @@ def _non_payable_reason(row: dict[str, Any], config: MealAllowanceConfig) -> str
     if _clean(row.get("_sourceType")) != "wx" and not _is_eligible_shift(row, config):
         return "当前班次不在餐补班次范围"
     if _last_punch_qualifies(row):
+        if not _has_first_punch(row):
+            return "首打卡(含补签)缺失，属于考勤异常"
         return ""
     if _remark_has_approved_business_trip(row):
         return ""

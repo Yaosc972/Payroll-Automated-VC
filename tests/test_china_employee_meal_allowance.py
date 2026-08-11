@@ -190,6 +190,31 @@ def test_meal_allowance_calculates_only_confirmed_rule_matches(tmp_path):
     assert "日期类型不是工作日" in rows["zt10004"]["warnings"]
 
 
+def test_meal_allowance_rejects_missing_first_punch_even_when_last_punch_qualifies(tmp_path):
+    file_path = tmp_path / "attendance.xlsx"
+    _write_attendance(
+        file_path,
+        [
+            _row(
+                员工="首卡缺失员工",
+                工号="zt10005",
+                **{
+                    "首打卡(含补签)": None,
+                    "末打卡(含补签)": datetime(2026, 5, 6, 21, 30),
+                },
+            )
+        ],
+    )
+
+    result = calculate_meal_allowance(parse_attendance_workbooks([file_path]))
+    row = result["results"][0]
+
+    assert result["summary"]["totalAmount"] == 0
+    assert result["summary"]["payableDayCount"] == 0
+    assert row["amount"] == 0
+    assert "首打卡(含补签)缺失，属于考勤异常" in row["warnings"]
+
+
 def test_meal_allowance_uses_offline_confirmed_organization_scope(tmp_path):
     file_path = tmp_path / "attendance.xlsx"
     _write_attendance(
@@ -303,7 +328,15 @@ def test_meal_allowance_business_trip_remark_after_21_counts_without_late_punch(
     _write_attendance(
         file_path,
         [
-            _row(员工="公出超过21点", 工号="zt31001", 备注="公出 08:30-22:00[已通过]", **{"末打卡(含补签)": datetime(2026, 5, 6, 9, 27)}),
+            _row(
+                员工="公出超过21点",
+                工号="zt31001",
+                备注="公出 08:30-22:00[已通过]",
+                **{
+                    "首打卡(含补签)": None,
+                    "末打卡(含补签)": datetime(2026, 5, 6, 9, 27),
+                },
+            ),
             _row(员工="出差未超过21点", 工号="zt31002", 备注="出差 08:30-20:30[已通过]", **{"末打卡(含补签)": datetime(2026, 5, 6, 20, 30)}),
         ],
     )
@@ -608,6 +641,7 @@ def test_wx_meal_allowance_uses_wx_template_and_rules(tmp_path):
             _wx_row(姓名="未晚归员工", 工号="WX00057", 日期=datetime(2026, 5, 7), **{"下班 1 打卡时间": "20:59"}),
             _wx_row(姓名="休息员工", 工号="WX00058", 日期=datetime(2026, 5, 8), 班次="休息 ", **{"下班 1 打卡时间": "22:10"}),
             _wx_row(姓名="体系外员工", 工号="WX00059", 日期=datetime(2026, 5, 9), 组织架构="WX-客服部", **{"下班 1 打卡时间": "21:30"}),
+            _wx_row(姓名="上班卡缺失员工", 工号="WX00061", 日期=datetime(2026, 5, 10), **{"上班 1 打卡时间": "", "下班 1 打卡时间": "21:30"}),
         ],
     )
 
@@ -626,6 +660,8 @@ def test_wx_meal_allowance_uses_wx_template_and_rules(tmp_path):
     assert "班次为休息或非工作日" in rows["WX00058"]["warnings"]
     assert rows["WX00059"]["amount"] == 0
     assert "组织不在核算对象范围" in rows["WX00059"]["warnings"]
+    assert rows["WX00061"]["amount"] == 0
+    assert "首打卡(含补签)缺失，属于考勤异常" in rows["WX00061"]["warnings"]
 
 
 def test_wx_meal_allowance_api_exports_separate_wx_source_sheet(tmp_path):
