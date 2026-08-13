@@ -382,6 +382,88 @@
         box-shadow: none;
       }
 
+      .btn-export {
+        position: relative;
+        isolation: isolate;
+        min-width: 106px;
+        overflow: hidden;
+      }
+
+      .btn-export.is-exporting:disabled,
+      .btn-export.is-exported:disabled,
+      .btn-export.is-export-error:disabled {
+        color: #FFFFFF;
+        opacity: 1;
+        box-shadow: none;
+      }
+
+      .btn-export.is-exporting:disabled {
+        cursor: wait;
+        border-color: var(--dl-accent-strong);
+        background: var(--dl-accent-strong);
+      }
+
+      .btn-export.is-exporting::before {
+        position: absolute;
+        inset: 0 auto 0 -45%;
+        z-index: 0;
+        width: 38%;
+        content: "";
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.28), transparent);
+        transform: skewX(-18deg) translateX(0);
+        animation: dl-export-sweep 1.25s ease-in-out infinite;
+      }
+
+      .btn-export.is-exported:disabled {
+        border-color: var(--dl-ok);
+        background: var(--dl-ok);
+      }
+
+      .btn-export.is-exporting > span {
+        position: relative;
+        z-index: 1;
+      }
+
+      .btn-export.is-export-error:disabled {
+        border-color: #B91C1C;
+        background: #B91C1C;
+      }
+
+      .dl-export-button-dots {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+      }
+
+      .dl-export-button-dots > span {
+        width: 3px;
+        height: 3px;
+        border-radius: 50%;
+        background: currentColor;
+        opacity: 0.42;
+        animation: dl-export-dot 0.9s ease-in-out infinite;
+      }
+
+      .dl-export-button-dots > span:nth-child(2) { animation-delay: 0.12s; }
+      .dl-export-button-dots > span:nth-child(3) { animation-delay: 0.24s; }
+
+      @keyframes dl-export-sweep {
+        to { transform: skewX(-18deg) translateX(410%); }
+      }
+
+      @keyframes dl-export-dot {
+        50% { opacity: 1; transform: translateY(-2px); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .btn-export,
+        .btn-export::before,
+        .dl-export-button-dots > span {
+          transition: none;
+          animation: none;
+        }
+      }
+
       .btn-download.disabled {
         opacity: 0.4;
         pointer-events: none;
@@ -691,6 +773,18 @@
         content: none;
       }
 
+      .dl-subject-card.primary.validating {
+        border-color: rgba(217, 119, 6, 0.46);
+        background: linear-gradient(180deg, #FFFEFA 0%, #FFF7E6 100%);
+        box-shadow: 0 8px 22px rgba(154, 103, 0, 0.1);
+      }
+
+      .dl-subject-card.primary.validating:hover {
+        border-color: #D97706;
+        background: linear-gradient(180deg, #FFFFFF 0%, #FFF4D6 100%);
+        box-shadow: 0 18px 42px rgba(154, 103, 0, 0.18);
+      }
+
       .dl-subject-card:not(:disabled):hover {
         border-color: var(--dl-accent);
         box-shadow: 0 18px 42px rgba(37, 99, 235, 0.16);
@@ -742,6 +836,24 @@
         white-space: nowrap;
       }
 
+      .dl-subject-card.validating .dl-subject-line-tag { right: 76px; }
+
+      .dl-subject-status-tag {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        min-height: 24px;
+        padding: 3px 8px;
+        border: 1px solid rgba(217, 119, 6, 0.28);
+        border-radius: 4px;
+        background: #FFF1CC;
+        color: #9A6700;
+        font-size: 11px;
+        font-weight: 850;
+        line-height: 16px;
+        white-space: nowrap;
+      }
+
       .dl-subject-card em {
         align-self: flex-start;
         margin-top: auto;
@@ -759,6 +871,8 @@
         color: var(--dl-accent);
       }
 
+      .dl-subject-card.primary.validating em { background: #9A6700; }
+
       .dl-subject-kicker {
         padding-right: 64px;
         color: #6B7A90;
@@ -767,6 +881,8 @@
         letter-spacing: 0.11em;
         text-transform: uppercase;
       }
+
+      .dl-subject-card.validating .dl-subject-kicker { padding-right: 132px; }
 
       .dl-subject-secondary {
         display: contents;
@@ -890,6 +1006,11 @@
         font-weight: 800;
       }
 
+      .dl-rule-status.validating {
+        background: #FFF7E6;
+        color: var(--dl-warning);
+      }
+
       .dl-rule-subject-head {
         display: flex;
         align-items: flex-start;
@@ -905,7 +1026,16 @@
       .dl-rule-block { padding: 18px 0; border-bottom: 1px solid var(--dl-line); }
       .dl-rule-block:last-child { border-bottom: 0; padding-bottom: 0; }
       .dl-rule-block h3 { margin: 0 0 10px; font-size: 15px; }
+      .dl-rule-block-note { margin: -2px 0 12px; color: var(--dl-muted); font-size: 13px; line-height: 1.6; }
       .dl-rule-list { margin: 0; padding-left: 20px; color: #40506A; line-height: 1.75; }
+      .dl-table.dl-rule-formula-table { min-width: 0; table-layout: fixed; }
+      .dl-table.dl-rule-formula-table th:nth-child(1) { width: 17%; }
+      .dl-table.dl-rule-formula-table th:nth-child(2) { width: 22%; }
+      .dl-table.dl-rule-formula-table th:nth-child(3) { width: 34%; }
+      .dl-table.dl-rule-formula-table th:nth-child(4) { width: 27%; }
+      .dl-table.dl-rule-formula-table td { vertical-align: top; line-height: 1.6; white-space: normal; overflow-wrap: anywhere; }
+      .dl-table.dl-rule-formula-table td:first-child { color: var(--dl-ink); font-weight: 800; }
+      .dl-table.dl-rule-formula-table .dl-rule-formula-text { color: var(--dl-accent); font-weight: 700; }
 
       .dl-rule-region-grid { display: grid; gap: 10px; }
       .dl-rule-region {
@@ -927,6 +1057,118 @@
         display: flex;
         align-items: center;
         gap: 10px;
+      }
+
+      .dl-night-config-actions {
+        flex-wrap: wrap;
+        padding: 14px;
+        border-bottom: 1px solid var(--dl-line);
+      }
+
+      .dl-night-config-guide {
+        display: grid;
+        grid-template-columns: minmax(210px, 0.8fr) repeat(2, minmax(240px, 1fr));
+        gap: 10px;
+        padding: 14px;
+        border-bottom: 1px solid var(--dl-line);
+        background: #F8FAFD;
+      }
+
+      .dl-night-config-guide-item {
+        padding: 12px 13px;
+        border: 1px solid var(--dl-line);
+        border-radius: 8px;
+        background: #FFFFFF;
+      }
+
+      .dl-night-config-guide-item strong {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--dl-ink);
+        font-size: 12px;
+      }
+
+      .dl-night-config-guide-item p {
+        margin: 0;
+        color: #526078;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .dl-night-config-guide-item.is-purpose {
+        border-color: rgba(37, 99, 235, 0.22);
+        background: var(--dl-accent-soft);
+      }
+
+      .dl-night-shift-break-editor { width: 100%; min-width: 0; }
+
+      .dl-break-editor-toolbar {
+        display: flex;
+        align-items: end;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .dl-break-editor-toolbar .inline-status { flex: 1; margin: 0; }
+
+      .dl-break-search-field {
+        display: grid;
+        flex: 0 0 260px;
+        gap: 5px;
+        color: var(--dl-muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .dl-break-search-field input {
+        min-height: 36px;
+        padding: 0 10px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--dl-ink);
+        font: inherit;
+        outline: none;
+      }
+
+      .dl-break-search-field input:focus {
+        border-color: var(--dl-accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+      }
+
+      .dl-break-table-wrap { max-height: 460px; }
+      .dl-break-edit-table { min-width: 1780px; table-layout: fixed; }
+      .dl-break-edit-table th:nth-child(1) { width: 88px; }
+      .dl-break-edit-table th:nth-child(2) { width: 110px; }
+      .dl-break-edit-table th:nth-child(3) { width: 86px; }
+      .dl-break-edit-table th:nth-child(4) { width: 220px; }
+      .dl-break-edit-table th:nth-child(5) { width: 145px; }
+      .dl-break-edit-table th:nth-child(6) { width: 90px; }
+      .dl-break-edit-table th:nth-child(n+7):nth-child(-n+9) { width: 240px; }
+      .dl-break-edit-table th:nth-child(10) { width: 180px; }
+      .dl-break-edit-table .dl-badge { margin: 0 8px; white-space: nowrap; }
+      .dl-shift-code { display: block; padding: 8px 12px; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+      .dl-break-segment-input {
+        display: grid;
+        grid-template-columns: 86px minmax(120px, 1fr);
+        gap: 6px;
+        align-items: center;
+      }
+
+      .dl-break-segment-input select {
+        width: 100%;
+        min-height: 34px;
+        border: 1px solid var(--dl-line-strong);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--dl-ink);
+        font: inherit;
+      }
+
+      .dl-parameter-panel-body .dl-table-wrap {
+        flex: 1;
+        max-height: 320px;
       }
 
       .dl-month-field {
@@ -2496,6 +2738,70 @@
       .dl-rule-card dt { color: var(--dl-muted); background: #F8FAFC; font-weight: 500; }
       .dl-rule-card dd { color: #334155; }
 
+      .dl-explain-summary {
+        margin: 0;
+        color: #334155;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .dl-explain-actions { display: grid; }
+
+      .dl-explain-action {
+        display: grid;
+        grid-template-columns: 100px minmax(140px, 1fr) minmax(220px, 1.5fr);
+        gap: 12px;
+        align-items: start;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--dl-line);
+        color: #334155;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .dl-explain-action:last-child { border-bottom: 0; }
+      .dl-explain-action strong { color: var(--dl-ink); font-variant-numeric: tabular-nums; }
+      .dl-explain-action span { color: #475569; }
+      .dl-explain-action em { color: var(--dl-warning); font-style: normal; font-weight: 600; }
+
+      .dl-explain-empty {
+        padding: 18px 16px;
+        color: var(--dl-success);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .dl-night-daily-wrap { overflow-x: auto; }
+
+      .dl-night-daily-table {
+        width: 100%;
+        min-width: 760px;
+        border-collapse: collapse;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dl-night-daily-table th,
+      .dl-night-daily-table td {
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--dl-line);
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .dl-night-daily-table th {
+        color: var(--dl-muted);
+        background: #F8FAFC;
+        font-weight: 600;
+      }
+
+      .dl-night-daily-table th:first-child,
+      .dl-night-daily-table td:first-child,
+      .dl-night-daily-table th:nth-child(2),
+      .dl-night-daily-table td:nth-child(2) { text-align: left; }
+
+      .dl-night-daily-table tbody tr:last-child td { border-bottom: 0; }
+
       /* ═══ 全局黑金吐司提示（Toast） ═══ */
       .dl-toast,
       .labor-toast {
@@ -2584,6 +2890,7 @@
         .dl-rule-category-tabs,
         .dl-rule-subject-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .dl-rule-subject-tabs { margin-top: 12px; padding-top: 12px; }
+        .dl-night-config-guide { grid-template-columns: 1fr; }
         .dl-rule-subject-tabs .dl-rule-section-label { grid-column: 1 / -1; }
         .dl-rule-summary-item strong { font-size: 15px; }
         .dl-rule-summary-item:first-child strong { font-size: 13px; white-space: nowrap; }
@@ -2600,6 +2907,7 @@
         .dl-main-full { padding: 16px; }
         .dl-empty { grid-template-columns: 1fr; padding: 20px; }
         .dl-metrics, .engine-card-grid, .confirm-grid, .dl-kv-grid { grid-template-columns: 1fr; }
+        .dl-explain-action { grid-template-columns: 1fr; gap: 4px; }
         .wizard-steps { grid-template-columns: 1fr 1fr; row-gap: 8px; border-bottom: 0; }
         .wz-step { border-bottom: 1px solid var(--dl-line); }
       }
@@ -2621,7 +2929,7 @@
       </div>
       <div class="dl-topbar-right">
         <span class="dl-top-meta">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
-        <span class="dl-top-meta">规则包 <strong>当前版 1.1.9</strong></span>
+        <span class="dl-top-meta">规则包 <strong>当前版 1.4.0</strong></span>
         <span class="dl-top-meta is-warn" id="batchStatusText">草稿</span>
         <span class="dl-top-meta" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
       </div>
@@ -2635,8 +2943,8 @@
             <button class="dl-rule-package-entry" id="rulePackageEntry" type="button">
               <span class="dl-rule-entry-copy">
                 <span>核算规则包</span>
-                <strong>当前版本 1.1.9</strong>
-                <span>补贴类、奖金类 · 已验证科目 4</span>
+                <strong>当前版本 1.4.0</strong>
+                <span>已验证规则 4 项 · 验证中规则 3 项</span>
               </span>
               <span class="dl-rule-entry-action">查看规则 →</span>
             </button>
@@ -2644,7 +2952,7 @@
               <div class="dl-subject-copy">
                 <span class="dl-subject-eyebrow">DOMESTIC LABOR PAYROLL</span>
                 <h1 class="dl-subject-title">国内劳务薪酬核算</h1>
-                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放全勤奖、餐费补贴、外宿补贴与工龄奖核算，岗位、高温和夜班补贴暂不可进入。</p>
+                <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放全勤奖、餐费补贴、外宿补贴、工龄奖、岗位补贴、高温补贴与夜班补贴核算；验证中科目保留逐日依据和待确认口径。</p>
                 <div class="dl-subject-grid" id="subjectCardGrid">
                   <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
                     <span class="dl-subject-line-tag">操作线</span>
@@ -2657,7 +2965,7 @@
                     <span class="dl-subject-line-tag">全区域</span>
                     <span class="dl-subject-kicker">Attendance Bonus</span>
                     <strong>全勤奖核算</strong>
-                    <span>按入离职、缺勤、迟到早退和签卡口径核算，固定标准100元。</span>
+                    <span>按入离职、缺勤、迟到早退和签卡等考勤口径核算，固定标准100元。</span>
                     <em>进入核算 →</em>
                   </button>
                   <button class="dl-subject-card primary" data-subject-entry="waisu_butie" type="button">
@@ -2674,26 +2982,29 @@
                     <span>按地区、岗位、工龄和缺勤口径核算，支持当月发放名单复核。</span>
                     <em>进入核算 →</em>
                   </button>
-                  <button class="dl-subject-card" data-subject-entry="gangwei_butie" type="button" disabled aria-disabled="true">
+                  <button class="dl-subject-card primary validating" data-subject-entry="gangwei_butie" type="button">
                     <span class="dl-subject-line-tag">操作线</span>
                     <span class="dl-subject-kicker">Position Allowance</span>
+                    <span class="dl-subject-status-tag">验证中</span>
                     <strong>岗位补贴核算</strong>
-                    <span>按岗位范围与补贴标准核算。</span>
-                    <em>暂未开放</em>
+                    <span>按岗位标准、排班天数与56小时缺勤门槛核算。</span>
+                    <em>进入核算 →</em>
                   </button>
-                  <button class="dl-subject-card" data-subject-entry="gaowen_butie" type="button" disabled aria-disabled="true">
+                  <button class="dl-subject-card primary validating" data-subject-entry="gaowen_butie" type="button">
                     <span class="dl-subject-line-tag">操作线</span>
                     <span class="dl-subject-kicker">High-temperature Allowance</span>
+                    <span class="dl-subject-status-tag">验证中</span>
                     <strong>高温补贴核算</strong>
-                    <span>按适用地区、月份与出勤口径核算。</span>
-                    <em>暂未开放</em>
+                    <span>按测温网点、出勤日期、白/夜班和实际出勤时长逐日核算。</span>
+                    <em>进入核算 →</em>
                   </button>
-                  <button class="dl-subject-card" data-subject-entry="yeban_butie" type="button" disabled aria-disabled="true">
+                  <button class="dl-subject-card primary validating" data-subject-entry="yeban_butie" type="button">
                     <span class="dl-subject-line-tag">操作线</span>
+                    <span class="dl-subject-status-tag">验证中</span>
                     <span class="dl-subject-kicker">Night Shift Allowance</span>
                     <strong>夜班补贴核算</strong>
-                    <span>待薪酬组确认班次休息与适用人员口径。</span>
-                    <em>暂未开放</em>
+                    <span>按打卡窗口核算，平台内置班次休息表，晋江额外排除人员按月确认。</span>
+                    <em>进入核算 →</em>
                   </button>
                 </div>
               </div>
@@ -2724,7 +3035,7 @@
                   <label class="dl-rule-version-control">
                     <span>规则包版本</span>
                     <select id="rulePackageVersionSelect" aria-label="选择规则包版本">
-                      <option>DL-PAYROLL.v1.1.9 · 当前</option>
+                      <option>DL-PAYROLL.v1.4.0 · 当前</option>
                     </select>
                   </label>
                   <button class="dl-btn" id="btnBackFromRules" type="button">返回科目首页</button>
@@ -2809,7 +3120,7 @@
     <aside id="explainDrawer" class="dl-explain-drawer" aria-label="员工核算说明">
       <div class="dl-drawer-head">
         <div>
-          <p class="dl-eyebrow">Calculation explanation</p>
+          <p class="dl-eyebrow">员工核算说明</p>
           <h2 class="dl-title" id="explainTitle">员工核算说明</h2>
         </div>
         <button class="btn-close-drawer" id="btnCloseExplain" type="button" aria-label="关闭解释抽屉">×</button>
@@ -2829,6 +3140,6 @@
       </div>
     </div>
 
-    <script src="domestic-labor.js?v=7"></script>
+    <script src="domestic-labor.js?v=8"></script>
   </body>
 </html>

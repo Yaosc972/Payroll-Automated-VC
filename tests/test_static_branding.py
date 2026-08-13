@@ -964,11 +964,25 @@ def test_domestic_labor_meal_workbench_static_labels():
     assert "异常复核" not in html
 
 
+def test_domestic_labor_export_button_shows_progress_and_respects_reduced_motion():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert 'class="btn-primary btn-export" id="btnExportCanbu"' in js
+    assert "state.exportInProgress" in js
+    assert "正在生成 Excel" in js
+    assert "Excel 已生成" in js
+    assert "dl-export-button-dots" in js
+    assert ".btn-export.is-exporting" in html
+    assert ".btn-export.is-exported" in html
+    assert "@media (prefers-reduced-motion: reduce)" in html
+
+
 def test_domestic_labor_housing_allowance_workbench_is_available():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
-    assert "当前开放全勤奖、餐费补贴、外宿补贴与工龄奖核算" in html
+    assert "当前开放全勤奖、餐费补贴、外宿补贴、工龄奖、岗位补贴、高温补贴与夜班补贴核算" in html
     assert "外宿补贴核算" in html
     assert '<span class="dl-subject-kicker">Housing Allowance</span>' in html
     assert 'class="dl-subject-card primary" data-subject-entry="waisu_butie"' in html
@@ -985,6 +999,7 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
 
 def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
     card_grid = html.split('id="subjectCardGrid"', 1)[1].split('</div>', 1)[0]
 
     assert html.count('class="dl-subject-line-tag">操作线</span>') == 5
@@ -996,10 +1011,42 @@ def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     assert "夜班补贴核算" in html
     assert "外宿补贴核算" in html
     assert "工龄奖核算" in html
-    assert html.count('disabled aria-disabled="true"') == 3
+    assert html.count('disabled aria-disabled="true"') == 0
     assert 'data-subject-entry="gangwei_butie"' in html
     assert 'data-subject-entry="gaowen_butie"' in html
     assert 'data-subject-entry="yeban_butie"' in html
+    assert 'class="dl-subject-card primary validating" data-subject-entry="gangwei_butie"' in html
+    assert 'class="dl-subject-card primary validating" data-subject-entry="gaowen_butie"' in html
+    assert 'class="dl-subject-card primary validating" data-subject-entry="yeban_butie"' in html
+    assert '<span class="dl-subject-status-tag">验证中</span>' in html
+    assert ".dl-subject-card.primary.validating" in html
+    assert "#FFF7E6" in html
+    assert "平台内置班次休息表，晋江额外排除人员按月确认" in html
+    assert "班次休息表、地区岗位、晋江特殊名单和连班登记" not in html
+    assert "btnSaveNightShiftBreaks" in js
+    assert "复制上月晋江名单" in js
+    assert "确认本月无额外排除人员" in js
+    assert "计件岗、门禁由系统自动排除" in js
+    assert "晋江不享有夜班补贴人员名单" in js
+    assert "晚上休息扣除" in js
+    assert "早上休息扣除" in js
+    assert "休息扣除合计" in js
+    assert 'data-shift-field="break_category_${number}"' in js
+    assert "地区岗位范围" not in js
+    assert "连班登记" not in js
+    assert "核算合计（含暂算）" in js
+    assert "暂算需确认日" in js
+    assert "异常未计金额日" in js
+    assert "金额已核算" in js
+    assert "需处理事项" in js
+    assert "有未核算日" not in js
+    assert "本月核算结果" in js
+    assert "需要处理的日期" in js
+    assert "员工缺勤（考勤异常）" in js
+    assert "补充当天上下班打卡" not in js
+    assert "只计算22:00至次日08:00内的有效时长" in js
+    assert "Calculation explanation" not in html
+    assert "review_calculated_days" in js
     assert ".dl-subject-line-tag" in html
     assert "· 已开放" not in card_grid
     assert "· 待开发" not in card_grid
@@ -1041,6 +1088,22 @@ def test_domestic_labor_attendance_bonus_workbench_is_available():
     assert "应发全勤奖" in js
 
 
+def test_domestic_labor_position_allowance_explains_july_rule_source_without_blocking():
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert "岗位补贴标准以2026年7月确认规则为依据" in js
+    assert "实际在职工作日天数" in js
+    assert "自动计算入离职缺勤时数" in js
+    assert "month < '2026-07'" not in js
+
+
+def test_domestic_labor_attendance_bonus_card_uses_subject_level_summary():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+
+    assert "按入离职、缺勤、迟到早退和签卡等考勤口径核算，固定标准100元。" in html
+    assert "迟到豁免二选一：6分钟内最多3次" not in html
+
+
 def test_domestic_labor_does_not_show_identified_fields_before_upload():
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
@@ -1067,14 +1130,16 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     assert 'id="rulePackageView"' in html
     assert 'id="rulePackageCategoryTabs"' in html
     assert 'id="rulePackageVersionSelect"' in html
-    assert "DL-PAYROLL.v1.1.9" in html
-    assert "已验证科目 4" in html
+    assert "DL-PAYROLL.v1.4.0" in html
+    assert "已验证规则 4 项 · 验证中规则 3 项" in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js
     assert "data-rule-category" in js
     assert "data-rule-subject" in js
     assert "核算规则包" in html
-    assert "当前版本 1.1.9" in html
+    assert "当前版本 1.4.0" in html
+    assert "字段计算公式" in js
+    assert "renderRuleFieldCalculations" in js
     assert "RULE PACKAGE · CURRENT" not in html
     assert "position: absolute" in html.split(".dl-rule-package-entry {", 1)[1].split("}", 1)[0]
 

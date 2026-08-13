@@ -1,6 +1,7 @@
 """国内劳务工薪酬核算 API 测试"""
 from datetime import date
 from io import BytesIO
+from pathlib import Path
 import re
 import threading
 
@@ -207,9 +208,9 @@ def _quanqinjiang_data() -> bytes:
     """全勤奖测试数据"""
     return _create_test_excel({
         "全勤奖": [
-            ["工号", "姓名", "考勤月份", "入职日期", "最后工作日", "旷工天数", "正班迟到次数", "早退次数", "签卡次数", "工伤假天数", "事假时数", "病假时数", "入离职缺勤时数", "迟到早退30分钟内扣款"],
-            ["OWHN001", "张三", "202606", "2023-01-15", None, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            ["OWHN002", "李四", "202606", "2022-06-01", None, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            ["工号", "姓名", "考勤月份", "入职日期", "最后工作日", "旷工天数", "正班迟到次数", "迟到6分钟内(次)", "迟到6-20分钟内(次)", "迟到20-30分钟内(次)", "早退次数", "签卡次数", "工伤假天数", "事假时数", "病假时数", "入离职缺勤时数", "迟到早退30分钟内扣款"],
+            ["OWHN001", "张三", "202606", "2023-01-15", None, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ["OWHN002", "李四", "202606", "2022-06-01", None, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         ],
     })
 
@@ -218,8 +219,8 @@ def _multi_engine_data() -> bytes:
     """多引擎测试数据"""
     return _create_test_excel({
         "全勤奖": [
-            ["工号", "姓名", "考勤月份", "入职日期", "最后工作日", "旷工天数", "正班迟到次数", "早退次数", "签卡次数", "工伤假天数", "事假时数", "病假时数", "入离职缺勤时数", "迟到早退30分钟内扣款"],
-            ["OWHN001", "张三", "202606", "2023-01-15", None, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ["工号", "姓名", "考勤月份", "入职日期", "最后工作日", "旷工天数", "正班迟到次数", "迟到6分钟内(次)", "迟到6-20分钟内(次)", "迟到20-30分钟内(次)", "早退次数", "签卡次数", "工伤假天数", "事假时数", "病假时数", "入离职缺勤时数", "迟到早退30分钟内扣款"],
+            ["OWHN001", "张三", "202606", "2023-01-15", None, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         ],
         "餐补": [
             ["工号", "姓名", "餐补标准", "出勤天数", "正班时数合计", "预计算餐补"],
@@ -337,7 +338,7 @@ def _split_canbu_files() -> tuple[bytes, bytes]:
 # ── 测试用例 ──
 
 
-def test_rule_package_only_publishes_verified_subjects():
+def test_rule_package_exposes_verified_and_validating_subjects():
     client = TestClient(app)
 
     response = client.get("/api/domestic-labor/rule-package")
@@ -345,17 +346,83 @@ def test_rule_package_only_publishes_verified_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.1.9"
+    assert package["version"] == "1.4.0"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
-    assert {subject["id"] for subject in package["subjects"]} == {"quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"}
-    assert all(subject["status"] == "已验证" for subject in package["subjects"])
+    assert {subject["id"] for subject in package["subjects"]} == {
+        "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
+        "gaowen_butie",
+    }
+    statuses = {subject["id"]: subject["status"] for subject in package["subjects"]}
+    assert statuses["quanqinjiang"] == "已验证"
+    assert statuses["yeban_butie"] == "验证中"
+    assert statuses["gangwei_butie"] == "验证中"
+    assert statuses["gaowen_butie"] == "验证中"
+    assert all(statuses[subject] == "已验证" for subject in {
+        "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"
+    })
     assert all(subject["version"].startswith("DL-") for subject in package["subjects"])
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.1.9"
-    assert package["version_history"][0]["subject_ids"] == ["quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"]
+    assert package["version_history"][0]["version"] == "1.4.0"
+    assert package["version_history"][0]["subject_ids"] == [
+        "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
+        "gaowen_butie",
+    ]
+
+
+def test_rule_package_marks_night_shift_allowance_as_validating():
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    yeban = next(subject for subject in package["subjects"] if subject["id"] == "yeban_butie")
+    payload = str(yeban)
+
+    assert yeban["status"] == "验证中"
+    assert yeban["version"] == "DL-YEBAN.v0.9.3"
+    assert "22:00至次日08:00" in payload
+    assert "上班向后、下班向前" in payload
+    assert "3元/小时" in payload
+    assert "单日最高25元" in payload
+    assert "平台班次休息基线" in payload
+    assert "晋江计件岗位和门禁岗位" in payload
+    assert "暂算金额已计入" in payload
+    assert "员工缺勤导致的考勤异常日不计夜班补贴" in payload
+    assert "补充上下班打卡" not in payload
+    assert "补卡" not in payload
+    assert "84.83%" in payload
+    assert yeban["pending_confirmations"]
+    fields = {item["field"]: item for item in yeban["field_calculations"]}
+    assert {
+        "计薪上班", "计薪下班", "夜班时长（小时）", "晚上休息扣除（小时）",
+        "早上休息扣除（小时）", "休息扣除合计（小时）", "当日夜班补贴",
+    } <= fields.keys()
+    assert "17:53 → 18:00" in fields["计薪上班"]["example"]
+    assert "07:13 → 次日07:00" in fields["计薪下班"]["example"]
+    assert "9.5小时 − 晚上休息1小时 − 早上休息0.5小时 = 8小时" in fields["有效夜班时长（小时）"]["example"]
+    assert "有效夜班时长 × 3元/小时" in fields["当日夜班补贴"]["formula"]
+
+
+def test_rule_package_preserves_previous_attendance_bonus_rule():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.3.0"}
+    ).json()
+    quanqin = next(subject for subject in package["subjects"] if subject["id"] == "quanqinjiang")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.3.0"
+    assert quanqin["status"] == "已验证"
+    assert quanqin["version"] == "DL-QUANQIN.v1.0.0"
+    assert "两档迟到同时出现" not in str(quanqin)
+
+
+def test_rule_package_preserves_previous_position_allowance_rule():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.3.1"}
+    ).json()
+    gangwei = next(subject for subject in package["subjects"] if subject["id"] == "gangwei_butie")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.3.1"
+    assert gangwei["version"] == "DL-GANGWEI.v0.9.0"
+    assert "入离职缺勤时数" not in {item["field"] for item in gangwei["field_calculations"]}
 
 
 def test_rule_package_publishes_verified_attendance_bonus_and_seniority():
@@ -366,16 +433,21 @@ def test_rule_package_publishes_verified_attendance_bonus_and_seniority():
 
     quanqin = next(subject for subject in package["subjects"] if subject["id"] == "quanqinjiang")
     assert quanqin["status"] == "已验证"
-    assert quanqin["version"] == "DL-QUANQIN.v1.0.0"
+    assert quanqin["version"] == "DL-QUANQIN.v1.1.0"
     assert "2,807" in str(quanqin)
+    assert "两档迟到同时出现" in str(quanqin)
+    assert "6分钟内2次且6-20分钟内1次" in str(quanqin)
+    assert quanqin["pending_confirmations"] == []
     assert "OWHN9535" in str(quanqin)
     assert "OWHN9353" in str(quanqin)
     assert "OWHX0190" in str(quanqin)
     gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
     assert gongling["status"] == "已验证"
-    assert gongling["version"] == "DL-GONGLING.v1.0.7"
+    assert gongling["version"] == "DL-GONGLING.v1.0.8"
     assert "B操作部" in str(gongling)
-    assert "包含“安检员”" in str(gongling)
+    assert "民航中级安检员" in str(gongling)
+    assert "内部高级安检员" in str(gongling)
+    assert "其他仅包含‘安检员’字样的岗位不自动享有" in str(gongling)
     assert "第四纵队" in str(gongling)
     assert "头程运营部" in str(gongling)
     assert "不限制工作地区" in str(gongling)
@@ -389,6 +461,49 @@ def test_rule_package_publishes_verified_attendance_bonus_and_seniority():
     assert "OWHN2187" in gongling["pending_confirmations"][0]
 
 
+def test_rule_package_publishes_confirmed_security_inspector_position_names():
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    subjects = {subject["id"]: subject for subject in package["subjects"]}
+    confirmed_positions = {
+        "安检员",
+        "民航初级安检员",
+        "民航中级安检员",
+        "民航高级安检员",
+        "内部初级安检员",
+        "内部中级安检员",
+        "内部高级安检员",
+    }
+
+    assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.3"
+    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.2"
+    assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.8"
+    for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
+        payload = str(subjects[subject_id])
+        assert all(position in payload for position in confirmed_positions)
+        assert "其他仅包含‘安检员’字样的岗位不自动享有" in payload
+
+
+def test_rule_package_publishes_dongguan_month_end_rounding():
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
+    dongguan = next(region for region in canbu["regions"] if region["name"] == "东莞")
+
+    assert canbu["version"] == "DL-CANBU.v1.0.3"
+    assert "单日未舍入餐补" in dongguan["formula"]
+    assert "月底汇总后统一舍入" in " ".join(dongguan["details"])
+    assert any(item["version"] == "DL-CANBU.v1.0.2" for item in canbu["change_log"])
+
+
+def test_rule_package_publishes_jiashan_yiwu_inspector_meal_eligibility():
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
+    jiashan_yiwu = next(region for region in canbu["regions"] if region["name"] == "嘉善 / 义乌")
+
+    assert canbu["version"] == "DL-CANBU.v1.0.3"
+    assert "查验员" in str(jiashan_yiwu)
+    assert canbu["change_log"][0]["version"] == "DL-CANBU.v1.0.3"
+
+
 def test_rule_package_supports_immutable_version_lookup():
     client = TestClient(app)
 
@@ -400,6 +515,98 @@ def test_rule_package_supports_immutable_version_lookup():
     assert {subject["id"] for subject in published.json()["subjects"]} == {"canbu", "waisu_butie"}
     assert missing.status_code == 404
     assert missing.json()["detail"] == "规则包版本不存在: 9.9.9"
+
+
+def test_rule_package_preserves_pre_night_shift_version():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.1.9"}
+    ).json()
+
+    assert package["display_version"] == "DL-PAYROLL.v1.1.9"
+    assert "yeban_butie" not in {subject["id"] for subject in package["subjects"]}
+
+
+def test_rule_package_preserves_night_shift_version_before_field_formulas():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.2.0"}
+    ).json()
+    yeban = next(subject for subject in package["subjects"] if subject["id"] == "yeban_butie")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.2.0"
+    assert yeban["version"] == "DL-YEBAN.v0.9.0"
+    assert "field_calculations" not in yeban
+
+
+def test_rule_package_preserves_field_formula_version_before_attendance_wording():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.2.1"}
+    ).json()
+    yeban = next(subject for subject in package["subjects"] if subject["id"] == "yeban_butie")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.2.1"
+    assert yeban["version"] == "DL-YEBAN.v0.9.1"
+    assert yeban["field_calculations"]
+
+
+def test_rule_package_preserves_pre_security_inspector_alias_version():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.2.2"}
+    ).json()
+    subjects = {subject["id"]: subject for subject in package["subjects"]}
+
+    assert package["display_version"] == "DL-PAYROLL.v1.2.2"
+    assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.0"
+    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.1"
+    assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.7"
+    assert "民航初级安检员" not in str(subjects["canbu"])
+    assert "民航初级安检员" not in str(subjects["waisu_butie"])
+
+
+def test_rule_package_preserves_pre_break_classification_version():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.2.3"}
+    ).json()
+    yeban = next(subject for subject in package["subjects"] if subject["id"] == "yeban_butie")
+    fields = {item["field"] for item in yeban["field_calculations"]}
+
+    assert package["display_version"] == "DL-PAYROLL.v1.2.3"
+    assert yeban["version"] == "DL-YEBAN.v0.9.2"
+    assert "扣除休息（小时）" in fields
+    assert "晚上休息扣除（小时）" not in fields
+
+
+def test_rule_package_preserves_pre_meal_month_end_rounding_version():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.2.4"}
+    ).json()
+    canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.2.4"
+    assert canbu["version"] == "DL-CANBU.v1.0.1"
+    assert "单日未舍入餐补" not in str(canbu)
+
+
+def test_rule_package_preserves_pre_jiashan_yiwu_inspector_version():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.2.5"}
+    ).json()
+    canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
+    jiashan_yiwu = next(region for region in canbu["regions"] if region["name"] == "嘉善 / 义乌")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.2.5"
+    assert canbu["version"] == "DL-CANBU.v1.0.2"
+    assert "查验员" not in str(jiashan_yiwu)
+
+
+def test_historical_rule_package_keeps_latest_version_available_for_navigation():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.1.3"}
+    ).json()
+
+    assert package["version"] == "1.1.3"
+    assert package["available_versions"][0]["version"] == "1.4.0"
+    assert package["available_versions"][0]["status"] == "当前版本"
+    assert any(item["version"] == "1.1.3" for item in package["available_versions"])
 
 
 def test_rule_package_preserves_dongguan_restriction_in_previous_version():
@@ -435,7 +642,7 @@ def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
     current_waisu = next(subject for subject in current["subjects"] if subject["id"] == "waisu_butie")
     previous_waisu = next(subject for subject in previous["subjects"] if subject["id"] == "waisu_butie")
 
-    assert current_waisu["version"] == "DL-WAISU.v1.0.1"
+    assert current_waisu["version"] == "DL-WAISU.v1.0.2"
     assert "最后工作日在核算月月末或之后" in "".join(current_waisu["common_rules"])
     assert previous_waisu["version"] == "DL-WAISU.v1.0.0"
     assert "最后工作日在核算月月末或之后" not in "".join(previous_waisu["common_rules"])
@@ -471,11 +678,14 @@ def test_list_templates():
     assert response.status_code == 200
     data = response.json()
     assert "templates" in data
-    assert len(data["templates"]) == 4
+    assert len(data["templates"]) == 7
 
     # 验证每个模板结构
     engines = {t["engine"] for t in data["templates"]}
-    assert engines == {"quanqinjiang", "canbu", "waisu_butie", "gonglingjiang"}
+    assert engines == {
+        "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
+        "gaowen_butie",
+    }
 
     for template in data["templates"]:
         assert "name" in template
@@ -491,6 +701,28 @@ def test_download_template():
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     assert len(response.content) > 0
+    workbook = load_workbook(BytesIO(response.content), data_only=True)
+    headers = [cell.value for cell in workbook.active[1]]
+    assert {"迟到6分钟内(次)", "迟到6-20分钟内(次)", "迟到20-30分钟内(次)"} <= set(headers)
+
+
+def test_create_attendance_bonus_run_rejects_missing_lateness_bands():
+    client = TestClient(app)
+    workbook = _create_test_excel({
+        "月考勤": [
+            ["工号", "姓名", "考勤月份", "入职日期", "正班迟到次数"],
+            ["OWHN001", "张三", "202608", "2023-01-01", 0],
+        ],
+    })
+
+    response = client.post(
+        "/api/domestic-labor/runs",
+        files={"file": ("缺少迟到分档.xlsx", workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        data={"engines": "quanqinjiang", "attendance_month": "202608"},
+    )
+
+    assert response.status_code == 400
+    assert "缺少迟到分档字段" in response.json()["detail"]
 
 
 def test_download_waisu_template_is_directly_uploadable_workbook():
@@ -514,6 +746,16 @@ def test_download_waisu_template_is_directly_uploadable_workbook():
     housing_headers = [cell.value for cell in workbook["住宿名单"][1]]
     assert housing_headers == ["工号", "姓名", "入住时间", "退宿时间"]
     assert workbook["住宿名单"].max_row == 1
+
+
+def test_download_night_shift_template_only_contains_attendance_inputs():
+    client = TestClient(app)
+    response = client.get("/api/domestic-labor/templates/yeban_butie/download")
+
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.content), data_only=True)
+    assert workbook.sheetnames == ["月考勤", "日考勤"]
+    assert "班次编号" in [cell.value for cell in workbook["日考勤"][1]]
 
 
 def test_download_template_invalid_engine():
@@ -942,6 +1184,7 @@ def test_create_run_supports_split_monthly_daily_and_housing_workbooks():
         "monthly_rows": 1,
         "daily_rows": 1,
         "housing_rows": 1,
+        "temperature_rows": 0,
         "present_types": ["daily", "housing", "monthly"],
         "sources": payload["input_summary"]["sources"],
     }
@@ -1185,8 +1428,20 @@ def test_full_workflow():
     # 4. 导出 Excel
     export_response = client.get(f"/api/domestic-labor/runs/{run_id}/export")
     assert export_response.status_code == 200
-    file_name = export_response.json()["file_name"]
+    export_payload = export_response.json()
+    file_name = export_payload["file_name"]
+    export_path = Path(export_payload["file_path"])
+    assert export_payload["cached"] is False
+    assert export_path.parent.name == run_id
     assert re.fullmatch(r"多科目核算结果_202606_\d{8}\.xlsx", file_name)
+
+    first_modified_at = export_path.stat().st_mtime_ns
+    cached_export_response = client.get(f"/api/domestic-labor/runs/{run_id}/export")
+    assert cached_export_response.status_code == 200
+    cached_export_payload = cached_export_response.json()
+    assert cached_export_payload["cached"] is True
+    assert cached_export_payload["file_path"] == str(export_path)
+    assert export_path.stat().st_mtime_ns == first_modified_at
 
     # 5. 下载文件
     download_response = client.get(f"/api/domestic-labor/runs/{run_id}/download/{file_name}")
@@ -1368,6 +1623,103 @@ def test_waisu_butie_export_outputs_business_reconciliation_sheet(tmp_path):
     ]
     assert ws.cell(3, 6).value == "嘉善外宿补贴"
     assert ws.cell(3, 13).value == "嘉善外宿补贴资格不满足"
+    wb.close()
+
+
+def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
+    output_path = tmp_path / "night_shift_export.xlsx"
+    exporter = ExcelExporter(str(output_path))
+    results = [{
+        "employee_id": "OWHN001",
+        "employee_name": "张三",
+        "department": "华东操作",
+        "yeban_butie": 24,
+        "total": 24,
+        "warnings": "",
+        "exceptions": [],
+        "subject_details": {
+            "yeban_butie": {
+                "amount": 24,
+                "details": {
+                    "calculated_days": 1,
+                    "excluded_days": 0,
+                    "review_calculated_days": 0,
+                    "unpriced_review_days": 1,
+                    "daily_results": [{
+                        "attendance_date": "2026-08-01 00:00:00",
+                        "shift_code": "HD01",
+                        "status": "calculated",
+                        "reason_code": "generic_rule",
+                        "raw_start": "22:03:00",
+                        "raw_end": "07:43:00",
+                        "rounded_start_minutes": 1320,
+                        "rounded_end_minutes": 1890,
+                        "night_minutes": 570,
+                        "evening_break_minutes": 60,
+                        "morning_break_minutes": 30,
+                        "break_minutes": 90,
+                        "amount": 24,
+                    }, {
+                        "attendance_date": "2026-08-02 00:00:00",
+                        "shift_code": "HD01",
+                        "status": "manual_review",
+                        "reason_code": "missing_punch",
+                        "raw_start": None,
+                        "raw_end": None,
+                        "rounded_start_minutes": None,
+                        "rounded_end_minutes": None,
+                        "night_minutes": 0,
+                        "evening_break_minutes": 0,
+                        "morning_break_minutes": 0,
+                        "break_minutes": 0,
+                        "amount": None,
+                    }],
+                },
+                "audit_explanation": {
+                    "inputs": {"工作地区": "嘉善", "岗位名称": "操作员"},
+                },
+            },
+        },
+    }]
+
+    exporter.export(results, "202608", {"total_employees": 1})
+
+    wb = load_workbook(output_path)
+    assert wb.sheetnames == ["核算汇总", "每日明细"]
+    summary = wb["核算汇总"]
+    assert [cell.value for cell in summary[1]][:12] == [
+        "工号", "姓名", "工作地区", "部门", "岗位", "正常核算日", "暂算需确认日", "无需补贴日",
+        "异常未计金额日", "应发夜班补贴", "核算结果", "需处理事项",
+    ]
+    assert [cell.value for cell in summary[2]][5:12] == [
+        1, 0, 0, 1, 24, "金额已核算", "查看1天异常未计金额原因",
+    ]
+
+    ws = wb["每日明细"]
+    assert [cell.value for cell in ws[1]] == [
+        "工号", "姓名", "工作地区", "岗位", "出勤日期", "班次", "当日结果", "业务原因",
+        "上班打卡", "下班打卡", "计薪上班", "计薪下班", "夜班时长（小时）",
+        "晚上休息扣除（小时）", "早上休息扣除（小时）", "休息扣除合计（小时）",
+        "当日夜班补贴", "需处理事项",
+    ]
+    assert ws.cell(2, 5).number_format == "yyyy-mm-dd"
+    assert ws.cell(2, 9).value == "22:03"
+    assert ws.cell(2, 10).value == "07:43"
+    assert ws.cell(2, 11).value == "22:00"
+    assert ws.cell(2, 12).value == "次日07:30"
+    assert ws.cell(2, 13).value == 9.5
+    assert ws.cell(2, 14).value == 1
+    assert ws.cell(2, 15).value == 0.5
+    assert ws.cell(2, 16).value == 1.5
+    assert ws.cell(2, 17).value == 24
+    assert ws.cell(2, 7).value == "正常核算"
+    assert ws.cell(2, 8).value == "按通用夜班规则计算"
+    assert ws.cell(3, 7).value == "考勤异常，不计补贴"
+    assert ws.cell(3, 8).value == "员工缺勤（考勤异常）"
+    assert ws.cell(3, 18).value == "员工当天缺勤，按考勤异常处理，不计夜班补贴"
+    all_text = "\n".join(str(cell.value or "") for row in ws.iter_rows() for cell in row)
+    assert "calculated" not in all_text
+    assert "generic_rule" not in all_text
     wb.close()
 
 
@@ -1588,11 +1940,11 @@ def test_canbu_dongguan_uses_platform_rule_without_meal_standard():
     result = CanBuEngine().calculate(employee, daily_attendance)
     explanation = result.details["audit_explanation"]
 
-    assert result.amount == 35.62
+    assert result.amount == 35.63
     assert explanation["subject"] == "canbu"
-    assert explanation["formula"] == "min(Σ单日餐补, 500)"
+    assert explanation["formula"] == "ROUND(min(Σ单日未舍入餐补, 500), 2)"
     assert explanation["inputs"]["工作地区"] == "东莞"
-    assert explanation["intermediate_values"]["日餐补合计"] == 35.62
+    assert explanation["intermediate_values"]["日餐补合计"] == 35.63
     assert explanation["steps"]
 
 
@@ -1613,6 +1965,29 @@ def test_canbu_dongguan_uses_max_regular_hours_and_overtime():
 
     assert result.amount == 9.5
     assert result.details["日餐补明细"] == [9.5]
+
+
+def test_canbu_dongguan_rounds_once_after_summing_raw_daily_amounts():
+    """东莞餐补保留逐日原始精度，月底汇总后再按Excel口径舍入。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "一级部门名称": "莞深操作",
+        "岗位名称": "操作员",
+    }
+    daily_attendance = [
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 1.14, "刷卡加班": 0},
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 1.14, "刷卡加班": 0},
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 1.14, "刷卡加班": 0},
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.amount == 8.12
+    assert result.details["日餐补明细"] == [2.7075, 2.7075, 2.7075]
+    assert result.details["月累计"] == 8.12
+    assert "月底汇总后统一舍入" in " ".join(result.details["audit_explanation"]["steps"])
 
 
 def test_canbu_dongguan_piecework_tally_is_not_excluded():
@@ -1841,6 +2216,27 @@ def test_canbu_jiashan_yiwu_include_cleaner_and_maintenance_alias():
     assert repair_specialist_result.details["地区规则"] == "嘉善"
 
 
+@pytest.mark.parametrize("work_area", ["嘉善", "义乌"])
+def test_canbu_jiashan_yiwu_inspector_is_eligible(work_area):
+    """嘉善和义乌的查验员均享有餐补。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": work_area,
+        "岗位名称": "查验员",
+        "排班天数": 24,
+        "实际在职工作日天数": 24,
+        "事假时数": 0,
+        "病假时数": 0,
+        "旷工天数": 0,
+    }
+
+    result = CanBuEngine().calculate(employee, daily_attendance=[])
+
+    assert result.amount == 300
+    assert result.details["地区规则"] == work_area
+
+
 def test_canbu_jiashan_unknown_position_is_not_eligible():
     """嘉善未在享有名单的岗位兜底不享有"""
     employee = {
@@ -1858,6 +2254,56 @@ def test_canbu_jiashan_unknown_position_is_not_eligible():
     assert result.amount == 0
     assert result.details["reason"] == "嘉善餐补资格不满足"
     assert explanation["intermediate_values"]["岗位是否在享有名单"] is False
+
+
+@pytest.mark.parametrize("position", [
+    "安检员",
+    "民航初级安检员",
+    "民航中级安检员",
+    "民航高级安检员",
+    "内部初级安检员",
+    "内部中级安检员",
+    "内部高级安检员",
+])
+@pytest.mark.parametrize("work_area", ["东莞", "嘉善", "义乌"])
+def test_canbu_all_confirmed_security_inspector_positions_are_eligible(work_area, position):
+    """餐补各适用地区兼容旧安检员岗位及六个新岗位名称。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": work_area,
+        "一级部门名称": "莞深操作",
+        "岗位名称": position,
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+    }
+    daily_attendance = [{
+        "工号": "OWHN001",
+        "工作地区": work_area,
+        "工作状态": "工作日",
+        "正班时数": 8,
+        "刷卡加班": 0,
+    }]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.amount == (19 if work_area == "东莞" else 300)
+
+
+def test_canbu_unconfirmed_security_inspector_like_position_stays_ineligible():
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": "安检员培训生",
+        "排班天数": 20,
+        "实际在职工作日天数": 20,
+    }
+
+    result = CanBuEngine().calculate(employee, daily_attendance=[])
+
+    assert result.amount == 0
+    assert result.details["reason"] == "嘉善餐补资格不满足"
 
 
 def test_waisu_butie_returns_audit_explanation():
@@ -2115,6 +2561,52 @@ def test_waisu_butie_jiashan_confirmed_positions_are_eligible(position):
     result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
 
     assert result.amount == 150
+
+
+@pytest.mark.parametrize("position", [
+    "安检员",
+    "民航初级安检员",
+    "民航中级安检员",
+    "民航高级安检员",
+    "内部初级安检员",
+    "内部中级安检员",
+    "内部高级安检员",
+])
+@pytest.mark.parametrize("work_area", ["东莞", "嘉善", "义乌"])
+def test_waisu_all_confirmed_security_inspector_positions_are_eligible(work_area, position):
+    """外宿补贴各适用地区兼容旧安检员岗位及六个新岗位名称。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": work_area,
+        "岗位名称": position,
+        "考勤月份": "202606",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 150
+
+
+def test_waisu_unconfirmed_security_inspector_like_position_stays_ineligible():
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "嘉善",
+        "岗位名称": "安检员培训生",
+        "考勤月份": "202606",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 0
+    assert result.details["reason"] == "嘉善外宿补贴资格不满足"
 
 
 def test_waisu_butie_jinjiang_confirmed_safety_officer_is_eligible():
@@ -2741,9 +3233,17 @@ def test_gonglingjiang_b_operation_department_uses_china_operation_rules():
     assert result.details["audit_explanation"]["intermediate_values"]["标准"] == 150
 
 
-@pytest.mark.parametrize("position", ["内部初级安检员", "民航中级安检员", "内部高级安检员"])
-def test_gonglingjiang_security_inspector_position_uses_contains_match(position):
-    """岗位名称包含“安检员”字样即按安检员资格判断"""
+@pytest.mark.parametrize("position", [
+    "安检员",
+    "民航初级安检员",
+    "民航中级安检员",
+    "民航高级安检员",
+    "内部初级安检员",
+    "内部中级安检员",
+    "内部高级安检员",
+])
+def test_gonglingjiang_confirmed_security_inspector_positions_are_eligible(position):
+    """工龄奖兼容旧安检员岗位及六个新岗位名称。"""
     employee = {
         **_operation_employee(),
         "工作地区": "东莞",
@@ -2754,6 +3254,19 @@ def test_gonglingjiang_security_inspector_position_uses_contains_match(position)
 
     assert result.amount == 450
     assert result.details["audit_explanation"]["intermediate_values"]["标准"] == 150
+
+
+def test_gonglingjiang_unconfirmed_security_inspector_like_position_stays_ineligible():
+    employee = {
+        **_operation_employee(),
+        "工作地区": "东莞",
+        "岗位名称": "安检员培训生",
+    }
+
+    result = GongLingJiangEngine().calculate(employee, hrbp_list=[], region="gsdg")
+
+    assert result.amount == 0
+    assert result.details["reason"] == "东莞操作岗位不享有工龄奖"
 
 
 @pytest.mark.parametrize("position", ["理货员", "揽收充电司机"])

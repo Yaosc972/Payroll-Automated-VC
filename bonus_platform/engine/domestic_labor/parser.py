@@ -1,5 +1,6 @@
 """Excel file parser for payroll data."""
 import io
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -30,6 +31,11 @@ class SheetData:
     headers: List[str]
     rows: List[Dict[str, Any]]
     row_count: int
+
+
+def _normalized_header_name(value: Any) -> str:
+    """Normalize wrapped/full-width production attendance headers for matching."""
+    return re.sub(r"\s+", "", str(value or "")).replace("（", "(").replace("）", ")").replace("≤", "")
 
 
 class ExcelParser:
@@ -150,13 +156,27 @@ class ExcelParser:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {self.workbook.sheetnames}")
 
         ws = self.workbook[sheet_name]
+        # 部分飞书/WPS导出的测温登记表把工作表维度错误写成A1:A1，实际仍有多列多行。
+        # read_only模式会据此截断数据，遇到该错误维度时重置后再迭代真实单元格。
+        if getattr(ws, "calculate_dimension", lambda: "")() == "A1:A1" and hasattr(ws, "reset_dimensions"):
+            ws.reset_dimensions()
         rows = []
         headers = []
 
+        blank_row_run = 0
         for i, row in enumerate(ws.iter_rows(values_only=True)):
             if i == 0:
                 headers = [str(h) if h else f"col_{j}" for j, h in enumerate(row)]
                 continue
+
+            if not any(value not in (None, "") for value in row):
+                blank_row_run += 1
+                # WPS/Excel may persist formatting to row 1,048,576. Payroll source
+                # tables are contiguous; stop once the populated block has clearly ended.
+                if blank_row_run >= 200:
+                    break
+                continue
+            blank_row_run = 0
 
             row_dict = {}
             for j, value in enumerate(row):
@@ -243,6 +263,7 @@ class PayrollDataLoader:
         self._monthly = None
         self._daily = None
         self._housing = None
+        self._temperature = None
 
     def load(self):
         """Load all sheets."""
@@ -263,6 +284,28 @@ class PayrollDataLoader:
     def _normalize_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize row data: fill defaults, convert numeric/date fields."""
         normalized = dict(row)
+        normalized["_实际在职工作日天数已提供"] = (
+            "实际在职工作日天数" in row and row.get("实际在职工作日天数") not in (None, "")
+        )
+        normalized["_入离职缺勤时数已提供"] = (
+            "入离职缺勤时数" in row and row.get("入离职缺勤时数") not in (None, "")
+        )
+
+        # 生产月考勤表头可能带换行、全角括号或“≤”。先把三档迟到字段归一到
+        # 平台标准键，避免后续为兼容别名补 0 时遮蔽真实值。
+        lateness_fields = {
+            "迟到6分钟内(次)": {"迟到6分钟内(次)", "迟到6分钟内", "迟到≤6分钟内(次)"},
+            "迟到6-20分钟内(次)": {"迟到6-20分钟内(次)", "迟到6-20分钟内", "迟到6至20分钟内(次)"},
+            "迟到20-30分钟内(次)": {"迟到20-30分钟内(次)", "迟到20-30分钟内", "迟到20至30分钟内(次)"},
+        }
+        for canonical, aliases in lateness_fields.items():
+            if normalized.get(canonical) not in (None, ""):
+                continue
+            normalized_aliases = {_normalized_header_name(alias) for alias in aliases}
+            for source_field, value in row.items():
+                if value not in (None, "") and _normalized_header_name(source_field) in normalized_aliases:
+                    normalized[canonical] = value
+                    break
 
         # 晋江等月报使用“排休请假”表示天数，统一到工龄奖读取的天数字段。
         if normalized.get("排休请假天数") in (None, "") and normalized.get("排休请假") not in (None, ""):
@@ -294,9 +337,12 @@ class PayrollDataLoader:
             "转正前天数", "转正后工作天数", "实际在职工作日天数",
             "夜班天数", "月夜班时数", "正常加班", "双休加班", "节假日加班",
             "工作日加班费", "公休日加班费", "节假日加班费",
-            "迟到6分钟内", "迟到6-20分钟内(次)", "迟到20-30分钟内(次)",
+            "迟到6分钟内", "迟到6分钟内(次)", "迟到≤6分钟内(次)",
+            "迟到6-20分钟内", "迟到6-20分钟内(次)",
+            "迟到20-30分钟内", "迟到20-30分钟内(次)",
             "早退6分钟内(次)", "早退6-20分钟内(次)", "早退20-30分钟内(次)",
             "休年假小时", "事假时数", "病假时数", "调休时数",
+            "其他假时数（带薪）", "其他假时数(带薪)",
             "旷工时数", "排休请假时数", "排休请假天数", "哺乳假小时", "请假时数",
             "婚假天数", "陪产假天数", "工伤假天数", "医疗期天数",
             "丧假天数", "产假天数", "多胞胎假天数", "剖腹产假天数",
@@ -440,6 +486,23 @@ class PayrollDataLoader:
                     return self._housing
         return self._housing
 
+    @property
+    def temperature(self) -> Optional[SheetData]:
+        """Get high-temperature measurement registration data."""
+        if self._temperature is None:
+            for name in self.parser.get_sheet_names():
+                raw = self.parser.parse_sheet(name)
+                if MultiFilePayrollDataLoader._sheet_type(name, raw.headers) == "temperature":
+                    rows = MultiFilePayrollDataLoader._normalize_temperature_rows(raw.rows)
+                    self._temperature = SheetData(
+                        name=raw.name,
+                        headers=raw.headers,
+                        rows=rows,
+                        row_count=len(rows),
+                    )
+                    break
+        return self._temperature
+
     def get_attendance_month(self) -> Optional[str]:
         """Get attendance month from data."""
         if self.monthly and self.monthly.rows:
@@ -540,6 +603,7 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         self._monthly = None
         self._daily = None
         self._housing = None
+        self._temperature = None
         self._scanned = False
         self._source_summary: List[Dict[str, Any]] = []
         self._present_types = set()
@@ -569,6 +633,13 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
     def _sheet_type(name: str, headers: Sequence[str]) -> Optional[str]:
         sheet_name = str(name or "").strip()
         header_set = {str(header or "").strip() for header in headers}
+        if any(marker in sheet_name for marker in ("核算比对", "线下核对", "核对版")):
+            # 生产核对工作簿常把线下金额、AI金额和月考勤基础字段放在同一结果页。
+            # 结果页只用于人工比对，不能再次作为月考勤并入，否则每名员工会重复。
+            return None
+        temperature_signals = header_set.intersection({"班次日期", "测温班次", "测温网点", "测温温度"})
+        if "测温" in sheet_name or len(temperature_signals) >= 3:
+            return "temperature"
         if "住宿" in sheet_name or "宿舍" in sheet_name or (
             "工号" in header_set
             and header_set.intersection({"入住时间", "入宿时间", "退宿时间", "离宿时间"})
@@ -620,10 +691,38 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             normalized_rows.append(normalized)
         return normalized_rows
 
+    @staticmethod
+    def _normalize_temperature_rows(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        normalized_rows = []
+        for row in rows:
+            normalized = dict(row)
+            site = str(normalized.get("测温网点", "") or "").strip()
+            shift = str(normalized.get("测温班次", "") or "").strip()
+            day = normalized.get("班次日期")
+            if isinstance(day, datetime):
+                day = day.date()
+            elif isinstance(day, str):
+                try:
+                    day = datetime.fromisoformat(day.replace("/", "-")[:10]).date()
+                except ValueError:
+                    pass
+            try:
+                temperature = float(normalized.get("测温温度"))
+            except (TypeError, ValueError):
+                continue
+            if not site or not shift or day in (None, ""):
+                continue
+            normalized["测温网点"] = site
+            normalized["测温班次"] = shift
+            normalized["班次日期"] = day
+            normalized["测温温度"] = temperature
+            normalized_rows.append(normalized)
+        return normalized_rows
+
     def _scan(self):
         if self._scanned:
             return
-        parts = {"monthly": [], "daily": [], "housing": []}
+        parts = {"monthly": [], "daily": [], "housing": [], "temperature": []}
         for parser in self.parsers:
             recognized = []
             for sheet_name in parser.get_sheet_names():
@@ -652,6 +751,9 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         housing_rows = self._normalize_housing_rows([
             row for part in parts["housing"] for row in part.rows
         ])
+        temperature_rows = self._normalize_temperature_rows([
+            row for part in parts["temperature"] for row in part.rows
+        ])
         self._monthly = SheetData(
             name="月考勤",
             headers=self._merge_headers(parts["monthly"]),
@@ -670,6 +772,12 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             rows=housing_rows,
             row_count=len(housing_rows),
         ) if "housing" in self._present_types else None
+        self._temperature = SheetData(
+            name="测温登记",
+            headers=self._merge_headers(parts["temperature"]),
+            rows=temperature_rows,
+            row_count=len(temperature_rows),
+        ) if "temperature" in self._present_types else None
         self._scanned = True
         self._fill_absence_from_daily()
 
@@ -687,6 +795,11 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
     def housing(self) -> Optional[SheetData]:
         self._scan()
         return self._housing
+
+    @property
+    def temperature(self) -> Optional[SheetData]:
+        self._scan()
+        return self._temperature
 
     @staticmethod
     def _month_digits(value: Any) -> str:
@@ -716,6 +829,23 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
 
         engine_set = set(engines)
         has_daily = self.daily is not None and bool(self.daily.rows)
+        if "quanqinjiang" in engine_set:
+            header_set = {_normalized_header_name(header) for header in self.monthly.headers}
+            lateness_header_groups = {
+                "迟到6分钟内(次)": {"迟到6分钟内(次)", "迟到6分钟内", "迟到≤6分钟内(次)"},
+                "迟到6-20分钟内(次)": {"迟到6-20分钟内(次)", "迟到6-20分钟内", "迟到6至20分钟内(次)"},
+                "迟到20-30分钟内(次)": {"迟到20-30分钟内(次)", "迟到20-30分钟内", "迟到20至30分钟内(次)"},
+            }
+            missing_lateness_headers = [
+                display_name
+                for display_name, aliases in lateness_header_groups.items()
+                if not header_set.intersection(_normalized_header_name(alias) for alias in aliases)
+            ]
+            if missing_lateness_headers:
+                missing_text = "、".join(missing_lateness_headers)
+                raise ValueError(
+                    f"全勤奖核算缺少迟到分档字段：{missing_text}；无法判断互斥豁免，请补充月考勤字段后重试"
+                )
         if "canbu" in engine_set:
             has_dongguan = any("东莞" in str(row.get("工作地区", "")) for row in self.monthly.rows)
             if has_dongguan and not has_daily:
@@ -725,6 +855,10 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
                 raise ValueError("外宿补贴核算缺少日考勤数据")
             if self.housing is None:
                 raise ValueError("外宿补贴核算缺少住宿名单；即使当月无人住宿，也请上传带表头的空名单")
+        if "yeban_butie" in engine_set and not has_daily:
+            raise ValueError("夜班补贴核算缺少日考勤数据")
+        if "gaowen_butie" in engine_set and not has_daily:
+            raise ValueError("高温补贴核算缺少日考勤数据")
 
         collection_seniority_rows = [
             row for row in self.monthly.rows
@@ -736,6 +870,7 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             "monthly_rows": self.monthly.row_count,
             "daily_rows": self.daily.row_count if self.daily else 0,
             "housing_rows": self.housing.row_count if self.housing else 0,
+            "temperature_rows": self.temperature.row_count if self.temperature else 0,
             "present_types": sorted(self._present_types),
             "sources": self._source_summary,
         }

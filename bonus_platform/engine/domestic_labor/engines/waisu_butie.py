@@ -3,6 +3,7 @@ from collections import Counter
 from datetime import date, datetime
 from typing import Any, Dict, List
 from .base import BaseEngine, CalculationResult, safe_float
+from .position_rules import is_position_eligible
 from ..models import AuditExplanation
 
 
@@ -434,7 +435,7 @@ class WaiSuBuTieEngine(BaseEngine):
         if work_area == "东莞":
             name_override = employee_name in DONGGUAN_ELIGIBLE_NAME_OVERRIDES
             explicitly_ineligible = position in DONGGUAN_INELIGIBLE_POSITIONS and not name_override
-            eligible_position = position in DONGGUAN_ELIGIBLE_POSITIONS or name_override
+            eligible_position = is_position_eligible(position, DONGGUAN_ELIGIBLE_POSITIONS) or name_override
             return {
                 "工作地区": work_area,
                 "岗位名称": position,
@@ -445,7 +446,7 @@ class WaiSuBuTieEngine(BaseEngine):
                 "eligible": eligible_position and not explicitly_ineligible,
             }
         if work_area in {"嘉善", "义乌"}:
-            eligible_position = position in JIASHAN_YIWU_ELIGIBLE_POSITIONS
+            eligible_position = is_position_eligible(position, JIASHAN_YIWU_ELIGIBLE_POSITIONS)
             return {
                 "工作地区": work_area,
                 "岗位名称": position,

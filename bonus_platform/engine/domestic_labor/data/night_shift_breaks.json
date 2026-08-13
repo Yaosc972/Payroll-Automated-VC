@@ -1,0 +1,1400 @@
+{
+  "source": "线下规则.xlsx/各班次休息时间",
+  "source_updated_at": "2026-07-23T23:40:39+08:00",
+  "shifts": [
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步24:00-08:30",
+      "shift_code": "LB43",
+      "shift_time": "24:00-32:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步00:30-09:00(管理)",
+      "shift_code": "LB29",
+      "shift_time": "00:30-09:00;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "06:00-06:30",
+        "12:00-13:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步01:00-09:30",
+      "shift_code": "LB44",
+      "shift_time": "01:00-09:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步03:00-11:30",
+      "shift_code": "LB15",
+      "shift_time": "03:00-11:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "06:00-06:30",
+        "12:00-13:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步06:00-15:00",
+      "shift_code": "LB01",
+      "shift_time": "06:00-15:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步06:00-15:00(管理)",
+      "shift_code": "LB26",
+      "shift_time": "06:00-15:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步07:00-16:00",
+      "shift_code": "LB16",
+      "shift_time": "07:00-16:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步07:30-16:30",
+      "shift_code": "LB02",
+      "shift_time": "07:30-16:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步08:00-17:00",
+      "shift_code": "LB03",
+      "shift_time": "08:00-17:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步08:00-17:00(管理)",
+      "shift_code": "LB46",
+      "shift_time": "08:00-17:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步08:30-17:30",
+      "shift_code": "LB04",
+      "shift_time": "08:30-17:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步08:30-17:30(管理)",
+      "shift_code": "LB25",
+      "shift_time": "08:30-17:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步09:00-18:00",
+      "shift_code": "LB05",
+      "shift_time": "09:00-18:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步09:00-18:00(管理)",
+      "shift_code": "LB24",
+      "shift_time": "09:00-18:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步10:00-19:00(B1)",
+      "shift_code": "LB57",
+      "shift_time": "10:00-19:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "19:00-19:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步10:00-19:30",
+      "shift_code": "LB45",
+      "shift_time": "10:00-19:30;",
+      "regular_hours": 9.5,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步11:00-19:30(中午连班)",
+      "shift_code": "LB32",
+      "shift_time": "11:00-19:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "17:00-17:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步12:00-20:30",
+      "shift_code": "LB48",
+      "shift_time": "12:00-20:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步13:00-21:30",
+      "shift_code": "LB06",
+      "shift_time": "13:00-21:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步13:00-21:30(管理)",
+      "shift_code": "LB30",
+      "shift_time": "13:00-21:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步14:00-22:30",
+      "shift_code": "LB56",
+      "shift_time": "14:00-22:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步15:00-23:30",
+      "shift_code": "LB17",
+      "shift_time": "15:00-23:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30",
+        "23:30-24:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步17:00-02:00",
+      "shift_code": "LB52",
+      "shift_time": "17:00-26:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:00-03:00",
+      "shift_code": "LB18",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:00-03:00(早上连班)",
+      "shift_code": "LB07",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:00-03:00(管理)",
+      "shift_code": "LB38",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:00-03:00(连班管理)",
+      "shift_code": "LB33",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:30-03:30(早上连班)",
+      "shift_code": "LB55",
+      "shift_time": "18:30-27:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:30-03:30",
+      "shift_code": "LB42",
+      "shift_time": "18:30-27:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:00-04:00",
+      "shift_code": "LB08",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:00-04:00(早上连班)",
+      "shift_code": "LB34",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:00-04:00(管理)",
+      "shift_code": "LB40",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:00-04:00(连班管理)",
+      "shift_code": "LB49",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:30-04:30",
+      "shift_code": "LB09",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:00-05:00",
+      "shift_code": "LB10",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:00-05:00(早上连班)",
+      "shift_code": "LB37",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:00-05:00(管理)",
+      "shift_code": "LB41",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:30-05:30",
+      "shift_code": "LB11",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:30-05:30(管理)",
+      "shift_code": "LB27",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步21:00-06:00",
+      "shift_code": "LB12",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步21:00-06:00(管理)",
+      "shift_code": "LB28",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步22:00-07:00(早上连班)",
+      "shift_code": "LB53",
+      "shift_time": "22:00-31:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步22:00-07:30",
+      "shift_code": "LB23",
+      "shift_time": "22:00-31:30;",
+      "regular_hours": 9.5,
+      "break_periods": [
+        "23:00-24:00",
+        "次日06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步23:00-08:00",
+      "shift_code": "LB51",
+      "shift_time": "23:00-32:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "05:00-06:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:30-04:30(早上连班)",
+      "shift_code": "LB58",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步19:30-04:30(连班管理)",
+      "shift_code": "LB59",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:30-05:30(早上连班)",
+      "shift_code": "LB60",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:30-05:30(连班管理)",
+      "shift_code": "LB61",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步21:00-06:00(早上连班)",
+      "shift_code": "LB62",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步21:00-06:00(连班管理)",
+      "shift_code": "LB63",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步18:30-03:30(连班管理)",
+      "shift_code": "LB64",
+      "shift_time": "18:30-27:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步22:00-07:00(连班管理)",
+      "shift_code": "LB65",
+      "shift_time": "22:00-31:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步20:00-05:00(连班管理)",
+      "shift_code": "LB66",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步22:00-07:30(管理)",
+      "shift_code": "LB67",
+      "shift_time": "22:00-31:30;",
+      "regular_hours": 9.5,
+      "break_periods": [
+        "23:00-24:00",
+        "06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "保洁专用08:00-18:30",
+      "shift_code": "LB39",
+      "shift_time": "08:00-18:30;",
+      "regular_hours": 10.5,
+      "break_periods": [
+        "11:30-13:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "发货凌晨三点班次",
+      "shift_code": "HD001",
+      "shift_time": "03:00-11:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "发货凌晨四点班次",
+      "shift_code": "HD002",
+      "shift_time": "04:00-12:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "发货凌晨六点班次",
+      "shift_code": "HD003",
+      "shift_time": "06:00-15:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "晚上24点班次",
+      "shift_code": "HD036",
+      "shift_time": "00:00-08:30;",
+      "regular_hours": 8,
+      "break_periods": [
+        "06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "19点无早",
+      "shift_code": "HD037",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "发货凌晨六点半班次",
+      "shift_code": "HD004",
+      "shift_time": "06:30-15:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "早上七点班次",
+      "shift_code": "HD005",
+      "shift_time": "07:00-16:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "早上八点班次",
+      "shift_code": "HD006",
+      "shift_time": "08:00-17:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "华东早班",
+      "shift_code": "HD007",
+      "shift_time": "09:00-18:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "司机早上十点班次",
+      "shift_code": "HD008",
+      "shift_time": "10:00-19:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "操作早上十点班次",
+      "shift_code": "HD009",
+      "shift_time": "10:00-19:30;",
+      "regular_hours": 9.5,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30",
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "早上12点班次",
+      "shift_code": "HD010",
+      "shift_time": "12:00-20:30;",
+      "regular_hours": 8,
+      "break_periods": [
+        "18:00-18:30",
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "华东中班",
+      "shift_code": "HD011",
+      "shift_time": "13:00-21:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30",
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库分拣晚上18点半班次",
+      "shift_code": "HD012",
+      "shift_time": "18:30-27:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库分拣晚上19点半班次",
+      "shift_code": "HD013",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库分拣晚上20点班次",
+      "shift_code": "HD014",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库分拣晚上20点半班次",
+      "shift_code": "HD015",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "正常晚上18点半班次",
+      "shift_code": "HD016",
+      "shift_time": "18:30-27:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00",
+        "30:30-31:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "正常晚上19点半班次",
+      "shift_code": "HD017",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00",
+        "30:30-31:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "正常晚上20点班次",
+      "shift_code": "HD018",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "24:00-25:00",
+        "30:30-31:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "正常晚上20点半班次",
+      "shift_code": "HD019",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00",
+        "30:30-31:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "晚上21点班次",
+      "shift_code": "HD020",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "24:00-25:00",
+        "30:00-30:30",
+        "36:00-37:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "晚上22点班次",
+      "shift_code": "HD021",
+      "shift_time": "22:00-31:30;",
+      "regular_hours": 9.5,
+      "break_periods": [
+        "23:00-24:00",
+        "30:30-31:00",
+        "36:00-37:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "晚上23点班次",
+      "shift_code": "HD022",
+      "shift_time": "23:00-32:30;",
+      "regular_hours": 9.5,
+      "break_periods": [
+        "24:00-25:00",
+        "30:00-30:30",
+        "36:00-37:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "当天24点班次",
+      "shift_code": "HD023",
+      "shift_time": "24:00-32:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "华东01：00-09:30晚中班次",
+      "shift_code": "HD024",
+      "shift_time": "01:00-09:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "华东17:30-02:30班次",
+      "shift_code": "HD025",
+      "shift_time": "17:30-26:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "20:30-21:30",
+        "26:30-27:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "换单晚上20点半班次班次",
+      "shift_code": "HD026",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "风控晚上21点班次",
+      "shift_code": "HD027",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "风控晚上20点半班次班次",
+      "shift_code": "HD028",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "风控晚上19点半班次",
+      "shift_code": "HD029",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "25:00-26:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "揽收无午休",
+      "shift_code": "HD030",
+      "shift_time": "11:00-19:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "19:00-19:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库分拣晚上17点半班次",
+      "shift_code": "HD031",
+      "shift_time": "17:30-26:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "22点班次（没有06:00-06:30休息）",
+      "shift_code": "HD032",
+      "shift_time": "22:00-31:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库18点班次",
+      "shift_code": "HD033",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "晚上19点班次",
+      "shift_code": "HD034",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 8,
+      "break_periods": [
+        "06:00-06:30",
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "晚上23点班次（没有24到25休息）",
+      "shift_code": "HD035",
+      "shift_time": "23:00-31:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "30:00-30:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "理货入库18点班",
+      "shift_code": "HD33",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "发货凌晨三点半班次",
+      "shift_code": "HD039",
+      "shift_time": "03:00-11:30",
+      "regular_hours": 8,
+      "break_periods": [
+        "12:00-13：00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心21:00班次",
+      "shift_code": "DN01",
+      "shift_time": "21:00-30:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心18:00班次",
+      "shift_code": "DN02",
+      "shift_time": "18:00-27:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心08:00早班",
+      "shift_code": "DN03",
+      "shift_time": "08:00-17:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "17:00-17:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心19:00晚班",
+      "shift_code": "DN04",
+      "shift_time": "19:00-28:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心14:00午班",
+      "shift_code": "DN05",
+      "shift_time": "14:00-23:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "18:00-19:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心20:00晚班",
+      "shift_code": "DN06",
+      "shift_time": "20:00-29:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "09:00早班",
+      "shift_code": "DN07",
+      "shift_time": "09:00-18:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "12:30午班",
+      "shift_code": "DN08",
+      "shift_time": "12:30-21:00;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "15:00班次",
+      "shift_code": "DN09",
+      "shift_time": "15:00-23:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "09:30班次",
+      "shift_code": "DN10",
+      "shift_time": "09:30-18:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:30-19:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "10:00班次",
+      "shift_code": "DN11",
+      "shift_time": "10:00-19:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心22:00班次",
+      "shift_code": "DN12",
+      "shift_time": "22:00-31:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心20:30点班次",
+      "shift_code": "DN13",
+      "shift_time": "20:30-29:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心16:00班次",
+      "shift_code": "DN14",
+      "shift_time": "16:00-25:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "20:00-21:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心13:00班次",
+      "shift_code": "DN15",
+      "shift_time": "13:00-22:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "17:00-18:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心21:30班次",
+      "shift_code": "DN16",
+      "shift_time": "21:30-30:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "11:00班次",
+      "shift_code": "DN17",
+      "shift_time": "11:00-20:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "17:00-18:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心19:30班次",
+      "shift_code": "DN18",
+      "shift_time": "19:30-28:30;",
+      "regular_hours": 9,
+      "break_periods": [
+        "24:00-25:00"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "20:00无休息段",
+      "shift_code": "DN19",
+      "shift_time": "20:00-28:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "21:00无休息段",
+      "shift_code": "DN20",
+      "shift_time": "21:00-29:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "19:00无休息段",
+      "shift_code": "DN21",
+      "shift_time": "19:00-27:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "18:00无休息段",
+      "shift_code": "DN22",
+      "shift_time": "18:00-26:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "20:30无休息段",
+      "shift_code": "DN23",
+      "shift_time": "20:30-28:30;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "22:00无休息段",
+      "shift_code": "DN24",
+      "shift_time": "22:00-30:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "06:00早班无休息段",
+      "shift_code": "DN25",
+      "shift_time": "06:00-14:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "09:00早班无休息段",
+      "shift_code": "DN26",
+      "shift_time": "09:00-17:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "6点早班",
+      "shift_code": "DN27",
+      "shift_time": "06:00-15:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "10:00-11:00",
+        "15:00-15:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "午班12:00",
+      "shift_code": "DN28",
+      "shift_time": "12:00-20:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    }
+  ]
+}

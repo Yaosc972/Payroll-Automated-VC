@@ -1,5 +1,6 @@
 """全勤奖计算引擎 (Full Attendance Bonus Engine)."""
 import calendar
+import re
 from datetime import date, datetime, time, timedelta
 from typing import Any, Dict, List, Optional
 from .base import BaseEngine, CalculationResult, safe_float, safe_int
@@ -14,6 +15,74 @@ EXCLUDED_EMPLOYEE_IDS = {"OWHN9535", "OWHN9353", "OWHX0190"}
 
 # 日考勤中的非工作日状态
 NON_WORK_STATUS = {"星期六休息", "星期天休息", "法定节假日"}
+
+
+def _normalized_field_name(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "")).replace("（", "(").replace("）", ")").replace("≤", "")
+
+
+def _first_numeric(employee_data: Dict[str, Any], *field_names: str) -> float:
+    """Read the first populated attendance field while supporting old headers."""
+    for field_name in field_names:
+        value = employee_data.get(field_name)
+        if value not in (None, ""):
+            return max(0.0, safe_float(value))
+    normalized_data = {
+        _normalized_field_name(key): value
+        for key, value in employee_data.items()
+        if value not in (None, "")
+    }
+    for field_name in field_names:
+        normalized_name = _normalized_field_name(field_name)
+        if normalized_name in normalized_data:
+            return max(0.0, safe_float(normalized_data[normalized_name]))
+    return 0.0
+
+
+def _lateness_exemption(employee_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Evaluate the mutually-exclusive monthly lateness exemption paths."""
+    within_six = _first_numeric(
+        employee_data, "迟到6分钟内(次)", "迟到6分钟内", "迟到≤6分钟内(次)"
+    )
+    six_to_twenty = _first_numeric(
+        employee_data,
+        "迟到6-20分钟内(次)",
+        "迟到6-20分钟内",
+        "迟到6至20分钟内(次)",
+    )
+    twenty_to_thirty = _first_numeric(
+        employee_data,
+        "迟到20-30分钟内(次)",
+        "迟到20-30分钟内",
+        "迟到20至30分钟内(次)",
+    )
+
+    reasons = []
+    if within_six > 3:
+        reasons.append("6分钟内迟到超过3次")
+    if six_to_twenty > 1:
+        reasons.append("6-20分钟迟到超过1次")
+    if within_six > 0 and six_to_twenty > 0:
+        reasons.append("两档迟到混合出现")
+    if twenty_to_thirty > 0:
+        reasons.append("存在20-30分钟迟到")
+
+    if reasons:
+        judgement = "；".join(reasons)
+    elif within_six > 0:
+        judgement = f"使用6分钟内迟到豁免：{within_six:g}/3次"
+    elif six_to_twenty > 0:
+        judgement = f"使用6-20分钟迟到豁免：{six_to_twenty:g}/1次"
+    else:
+        judgement = "未使用分档迟到豁免"
+
+    return {
+        "迟到6分钟内次数": within_six,
+        "迟到6-20分钟次数": six_to_twenty,
+        "迟到20-30分钟次数": twenty_to_thirty,
+        "迟到豁免判断": judgement,
+        "是否不符合迟到豁免": bool(reasons),
+    }
 
 
 def _audit_explanation(
@@ -99,6 +168,15 @@ class QuanQinJiangEngine(BaseEngine):
             "考勤月份": str(employee_data.get("考勤月份", "")),
             "入职日期": str(employee_data.get("入职日期", "")),
             "最后工作日": str(employee_data.get("最后工作日", "")),
+            "迟到6分钟内次数": _first_numeric(
+                employee_data, "迟到6分钟内(次)", "迟到6分钟内", "迟到≤6分钟内(次)"
+            ),
+            "迟到6-20分钟次数": _first_numeric(
+                employee_data, "迟到6-20分钟内(次)", "迟到6-20分钟内", "迟到6至20分钟内(次)"
+            ),
+            "迟到20-30分钟次数": _first_numeric(
+                employee_data, "迟到20-30分钟内(次)", "迟到20-30分钟内", "迟到20至30分钟内(次)"
+            ),
             "日考勤记录数": len(daily_attendance or []),
         }
 
@@ -145,7 +223,33 @@ class QuanQinJiangEngine(BaseEngine):
 
         month_start, month_end, _ = self.get_month_range(attendance_month)
 
-        # 条件2：缺勤/迟到/签卡排除
+        # 条件2：分档迟到豁免。两条路径互斥，不能叠加使用。
+        lateness_values = _lateness_exemption(employee_data)
+        if lateness_values["是否不符合迟到豁免"]:
+            return CalculationResult(
+                employee_id=employee_id,
+                employee_name=employee_name,
+                amount=0,
+                details={
+                    "reason": "迟到豁免不符合",
+                    "audit_explanation": _audit_explanation(
+                        0,
+                        "全勤奖迟到豁免判断",
+                        "A≤3且B≤1且不得同时大于0，且20-30分钟迟到=0；否则全勤奖=0",
+                        input_snapshot,
+                        lateness_values,
+                        [
+                            "分别统计6分钟内、6-20分钟和20-30分钟迟到次数",
+                            "6分钟内最多豁免3次，或6-20分钟最多豁免1次，两条路径不可叠加",
+                            lateness_values["迟到豁免判断"],
+                            "全勤奖金额为0",
+                        ],
+                    ),
+                },
+                warnings=[],
+            )
+
+        # 条件3：其他缺勤/迟到早退/签卡排除
         absence_conditions = [
             safe_float(employee_data.get("旷工天数", 0)),
             safe_float(employee_data.get("正班迟到次数", 0)) + safe_float(employee_data.get("早退次数", 0)),
@@ -165,6 +269,7 @@ class QuanQinJiangEngine(BaseEngine):
             "病假时数": absence_conditions[5],
             "入离职缺勤时数": absence_conditions[6],
             "迟到早退30分钟内扣款": absence_conditions[7],
+            **lateness_values,
         }
 
         if (
@@ -195,7 +300,7 @@ class QuanQinJiangEngine(BaseEngine):
                 warnings=[]
             )
 
-        # 条件3：入职时间排除（含工作日判断）
+        # 条件4：入职时间排除（含工作日判断）
         hire_date = employee_data.get("入职日期")
         if hire_date and isinstance(hire_date, (date, datetime)):
             if isinstance(hire_date, datetime):
@@ -233,7 +338,7 @@ class QuanQinJiangEngine(BaseEngine):
                     )
                 # gap全是休息日/节假日，不排除，继续判断条件4
 
-        # 条件4：在职状态判断
+        # 条件5：在职状态判断
         last_work_day = employee_data.get("最后工作日")
 
         # 处理Excel空值：time(0,0)（时间格式空单元格）、零日期

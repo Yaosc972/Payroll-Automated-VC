@@ -32,7 +32,10 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"name": "入职日期", "desc": "格式YYYY-MM-DD", "required": True, "example": "2023-05-15"},
             {"name": "最后工作日", "desc": "在职员工留空，离职员工填写日期", "required": False, "example": ""},
             {"name": "旷工天数", "desc": "默认0", "required": False, "example": "0"},
-            {"name": "正班迟到次数", "desc": "默认0", "required": False, "example": "0"},
+            {"name": "正班迟到次数", "desc": "迟到总次数，用于兼容原月报", "required": False, "example": "0"},
+            {"name": "迟到6分钟内(次)", "desc": "最多豁免3次；与6-20分钟迟到不可同时出现", "required": False, "example": "2"},
+            {"name": "迟到6-20分钟内(次)", "desc": "最多豁免1次；与6分钟内迟到不可同时出现", "required": False, "example": "0"},
+            {"name": "迟到20-30分钟内(次)", "desc": "出现即不享有全勤奖", "required": False, "example": "0"},
             {"name": "早退次数", "desc": "默认0", "required": False, "example": "0"},
             {"name": "签卡次数", "desc": "默认0", "required": False, "example": "0"},
             {"name": "工伤假天数", "desc": "默认0", "required": False, "example": "0"},
@@ -43,7 +46,8 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
         ],
         "example_extra": [
             {"工号": "OWHN0424", "姓名": "韩录阳", "考勤月份": "202603", "入职日期": "2021-08-10",
-             "最后工作日": "", "旷工天数": "0", "正班迟到次数": "0", "早退次数": "0", "签卡次数": "0",
+             "最后工作日": "", "旷工天数": "0", "正班迟到次数": "2", "迟到6分钟内(次)": "2",
+             "迟到6-20分钟内(次)": "0", "迟到20-30分钟内(次)": "0", "早退次数": "0", "签卡次数": "0",
              "工伤假天数": "0", "事假时数": "0", "病假时数": "0", "入离职缺勤时数": "0", "迟到早退30分钟内扣款": "0"},
         ],
     },
@@ -94,6 +98,61 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
              "入职日期": "2021-08-10", "最后工作日": "", "事假时数": "0", "病假时数": "0",
              "旷工时数": "0", "排休请假时数": "0", "入离职缺勤时数": "0"},
         ],
+    },
+    "gangwei_butie": {
+        "name": "岗位补贴核算模板",
+        "description": "用于按地区、岗位名称、排班天数和缺勤时数核算岗位补贴；职级不参与计算",
+        "columns": [
+            {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN14187"},
+            {"name": "姓名", "desc": "员工姓名", "required": True, "example": "陈康"},
+            {"name": "考勤月份", "desc": "格式YYYYMM", "required": True, "example": "202607"},
+            {"name": "一级部门名称", "desc": "员工一级部门", "required": False, "example": "莞深操作"},
+            {"name": "工作地区", "desc": "东莞/嘉善/义乌/晋江", "required": True, "example": "东莞"},
+            {"name": "岗位名称", "desc": "按岗位名称匹配补贴资格和标准；不读取职级", "required": True, "example": "民航初级安检员"},
+            {"name": "排班天数", "desc": "当月岗位补贴折算分母", "required": True, "example": "23"},
+            {"name": "实际在职工作日天数", "desc": "用于自动计算入离职缺勤时数", "required": False, "example": "23"},
+            {"name": "事假时数", "desc": "小时", "required": False, "example": "0"},
+            {"name": "排休请假时数", "desc": "小时", "required": False, "example": "0"},
+            {"name": "病假时数", "desc": "小时", "required": False, "example": "0"},
+            {"name": "旷工时数", "desc": "小时", "required": False, "example": "0"},
+            {"name": "休年假小时", "desc": "小时", "required": False, "example": "0"},
+            {"name": "女神假天数", "desc": "天数；核算时每1天折算8小时", "required": False, "example": "0"},
+            {"name": "其他假时数（带薪）", "desc": "小时", "required": False, "example": "0"},
+            {"name": "调休时数", "desc": "小时", "required": False, "example": "0"},
+            {"name": "入离职缺勤时数", "desc": "已有非零值优先；否则按（排班天数-实际在职工作日天数）×8自动计算", "required": False, "example": "0"},
+        ],
+        "example_extra": [],
+    },
+    "gaowen_butie": {
+        "name": "高温补贴核算模板",
+        "description": "用于上传月考勤、日考勤和测温登记；按同仓同日同班次测温及实际出勤逐日核算",
+        "columns": [
+            {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN001"},
+            {"name": "姓名", "desc": "员工姓名", "required": True, "example": "张三"},
+            {"name": "考勤月份", "desc": "格式YYYYMM", "required": True, "example": "202607"},
+            {"name": "工作地区", "desc": "东莞/嘉善/义乌/晋江", "required": True, "example": "东莞"},
+            {"name": "岗位名称", "desc": "地区固定岗位范围所需；职级和领色不参与", "required": True, "example": "操作员"},
+            {"name": "一级部门名称", "desc": "用于识别员工实际测温网点", "required": False, "example": "寮步区"},
+            {"name": "二级部门名称", "desc": "用于识别员工实际测温网点", "required": False, "example": "中国操作部"},
+            {"name": "三级部门名称", "desc": "用于识别员工实际测温网点", "required": False, "example": "华南1号枢纽2"},
+            {"name": "四级部门名称", "desc": "用于识别员工实际测温网点", "required": False, "example": "寮步操作组"},
+            {"name": "五级部门名称", "desc": "风控支持人员用于识别实际仓库", "required": False, "example": "寮步安全组"},
+        ],
+        "example_extra": [],
+    },
+    "yeban_butie": {
+        "name": "夜班补贴核算模板",
+        "description": "用于上传月/日考勤；班次休息由平台维护，晋江特殊名单单独上传",
+        "columns": [
+            {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN2313"},
+            {"name": "姓名", "desc": "员工姓名", "required": True, "example": "何俊伟"},
+            {"name": "考勤月份", "desc": "格式YYYYMM", "required": True, "example": "202608"},
+            {"name": "工作地区", "desc": "东莞/嘉善/义乌/晋江", "required": True, "example": "东莞"},
+            {"name": "一级部门名称", "desc": "员工一级部门", "required": False, "example": "莞深操作"},
+            {"name": "二级部门名称", "desc": "员工二级部门", "required": False, "example": "中国操作部"},
+            {"name": "岗位名称", "desc": "固定线下规则所需岗位信息", "required": True, "example": "操作员"},
+        ],
+        "example_extra": [],
     },
     "gonglingjiang": {
         "name": "工龄奖计算模板",
@@ -172,6 +231,44 @@ WAISU_SHEETS = {
 }
 
 
+YEBAN_ATTENDANCE_SHEETS = {
+    "月考勤": ENGINE_TEMPLATES["yeban_butie"]["columns"],
+    "日考勤": [
+        {"name": "日期", "desc": "格式YYYY-MM-DD", "required": True},
+        {"name": "工号", "desc": "员工工号", "required": True},
+        {"name": "姓名", "desc": "员工姓名", "required": True},
+        {"name": "工作地区", "desc": "用于地区规则匹配", "required": True},
+        {"name": "岗位名称", "desc": "固定线下规则所需岗位信息", "required": True},
+        {"name": "计时", "desc": "计时/计件属性；晋江按日识别计件转换", "required": False},
+        {"name": "班次编号", "desc": "用于匹配平台班次休息表", "required": True},
+        {"name": "上班一", "desc": "第一段上班打卡时间", "required": True},
+        {"name": "下班一", "desc": "第一段下班打卡时间", "required": True},
+    ],
+}
+
+
+GAOWEN_ATTENDANCE_SHEETS = {
+    "月考勤": ENGINE_TEMPLATES["gaowen_butie"]["columns"],
+    "日考勤": [
+        {"name": "出勤日期", "desc": "格式YYYY-MM-DD", "required": True},
+        {"name": "工号", "desc": "员工工号", "required": True},
+        {"name": "姓名", "desc": "员工姓名", "required": True},
+        {"name": "班次名称", "desc": "用于识别白班/夜班", "required": False},
+        {"name": "班次时间段", "desc": "如19:00-28:00，用于识别白班/夜班", "required": True},
+        {"name": "正班时数", "desc": "当日正班小时数", "required": True},
+        {"name": "刷卡加班", "desc": "当日刷卡加班小时数", "required": True},
+        {"name": "实际上班时数", "desc": "明确为0时不发高温补贴", "required": False},
+    ],
+    "测温登记": [
+        {"name": "温度测温点", "desc": "测温地点说明", "required": False},
+        {"name": "班次日期", "desc": "测温归属日期，格式YYYY-MM-DD", "required": True},
+        {"name": "测温班次", "desc": "白班或夜班", "required": True},
+        {"name": "测温网点", "desc": "平台固定网点名称", "required": True},
+        {"name": "测温温度", "desc": "摄氏温度，达到33℃才计发", "required": True},
+    ],
+}
+
+
 def _format_input_sheet(ws, columns: List[Dict[str, Any]]) -> None:
     """创建可直接录入的数据表；字段说明使用批注，避免被解析成员工数据。"""
     for col_idx, col in enumerate(columns, 1):
@@ -200,12 +297,38 @@ def _generate_waisu_template() -> bytes:
     return output.getvalue()
 
 
+def _generate_yeban_template() -> bytes:
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for sheet_name, columns in YEBAN_ATTENDANCE_SHEETS.items():
+        _format_input_sheet(wb.create_sheet(sheet_name), columns)
+    from io import BytesIO
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+def _generate_gaowen_template() -> bytes:
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for sheet_name, columns in GAOWEN_ATTENDANCE_SHEETS.items():
+        _format_input_sheet(wb.create_sheet(sheet_name), columns)
+    from io import BytesIO
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
 def generate_template(engine_key: str) -> bytes:
     """生成指定引擎的Excel模板，返回文件字节流"""
     if engine_key not in ENGINE_TEMPLATES:
         raise ValueError(f"未知引擎: {engine_key}，可选: {list(ENGINE_TEMPLATES.keys())}")
     if engine_key == "waisu_butie":
         return _generate_waisu_template()
+    if engine_key == "yeban_butie":
+        return _generate_yeban_template()
+    if engine_key == "gaowen_butie":
+        return _generate_gaowen_template()
 
     template = ENGINE_TEMPLATES[engine_key]
     wb = openpyxl.Workbook()

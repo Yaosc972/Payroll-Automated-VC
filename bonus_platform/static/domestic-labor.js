@@ -27,12 +27,15 @@ const state = {
   canbuBatchPickerYear: new Date().getFullYear(),
   rulePackage: null,
   rulePackageLoading: false,
+  nightShiftConfigs: {},
+  nightShiftConfigLoading: {},
   activeRuleCategory: 'all',
   activeRuleSubject: 'canbu',
   pollTimer: null,
   pollRequestInFlight: false,
   pollRetryCount: 0,
   pollMaxRetries: 400, // 400 × 1.5s = 10 min
+  exportInProgress: false,
 };
 
 const CANBU_BATCH_STORAGE_KEY = 'domesticLabor.canbuBatches.v1';
@@ -49,7 +52,7 @@ const SUBJECT_WORKBENCH = {
     resultField: 'quanqinjiang',
     totalField: 'total_quanqinjiang',
     uploadTitle: '全勤奖数据 Excel',
-    uploadDescription: '全勤奖核算需要月考勤数据；日考勤用于识别月初入职前是否存在工作日。',
+    uploadDescription: '全勤奖核算需要月考勤中的三档迟到次数；日考勤用于识别月初入职前是否存在工作日。',
   },
   canbu: {
     name: '餐补',
@@ -75,12 +78,36 @@ const SUBJECT_WORKBENCH = {
     uploadTitle: '工龄奖数据 Excel',
     uploadDescription: '工龄奖核算需要月考勤数据；识别到第四纵队时要求确认揽收线工龄奖名单。',
   },
+  gangwei_butie: {
+    name: '岗位补贴',
+    batchNoun: '岗位补贴批次',
+    resultField: 'gangwei_butie',
+    totalField: 'total_gangwei_butie',
+    uploadTitle: '岗位补贴月考勤 Excel',
+    uploadDescription: '岗位补贴只需要月考勤，标准以2026年7月确认规则为依据；按地区、岗位名称、排班天数和九类缺勤字段计算，并用实际在职工作日天数自动计算入离职缺勤时数，职级不参与。',
+  },
+  gaowen_butie: {
+    name: '高温补贴',
+    batchNoun: '高温补贴批次',
+    resultField: 'gaowen_butie',
+    totalField: 'total_gaowen_butie',
+    uploadTitle: '高温补贴月考勤、日考勤与测温登记 Excel',
+    uploadDescription: '高温补贴核算需要月考勤、日考勤和高温测温登记；可上传一个多Sheet文件，也可上传三份拆分文件。',
+  },
+  yeban_butie: {
+    name: '夜班补贴',
+    batchNoun: '夜班补贴批次',
+    resultField: 'yeban_butie',
+    totalField: 'total_yeban_butie',
+    uploadTitle: '夜班补贴月考勤与日考勤 Excel',
+    uploadDescription: '夜班补贴核算需要月考勤和日考勤。班次休息使用平台基线并支持当月修改；晋江额外排除人员按月确认。',
+  },
 };
 
 const ENGINE_META = {
   quanqinjiang: {
     name: '全勤奖',
-    desc: '100元/人/月，按出勤天数、迟到、旷工等条件计算',
+    desc: '100元/人/月，迟到豁免按6分钟内或6-20分钟二选一',
     icon: 'Q',
     color: 'brand',
   },
@@ -101,6 +128,24 @@ const ENGINE_META = {
     desc: '按工龄阶梯计算，每年递增',
     icon: 'G',
     color: 'violet',
+  },
+  gangwei_butie: {
+    name: '岗位补贴',
+    desc: '按岗位标准和56小时缺勤门槛折算，女神假1天按8小时',
+    icon: 'P',
+    color: 'warning',
+  },
+  gaowen_butie: {
+    name: '高温补贴',
+    desc: '同仓同日同班次达到33℃后按实际出勤折算',
+    icon: 'H',
+    color: 'warning',
+  },
+  yeban_butie: {
+    name: '夜班补贴',
+    desc: '22:00至次日08:00，3元/小时，单日封顶25元',
+    icon: 'N',
+    color: 'info',
   },
 };
 
@@ -524,7 +569,7 @@ function bindEvents() {
     if (!card) return;
     if (card.disabled || card.getAttribute('aria-disabled') === 'true') return;
     const subject = card.dataset.subjectEntry;
-    if (subject === 'quanqinjiang' || subject === 'canbu' || subject === 'waisu_butie' || subject === 'gonglingjiang') {
+    if (subject === 'quanqinjiang' || subject === 'canbu' || subject === 'waisu_butie' || subject === 'gonglingjiang' || subject === 'gangwei_butie' || subject === 'gaowen_butie' || subject === 'yeban_butie') {
       state.activeWorkbenchSubject = subject;
       state.activeCanbuBatchId = '';
       showView('canbuBatches');
@@ -785,7 +830,8 @@ function renderRulePackage() {
   if (el.rulePackageTitle) el.rulePackageTitle.textContent = packageData.name;
   if (el.rulePackageScope) el.rulePackageScope.textContent = packageData.scope_note;
   if (el.rulePackageVersionSelect) {
-    el.rulePackageVersionSelect.innerHTML = (packageData.version_history || []).map((version) => `
+    const availableVersions = packageData.available_versions || packageData.version_history || [];
+    el.rulePackageVersionSelect.innerHTML = availableVersions.map((version) => `
       <option value="${escapeHtml(version.version)}" ${version.version === packageData.version ? 'selected' : ''}>${escapeHtml(version.display_version)} · ${escapeHtml(version.status)}</option>
     `).join('');
   }
@@ -793,7 +839,7 @@ function renderRulePackage() {
     const summary = [
       ['当前版本', packageData.display_version],
       ['发布状态', packageData.status],
-      ['已验证科目', String((packageData.subjects || []).length)],
+      ['规则科目', String((packageData.subjects || []).length)],
       ['生效月份', formatRuleEffectiveMonth(packageData.effective_from)],
     ];
     el.rulePackageSummary.innerHTML = summary.map(([label, value]) => `
@@ -816,7 +862,7 @@ function renderRulePackageNavigation() {
   if (!packageData) return;
   const categories = packageData.categories || [];
   if (el.rulePackageCategoryTabs) {
-    const tabs = [{ id: 'all', name: '全部已验证', subject_ids: packageData.subjects.map(subject => subject.id) }, ...categories];
+    const tabs = [{ id: 'all', name: '全部科目', subject_ids: packageData.subjects.map(subject => subject.id) }, ...categories];
     el.rulePackageCategoryTabs.innerHTML = tabs.map((category) => `
       <button class="dl-rule-tab ${category.id === state.activeRuleCategory ? 'active' : ''}" type="button" data-rule-category="${escapeHtml(category.id)}">
         <span>${escapeHtml(category.name)}</span><span>${category.subject_ids.length}</span>
@@ -829,7 +875,7 @@ function renderRulePackageNavigation() {
       <p class="dl-rule-section-label">核算科目</p>
       ${subjects.map((subject) => `
         <button class="dl-rule-tab ${subject.id === state.activeRuleSubject ? 'active' : ''}" type="button" data-rule-subject="${escapeHtml(subject.id)}">
-          <span>${escapeHtml(subject.name)}</span><span class="dl-rule-status">${escapeHtml(subject.status)}</span>
+          <span>${escapeHtml(subject.name)}</span><span class="dl-rule-status ${getRuleStatusClass(subject.status)}">${escapeHtml(subject.status)}</span>
         </button>
       `).join('')}
     `;
@@ -840,13 +886,13 @@ function renderRulePackageSubject() {
   if (!el.rulePackageContent || !state.rulePackage) return;
   const subject = state.rulePackage.subjects.find(item => item.id === state.activeRuleSubject);
   if (!subject) {
-    el.rulePackageContent.innerHTML = '<div class="dl-rule-loading">当前分类暂无已验证科目。</div>';
+    el.rulePackageContent.innerHTML = '<div class="dl-rule-loading">当前分类暂无规则科目。</div>';
     return;
   }
   el.rulePackageContent.innerHTML = `
     <div class="dl-rule-subject-head">
       <div>
-        <span class="dl-rule-status">${escapeHtml(subject.status)}</span>
+        <span class="dl-rule-status ${getRuleStatusClass(subject.status)}">${escapeHtml(subject.status)}</span>
         <h2>${escapeHtml(subject.name)}</h2>
         <p>${escapeHtml(subject.summary)}</p>
       </div>
@@ -854,6 +900,7 @@ function renderRulePackageSubject() {
     </div>
     ${renderRulePackageBlock('数据来源', subject.data_sources)}
     ${renderRulePackageBlock('通用规则', subject.common_rules)}
+    ${renderRuleFieldCalculations(subject.field_calculations, subject.name)}
     <section class="dl-rule-block">
       <h3>地区口径</h3>
       <div class="dl-rule-region-grid">
@@ -875,8 +922,37 @@ function renderRulePackageSubject() {
   `;
 }
 
+function renderRuleFieldCalculations(items = [], subjectName = '') {
+  if (!items.length) return '';
+  return `
+    <section class="dl-rule-block">
+      <h3>字段计算公式</h3>
+      <p class="dl-rule-block-note">对应${escapeHtml(subjectName || '当前科目')}结果及导出明细，按业务字段从输入到应发金额逐步说明。</p>
+      <div class="dl-table-wrap">
+        <table class="dl-table dl-rule-formula-table">
+          <thead><tr><th>结果字段</th><th>字段含义</th><th>计算公式</th><th>计算示例</th></tr></thead>
+          <tbody>
+            ${items.map(item => `
+              <tr>
+                <td>${escapeHtml(item.field)}</td>
+                <td>${escapeHtml(item.definition)}</td>
+                <td class="dl-rule-formula-text">${escapeHtml(item.formula)}</td>
+                <td>${escapeHtml(item.example)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function renderRulePackageBlock(title, items) {
   return `<section class="dl-rule-block"><h3>${escapeHtml(title)}</h3>${renderRuleList(items)}</section>`;
+}
+
+function getRuleStatusClass(status) {
+  return status === '验证中' ? 'validating' : '';
 }
 
 function renderRuleList(items = []) {
@@ -888,7 +964,7 @@ function renderRulePackageHistory() {
   const rows = state.rulePackage.version_history || [];
   el.rulePackageHistory.innerHTML = `
     <table class="dl-table">
-      <thead><tr><th>规则包版本</th><th>状态</th><th>发布日期</th><th>生效月份</th><th>已验证科目</th><th>变更说明</th></tr></thead>
+      <thead><tr><th>规则包版本</th><th>状态</th><th>发布日期</th><th>生效月份</th><th>规则科目</th><th>变更说明</th></tr></thead>
       <tbody>
         ${rows.map((row) => `
           <tr>
@@ -1030,7 +1106,7 @@ function renderCanbuWorkbench(step = 'upload') {
         <div class="dl-actions-inline">
           <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回批次列表</button>
           <button class="dl-btn" id="btnRecalculateCanbu" type="button">重新核算</button>
-          <button class="btn-primary" id="btnExportCanbu" type="button" ${canbuResults.length ? '' : 'disabled'}>导出结果</button>
+          <button class="btn-primary btn-export" id="btnExportCanbu" type="button" ${canbuResults.length ? '' : 'disabled'}>导出结果</button>
         </div>
       </div>
       ${renderCanbuStepper(step, batch)}
@@ -1188,6 +1264,202 @@ function refreshDynamicWorkbenchRefs() {
   el.btnToggleAside = document.querySelector('#btnToggleAside');
 }
 
+function nightShiftMonth(batch = getActiveCanbuBatch()) {
+  return String(batch?.month || '').replace(/\D/g, '').slice(0, 6);
+}
+
+function getNightShiftConfig(batch = getActiveCanbuBatch()) {
+  return state.nightShiftConfigs[nightShiftMonth(batch)] || null;
+}
+
+function isNightShiftConfigReady(batch = getActiveCanbuBatch()) {
+  const config = getNightShiftConfig(batch);
+  return Number(config?.counts?.effective_shift_count || 0) > 0;
+}
+
+async function loadNightShiftConfig(batch = getActiveCanbuBatch(), { force = false } = {}) {
+  const month = nightShiftMonth(batch);
+  if (!month || state.nightShiftConfigLoading[month]) return;
+  if (!force && state.nightShiftConfigs[month]) return;
+  state.nightShiftConfigLoading[month] = true;
+  try {
+    state.nightShiftConfigs[month] = await requestJson(`/api/domestic-labor/night-shift/config/${month}`);
+  } catch (error) {
+    toast(error.message || '加载夜班配置失败。');
+  } finally {
+    state.nightShiftConfigLoading[month] = false;
+    if (getActiveCanbuBatch()?.id === batch?.id && getActiveWorkbenchSubject() === 'yeban_butie') {
+      renderCanbuStepContent('upload');
+    }
+  }
+}
+
+function renderNightShiftConfigRows(rows, columns, emptyText) {
+  const visibleRows = (rows || []).slice(0, 8);
+  if (!visibleRows.length) return `<p class="inline-status">${escapeHtml(emptyText)}</p>`;
+  return `
+    <div class="dl-table-wrap">
+      <table class="dl-table">
+        <thead><tr>${columns.map(column => `<th>${escapeHtml(column.label)}</th>`).join('')}</tr></thead>
+        <tbody>${visibleRows.map(row => `<tr>${columns.map(column => `<td>${escapeHtml(column.value(row))}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>
+    ${(rows || []).length > visibleRows.length ? `<p class="inline-status">仅预览前 ${visibleRows.length} 条，完整内容请下载当前配置。</p>` : ''}
+  `;
+}
+
+const NIGHT_SHIFT_BREAK_CATEGORIES = ['晚上休息', '早上休息', '其他休息'];
+
+function getNightShiftBreakSegments(row) {
+  const configured = Array.isArray(row?.break_segments) ? row.break_segments : [];
+  const legacy = Array.isArray(row?.break_periods) ? row.break_periods : [];
+  const segments = configured.length
+    ? configured
+    : legacy.map(period => ({ period, category: '其他休息' }));
+  return [...segments, null, null, null].slice(0, 3).map(segment => ({
+    period: String(segment?.period || ''),
+    category: NIGHT_SHIFT_BREAK_CATEGORIES.includes(segment?.category)
+      ? segment.category
+      : '其他休息',
+  }));
+}
+
+function renderNightShiftBreakSegment(segment, index) {
+  const number = index + 1;
+  return `
+    <td>
+      <div class="dl-break-segment-input">
+        <select data-shift-field="break_category_${number}" aria-label="休息段${number}类型">
+          ${NIGHT_SHIFT_BREAK_CATEGORIES.map(category => `
+            <option value="${escapeHtml(category)}" ${segment.category === category ? 'selected' : ''}>${escapeHtml(category)}</option>
+          `).join('')}
+        </select>
+        <input class="dl-roster-input" data-shift-field="break_${number}" value="${escapeHtml(segment.period)}" placeholder="HH:MM-HH:MM" aria-label="休息段${number}时段">
+      </div>
+    </td>
+  `;
+}
+
+function renderNightShiftBreakEditor(config) {
+  const rows = config.effective_shift_breaks || config.shift_breaks || [];
+  const overrideCodes = new Set((config.shift_break_overrides || []).map(row => String(row.shift_code || '')));
+  return `
+    <div class="dl-night-shift-break-editor">
+      <div class="dl-break-editor-toolbar">
+        <label class="dl-break-search-field">
+          <span>筛选班次</span>
+          <input id="nightShiftBreakSearch" type="search" placeholder="输入班次编号、名称或类别">
+        </label>
+        <p class="inline-status">每段休息必须明确选择“晚上休息 / 早上休息 / 其他休息”；00:00—01:00等跨零点时段不会被系统自行改判。</p>
+        <button class="btn-primary" id="btnSaveNightShiftBreaks" type="button">保存当月班次调整</button>
+      </div>
+      <div class="dl-roster-table-wrap dl-break-table-wrap">
+        <table class="dl-roster-table dl-break-edit-table">
+          <thead><tr><th>状态</th><th>班次类别</th><th>班次编号</th><th>班次名称</th><th>班次时间</th><th>正班时数</th><th>休息段1（类型/时段）</th><th>休息段2（类型/时段）</th><th>休息段3（类型/时段）</th><th>备注</th></tr></thead>
+          <tbody>${rows.map(row => {
+            const breakSegments = getNightShiftBreakSegments(row);
+            const searchText = [row.shift_category, row.shift_code, row.shift_name].filter(Boolean).join(' ').toLowerCase();
+            const adjusted = overrideCodes.has(String(row.shift_code || ''));
+            return `
+              <tr data-night-shift-break-row data-shift-code="${escapeHtml(row.shift_code || '')}" data-search-text="${escapeHtml(searchText)}">
+                <td><span class="dl-badge ${adjusted ? 'warn' : 'neutral'}">${adjusted ? '当月调整' : '平台基线'}</span></td>
+                <td><input class="dl-roster-input" data-shift-field="shift_category" value="${escapeHtml(row.shift_category || '')}" aria-label="班次类别"></td>
+                <td><strong class="dl-shift-code">${escapeHtml(row.shift_code || '')}</strong></td>
+                <td><input class="dl-roster-input" data-shift-field="shift_name" value="${escapeHtml(row.shift_name || '')}" aria-label="班次名称"></td>
+                <td><input class="dl-roster-input" data-shift-field="shift_time" value="${escapeHtml(row.shift_time || '')}" aria-label="班次时间"></td>
+                <td><input class="dl-roster-input" data-shift-field="regular_hours" inputmode="decimal" value="${escapeHtml(row.regular_hours ?? '')}" aria-label="正班时数"></td>
+                ${breakSegments.map(renderNightShiftBreakSegment).join('')}
+                <td><input class="dl-roster-input" data-shift-field="note" value="${escapeHtml(row.note || '')}" aria-label="备注"></td>
+              </tr>
+            `;
+          }).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function collectNightShiftBreakOverrides(config) {
+  const baselineByCode = new Map((config.baseline_shift_breaks || []).map(row => [String(row.shift_code || ''), row]));
+  const fields = ['shift_category', 'shift_name', 'shift_code', 'shift_time', 'regular_hours', 'break_segments', 'note'];
+  const comparable = row => Object.fromEntries(fields.map(field => [field, row?.[field] ?? (field === 'break_segments' ? [] : '')]));
+  return Array.from(document.querySelectorAll('[data-night-shift-break-row]')).map(row => {
+    const value = field => row.querySelector(`[data-shift-field="${field}"]`)?.value.trim() || '';
+    const regularHoursText = value('regular_hours');
+    const breakSegments = [1, 2, 3].map(index => ({
+      period: value(`break_${index}`),
+      category: value(`break_category_${index}`) || '其他休息',
+    })).filter(segment => segment.period);
+    return {
+      shift_category: value('shift_category'),
+      shift_name: value('shift_name'),
+      shift_code: row.dataset.shiftCode || '',
+      shift_time: value('shift_time'),
+      regular_hours: regularHoursText === '' ? null : Number(regularHoursText),
+      break_periods: breakSegments.map(segment => segment.period),
+      break_segments: breakSegments,
+      note: value('note'),
+    };
+  }).filter(row => JSON.stringify(comparable(row)) !== JSON.stringify(comparable(baselineByCode.get(row.shift_code))));
+}
+
+function renderNightShiftConfigPanel(batch) {
+  const month = nightShiftMonth(batch);
+  const config = getNightShiftConfig(batch);
+  const loading = Boolean(state.nightShiftConfigLoading[month]);
+  if (!config) {
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">当月夜班配置</h2><p class="dl-panel-sub">${loading ? '正在读取配置版本…' : '准备读取配置版本。'}</p></div></div>
+      </section>
+    `;
+  }
+  const counts = config.counts || {};
+  const ready = isNightShiftConfigReady(batch);
+  const listConfirmed = Boolean(config.jinjiang_list_confirmed);
+  const updatedText = config.updated_at
+    ? `最近更新：${escapeHtml(formatDateTime(config.updated_at))}${config.copied_from ? ` · 晋江名单复制自 ${escapeHtml(config.copied_from)}` : ''}`
+    : '平台班次基线已加载。请确认本月是否存在晋江额外排除人员；未确认前，晋江普通岗进入待确认。';
+  const exclusionCount = Number(counts.jinjiang_exclusion_count || 0);
+  const listStatus = !listConfirmed ? '未确认' : exclusionCount ? `已确认 ${exclusionCount} 人` : '已确认无额外排除';
+  return `
+    <section class="dl-panel">
+      <div class="dl-panel-head">
+        <div>
+          <h2 class="dl-panel-title">${escapeHtml(formatMonthLabel(batch.month))} 夜班特殊配置</h2>
+          <p class="dl-panel-sub">班次休息以平台基线为准，可保存当月差异；地区范围由固定线下规则判断；晋江仅需确认额外不享有人员。</p>
+        </div>
+        <span class="dl-badge ${listConfirmed ? 'ok' : 'warn'}">${listConfirmed ? `版本 ${Number(config.revision || 0)} · ${listStatus}` : '平台基线可核算 · 晋江名单未确认'}</span>
+      </div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>平台有效班次</span><strong>${Number(counts.effective_shift_count || 0)}</strong></div>
+        <div class="dl-result-stat"><span>当月班次调整</span><strong>${Number(counts.shift_break_override_count || 0)}</strong></div>
+        <div class="dl-result-stat"><span>适用地区规则</span><strong>固定内置</strong></div>
+        <div class="dl-result-stat"><span>晋江额外排除人数</span><strong>${exclusionCount}</strong></div>
+        <div class="dl-result-stat ${listConfirmed ? '' : 'warning'}"><span>晋江名单状态</span><strong>${listStatus}</strong></div>
+      </div>
+      <div class="dl-night-config-guide" aria-label="晋江名单填写说明">
+        <div class="dl-night-config-guide-item is-purpose"><strong>这份名单会做什么</strong><p>名单内人员在填写的生效日期范围内，不计算晋江夜班补贴。</p></div>
+        <div class="dl-night-config-guide-item"><strong>需要人工维护</strong><p>考勤字段无法稳定识别，但因轻松岗位或其他线下确认原因不享有补贴的人员。</p></div>
+        <div class="dl-night-config-guide-item"><strong>不要重复维护</strong><p>计件岗、门禁由系统自动排除；其他地区人员也不填这份名单。</p></div>
+      </div>
+      <div class="dl-actions-inline dl-night-config-actions">
+        ${!listConfirmed ? '<button class="dl-btn" id="btnConfirmNoJinjiangExclusions" type="button">确认本月无额外排除人员</button>' : ''}
+        <a class="dl-btn" href="/api/domestic-labor/night-shift/config-template/download" download>下载有名单时的填写模板</a>
+        ${listConfirmed ? `<a class="dl-btn" href="/api/domestic-labor/night-shift/config/${month}/download" download>下载当前晋江名单</a>` : ''}
+        <button class="dl-btn" id="btnCopyNightShiftConfig" type="button" ${listConfirmed ? 'disabled' : ''}>复制上月晋江名单</button>
+        <button class="btn-primary" id="btnImportNightShiftConfig" type="button">${listConfirmed ? '更新不享有名单' : '上传填写完成的名单'}</button>
+        <input id="nightShiftConfigFile" type="file" accept=".xlsx,.xlsm" hidden>
+      </div>
+      <p class="inline-status" id="nightShiftConfigStatus">${updatedText}</p>
+      <details class="dl-parameter-panel" open><summary><span>平台班次休息表</span><strong>${Number(counts.effective_shift_count || 0)} 条 · ${Number(counts.shift_break_override_count || 0)} 条当月调整</strong></summary><div class="dl-parameter-panel-body">${renderNightShiftBreakEditor(config)}</div></details>
+        <details class="dl-parameter-panel"><summary><span>晋江不享有夜班补贴人员名单</span><strong>${exclusionCount} 人 · ${listStatus}</strong></summary><div class="dl-parameter-panel-body">${renderNightShiftConfigRows(config.jinjiang_exclusions, [
+          { label: '工号', value: row => row.employee_id || '' }, { label: '姓名', value: row => row.employee_name || '' }, { label: '排除原因', value: row => row.reason || '' }, { label: '有效期', value: row => `${row.start_date || ''} 至 ${row.end_date || '持续有效'}` },
+        ], listConfirmed ? '本月已确认无额外排除人员。计件岗和门禁仍由系统自动排除。' : '请先确认本月无人，或下载模板填写后上传。')}</div></details>
+    </section>
+  `;
+}
+
 function renderCanbuStepContent(step, results = []) {
   const root = document.querySelector('#canbuStepContent');
   if (!root) return;
@@ -1207,7 +1479,9 @@ function renderCanbuStepContent(step, results = []) {
       )
     : [];
   if (step === 'upload') {
+    const isNightShift = batch?.subject === 'yeban_butie';
     root.innerHTML = `
+      ${isNightShift ? renderNightShiftConfigPanel(batch) : ''}
       <section class="dl-panel">
         <div class="dl-panel-head">
           <div>
@@ -1218,18 +1492,24 @@ function renderCanbuStepContent(step, results = []) {
         <div class="dl-upload-list">
           <div class="dl-upload-row">
             <strong>日考勤数据</strong>
-            <span>${batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : batch?.subject === 'gonglingjiang' ? '工龄奖不依赖日考勤明细' : batch?.subject === 'quanqinjiang' ? '月初入职前工作日识别' : '东莞餐补逐日计算'}</span>
-            <span class="dl-badge ${batch?.subject === 'gonglingjiang' ? 'ok' : 'warn'}">${batch?.subject === 'gonglingjiang' ? '非必需' : batch?.subject === 'quanqinjiang' ? '建议上传' : '随 Excel 上传'}</span>
+            <span>${batch?.subject === 'yeban_butie' ? '日期、班次、上下班打卡与岗位识别' : batch?.subject === 'gaowen_butie' ? '出勤日期、班次、正班时数、刷卡加班与实际上班时数' : batch?.subject === 'waisu_butie' ? '出勤与工作地区识别' : batch?.subject === 'gangwei_butie' ? '岗位补贴不依赖日考勤明细' : batch?.subject === 'gonglingjiang' ? '工龄奖不依赖日考勤明细' : batch?.subject === 'quanqinjiang' ? '月初入职前工作日识别' : '东莞餐补逐日计算'}</span>
+            <span class="dl-badge ${(batch?.subject === 'gonglingjiang' || batch?.subject === 'gangwei_butie') ? 'ok' : 'warn'}">${(batch?.subject === 'gonglingjiang' || batch?.subject === 'gangwei_butie') ? '非必需' : batch?.subject === 'quanqinjiang' ? '建议上传' : '随 Excel 上传'}</span>
           </div>
           <div class="dl-upload-row">
             <strong>月考勤数据</strong>
-            <span>${batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : batch?.subject === 'gonglingjiang' ? '地区、部门、岗位、入职日期和缺勤字段' : batch?.subject === 'quanqinjiang' ? '入离职、缺勤、迟到早退和签卡字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
+            <span>${batch?.subject === 'yeban_butie' ? '员工、工作地区和岗位基础字段' : batch?.subject === 'gaowen_butie' ? '员工、地区、岗位和各级组织归属，用于识别测温网点' : batch?.subject === 'waisu_butie' ? '岗位、入离职和缺勤字段' : batch?.subject === 'gangwei_butie' ? '地区、岗位、排班天数和九类缺勤字段' : batch?.subject === 'gonglingjiang' ? '地区、部门、岗位、入职日期和缺勤字段' : batch?.subject === 'quanqinjiang' ? '入离职、缺勤、迟到早退和签卡字段' : '嘉善/义乌汇总计算、人员字段补充'}</span>
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>
           ${batch?.subject === 'waisu_butie' ? `
           <div class="dl-upload-row">
             <strong>住宿名单字段</strong>
             <span>工号、入住时间、退宿时间</span>
+            <span class="dl-badge warn">随 Excel 上传</span>
+          </div>` : ''}
+          ${batch?.subject === 'gaowen_butie' ? `
+          <div class="dl-upload-row">
+            <strong>高温测温登记</strong>
+            <span>班次日期、测温班次、测温网点、测温温度；同仓同日同班次最高温达到33℃才计发</span>
             <span class="dl-badge warn">随 Excel 上传</span>
           </div>` : ''}
         </div>
@@ -1264,6 +1544,7 @@ function renderCanbuStepContent(step, results = []) {
     bindCanbuUploadEvents();
     renderSelectedPayrollFiles();
     renderExceptionQueue([]);
+    if (isNightShift && !getNightShiftConfig(batch)) loadNightShiftConfig(batch);
     return;
   }
 
@@ -1284,6 +1565,9 @@ function renderCanbuStepContent(step, results = []) {
   if (batch?.subject === 'quanqinjiang') renderQuanqinResults(results);
   else if (batch?.subject === 'waisu_butie') renderWaisuResults(results);
   else if (batch?.subject === 'gonglingjiang') renderGonglingResults(results);
+  else if (batch?.subject === 'gangwei_butie') renderGangweiResults(results);
+  else if (batch?.subject === 'gaowen_butie') renderGaowenResults(results);
+  else if (batch?.subject === 'yeban_butie') renderNightShiftResults(results);
   else renderCanbuResults(results);
 }
 
@@ -1316,11 +1600,12 @@ function renderSelectedPayrollFiles(message = '') {
       : '点击选择一个或多个文件 · 支持 .xlsx / .xlsm / .xls';
   }
   el.fileUploadZone?.classList.toggle('has-file', files.length > 0);
-  if (submit) submit.disabled = files.length === 0;
+  const configReady = getActiveWorkbenchSubject() !== 'yeban_butie' || isNightShiftConfigReady();
+  if (submit) submit.disabled = files.length === 0 || !configReady;
   if (el.uploadStatus) {
     setText(el.uploadStatus, message || (files.length
-      ? '提交后自动识别月考勤、日考勤及住宿名单。'
-      : '选择文件后开始字段检查。'));
+      ? (configReady ? '提交后自动识别月考勤、日考勤及住宿名单。' : '先完成当月夜班配置，文件已暂存。')
+      : (configReady ? '选择文件后开始字段检查。' : '先完成当月夜班配置，再上传考勤文件。')));
   }
   if (!el.selectedPayrollFileList) return;
   el.selectedPayrollFileList.hidden = files.length === 0;
@@ -1364,6 +1649,115 @@ function bindCanbuUploadEvents() {
     collectionRosterRows?.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
     collectionRosterRows?.querySelector('tr:last-child [data-roster-field="employeeId"]')?.focus();
   });
+  const nightShiftConfigInput = document.querySelector('#nightShiftConfigFile');
+  document.querySelector('#btnConfirmNoJinjiangExclusions')?.addEventListener('click', async () => {
+    const batch = getActiveCanbuBatch();
+    const month = nightShiftMonth(batch);
+    const config = getNightShiftConfig(batch);
+    const status = document.querySelector('#nightShiftConfigStatus');
+    if (!month || !config) return;
+    setText(status, '正在确认本月无额外排除人员…');
+    try {
+      state.nightShiftConfigs[month] = await requestJson(
+        `/api/domestic-labor/night-shift/config/${month}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shift_break_overrides: config.shift_break_overrides || [],
+            jinjiang_exclusions: [],
+            jinjiang_list_confirmed: true,
+          }),
+        }
+      );
+      toast('已确认本月无额外排除人员。');
+      renderCanbuStepContent('upload');
+    } catch (error) {
+      setText(status, error.message, true);
+      toast(error.message);
+    }
+  });
+  document.querySelector('#btnImportNightShiftConfig')?.addEventListener('click', () => {
+    nightShiftConfigInput?.click();
+  });
+  nightShiftConfigInput?.addEventListener('change', async () => {
+    const file = nightShiftConfigInput.files?.[0];
+    const batch = getActiveCanbuBatch();
+    const month = nightShiftMonth(batch);
+    if (!file || !month) return;
+    const status = document.querySelector('#nightShiftConfigStatus');
+    setText(status, '正在校验并保存晋江不享有夜班补贴人员名单…');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      state.nightShiftConfigs[month] = await requestJson(
+        `/api/domestic-labor/night-shift/config/${month}/import`,
+        { method: 'POST', body: form }
+      );
+      toast('当月晋江不享有夜班补贴人员名单已保存。');
+      renderCanbuStepContent('upload');
+    } catch (error) {
+      setText(status, error.message, true);
+      toast(error.message);
+    } finally {
+      nightShiftConfigInput.value = '';
+    }
+  });
+  document.querySelector('#btnCopyNightShiftConfig')?.addEventListener('click', async () => {
+    const batch = getActiveCanbuBatch();
+    const month = nightShiftMonth(batch);
+    const status = document.querySelector('#nightShiftConfigStatus');
+    if (!month) return;
+    setText(status, '正在复制上月晋江不享有名单…');
+    try {
+      state.nightShiftConfigs[month] = await requestJson(
+        `/api/domestic-labor/night-shift/config/${month}/copy`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+      );
+      toast('已复制上月晋江不享有名单，请核对后再提交核算。');
+      renderCanbuStepContent('upload');
+    } catch (error) {
+      setText(status, error.message, true);
+      toast(error.message);
+    }
+  });
+  document.querySelector('#nightShiftBreakSearch')?.addEventListener('input', (event) => {
+    const keyword = event.target.value.trim().toLowerCase();
+    document.querySelectorAll('[data-night-shift-break-row]').forEach(row => {
+      row.hidden = Boolean(keyword) && !String(row.dataset.searchText || '').includes(keyword);
+    });
+  });
+  document.querySelector('#btnSaveNightShiftBreaks')?.addEventListener('click', async () => {
+    const batch = getActiveCanbuBatch();
+    const month = nightShiftMonth(batch);
+    const config = getNightShiftConfig(batch);
+    const status = document.querySelector('#nightShiftConfigStatus');
+    if (!month || !config) return;
+    const overrides = collectNightShiftBreakOverrides(config);
+    if (overrides.some(row => row.regular_hours !== null && !Number.isFinite(row.regular_hours))) {
+      return toast('正班时数必须填写数字。');
+    }
+    setText(status, `正在保存 ${overrides.length} 条当月班次调整…`);
+    try {
+      state.nightShiftConfigs[month] = await requestJson(
+        `/api/domestic-labor/night-shift/config/${month}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shift_break_overrides: overrides,
+            jinjiang_exclusions: config.jinjiang_exclusions || [],
+            jinjiang_list_confirmed: Boolean(config.jinjiang_list_confirmed),
+          }),
+        }
+      );
+      toast(overrides.length ? `已保存 ${overrides.length} 条当月班次调整。` : '已恢复使用完整平台班次基线。');
+      renderCanbuStepContent('upload');
+    } catch (error) {
+      setText(status, error.message, true);
+      toast(error.message);
+    }
+  });
   el.fileUploadZone?.addEventListener('click', (event) => {
     if (event.target === el.payrollFile) return;
     el.payrollFile?.click();
@@ -1398,7 +1792,8 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
         ${validationSummary}
         <div class="dl-field-groups">
           ${renderFieldGroup('基础员工字段', ['工号', '姓名', '考勤月份', '入职日期', '最后工作日'])}
-          ${renderFieldGroup('全勤判断字段', ['旷工天数', '正班迟到次数', '早退次数', '签卡次数', '迟到早退30分钟内扣款'])}
+          ${renderFieldGroup('迟到豁免字段（二选一）', ['迟到6分钟内(次)：最多3次', '迟到6-20分钟内(次)：最多1次', '迟到20-30分钟内(次)：出现即为0'])}
+          ${renderFieldGroup('其他全勤判断字段', ['旷工天数', '正班迟到次数', '早退次数', '签卡次数', '迟到早退30分钟内扣款'])}
           ${renderFieldGroup('请假与缺勤字段', ['工伤假天数', '事假时数', '病假时数', '入离职缺勤时数'])}
           ${renderFieldGroup('月初入职辅助字段', ['出勤日期', '工作状态（有日考勤时优先使用）'])}
         </div>
@@ -1417,6 +1812,60 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
           ${renderFieldGroup('缺勤折算字段', ['休年假小时', '事假时数', '病假时数', '排休请假时数/天数', '旷工时数/天数'])}
         </div>
         <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看结果。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+      </section>
+    `;
+  }
+  if (subject === 'yeban_butie') {
+    const snapshot = state.currentRun?.nightShiftConfigSnapshot || state.currentRun?.night_shift_config_snapshot || {};
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段与配置检查</h2><p class="dl-panel-sub">考勤事实与当月配置均已绑定到本次任务，后续修改配置不会改变本批次。</p></div></div>
+        ${validationSummary}
+        <div class="dl-field-groups">
+          ${renderFieldGroup('员工基础字段', ['工号', '姓名', '考勤月份', '工作地区', '岗位名称'])}
+          ${renderFieldGroup('日考勤字段', ['日期', '班次编号', '上班一', '下班一'])}
+          ${renderFieldGroup('配置快照', [
+            `月份 ${snapshot.month || nightShiftMonth()}`,
+            `版本 ${snapshot.revision || '—'}`,
+            `平台有效班次 ${(snapshot.shift_breaks || []).length} 条`,
+            `当月班次调整 ${(snapshot.shift_break_overrides || []).length} 条`,
+            '适用地区规则 固定内置',
+            `晋江额外排除 ${(snapshot.jinjiang_exclusions || []).length} 人`,
+            `晋江名单 ${snapshot.jinjiang_list_confirmed ? '已确认' : '未确认'}`,
+          ])}
+        </div>
+        <div class="drawer-footer compact"><p class="inline-status">字段已识别；未命中配置、异常打卡和未确认规则会进入复核，不会自动计薪。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+      </section>
+    `;
+  }
+  if (subject === 'gaowen_butie') {
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">按员工组织归属、逐日出勤和同仓同日同班次测温三组依据检查。</p></div></div>
+        ${validationSummary}
+        <div class="dl-field-groups">
+          ${renderFieldGroup('员工与网点识别', ['工号', '姓名', '工作地区', '岗位名称', '一级至六级部门名称'])}
+          ${renderFieldGroup('日考勤字段', ['出勤日期', '班次名称/班次时间段', '正班时数', '刷卡加班', '实际上班时数'])}
+          ${renderFieldGroup('测温登记字段', [
+            '班次日期', '测温班次（白班/夜班）', '测温网点', '测温温度',
+            `已识别测温记录 ${Number(inputSummary.temperature_rows || 0)} 条`,
+          ])}
+        </div>
+        <div class="drawer-footer compact"><p class="inline-status">测温文件缺失不阻止任务，但测温区没有同班次记录时按0元；不会误判为无测温区域全额发放。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+      </section>
+    `;
+  }
+  if (subject === 'gangwei_butie') {
+    return `
+      <section class="dl-panel">
+        <div class="dl-panel-head"><div><h2 class="dl-panel-title">字段检查</h2><p class="dl-panel-sub">岗位补贴标准以2026年7月确认规则为依据；按岗位资格、月度标准和56小时缺勤门槛分组检查，职级不参与。</p></div></div>
+        ${validationSummary}
+        <div class="dl-field-groups">
+          ${renderFieldGroup('资格与标准字段', ['工号', '姓名', '工作地区', '岗位名称', '排班天数', '实际在职工作日天数'])}
+          ${renderFieldGroup('缺勤折算字段', ['事假时数', '排休请假时数', '病假时数', '旷工时数', '休年假小时', '其他带薪假时数', '调休时数', '入离职缺勤时数'])}
+          ${renderFieldGroup('女神假字段', ['女神假天数×8小时后计入56小时门槛'])}
+        </div>
+        <div class="drawer-footer compact"><p class="inline-status">已有入离职缺勤时数优先；否则按排班天数与实际在职工作日天数自动计算，缺字段只提示、不阻止核算。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
       </section>
     `;
   }
@@ -1947,6 +2396,369 @@ function openCanbuExplainDrawer(row) {
   document.body.style.overflow = 'hidden';
 }
 
+function getNightShiftDetails(row) {
+  return getSubjectDetail(row, 'yeban_butie')?.details || {};
+}
+
+function getNightShiftDailyCounts(row) {
+  const details = getNightShiftDetails(row);
+  return {
+    calculated: Number(details.calculated_days || 0),
+    excluded: Number(details.excluded_days || 0),
+    manual: Number(details.manual_review_days || 0),
+    pending: Number(details.pending_rule_days || 0),
+    reviewCalculated: Number(details.review_calculated_days || 0),
+    unpricedReview: Number(details.unpriced_review_days || 0),
+  };
+}
+
+function getNightShiftReasonLabel(reasonCode) {
+  const labels = {
+    generic_rule: '按通用夜班规则计算',
+    invalid_attendance_date: '出勤日期缺失或格式错误',
+    missing_punch: '员工缺勤（考勤异常）',
+    implausible_duration: '上下班时长超出合理范围',
+    no_effective_attendance: '取整后没有有效出勤时段',
+    no_night_overlap: '当天未覆盖夜班时段',
+    no_scheduled_night_work: '当天排班无需计算夜班补贴',
+    invalid_break_period: '班次休息时间配置错误',
+    partial_break_overlap: '实际出勤只覆盖部分休息时段',
+    negative_effective_duration: '扣除休息后没有有效夜班时长',
+    three_am_shift_pending: '凌晨3点班早退口径待确认',
+    work_area_scope_pending: '工作地区口径待确认',
+    jinjiang_special_list_unconfirmed: '晋江特殊名单尚未确认',
+    jinjiang_piecework_excluded: '晋江计件岗位不享有夜班补贴',
+    jinjiang_special_list_excluded: '属于晋江不享有夜班补贴名单',
+    jinjiang_gatekeeper_excluded: '晋江门禁岗位不享有夜班补贴',
+    shift_break_config_missing: '班次休息时间尚未维护',
+  };
+  return labels[reasonCode] || '需要核对当天考勤或业务口径';
+}
+
+function formatNightShiftAttendanceDate(value) {
+  const text = String(value || '').trim();
+  const matched = text.match(/\d{4}-\d{2}-\d{2}/);
+  return matched ? matched[0] : (text || '日期缺失');
+}
+
+function formatNightShiftMinutesAsClock(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes)) return '—';
+  const dayOffset = Math.floor(minutes / (24 * 60));
+  const minuteOfDay = ((Math.round(minutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const hour = String(Math.floor(minuteOfDay / 60)).padStart(2, '0');
+  const minute = String(minuteOfDay % 60).padStart(2, '0');
+  return `${dayOffset > 0 ? '次日' : ''}${hour}:${minute}`;
+}
+
+function formatNightShiftBreakHours(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const minutes = Number(value);
+  return Number.isFinite(minutes) ? (minutes / 60).toFixed(2) : '—';
+}
+
+function getNightShiftDailyAction(daily) {
+  const status = String(daily?.status || '');
+  const reasonCode = String(daily?.reason_code || '');
+  if (status === 'calculated_review' || status === 'calculated_pending') {
+    return `当日${formatMoney(daily?.amount)}元已计入，请确认后留档`;
+  }
+  if (reasonCode === 'missing_punch') return '员工当天缺勤，按考勤异常处理，当日不计夜班补贴';
+  if (reasonCode === 'shift_break_config_missing' || reasonCode === 'invalid_break_period') {
+    return '维护该班次休息时间后重新核算；当前金额未包含这一天';
+  }
+  if (status === 'pending_rule') return '确认当天业务口径后重新核算；当前金额未包含这一天';
+  return '核对当天原始考勤后重新核算；当前金额未包含这一天';
+}
+
+function renderNightShiftExplanation(row) {
+  const details = getNightShiftDetails(row);
+  const counts = getNightShiftDailyCounts(row);
+  const dailyResults = Array.isArray(details.daily_results) ? details.daily_results : [];
+  const resultStatus = getNightShiftResultStatus(row);
+  const actionRows = dailyResults.filter(daily => [
+    'manual_review', 'pending_rule', 'calculated_review', 'calculated_pending',
+  ].includes(String(daily?.status || '')));
+  const actionHtml = actionRows.length ? actionRows.map(daily => {
+    const date = formatNightShiftAttendanceDate(daily.attendance_date);
+    const shift = String(daily.shift_code || '').trim();
+    const reason = getNightShiftReasonLabel(daily.reason_code);
+    return `
+      <div class="dl-explain-action">
+        <strong>${escapeHtml(date)}</strong>
+        <span>${escapeHtml(reason)}${shift ? ` · 班次${escapeHtml(shift)}` : ''}</span>
+        <em>${escapeHtml(getNightShiftDailyAction(daily))}</em>
+      </div>
+    `;
+  }).join('') : '<div class="dl-explain-empty">本月没有需要人工处理的日期。</div>';
+  const includedText = counts.reviewCalculated > 0
+    ? `正常核算${counts.calculated}天；另有${counts.reviewCalculated}天暂算金额已计入，待确认。`
+    : `正常核算${counts.calculated}天，没有暂算金额。`;
+  const unpricedText = counts.unpricedReview > 0
+    ? `${counts.unpricedReview}天；当前应发金额未包含这些日期。`
+    : '0天；所有需要计薪的日期均已计入。';
+  const dailyBreakdownHtml = dailyResults.length ? `
+    <div class="dl-night-daily-wrap">
+      <table class="dl-night-daily-table">
+        <thead><tr>
+          <th>出勤日期</th><th>班次</th><th>计薪上班</th><th>计薪下班</th><th>夜班时长</th>
+          <th>晚上休息扣除</th><th>早上休息扣除</th><th>休息扣除合计</th><th>当日补贴</th>
+        </tr></thead>
+        <tbody>${dailyResults.map(daily => `
+          <tr>
+            <td>${escapeHtml(formatNightShiftAttendanceDate(daily.attendance_date))}</td>
+            <td>${escapeHtml(daily.shift_code || '—')}</td>
+            <td>${escapeHtml(formatNightShiftMinutesAsClock(daily.rounded_start_minutes))}</td>
+            <td>${escapeHtml(formatNightShiftMinutesAsClock(daily.rounded_end_minutes))}</td>
+            <td>${escapeHtml(formatNightShiftBreakHours(daily.night_minutes))}</td>
+            <td>${escapeHtml(formatNightShiftBreakHours(daily.evening_break_minutes))}</td>
+            <td>${escapeHtml(formatNightShiftBreakHours(daily.morning_break_minutes))}</td>
+            <td>${escapeHtml(formatNightShiftBreakHours(daily.break_minutes))}</td>
+            <td>${daily.amount === null || daily.amount === undefined ? '—' : escapeHtml(formatMoney(daily.amount))}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    </div>
+  ` : '<div class="dl-explain-empty">本月没有日考勤计算明细。</div>';
+
+  el.explainTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''} · 夜班补贴`;
+  el.explainBody.innerHTML = `
+    <div class="dl-kv-grid">
+      <div class="dl-kv"><span>本月应发</span><strong>${formatMoney(row.yeban_butie)}</strong></div>
+      <div class="dl-kv"><span>本月核算结果</span><strong>${escapeHtml(resultStatus.label)}</strong></div>
+      <div class="dl-kv"><span>需处理日期</span><strong>${actionRows.length}天</strong></div>
+    </div>
+    <div class="dl-rule-card">
+      <h3>这笔钱是怎么得出的</h3>
+      <dl>
+        <dt>本月考勤</dt><dd>${dailyResults.length}天</dd>
+        <dt>已计入金额</dt><dd>${escapeHtml(includedText)}以上日期的每日夜班补贴相加，得到本月应发${formatMoney(row.yeban_butie)}元。</dd>
+        <dt>无需补贴</dt><dd>${counts.excluded}天；当天没有符合夜班补贴的有效时长。</dd>
+        <dt>异常未计金额日</dt><dd>${escapeHtml(unpricedText)}</dd>
+        <dt>计算口径</dt><dd>只计算22:00至次日08:00内的有效时长；上下班时间按半小时取整，按班次配置分别扣除晚上休息和早上休息，再按3元/小时计算，单日最高25元。</dd>
+      </dl>
+    </div>
+    <div class="dl-rule-card">
+      <h3>每日计算明细（${dailyResults.length}天）</h3>
+      ${dailyBreakdownHtml}
+    </div>
+    <div class="dl-rule-card">
+      <h3>需要处理的日期（${actionRows.length}天）</h3>
+      <p class="dl-explain-summary">暂算日期的金额已经计入；员工缺勤等考勤异常或缺少核算依据的日期不计金额，具体原因见下方明细。</p>
+      <div class="dl-explain-actions">${actionHtml}</div>
+    </div>
+  `;
+}
+
+const HIGH_TEMPERATURE_REASON_LABELS = {
+  calculated: '同仓同日同班次最高温达到33℃，按实际出勤折算',
+  temperature_below_33: '同班次最高温未达到33℃',
+  no_matching_temperature: '没有匹配到同仓同日同班次测温',
+  actual_attendance_zero: '无正班且仅有0.5小时内残留刷卡，按无实际出勤处理',
+  no_actual_attendance: '没有可计发的实际出勤时长',
+  outside_high_temperature_season: '不在6月至10月高温津贴期间',
+  employee_or_position_excluded: '命中地区固定排除人员或岗位规则',
+  measurement_site_unresolved: '无法识别员工对应测温网点',
+  attendance_shift_unresolved: '无法从考勤识别白班或夜班',
+  invalid_attendance_date: '出勤日期缺失或格式错误',
+};
+
+function renderHighTemperatureExplanation(row) {
+  const subject = getSubjectDetail(row, 'gaowen_butie') || {};
+  const details = subject.details || {};
+  const dailyResults = Array.isArray(details.daily_results) ? details.daily_results : [];
+  const payableRows = dailyResults.filter(daily => daily.status === 'calculated');
+  const missingMeasurements = dailyResults.filter(daily => daily.reason_code === 'no_matching_temperature');
+  const exceptions = getSubjectExceptions(row, 'gaowen_butie');
+  const actionHtml = exceptions.length
+    ? exceptions.map(item => `
+        <div class="dl-explain-action">
+          <strong>${escapeHtml(item.level === 'blocking' ? '阻断' : '需确认')}</strong>
+          <span>${escapeHtml(item.message || '高温补贴口径待确认')}</span>
+          <em>${escapeHtml(item.suggested_action || '核对测温与人员口径后重新核算')}</em>
+        </div>
+      `).join('')
+    : '<div class="dl-explain-empty">本月没有平台已识别的异常。</div>';
+  const dailyBreakdownHtml = dailyResults.length ? `
+    <div class="dl-night-daily-wrap">
+      <table class="dl-night-daily-table">
+        <thead><tr>
+          <th>出勤日期</th><th>班次</th><th>测温网点</th><th>最高温</th><th>计薪时长</th><th>当日结果</th><th>当日补贴</th>
+        </tr></thead>
+        <tbody>${dailyResults.map(daily => {
+          const temperature = daily.temperature === null || daily.temperature === undefined ? '—' : `${Number(daily.temperature).toFixed(1)}℃`;
+          const reason = HIGH_TEMPERATURE_REASON_LABELS[daily.reason_code] || daily.reason_code || '原因待确认';
+          return `
+            <tr>
+              <td>${escapeHtml(formatNightShiftAttendanceDate(daily.attendance_date))}</td>
+              <td>${escapeHtml(daily.shift || '—')}</td>
+              <td>${escapeHtml(daily.site || '—')}</td>
+              <td>${escapeHtml(temperature)}</td>
+              <td>${escapeHtml(Number(daily.attendance_hours || 0).toFixed(2))}小时</td>
+              <td>${escapeHtml(reason)}</td>
+              <td>${escapeHtml(formatMoney(daily.amount || 0))}</td>
+            </tr>
+          `;
+        }).join('')}</tbody>
+      </table>
+    </div>
+  ` : '<div class="dl-explain-empty">本月没有日考勤计算明细。</div>';
+
+  el.explainTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''} · 高温补贴`;
+  el.explainBody.innerHTML = `
+    <div class="dl-kv-grid">
+      <div class="dl-kv"><span>本月应发</span><strong>${formatMoney(row.gaowen_butie)}</strong></div>
+      <div class="dl-kv"><span>对应测温网点</span><strong>${escapeHtml(details['测温网点'] || '待确认')}</strong></div>
+      <div class="dl-kv"><span>高温出勤日</span><strong>${Number(details['高温出勤天数'] || 0)}天</strong></div>
+      <div class="dl-kv"><span>计发日</span><strong>${payableRows.length}天</strong></div>
+    </div>
+    <div class="dl-rule-card">
+      <h3>这笔钱是怎么得出的</h3>
+      <dl>
+        <dt>测温匹配</dt><dd>按同测温网点、同出勤日期、同白/夜班取最高温；达到33℃才计算当天金额。</dd>
+        <dt>计薪时长</dt><dd>取正班时数与刷卡加班较大值；无正班且只有0.5小时内残留刷卡时按无实际出勤处理。</dd>
+        <dt>当日金额</dt><dd>计薪时长 × ${escapeHtml(displayValue(details['小时单价'], 0))}元，单日最高${escapeHtml(displayValue(details['单日封顶'], 0))}元。</dd>
+        <dt>本月金额</dt><dd>${payableRows.length}个计发日逐日相加，月度最高${escapeHtml(displayValue(details['月度封顶'], 0))}元，得到${formatMoney(row.gaowen_butie)}。</dd>
+        <dt>缺少测温</dt><dd>${missingMeasurements.length}天；这些日期当前按0元处理，不会借用其他仓、其他日期或其他班次温度。</dd>
+      </dl>
+    </div>
+    <div class="dl-rule-card">
+      <h3>每日计算明细（${dailyResults.length}天）</h3>
+      ${dailyBreakdownHtml}
+    </div>
+    <div class="dl-rule-card">
+      <h3>需要处理的事项（${exceptions.length}项）</h3>
+      <div class="dl-explain-actions">${actionHtml}</div>
+    </div>
+  `;
+}
+
+function hasNightShiftReviewIssue(row) {
+  const counts = getNightShiftDailyCounts(row);
+  return counts.manual > 0 || counts.pending > 0 || getSubjectExceptions(row, 'yeban_butie').length > 0;
+}
+
+function getNightShiftResultStatus(row) {
+  const counts = getNightShiftDailyCounts(row);
+  const actions = [];
+  if (counts.reviewCalculated > 0) actions.push(`确认${counts.reviewCalculated}天暂算结果`);
+  if (counts.unpricedReview > 0) actions.push(`查看${counts.unpricedReview}天异常未计金额原因`);
+  if (counts.unpricedReview > 0 && counts.reviewCalculated > 0) {
+    return { className: 'warn', label: '金额已核算（含暂算，不含异常未计金额日）', action: actions.join('；') };
+  }
+  if (counts.unpricedReview > 0) {
+    return { className: 'warn', label: '金额已核算（不含异常未计金额日）', action: actions.join('；') };
+  }
+  if (counts.reviewCalculated > 0 || counts.manual > 0 || counts.pending > 0) {
+    return { className: 'warn', label: '金额已核算（含暂算）', action: actions.join('；') || '复核异常或特殊情况' };
+  }
+  return { className: 'ok', label: '核算完成', action: '无需处理' };
+}
+
+function filterNightShiftResults(results) {
+  const keyword = state.resultSearch.trim().toLowerCase();
+  return (results || []).filter(row => {
+    const issue = hasNightShiftReviewIssue(row);
+    if (state.reviewStatusFilter === 'review' && !issue) return false;
+    if (state.reviewStatusFilter === 'pass' && issue) return false;
+    const amount = Number(row.yeban_butie || 0);
+    if (state.amountFilter === 'positive' && amount <= 0) return false;
+    if (state.amountFilter === 'zero' && amount !== 0) return false;
+    if (!keyword) return true;
+    const inputs = getSubjectDetail(row, 'yeban_butie')?.audit_explanation?.inputs || {};
+    return [row.employee_id, row.employee_name, row.department, inputs['工作地区'], inputs['岗位名称'], getEffectiveWarningText(row)]
+      .map(value => String(value || '').toLowerCase()).join(' ').includes(keyword);
+  });
+}
+
+function renderNightShiftResults(results = []) {
+  const root = document.querySelector('#canbuStepContent');
+  if (!root) return;
+  const rows = Array.isArray(results) ? results : [];
+  const totals = rows.reduce((summary, row) => {
+    const counts = getNightShiftDailyCounts(row);
+    summary.calculated += counts.calculated;
+    summary.excluded += counts.excluded;
+    summary.manual += counts.manual;
+    summary.pending += counts.pending;
+    summary.reviewCalculated += counts.reviewCalculated;
+    summary.unpricedReview += counts.unpricedReview;
+    return summary;
+  }, { calculated: 0, excluded: 0, manual: 0, pending: 0, reviewCalculated: 0, unpricedReview: 0 });
+  root.innerHTML = `
+    <section class="dl-panel">
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">夜班补贴核算</h2><p class="dl-panel-sub">结果按证据状态分层：自动核算可发放，明确排除不发放，异常与未确认口径进入复核。</p></div></div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>核算合计（含暂算）</span><strong>${formatMoney(sumField(rows, 'yeban_butie'))}</strong></div>
+        <div class="dl-result-stat"><span>正常核算日</span><strong>${totals.calculated}</strong></div>
+        <div class="dl-result-stat"><span>无需补贴日</span><strong>${totals.excluded}</strong></div>
+        <div class="dl-result-stat warning"><span>暂算需确认日</span><strong>${totals.reviewCalculated}</strong></div>
+        <div class="dl-result-stat warning"><span>异常未计金额日</span><strong>${totals.unpricedReview}</strong></div>
+      </div>
+      <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
+        <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、地区、岗位" aria-label="筛选夜班补贴结果">
+        <select class="dl-select" id="reviewStatusFilter" aria-label="筛选处理状态"><option value="all">全部处理状态</option><option value="review">只看需处理</option><option value="pass">只看无需处理</option></select>
+        <select class="dl-select" id="amountFilter" aria-label="筛选金额"><option value="all">全部金额</option><option value="positive">应发大于0</option><option value="zero">应发为0</option></select>
+        <span class="dl-result-count" id="resultCountText">—</span>
+      </div></div>
+      <div id="resultsTable" class="dl-table-wrap"></div><div class="dl-pagination" id="canbuPagination"></div>
+    </section>
+  `;
+  el.resultsTable = document.querySelector('#resultsTable');
+  el.resultSearchInput = document.querySelector('#resultSearchInput');
+  el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
+  el.amountFilter = document.querySelector('#amountFilter');
+  el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
+  if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
+  if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
+  if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
+  const rerender = () => { state.canbuPage = 1; renderNightShiftResultsTable(rows); };
+  el.resultSearchInput?.addEventListener('input', () => { state.resultSearch = el.resultSearchInput.value.trim(); rerender(); });
+  el.reviewStatusFilter?.addEventListener('change', () => { state.reviewStatusFilter = el.reviewStatusFilter.value; rerender(); });
+  el.amountFilter?.addEventListener('change', () => { state.amountFilter = el.amountFilter.value; rerender(); });
+  renderNightShiftResultsTable(rows);
+  renderExceptionQueue(rows);
+}
+
+function renderNightShiftResultsTable(results) {
+  if (!el.resultsTable) return;
+  const filtered = filterNightShiftResults(results);
+  updateResultCount(results.length, filtered.length);
+  const pages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  state.canbuPage = Math.min(Math.max(state.canbuPage, 1), pages);
+  const start = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(start, start + state.canbuPageSize);
+  if (!filtered.length) {
+    el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无夜班补贴核算结果。</p></div>';
+    if (el.canbuPagination) el.canbuPagination.innerHTML = '';
+    return;
+  }
+  el.resultsTable.innerHTML = `
+    <table class="dl-table dl-result-table"><thead><tr>
+      <th class="sticky-col id-col">工号</th><th class="sticky-col name-col">姓名</th><th>工作地区</th><th>部门</th><th>岗位</th>
+      <th class="dl-num">正常核算日</th><th class="dl-num">暂算需确认日</th><th class="dl-num">无需补贴日</th><th class="dl-num">异常未计金额日</th><th class="dl-num">应发夜班补贴</th><th>核算结果</th><th>需处理事项</th><th>解释</th>
+    </tr></thead><tbody>${pageRows.map(row => {
+      const inputs = getSubjectDetail(row, 'yeban_butie')?.audit_explanation?.inputs || {};
+      const counts = getNightShiftDailyCounts(row);
+      const resultStatus = getNightShiftResultStatus(row);
+      const index = results.indexOf(row);
+      return `<tr>
+        <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id)}</td><td class="sticky-col name-col">${escapeHtml(row.employee_name)}</td>
+        <td>${escapeHtml(displayValue(inputs['工作地区'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(row.department, '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(inputs['岗位名称'], '—'))}</td>
+        <td class="dl-num">${counts.calculated}</td><td class="dl-num">${counts.reviewCalculated}</td><td class="dl-num">${counts.excluded}</td><td class="dl-num">${counts.unpricedReview}</td>
+        <td class="dl-num dl-strong">${formatMoney(row.yeban_butie)}</td><td><span class="dl-badge ${resultStatus.className}">${resultStatus.label}</span></td><td class="wrap-cell">${escapeHtml(resultStatus.action)}</td><td><button class="dl-segment compact" data-yeban-explain-index="${index}" type="button">计算过程</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+  `;
+  el.resultsTable.querySelectorAll('[data-yeban-explain-index]').forEach(button => button.addEventListener('click', () => openExplainDrawer(results[Number(button.dataset.yebanExplainIndex)])));
+  if (el.canbuPagination) {
+    el.canbuPagination.innerHTML = `<span>${start + 1}-${Math.min(start + pageRows.length, filtered.length)} / ${filtered.length}</span><div class="dl-pagination-actions"><button class="dl-segment compact" data-yeban-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button><strong>${state.canbuPage} / ${pages}</strong><button class="dl-segment compact" data-yeban-page="next" type="button" ${state.canbuPage >= pages ? 'disabled' : ''}>下一页</button></div>`;
+    el.canbuPagination.querySelectorAll('[data-yeban-page]').forEach(button => button.addEventListener('click', () => { state.canbuPage += button.dataset.yebanPage === 'prev' ? -1 : 1; renderNightShiftResultsTable(results); }));
+  }
+}
+
 function renderGonglingResults(results = []) {
   const root = document.querySelector('#canbuStepContent');
   if (!root) return;
@@ -2003,6 +2815,194 @@ function renderGonglingResults(results = []) {
   document.querySelector('#btnEditGonglingHrbpList')?.addEventListener('click', restartActiveBatchForRecalculation);
   renderGonglingResultsTable(rows);
   renderExceptionQueue(rows);
+}
+
+function renderGangweiResults(results = []) {
+  const root = document.querySelector('#canbuStepContent');
+  if (!root) return;
+  const rows = Array.isArray(results) ? results : [];
+  const total = sumField(rows, 'gangwei_butie');
+  const positiveCount = rows.filter(row => Number(row.gangwei_butie || 0) > 0).length;
+  const deductionCount = rows.filter(row => Number(getSubjectDetail(row, 'gangwei_butie')?.details?.['扣减天数'] || 0) > 0).length;
+  const warnings = countSubjectWarnings(rows, 'gangwei_butie');
+  root.innerHTML = `
+    <section class="dl-panel">
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">岗位补贴核算 <span class="dl-badge warn">验证中</span></h2><p class="dl-panel-sub">按岗位标准和排班天数核算；九类缺勤达到56小时后按全部小时折算，女神假1天按8小时。</p></div></div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
+        <div class="dl-result-stat"><span>员工数</span><strong>${rows.length}</strong></div>
+        <div class="dl-result-stat"><span>享有人数</span><strong>${positiveCount}</strong></div>
+        <div class="dl-result-stat"><span>触发缺勤扣减</span><strong>${deductionCount}</strong></div>
+        <div class="dl-result-stat warning"><span>需确认</span><strong>${warnings}</strong></div>
+      </div>
+      <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
+        <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、地区、岗位" aria-label="筛选岗位补贴结果">
+        <select class="dl-select" id="reviewStatusFilter" aria-label="筛选确认状态"><option value="all">全部状态</option><option value="review">只看需确认</option><option value="pass">只看已核算</option></select>
+        <select class="dl-select" id="amountFilter" aria-label="筛选金额状态"><option value="all">全部金额</option><option value="positive">应发大于0</option><option value="zero">应发为0</option></select>
+        <span class="dl-result-count" id="resultCountText">—</span>
+      </div></div>
+      <div id="resultsTable" class="dl-table-wrap"></div><div class="dl-pagination" id="canbuPagination"></div>
+    </section>
+  `;
+  el.resultsTable = document.querySelector('#resultsTable');
+  el.resultSearchInput = document.querySelector('#resultSearchInput');
+  el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
+  el.amountFilter = document.querySelector('#amountFilter');
+  el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
+  if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
+  if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
+  if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
+  const rerender = () => { state.canbuPage = 1; renderGangweiResultsTable(rows); };
+  el.resultSearchInput?.addEventListener('input', () => { state.resultSearch = el.resultSearchInput.value.trim(); rerender(); });
+  el.reviewStatusFilter?.addEventListener('change', () => { state.reviewStatusFilter = el.reviewStatusFilter.value; rerender(); });
+  el.amountFilter?.addEventListener('change', () => { state.amountFilter = el.amountFilter.value; rerender(); });
+  renderGangweiResultsTable(rows);
+  renderExceptionQueue(rows);
+}
+
+function renderGangweiResultsTable(results) {
+  if (!el.resultsTable) return;
+  const keyword = state.resultSearch.trim().toLowerCase();
+  const filtered = results.filter(row => {
+    const detail = getSubjectDetail(row, 'gangwei_butie')?.details || {};
+    const issue = hasSubjectReviewIssue(row, 'gangwei_butie');
+    if (state.reviewStatusFilter === 'review' && !issue) return false;
+    if (state.reviewStatusFilter === 'pass' && issue) return false;
+    const amount = Number(row.gangwei_butie || 0);
+    if (state.amountFilter === 'positive' && amount <= 0) return false;
+    if (state.amountFilter === 'zero' && amount !== 0) return false;
+    if (!keyword) return true;
+    const inputs = detail.audit_explanation?.inputs || {};
+    return [row.employee_id, row.employee_name, row.department, inputs['工作地区'], inputs['岗位名称'], detail['资格判断'], getEffectiveWarningText(row)]
+      .map(value => String(value || '').toLowerCase()).join(' ').includes(keyword);
+  });
+  updateResultCount(results.length, filtered.length);
+  const pages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  state.canbuPage = Math.min(Math.max(state.canbuPage, 1), pages);
+  const start = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(start, start + state.canbuPageSize);
+  if (!filtered.length) {
+    el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无岗位补贴核算结果。</p></div>';
+    if (el.canbuPagination) el.canbuPagination.innerHTML = '';
+    return;
+  }
+  el.resultsTable.innerHTML = `
+    <table class="dl-table dl-result-table"><thead><tr>
+      <th class="sticky-col id-col">工号</th><th class="sticky-col name-col">姓名</th><th>工作地区</th><th>岗位</th><th>资格</th>
+      <th class="dl-num">标准</th><th class="dl-num">排班天数</th><th class="dl-num">缺勤时数</th><th class="dl-num">扣减天数</th><th class="dl-num">计发天数</th><th class="dl-num">应发岗位补贴</th><th>状态</th><th>解释</th>
+    </tr></thead><tbody>${pageRows.map(row => {
+      const detail = getSubjectDetail(row, 'gangwei_butie')?.details || {};
+      const inputs = detail.audit_explanation?.inputs || {};
+      const issue = hasSubjectReviewIssue(row, 'gangwei_butie');
+      const index = results.indexOf(row);
+      return `<tr>
+        <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id)}</td><td class="sticky-col name-col">${escapeHtml(row.employee_name)}</td>
+        <td>${escapeHtml(displayValue(inputs['工作地区'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(inputs['岗位名称'], '—'))}</td><td>${escapeHtml(displayValue(detail['资格判断'], '—'))}</td>
+        <td class="dl-num">${formatMoney(detail['岗位补贴标准'] || 0)}</td><td class="dl-num">${escapeHtml(displayValue(detail['排班天数'], 0))}</td><td class="dl-num">${escapeHtml(displayValue(detail['缺勤合计时数'], 0))}</td><td class="dl-num">${escapeHtml(displayValue(detail['扣减天数'], 0))}</td><td class="dl-num">${escapeHtml(displayValue(detail['岗位补贴计发天数'], 0))}</td>
+        <td class="dl-num dl-strong">${formatMoney(row.gangwei_butie)}</td><td><span class="dl-badge ${issue ? 'warn' : 'ok'}">${issue ? '需确认' : '核算完成'}</span></td><td><button class="dl-segment compact" data-gangwei-explain-index="${index}" type="button">计算过程</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+  `;
+  el.resultsTable.querySelectorAll('[data-gangwei-explain-index]').forEach(button => button.addEventListener('click', () => openExplainDrawer(results[Number(button.dataset.gangweiExplainIndex)])));
+  if (el.canbuPagination) {
+    el.canbuPagination.innerHTML = `<span>${start + 1}-${Math.min(start + pageRows.length, filtered.length)} / ${filtered.length}</span><div class="dl-pagination-actions"><button class="dl-segment compact" data-gangwei-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button><strong>${state.canbuPage} / ${pages}</strong><button class="dl-segment compact" data-gangwei-page="next" type="button" ${state.canbuPage >= pages ? 'disabled' : ''}>下一页</button></div>`;
+    el.canbuPagination.querySelectorAll('[data-gangwei-page]').forEach(button => button.addEventListener('click', () => { state.canbuPage += button.dataset.gangweiPage === 'prev' ? -1 : 1; renderGangweiResultsTable(results); }));
+  }
+}
+
+function renderGaowenResults(results = []) {
+  const root = document.querySelector('#canbuStepContent');
+  if (!root) return;
+  const rows = Array.isArray(results) ? results : [];
+  const total = sumField(rows, 'gaowen_butie');
+  const paidCount = rows.filter(row => Number(row.gaowen_butie || 0) > 0).length;
+  const hotDays = rows.reduce((sum, row) => sum + Number(getSubjectDetail(row, 'gaowen_butie')?.details?.['高温出勤天数'] || 0), 0);
+  const warnings = countSubjectWarnings(rows, 'gaowen_butie');
+  root.innerHTML = `
+    <section class="dl-panel">
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">高温补贴核算 <span class="dl-badge warn">验证中</span></h2><p class="dl-panel-sub">同测温网点、同出勤日期、同白/夜班最高温达到33℃后，按实际高温出勤时长逐日折算。</p></div></div>
+      <div class="dl-result-summary">
+        <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
+        <div class="dl-result-stat"><span>员工数</span><strong>${rows.length}</strong></div>
+        <div class="dl-result-stat"><span>计发人数</span><strong>${paidCount}</strong></div>
+        <div class="dl-result-stat"><span>高温出勤日</span><strong>${hotDays}</strong></div>
+        <div class="dl-result-stat warning"><span>需确认</span><strong>${warnings}</strong></div>
+      </div>
+      <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
+        <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、地区、岗位、测温网点" aria-label="筛选高温补贴结果">
+        <select class="dl-select" id="reviewStatusFilter" aria-label="筛选确认状态"><option value="all">全部状态</option><option value="review">只看需确认</option><option value="pass">只看已核算</option></select>
+        <select class="dl-select" id="amountFilter" aria-label="筛选金额状态"><option value="all">全部金额</option><option value="positive">应发大于0</option><option value="zero">应发为0</option></select>
+        <span class="dl-result-count" id="resultCountText">—</span>
+      </div></div>
+      <div id="resultsTable" class="dl-table-wrap"></div><div class="dl-pagination" id="canbuPagination"></div>
+    </section>
+  `;
+  el.resultsTable = document.querySelector('#resultsTable');
+  el.resultSearchInput = document.querySelector('#resultSearchInput');
+  el.reviewStatusFilter = document.querySelector('#reviewStatusFilter');
+  el.amountFilter = document.querySelector('#amountFilter');
+  el.resultCountText = document.querySelector('#resultCountText');
+  el.canbuPagination = document.querySelector('#canbuPagination');
+  if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
+  if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
+  if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
+  const rerender = () => { state.canbuPage = 1; renderGaowenResultsTable(rows); };
+  el.resultSearchInput?.addEventListener('input', () => { state.resultSearch = el.resultSearchInput.value.trim(); rerender(); });
+  el.reviewStatusFilter?.addEventListener('change', () => { state.reviewStatusFilter = el.reviewStatusFilter.value; rerender(); });
+  el.amountFilter?.addEventListener('change', () => { state.amountFilter = el.amountFilter.value; rerender(); });
+  renderGaowenResultsTable(rows);
+  renderExceptionQueue(rows);
+}
+
+function renderGaowenResultsTable(results) {
+  if (!el.resultsTable) return;
+  const keyword = state.resultSearch.trim().toLowerCase();
+  const filtered = results.filter(row => {
+    const detail = getSubjectDetail(row, 'gaowen_butie')?.details || {};
+    const issue = hasSubjectReviewIssue(row, 'gaowen_butie');
+    if (state.reviewStatusFilter === 'review' && !issue) return false;
+    if (state.reviewStatusFilter === 'pass' && issue) return false;
+    const amount = Number(row.gaowen_butie || 0);
+    if (state.amountFilter === 'positive' && amount <= 0) return false;
+    if (state.amountFilter === 'zero' && amount !== 0) return false;
+    if (!keyword) return true;
+    const inputs = detail.audit_explanation?.inputs || {};
+    return [row.employee_id, row.employee_name, row.department, inputs['工作地区'], inputs['岗位名称'], detail['测温网点'], detail['资格判断'], getEffectiveWarningText(row)]
+      .map(value => String(value || '').toLowerCase()).join(' ').includes(keyword);
+  });
+  updateResultCount(results.length, filtered.length);
+  const pages = Math.max(1, Math.ceil(filtered.length / state.canbuPageSize));
+  state.canbuPage = Math.min(Math.max(state.canbuPage, 1), pages);
+  const start = (state.canbuPage - 1) * state.canbuPageSize;
+  const pageRows = filtered.slice(start, start + state.canbuPageSize);
+  if (!filtered.length) {
+    el.resultsTable.innerHTML = '<div class="dl-empty compact"><p>暂无高温补贴核算结果。</p></div>';
+    if (el.canbuPagination) el.canbuPagination.innerHTML = '';
+    return;
+  }
+  el.resultsTable.innerHTML = `
+    <table class="dl-table dl-result-table"><thead><tr>
+      <th class="sticky-col id-col">工号</th><th class="sticky-col name-col">姓名</th><th>工作地区</th><th>岗位</th><th>测温网点</th>
+      <th class="dl-num">小时单价</th><th class="dl-num">单日上限</th><th class="dl-num">高温出勤日</th><th class="dl-num">月度上限</th><th class="dl-num">应发高温补贴</th><th>状态</th><th>解释</th>
+    </tr></thead><tbody>${pageRows.map(row => {
+      const detail = getSubjectDetail(row, 'gaowen_butie')?.details || {};
+      const inputs = detail.audit_explanation?.inputs || {};
+      const issue = hasSubjectReviewIssue(row, 'gaowen_butie');
+      const index = results.indexOf(row);
+      return `<tr>
+        <td class="sticky-col id-col dl-strong">${escapeHtml(row.employee_id)}</td><td class="sticky-col name-col">${escapeHtml(row.employee_name)}</td>
+        <td>${escapeHtml(displayValue(inputs['工作地区'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(inputs['岗位名称'], '—'))}</td><td class="wrap-cell">${escapeHtml(displayValue(detail['测温网点'], '待识别'))}</td>
+        <td class="dl-num">${formatMoney(detail['小时单价'] || 0)}</td><td class="dl-num">${formatMoney(detail['单日封顶'] || 0)}</td><td class="dl-num">${escapeHtml(displayValue(detail['高温出勤天数'], 0))}</td><td class="dl-num">${formatMoney(detail['月度封顶'] || 0)}</td>
+        <td class="dl-num dl-strong">${formatMoney(row.gaowen_butie)}</td><td><span class="dl-badge ${issue ? 'warn' : 'ok'}">${issue ? '需确认' : '核算完成'}</span></td><td><button class="dl-segment compact" data-gaowen-explain-index="${index}" type="button">计算过程</button></td>
+      </tr>`;
+    }).join('')}</tbody></table>
+  `;
+  el.resultsTable.querySelectorAll('[data-gaowen-explain-index]').forEach(button => button.addEventListener('click', () => openExplainDrawer(results[Number(button.dataset.gaowenExplainIndex)])));
+  if (el.canbuPagination) {
+    el.canbuPagination.innerHTML = `<span>${start + 1}-${Math.min(start + pageRows.length, filtered.length)} / ${filtered.length}</span><div class="dl-pagination-actions"><button class="dl-segment compact" data-gaowen-page="prev" type="button" ${state.canbuPage <= 1 ? 'disabled' : ''}>上一页</button><strong>${state.canbuPage} / ${pages}</strong><button class="dl-segment compact" data-gaowen-page="next" type="button" ${state.canbuPage >= pages ? 'disabled' : ''}>下一页</button></div>`;
+    el.canbuPagination.querySelectorAll('[data-gaowen-page]').forEach(button => button.addEventListener('click', () => { state.canbuPage += button.dataset.gaowenPage === 'prev' ? -1 : 1; renderGaowenResultsTable(results); }));
+  }
 }
 
 function hasGonglingReviewIssue(row) {
@@ -2509,6 +3509,9 @@ async function submitCanbuBatch() {
   const config = getWorkbenchConfig(batch?.subject);
   if (!state.payrollFiles.length && !state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
   if (!batch) return toast(`暂无${config.name}批次。`);
+  if (batch.subject === 'yeban_butie' && !isNightShiftConfigReady(batch)) {
+    return toast('平台班次休息基线未加载，请刷新页面后重试。');
+  }
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
   beginCanbuOperation(batch, '正在生成安全直传地址...');
@@ -2558,6 +3561,7 @@ async function submitCanbuBatch() {
       inputSummary: data.input_summary,
       collectionSeniorityRoster: data.collection_seniority_roster,
       collectionSeniorityRosterCount: data.collection_seniority_roster_count,
+      nightShiftConfigSnapshot: data.night_shift_config_snapshot,
     };
     state.currentResultsRunId = '';
     syncCanbuBatchFromRun(state.currentRun, { batchId: batch.id, status: data.status });
@@ -2893,6 +3897,9 @@ function renderResults(metadata) {
     canbu: { count: results.filter(r => r.canbu > 0).length, totalAmount: summary.total_canbu || 0 },
     waisu_butie: { count: results.filter(r => r.waisu_butie > 0).length, totalAmount: summary.total_waisu_butie || 0 },
     gonglingjiang: { count: results.filter(r => r.gonglingjiang > 0).length, totalAmount: summary.total_gonglingjiang || 0 },
+    gangwei_butie: { count: results.filter(r => r.gangwei_butie > 0).length, totalAmount: summary.total_gangwei_butie || 0 },
+    gaowen_butie: { count: results.filter(r => r.gaowen_butie > 0).length, totalAmount: summary.total_gaowen_butie || 0 },
+    yeban_butie: { count: results.filter(r => r.yeban_butie > 0).length, totalAmount: summary.total_yeban_butie || 0 },
   };
   if (el.engineSummarySection) el.engineSummarySection.hidden = false;
   renderEngineSummary(engineSummary);
@@ -2910,7 +3917,7 @@ function renderResultsTable(results) {
         <div>
           <span class="dl-badge warn">等待数据</span>
           <h2>员工薪酬结果会显示在这里</h2>
-          <p>结果表将包含员工工号、部门、岗位、四项科目金额、计算结果、异常等级、复核状态与导出就绪状态。</p>
+          <p>结果表将包含员工工号、部门、岗位、各科目金额、计算结果、异常等级、复核状态与导出就绪状态。</p>
         </div>
         <div class="dl-empty-map">
           <div class="dl-empty-map-row"><strong>表格</strong><span>可筛选、可排序、可追溯</span></div>
@@ -2935,6 +3942,9 @@ function renderResultsTable(results) {
         <td class="dl-num">${formatMoney(row.canbu)}</td>
         <td class="dl-num">${formatMoney(row.waisu_butie)}</td>
         <td class="dl-num">${formatMoney(row.gonglingjiang)}</td>
+        <td class="dl-num">${formatMoney(row.gangwei_butie)}</td>
+        <td class="dl-num">${formatMoney(row.gaowen_butie)}</td>
+        <td class="dl-num">${formatMoney(row.yeban_butie)}</td>
         <td class="dl-num dl-strong">${formatMoney(row.total)}</td>
         <td><span class="dl-badge ${warningLevel.className}">${warningLevel.label}</span></td>
         <td><span class="dl-badge">${needsReview ? '待复核' : '自动通过'}</span></td>
@@ -2955,6 +3965,9 @@ function renderResultsTable(results) {
           <th class="dl-num">餐补</th>
           <th class="dl-num">外宿补贴</th>
           <th class="dl-num">工龄奖</th>
+          <th class="dl-num">岗位补贴</th>
+          <th class="dl-num">高温补贴</th>
+          <th class="dl-num">夜班补贴</th>
           <th class="dl-num">应发合计</th>
           <th>异常等级</th>
           <th>复核状态</th>
@@ -3085,7 +4098,7 @@ function renderExceptionQueue(results) {
 
 function openExplainDrawer(row) {
   if (!row || !el.explainDrawer || !el.explainTitle || !el.explainBody) return;
-  const allSubjectKeys = ['quanqinjiang', 'canbu', 'waisu_butie', 'gonglingjiang'];
+  const allSubjectKeys = ['quanqinjiang', 'canbu', 'waisu_butie', 'gonglingjiang', 'gangwei_butie', 'gaowen_butie', 'yeban_butie'];
   const activeSubject = state.view === 'canbuWorkbench' ? getActiveWorkbenchSubject() : '';
   const calculatedSubjectKeys = allSubjectKeys.filter(key => getSubjectDetail(row, key));
   const subjectKeys = activeSubject && ENGINE_META[activeSubject]
@@ -3093,6 +4106,16 @@ function openExplainDrawer(row) {
     : (calculatedSubjectKeys.length ? calculatedSubjectKeys : allSubjectKeys);
   const singleSubject = subjectKeys.length === 1 ? subjectKeys[0] : '';
   const singleSubjectMeta = singleSubject ? ENGINE_META[singleSubject] : null;
+  if (singleSubject === 'yeban_butie') {
+    renderNightShiftExplanation(row);
+    el.explainDrawer.classList.add('open');
+    return;
+  }
+  if (singleSubject === 'gaowen_butie') {
+    renderHighTemperatureExplanation(row);
+    el.explainDrawer.classList.add('open');
+    return;
+  }
   el.explainTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''}`;
   const subjectCards = subjectKeys.map(key => {
     const meta = ENGINE_META[key];
@@ -3142,10 +4165,13 @@ function closeExplainDrawer() {
 }
 
 function buildRuleExplanation(key, row) {
-  if (key === 'quanqinjiang') return '按考勤月份、入离职、旷工、迟到早退、签卡和扣款条件判断。';
+  if (key === 'quanqinjiang') return '按考勤月份、入离职、旷工、签卡和迟到分档判断；6分钟内最多3次或6-20分钟最多1次，两档不可混用。';
   if (key === 'canbu') return '按餐补资格、日有效出勤和月度封顶金额计算。';
   if (key === 'waisu_butie') return '按外宿资格、当月在职天数、住宿扣除和缺勤阈值折算。';
   if (key === 'gonglingjiang') return '按地区、部门、岗位、工龄、排班天数、缺勤与揽收线工龄奖名单计算。';
+  if (key === 'gangwei_butie') return '按地区、岗位名称、岗位补贴标准、排班天数和56小时缺勤门槛计算；入离职缺勤优先读取已有值，否则按排班天数与实际在职工作日天数自动计算；女神假每1天按8小时折算，职级不参与。';
+  if (key === 'gaowen_butie') return '按同测温网点、同出勤日期、同白/夜班最高温是否达到33℃判断；达到后取正班时数与刷卡加班较大值，按地区小时单价、单日及月度上限逐日计算。';
+  if (key === 'yeban_butie') return '按夜班窗口、半小时取整、平台班次休息、固定地区规则和晋江额外排除名单逐日计算。';
   return '该科目按照当前规则包计算。';
 }
 
@@ -3287,6 +4313,13 @@ function enableReportExportLink() {
 
 async function exportResults(autoDownload = false) {
   if (!state.currentRun) return toast('暂无任务。');
+  if (state.exportInProgress) return;
+  state.exportInProgress = true;
+  const exportButtons = [...new Set([
+    el.btnExport,
+    document.querySelector('#btnExportCanbu'),
+  ].filter(Boolean))];
+  exportButtons.forEach(button => setExportButtonState(button, 'exporting'));
   setText(el.taskStatusSub, '正在生成 Excel...');
   try {
     const data = await requestJson(`/api/domestic-labor/runs/${state.currentRun.id}/export`);
@@ -3311,12 +4344,52 @@ async function exportResults(autoDownload = false) {
       exportFileName: data.file_name,
       exportedAt: new Date().toISOString(),
     });
+    exportButtons.forEach(button => setExportButtonState(button, 'exported'));
+    await new Promise(resolve => window.setTimeout(resolve, 650));
     if (state.view === 'canbuWorkbench' && getActiveCanbuBatch()) {
       syncWorkbenchChrome(getActiveCanbuBatch());
     }
   } catch (error) {
     toast(error.message);
     setText(el.taskStatusSub, error.message, true);
+    exportButtons.forEach(button => setExportButtonState(button, 'error'));
+    await new Promise(resolve => window.setTimeout(resolve, 900));
+  } finally {
+    state.exportInProgress = false;
+    exportButtons.forEach(button => setExportButtonState(button, 'idle'));
+  }
+}
+
+function setExportButtonState(button, status) {
+  if (!button) return;
+  if (!button.dataset.exportDefaultLabel) {
+    button.dataset.exportDefaultLabel = button.textContent.trim() || '导出结果';
+    button.dataset.exportWasDisabled = button.disabled ? 'true' : 'false';
+  }
+  button.classList.toggle('is-exporting', status === 'exporting');
+  button.classList.toggle('is-exported', status === 'exported');
+  button.classList.toggle('is-export-error', status === 'error');
+
+  if (status === 'idle') {
+    button.disabled = button.dataset.exportWasDisabled === 'true';
+    button.removeAttribute('aria-busy');
+    button.textContent = button.dataset.exportDefaultLabel;
+    delete button.dataset.exportDefaultLabel;
+    delete button.dataset.exportWasDisabled;
+    return;
+  }
+
+  button.disabled = true;
+  button.setAttribute('aria-busy', status === 'exporting' ? 'true' : 'false');
+  if (status === 'exporting') {
+    button.innerHTML = `
+      <span>正在生成 Excel</span>
+      <span class="dl-export-button-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+    `;
+  } else if (status === 'exported') {
+    button.textContent = 'Excel 已生成';
+  } else {
+    button.textContent = '生成失败，请重试';
   }
 }
 

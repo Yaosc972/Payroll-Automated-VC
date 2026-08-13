@@ -1,8 +1,10 @@
 """餐补计算引擎 (Meal Allowance Engine)."""
 from collections import Counter
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List
 
 from .base import BaseEngine, CalculationResult, safe_float
+from .position_rules import is_position_eligible
 from ..models import AuditExplanation
 
 
@@ -42,6 +44,7 @@ DONGGUAN_DEPARTMENT_KEYWORDS = {"寮步区", "莞深操作"}
 JIASHAN_MONTHLY_STANDARD = 300.0
 JIASHAN_ELIGIBLE_POSITIONS = {
     "安检员",
+    "查验员",
     "操作员",
     "门禁员",
     "巡场员",
@@ -68,6 +71,11 @@ JIASHAN_INELIGIBLE_POSITIONS = {
 
 REST_DAY_STATUSES = {"星期六休息", "星期天休息", "法定节假日", "休息"}
 ABNORMAL_TRUE_VALUES = {"是", "1", "true", "True", "TRUE"}
+
+
+def _excel_round(value: float, digits: int = 2) -> float:
+    quantizer = Decimal("1").scaleb(-digits)
+    return float(Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP))
 
 
 def _audit_explanation(
@@ -210,7 +218,7 @@ class CanBuEngine(BaseEngine):
     ) -> CalculationResult:
         is_eligible_dept = any(keyword in department_text for keyword in DONGGUAN_DEPARTMENT_KEYWORDS)
         is_explicitly_ineligible = position in DONGGUAN_INELIGIBLE_POSITIONS
-        is_eligible_position = position in DONGGUAN_ELIGIBLE_POSITIONS
+        is_eligible_position = is_position_eligible(position, DONGGUAN_ELIGIBLE_POSITIONS)
         if not is_eligible_dept or is_explicitly_ineligible or not is_eligible_position:
             return self._zero_result(
                 employee_id,
@@ -246,7 +254,7 @@ class CanBuEngine(BaseEngine):
             daily_totals.append(self._calculate_dongguan_daily(day))
 
         monthly_total = sum(daily_totals)
-        final_amount = round(min(monthly_total, DONGGUAN_MONTHLY_CAP), 2)
+        final_amount = _excel_round(min(monthly_total, DONGGUAN_MONTHLY_CAP), 2)
         warnings = []
         if monthly_total > DONGGUAN_MONTHLY_CAP:
             warnings.append(f"触发封顶: 累计{monthly_total:.2f}元 > {DONGGUAN_MONTHLY_CAP}元")
@@ -258,26 +266,27 @@ class CanBuEngine(BaseEngine):
             details={
                 "地区规则": "东莞",
                 "日餐补明细": daily_totals,
-                "月累计": round(monthly_total, 2),
+                "月累计": _excel_round(monthly_total, 2),
                 "封顶金额": DONGGUAN_MONTHLY_CAP,
                 "是否触发封顶": monthly_total > DONGGUAN_MONTHLY_CAP,
                 "audit_explanation": _audit_explanation(
                     final_amount,
                     "东莞餐补逐日折算与封顶",
-                    "min(Σ单日餐补, 500)",
+                    "ROUND(min(Σ单日未舍入餐补, 500), 2)",
                     input_snapshot,
                     {
                         "日标准": DONGGUAN_DAILY_RATE,
                         "月封顶": DONGGUAN_MONTHLY_CAP,
                         "日考勤记录数": len(daily_attendance),
-                        "日餐补合计": round(monthly_total, 2),
+                        "日餐补合计": _excel_round(monthly_total, 2),
                         "是否触发封顶": monthly_total > DONGGUAN_MONTHLY_CAP,
                         "最终金额": final_amount,
                     },
                     [
                         "工作地区为东莞，按平台内置餐补规则计算，不依赖月报餐补标准字段",
                         "按日考勤正班时数和刷卡加班取较大值折算",
-                        f"最终餐补=min({round(monthly_total, 2)}, {DONGGUAN_MONTHLY_CAP})={final_amount}",
+                        "单日折算金额保留原始精度，月底汇总后统一舍入，按Excel口径保留2位小数",
+                        f"最终餐补=ROUND(min({monthly_total:.6f}, {DONGGUAN_MONTHLY_CAP}), 2)={final_amount}",
                     ],
                 ),
             },
@@ -299,7 +308,11 @@ class CanBuEngine(BaseEngine):
             return DONGGUAN_DAILY_RATE
         if effective_hours <= 0:
             return 0
-        return round(effective_hours * (DONGGUAN_DAILY_RATE / 8), 2)
+        return float(
+            Decimal(str(effective_hours))
+            * Decimal(str(DONGGUAN_DAILY_RATE))
+            / Decimal("8")
+        )
 
     def _calculate_jiashan_yiwu(
         self,
@@ -311,7 +324,7 @@ class CanBuEngine(BaseEngine):
         input_snapshot: Dict[str, Any],
     ) -> CalculationResult:
         is_explicitly_ineligible = position in JIASHAN_INELIGIBLE_POSITIONS
-        is_eligible_position = position in JIASHAN_ELIGIBLE_POSITIONS
+        is_eligible_position = is_position_eligible(position, JIASHAN_ELIGIBLE_POSITIONS)
         if is_explicitly_ineligible or not is_eligible_position:
             return self._zero_result(
                 employee_id,
