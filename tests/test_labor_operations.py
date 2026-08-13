@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from bonus_platform.engine.labor.operations import build_labor_operations_snapshot
 
 
 def _time(minutes_ago: int) -> str:
-    return (datetime.utcnow() - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds") + "Z"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return (now - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds") + "Z"
 
 
 def test_operations_snapshot_builds_alerts_and_metrics():

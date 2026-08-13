@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -9,6 +8,8 @@ import re
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
+
+from ...time_utils import utcnow_naive
 
 from .materials import build_material_index, build_material_replay_plan
 
@@ -79,7 +80,7 @@ def discover_golden_batches(
         selected.append(_build_manifest_batch(root, batch))
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "materials_root": str(root),
         "source": "local_material_discovery",
         "expected_result_policy": "program output is not accepted as truth; business review required",
@@ -107,7 +108,7 @@ def build_golden_candidate_plan(
         selected.append(_supplier_candidate_plan(root, supplier, candidates))
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "materials_root": str(root),
         "source": "local_material_candidate_plan",
         "required_suppliers": required,
@@ -166,7 +167,7 @@ def prepare_golden_manifests(
             failed.append(record)
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "materials_root": str(root),
         "output_dir": str(destination),
         "source": "local_material_manifest_prepare",
@@ -394,7 +395,7 @@ def build_golden_review_template(
             )
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "source": "golden_business_review_template",
         "manifest_dir": str(directory),
         "review_policy": "Business reviewers must fill expected_metrics from reviewed invoice, bill, and reconciliation evidence. program output is not accepted as truth.",
@@ -435,7 +436,7 @@ def build_golden_review_handoff(
     readme_path.write_text(_business_review_readme(template, guidance), encoding="utf-8")
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "source": "golden_business_review_handoff",
         "ok": True,
         "summary": template["summary"],
@@ -596,7 +597,7 @@ def apply_golden_review_template(
     if require_approved and not template_validation["ok"]:
         return {
             "schema_version": SCHEMA_VERSION,
-            "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
             "source": "golden_business_review_apply",
             "manifest_dir": str(source_dir),
             "review_template": str(review_template) if not isinstance(review_template, dict) else "<in-memory>",
@@ -698,7 +699,7 @@ def apply_golden_review_template(
         skipped.append({"batch_key": batch_key, "reason": "missing_source_manifest"})
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "source": "golden_business_review_apply",
         "manifest_dir": str(source_dir),
         "review_template": str(review_template) if not isinstance(review_template, dict) else "<in-memory>",
@@ -800,7 +801,7 @@ def run_golden_manifest_replay(
     digest = hashlib.sha256(json.dumps(digest_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "source": "golden_manifest_replay",
         "manifest_dir": str(directory),
         "output_dir": str(destination),

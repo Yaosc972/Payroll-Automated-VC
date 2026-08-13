@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import hashlib
 
 import pytest
@@ -30,7 +30,8 @@ def test_expired_lease_can_be_reclaimed_by_same_owner(job_store, monkeypatch):
     job = jobs.enqueue_labor_worker_job("labor_run", owner_user_id="user-1")
     first = jobs.claim_labor_worker_job(owner_user_id="user-1", device_id="device-a")
     expired = dict(first)
-    expired["leaseExpiresAt"] = (datetime.utcnow() - timedelta(seconds=1)).isoformat(timespec="seconds") + "Z"
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    expired["leaseExpiresAt"] = (now - timedelta(seconds=1)).isoformat(timespec="seconds") + "Z"
     jobs._write_labor_worker_job(expired)
 
     reclaimed = jobs.claim_labor_worker_job(owner_user_id="user-1", device_id="device-b")

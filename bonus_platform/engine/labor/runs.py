@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List
 from uuid import uuid4
 
 from ...config import LABOR_RUNS_DIR
+from ...time_utils import utcnow_naive
 from .blob_storage import (
     canonicalize_labor_metadata_for_blob,
     materialize_labor_metadata_for_local,
@@ -219,7 +220,7 @@ def begin_labor_mapping_preflight(
             and str(current.get("status") or "") in {"queued", "running", "completed"}
         ):
             return None
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        now = utcnow_naive().isoformat(timespec="seconds") + "Z"
         return {
             **metadata,
             "mappingPreflight": {

@@ -33,6 +33,8 @@ from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
 from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+
+from bonus_platform.time_utils import utcnow_naive
 import httpx
 from openpyxl import Workbook, load_workbook
 
@@ -1218,7 +1220,7 @@ def _queue_new_user_permission_notification(user: dict[str, Any]) -> dict[str, A
                 "userName": user.get("name") or "未命名用户",
                 "name": user.get("name") or "未命名用户",
                 "email": user.get("email") or "",
-                "createdAt": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+                "createdAt": utcnow_naive().replace(microsecond=0).isoformat() + "Z",
             },
         )
     except Exception as exc:  # noqa: BLE001 - login must succeed if notification enqueue fails.
@@ -3231,7 +3233,7 @@ def _sanitize_labor_telemetry(payload: dict) -> dict:
         payload = {}
     event = {
         "schemaVersion": LABOR_TELEMETRY_SCHEMA_VERSION,
-        "createdAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "createdAt": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "source": "overseas-labor-ui",
         "event": _telemetry_text(payload.get("event") or payload.get("eventType"), 96),
         "runId": _telemetry_text(payload.get("runId"), 96),
@@ -3988,7 +3990,7 @@ def finalize_personal_labor_worker_release(request: Request, payload: dict = Bod
         for release_platform, release in (existing.get("pendingReleases") or {}).items()
         if release_platform in _LABOR_WORKER_RELEASE_PLATFORMS and isinstance(release, dict)
     } if isinstance(existing, dict) and isinstance(existing.get("pendingReleases"), dict) else {}
-    published_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    published_at = utcnow_naive().isoformat(timespec="seconds") + "Z"
     release = {
         "version": version,
         "minimumVersion": version,
@@ -4127,7 +4129,7 @@ def heartbeat_personal_labor_worker_job(
             identity=identity,
         ) as (_, job, _, generation):
             if str(job.get("jobType") or "reconcile") != "mapping_preflight":
-                heartbeat_at = str(job.get("heartbeatAt") or datetime.utcnow().isoformat())
+                heartbeat_at = str(job.get("heartbeatAt") or utcnow_naive().isoformat())
                 _update_worker_generation_metadata(
                     str(job.get("runId") or ""),
                     generation,
@@ -4227,7 +4229,7 @@ def _mark_worker_result_rejected(run_id: str, generation: str, exc: LaborWorkerA
                 "status": "failed",
                 "statusLabel": "结果未接受",
                 "message": str(exc),
-                "failedAt": datetime.utcnow().isoformat(),
+                "failedAt": utcnow_naive().isoformat(),
                 "taskGenerationId": generation,
             },
         },
@@ -4649,7 +4651,7 @@ def upload_personal_labor_mapping_preflight_result(
             ):
                 raise LaborWorkerLeaseError("字段预检对应的 Excel 输入已经变化，结果已拒绝。")
             normalized = _normalize_mapping_preflight_result(metadata, payload)
-            completed_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            completed_at = utcnow_naive().isoformat(timespec="seconds") + "Z"
             updated, applied = update_labor_metadata_for_mapping_preflight(
                 str(job.get("runId") or ""),
                 expected_task_generation_id=generation,
@@ -5105,7 +5107,7 @@ def create_labor_run_from_material(request: Request, payload: dict = Body(...)) 
             "copiedSources": copied_sources,
             "mappingCandidate": mapping_candidate,
             "expectedRisks": plan.get("expectedRisks", []),
-            "createdAt": datetime.utcnow().isoformat(),
+            "createdAt": utcnow_naive().isoformat(),
         },
         "workbookMappings": workbook_mappings,
     }
@@ -5195,7 +5197,7 @@ def review_labor_run_result(request: Request, run_id: str, payload: dict = Body(
             ),
         )
     actor_user_id, _ = _labor_request_actor(request)
-    reviewed_at = datetime.utcnow().isoformat()
+    reviewed_at = utcnow_naive().isoformat()
     updated = update_labor_metadata(
         run_id,
         {
@@ -6511,7 +6513,7 @@ def _mark_labor_task_handoff_failed(run_id: str, task_generation_id: str, exc: B
         "status": "failed",
         "statusLabel": "提交失败",
         "message": message,
-        "failedAt": datetime.utcnow().isoformat(),
+        "failedAt": utcnow_naive().isoformat(),
         "taskGenerationId": task_generation_id,
     }
     try:
@@ -6556,7 +6558,7 @@ def replay_labor_reocr_candidate(run_id: str, payload: dict = Body(...)) -> dict
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     replay["runId"] = run_id
-    replay["replayedAt"] = datetime.utcnow().isoformat()
+    replay["replayedAt"] = utcnow_naive().isoformat()
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     replays = list(governance.get("replays") or [])
     replays.append(replay)
@@ -6603,7 +6605,7 @@ async def replay_labor_reocr_candidate_file(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     replay["runId"] = run_id
-    replay["replayedAt"] = datetime.utcnow().isoformat()
+    replay["replayedAt"] = utcnow_naive().isoformat()
     replay["candidateFile"] = candidate_file.filename
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     replays = list(governance.get("replays") or [])
@@ -6659,7 +6661,7 @@ async def replay_labor_reocr_candidate_file_batch(
                 confidence_threshold=float(confidence_threshold if confidence_threshold is not None else AI_CONFIG["confidence_threshold"]),
             )
             replay["runId"] = run_id
-            replay["replayedAt"] = datetime.utcnow().isoformat()
+            replay["replayedAt"] = utcnow_naive().isoformat()
             replay["candidateFile"] = candidate_file.filename
             replay["batchUpload"] = True
             replays.append(replay)
@@ -6726,7 +6728,7 @@ def replay_labor_reocr_candidate_cache(run_id: str, payload: dict = Body(...)) -
         raise HTTPException(status_code=400, detail="该 PDF 没有可预览的本地历史图片识别记录。")
 
     replay["runId"] = run_id
-    replay["replayedAt"] = datetime.utcnow().isoformat()
+    replay["replayedAt"] = utcnow_naive().isoformat()
     governance = _normalized_reocr_governance(metadata.get("reocrReplayGovernance"))
     replays = list(governance.get("replays") or [])
     replays.append(replay)
@@ -6766,7 +6768,7 @@ def replay_labor_reocr_candidate_cache_batch(run_id: str, payload: dict = Body(d
             if not replay.get("summary", {}).get("candidateRowCount"):
                 raise ValueError("该 PDF 没有可预览的本地历史图片识别记录。")
             replay["runId"] = run_id
-            replay["replayedAt"] = datetime.utcnow().isoformat()
+            replay["replayedAt"] = utcnow_naive().isoformat()
             replays.append(replay)
             results.append(replay)
         except (HTTPException, ValueError) as exc:
@@ -6957,7 +6959,7 @@ def confirm_labor_reocr_candidate(run_id: str, payload: dict = Body(...), reques
     if replay.get("decision") != "ready_for_user_confirmation":
         raise HTTPException(status_code=400, detail="图片识别结果未通过影响预览，不能确认。")
 
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     candidate_id = f"reocr_{run_id}_{_safe_record_id(source_file)}_{_safe_record_id(warehouse_id or 'all')}"
     actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     active = {
@@ -7017,7 +7019,7 @@ def confirm_labor_reocr_candidate_batch(run_id: str, payload: dict = Body(defaul
         for item in governance["activeCandidates"]
         if item.get("decision") in {"active", "applied"} or item.get("status") in {"active", "applied"}
     }
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     confirmed = []
     skipped = []
     for replay in governance["replays"]:
@@ -7108,7 +7110,7 @@ def apply_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict = 
 
     actor = _labor_action_actor(request, payload, "appliedBy", "applied_by")
     reason = str(payload.get("reason") or "").strip()
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     previous_snapshot = {
         "status": metadata.get("status", ""),
         "comparisonSummary": metadata.get("comparisonSummary", {}),
@@ -7245,7 +7247,7 @@ def apply_labor_reocr_batch(run_id: str, payload: dict = Body(default={}), reque
 
     actor = _labor_action_actor(request, payload, "appliedBy", "applied_by")
     reason = str(payload.get("reason") or "").strip()
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     previous_snapshot = {
         "status": metadata.get("status", ""),
         "comparisonSummary": metadata.get("comparisonSummary", {}),
@@ -7356,7 +7358,7 @@ def rollback_labor_reocr_candidate(run_id: str, candidate_id: str, payload: dict
 
     actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     reason = str(payload.get("reason") or payload.get("rollbackReason") or payload.get("rollback_reason") or "").strip()
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     rolled_back = {
         **active,
         "decision": "rolled_back",
@@ -7434,7 +7436,7 @@ def create_labor_rule_candidate(run_id: str, payload: dict = Body(...), request:
         conditions=payload.get("conditions") if isinstance(payload.get("conditions"), dict) else {},
     )
     candidate["runId"] = run_id
-    candidate["createdAt"] = datetime.utcnow().isoformat()
+    candidate["createdAt"] = utcnow_naive().isoformat()
     governance["candidates"].append(candidate)
     updated = update_labor_metadata(
         run_id,
@@ -7458,7 +7460,7 @@ def replay_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body(
         raise HTTPException(status_code=400, detail="replayResults 必须是数组。")
     replay_summary = summarize_rule_replay(candidate, replay_results)
     replay_summary["runId"] = run_id
-    replay_summary["summarizedAt"] = datetime.utcnow().isoformat()
+    replay_summary["summarizedAt"] = utcnow_naive().isoformat()
     replay_summary["preflight"] = _build_rule_replay_preflight(replay_summary)
     governance["replaySummaries"][rule_id] = replay_summary
     updated = update_labor_metadata(run_id, {"ruleGovernance": governance})
@@ -7484,7 +7486,7 @@ def auto_replay_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = 
         limit=max(1, min(limit, 100)),
     )
     replay_summary["runId"] = run_id
-    replay_summary["summarizedAt"] = datetime.utcnow().isoformat()
+    replay_summary["summarizedAt"] = utcnow_naive().isoformat()
     replay_summary["preflight"] = _build_rule_replay_preflight(replay_summary)
     governance["replaySummaries"][rule_id] = replay_summary
     updated = update_labor_metadata(run_id, {"ruleGovernance": governance})
@@ -7512,7 +7514,7 @@ def confirm_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Body
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     active["runId"] = run_id
-    active["confirmedAt"] = datetime.utcnow().isoformat()
+    active["confirmedAt"] = utcnow_naive().isoformat()
     active["preflight"] = replay_summary.get("preflight") or _build_rule_replay_preflight(replay_summary)
     _upsert_rule_record(governance["activeRules"], active)
     _upsert_rule_record(governance["candidates"], {**candidate, "status": "confirmed", "decision": "confirmed"})
@@ -7545,7 +7547,7 @@ def rollback_labor_rule_candidate(run_id: str, rule_id: str, payload: dict = Bod
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     rolled_back["runId"] = run_id
-    rolled_back["rolledBackAt"] = datetime.utcnow().isoformat()
+    rolled_back["rolledBackAt"] = utcnow_naive().isoformat()
     _upsert_rule_record(governance["rolledBackRules"], rolled_back)
     _remove_rule_record(governance["activeRules"], rule_id)
     updated = update_labor_metadata(
@@ -7596,7 +7598,7 @@ def confirm_labor_name_mapping_candidate(run_id: str, candidate_id: str, payload
         "requiresConfirmation": False,
         "confirmedBy": actor,
         "confirmationReason": reason,
-        "confirmedAt": datetime.utcnow().isoformat(),
+        "confirmedAt": utcnow_naive().isoformat(),
         "auditTrail": [
             *(candidate.get("auditTrail") or []),
             {"action": "confirmed", "actor": actor, "reason": reason, "replaySummary": replay_summary.get("summary", {})},
@@ -7657,7 +7659,7 @@ def confirm_labor_allocation_candidate(run_id: str, candidate_id: str, payload: 
     actor = _labor_action_actor(request, payload, "confirmedBy", "confirmed_by")
     reason = str(payload.get("reason") or "").strip()
     decision_note = str(payload.get("decisionNote") or payload.get("decision_note") or "").strip()
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     active = {
         **candidate,
         "decision": "confirmed",
@@ -7703,7 +7705,7 @@ def rollback_labor_allocation_candidate(run_id: str, candidate_id: str, payload:
 
     actor = _labor_action_actor(request, payload, "rolledBackBy", "rolled_back_by")
     reason = str(payload.get("reason") or payload.get("rollbackReason") or payload.get("rollback_reason") or "").strip()
-    now = datetime.utcnow().isoformat()
+    now = utcnow_naive().isoformat()
     rolled_back = {
         **active,
         "decision": "rolled_back",
@@ -7755,7 +7757,7 @@ def auto_replay_labor_name_mapping_candidate(run_id: str, candidate_id: str, pay
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     replay_summary["runId"] = run_id
-    replay_summary["summarizedAt"] = datetime.utcnow().isoformat()
+    replay_summary["summarizedAt"] = utcnow_naive().isoformat()
     governance["replaySummaries"][candidate_id] = replay_summary
     updated = update_labor_metadata(run_id, {"nameMappingGovernance": governance})
     return updated["nameMappingGovernance"]["replaySummaries"][candidate_id]
@@ -7782,7 +7784,7 @@ def rollback_labor_name_mapping_candidate(run_id: str, candidate_id: str, payloa
         "status": "rolled_back",
         "rolledBackBy": actor,
         "rollbackReason": reason,
-        "rolledBackAt": datetime.utcnow().isoformat(),
+        "rolledBackAt": utcnow_naive().isoformat(),
         "auditTrail": [
             *(active.get("auditTrail") or []),
             {"action": "rolled_back", "actor": actor, "reason": reason},
@@ -7834,7 +7836,7 @@ def confirm_labor_profile_candidate(run_id: str, candidate_id: str, payload: dic
         "version": int((candidate.get("profileData") or {}).get("version") or candidate.get("version") or 1),
         "confirmedBy": actor,
         "confirmationReason": str(payload.get("reason") or "").strip(),
-        "confirmedAt": datetime.utcnow().isoformat(),
+        "confirmedAt": utcnow_naive().isoformat(),
         "auditTrail": [
             *(candidate.get("auditTrail") or []),
             {
@@ -7877,7 +7879,7 @@ def auto_replay_labor_profile_candidate(run_id: str, candidate_id: str, payload:
         limit=max(1, min(limit, 100)),
     )
     replay_summary["runId"] = run_id
-    replay_summary["summarizedAt"] = datetime.utcnow().isoformat()
+    replay_summary["summarizedAt"] = utcnow_naive().isoformat()
     replay_summary["preflight"] = _build_profile_replay_preflight(candidate, replay_summary)
     governance["replaySummaries"][candidate_id] = replay_summary
     updated = update_labor_metadata(run_id, {"profileGovernance": governance})
@@ -7902,7 +7904,7 @@ def rollback_labor_profile_candidate(run_id: str, candidate_id: str, payload: di
         "rolledBackBy": actor,
         "rollbackReason": str(payload.get("reason") or "").strip(),
         "rollbackToVersion": rollback_target,
-        "rolledBackAt": datetime.utcnow().isoformat(),
+        "rolledBackAt": utcnow_naive().isoformat(),
         "auditTrail": [
             *(active.get("auditTrail") or []),
             {
@@ -7946,7 +7948,7 @@ def confirm_labor_correction_candidate(run_id: str, candidate_id: str, payload: 
         "requiresConfirmation": False,
         "confirmedBy": actor,
         "confirmationReason": str(payload.get("reason") or "").strip(),
-        "confirmedAt": datetime.utcnow().isoformat(),
+        "confirmedAt": utcnow_naive().isoformat(),
         "auditTrail": [
             *(candidate.get("auditTrail") or []),
             {
@@ -7984,7 +7986,7 @@ def auto_replay_labor_correction_candidate(run_id: str, candidate_id: str, paylo
         hours_tolerance=float(payload.get("hoursTolerance") or payload.get("hours_tolerance") or AI_CONFIG["hours_tolerance"]),
     )
     replay_summary["runId"] = run_id
-    replay_summary["summarizedAt"] = datetime.utcnow().isoformat()
+    replay_summary["summarizedAt"] = utcnow_naive().isoformat()
     governance["replaySummaries"][candidate_id] = replay_summary
     updated = update_labor_metadata(run_id, {"correctionGovernance": governance})
     return updated["correctionGovernance"]["replaySummaries"][candidate_id]
@@ -8004,7 +8006,7 @@ def rollback_labor_correction_candidate(run_id: str, candidate_id: str, payload:
         "status": "rolled_back",
         "rolledBackBy": actor,
         "rollbackReason": str(payload.get("reason") or "").strip(),
-        "rolledBackAt": datetime.utcnow().isoformat(),
+        "rolledBackAt": utcnow_naive().isoformat(),
         "auditTrail": [
             *(active.get("auditTrail") or []),
             {
@@ -8099,7 +8101,7 @@ def _rule_id_from_payload(payload: dict) -> str:
         return rule_id
     title = str(payload.get("title") or "rule").strip().lower()
     safe_title = re.sub(r"[^a-z0-9]+", "_", title).strip("_") or "rule"
-    return f"{safe_title}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    return f"{safe_title}_{utcnow_naive().strftime('%Y%m%d%H%M%S')}"
 
 
 def _find_rule_record(records: list[dict], rule_id: str) -> dict | None:
@@ -8155,7 +8157,7 @@ def _build_profile_candidate(run_id: str, supplier: str, profile_data: dict, pdf
         "status": "pending_user_confirmation",
         "requiresConfirmation": True,
         "source": f"labor_run:{run_id}",
-        "createdAt": datetime.utcnow().isoformat(),
+        "createdAt": utcnow_naive().isoformat(),
         "profileData": profile_data,
         "evidence": evidence,
         "auditTrail": [
@@ -8936,7 +8938,7 @@ def _build_low_confidence_correction_candidates(run_id: str, pdf_rows: list, ext
                 "status": "pending_user_confirmation",
                 "requiresConfirmation": True,
                 "source": f"labor_run:{run_id}",
-                "createdAt": datetime.utcnow().isoformat(),
+                "createdAt": utcnow_naive().isoformat(),
                 "reason": "low_confidence_extraction",
                 "original": proposed,
                 "proposed": proposed,
@@ -10635,7 +10637,7 @@ def _run_labor_extract_compare(
                     "status": "running",
                     "statusLabel": "处理中",
                     "message": "后台正在读取已上传文件并生成核对结果。",
-                    "startedAt": datetime.utcnow().isoformat(),
+                    "startedAt": utcnow_naive().isoformat(),
                     **({"taskGenerationId": generation} if generation else {}),
                 },
             },
@@ -10674,7 +10676,7 @@ def _run_labor_extract_compare(
                     "status": "completed",
                     "statusLabel": "完成",
                     "message": "核对结果已生成。",
-                    "completedAt": datetime.utcnow().isoformat(),
+                    "completedAt": utcnow_naive().isoformat(),
                     **({"taskGenerationId": generation} if generation else {}),
                 },
             },
@@ -10714,7 +10716,7 @@ def _run_labor_extract_compare(
                     "status": "failed",
                     "statusLabel": "失败",
                     "message": str(exc),
-                    "failedAt": datetime.utcnow().isoformat(),
+                    "failedAt": utcnow_naive().isoformat(),
                     **({"taskGenerationId": generation} if generation else {}),
                 },
             },
@@ -10752,7 +10754,7 @@ def _run_labor_extract_compare(
                     "status": "failed",
                     "statusLabel": "失败",
                     "message": message,
-                    "failedAt": datetime.utcnow().isoformat(),
+                    "failedAt": utcnow_naive().isoformat(),
                     **({"taskGenerationId": generation} if generation else {}),
                 },
             },
@@ -12192,7 +12194,7 @@ def _perform_labor_extract_compare(run_id: str, task_generation_id: str = "") ->
                 "status": "completed",
                 "statusLabel": "完成",
                 "message": "核对结果已生成。",
-                "completedAt": datetime.utcnow().isoformat(),
+                "completedAt": utcnow_naive().isoformat(),
                 **({"taskGenerationId": generation} if generation else {}),
             },
             "errorMessage": "",

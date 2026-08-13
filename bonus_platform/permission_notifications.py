@@ -5,6 +5,8 @@ import re
 from typing import Any
 from urllib.parse import quote
 
+from .time_utils import utcnow_naive
+
 
 def _safe_text(value: Any, fallback: str = "-") -> str:
     text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or "")).strip()
@@ -149,7 +151,7 @@ def build_permission_change_payload(
         "addedModules": [after_modules[item] for item in sorted(set(after_modules) - set(before_modules))],
         "removedModules": [before_modules[item] for item in sorted(set(before_modules) - set(after_modules))],
         "currentModules": [after_modules[item] for item in sorted(after_modules)],
-        "changedAt": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "changedAt": utcnow_naive().replace(microsecond=0).isoformat() + "Z",
     }
 
 

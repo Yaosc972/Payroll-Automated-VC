@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Any, Callable
 from uuid import uuid4
+
+from ...time_utils import utcnow_naive
 
 from .worker_version import worker_version_at_least, worker_version_code
 
@@ -82,7 +83,7 @@ class PostgresLaborWorkerStore:
         generation: str,
         job_type: str,
     ) -> Any:
-        job_id = f"labor_job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}"
+        job_id = f"labor_job_{utcnow_naive().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}"
         metadata = json.dumps(
             {
                 "ownerUserId": owner,
@@ -365,7 +366,7 @@ class PostgresLaborWorkerStore:
         generation = str(expected_task_generation_id or "").strip()
         acceptance = json.dumps(
             {
-                "resultAcceptedAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "resultAcceptedAt": utcnow_naive().isoformat(timespec="seconds") + "Z",
                 "resultAcceptedGenerationId": generation,
                 "resultAcceptedReportSha256": str(result_report_sha256 or "").strip().lower(),
                 "resultAcceptedReportSizeBytes": int(result_report_size_bytes or 0),

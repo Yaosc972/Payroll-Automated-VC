@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from ...config import OUTPUT_DIR
+from ...time_utils import utcnow_naive
 from .worker_jobs_postgres import PostgresLaborWorkerStore
 from .worker_version import worker_version_at_least
 
@@ -72,7 +73,7 @@ def enqueue_labor_worker_job(
                 return job
         now = _utc_now()
         job = {
-            "id": f"labor_job_{datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}",
+            "id": f"labor_job_{utcnow_naive().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}",
             "runId": str(run_id),
             "jobType": normalized_job_type,
             "ownerUserId": owner,
@@ -157,7 +158,7 @@ def claim_labor_worker_job(*, owner_user_id: str, device_id: str, worker_version
     store = _postgres_store()
     if store:
         return store.claim(owner, device, worker_version)
-    now = datetime.utcnow()
+    now = utcnow_naive()
     with _STORE_LOCK:
         for job in list_labor_worker_jobs():
             if job.get("ownerUserId") != owner:
@@ -484,7 +485,7 @@ def _assert_lease(
         or job.get("claimedDeviceId") != _required_identity(device_id, "device_id")
     ):
         raise LaborWorkerLeaseError("任务不属于当前 Worker，或租约已经失效。")
-    if _parse_time(job.get("leaseExpiresAt"), default=datetime.min) <= datetime.utcnow():
+    if _parse_time(job.get("leaseExpiresAt"), default=datetime.min) <= utcnow_naive():
         raise LaborWorkerLeaseError("任务租约已经过期。")
     _assert_job_generation(job, expected_task_generation_id)
     return dict(job)
@@ -590,11 +591,11 @@ def _required_job_type(value: str) -> str:
 
 
 def _utc_now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    return utcnow_naive().isoformat(timespec="seconds") + "Z"
 
 
 def _utc_after(seconds: int) -> str:
-    return (datetime.utcnow() + timedelta(seconds=seconds)).isoformat(timespec="seconds") + "Z"
+    return (utcnow_naive() + timedelta(seconds=seconds)).isoformat(timespec="seconds") + "Z"
 
 
 def _lease_deadline() -> str:

@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ...time_utils import utcnow_naive
 
 
 _LOCK = threading.Lock()
@@ -18,7 +19,7 @@ def record_labor_runtime_metric(event: str, *, status: str = "", summary: dict[s
     payload = {
         "event": str(event)[:96],
         "status": str(status)[:64],
-        "createdAt": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "createdAt": utcnow_naive().isoformat(timespec="seconds") + "Z",
         "summary": summary or {},
     }
     path = Path(configured).expanduser()

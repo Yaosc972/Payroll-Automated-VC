@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from datetime import timedelta
 import hashlib
 import json
@@ -12,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from .. import config
+from ..time_utils import utcnow_naive
 
 
 SQLITE_SCHEMA = """
@@ -272,11 +272,11 @@ def _sqlite_db_path(db_path: Path | None = None) -> Path:
 
 
 def _now() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return utcnow_naive().replace(microsecond=0).isoformat() + "Z"
 
 
 def _expires_at() -> str:
-    return (datetime.utcnow().replace(microsecond=0) + timedelta(days=SESSION_TTL_DAYS)).isoformat() + "Z"
+    return (utcnow_naive().replace(microsecond=0) + timedelta(days=SESSION_TTL_DAYS)).isoformat() + "Z"
 
 
 def _hash_token(token: str) -> str:
@@ -610,7 +610,7 @@ def list_pending_admin_notifications(
     init_admin_store(db_path)
     safe_limit = max(1, min(int(limit or 1), 20))
     stale_before = (
-        datetime.utcnow().replace(microsecond=0) - timedelta(minutes=5)
+        utcnow_naive().replace(microsecond=0) - timedelta(minutes=5)
     ).isoformat() + "Z"
     with _connect(db_path) as connection:
         rows = connection.execute(
@@ -631,7 +631,7 @@ def claim_admin_notification(notification_id: str, db_path: Path | None = None) 
     init_admin_store(db_path)
     now = _now()
     stale_before = (
-        datetime.utcnow().replace(microsecond=0) - timedelta(minutes=5)
+        utcnow_naive().replace(microsecond=0) - timedelta(minutes=5)
     ).isoformat() + "Z"
     with _connect(db_path) as connection:
         cursor = connection.execute(

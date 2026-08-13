@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from ...config import OUTPUT_DIR
+from ...time_utils import utcnow_naive
 
 
 LABOR_JOBS_DIR = OUTPUT_DIR / "labor_jobs"
@@ -62,7 +63,7 @@ def enqueue_labor_reconciliation_job(run_id: str, metadata: dict[str, Any] | Non
 def claim_next_labor_job(worker_id: str) -> dict[str, Any] | None:
     if _use_postgres_jobs():
         return _claim_next_postgres_job(worker_id)
-    now_dt = datetime.utcnow()
+    now_dt = utcnow_naive()
     for job in _list_jobs():
         is_available = job.get("status") in {"queued", "retry_wait"} and (
             not _parse_time(job.get("availableAt")) or _parse_time(job.get("availableAt")) <= now_dt
@@ -229,16 +230,16 @@ def _job_path(job_id: str) -> Path:
 
 
 def _new_job_id() -> str:
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
+    timestamp = utcnow_naive().strftime("%Y%m%d_%H%M%S_%f")
     return f"labor_job_{timestamp}_{uuid4().hex[:8]}"
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return utcnow_naive().isoformat(timespec="seconds")
 
 
 def _lease_expires_at() -> str:
-    return (datetime.utcnow() + timedelta(seconds=JOB_LEASE_SECONDS)).isoformat(timespec="seconds")
+    return (utcnow_naive() + timedelta(seconds=JOB_LEASE_SECONDS)).isoformat(timespec="seconds")
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -251,7 +252,7 @@ def _parse_time(value: Any) -> datetime | None:
 def _next_retry_at(job: dict[str, Any]) -> str:
     attempt = max(int(job.get("attempt") or 1), 1)
     delay_seconds = [30, 120, 600, 1800][min(attempt - 1, 3)]
-    return (datetime.utcnow() + timedelta(seconds=delay_seconds)).isoformat(timespec="seconds")
+    return (utcnow_naive() + timedelta(seconds=delay_seconds)).isoformat(timespec="seconds")
 
 
 def _job_metadata_snapshot(metadata: dict[str, Any]) -> dict[str, Any]:

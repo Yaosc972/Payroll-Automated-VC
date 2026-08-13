@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from ...time_utils import utcnow_naive
+
 
 def build_labor_operations_snapshot(
     jobs: list[dict[str, Any]],
@@ -10,7 +12,7 @@ def build_labor_operations_snapshot(
     *,
     storage: dict[str, Any],
 ) -> dict[str, Any]:
-    now = datetime.utcnow()
+    now = utcnow_naive()
     alerts: list[dict[str, Any]] = []
     active = [job for job in jobs if job.get("status") in {"queued", "running", "retry_wait"}]
     stale_running = [
