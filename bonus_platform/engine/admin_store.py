@@ -1070,7 +1070,14 @@ def get_session_auth_context(token: str, db_path: Path | None = None) -> tuple[s
 def delete_session(token: str, db_path: Path | None = None) -> None:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
+        session = connection.execute(
+            "SELECT user_id FROM admin_sessions WHERE token_hash = ?",
+            (_hash_token(token),),
+        ).fetchone()
         connection.execute("DELETE FROM admin_sessions WHERE token_hash = ?", (_hash_token(token),))
+        if session:
+            user_id = str(session["user_id"])
+            _insert_audit(connection, user_id, "logout", "user", user_id, "登录会话已退出")
         connection.commit()
 
 
@@ -1181,7 +1188,18 @@ def set_feature_permission(
     return get_permissions(db_path)["rolePermissions"].get(role_id, {})
 
 
-def list_audit_logs(limit: int = 50, db_path: Path | None = None) -> list[dict[str, Any]]:
+def count_audit_logs(db_path: Path | None = None) -> int:
+    init_admin_store(db_path)
+    with _connect(db_path) as connection:
+        row = connection.execute("SELECT COUNT(*) AS total FROM admin_audit_logs").fetchone()
+    return int(row["total"] if row else 0)
+
+
+def list_audit_logs(
+    limit: int = 50,
+    offset: int = 0,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
         rows = connection.execute(
@@ -1190,11 +1208,33 @@ def list_audit_logs(limit: int = 50, db_path: Path | None = None) -> list[dict[s
                    target_id AS "targetId", detail, created_at AS "createdAt"
             FROM admin_audit_logs
             ORDER BY id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (limit,),
+            (max(1, limit), max(0, offset)),
         ).fetchall()
     return _rows_to_dicts(rows)
+
+
+def record_audit_event(
+    actor_user_id: str,
+    action: str,
+    target_type: str,
+    target_id: str,
+    detail: str | None = None,
+    db_path: Path | None = None,
+) -> None:
+    """Persist a server-derived business audit event without request payload data."""
+    init_admin_store(db_path)
+    with _connect(db_path) as connection:
+        _insert_audit(
+            connection,
+            str(actor_user_id)[:256],
+            str(action)[:128],
+            str(target_type)[:128],
+            str(target_id)[:256],
+            str(detail)[:500] if detail is not None else None,
+        )
+        connection.commit()
 
 
 def _insert_audit(

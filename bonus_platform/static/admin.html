@@ -7,7 +7,7 @@
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=admin-users-20260810" />
-    <link rel="stylesheet" href="admin-directory.css?v=20260810-1" />
+    <link rel="stylesheet" href="admin-directory.css?v=20260812-3" />
     <script src="permission-guard.js?v=9"></script>
   </head>
   <body class="portal-shell dashboard-shell admin-console-shell">
@@ -187,6 +187,7 @@
               <p>Audit Trail</p>
               <h2 id="auditLogTitle">操作日志</h2>
             </div>
+            <span class="admin-audit-context" id="auditLogContext">最近 12 条 · 北京时间</span>
           </div>
 
           <table class="admin-audit-table">
@@ -195,15 +196,20 @@
                 <th>时间</th>
                 <th>操作者</th>
                 <th>动作</th>
-                <th>对象</th>
+                <th>对象 / 变更</th>
               </tr>
             </thead>
             <tbody id="auditLogRows"></tbody>
           </table>
+          <div
+            class="admin-user-pagination admin-audit-pagination"
+            id="auditLogPagination"
+            aria-label="操作日志分页"
+          ></div>
         </section>
       </main>
     </div>
 
-    <script src="admin.js?v=33b7cdde7558"></script>
+    <script src="admin.js?v=20260812-3"></script>
   </body>
 </html>

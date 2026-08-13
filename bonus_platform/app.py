@@ -177,6 +177,7 @@ from .engine.fbu_performance.runs import (
 from .engine.fbu_performance.runs import FBURuleListStore
 from .engine.admin_store import (
     claim_admin_notification,
+    count_audit_logs,
     create_session,
     delete_session,
     enqueue_admin_notification,
@@ -189,6 +190,7 @@ from .engine.admin_store import (
     list_pending_admin_notifications,
     mark_admin_notification_failed,
     mark_admin_notification_sent,
+    record_audit_event,
     set_feature_permission,
     set_module_enabled,
     set_module_role_access,
@@ -227,6 +229,7 @@ PERMISSION_NOTIFICATION_CONFIG = {
     "public_url": str(os.environ.get("SIGMA_WORKBENCH_PUBLIC_URL") or "").strip().rstrip("/"),
 }
 permission_notification_logger = logging.getLogger("bonus_platform.permission_notifications")
+audit_logger = logging.getLogger("bonus_platform.audit")
 
 
 def _clear_current_user_cache() -> None:
@@ -868,6 +871,161 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 SESSION_COOKIE_NAME = "sigma_session"
 FEISHU_STATE_COOKIE_NAME = "sigma_feishu_state"
 FEISHU_API_BASE_URL = "https://open.feishu.cn/open-apis"
+
+_BUSINESS_AUDIT_MODULE_NAMES = {
+    "recruitment": "全球招聘奖金核算",
+    "employee": "中国区正式工薪酬核算",
+    "domestic": "中国区外包工薪酬核算",
+    "fbu": "FBU美洲绩效奖金核算",
+    "overseas": "海外劳务报账核对",
+}
+_BUSINESS_AUDIT_PAGE_MODULES = {
+    "/recruitment.html": "recruitment",
+    "/china-employee-payroll.html": "employee",
+    "/employee-payroll.html": "employee",
+    "/domestic-labor.html": "domestic",
+    "/labor.html": "domestic",
+    "/fbu-performance.html": "fbu",
+    "/overseas-labor.html": "overseas",
+}
+_BUSINESS_AUDIT_ACTION_LABELS = {
+    "module_open": "进入模块",
+    "run_create": "新建批次",
+    "data_import": "导入材料",
+    "calculation_submit": "提交核算",
+    "review_confirm": "复核确认",
+    "result_export": "导出结果",
+    "run_delete": "删除批次",
+    "config_update": "更新配置",
+    "business_operation": "业务操作",
+}
+
+
+def _business_audit_module_id(path: str) -> str | None:
+    if path == "/api/calculate" or path.startswith("/api/runs"):
+        return "recruitment"
+    prefixes = (
+        ("/api/china-employee-payroll/", "employee"),
+        ("/api/domestic-labor/", "domestic"),
+        ("/api/fbu-performance/", "fbu"),
+        ("/api/labor/", "overseas"),
+    )
+    return next((module_id for prefix, module_id in prefixes if path.startswith(prefix)), None)
+
+
+def _business_audit_run_id(path: str) -> str:
+    match = re.search(r"/runs/([^/]+)", path)
+    if match and match.group(1) not in {"calculate", "bulk-delete", "direct-upload-plan"}:
+        return match.group(1)[:128]
+    meal_match = re.search(r"/meal-allowance/([^/]+)/export$", path)
+    return meal_match.group(1)[:128] if meal_match else ""
+
+
+def _business_activity_audit_event(method: str, path: str, status_code: int) -> dict[str, str] | None:
+    """Classify successful, user-meaningful activity without inspecting request data."""
+    method = method.upper()
+    path = path.rstrip("/") or "/"
+    if not 200 <= status_code < 400:
+        return None
+
+    page_module_id = _BUSINESS_AUDIT_PAGE_MODULES.get(path)
+    if method == "GET" and page_module_id:
+        return {
+            "action": "module_open",
+            "target_type": "module",
+            "target_id": page_module_id,
+            "detail": f"进入{_BUSINESS_AUDIT_MODULE_NAMES[page_module_id]}",
+        }
+
+    module_id = _business_audit_module_id(path)
+    if not module_id:
+        return None
+    if path.startswith("/api/labor/worker/") or path in {
+        "/api/labor/telemetry",
+        "/api/labor/maintenance/cleanup",
+    }:
+        return None
+
+    run_id = _business_audit_run_id(path)
+    run_suffix = f" · 批次 ID：{run_id}" if run_id else ""
+
+    if method == "GET":
+        is_template = "/templates/" in path
+        is_export = path.endswith(("/export", "/export-excel")) or "/download/" in path
+        if not is_template and is_export:
+            return {
+                "action": "result_export",
+                "target_type": "module",
+                "target_id": module_id,
+                "detail": f"导出结果{run_suffix}",
+            }
+        return None
+
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if method == "POST" and (
+        path.endswith("/upload-intents")
+        or path.endswith("/direct-upload-plan")
+        or path.endswith("/uploads/plan")
+        or path.endswith("/attendance-direct-upload-plan")
+    ):
+        return None
+
+    if method == "DELETE" or path.endswith("/bulk-delete"):
+        action, detail = "run_delete", "删除业务批次"
+    elif path in {
+        "/api/domestic-labor/runs",
+        "/api/fbu-performance/runs",
+        "/api/labor/runs",
+        "/api/labor/material-runs",
+    }:
+        action, detail = "run_create", "新建核算批次"
+    elif (
+        any(marker in path for marker in ("/calculate", "/compare", "extract-and-compare"))
+        or path in {"/api/calculate", "/api/china-employee-payroll/meal-allowance"}
+    ):
+        action = "calculation_submit"
+        detail = "提交核对" if module_id == "overseas" else "提交核算"
+    elif any(marker in path for marker in ("/import", "/files", "direct-upload-complete", "upload-intents")):
+        action, detail = "data_import", "导入或上传业务材料"
+    elif any(marker in path for marker in ("/confirm", "/finalize", "/business-review", "/replay", "/apply", "/rollback")):
+        action, detail = "review_confirm", "提交复核或确认"
+    elif any(marker in path for marker in ("/mapping", "/roster", "/rule-list", "policies", "adjustments", "supplement")):
+        action, detail = "config_update", "更新核算配置"
+    else:
+        action, detail = "business_operation", "执行业务操作"
+    return {
+        "action": action,
+        "target_type": "module",
+        "target_id": module_id,
+        "detail": f"{detail}{run_suffix}",
+    }
+
+
+def _business_activity_audit_outcome_event(method: str, path: str, status_code: int) -> dict[str, str] | None:
+    """Return a success, permission-denial, or failure event for a selected business action."""
+    candidate = _business_activity_audit_event(method, path, 200)
+    if candidate is None:
+        return None
+    success_event = _business_activity_audit_event(method, path, status_code)
+    if success_event is not None:
+        return success_event
+    if status_code < 400:
+        return None
+    if status_code in {401, 403}:
+        detail = "登录会话失效" if status_code == 401 else "权限拒绝"
+        action = "access_denied"
+    else:
+        detail = f"{_BUSINESS_AUDIT_ACTION_LABELS.get(candidate['action'], '业务操作')}失败"
+        action = "operation_failed"
+    run_id = _business_audit_run_id(path)
+    run_suffix = f" · 批次 ID：{run_id}" if run_id else ""
+    return {
+        "action": action,
+        "target_type": candidate["target_type"],
+        "target_id": candidate["target_id"],
+        "detail": f"{detail}{run_suffix} · HTTP {status_code}",
+    }
 
 
 def _validate_safe_id(value: str, field_name: str = "id") -> str:
@@ -2285,6 +2443,35 @@ async def overseas_labor_access_gate(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def audit_authenticated_business_activity(request: Request, call_next):
+    candidate = _business_activity_audit_event(request.method, request.url.path, 200)
+    if candidate is None:
+        return await call_next(request)
+
+    actor_user_id = ""
+    session_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if session_token:
+        try:
+            actor_user_id = get_session_user_id(session_token)
+        except KeyError:
+            actor_user_id = ""
+
+    response = await call_next(request)
+    event = _business_activity_audit_outcome_event(request.method, request.url.path, response.status_code)
+    if actor_user_id and event:
+        try:
+            await asyncio.to_thread(record_audit_event, actor_user_id, **event)
+        except Exception as exc:
+            audit_logger.warning(
+                "Audit event persistence failed action=%s module=%s error=%s",
+                event["action"],
+                event["target_id"],
+                type(exc).__name__,
+            )
+    return response
+
+
 class _FBUGZipMiddleware:
     """Compress only the FBU API and its large text assets."""
 
@@ -2606,10 +2793,27 @@ def api_set_feature_permission(
 
 @app.get("/api/admin/audit-logs")
 def api_admin_audit_logs(
-    limit: int = 50,
+    page: int = 1,
+    page_size: int = 12,
+    limit: Optional[int] = None,
     actor_user_id: str = Depends(_require_admin_user),
 ) -> dict:
-    return {"logs": list_audit_logs(limit=max(1, min(limit, 200)))}
+    normalized_page_size = max(1, min(limit if limit is not None else page_size, 200))
+    total = count_audit_logs()
+    total_pages = max(1, (total + normalized_page_size - 1) // normalized_page_size)
+    normalized_page = min(max(1, page), total_pages)
+    return {
+        "logs": list_audit_logs(
+            limit=normalized_page_size,
+            offset=(normalized_page - 1) * normalized_page_size,
+        ),
+        "pagination": {
+            "page": normalized_page,
+            "pageSize": normalized_page_size,
+            "total": total,
+            "totalPages": total_pages,
+        },
+    }
 
 @app.get("/api/labor/access")
 def labor_access() -> dict:

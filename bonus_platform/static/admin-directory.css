@@ -79,3 +79,139 @@
     padding-left: 9px;
   }
 }
+
+/* Audit trail readability overrides. Keep technical identifiers available, but secondary. */
+.section-bar > .admin-audit-context {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #1e3a8a;
+  background: rgba(219, 234, 254, 0.54);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.admin-audit-table {
+  table-layout: fixed;
+}
+
+.admin-audit-table th:nth-child(1) { width: 17%; }
+.admin-audit-table th:nth-child(2) { width: 25%; }
+.admin-audit-table th:nth-child(3) { width: 17%; }
+.admin-audit-table th:nth-child(4) { width: 41%; }
+
+.admin-audit-table td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.admin-audit-table .admin-audit-empty {
+  padding: 28px 16px;
+  color: #64748b;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.admin-audit-time,
+.admin-audit-person,
+.admin-audit-target {
+  display: grid;
+  gap: 2px;
+}
+
+.admin-audit-time strong,
+.admin-audit-person strong,
+.admin-audit-target strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.admin-audit-time span,
+.admin-audit-person span,
+.admin-audit-target span {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.admin-audit-target em {
+  margin-top: 3px;
+  color: #334155;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.admin-audit-id {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+
+.admin-audit-action {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 9px;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.admin-audit-action.is-success {
+  color: #0f766e;
+  background: rgba(204, 251, 241, 0.72);
+}
+
+.admin-audit-action.is-info {
+  color: #075985;
+  background: rgba(224, 242, 254, 0.78);
+}
+
+.admin-audit-action.is-permission {
+  color: #1e3a8a;
+  background: rgba(219, 234, 254, 0.78);
+}
+
+.admin-audit-action.is-system,
+.admin-audit-action.is-neutral {
+  color: #475569;
+  background: rgba(241, 245, 249, 0.9);
+}
+
+.admin-audit-action.is-danger {
+  color: #b42318;
+  background: rgba(254, 226, 226, 0.82);
+}
+
+.admin-audit-pagination {
+  margin-top: 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  padding-top: 12px;
+}
+
+@media (max-width: 760px) {
+  .admin-audit-pagination {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .admin-audit-pagination .admin-pagination-count {
+    width: 100%;
+  }
+}

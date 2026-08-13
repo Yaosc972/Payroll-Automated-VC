@@ -103,6 +103,187 @@ def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     assert "set_module_enabled" in actions
 
 
+def test_business_activity_audit_classifies_useful_actions_and_filters_noise():
+    assert app_module._business_activity_audit_event("GET", "/recruitment.html", 200) == {
+        "action": "module_open",
+        "target_type": "module",
+        "target_id": "recruitment",
+        "detail": "进入全球招聘奖金核算",
+    }
+    assert app_module._business_activity_audit_event("POST", "/api/domestic-labor/runs", 201) == {
+        "action": "run_create",
+        "target_type": "module",
+        "target_id": "domestic",
+        "detail": "新建核算批次",
+    }
+    assert app_module._business_activity_audit_event(
+        "GET",
+        "/api/fbu-performance/runs/run-123/export-excel",
+        200,
+    ) == {
+        "action": "result_export",
+        "target_type": "module",
+        "target_id": "fbu",
+        "detail": "导出结果 · 批次 ID：run-123",
+    }
+    assert app_module._business_activity_audit_event(
+        "POST",
+        "/api/labor/runs/run-456/extract-and-compare",
+        200,
+    ) == {
+        "action": "calculation_submit",
+        "target_type": "module",
+        "target_id": "overseas",
+        "detail": "提交核对 · 批次 ID：run-456",
+    }
+    assert app_module._business_activity_audit_event(
+        "POST",
+        "/api/china-employee-payroll/meal-allowance",
+        200,
+    )["action"] == "calculation_submit"
+
+    assert app_module._business_activity_audit_event("GET", "/api/domestic-labor/runs", 200) is None
+    assert app_module._business_activity_audit_event("POST", "/api/labor/worker/jobs/claim", 200) is None
+    assert app_module._business_activity_audit_event("POST", "/api/labor/telemetry", 202) is None
+    assert app_module._business_activity_audit_event(
+        "POST",
+        "/api/labor/runs/run-456/upload-intents",
+        200,
+    ) is None
+    assert app_module._business_activity_audit_event(
+        "POST",
+        "/api/domestic-labor/runs/direct-upload-plan",
+        200,
+    ) is None
+    assert app_module._business_activity_audit_event("PUT", "/api/admin/users/user-1/roles", 200) is None
+    assert app_module._business_activity_audit_event("POST", "/api/domestic-labor/runs", 500) is None
+
+
+def test_business_activity_audit_classifies_permission_and_operation_failures():
+    assert app_module._business_activity_audit_outcome_event(
+        "GET",
+        "/china-employee-payroll.html",
+        403,
+    ) == {
+        "action": "access_denied",
+        "target_type": "module",
+        "target_id": "employee",
+        "detail": "权限拒绝 · HTTP 403",
+    }
+    assert app_module._business_activity_audit_outcome_event(
+        "POST",
+        "/api/china-employee-payroll/meal-allowance",
+        422,
+    ) == {
+        "action": "operation_failed",
+        "target_type": "module",
+        "target_id": "employee",
+        "detail": "提交核算失败 · HTTP 422",
+    }
+    assert app_module._business_activity_audit_outcome_event(
+        "GET",
+        "/api/domestic-labor/runs",
+        500,
+    ) is None
+    assert app_module._business_activity_audit_outcome_event(
+        "POST",
+        "/api/labor/worker/jobs/claim",
+        500,
+    ) is None
+
+
+def test_authenticated_permission_denial_and_business_failure_are_audited(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+
+    with TestClient(app) as client:
+        client.post("/api/auth/mock-login", json={"userId": "recruitmentAdminUser"})
+        forbidden_page = client.get("/china-employee-payroll.html")
+        client.post("/api/auth/logout")
+
+        client.post("/api/auth/mock-login", json={"userId": "cnPayrollAdminUser"})
+        failed_calculation = client.post("/api/china-employee-payroll/meal-allowance")
+        client.post("/api/auth/logout")
+
+        client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        logs_response = client.get("/api/admin/audit-logs?limit=50")
+
+    assert forbidden_page.status_code == 403
+    assert failed_calculation.status_code == 422
+    logs = logs_response.json()["logs"]
+    assert any(
+        log["actorUserId"] == "recruitmentAdminUser"
+        and log["action"] == "access_denied"
+        and log["targetId"] == "employee"
+        for log in logs
+    )
+    assert any(
+        log["actorUserId"] == "cnPayrollAdminUser"
+        and log["action"] == "operation_failed"
+        and log["detail"] == "提交核算失败 · HTTP 422"
+        for log in logs
+    )
+
+
+def test_module_entry_and_logout_are_recorded_for_authenticated_user(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+
+    with TestClient(app) as client:
+        login = client.post("/api/auth/mock-login", json={"userId": "recruitmentAdminUser"})
+        module_page = client.get("/recruitment.html")
+        logout = client.post("/api/auth/logout")
+        client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        logs_response = client.get("/api/admin/audit-logs?limit=50")
+
+    assert login.status_code == 200
+    assert module_page.status_code == 200
+    assert logout.status_code == 200
+    logs = logs_response.json()["logs"]
+    recruitment_actions = {
+        log["action"]
+        for log in logs
+        if log["actorUserId"] == "recruitmentAdminUser"
+    }
+    assert {"mock_login", "module_open", "logout"} <= recruitment_actions
+
+
+def test_admin_audit_logs_api_returns_server_side_pagination(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    admin_store.init_admin_store(db_path)
+    for index in range(23):
+        admin_store.record_audit_event(
+            "payrollAdmin",
+            "business_operation",
+            "module",
+            "recruitment",
+            f"测试记录 {index + 1}",
+            db_path=db_path,
+        )
+
+    with TestClient(app) as client:
+        client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        first_page = client.get("/api/admin/audit-logs?page=1&page_size=10")
+        second_page = client.get("/api/admin/audit-logs?page=2&page_size=10")
+        last_page = client.get("/api/admin/audit-logs?page=999&page_size=10")
+
+    assert first_page.status_code == 200
+    assert first_page.json()["pagination"] == {
+        "page": 1,
+        "pageSize": 10,
+        "total": 24,
+        "totalPages": 3,
+    }
+    assert len(first_page.json()["logs"]) == 10
+    assert len(second_page.json()["logs"]) == 10
+    assert {log["id"] for log in first_page.json()["logs"]}.isdisjoint(
+        {log["id"] for log in second_page.json()["logs"]}
+    )
+    assert last_page.json()["pagination"]["page"] == 3
+    assert len(last_page.json()["logs"]) == 4
+
+
 def test_overseas_labor_requires_module_role_on_page_and_api(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)

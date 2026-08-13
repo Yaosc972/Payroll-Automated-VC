@@ -749,8 +749,8 @@ def test_admin_console_is_static_permission_management_shell():
     assert 'data-admin-only="true"' in html
     assert "permission-guard.js" in html
     assert 'id="activeAdminUser"' in html
-    assert 'src="admin.js?v=33b7cdde7558"' in html
-    assert 'href="admin-directory.css?v=20260810-1"' in html
+    assert 'src="admin.js?v=20260812-3"' in html
+    assert 'href="admin-directory.css?v=20260812-3"' in html
     assert 'id="adminUserSearch"' in html
     assert 'id="adminUserStatusFilter"' in html
     assert 'id="adminUserPagination"' in html
@@ -768,6 +768,34 @@ def test_admin_console_is_static_permission_management_shell():
     assert "adminUserPageSize" in js
     assert "data-user-page" in js
     assert "admin-summary-tags" in js
+    assert "最近 12 条 · 北京时间" in html
+    assert "对象 / 变更" in html
+    assert "formatAuditTime" in js
+    assert 'timeZone: "Asia/Shanghai"' in js
+    assert "resolveAuditUser" in js
+    assert "resolveAuditTarget" in js
+    assert "飞书登录" in js
+    assert "同步用户资料" in js
+    assert "更新用户角色" in js
+    assert "进入模块" in js
+    assert "新建批次" in js
+    assert "导入材料" in js
+    assert "提交核算" in js
+    assert "复核确认" in js
+    assert "导出结果" in js
+    assert "删除批次" in js
+    assert "权限拒绝" in js
+    assert "操作失败" in js
+    assert "log.targetType" in js
+    assert "log.detail" in js
+    assert "admin-audit-id" in js
+    assert 'id="auditLogContext"' in html
+    assert 'id="auditLogPagination"' in html
+    assert "auditLogUi" in js
+    assert "loadAuditPage" in js
+    assert "data-audit-page" in js
+    assert "adminAuditPageSize" in js
+    assert "page_size=${auditLogUi.pageSize}" in js
     assert "save-user-roles" in js
     assert "默认权限：无模块权限" in js
     assert "更新用户角色" in js

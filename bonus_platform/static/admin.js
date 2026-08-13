@@ -88,7 +88,34 @@
     page: 1,
     pageSize: 10,
   };
+  const auditLogUi = {
+    page: 1,
+    pageSize: 12,
+    total: state.logs.length,
+    totalPages: 1,
+    loading: false,
+  };
   let requestedUserFocused = false;
+
+  const auditApiUrl = (page = auditLogUi.page) => (
+    `/api/admin/audit-logs?page=${page}&page_size=${auditLogUi.pageSize}`
+  );
+
+  const applyAuditData = (auditData) => {
+    state.logs = (auditData.logs || []).map(log => ({
+      time: log.createdAt,
+      actor: log.actorUserId,
+      action: log.action,
+      target: log.targetId,
+      targetType: log.targetType,
+      detail: log.detail,
+    }));
+    const pagination = auditData.pagination || {};
+    auditLogUi.page = Number(pagination.page) || 1;
+    auditLogUi.pageSize = Number(pagination.pageSize) || auditLogUi.pageSize;
+    auditLogUi.total = Number(pagination.total) || 0;
+    auditLogUi.totalPages = Math.max(1, Number(pagination.totalPages) || 1);
+  };
 
   const mergeApiState = (apiState) => {
     const roleNameById = Object.fromEntries((apiState.roles || []).map(role => [role.id, role.name]));
@@ -131,19 +158,12 @@
     try {
       const [apiState, auditData, meData] = await Promise.all([
         apiRequest("/api/admin/state"),
-        apiRequest("/api/admin/audit-logs?limit=12"),
+        apiRequest(auditApiUrl(1)),
         apiRequest("/api/me"),
       ]);
       currentActorId = meData.user?.id || "";
-      state = {
-        ...mergeApiState(apiState),
-        logs: (auditData.logs || []).map(log => ({
-          time: log.createdAt,
-          actor: log.actorUserId,
-          action: log.action,
-          target: log.targetId,
-        })),
-      };
+      state = mergeApiState(apiState);
+      applyAuditData(auditData);
       apiBacked = true;
       saveState("已连接数据库权限配置");
       render();
@@ -161,27 +181,38 @@
       return;
     }
     try {
+      auditLogUi.page = 1;
       const [apiState, auditData, meData] = await Promise.all([
         apiRequest("/api/admin/state"),
-        apiRequest("/api/admin/audit-logs?limit=12"),
+        apiRequest(auditApiUrl(1)),
         apiRequest("/api/me"),
       ]);
       currentActorId = meData.user?.id || currentActorId;
-      state = {
-        ...mergeApiState(apiState),
-        logs: (auditData.logs || []).map(log => ({
-          time: log.createdAt,
-          actor: log.actorUserId,
-          action: log.action,
-          target: log.targetId,
-        })),
-      };
+      state = mergeApiState(apiState);
+      applyAuditData(auditData);
       saveState(message);
       render();
     } catch {
       apiBacked = false;
       saveState("数据库连接失败，已切回本地草稿");
       render();
+    }
+  };
+
+  const loadAuditPage = async (page) => {
+    if (!apiBacked || auditLogUi.loading) return;
+    auditLogUi.loading = true;
+    renderAuditPagination();
+    try {
+      const auditData = await apiRequest(auditApiUrl(page));
+      applyAuditData(auditData);
+      renderLogs();
+      renderMetrics();
+    } catch (error) {
+      saveState(error.message || "操作日志加载失败");
+    } finally {
+      auditLogUi.loading = false;
+      renderAuditPagination();
     }
   };
 
@@ -487,17 +518,189 @@
     }
   };
 
+  const auditActionLabels = {
+    feishu_login: { label: "飞书登录", tone: "success" },
+    feishu_user_upsert: { label: "同步用户资料", tone: "info" },
+    set_user_roles: { label: "更新用户角色", tone: "permission" },
+    set_module_enabled: { label: "更新模块状态", tone: "permission" },
+    set_module_role_access: { label: "更新模块访问", tone: "permission" },
+    set_feature_permission: { label: "更新功能权限", tone: "permission" },
+    bootstrap_admin: { label: "初始化管理员", tone: "system" },
+    mock_login: { label: "模拟登录", tone: "neutral" },
+    logout: { label: "退出登录", tone: "neutral" },
+    module_open: { label: "进入模块", tone: "info" },
+    run_create: { label: "新建批次", tone: "success" },
+    data_import: { label: "导入材料", tone: "info" },
+    calculation_submit: { label: "提交核算", tone: "success" },
+    review_confirm: { label: "复核确认", tone: "permission" },
+    result_export: { label: "导出结果", tone: "info" },
+    run_delete: { label: "删除批次", tone: "neutral" },
+    config_update: { label: "更新配置", tone: "permission" },
+    business_operation: { label: "业务操作", tone: "neutral" },
+    access_denied: { label: "权限拒绝", tone: "danger" },
+    operation_failed: { label: "操作失败", tone: "danger" },
+  };
+
+  const getAuditAction = (action) => auditActionLabels[action] || {
+    label: action || "其他操作",
+    tone: "neutral",
+  };
+
+  const resolveAuditUser = (identifier) => {
+    if (!identifier) return null;
+    if (identifier === "system") return { id: "system", name: "系统", email: "自动执行" };
+    return state.users.find(user => [user.id, user.email, user.name].includes(identifier)) || null;
+  };
+
+  const auditTechnicalId = (identifier) => {
+    if (!identifier) return "";
+    const text = String(identifier);
+    const shortId = text.length > 18 ? `…${text.slice(-8)}` : text;
+    return `<small class="admin-audit-id" title="${escapeHtml(text)}">ID · ${escapeHtml(shortId)}</small>`;
+  };
+
+  const auditUserMarkup = (identifier) => {
+    const user = resolveAuditUser(identifier);
+    if (!user) {
+      return `<div class="admin-audit-person"><strong>${escapeHtml(identifier || "未知用户")}</strong>${auditTechnicalId(identifier)}</div>`;
+    }
+    return `
+      <div class="admin-audit-person">
+        <strong>${escapeHtml(user.name || "未命名用户")}</strong>
+        <span>${escapeHtml(user.email || "未填写邮箱")}</span>
+        ${auditTechnicalId(user.id)}
+      </div>
+    `;
+  };
+
+  const formatAuditTime = (value) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return { date: String(value || "—"), time: "" };
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).formatToParts(date).map(part => [part.type, part.value]));
+    return {
+      date: `${parts.year}-${parts.month}-${parts.day}`,
+      time: `${parts.hour}:${parts.minute}:${parts.second}`,
+    };
+  };
+
+  const auditTimeMarkup = (value) => {
+    const time = formatAuditTime(value);
+    return `<time class="admin-audit-time" datetime="${escapeHtml(value)}"><strong>${escapeHtml(time.date)}</strong><span>${escapeHtml(time.time)} · 北京时间</span></time>`;
+  };
+
+  const auditDetailLabel = (log) => {
+    const detail = String(log.detail || "");
+    if (log.action === "feishu_login" || log.action === "mock_login") return "登录会话已创建";
+    if (log.action === "logout") return "登录会话已退出";
+    if (log.action === "feishu_user_upsert") return "用户资料已同步";
+    if (log.action === "set_user_roles") {
+      const roleNames = detail.split(",").filter(Boolean).map(roleId => getRole(roleId)?.name || roleId);
+      return roleNames.length ? `角色调整为：${roleNames.join("、")}` : "角色调整为：无模块权限";
+    }
+    if (log.action === "set_module_enabled") return detail === "True" ? "模块已启用" : "模块已停用";
+    if (log.action === "set_module_role_access") return detail === "True" ? "允许该角色进入" : "禁止该角色进入";
+    if (log.action === "set_feature_permission") return detail === "True" ? "功能权限已开启" : "功能权限已关闭";
+    if (log.action === "bootstrap_admin") return `授予角色：${getRole(detail)?.name || detail || "系统管理员"}`;
+    return detail;
+  };
+
+  const resolveAuditTarget = (log) => {
+    const targetId = String(log.target || "");
+    const detail = auditDetailLabel(log);
+    if (log.targetType === "user") {
+      const user = resolveAuditUser(targetId);
+      return {
+        primary: user?.name || "用户",
+        secondary: user?.email || "",
+        identifier: targetId,
+        detail,
+      };
+    }
+    if (log.targetType === "module") {
+      const module = getModule(targetId);
+      return { primary: module?.name || targetId, secondary: "业务模块", identifier: targetId, detail };
+    }
+    if (log.targetType === "module_role") {
+      const [moduleId, roleId] = targetId.split(":");
+      return {
+        primary: getModule(moduleId)?.name || moduleId,
+        secondary: getRole(roleId)?.name || roleId,
+        identifier: targetId,
+        detail,
+      };
+    }
+    if (log.targetType === "role_feature") {
+      const [roleId, featureId] = targetId.split(":");
+      const feature = state.features.find(item => item.id === featureId);
+      return {
+        primary: getRole(roleId)?.name || roleId,
+        secondary: feature?.name || featureId,
+        identifier: targetId,
+        detail,
+      };
+    }
+    return { primary: targetId || "—", secondary: "", identifier: "", detail };
+  };
+
+  const auditTargetMarkup = (target) => `
+    <div class="admin-audit-target">
+      <strong>${escapeHtml(target.primary)}</strong>
+      ${target.secondary ? `<span>${escapeHtml(target.secondary)}</span>` : ""}
+      ${target.detail ? `<em>${escapeHtml(target.detail)}</em>` : ""}
+      ${target.identifier ? auditTechnicalId(target.identifier) : ""}
+    </div>
+  `;
+
   const renderLogs = () => {
     const rows = document.getElementById("auditLogRows");
     if (!rows) return;
-    rows.innerHTML = state.logs.map(log => `
-      <tr>
-        <td>${log.time}</td>
-        <td>${log.actor}</td>
-        <td>${log.action}</td>
-        <td>${log.target}</td>
-      </tr>
-    `).join("");
+    if (!state.logs.length) {
+      rows.innerHTML = '<tr><td colspan="4" class="admin-audit-empty">暂无操作日志</td></tr>';
+      return;
+    }
+    rows.innerHTML = state.logs.map(log => {
+      const action = getAuditAction(log.action);
+      const target = resolveAuditTarget(log);
+      return `
+        <tr>
+          <td>${auditTimeMarkup(log.time)}</td>
+          <td>${auditUserMarkup(log.actor)}</td>
+          <td><span class="admin-audit-action is-${action.tone}">${escapeHtml(action.label)}</span></td>
+          <td>${auditTargetMarkup(target)}</td>
+        </tr>
+      `;
+    }).join("");
+  };
+
+  const renderAuditPagination = () => {
+    const context = document.getElementById("auditLogContext");
+    const pagination = document.getElementById("auditLogPagination");
+    if (context) {
+      context.textContent = `共 ${auditLogUi.total} 条 · 第 ${auditLogUi.page}/${auditLogUi.totalPages} 页 · 北京时间`;
+    }
+    if (!pagination) return;
+    pagination.innerHTML = `
+      <div class="admin-pagination-count">第 ${auditLogUi.page} / ${auditLogUi.totalPages} 页 · 共 ${auditLogUi.total} 条</div>
+      <div class="admin-pagination-actions">
+        <button type="button" data-audit-page="prev" ${auditLogUi.loading || auditLogUi.page <= 1 ? "disabled" : ""}>上一页</button>
+        <button type="button" data-audit-page="next" ${auditLogUi.loading || auditLogUi.page >= auditLogUi.totalPages ? "disabled" : ""}>下一页</button>
+      </div>
+      <label class="admin-page-size">
+        <span>每页</span>
+        <select id="adminAuditPageSize" ${auditLogUi.loading ? "disabled" : ""}>
+          ${[12, 25, 50].map(size => `<option value="${size}" ${size === auditLogUi.pageSize ? "selected" : ""}>${size} 条</option>`).join("")}
+        </select>
+      </label>
+    `;
   };
 
   const renderMetrics = () => {
@@ -510,7 +713,7 @@
         .flatMap(permissionMap => Object.values(permissionMap))
         .filter(Boolean).length;
     }
-    if (adminLogCount) adminLogCount.textContent = state.logs.length;
+    if (adminLogCount) adminLogCount.textContent = auditLogUi.total;
   };
 
   const focusRequestedUser = () => {
@@ -537,6 +740,7 @@
     renderFeatures();
     renderConfig();
     renderLogs();
+    renderAuditPagination();
     renderMetrics();
     focusRequestedUser();
   };
@@ -556,6 +760,18 @@
       userListUi.pageSize = Number(target.value) || 10;
       userListUi.page = 1;
       renderUsers();
+      return;
+    }
+
+    if (target.id === "adminAuditPageSize") {
+      auditLogUi.pageSize = Number(target.value) || 12;
+      auditLogUi.page = 1;
+      if (apiBacked) {
+        await loadAuditPage(1);
+      } else {
+        auditLogUi.totalPages = Math.max(1, Math.ceil(auditLogUi.total / auditLogUi.pageSize));
+        renderAuditPagination();
+      }
       return;
     }
 
@@ -646,6 +862,14 @@
   });
 
   document.addEventListener("click", async (event) => {
+    const auditPageButton = event.target.closest("[data-audit-page]");
+    if (auditPageButton && !auditPageButton.disabled) {
+      const nextPage = auditLogUi.page + (auditPageButton.dataset.auditPage === "next" ? 1 : -1);
+      await loadAuditPage(nextPage);
+      document.getElementById("auditLog")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
     const pageButton = event.target.closest("[data-user-page]");
     if (pageButton && !pageButton.disabled) {
       userListUi.page += pageButton.dataset.userPage === "next" ? 1 : -1;
