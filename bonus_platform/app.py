@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
+import json
 import logging
 import re
 logging.basicConfig(
@@ -22,9 +23,27 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import AI_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, MAX_PREVIEW_ROWS, SUPPLIER_PROFILES_OUTPUT_DIR, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, ensure_data_files
 from .engine.domestic_labor.parser import MultiFilePayrollDataLoader
-from .engine.domestic_labor.engines import QuanQinJiangEngine, CanBuEngine, WaiSuBuTieEngine, GongLingJiangEngine
+from .engine.domestic_labor.engines import (
+    QuanQinJiangEngine,
+    CanBuEngine,
+    WaiSuBuTieEngine,
+    GongLingJiangEngine,
+    YeBanBuTieEngine,
+    GangWeiBuTieEngine,
+    GaoWenBuTieEngine,
+)
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
 from .engine.domestic_labor.exporter import ExcelExporter
+from .engine.domestic_labor.night_shift_config import (
+    build_night_shift_config_snapshot,
+    config_counts,
+    copy_night_shift_config,
+    generate_night_shift_config_workbook,
+    list_night_shift_config_revisions,
+    load_night_shift_config,
+    parse_night_shift_config_workbook,
+    save_night_shift_config,
+)
 from .engine.domestic_labor.rule_package import get_rule_package
 from .engine.domestic_labor.runs import (
     create_payroll_run, update_payroll_metadata, load_payroll_metadata,
@@ -1345,7 +1364,12 @@ DOMESTIC_LABOR_SUBJECT_NAMES = {
     "waisu_butie": "外宿补贴",
     "quanqinjiang": "全勤奖",
     "gonglingjiang": "工龄奖",
+    "gangwei_butie": "岗位补贴",
+    "gaowen_butie": "高温补贴",
+    "yeban_butie": "夜班补贴",
 }
+DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260813.1"
+DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST = ".export-cache.json"
 
 
 def _domestic_labor_export_filename(metadata: dict) -> str:
@@ -1361,6 +1385,38 @@ def _domestic_labor_export_filename(metadata: dict) -> str:
     attendance_month = month_digits[:6] if len(month_digits) >= 6 else "未指定月份"
     exported_at = datetime.now().strftime("%Y%m%d")
     return f"{subject_name}核算结果_{attendance_month}_{exported_at}.xlsx"
+
+
+def _domestic_labor_cached_export(run_dir: Path, metadata: dict, file_name: str) -> Path | None:
+    """Return an unchanged run's export when its format version is still current."""
+    out_path = run_dir / file_name
+    manifest_path = run_dir / DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST
+    if not out_path.exists() or not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if manifest != {
+        "version": DOMESTIC_LABOR_EXPORT_CACHE_VERSION,
+        "file_name": file_name,
+        "source_updated_at": metadata.get("updatedAt", ""),
+        "result_count": len(metadata.get("results", [])),
+    }:
+        return None
+    return out_path
+
+
+def _save_domestic_labor_export_cache(run_dir: Path, metadata: dict, file_name: str) -> None:
+    manifest_path = run_dir / DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps({
+        "version": DOMESTIC_LABOR_EXPORT_CACHE_VERSION,
+        "file_name": file_name,
+        "source_updated_at": metadata.get("updatedAt", ""),
+        "result_count": len(metadata.get("results", [])),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(manifest_path)
 
 
 @app.get("/api/domestic-labor/rule-package")
@@ -1399,7 +1455,8 @@ def _domestic_labor_region_for_department(department: str) -> str:
 
 def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
-                              hrbp_list: list = None):
+                              hrbp_list: list = None,
+                              night_shift_config: dict = None):
     """Background worker: load Excel, run engines, save results."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     try:
@@ -1408,15 +1465,25 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
             monthly = loader.monthly
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
+            temperature_records = loader.temperature.rows if loader.temperature else []
+            high_temperature_engine = GaoWenBuTieEngine(temperature_records)
 
             results = []
             for row in monthly.rows:
                 emp_id = str(row.get("工号", ""))
                 emp_name = str(row.get("姓名", ""))
-                dept = str(row.get("二级部门名称", ""))
+                dept = str(
+                    row.get("二级部门名称")
+                    or row.get("部门名称")
+                    or row.get("一级部门名称")
+                    or ""
+                )
                 region = _domestic_labor_region_for_department(dept)
                 r = {"employee_id": emp_id, "employee_name": emp_name, "department": dept,
                      "quanqinjiang": 0, "canbu": 0, "waisu_butie": 0, "gonglingjiang": 0,
+                     "gangwei_butie": 0,
+                     "gaowen_butie": 0,
+                     "yeban_butie": 0,
                      "total": 0, "warnings": [], "exceptions": [], "subject_details": {}}
 
                 if "quanqinjiang" in engines:
@@ -1436,7 +1503,26 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                     cr = GongLingJiangEngine().calculate(row, hrbp_list or [], region=region)
                     _attach_domestic_engine_result(r, "gonglingjiang", cr)
 
-                r["total"] = r["quanqinjiang"] + r["canbu"] + r["waisu_butie"] + r["gonglingjiang"]
+                if "gangwei_butie" in engines:
+                    cr = GangWeiBuTieEngine().calculate(row)
+                    _attach_domestic_engine_result(r, "gangwei_butie", cr)
+
+                if "gaowen_butie" in engines:
+                    cr = high_temperature_engine.calculate(row, daily_by_emp.get(emp_id, []))
+                    _attach_domestic_engine_result(r, "gaowen_butie", cr)
+
+                if "yeban_butie" in engines:
+                    cr = YeBanBuTieEngine().calculate(
+                        row,
+                        daily_by_emp.get(emp_id, []),
+                        config=night_shift_config or {},
+                    )
+                    _attach_domestic_engine_result(r, "yeban_butie", cr)
+
+                r["total"] = (
+                    r["quanqinjiang"] + r["canbu"] + r["waisu_butie"]
+                    + r["gonglingjiang"] + r["gangwei_butie"] + r["gaowen_butie"] + r["yeban_butie"]
+                )
                 r["warnings"] = "; ".join(r["warnings"]) if r["warnings"] else ""
                 results.append(r)
 
@@ -1447,6 +1533,9 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 "total_canbu": sum(r["canbu"] for r in results),
                 "total_waisu_butie": sum(r["waisu_butie"] for r in results),
                 "total_gonglingjiang": sum(r["gonglingjiang"] for r in results),
+                "total_gangwei_butie": sum(r["gangwei_butie"] for r in results),
+                "total_gaowen_butie": sum(r["gaowen_butie"] for r in results),
+                "total_yeban_butie": sum(r["yeban_butie"] for r in results),
                 "grand_total": sum(r["total"] for r in results),
                 "warning_count": sum(1 for r in results if r["warnings"]),
             }
@@ -1488,6 +1577,15 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         if e not in valid_engines:
             raise HTTPException(400, f"未知引擎: {e}")
 
+    night_shift_config = None
+    if "yeban_butie" in engine_list:
+        try:
+            night_shift_config = build_night_shift_config_snapshot(
+                load_night_shift_config(attendance_month, required=False)
+            )
+        except ValueError as exc:
+            raise HTTPException(400, f"夜班补贴配置校验失败：{exc}") from exc
+
     collection_roster = []
     if hrbp_list.strip():
         try:
@@ -1518,6 +1616,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "attendanceMonth": attendance_month,
         "fileName": uploaded_files[0].filename,
         "fileNames": [uploaded_file.filename for uploaded_file in uploaded_files],
+        "nightShiftConfigSnapshot": night_shift_config if "yeban_butie" in engine_list else None,
     })
     run_id = run["id"]
     run_dir = get_payroll_run_dir(run_id)
@@ -1557,12 +1656,13 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "inputSummary": input_summary,
         "collectionSeniorityRoster": collection_roster if "gonglingjiang" in engine_list else [],
         "collectionSeniorityRosterCount": len(collection_roster) if "gonglingjiang" in engine_list else 0,
+        "nightShiftConfigSnapshot": night_shift_config if "yeban_butie" in engine_list else None,
     })
 
     # Launch background calculation
     asyncio.get_event_loop().run_in_executor(
         None, _run_payroll_calculation, run_id, [str(path) for path in saved_paths],
-        attendance_month, engine_list, password or None, hrbp,
+        attendance_month, engine_list, password or None, hrbp, night_shift_config,
     )
 
     return {
@@ -1572,6 +1672,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "input_summary": input_summary,
         "collection_seniority_roster": collection_roster if "gonglingjiang" in engine_list else [],
         "collection_seniority_roster_count": len(collection_roster) if "gonglingjiang" in engine_list else 0,
+        "night_shift_config_snapshot": night_shift_config if "yeban_butie" in engine_list else None,
     }
 
 
@@ -1601,18 +1702,30 @@ def get_domestic_labor_results(run_id: str) -> dict:
 @app.get("/api/domestic-labor/runs/{run_id}/export")
 def export_domestic_labor(run_id: str) -> dict:
     try:
-        metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
+        run_dir = get_payroll_run_dir(run_id)
+        metadata = load_payroll_metadata(run_dir)
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
     results = metadata.get("results", [])
     if not results:
         raise HTTPException(400, "暂无计算结果可导出")
     file_name = _domestic_labor_export_filename(metadata)
-    out_path = PAYROLL_OUTPUT_DIR / file_name
-    exporter = ExcelExporter(str(out_path))
+    cached_path = _domestic_labor_cached_export(run_dir, metadata, file_name)
+    if cached_path is not None:
+        return {"file_path": str(cached_path), "file_name": file_name, "cached": True}
+
+    out_path = run_dir / file_name
+    with NamedTemporaryFile(prefix=".export-", suffix=".xlsx", dir=run_dir, delete=False) as temp_file:
+        temp_path = Path(temp_file.name)
+    exporter = ExcelExporter(str(temp_path))
     summary = metadata.get("summary", {})
-    exporter.export(results, metadata.get("attendanceMonth", ""), summary)
-    return {"file_path": str(out_path), "file_name": file_name}
+    try:
+        exporter.export(results, metadata.get("attendanceMonth", ""), summary)
+        temp_path.replace(out_path)
+        _save_domestic_labor_export_cache(run_dir, metadata, file_name)
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return {"file_path": str(out_path), "file_name": file_name, "cached": False}
 
 
 @app.get("/api/domestic-labor/runs/{run_id}/download/{filename}")
@@ -1657,6 +1770,102 @@ def download_domestic_labor_template(engine_key: str) -> FileResponse:
         tmp.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=f"{engine_key}_template.xlsx",
+    )
+
+
+@app.get("/api/domestic-labor/night-shift/config/{month}")
+def get_domestic_labor_night_shift_config(month: str) -> dict:
+    try:
+        payload = load_night_shift_config(month, required=False)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**payload, "counts": config_counts(payload)}
+
+
+@app.put("/api/domestic-labor/night-shift/config/{month}")
+def put_domestic_labor_night_shift_config(month: str, payload: dict = Body(...)) -> dict:
+    try:
+        saved = save_night_shift_config(month, payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**saved, "counts": config_counts(saved)}
+
+
+@app.get("/api/domestic-labor/night-shift/config/{month}/history")
+def list_domestic_labor_night_shift_config_history(month: str) -> dict:
+    try:
+        revisions = list_night_shift_config_revisions(month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"month": month, "revisions": revisions}
+
+
+@app.post("/api/domestic-labor/night-shift/config/{month}/copy")
+def copy_domestic_labor_night_shift_config(month: str, payload: dict = Body(default={})) -> dict:
+    source_month = str(payload.get("source_month") or "")
+    if not source_month:
+        try:
+            target = datetime.strptime(month, "%Y%m")
+        except ValueError as exc:
+            raise HTTPException(400, "核算月份必须为 YYYYMM") from exc
+        source_month = (target.replace(day=1) - timedelta(days=1)).strftime("%Y%m")
+    try:
+        copied = copy_night_shift_config(source_month, month)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**copied, "counts": config_counts(copied)}
+
+
+@app.post("/api/domestic-labor/night-shift/config/{month}/import")
+async def import_domestic_labor_night_shift_config(month: str, file: UploadFile = File(...)) -> dict:
+    if not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "夜班维护文件仅支持 .xlsx / .xlsm")
+    try:
+        payload = parse_night_shift_config_workbook(await file.read())
+        current = load_night_shift_config(month, required=False)
+        saved = save_night_shift_config(month, {
+            "shift_break_overrides": current.get("shift_break_overrides", []),
+            "jinjiang_exclusions": payload.get("jinjiang_exclusions", []),
+            "jinjiang_list_confirmed": True,
+        })
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**saved, "counts": config_counts(saved)}
+
+
+@app.get("/api/domestic-labor/night-shift/config/{month}/download")
+def download_domestic_labor_night_shift_config(month: str) -> FileResponse:
+    try:
+        payload = load_night_shift_config(month)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    data = generate_night_shift_config_workbook(payload)
+    tmp = NamedTemporaryFile(delete=False, suffix=f"_{month}_night_shift_config.xlsx")
+    tmp.write(data)
+    tmp.close()
+    return FileResponse(
+        tmp.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"晋江不享有夜班补贴人员名单_{month}.xlsx",
+    )
+
+
+@app.get("/api/domestic-labor/night-shift/config-template/download")
+def download_domestic_labor_night_shift_config_template() -> FileResponse:
+    data = generate_night_shift_config_workbook()
+    tmp = NamedTemporaryFile(delete=False, suffix="_night_shift_config_template.xlsx")
+    tmp.write(data)
+    tmp.close()
+    return FileResponse(
+        tmp.name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="晋江不享有夜班补贴人员名单模板.xlsx",
     )
 
 

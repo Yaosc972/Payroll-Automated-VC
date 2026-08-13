@@ -434,7 +434,7 @@
           <div class="card">
             <h3>涉及表和关键字段</h3>
             <p><span class="tag">月报/月考勤</span><span class="tag">日考勤</span></p>
-            <p><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>旷工天数</code>、<code>正班迟到次数</code>、<code>早退次数</code>、<code>签卡次数</code>、<code>工伤假天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>入离职缺勤时数</code>、<code>迟到早退30分钟内扣款</code>。</p>
+            <p><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>旷工天数</code>、<code>迟到6分钟内(次)</code>、<code>迟到6-20分钟内(次)</code>、<code>迟到20-30分钟内(次)</code>、<code>正班迟到次数</code>、<code>早退次数</code>、<code>签卡次数</code>、<code>工伤假天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>入离职缺勤时数</code>、<code>迟到早退30分钟内扣款</code>。</p>
             <p>日考勤用于判断非月初入职员工在入职前缺口内是否存在工作日，字段包括 <code>出勤日期</code>、<code>工作状态</code>。</p>
           </div>
         </div>
@@ -463,9 +463,9 @@
             </tr>
             <tr>
               <td>3</td>
-              <td>任一异常考勤命中：<code>旷工天数 &gt; 0</code>；<code>正班迟到次数 + 早退次数 &gt; 3</code>；<code>签卡次数 &gt; 3</code>；<code>工伤假天数 &gt; 0</code>；<code>事假时数 &gt; 0</code>；<code>病假时数 &gt; 0</code>；<code>入离职缺勤时数 &gt; 0</code>；<code>迟到早退30分钟内扣款 &gt; 0</code>。</td>
+              <td>迟到豁免不符合：6分钟内超过3次；6-20分钟超过1次；两档同时出现；或存在20-30分钟迟到。</td>
               <td>全勤奖 = 0。</td>
-              <td>已用2026年2月、3月四份月报逐行验证。</td>
+              <td>两个豁免档位互斥，示例：6分钟内2次且6-20分钟内1次仍为0元。</td>
             </tr>
             <tr>
               <td>4</td>
@@ -531,8 +531,8 @@
           <tbody>
             <tr>
               <td>东莞</td>
-              <td>部门字段任一处包含 <code>寮步区</code> 或 <code>莞深操作</code>；岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>。未在享有名单即不享有。</td>
-              <td>逐日折算，19 元/天，月封顶 500。</td>
+              <td>部门字段任一处包含 <code>寮步区</code> 或 <code>莞深操作</code>；岗位在 <code>安检员</code>（含已确认的民航初/中/高级、内部初/中/高级安检员）、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>。未在享有名单即不享有。</td>
+              <td>逐日折算，19 元/天；单日保留原始精度，月底汇总后统一舍入，月封顶 500。</td>
               <td>已配置。</td>
             </tr>
             <tr>
@@ -543,7 +543,7 @@
             </tr>
             <tr>
               <td>嘉善 / 义乌</td>
-              <td>岗位在 <code>安检员</code>、<code>操作员</code>、<code>门禁员</code>、<code>巡场员</code>、<code>保洁</code>、<code>仓库文员</code>、<code>操作文员</code>、<code>设备维护员</code>、<code>设备维护专员</code>、<code>数据专员</code>、<code>安全员</code>。未在享有名单即不享有。</td>
+              <td>岗位在 <code>安检员</code>（含已确认的民航初/中/高级、内部初/中/高级安检员）、<code>查验员</code>、<code>操作员</code>、<code>门禁员</code>、<code>巡场员</code>、<code>保洁</code>、<code>仓库文员</code>、<code>操作文员</code>、<code>设备维护员</code>、<code>设备维护专员</code>、<code>数据专员</code>、<code>安全员</code>。未在享有名单即不享有。</td>
               <td>按月报字段折算，月标准 300 元。</td>
               <td>已配置。</td>
             </tr>
@@ -567,8 +567,8 @@
           </div>
           <div class="card">
             <h3>东莞月度公式</h3>
-            <p>系统逐日计算后汇总，金额保留两位小数并封顶。</p>
-            <span class="formula">东莞餐补 = min(Σ 单日餐补, 500)</span>
+            <p>系统逐日计算时不做两位小数舍入，保留单日原始精度；月底汇总后统一按 Excel 口径舍入两位小数并封顶。</p>
+            <span class="formula">东莞餐补 = ROUND(min(Σ 单日未舍入餐补, 500), 2)</span>
             <p class="note">当前不再优先使用日考勤里的预计算 <code>餐补</code> 字段；平台按规则自行重算。</p>
           </div>
           <div class="card">
@@ -722,7 +722,7 @@
             </tr>
             <tr>
               <td>东莞 / 操作</td>
-              <td>岗位在 <code>安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>、<code>理货员</code>，且不在不享有岗位清单；岗位名称包含“安检员”字样即按安检员判断，不按职级判断。线下规则图列有“文员”，但 2026 年 6 月实际结果存在反例，确认前暂不开放。</td>
+              <td>岗位在 <code>安检员</code>、<code>民航初级安检员</code>、<code>民航中级安检员</code>、<code>民航高级安检员</code>、<code>内部初级安检员</code>、<code>内部中级安检员</code>、<code>内部高级安检员</code>、<code>操作文员</code>、<code>操作员</code>、<code>叉车司机</code>、<code>揽收充电司机</code>、<code>查验员</code>、<code>监察员</code>、<code>理货员</code>，且不在不享有岗位清单；其他仅包含“安检员”字样的岗位不自动享有。线下规则图列有“文员”，但 2026 年 6 月实际结果存在反例，确认前暂不开放。</td>
               <td>150 元/年</td>
               <td>600 元</td>
             </tr>
@@ -740,7 +740,7 @@
             </tr>
             <tr>
               <td>默认莞深广珠 / 操作</td>
-              <td><code>二级部门名称=中国操作部或B操作部</code> 且岗位在操作岗位名单；岗位名称包含“安检员”字样即按安检员判断。</td>
+              <td><code>二级部门名称=中国操作部或B操作部</code> 且岗位在操作岗位名单；安检员岗位仅按旧称及已确认的民航初/中/高级、内部初/中/高级名称精确判断。</td>
               <td>150 元/年</td>
               <td>600 元</td>
             </tr>
@@ -924,10 +924,6 @@
             当前平台不会直接归 0，只生成提示异常并继续按缺勤折算。若业务要求正班出勤 0 必须不发，需要另行调整。
           </div>
           <div class="note">
-            <strong>全勤奖已完成线下验证。</strong><br>
-            工伤假天数 &gt; 0 按 0 元处理；2026年2月、3月四份月报合计 2,807 人逐行一致。
-          </div>
-          <div class="note">
             <strong>外宿补贴缺勤字段。</strong><br>
             餐补与工龄奖均可读取 <code>旷工时数</code>；工龄奖在小时字段缺失时兼容 <code>旷工天数 × 8</code>。
           </div>
@@ -954,7 +950,7 @@
           <tbody>
             <tr>
               <td>全勤奖</td>
-              <td><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>旷工天数</code>、<code>正班迟到次数</code>、<code>早退次数</code>、<code>签卡次数</code>、<code>工伤假天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>入离职缺勤时数</code>、<code>迟到早退30分钟内扣款</code></td>
+              <td><code>工号</code>、<code>姓名</code>、<code>考勤月份</code>、<code>入职日期</code>、<code>最后工作日</code>、<code>旷工天数</code>、<code>迟到6分钟内(次)</code>、<code>迟到6-20分钟内(次)</code>、<code>迟到20-30分钟内(次)</code>、<code>正班迟到次数</code>、<code>早退次数</code>、<code>签卡次数</code>、<code>工伤假天数</code>、<code>事假时数</code>、<code>病假时数</code>、<code>入离职缺勤时数</code>、<code>迟到早退30分钟内扣款</code></td>
               <td>日考勤：<code>工号</code>、<code>出勤日期</code>、<code>工作状态</code></td>
             </tr>
             <tr>
