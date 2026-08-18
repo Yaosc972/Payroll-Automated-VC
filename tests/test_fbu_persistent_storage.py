@@ -243,6 +243,48 @@ def test_v2_snapshot_splits_large_sections_and_lists_from_single_index(monkeypat
     ]
 
 
+def test_snapshot_refresh_bypasses_cached_manifest(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    prefix = "fbu-performance-runs/production/run_123"
+    objects = {
+        f"{prefix}/summary.json": json.dumps({
+            "schemaVersion": 2,
+            "run": {"run_id": "run_123", "current_salary_file": ""},
+            "sections": {},
+        }).encode("utf-8"),
+    }
+    monkeypatch.setattr(
+        fbu_storage,
+        "_download_bytes",
+        lambda object_path: objects.get(object_path),
+    )
+
+    cached = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections=set(),
+    )
+    assert cached["current_salary_file"] == ""
+
+    objects[f"{prefix}/summary.json"] = json.dumps({
+        "schemaVersion": 2,
+        "run": {"run_id": "run_123", "current_salary_file": "current.xlsx"},
+        "sections": {},
+    }).encode("utf-8")
+
+    still_cached = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections=set(),
+    )
+    refreshed = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections=set(),
+        refresh=True,
+    )
+
+    assert still_cached["current_salary_file"] == ""
+    assert refreshed["current_salary_file"] == "current.xlsx"
+
+
 def test_v2_manifest_removes_legacy_embedded_roster_from_previous_summary():
     previous = {
         "run": {
@@ -693,7 +735,7 @@ def _install_fake_persistent_backend(monkeypatch):
         manifests[run_id] = manifest
         return manifest
 
-    def load_snapshot(run_id, *, sections=None):
+    def load_snapshot(run_id, *, sections=None, refresh=False):
         current = metadata.get(run_id)
         if current is None:
             return None
@@ -752,6 +794,32 @@ def test_run_metadata_survives_separate_manager_instances(monkeypatch, tmp_path)
     assert restored.calc_month == "2026-05"
     assert restored.attendance_data["employees"][0]["employee_id"] == "zt1"
     assert [run.run_id for run in second.list_runs()] == [created.run_id]
+
+
+def test_run_manager_can_force_persistent_manifest_refresh(monkeypatch, tmp_path):
+    refresh_values = []
+    monkeypatch.setattr(fbu_runs, "fbu_persistent_storage_enabled", lambda: True)
+
+    def load_snapshot(run_id, *, sections=None, refresh=False):
+        refresh_values.append(refresh)
+        return {
+            "run_id": run_id,
+            "created_at": "2026-08-18T00:00:00",
+            "calc_month": "2026-08",
+        }
+
+    monkeypatch.setattr(
+        fbu_runs,
+        "load_fbu_run_snapshot_from_persistent",
+        load_snapshot,
+    )
+    manager = fbu_runs.FBURunManager(str(tmp_path))
+
+    restored = manager.get_run("run_123", sections=set(), refresh=True)
+
+    assert restored is not None
+    assert restored.run_id == "run_123"
+    assert refresh_values == [True]
 
 
 def test_save_step_data_applies_metadata_and_persists_once(monkeypatch, tmp_path):

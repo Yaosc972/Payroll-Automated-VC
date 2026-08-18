@@ -1014,7 +1014,7 @@ class FBURunManager:
         verification: dict,
     ) -> None:
         """Persist one salary material and any reconciliation output atomically."""
-        run = self.get_run(run_id, sections=set())
+        run = self.get_run(run_id, sections=set(), refresh=True)
         if not run:
             return
 
@@ -1193,6 +1193,8 @@ class FBURunManager:
         self,
         run_id: str,
         sections: set[str] | None = None,
+        *,
+        refresh: bool = False,
     ) -> Optional[FBURun]:
         """获取运行记录"""
         requested = (
@@ -1204,6 +1206,7 @@ class FBURunManager:
             payload = load_fbu_run_snapshot_from_persistent(
                 run_id,
                 sections=requested,
+                refresh=refresh,
             )
             if payload:
                 run = self._merge_run_payload(run_id, payload)

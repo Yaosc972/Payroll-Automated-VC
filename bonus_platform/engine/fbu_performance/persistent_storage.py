@@ -465,8 +465,9 @@ def load_fbu_run_snapshot_from_persistent(
     run_id: str,
     *,
     sections: set[str] | None = None,
+    refresh: bool = False,
 ) -> dict[str, Any] | None:
-    manifest = _load_fbu_run_manifest(run_id)
+    manifest = _load_fbu_run_manifest(run_id, refresh=refresh)
     if not manifest:
         legacy = _load_legacy_fbu_run_metadata(run_id)
         if legacy is None:

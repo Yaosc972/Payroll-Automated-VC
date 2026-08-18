@@ -16364,7 +16364,7 @@ async def import_fbu_salary_history_material(
     file: UploadFile = File(...),
 ) -> dict:
     """Upload and parse one salary-history material, then reconcile when all three exist."""
-    run = fbu_run_manager.get_run(run_id, sections=set())
+    run = fbu_run_manager.get_run(run_id, sections=set(), refresh=True)
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -16389,6 +16389,7 @@ async def import_fbu_salary_history_material(
         refreshed_run = fbu_run_manager.get_run(
             run_id,
             sections={"previous_salary_data", "current_salary_data", "adjustment_data"},
+            refresh=True,
         )
         if not refreshed_run:
             raise HTTPException(404, "任务不存在")
