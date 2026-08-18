@@ -2092,6 +2092,66 @@ def test_fbu_salary_history_materials_upload_individually_and_reconcile_when_com
     assert run.salary_data["employees"][0]["verification_status"] == "blocking"
 
 
+def test_final_salary_material_is_committed_in_one_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_salary_preview",
+        lambda self, path: {
+            "employees": [{"employee_id": "E001", "hourly_rate": 21, "ratio": 0.09}],
+            "summary": {"source": str(path)},
+        },
+    )
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_adjustments_preview",
+        lambda self, path: {"employees": [], "events": [], "summary": {"total_events": 0}},
+    )
+
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-05"}).json()["run_id"]
+    for material_type, filename in (
+        ("currentSalary", "may.xlsx"),
+        ("salaryAdjustments", "adjustments.xlsx"),
+    ):
+        response = client.post(
+            "/api/fbu-performance/import-salary-history-material",
+            data={"run_id": run_id, "material_type": material_type},
+            files={"file": (filename, b"salary", "application/octet-stream")},
+        )
+        assert response.status_code == 200
+
+    commits = []
+    original_save_runs = manager._save_runs
+
+    def record_save(changed_run_id=None, changed_fields=None):
+        commits.append(set(changed_fields or set()))
+        return original_save_runs(changed_run_id, changed_fields)
+
+    monkeypatch.setattr(manager, "_save_runs", record_save)
+    response = client.post(
+        "/api/fbu-performance/import-salary-history-material",
+        data={"run_id": run_id, "material_type": "previousSalary"},
+        files={"file": ("april.xlsx", b"salary", "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ready_for_reconciliation"] is True
+    assert len(commits) == 1
+    assert {
+        "previous_salary_file",
+        "previous_salary_data",
+        "salary_verification_data",
+        "salary_data",
+        "current_step",
+        "status",
+    }.issubset(commits[0])
+
+
 def test_fbu_salary_verification_rejects_choice_for_missing_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
     run = app_module.fbu_run_manager.create_run(calc_month="2026-06")

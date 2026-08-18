@@ -1003,6 +1003,53 @@ class FBURunManager:
         )
         self._save_runs(run_id, changed_fields)
 
+    def save_salary_history_import(
+        self,
+        run_id: str,
+        *,
+        core_updates: dict,
+        section_updates: dict,
+        ready_for_reconciliation: bool,
+        resolved_salary: dict,
+        verification: dict,
+    ) -> None:
+        """Persist one salary material and any reconciliation output atomically."""
+        run = self.get_run(run_id, sections=set())
+        if not run:
+            return
+
+        self._invalidate_results(run)
+        for key, value in core_updates.items():
+            setattr(run, key, value)
+        for key, value in section_updates.items():
+            setattr(run, key, value)
+        run.salary_verification_data = verification if ready_for_reconciliation else {}
+        run.salary_data = resolved_salary if ready_for_reconciliation else {}
+        run.error = ""
+
+        changed_fields = {
+            *core_updates.keys(),
+            *section_updates.keys(),
+            "salary_verification_data",
+            "salary_data",
+            "error",
+            "results",
+            "results_view_data",
+            "total_employees",
+            "total_bonus",
+            "match_rate",
+        }
+        if ready_for_reconciliation:
+            run.current_step = 2
+            run.status = "step2"
+            changed_fields.update({"current_step", "status"})
+
+        self.runs[run_id] = run
+        self._loaded_sections.setdefault(run_id, set()).update(
+            changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
+        )
+        self._save_runs(run_id, changed_fields)
+
     def backfill_hourly_rate_policy_data(self, run_id: str, data: dict) -> None:
         """Persist generated defaults for legacy runs without invalidating saved results."""
         run = self.get_run(run_id, sections={"hourly_rate_policy_data"})

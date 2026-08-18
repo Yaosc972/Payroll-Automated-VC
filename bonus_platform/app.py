@@ -16332,17 +16332,14 @@ _FBU_SALARY_HISTORY_MATERIALS = {
 }
 
 
-def _reconcile_fbu_salary_history(run_id: str, parser: FBUPerformanceParser) -> tuple[dict, dict]:
-    run = fbu_run_manager.get_run(
-        run_id,
-        sections={"previous_salary_data", "current_salary_data", "adjustment_data"},
-    )
-    if not run:
-        raise HTTPException(404, "任务不存在")
-
-    previous_preview = run.previous_salary_data or {}
-    current_preview = run.current_salary_data or {}
-    adjustment_preview = run.adjustment_data or {}
+def _reconcile_fbu_salary_history(
+    run,
+    parser: FBUPerformanceParser,
+    *,
+    previous_preview: dict,
+    current_preview: dict,
+    adjustment_preview: dict,
+) -> tuple[dict, dict]:
     verification = parser.reconcile_salary_history(
         previous_preview.get("employees", []),
         current_preview.get("employees", []),
@@ -16357,12 +16354,6 @@ def _reconcile_fbu_salary_history(run_id: str, parser: FBUPerformanceParser) -> 
             **verification["summary"],
         },
     }
-    fbu_run_manager.update_run(
-        run_id,
-        salary_verification_data=verification,
-        error="",
-    )
-    fbu_run_manager.save_step_data(run_id, 2, resolved_salary)
     return resolved_salary, verification
 
 
@@ -16395,33 +16386,61 @@ async def import_fbu_salary_history_material(
         else:
             material_preview = parser.parse_salary_preview(str(file_path))
 
-        update_fields = {
-            material["file_field"]: file.filename,
-            material["data_field"]: material_preview,
-            "salary_verification_data": {},
-            "salary_data": {},
-            "error": "",
-        }
-        if material_type == "currentSalary":
-            update_fields["salary_file"] = file.filename
-        fbu_run_manager.update_run(run_id, **update_fields)
-        fbu_run_manager.persist_files(run_id, [material["path"]])
-
         refreshed_run = fbu_run_manager.get_run(
             run_id,
             sections={"previous_salary_data", "current_salary_data", "adjustment_data"},
         )
+        if not refreshed_run:
+            raise HTTPException(404, "任务不存在")
+
+        core_updates = {material["file_field"]: file.filename}
+        if material_type == "currentSalary":
+            core_updates["salary_file"] = file.filename
+        section_updates = {material["data_field"]: material_preview}
+
+        material_files = {
+            key: (
+                file.filename
+                if key == material_type
+                else getattr(refreshed_run, config["file_field"], "")
+            )
+            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+        }
+        material_previews = {
+            key: (
+                material_preview
+                if key == material_type
+                else getattr(refreshed_run, config["data_field"], {})
+            )
+            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+        }
+
         missing_materials = [
             key
-            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
-            if not getattr(refreshed_run, config["file_field"], "")
-            or not getattr(refreshed_run, config["data_field"], {})
+            for key in _FBU_SALARY_HISTORY_MATERIALS
+            if not material_files[key] or not material_previews[key]
         ]
         ready_for_reconciliation = not missing_materials
         resolved_salary = {}
         verification = {}
         if ready_for_reconciliation:
-            resolved_salary, verification = _reconcile_fbu_salary_history(run_id, parser)
+            resolved_salary, verification = _reconcile_fbu_salary_history(
+                refreshed_run,
+                parser,
+                previous_preview=material_previews["previousSalary"],
+                current_preview=material_previews["currentSalary"],
+                adjustment_preview=material_previews["salaryAdjustments"],
+            )
+
+        fbu_run_manager.save_salary_history_import(
+            run_id,
+            core_updates=core_updates,
+            section_updates=section_updates,
+            ready_for_reconciliation=ready_for_reconciliation,
+            resolved_salary=resolved_salary,
+            verification=verification,
+        )
+        fbu_run_manager.persist_files(run_id, [material["path"]])
 
         return {
             "success": True,
