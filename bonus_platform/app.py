@@ -16660,6 +16660,7 @@ def confirm_fbu_salary_verification(run_id: str, body: dict = Body(...)) -> dict
     run = fbu_run_manager.get_run(
         run_id,
         sections={"salary_verification_data", "salary_data"},
+        refresh=True,
     )
     if not run:
         raise HTTPException(404, "任务不存在")

@@ -1234,6 +1234,17 @@ def test_salary_step_exposes_blocking_history_rows_with_snapshot_choices():
     assert "后续重新上传" in salary_review
 
 
+def test_salary_verification_confirmation_uses_authoritative_response_without_immediate_reload():
+    js = _js()
+    confirmation = js.split("async function confirmSalaryVerification", 1)[1].split(
+        "async function uploadWorkbenchPreviousAttendanceFile", 1
+    )[0]
+
+    assert "applySalaryVerificationBatchResult" in confirmation
+    assert "refreshSalaryVerificationSections(updated)" in confirmation
+    assert "await enterActivity" not in confirmation
+
+
 def test_transfer_history_warning_is_visible_in_the_title_meta():
     html = _html()
     js = _js()

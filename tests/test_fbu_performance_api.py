@@ -2242,6 +2242,49 @@ def test_fbu_salary_verification_rejects_choice_for_missing_snapshot(monkeypatch
     assert valid.json()["preview"]["employees"][0]["hourly_rate"] == 23
 
 
+def test_fbu_salary_verification_reads_fresh_snapshot_before_confirming(monkeypatch, tmp_path):
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    run = manager.create_run(calc_month="2026-06")
+    blocked = {
+        "employee_id": "E001",
+        "hourly_rate": 23,
+        "ratio": 0.13,
+        "previous_hourly_rate": 23,
+        "previous_ratio": 0.13,
+        "current_hourly_rate": 25,
+        "current_ratio": 0.15,
+        "verification_status": "blocking",
+        "resolution": "unmatched_change",
+    }
+    verification = {
+        "employees": [blocked],
+        "issues": [{"employee_id": "E001", "reason": "未匹配调薪流程"}],
+        "summary": {"total_employees": 1, "resolved_count": 0, "blocking_count": 1},
+    }
+    manager.update_run(
+        run.run_id,
+        salary_verification_data=verification,
+        salary_data={"employees": [blocked], "summary": verification["summary"]},
+    )
+    original_get_run = manager.get_run
+    refresh_values = []
+
+    def record_get_run(run_id, sections=None, refresh=False):
+        refresh_values.append(refresh)
+        return original_get_run(run_id, sections=sections)
+
+    monkeypatch.setattr(manager, "get_run", record_get_run)
+
+    response = TestClient(app_module.app).post(
+        f"/api/fbu-performance/runs/{run.run_id}/salary-verification/confirm",
+        json={"employee_id": "E001", "choice": "current"},
+    )
+
+    assert response.status_code == 200
+    assert refresh_values[0] is True
+
+
 def test_fbu_salary_verification_can_ignore_missing_current_as_zero_and_reimport_wins(
     monkeypatch,
     tmp_path,

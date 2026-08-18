@@ -505,7 +505,10 @@ def load_fbu_run_snapshot_from_persistent(
         )
         if not section.get("present") and not recovery_expected:
             return field, [] if field == "results" else {}
-        value = _download_json(_object_path(run_id, _section_relative_path(field)))
+        value = _download_json(
+            _object_path(run_id, _section_relative_path(field)),
+            refresh=refresh,
+        )
         if value is None:
             return field, [] if field == "results" else {}
         return field, value

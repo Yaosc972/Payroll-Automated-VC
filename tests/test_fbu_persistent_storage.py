@@ -557,6 +557,56 @@ def test_v2_json_cache_refreshes_remote_data_after_ttl(monkeypatch):
     assert reads == [object_path, object_path]
 
 
+def test_load_run_snapshot_refresh_bypasses_cached_manifest_and_sections(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    monkeypatch.setenv("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "30")
+    prefix = "fbu-performance-runs/production/run_123"
+    initial_section = {
+        "employees": [{"employee_id": "E001", "verification_status": "blocking"}],
+        "summary": {"blocking_count": 1},
+    }
+    resolved_section = {
+        "employees": [{"employee_id": "E001", "verification_status": "resolved"}],
+        "summary": {"blocking_count": 0},
+    }
+    initial_manifest = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "salary_verification_data": initial_section,
+    })
+    resolved_manifest = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "salary_verification_data": resolved_section,
+    })
+    objects = {
+        f"{prefix}/summary.json": json.dumps(initial_manifest).encode("utf-8"),
+        f"{prefix}/sections/salary_verification_data.json": json.dumps(initial_section).encode("utf-8"),
+    }
+    monkeypatch.setattr(
+        fbu_storage,
+        "_download_bytes",
+        lambda object_path: objects.get(object_path),
+    )
+
+    cached = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"salary_verification_data"},
+    )
+    assert cached["salary_verification_data"]["summary"]["blocking_count"] == 1
+
+    objects[f"{prefix}/summary.json"] = json.dumps(resolved_manifest).encode("utf-8")
+    objects[f"{prefix}/sections/salary_verification_data.json"] = json.dumps(
+        resolved_section
+    ).encode("utf-8")
+
+    refreshed = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"salary_verification_data"},
+        refresh=True,
+    )
+
+    assert refreshed["salary_verification_data"]["summary"]["blocking_count"] == 0
+
+
 def test_v2_incremental_snapshot_only_rewrites_changed_sections(monkeypatch):
     monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
     objects: dict[str, bytes] = {}
