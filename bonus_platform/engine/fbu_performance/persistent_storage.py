@@ -44,7 +44,14 @@ _ATTENDANCE_RECOVERY_SECTION_FIELDS = frozenset({
     "attendance_view_data",
     "hourly_rate_policy_data",
 })
-_STALE_MANIFEST_RECOVERY_SECTION_FIELDS = frozenset({"base_override_data"})
+_STALE_MANIFEST_RECOVERY_SECTION_FIELDS = frozenset({
+    "base_override_data",
+    "previous_salary_data",
+    "current_salary_data",
+    "adjustment_data",
+    "salary_verification_data",
+    "salary_data",
+})
 _RUN_INDEX_LOCK = threading.RLock()
 _JSON_CACHE_LOCK = threading.RLock()
 _JSON_CACHE_MAX_ITEM_BYTES = 2 * 1024 * 1024

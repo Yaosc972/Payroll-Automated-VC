@@ -285,6 +285,37 @@ def test_snapshot_refresh_bypasses_cached_manifest(monkeypatch):
     assert refreshed["current_salary_file"] == "current.xlsx"
 
 
+def test_salary_section_recovers_when_manifest_presence_is_stale(monkeypatch):
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    prefix = "fbu-performance-runs/production/run_123"
+    salary_data = {"employees": [{"employee_id": "zt1", "hourly_rate": 20}]}
+    objects = {
+        f"{prefix}/summary.json": json.dumps({
+            "schemaVersion": 2,
+            "run": {"run_id": "run_123"},
+            "sections": {
+                "current_salary_data": {
+                    "path": "sections/current_salary_data.json",
+                    "present": False,
+                },
+            },
+        }).encode("utf-8"),
+        f"{prefix}/sections/current_salary_data.json": json.dumps(salary_data).encode("utf-8"),
+    }
+    monkeypatch.setattr(
+        fbu_storage,
+        "_download_bytes",
+        lambda object_path: objects.get(object_path),
+    )
+
+    restored = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"current_salary_data"},
+    )
+
+    assert restored["current_salary_data"] == salary_data
+
+
 def test_v2_manifest_removes_legacy_embedded_roster_from_previous_summary():
     previous = {
         "run": {

@@ -2152,6 +2152,55 @@ def test_final_salary_material_is_committed_in_one_snapshot(monkeypatch, tmp_pat
     }.issubset(commits[0])
 
 
+def test_salary_snapshot_recovers_materials_from_sections_when_manifest_is_stale(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+
+    salary_preview = {
+        "employees": [{"employee_id": "E001", "hourly_rate": 21, "ratio": 0.09}],
+        "summary": {"total_employees": 1},
+    }
+    adjustment_preview = {
+        "employees": [],
+        "events": [],
+        "summary": {"total_events": 0},
+    }
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_salary_preview",
+        lambda self, path: salary_preview,
+    )
+
+    run = manager.create_run(calc_month="2026-05", persist=False)
+    run.current_salary_data = salary_preview
+    run.adjustment_data = adjustment_preview
+    manager._loaded_sections[run.run_id].update({"current_salary_data", "adjustment_data"})
+
+    response = TestClient(app_module.app).post(
+        "/api/fbu-performance/import-salary-history-material",
+        data={"run_id": run.run_id, "material_type": "previousSalary"},
+        files={"file": ("april.xlsx", b"salary", "application/octet-stream")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ready_for_reconciliation"] is True
+    restored = manager.get_run(
+        run.run_id,
+        sections={
+            "previous_salary_data",
+            "current_salary_data",
+            "adjustment_data",
+            "salary_verification_data",
+        },
+    )
+    assert restored.previous_salary_file == "april.xlsx"
+    assert restored.current_salary_file == "salary.xlsx"
+    assert restored.adjustment_file == "adjustments.xlsx"
+    assert restored.salary_verification_data
+
+
 def test_fbu_salary_verification_rejects_choice_for_missing_snapshot(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
     run = app_module.fbu_run_manager.create_run(calc_month="2026-06")

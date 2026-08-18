@@ -16394,19 +16394,6 @@ async def import_fbu_salary_history_material(
         if not refreshed_run:
             raise HTTPException(404, "任务不存在")
 
-        core_updates = {material["file_field"]: file.filename}
-        if material_type == "currentSalary":
-            core_updates["salary_file"] = file.filename
-        section_updates = {material["data_field"]: material_preview}
-
-        material_files = {
-            key: (
-                file.filename
-                if key == material_type
-                else getattr(refreshed_run, config["file_field"], "")
-            )
-            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
-        }
         material_previews = {
             key: (
                 material_preview
@@ -16414,6 +16401,29 @@ async def import_fbu_salary_history_material(
                 else getattr(refreshed_run, config["data_field"], {})
             )
             for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+        }
+        material_files = {
+            key: (
+                file.filename
+                if key == material_type
+                else (
+                    getattr(refreshed_run, config["file_field"], "")
+                    or (config["path"] if material_previews[key] else "")
+                )
+            )
+            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+        }
+        core_updates = {
+            config["file_field"]: material_files[key]
+            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+            if material_files[key]
+        }
+        if material_files["currentSalary"]:
+            core_updates["salary_file"] = material_files["currentSalary"]
+        section_updates = {
+            config["data_field"]: material_previews[key]
+            for key, config in _FBU_SALARY_HISTORY_MATERIALS.items()
+            if material_previews[key]
         }
 
         missing_materials = [
