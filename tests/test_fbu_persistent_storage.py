@@ -530,6 +530,107 @@ def test_incremental_snapshot_merges_manifest_changed_during_section_upload(monk
     assert manifest["sections"]["base_override_data"]["present"] is True
 
 
+def test_incremental_snapshots_survive_two_instances_writing_from_same_stale_manifest(monkeypatch):
+    """Distinct upload jobs must not erase each other's file or parsed section."""
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    prefix = "fbu-performance-runs/production"
+    initial = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "created_at": "2026-08-19T10:00:00",
+        "calc_month": "2026-07",
+        "status": "step2",
+    })
+    summary_path = f"{prefix}/run_123/summary.json"
+    objects: dict[str, bytes] = {
+        summary_path: json.dumps(initial).encode("utf-8"),
+    }
+    stale_summary_reads = True
+
+    def upload(object_path: str, content: bytes, content_type: str) -> None:
+        objects[object_path] = content
+
+    def download(object_path: str) -> bytes | None:
+        if stale_summary_reads and object_path == summary_path:
+            return json.dumps(initial).encode("utf-8")
+        return objects.get(object_path)
+
+    def list_objects(object_prefix: str) -> list[dict[str, str]]:
+        directory = f"{object_prefix.rstrip('/')}/"
+        return [
+            {"name": object_path.removeprefix(directory)}
+            for object_path in sorted(objects)
+            if object_path.startswith(directory)
+            and "/" not in object_path.removeprefix(directory)
+        ]
+
+    monkeypatch.setattr(fbu_storage, "_upload_bytes", upload)
+    monkeypatch.setattr(fbu_storage, "_download_bytes", download)
+    monkeypatch.setattr(fbu_storage, "_list_objects", list_objects)
+    monkeypatch.setattr(fbu_storage, "_upsert_fbu_run_index", lambda manifest: None)
+
+    attendance_data = {
+        "summary": {"total_employees": 307},
+        "employees": [{"employee_id": "zt1", "total_base_hours": 80}],
+    }
+    leave_data = {
+        "summary": {"pending_count": 11},
+        "rows": [{"employee_id": "zt1", "status": "pending"}],
+    }
+    fbu_storage.save_fbu_run_snapshot_to_persistent(
+        "run_123",
+        {
+            "run_id": "run_123",
+            "attendance_file": "attendance.xlsx",
+            "attendance_data": attendance_data,
+        },
+        changed_fields={"attendance_file", "attendance_data"},
+    )
+    fbu_storage.save_fbu_run_snapshot_to_persistent(
+        "run_123",
+        {
+            "run_id": "run_123",
+            "supplemental_leave_file": "leave.xlsx",
+            "supplemental_leave_data": leave_data,
+        },
+        changed_fields={"supplemental_leave_file", "supplemental_leave_data"},
+    )
+
+    mutation_paths = [
+        path
+        for path in objects
+        if path.startswith(f"{prefix}/run_123/mutations/")
+    ]
+    leave_mutation_path = next(
+        path
+        for path in mutation_paths
+        if "supplemental_leave_file" in json.loads(objects[path])["run"]
+    )
+    lost_update = fbu_storage.build_fbu_run_manifest(
+        {
+            "run_id": "run_123",
+            "supplemental_leave_file": "leave.xlsx",
+            "supplemental_leave_data": leave_data,
+        },
+        previous=initial,
+        changed_fields={"supplemental_leave_file", "supplemental_leave_data"},
+    )
+    lost_update["appliedMutations"] = [leave_mutation_path.rsplit("/", 1)[-1]]
+    objects[summary_path] = json.dumps(lost_update).encode("utf-8")
+
+    stale_summary_reads = False
+    fbu_storage._clear_fbu_json_cache()
+    restored = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"attendance_data", "supplemental_leave_data"},
+        refresh=True,
+    )
+
+    assert restored["attendance_file"] == "attendance.xlsx"
+    assert restored["supplemental_leave_file"] == "leave.xlsx"
+    assert restored["attendance_data"] == attendance_data
+    assert restored["supplemental_leave_data"] == leave_data
+
+
 def test_v2_json_cache_refreshes_remote_data_after_ttl(monkeypatch):
     monkeypatch.setenv("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "2")
     object_path = "fbu-performance-runs/production/_runs-index.json"
@@ -650,11 +751,11 @@ def test_v2_incremental_snapshot_only_rewrites_changed_sections(monkeypatch):
     )
 
     suffixes = {path.split("/run_123/", 1)[-1] for path in uploads if "/run_123/" in path}
-    assert suffixes == {
-        "summary.json",
-        "sections/period_adjustment_data.json",
-        "sections/results.json",
-    }
+    assert "summary.json" in suffixes
+    assert "sections/period_adjustment_data.json" in suffixes
+    assert "sections/results.json" in suffixes
+    assert len([path for path in suffixes if path.startswith("mutations/")]) == 1
+    assert len(suffixes) == 4
     assert not any(path.endswith("sections/attendance_data.json") for path in uploads)
 
 

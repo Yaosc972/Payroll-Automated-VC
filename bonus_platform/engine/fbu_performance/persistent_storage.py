@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
 from http.client import RemoteDisconnected
 from pathlib import Path
 from typing import Any, Iterable
@@ -200,6 +201,10 @@ def _section_relative_path(field: str) -> str:
     return f"sections/{field}.json"
 
 
+def _mutation_relative_path() -> str:
+    return f"mutations/{time.time_ns():020d}-{uuid4().hex}.json"
+
+
 def _section_count(value: Any) -> int:
     if isinstance(value, list):
         return len(value)
@@ -306,6 +311,137 @@ def _load_fbu_run_manifest(
     if not isinstance(payload, dict) or not isinstance(payload.get("run"), dict):
         return None
     return payload
+
+
+def _load_fbu_run_mutations(
+    run_id: str,
+    *,
+    refresh: bool = False,
+    exclude: set[str] | None = None,
+) -> list[tuple[str, dict[str, Any]]]:
+    prefix = _object_path(run_id, "mutations")
+    try:
+        entries = _list_objects(prefix)
+    except (
+        FBUStorageStatusError,
+        URLError,
+        TimeoutError,
+        RemoteDisconnected,
+        ConnectionError,
+        OSError,
+        RuntimeError,
+    ):
+        return []
+
+    mutation_names = []
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not re.fullmatch(r"[0-9A-Za-z_-]+\.json", name):
+            continue
+        if exclude and name in exclude:
+            continue
+        mutation_names.append(name)
+
+    def load_mutation(name: str) -> tuple[str, dict[str, Any] | None]:
+        mutation = _download_json(f"{prefix}/{name}", refresh=refresh)
+        return name, mutation if isinstance(mutation, dict) else None
+
+    if len(mutation_names) <= 1:
+        loaded = [load_mutation(name) for name in mutation_names]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(mutation_names))) as executor:
+            loaded = list(executor.map(load_mutation, mutation_names))
+    mutations = [
+        (name, mutation)
+        for name, mutation in loaded
+        if mutation is not None
+    ]
+    mutations.sort(
+        key=lambda item: (
+            str(item[1].get("createdAt") or ""),
+            item[0],
+        )
+    )
+    return mutations
+
+
+def _merge_fbu_run_mutations(
+    run_id: str,
+    manifest: dict[str, Any] | None,
+    *,
+    refresh: bool = False,
+) -> dict[str, Any] | None:
+    applied = {
+        str(name)
+        for name in ((manifest or {}).get("appliedMutations") or [])
+        if isinstance(name, str)
+    }
+    mutations = _load_fbu_run_mutations(
+        run_id,
+        refresh=refresh,
+        exclude=applied,
+    )
+    if not mutations:
+        return manifest
+
+    merged = copy.deepcopy(manifest) if manifest else {
+        "schemaVersion": FBU_RUN_SCHEMA_VERSION,
+        "updatedAt": "",
+        "run": {"run_id": run_id},
+        "sections": {},
+    }
+    run = merged.setdefault("run", {})
+    sections = merged.setdefault("sections", {})
+    for name, mutation in mutations:
+        mutation_run = mutation.get("run")
+        mutation_sections = mutation.get("sections")
+        if isinstance(mutation_run, dict):
+            run.update(mutation_run)
+        if isinstance(mutation_sections, dict):
+            sections.update(mutation_sections)
+        mutation_time = str(mutation.get("createdAt") or "")
+        if mutation_time > str(merged.get("updatedAt") or ""):
+            merged["updatedAt"] = mutation_time
+        applied.add(name)
+    merged["appliedMutations"] = sorted(applied)
+    return merged
+
+
+def _save_fbu_run_mutation(
+    run_id: str,
+    payload: dict[str, Any],
+    *,
+    changed_fields: set[str] | None,
+    section_values: dict[str, Any],
+) -> None:
+    if changed_fields is None:
+        core_fields = {
+            key
+            for key in payload
+            if key not in FBU_RUN_SECTION_FIELDS and key != "roster_data"
+        }
+    else:
+        core_fields = {
+            key
+            for key in changed_fields
+            if key in payload
+            and key not in FBU_RUN_SECTION_FIELDS
+            and key != "roster_data"
+        }
+    created_at = datetime.now().isoformat()
+    mutation = {
+        "schemaVersion": FBU_RUN_SCHEMA_VERSION,
+        "createdAt": created_at,
+        "run": {key: payload[key] for key in sorted(core_fields)},
+        "sections": {
+            field: _section_manifest(field, value)
+            for field, value in sorted(section_values.items())
+        },
+    }
+    _upload_json(
+        _object_path(run_id, _mutation_relative_path()),
+        mutation,
+    )
 
 
 def _load_fbu_run_index() -> list[dict[str, Any]] | None:
@@ -432,8 +568,13 @@ def save_fbu_run_snapshot_to_persistent(
         section_fields = set(changed_fields).intersection(FBU_RUN_SECTION_FIELDS)
     section_fields.update(migration_fields)
 
+    section_values = {
+        field: payload.get(field) if field in payload else (legacy or {}).get(field)
+        for field in section_fields
+    }
+
     def upload_section(field: str) -> None:
-        value = payload.get(field) if field in payload else (legacy or {}).get(field)
+        value = section_values[field]
         _upload_json(
             _object_path(run_id, _section_relative_path(field)),
             value,
@@ -448,9 +589,19 @@ def save_fbu_run_snapshot_to_persistent(
             max_workers=min(4, len(ordered_section_fields))
         ) as executor:
             list(executor.map(upload_section, ordered_section_fields))
+    _save_fbu_run_mutation(
+        run_id,
+        payload,
+        changed_fields=changed_fields,
+        section_values=section_values,
+    )
     latest = previous
-    if changed_fields is not None and previous is not None:
-        latest = _load_fbu_run_manifest(run_id, refresh=True) or previous
+    if changed_fields is not None:
+        latest = _merge_fbu_run_mutations(
+            run_id,
+            _load_fbu_run_manifest(run_id, refresh=True) or previous,
+            refresh=True,
+        ) or previous
     manifest_payload = payload
     if changed_fields is not None and latest is not None:
         manifest_payload = {
@@ -474,7 +625,11 @@ def load_fbu_run_snapshot_from_persistent(
     sections: set[str] | None = None,
     refresh: bool = False,
 ) -> dict[str, Any] | None:
-    manifest = _load_fbu_run_manifest(run_id, refresh=refresh)
+    manifest = _merge_fbu_run_mutations(
+        run_id,
+        _load_fbu_run_manifest(run_id, refresh=refresh),
+        refresh=refresh,
+    )
     if not manifest:
         legacy = _load_legacy_fbu_run_metadata(run_id)
         if legacy is None:
