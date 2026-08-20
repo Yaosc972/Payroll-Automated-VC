@@ -208,6 +208,7 @@ from .engine.admin_store import (
     init_admin_store,
     list_audit_logs,
     list_pending_admin_notifications,
+    list_users,
     mark_admin_notification_failed,
     mark_admin_notification_sent,
     record_audit_event,
@@ -219,9 +220,22 @@ from .engine.admin_store import (
 )
 from .permission_notifications import (
     admin_user_url,
+    build_feedback_submitted_card,
     build_new_user_card,
     build_permission_change_card,
     build_permission_change_payload,
+    build_workbench_announcement_card,
+)
+from .engine.feedback_store import (
+    ANNOUNCEMENT_KIND_LABELS,
+    CATEGORY_LABELS,
+    create_announcement,
+    create_feedback,
+    get_feedback,
+    get_feedback_attachment,
+    list_announcements,
+    list_feedback_for_admin,
+    list_feedback_for_user,
 )
 from .engine.fbu_performance.persistent_storage import (
     FBU_RUN_SECTION_FIELDS,
@@ -246,6 +260,7 @@ CURRENT_USER_CACHE_TTL_SECONDS = 60
 _CURRENT_USER_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
 PERMISSION_NOTIFICATION_CONFIG = {
     "admin_open_id": str(os.environ.get("FEISHU_PERMISSION_ADMIN_OPEN_ID") or "").strip(),
+    "feedback_admin_name": str(os.environ.get("FEISHU_FEEDBACK_ADMIN_NAME") or "姚硕灿").strip(),
     "public_url": str(os.environ.get("SIGMA_WORKBENCH_PUBLIC_URL") or "").strip().rstrip("/"),
 }
 permission_notification_logger = logging.getLogger("bonus_platform.permission_notifications")
@@ -1175,6 +1190,20 @@ def _send_feishu_permission_card(notification: dict[str, Any]) -> str:
         )
     elif kind == "permission_changed":
         card = build_permission_change_card(payload, f"{public_url}/")
+    elif kind == "feedback_submitted":
+        feedback_id = str(payload.get("feedbackId") or "")
+        user_open_id = str(payload.get("userOpenId") or "")
+        card = build_feedback_submitted_card(
+            payload,
+            f"{public_url}/admin.html?feedback={quote(feedback_id, safe='')}#feedbackCenter",
+            f"https://applink.feishu.cn/client/chat/open?openId={quote(user_open_id, safe='')}",
+        )
+    elif kind == "workbench_announcement":
+        announcement_id = str(payload.get("announcementId") or "")
+        card = build_workbench_announcement_card(
+            payload,
+            f"{public_url}/?announcement={quote(announcement_id, safe='')}",
+        )
     else:
         raise ValueError("unsupported_permission_notification_kind")
 
@@ -1199,7 +1228,7 @@ def _send_feishu_permission_card(notification: dict[str, Any]) -> str:
 def _dispatch_pending_permission_notifications() -> None:
     """Best-effort delivery; queued rows preserve retries without blocking auth or grants."""
     try:
-        notifications = list_pending_admin_notifications(limit=3)
+        notifications = list_pending_admin_notifications(limit=50)
     except Exception as exc:  # noqa: BLE001 - notification failures must not break core flows.
         permission_notification_logger.warning("permission notification outbox unavailable: %s", type(exc).__name__)
         return
@@ -1272,6 +1301,85 @@ def _queue_permission_change_notification(
     except Exception as exc:  # noqa: BLE001 - grants must commit even if notification enqueue fails.
         permission_notification_logger.warning("permission change notification enqueue failed: %s", type(exc).__name__)
         return None
+
+
+def _feedback_notification_recipient_open_id() -> str:
+    """Resolve one active system administrator by exact display name."""
+    target_name = str(PERMISSION_NOTIFICATION_CONFIG.get("feedback_admin_name") or "").strip()
+    if not target_name:
+        return ""
+    matches = [
+        user
+        for user in list_users()
+        if str(user.get("name") or "").strip() == target_name
+        and user.get("status") == "active"
+        and "admin" in list(user.get("roleIds") or [])
+        and str(user.get("feishuOpenId") or "").strip()
+    ]
+    if len(matches) != 1:
+        permission_notification_logger.warning(
+            "feedback notification recipient resolution failed name=%s matches=%s",
+            target_name,
+            len(matches),
+        )
+        return ""
+    return str(matches[0]["feishuOpenId"]).strip()
+
+
+def _queue_feedback_notification(feedback: dict[str, Any]) -> dict[str, Any] | None:
+    recipient_open_id = _feedback_notification_recipient_open_id()
+    if not recipient_open_id:
+        return None
+    try:
+        return enqueue_admin_notification(
+            event_key=f"feedback:{feedback['id']}",
+            kind="feedback_submitted",
+            recipient_open_id=recipient_open_id,
+            payload={
+                "feedbackId": feedback["id"],
+                "userName": feedback.get("userName") or "业务用户",
+                "userOpenId": feedback.get("userOpenId") or "",
+                "categoryLabel": feedback.get("categoryLabel") or "平台反馈",
+                "moduleName": feedback.get("moduleName") or "HRAS 全球薪酬核算工作台",
+                "description": feedback.get("description") or "",
+                "attachmentCount": feedback.get("attachmentCount") or 0,
+                "createdAt": feedback.get("createdAt") or "",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 - feedback must persist even if notification enqueue fails.
+        permission_notification_logger.warning("feedback notification enqueue failed: %s", type(exc).__name__)
+        return None
+
+
+def _queue_announcement_notifications(announcement: dict[str, Any]) -> int:
+    queued = 0
+    for user in list_users():
+        recipient_open_id = str(user.get("feishuOpenId") or "").strip()
+        if user.get("status") != "active" or not recipient_open_id:
+            continue
+        try:
+            enqueue_admin_notification(
+                event_key=f"announcement:{announcement['id']}:{user['id']}",
+                kind="workbench_announcement",
+                recipient_open_id=recipient_open_id,
+                payload={
+                    "announcementId": announcement["id"],
+                    "kind": announcement.get("kind") or "feature",
+                    "kindLabel": announcement.get("kindLabel") or "功能更新",
+                    "title": announcement.get("title") or "HRAS 工作台更新",
+                    "content": announcement.get("content") or "",
+                    "moduleName": announcement.get("moduleName") or "HRAS 全球薪酬核算工作台",
+                    "publishedAt": announcement.get("publishedAt") or "",
+                },
+            )
+            queued += 1
+        except Exception as exc:  # noqa: BLE001 - one recipient cannot block the release notice.
+            permission_notification_logger.warning(
+                "announcement notification enqueue failed: user=%s error=%s",
+                user.get("id"),
+                type(exc).__name__,
+            )
+    return queued
 
 
 def _get_feishu_user_access_token(code: str, app_access_token: str) -> dict[str, Any]:
@@ -2710,6 +2818,178 @@ def api_auth_feishu_callback(
 @app.get("/api/me")
 def api_me(actor_user_id: str = Depends(_current_user_id)) -> dict:
     return _get_cached_current_user(actor_user_id)
+
+
+@app.post("/api/workbench/feedback", status_code=201)
+async def api_create_workbench_feedback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    category: str = Form(...),
+    module_id: str = Form(..., alias="moduleId"),
+    description: str = Form(...),
+    page_path: str = Form("", alias="pagePath"),
+    attachments: list[UploadFile] = File(default=[]),
+    actor_user_id: str = Depends(_current_user_id),
+) -> dict:
+    if len(attachments) > 3:
+        raise HTTPException(status_code=400, detail="每次最多上传 3 张截图。")
+    allowed_types = {"image/png", "image/jpeg", "image/webp"}
+    attachment_rows = []
+    for upload in attachments:
+        content_type = str(upload.content_type or "").lower()
+        if content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="截图仅支持 PNG、JPG 或 WebP 格式。")
+        content = await upload.read(5 * 1024 * 1024 + 1)
+        if len(content) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="单张截图不能超过 5MB。")
+        if not content:
+            raise HTTPException(status_code=400, detail="截图文件为空。")
+        attachment_rows.append({
+            "filename": upload.filename or "screenshot",
+            "contentType": content_type,
+            "content": content,
+        })
+    current = _get_cached_current_user(actor_user_id)
+    try:
+        feedback = create_feedback(
+            user=current["user"],
+            category=category,
+            module_id=module_id,
+            description=description,
+            page_path=page_path,
+            user_agent=request.headers.get("user-agent", ""),
+            attachments=attachment_rows,
+        )
+    except ValueError as exc:
+        messages = {
+            "invalid_feedback_category": "请选择有效的反馈类型。",
+            "invalid_feedback_module": "请选择有效的所属模块。",
+            "invalid_feedback_description": "问题描述需要填写 4 至 4000 个字符。",
+        }
+        raise HTTPException(status_code=400, detail=messages.get(str(exc), "反馈内容无效。")) from exc
+    queued = _queue_feedback_notification(feedback)
+    if queued:
+        background_tasks.add_task(_dispatch_pending_permission_notifications)
+    record_audit_event(
+        actor_user_id,
+        "submit_feedback",
+        "feedback",
+        feedback["id"],
+        f"{feedback['moduleName']} · 附件 {feedback['attachmentCount']} 张",
+    )
+    return {"feedback": feedback}
+
+
+@app.get("/api/workbench/feedback/mine")
+def api_my_workbench_feedback(
+    limit: int = 50,
+    actor_user_id: str = Depends(_current_user_id),
+) -> dict:
+    return {"feedback": list_feedback_for_user(actor_user_id, limit=limit)}
+
+
+def _feedback_for_viewer(feedback_id: str, actor_user_id: str) -> dict[str, Any]:
+    try:
+        feedback = get_feedback(feedback_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="反馈记录不存在。") from exc
+    current = _get_cached_current_user(actor_user_id)
+    is_admin = any(role.get("id") == "admin" for role in current.get("roles", []))
+    if feedback.get("userId") != actor_user_id and not is_admin:
+        raise HTTPException(status_code=404, detail="反馈记录不存在。")
+    return feedback
+
+
+@app.get("/api/workbench/feedback/{feedback_id}")
+def api_workbench_feedback_detail(
+    feedback_id: str,
+    actor_user_id: str = Depends(_current_user_id),
+) -> dict:
+    return {"feedback": _feedback_for_viewer(feedback_id, actor_user_id)}
+
+
+@app.get("/api/workbench/feedback/{feedback_id}/attachments/{attachment_id}")
+def api_workbench_feedback_attachment(
+    feedback_id: str,
+    attachment_id: str,
+    actor_user_id: str = Depends(_current_user_id),
+) -> Response:
+    _feedback_for_viewer(feedback_id, actor_user_id)
+    try:
+        attachment = get_feedback_attachment(feedback_id, attachment_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="截图附件不存在。") from exc
+    return Response(
+        content=attachment["content"],
+        media_type=attachment["content_type"],
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(str(attachment['filename']), safe='')}"
+        },
+    )
+
+
+@app.get("/api/workbench/announcements")
+def api_workbench_announcements(
+    limit: int = 50,
+    actor_user_id: str = Depends(_current_user_id),
+) -> dict:
+    return {"announcements": list_announcements(limit=limit)}
+
+
+@app.get("/api/admin/feedback")
+def api_admin_feedback(
+    limit: int = 100,
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    return {"feedback": list_feedback_for_admin(limit=limit)}
+
+
+@app.get("/api/admin/announcements")
+def api_admin_announcements(
+    limit: int = 100,
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    return {"announcements": list_announcements(limit=limit)}
+
+
+@app.post("/api/admin/announcements", status_code=201)
+def api_publish_workbench_announcement(
+    background_tasks: BackgroundTasks,
+    payload: dict = Body(...),
+    actor_user_id: str = Depends(_require_admin_user),
+) -> dict:
+    current = _get_cached_current_user(actor_user_id)
+    try:
+        announcement = create_announcement(
+            actor=current["user"],
+            kind=str(payload.get("kind") or ""),
+            title=str(payload.get("title") or ""),
+            content=str(payload.get("content") or ""),
+            module_id=str(payload.get("moduleId") or "home"),
+            visual_style=str(payload.get("visualStyle") or "sunny"),
+        )
+    except ValueError as exc:
+        messages = {
+            "invalid_announcement_kind": "请选择功能更新或问题提示。",
+            "invalid_announcement_module": "请选择有效的关联模块。",
+            "invalid_announcement_style": "请选择有效的便签样式。",
+            "invalid_announcement_title": "公告标题需要填写 2 至 120 个字符。",
+            "invalid_announcement_content": "公告内容需要填写 2 至 8000 个字符。",
+        }
+        raise HTTPException(status_code=400, detail=messages.get(str(exc), "公告内容无效。")) from exc
+    queued_recipients = 0
+    if bool(payload.get("pushToFeishu", True)):
+        queued_recipients = _queue_announcement_notifications(announcement)
+        if queued_recipients:
+            background_tasks.add_task(_dispatch_pending_permission_notifications)
+    record_audit_event(
+        actor_user_id,
+        "publish_announcement",
+        "announcement",
+        announcement["id"],
+        f"{announcement['kindLabel']} · {announcement['moduleName']} · 飞书推送 {queued_recipients} 人",
+    )
+    return {"announcement": announcement, "queuedRecipients": queued_recipients}
 
 
 @app.get("/api/admin/state")

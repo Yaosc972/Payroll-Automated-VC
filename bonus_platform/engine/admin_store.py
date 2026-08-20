@@ -107,6 +107,46 @@ CREATE TABLE IF NOT EXISTS admin_notification_outbox (
   updated_at TEXT NOT NULL,
   sent_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS workbench_feedback (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  user_open_id TEXT,
+  category TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  module_name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  page_path TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES admin_users(id)
+);
+
+CREATE TABLE IF NOT EXISTS workbench_feedback_attachments (
+  id TEXT PRIMARY KEY,
+  feedback_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  content BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (feedback_id) REFERENCES workbench_feedback(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS workbench_announcements (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  module_name TEXT NOT NULL,
+  visual_style TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_by_name TEXT NOT NULL,
+  published_at TEXT NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES admin_users(id)
+);
 """
 
 POSTGRES_SCHEMA = """
@@ -202,6 +242,46 @@ CREATE TABLE IF NOT EXISTS admin_notification_outbox (
   updated_at TEXT NOT NULL,
   sent_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS workbench_feedback (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  user_open_id TEXT,
+  category TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  module_name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  page_path TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES admin_users(id)
+);
+
+CREATE TABLE IF NOT EXISTS workbench_feedback_attachments (
+  id TEXT PRIMARY KEY,
+  feedback_id TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  content BYTEA NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (feedback_id) REFERENCES workbench_feedback(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS workbench_announcements (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  module_id TEXT NOT NULL,
+  module_name TEXT NOT NULL,
+  visual_style TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  created_by_name TEXT NOT NULL,
+  published_at TEXT NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES admin_users(id)
+);
 """
 
 
@@ -220,6 +300,103 @@ DEFAULT_USERS = [
     {"id": "cnPayrollAdminUser", "name": "CN Payroll Admin", "email": "cn.payroll.admin@example.com", "role_ids": ["employeeAdmin", "domesticAdmin"]},
     {"id": "fbuAdminUser", "name": "FBU Bonus Admin", "email": "fbu.admin@example.com", "role_ids": ["fbuAdmin"]},
     {"id": "overseasAdminUser", "name": "Overseas Audit Admin", "email": "overseas.admin@example.com", "role_ids": ["overseasAdmin"]},
+]
+
+DEFAULT_WORKBENCH_ANNOUNCEMENTS = [
+    {
+        "id": "UPD-LAUNCH-RECRUITMENT-20260820",
+        "kind": "feature",
+        "title": "招聘奖金核算已上线",
+        "content": (
+            "每月招聘奖金可以在一个页面里完成。\n"
+            "- 导入本月资料并完成初算\n"
+            "- 查看差异并确认结果\n"
+            "- 确认后导出结果，留存本月记录\n"
+            "> 建议按“导入—检查—确认—留存”的顺序使用。"
+        ),
+        "module_id": "recruitment",
+        "module_name": "全球招聘奖金核算",
+        "visual_style": "sunny",
+        "created_by": "payrollAdmin",
+        "created_by_name": "HRAS 工作台",
+        "published_at": "2026-08-20T01:00:00Z",
+    },
+    {
+        "id": "UPD-LAUNCH-EMPLOYEE-20260820",
+        "kind": "feature",
+        "title": "正式工餐补核算已开放",
+        "content": (
+            "正式工模块现已开放餐补核算。\n"
+            "- 导入集团与 WX 考勤资料\n"
+            "- 按月份计算餐补\n"
+            "- 查看缺失、重复等需要核对的记录\n"
+            "- 确认后导出结果\n"
+            "> 当前先开放餐补，其他薪酬项目会按计划增加。"
+        ),
+        "module_id": "employee",
+        "module_name": "中国区正式工薪酬核算",
+        "visual_style": "mint",
+        "created_by": "payrollAdmin",
+        "created_by_name": "HRAS 工作台",
+        "published_at": "2026-08-20T01:01:00Z",
+    },
+    {
+        "id": "UPD-LAUNCH-DOMESTIC-20260820",
+        "kind": "feature",
+        "title": "外包工薪酬核算开放试用",
+        "content": (
+            "现在可以按月完成外包工考勤和薪酬核算。\n"
+            "- 导入考勤资料\n"
+            "- 核算各项薪酬\n"
+            "- 查看员工明细和需要复核的记录\n"
+            "- 导出核算结果\n"
+            "> 目前处于试用阶段，正式使用前请复核结果。"
+        ),
+        "module_id": "domestic",
+        "module_name": "中国区外包工薪酬核算",
+        "visual_style": "blueprint",
+        "created_by": "payrollAdmin",
+        "created_by_name": "HRAS 工作台",
+        "published_at": "2026-08-20T01:02:00Z",
+    },
+    {
+        "id": "UPD-LAUNCH-FBU-20260820",
+        "kind": "feature",
+        "title": "FBU绩效奖金核算已上线",
+        "content": (
+            "FBU 每月绩效奖金可以集中处理。\n"
+            "- 上传当月薪资、全量调薪和上月薪资\n"
+            "- 查看绩效数据并进行核算检查\n"
+            "- 在不同页面之间切换时，已上传资料会继续保留\n"
+            "- 复核后查看最终结果\n"
+            "> 刷新页面后，上月薪资仍会保留。"
+        ),
+        "module_id": "fbu",
+        "module_name": "FBU美洲绩效奖金核算",
+        "visual_style": "peach",
+        "created_by": "payrollAdmin",
+        "created_by_name": "HRAS 工作台",
+        "published_at": "2026-08-20T01:03:00Z",
+    },
+    {
+        "id": "UPD-LAUNCH-OVERSEAS-20260820",
+        "kind": "feature",
+        "title": "海外报账核对开放试用",
+        "content": (
+            "海外劳务报账资料可以在一个页面完成核对。\n"
+            "- 上传发票和报账表\n"
+            "- 按员工查看资料是否一致\n"
+            "- 集中查看金额、工时和人员信息差异\n"
+            "- 确认后下载核对结果\n"
+            "> 请先确认发票清晰、报账表信息完整。"
+        ),
+        "module_id": "overseas",
+        "module_name": "海外劳务报账核对",
+        "visual_style": "sunny",
+        "created_by": "payrollAdmin",
+        "created_by_name": "HRAS 工作台",
+        "published_at": "2026-08-20T01:04:00Z",
+    },
 ]
 
 DEFAULT_MODULES = [
@@ -501,6 +678,25 @@ def _seed_defaults(connection: _AdminConnection) -> None:
                 ["user_id", "role_id"],
                 {"user_id": user["id"], "role_id": role_id, "created_at": now},
             )
+    for announcement in DEFAULT_WORKBENCH_ANNOUNCEMENTS:
+        _insert_seed(
+            connection,
+            "workbench_announcements",
+            [
+                "id",
+                "kind",
+                "title",
+                "content",
+                "module_id",
+                "module_name",
+                "visual_style",
+                "created_by",
+                "created_by_name",
+                "published_at",
+            ],
+            ["id"],
+            announcement,
+        )
     for role in DEFAULT_ROLES:
         for module in DEFAULT_MODULES:
             can_enter = 1 if role["id"] == "admin" or role.get("module_id") == module["id"] else 0

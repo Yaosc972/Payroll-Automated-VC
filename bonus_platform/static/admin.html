@@ -8,6 +8,7 @@
     <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
     <link rel="stylesheet" href="styles.css?v=admin-users-20260810" />
     <link rel="stylesheet" href="admin-directory.css?v=20260812-3" />
+    <link rel="stylesheet" href="admin-feedback.css?v=20260820-1" />
     <script src="permission-guard.js?v=9"></script>
   </head>
   <body class="portal-shell dashboard-shell admin-console-shell">
@@ -49,6 +50,10 @@
           <a href="#moduleConfig">
             <span>模块配置</span>
             <b>Module Settings</b>
+          </a>
+          <a href="#feedbackCenter">
+            <span>反馈与更新</span>
+            <b>Feedback & Updates</b>
           </a>
           <a href="#auditLog">
             <span>操作日志</span>
@@ -181,6 +186,60 @@
           </div>
         </section>
 
+        <section id="feedbackCenter" class="admin-console-section admin-feedback-center" aria-labelledby="feedbackCenterTitle">
+          <div class="section-bar">
+            <div>
+              <p>Feedback & Release Notes</p>
+              <h2 id="feedbackCenterTitle">反馈与更新</h2>
+            </div>
+            <span class="admin-feedback-lightweight">只收集 · 只播报 · 不做工单流转</span>
+          </div>
+
+          <div class="admin-feedback-layout">
+            <section class="admin-feedback-inbox" aria-labelledby="adminFeedbackInboxTitle">
+              <header>
+                <div><span>LISTENING INBOX</span><h3 id="adminFeedbackInboxTitle">用户反馈</h3></div>
+                <button id="adminFeedbackRefresh" type="button">刷新</button>
+              </header>
+              <div class="admin-feedback-list" id="adminFeedbackList"></div>
+              <article class="admin-feedback-detail" id="adminFeedbackDetail" hidden></article>
+            </section>
+
+            <section class="admin-announcement-composer" aria-labelledby="adminAnnouncementTitle">
+              <header>
+                <div><span>PIN A NEW NOTE</span><h3 id="adminAnnouncementTitle">发布更新公告</h3></div>
+                <i aria-hidden="true">✦</i>
+              </header>
+              <form id="adminAnnouncementForm">
+                <div class="admin-announcement-fields">
+                  <label><span>公告类型</span><select name="kind"><option value="feature">功能更新</option><option value="known_issue">问题提示</option></select></label>
+                  <label><span>关联模块</span><select name="moduleId"><option value="home">平台首页</option><option value="recruitment">全球招聘奖金核算</option><option value="employee">中国区正式工薪酬核算</option><option value="domestic">中国区外包工薪酬核算</option><option value="fbu">FBU美洲绩效奖金核算</option><option value="overseas">海外劳务报账核对</option></select></label>
+                </div>
+                <label><span>标题</span><input name="title" type="text" minlength="2" maxlength="120" required placeholder="一句话说明本次更新" /></label>
+                <div class="admin-rich-editor">
+                  <div class="admin-rich-toolbar" aria-label="富文本快捷格式">
+                    <button type="button" data-rich-wrap="**" title="加粗">B</button>
+                    <button type="button" data-rich-wrap="==" title="高亮">重点</button>
+                    <button type="button" data-rich-prefix="- " title="项目符号">• 列表</button>
+                    <button type="button" data-rich-prefix="> " title="提示块">❯ 提示</button>
+                    <button type="button" data-rich-link title="链接">↗ 链接</button>
+                  </div>
+                  <textarea id="adminAnnouncementContent" name="content" rows="8" minlength="2" maxlength="8000" required placeholder="支持 **加粗**、==高亮==、- 列表、> 提示块和 [文字](https://链接)"></textarea>
+                </div>
+                <label class="admin-feishu-push"><input type="checkbox" name="pushToFeishu" checked /><span>同步通过 HRAS 飞书应用推送给已启用用户</span></label>
+                <div class="admin-announcement-submit">
+                  <span id="adminAnnouncementStatus" role="status" aria-live="polite"></span>
+                  <button type="submit">发布公告</button>
+                </div>
+              </form>
+              <div class="admin-announcement-recent">
+                <h4>最近发布</h4>
+                <div id="adminAnnouncementList"></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <section id="auditLog" class="admin-console-section" aria-labelledby="auditLogTitle">
           <div class="section-bar">
             <div>
@@ -211,5 +270,6 @@
     </div>
 
     <script src="admin.js?v=20260812-3"></script>
+    <script src="admin-feedback.js?v=20260820-2"></script>
   </body>
 </html>

@@ -5,6 +5,7 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
+STATIC_DIR = ROOT / "bonus_platform" / "static"
 INDEX_HTML = ROOT / "bonus_platform" / "static" / "index.html"
 ADMIN_HTML = ROOT / "bonus_platform" / "static" / "admin.html"
 ADMIN_JS = ROOT / "bonus_platform" / "static" / "admin.js"
@@ -657,8 +658,12 @@ def test_story_gallery_uses_large_single_row_demo_images():
 def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     html = INDEX_HTML.read_text(encoding="utf-8")
 
-    assert "Welcome to Sigma Workbench" in html
-    assert "Σ-WORKBENCH" in html
+    assert "Welcome to HRAS Global Payroll Workbench" in html
+    assert "HRAS 全球薪酬核算工作台" in html
+    assert "HRAS Global Payroll Workbench" in html
+    assert 'class="dashboard-hras-watermark"' in html
+    assert 'class="welcome-title-brand">HRAS</span>' in html
+    assert 'class="today-stack"' not in html
     assert "Recruitment Bonus Reconciliation" in html
     assert "招聘奖金核算" in html
     assert "Domestic Labor Vendor Payroll" in html
@@ -698,6 +703,87 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "进入后台管理" in html
     assert "isSystemAdmin" in html
     assert "adminOnly" in html
+
+
+def test_portal_feedback_and_creative_updates_are_lightweight_and_available():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    widget_js = (STATIC_DIR / "feedback-widget.js").read_text(encoding="utf-8")
+    widget_css = (STATIC_DIR / "feedback-widget.css").read_text(encoding="utf-8")
+    admin_html = ADMIN_HTML.read_text(encoding="utf-8")
+    admin_js = (STATIC_DIR / "admin-feedback.js").read_text(encoding="utf-8")
+
+    assert '<html lang="zh-CN" data-module-id="home">' in html
+    assert '<div class="feedback-widget" id="feedbackWidget">' not in html
+    assert 'src="feedback-widget.js?v=20260820-13"' in html
+    assert 'href="feedback-widget.css?v=20260820-13"' in html
+
+    assert 'id="feedbackLauncher"' in widget_js
+    assert 'class="feedback-launcher-icon"' in widget_js
+    assert 'background-image: url("assets/feedback-mailbox-original.png")' in widget_css
+    assert 'data-feedback-tab="submit"' in widget_js
+    assert 'data-feedback-tab="mine"' in widget_js
+    assert 'data-feedback-tab="updates"' in widget_js
+    assert "粘贴、拖入或选择截图" in widget_js
+    assert "最多 3 张" in widget_js
+    assert 'type="hidden" name="category" value="general"' in widget_js
+    assert 'class="feedback-module-picker"' in widget_js
+    assert "所属模块（必选）" in widget_js
+    assert 'name="moduleId" value="home" required' in widget_js
+    assert 'name="moduleId" value="home" checked' not in widget_js
+    assert "closest('a[data-module-id]')" in html
+    assert "反馈类型" not in widget_js
+    assert "招聘奖金</span>" in widget_js
+    assert "FBU绩效</span>" in widget_js
+    assert 'id="feedbackAnnouncementDetail"' in widget_js
+    assert 'id="feedbackImagePreview"' in widget_js
+    assert 'class="feedback-image-preview-close"' in widget_js
+    assert "document.body.append(imagePreview)" in widget_js
+    assert ".feedback-image-preview {\n  position: fixed;" in widget_css
+    assert "z-index: 20000" in widget_css
+    assert "max-width: min(92vw, 1600px)" in widget_css
+    assert "ensureFeedbackWidget" in widget_js
+
+    module_pages = {
+        "recruitment.html": "recruitment",
+        "china-employee-payroll.html": "employee",
+        "domestic-labor.html": "domestic",
+        "fbu-performance.html": "fbu",
+        "overseas-labor.html": "overseas",
+    }
+    for filename, module_id in module_pages.items():
+        module_html = (STATIC_DIR / filename).read_text(encoding="utf-8")
+        assert f'data-module-id="{module_id}"' in module_html
+        assert 'href="feedback-widget.css?v=20260820-13"' in module_html
+        assert 'src="feedback-widget.js?v=20260820-13"' in module_html
+
+    assert 'drawer.addEventListener("paste"' in widget_js
+    assert 'dropzone.addEventListener("drop"' in widget_js
+    assert "feedback-history-attachments" in widget_js
+    assert "openImagePreview" in widget_js
+    assert 'button.addEventListener("click", () => openImagePreview' in widget_js
+    assert 'link.href = `/api/workbench/feedback/' not in widget_js
+    assert "renderRichText" in widget_js
+    assert "announcementExcerpt" in widget_js
+    assert "openAnnouncementDetail" in widget_js
+    assert 'readAnnouncementsKey = "hras-announcement-read-v1"' in widget_js
+    assert "markAnnouncementRead" in widget_js
+    assert '"界面预览"' in widget_js
+    assert "查看更新" in widget_js
+    assert "localStorage.setItem(readAnnouncementsKey" in widget_js
+    assert ".announcement-note-open" in widget_css
+    assert ".announcement-detail-media" in widget_css
+    assert ".announcement-note.unread .note-stamp::before" in widget_css
+    assert "object-fit: cover" in widget_css
+    assert "background: #ffffff" in widget_css
+
+    assert 'id="feedbackCenter"' in admin_html
+    assert 'id="adminAnnouncementForm"' in admin_html
+    assert "只收集 · 只播报 · 不做工单流转" in admin_html
+    assert 'name="pushToFeishu"' in admin_html
+    assert "**加粗**" in admin_html
+    assert "==高亮==" in admin_html
+    assert "/api/admin/feedback?limit=100" in admin_js
+    assert 'apiRequest("/api/admin/announcements"' in admin_js
     assert ".dashboard-user-menu" in STYLES_CSS.read_text(encoding="utf-8")
     assert "login.html?next=" in html
     assert "permission-locked" in html

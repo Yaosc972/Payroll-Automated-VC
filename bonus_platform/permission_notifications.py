@@ -31,10 +31,10 @@ def _display_time(value: Any) -> str:
         return _safe_text(raw)
 
 
-def _button(label: str, url: str, *, primary: bool = True) -> dict[str, Any]:
+def _button(label: str, url: str, *, primary: bool = True, element_id: str = "open_console") -> dict[str, Any]:
     return {
         "tag": "button",
-        "element_id": "open_console",
+        "element_id": element_id,
         "text": {"tag": "plain_text", "content": label},
         "type": "primary" if primary else "default",
         "width": "fill",
@@ -217,3 +217,68 @@ def build_permission_change_card(payload: dict[str, Any], workbench_url: str) ->
 
 def admin_user_url(base_url: str, user_id: str) -> str:
     return f"{str(base_url).rstrip('/')}/admin.html?user={quote(str(user_id), safe='')}"
+
+
+def build_feedback_submitted_card(
+    payload: dict[str, Any],
+    detail_url: str,
+    contact_url: str,
+) -> dict[str, Any]:
+    attachment_count = max(0, int(payload.get("attachmentCount") or 0))
+    attachment_text = f"{attachment_count} 张截图" if attachment_count else "无截图"
+    return _base_card(
+        "收到新的平台反馈",
+        "HRAS Global Payroll Workbench · 用户反馈",
+        "orange",
+        [
+            {
+                "tag": "markdown",
+                "content": (
+                    f"**{_safe_text(payload.get('userName'), '业务用户')}** 提交了"
+                    f"一条 **{_safe_text(payload.get('categoryLabel'), '平台反馈')}**。"
+                ),
+            },
+            {
+                "tag": "markdown",
+                "content": (
+                    f"**反馈编号**\n{_safe_text(payload.get('feedbackId'))}\n\n"
+                    f"**所属模块**\n{_safe_text(payload.get('moduleName'))}\n\n"
+                    f"**问题描述**\n{_safe_text(payload.get('description'))}"
+                ),
+            },
+            {
+                "tag": "markdown",
+                "content": (
+                    f"<font color='grey'>附件：{attachment_text}\n"
+                    f"提交时间：{_display_time(payload.get('createdAt'))}</font>"
+                ),
+                "text_size": "notation",
+            },
+            _button("查看详情", detail_url, element_id="open_feedback_detail"),
+            _button("联系用户", contact_url, primary=False, element_id="contact_feedback_user"),
+        ],
+    )
+
+
+def build_workbench_announcement_card(payload: dict[str, Any], workbench_url: str) -> dict[str, Any]:
+    is_issue = str(payload.get("kind") or "") == "known_issue"
+    return _base_card(
+        _safe_text(payload.get("title"), "HRAS 工作台更新"),
+        f"HRAS Global Payroll Workbench · {_safe_text(payload.get('kindLabel'), '产品更新')}",
+        "orange" if is_issue else "blue",
+        [
+            {
+                "tag": "markdown",
+                "content": (
+                    f"**{_safe_text(payload.get('moduleName'), 'HRAS 全球薪酬核算工作台')}**\n\n"
+                    f"{_safe_text(payload.get('content'))}"
+                ),
+            },
+            {
+                "tag": "markdown",
+                "content": f"<font color='grey'>发布时间：{_display_time(payload.get('publishedAt'))}</font>",
+                "text_size": "notation",
+            },
+            _button("打开工作台", workbench_url, element_id="open_workbench_announcement"),
+        ],
+    )

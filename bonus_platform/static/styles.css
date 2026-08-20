@@ -6161,7 +6161,7 @@ body.filters-collapsed .filter-body {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
+  grid-template-columns: 340px minmax(0, 1fr);
   gap: 24px;
   width: calc(100dvw - 48px);
   max-width: 1440px;
@@ -6199,7 +6199,7 @@ body.filters-collapsed .filter-body {
   text-decoration: none;
 }
 
-.dashboard-logo img {
+.dashboard-logo > img {
   width: 52px;
   height: 52px;
   object-fit: contain;
@@ -6207,15 +6207,20 @@ body.filters-collapsed .filter-body {
 
 .dashboard-logo span {
   display: grid;
+  min-width: 0;
   gap: 3px;
 }
 
 .dashboard-logo strong {
   font-family: var(--font-number), var(--font-cjk);
-  font-size: 16px;
+  font-size: 14px;
   font-weight: var(--weight-black);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+}
+
+.dashboard-logo strong,
+.dashboard-logo small {
+  white-space: nowrap;
 }
 
 .dashboard-logo small,
@@ -6234,6 +6239,11 @@ body.filters-collapsed .filter-body {
   letter-spacing: 0.06em;
   line-height: 1.3;
   text-transform: uppercase;
+}
+
+.dashboard-logo small {
+  font-size: 9px;
+  letter-spacing: 0.025em;
 }
 
 .dashboard-nav {
@@ -6373,8 +6383,7 @@ body.filters-collapsed .filter-body {
 }
 
 .dashboard-user em,
-.status-pill,
-.today-stack span {
+.status-pill {
   border-radius: 999px;
   padding: 8px 11px;
   font-style: normal;
@@ -6400,8 +6409,10 @@ body.filters-collapsed .filter-body {
 }
 
 .welcome-panel {
+  position: relative;
+  isolation: isolate;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 168px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-items: end;
   overflow: hidden;
@@ -6411,6 +6422,24 @@ body.filters-collapsed .filter-body {
     linear-gradient(145deg, rgba(255, 255, 255, 0.72), rgba(239, 246, 255, 0.58)),
     radial-gradient(circle at 88% 16%, rgba(34, 211, 238, 0.22), transparent 34%),
     radial-gradient(circle at 12% 94%, rgba(139, 92, 246, 0.16), transparent 30%);
+}
+
+.welcome-panel > :not(.dashboard-hras-watermark) {
+  position: relative;
+  z-index: 1;
+}
+
+.dashboard-hras-watermark {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  right: 96px;
+  width: min(480px, 52%);
+  height: auto;
+  transform: translateY(-50%);
+  opacity: 0.045;
+  pointer-events: none;
+  user-select: none;
 }
 
 .welcome-panel h1 {
@@ -6431,6 +6460,14 @@ body.filters-collapsed .filter-body {
   font-size: 13px;
   font-weight: var(--weight-medium);
   line-height: 1.48;
+}
+
+.welcome-panel h1 .welcome-title-brand {
+  display: inline;
+  margin: 0;
+  color: #0e1d49;
+  font: inherit;
+  line-height: inherit;
 }
 
 .workday-focus {
@@ -6461,36 +6498,6 @@ body.filters-collapsed .filter-body {
   color: #334155;
   background: rgba(255, 255, 255, 0.54);
   box-shadow: var(--inner-edge-glow);
-}
-
-.today-stack {
-  display: grid;
-  gap: 6px;
-  border-radius: 20px;
-  padding: 14px;
-  background: rgba(15, 23, 42, 0.9);
-  color: #ffffff;
-  box-shadow: 0 26px 50px rgba(15, 23, 42, 0.18);
-}
-
-.today-stack span {
-  width: fit-content;
-  color: #075985;
-  background: rgba(224, 242, 254, 0.92);
-}
-
-.today-stack strong {
-  font-family: var(--font-number);
-  font-size: 36px;
-  font-weight: var(--weight-black);
-  letter-spacing: -0.06em;
-  line-height: 0.9;
-}
-
-.today-stack small {
-  color: rgba(219, 234, 254, 0.78);
-  font-size: 11px;
-  line-height: 1.35;
 }
 
 .dashboard-section {
@@ -6802,7 +6809,7 @@ body.filters-collapsed .filter-body {
 @media (max-width: 1280px) {
   .dashboard-frame {
     width: min(1180px, calc(100vw - 32px));
-    grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-columns: 320px minmax(0, 1fr);
   }
 
   .saas-module-grid,
@@ -7086,6 +7093,78 @@ body.filters-collapsed .filter-body {
 
 .data-table tbody tr:hover {
   background: #f5f5f7;
+}
+
+/* Scoped HRAS homepage brand overrides stay stronger than legacy dashboard duplicates. */
+.dashboard-shell:not(.admin-console-shell) .dashboard-frame {
+  grid-template-columns: 340px minmax(0, 1fr);
+}
+
+.dashboard-shell:not(.admin-console-shell) .dashboard-logo > img {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 16px rgba(15, 23, 42, 0.12));
+}
+
+.dashboard-shell:not(.admin-console-shell) .dashboard-logo span {
+  min-width: 0;
+}
+
+.dashboard-shell:not(.admin-console-shell) .dashboard-logo strong {
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  text-transform: none;
+}
+
+.dashboard-shell:not(.admin-console-shell) .dashboard-logo strong,
+.dashboard-shell:not(.admin-console-shell) .dashboard-logo small {
+  white-space: nowrap;
+}
+
+.dashboard-shell:not(.admin-console-shell) .dashboard-logo small {
+  font-size: 9px;
+  letter-spacing: 0.025em;
+}
+
+.dashboard-shell:not(.admin-console-shell) .welcome-panel {
+  position: relative;
+  isolation: isolate;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard-shell:not(.admin-console-shell) .welcome-panel > :not(.dashboard-hras-watermark) {
+  position: relative;
+  z-index: 1;
+}
+
+.dashboard-shell:not(.admin-console-shell) .dashboard-hras-watermark {
+  position: absolute;
+  z-index: 0;
+  top: 50%;
+  right: 96px;
+  display: block;
+  width: min(480px, 52%);
+  height: auto;
+  margin: 0;
+  transform: translateY(-50%);
+  opacity: 0.045;
+  pointer-events: none;
+  user-select: none;
+}
+
+.dashboard-shell:not(.admin-console-shell) .welcome-panel h1 .welcome-title-brand {
+  display: inline;
+  margin: 0;
+  color: #0e1d49;
+  font: inherit;
+  line-height: inherit;
+}
+
+@media (max-width: 1280px) {
+  .dashboard-shell:not(.admin-console-shell) .dashboard-frame {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
 }
 
 /* ── Admin user directory: dense, searchable, paginated ── */

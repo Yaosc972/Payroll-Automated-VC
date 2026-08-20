@@ -1,12 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-module-id="home">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=1280" />
-    <title>西格玛工作台 · Σ-WORKBENCH</title>
+    <title>HRAS 全球薪酬核算工作台 · HRAS Global Payroll Workbench</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
     <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
-    <link rel="stylesheet" href="styles.css?v=21" />
+    <link rel="stylesheet" href="styles.css?v=29" />
+    <link rel="stylesheet" href="feedback-widget.css?v=20260820-13" />
   </head>
   <body class="portal-shell dashboard-shell">
     <div class="portal-mesh" aria-hidden="true">
@@ -16,13 +17,13 @@
       <span class="mesh-grid"></span>
     </div>
 
-    <div class="dashboard-frame" aria-label="西格玛工作台控制台">
+    <div class="dashboard-frame" aria-label="HRAS 全球薪酬核算工作台控制台">
       <aside class="dashboard-sidebar" aria-label="主导航">
-        <a class="dashboard-logo" href="/" aria-label="西格玛工作台首页">
+        <a class="dashboard-logo" href="/" aria-label="HRAS 全球薪酬核算工作台首页">
           <img src="assets/workbench-logo-2026.png" alt="" />
           <span>
-            <strong>Σ Workbench</strong>
-            <small>Compensation Core</small>
+            <strong>HRAS 全球薪酬核算工作台</strong>
+            <small>HRAS Global Payroll Workbench</small>
           </span>
         </a>
 
@@ -59,7 +60,7 @@
 
       <main class="dashboard-main">
         <p class="sr-only">
-          Welcome to Sigma Workbench · Σ-WORKBENCH · Recruitment Bonus Reconciliation · 招聘奖金核算 ·
+          Welcome to HRAS Global Payroll Workbench · HRAS 全球薪酬核算工作台 · Recruitment Bonus Reconciliation · 招聘奖金核算 ·
           Domestic Labor Vendor Payroll · 劳务工薪酬核算 · Overseas Labor Invoice Audit · 海外劳务工报账核对
         </p>
         <header class="dashboard-topbar">
@@ -90,9 +91,10 @@
         </header>
 
         <section class="welcome-panel">
+          <img class="dashboard-hras-watermark" src="assets/hras-logo-original.svg" alt="" aria-hidden="true" />
           <div>
             <p class="portal-kicker">Enterprise Payroll Intelligence</p>
-            <h1>欢迎回来，西格玛工作台已准备就绪</h1>
+            <h1>欢迎回来，<span class="welcome-title-brand">HRAS</span> 全球薪酬核算工作台已准备就绪</h1>
             <span>统一管理招聘激励、正式工薪酬、外包工薪酬、FBU绩效奖金与海外劳务报账核对。</span>
             <div class="workday-focus" aria-label="今日关注">
               <b>今日关注</b>
@@ -100,11 +102,6 @@
               <span>批次归档</span>
               <span>结果导出</span>
             </div>
-          </div>
-          <div class="today-stack" aria-label="今日任务">
-            <span>今日任务</span>
-            <strong>7</strong>
-            <small>待复核异常 6 项 · 待归档批次 1 项</small>
           </div>
         </section>
 
@@ -206,6 +203,7 @@
 
       </main>
     </div>
+
     <script>
       (async () => {
         if (window.gsap && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -367,7 +365,7 @@
           }
         });
 
-        document.querySelectorAll('[data-module-id]').forEach((entry) => {
+        document.querySelectorAll('a[data-module-id]').forEach((entry) => {
           const moduleId = entry.dataset.moduleId;
           const module = getModule(moduleId);
           if (!module) return;
@@ -383,7 +381,7 @@
         });
 
         document.addEventListener('click', (event) => {
-          const entry = event.target.closest('[data-module-id]');
+          const entry = event.target.closest('a[data-module-id]');
           if (!entry || canEnterModule(entry.dataset.moduleId)) return;
           event.preventDefault();
           const module = getModule(entry.dataset.moduleId);
@@ -422,5 +420,6 @@
         });
       })();
     </script>
+    <script src="feedback-widget.js?v=20260820-13"></script>
   </body>
 </html>
