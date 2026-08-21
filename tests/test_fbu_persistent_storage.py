@@ -1310,7 +1310,11 @@ def test_save_step_data_applies_metadata_and_persists_once(monkeypatch, tmp_path
     manager = fbu_runs.FBURunManager(str(tmp_path))
     created = manager.create_run("2026-05", persist=False)
     save_calls: list[str] = []
-    monkeypatch.setattr(manager, "_save_runs", lambda run_id, changed_fields=None: save_calls.append(run_id))
+    monkeypatch.setattr(
+        manager,
+        "_save_runs",
+        lambda run_id, changed_fields=None, **_kwargs: save_calls.append(run_id),
+    )
 
     manager.save_step_data(
         created.run_id,
