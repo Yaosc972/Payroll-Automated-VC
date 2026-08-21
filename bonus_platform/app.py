@@ -15291,12 +15291,12 @@ def _build_base_override_data_from_rule_lists(
         for region in FBU_AMERICAS_REGIONS
     }
 
-    def belongs_to_run_region(employee_id: str) -> bool:
+    def belongs_to_run_region(employee_id: str, *, allow_missing: bool = False) -> bool:
         if not roster_lookup or not target_area:
             return True
         roster_info = _rule_list_roster_info(roster_lookup, employee_id)
         if not roster_info:
-            return False
+            return allow_missing
         employee_area = str(roster_info.get("area") or "").strip()
         return (
             not employee_area
@@ -15323,7 +15323,10 @@ def _build_base_override_data_from_rule_lists(
         if not row.get("active", True):
             continue
         employee_id = str(row.get("employee_id") or "").strip()
-        if not employee_id or not belongs_to_run_region(employee_id):
+        if not employee_id or not belongs_to_run_region(
+            employee_id,
+            allow_missing=target_area == "新泽西区",
+        ):
             continue
         employees.append(_build_rule_list_override_row(
             row,
