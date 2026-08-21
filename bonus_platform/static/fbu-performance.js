@@ -6749,6 +6749,10 @@ function buildNeedsForStep(stepKey, activity) {
   const needs = [];
   const push = (id, text, action = '') => needs.push({ id, text, action });
   if (!activity) return needs;
+  // A completed activity is the durable workflow result. Lazy detail loading
+  // must not make earlier steps look incomplete while their sections are still
+  // being fetched after a refresh or re-entry.
+  if (activity.status === 'completed') return needs;
 
   if (stepKey === 'people' && !activity.roster_file) {
     push('roster', '请上传花名册', '<button class="btn btn-primary btn-sm" type="button" onclick="openWorkbenchUpload(\'roster\')">上传</button>');

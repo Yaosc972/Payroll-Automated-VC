@@ -1377,6 +1377,7 @@ def test_lazy_step_status_uses_manifest_pending_count_after_refresh():
 
     assert "function getActivitySectionSummary" in js
     assert "state.activities.find(item => item.run_id === activity?.run_id)" in js
+    assert "if (activity.status === 'completed') return needs;" in needs
     assert "work_hour_rule_count" in needs
     assert "fixed_base_count" in needs
     assert "pending_count" in needs
