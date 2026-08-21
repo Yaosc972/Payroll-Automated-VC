@@ -185,6 +185,47 @@ def test_confirm_rule_lists_enriches_name_area_and_department_from_roster(monkey
     assert by_id["zt15638"]["department"] == "FBU-区域管理-美东"
 
 
+def test_confirm_rule_lists_keeps_only_employees_in_activity_region(monkeypatch, tmp_path):
+    client = _client_with_tmp_store(monkeypatch, tmp_path)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Roster"
+    sheet.append(["姓名", "工号", "二级部门", "三级部门", "四级部门", "划分区域"])
+    sheet.append(["新泽西员工", "zt12988", "FBU", "仓储事业部", "新泽西仓", "新泽西区"])
+    sheet.append(["加州员工", "zt20001", "FBU", "仓储事业部", "加州仓", "加州区"])
+    upload = client.post(
+        "/api/fbu-performance/roster",
+        files={
+            "file": (
+                "roster.xlsx",
+                _workbook_bytes(workbook),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert upload.status_code == 200
+    run_id = client.post(
+        "/api/fbu-performance/runs",
+        json={"calc_month": "2026-07", "region_code": "us_ca"},
+    ).json()["run_id"]
+
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/rule-lists/confirm",
+        json={
+            "work_hour_employees": [
+                {"employee_id": "zt12988", "name": "新泽西员工", "active": True},
+                {"employee_id": "zt20001", "name": "加州员工", "active": True},
+            ],
+            "fixed_base_employees": [],
+        },
+    )
+
+    assert response.status_code == 200
+    rows = response.json()["preview"]["employees"]
+    assert [row["employee_id"] for row in rows] == ["zt20001"]
+    assert rows[0]["area"] == "加州区"
+
+
 def test_save_rule_lists_rejects_non_numeric_fixed_base(monkeypatch, tmp_path):
     client = _client_with_tmp_store(monkeypatch, tmp_path)
 

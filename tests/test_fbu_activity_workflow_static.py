@@ -1369,7 +1369,7 @@ def test_initial_workbench_overlaps_rule_list_and_activity_core_requests():
     )
 
 
-def test_lazy_step_status_uses_manifest_summaries_after_refresh():
+def test_lazy_step_status_uses_manifest_pending_count_after_refresh():
     js = _js()
     needs = js.split("function buildNeedsForStep", 1)[1].split(
         "function renderNeedsPanel", 1
@@ -1379,7 +1379,8 @@ def test_lazy_step_status_uses_manifest_summaries_after_refresh():
     assert "state.activities.find(item => item.run_id === activity?.run_id)" in js
     assert "work_hour_rule_count" in needs
     assert "fixed_base_count" in needs
-    assert "suggested_count" in needs
+    assert "pending_count" in needs
+    assert "补充假勤待确认记录" in needs
     assert "getSalaryVerificationBlockingCount(activity)" in needs
 
 

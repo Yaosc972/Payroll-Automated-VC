@@ -773,6 +773,33 @@ def test_supplemental_leave_api_supports_compact_row_response():
     assert payload["summary"]["include_hours"] == 8
 
 
+def test_calculation_rejects_pending_supplemental_leave_confirmations():
+    client = TestClient(app)
+    created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
+    app_module.fbu_run_manager.update_run(
+        created["run_id"],
+        supplemental_leave_file="leave.xlsx",
+        supplemental_leave_data={
+            "rows": [
+                {
+                    "row_id": "leave:1",
+                    "employee_id": "zt001",
+                    "confirmation_status": "pending",
+                    "include_in_base": False,
+                },
+            ],
+            "summary": {"pending_count": 1},
+        },
+    )
+
+    response = client.post(f"/api/fbu-performance/calculate/{created['run_id']}")
+
+    assert response.status_code == 409
+    assert "补充假勤仍有 1 条待确认" in response.json()["detail"]
+    detail = client.get(f"/api/fbu-performance/runs/{created['run_id']}").json()
+    assert detail["status"] != "completed"
+
+
 def test_supplemental_leave_api_merges_duplicate_flow_rows_on_import():
     client = TestClient(app)
     created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()

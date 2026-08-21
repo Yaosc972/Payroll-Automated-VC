@@ -19,10 +19,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from . import postgres_state
+
 
 FBU_RUN_PREFIX = "fbu-performance-runs"
 FBU_RUN_SCHEMA_VERSION = 2
 FBU_RUN_INDEX_FILENAME = "_runs-index.json"
+FBU_RUN_INDEX_ENTRY_PREFIX = "_run-index"
 FBU_RUN_SECTION_FIELDS = frozenset({
     "attendance_data",
     "attendance_view_data",
@@ -175,10 +178,20 @@ def _upload_json(object_path: str, payload: Any) -> None:
     _cache_json(object_path, payload, len(content))
 
 
-def _download_json(object_path: str, *, refresh: bool = False) -> Any:
+def _download_json(
+    object_path: str,
+    *,
+    refresh: bool = False,
+    cache_version: str = "",
+) -> Any:
+    cache_path = (
+        f"{object_path}#version={cache_version}"
+        if cache_version
+        else object_path
+    )
     if refresh:
         _invalidate_fbu_json_cache_prefix(object_path)
-    cached = _get_cached_json(object_path)
+    cached = _get_cached_json(cache_path)
     if cached is not None:
         return cached
     content = _download_bytes(object_path)
@@ -187,12 +200,16 @@ def _download_json(object_path: str, *, refresh: bool = False) -> Any:
     if content.startswith(b"\x1f\x8b"):
         content = gzip.decompress(content)
     payload = json.loads(content.decode("utf-8"))
-    _cache_json(object_path, payload, len(content))
+    _cache_json(cache_path, payload, len(content))
     return payload
 
 
 def _run_index_object_path() -> str:
     return f"{_environment_prefix()}/{FBU_RUN_INDEX_FILENAME}"
+
+
+def _run_index_entry_object_path(run_id: str) -> str:
+    return f"{_environment_prefix()}/{FBU_RUN_INDEX_ENTRY_PREFIX}/{_safe_run_id(run_id)}.json"
 
 
 def _section_relative_path(field: str) -> str:
@@ -253,7 +270,12 @@ def _bounded_summary(value: Any) -> dict[str, Any]:
     }
 
 
-def _section_manifest(field: str, value: Any) -> dict[str, Any]:
+def _section_manifest(
+    field: str,
+    value: Any,
+    *,
+    updated_at: str | None = None,
+) -> dict[str, Any]:
     present = bool(value)
     return {
         "path": _section_relative_path(field),
@@ -261,6 +283,7 @@ def _section_manifest(field: str, value: Any) -> dict[str, Any]:
         "count": _section_count(value),
         "bytes": len(_json_bytes(value)) if present else 0,
         "summary": _bounded_summary(value),
+        "updatedAt": updated_at or datetime.now().isoformat(),
     }
 
 
@@ -434,7 +457,7 @@ def _save_fbu_run_mutation(
         "createdAt": created_at,
         "run": {key: payload[key] for key in sorted(core_fields)},
         "sections": {
-            field: _section_manifest(field, value)
+            field: _section_manifest(field, value, updated_at=created_at)
             for field, value in sorted(section_values.items())
         },
     }
@@ -479,10 +502,52 @@ def _load_legacy_fbu_run_metadata(run_id: str) -> dict[str, Any] | None:
 
 
 def list_fbu_run_summaries_from_persistent() -> list[dict[str, Any]]:
+    database_states = postgres_state.list_run_states()
+    database_core_by_id = {
+        str(row.get("run_id") or ""): row
+        for row in (database_states or [])
+        if str(row.get("run_id") or "")
+    }
     indexed = _load_fbu_run_index()
+    if database_states is not None:
+        per_run_entries = []
+    else:
+        try:
+            per_run_entries = _list_objects(
+                f"{_environment_prefix()}/{FBU_RUN_INDEX_ENTRY_PREFIX}"
+            )
+        except RuntimeError:
+            per_run_entries = []
+    entry_ids = [
+        str(entry.get("name") or "")[:-5]
+        for entry in per_run_entries
+        if str(entry.get("name") or "").endswith(".json")
+    ]
+    if entry_ids:
+        with ThreadPoolExecutor(max_workers=min(8, len(entry_ids))) as executor:
+            per_run_rows = list(executor.map(
+                lambda entry_id: _download_json(_run_index_entry_object_path(entry_id)),
+                entry_ids,
+            ))
+        per_run_by_id = {
+            str((row.get("run") or {}).get("run_id") or ""): row
+            for row in per_run_rows
+            if isinstance(row, dict) and isinstance(row.get("run"), dict)
+        }
+    else:
+        per_run_by_id = {}
     if indexed is not None:
+        by_id = {
+            str((row.get("run") or {}).get("run_id") or ""): row
+            for row in indexed
+        }
+        by_id.update(per_run_by_id)
+        by_id.update({
+            run_id: build_fbu_run_manifest(core, previous=by_id.get(run_id))
+            for run_id, core in database_core_by_id.items()
+        })
         return sorted(
-            indexed,
+            by_id.values(),
             key=lambda row: str((row.get("run") or {}).get("created_at") or ""),
             reverse=True,
         )
@@ -502,8 +567,17 @@ def list_fbu_run_summaries_from_persistent() -> list[dict[str, Any]]:
             rows.append(manifest)
     if rows:
         _save_fbu_run_index(rows)
+    by_id = {
+        str((row.get("run") or {}).get("run_id") or ""): row
+        for row in rows
+    }
+    by_id.update(per_run_by_id)
+    by_id.update({
+        run_id: build_fbu_run_manifest(core, previous=by_id.get(run_id))
+        for run_id, core in database_core_by_id.items()
+    })
     return sorted(
-        rows,
+        by_id.values(),
         key=lambda row: str((row.get("run") or {}).get("created_at") or ""),
         reverse=True,
     )
@@ -513,6 +587,9 @@ def _upsert_fbu_run_index(manifest: dict[str, Any]) -> None:
     run_id = str((manifest.get("run") or {}).get("run_id") or "")
     if not run_id:
         raise ValueError("FBU 活动摘要缺少活动编号")
+    # This per-run object is the concurrency-safe canonical Storage index. The
+    # aggregate file below remains a compatibility cache for older deployments.
+    _upload_json(_run_index_entry_object_path(run_id), manifest)
     with _RUN_INDEX_LOCK:
         rows = list_fbu_run_summaries_from_persistent()
         by_id = {
@@ -524,6 +601,13 @@ def _upsert_fbu_run_index(manifest: dict[str, Any]) -> None:
 
 
 def _remove_fbu_run_from_index(run_id: str) -> None:
+    _request(
+        "DELETE",
+        _storage_url(f"object/{fbu_supabase_bucket()}"),
+        headers=_headers({"content-type": "application/json"}),
+        content=json.dumps({"prefixes": [_run_index_entry_object_path(run_id)]}).encode("utf-8"),
+    )
+    _invalidate_fbu_json_cache_prefix(_run_index_entry_object_path(run_id))
     with _RUN_INDEX_LOCK:
         rows = _load_fbu_run_index()
         if rows is None:
@@ -541,7 +625,27 @@ def save_fbu_run_snapshot_to_persistent(
     payload: dict[str, Any],
     *,
     changed_fields: set[str] | None = None,
+    base_sections: dict[str, Any] | None = None,
+    section_revisions: dict[str, int] | None = None,
+    replace_sections: set[str] | None = None,
+    base_core: dict[str, Any] | None = None,
+    core_revision: int = 0,
 ) -> dict[str, Any]:
+    database_manifest = _save_fbu_run_snapshot_to_postgres(
+        run_id,
+        payload,
+        changed_fields=changed_fields,
+        base_sections=base_sections,
+        section_revisions=section_revisions,
+        replace_sections=replace_sections,
+        base_core=base_core,
+        core_revision=core_revision,
+    )
+    if database_manifest:
+        payload = {
+            **payload,
+            **dict(database_manifest.get("effectiveSections") or {}),
+        }
     previous = _load_fbu_run_manifest(run_id)
     legacy: dict[str, Any] | None = None
     migration_fields: set[str] = set()
@@ -616,6 +720,83 @@ def save_fbu_run_snapshot_to_persistent(
     )
     _upload_json(_object_path(run_id, "summary.json"), manifest)
     _upsert_fbu_run_index(manifest)
+    return database_manifest or manifest
+
+
+def _save_fbu_run_snapshot_to_postgres(
+    run_id: str,
+    payload: dict[str, Any],
+    *,
+    changed_fields: set[str] | None,
+    base_sections: dict[str, Any] | None,
+    section_revisions: dict[str, int] | None,
+    replace_sections: set[str] | None,
+    base_core: dict[str, Any] | None,
+    core_revision: int,
+) -> dict[str, Any] | None:
+    if not postgres_state.fbu_postgres_state_requested():
+        return None
+    all_core = {
+        key: value
+        for key, value in payload.items()
+        if key not in FBU_RUN_SECTION_FIELDS
+        and key not in {"roster_data", "__core_revision", "__section_revisions"}
+    }
+    if changed_fields is None:
+        section_fields = {
+            field
+            for field in FBU_RUN_SECTION_FIELDS
+            if field in payload and bool(payload.get(field))
+        }
+    else:
+        section_fields = set(changed_fields).intersection(FBU_RUN_SECTION_FIELDS)
+    revisions = dict(section_revisions or {})
+    snapshot_result = postgres_state.save_snapshot_with_retry(
+        run_id,
+        base_core=dict(base_core or all_core),
+        desired_core=all_core,
+        expected_core_revision=int(core_revision or 0),
+        sections={
+            field: {
+                "base": (base_sections or {}).get(
+                    field,
+                    payload.get(field, [] if field == "results" else {}),
+                ),
+                "desired": payload.get(field, [] if field == "results" else {}),
+                "expected_revision": int(revisions.get(field) or 0),
+                "replace": changed_fields is None or field in set(replace_sections or ()),
+            }
+            for field in sorted(section_fields)
+        },
+    )
+    if snapshot_result is None:
+        return None
+    section_results = dict(snapshot_result.get("sections") or {})
+    effective_sections = {
+        field: dict(section_results.get(field) or {}).get("data")
+        for field in section_fields
+    }
+    revisions.update({
+        field: int(dict(section_results.get(field) or {}).get("revision") or 0)
+        for field in section_fields
+    })
+
+    core = dict(snapshot_result.get("data") or all_core)
+    manifest = build_fbu_run_manifest(core)
+    now = datetime.now().isoformat()
+    manifest["sections"] = {
+        **dict(manifest.get("sections") or {}),
+        **{
+            field: {
+                **_section_manifest(field, value, updated_at=now),
+                "revision": revisions[field],
+            }
+            for field, value in effective_sections.items()
+        },
+    }
+    manifest["sectionRevisions"] = revisions
+    manifest["coreRevision"] = int(snapshot_result.get("revision") or 0)
+    manifest["effectiveSections"] = effective_sections
     return manifest
 
 
@@ -625,6 +806,61 @@ def load_fbu_run_snapshot_from_persistent(
     sections: set[str] | None = None,
     refresh: bool = False,
 ) -> dict[str, Any] | None:
+    requested = (
+        set(FBU_RUN_SECTION_FIELDS)
+        if sections is None
+        else set(sections).intersection(FBU_RUN_SECTION_FIELDS)
+    )
+    database_payload = postgres_state.load_run_state(run_id, requested)
+    if database_payload:
+        revisions = dict(database_payload.get("__section_revisions") or {})
+        missing = {field for field in requested if not int(revisions.get(field) or 0)}
+        if missing:
+            legacy = _load_fbu_run_snapshot_from_storage(
+                run_id,
+                sections=missing,
+                refresh=refresh,
+            )
+            for field in missing:
+                value = (legacy or {}).get(field)
+                if not value:
+                    continue
+                result = postgres_state.replace_section(run_id, field, value)
+                if result:
+                    database_payload[field] = result.get("data")
+                    revisions[field] = int(result.get("revision") or 0)
+            database_payload["__section_revisions"] = revisions
+        return database_payload
+    legacy = _load_fbu_run_snapshot_from_storage(
+        run_id,
+        sections=sections,
+        refresh=refresh,
+    )
+    if legacy and database_payload == {}:
+        _save_fbu_run_snapshot_to_postgres(
+            run_id,
+            legacy,
+            changed_fields=None,
+            base_sections=None,
+            section_revisions=None,
+            replace_sections=requested,
+            base_core=None,
+            core_revision=0,
+        )
+    return legacy
+
+
+def _load_fbu_run_snapshot_from_storage(
+    run_id: str,
+    *,
+    sections: set[str] | None = None,
+    refresh: bool = False,
+) -> dict[str, Any] | None:
+    requested = (
+        set(FBU_RUN_SECTION_FIELDS)
+        if sections is None
+        else set(sections).intersection(FBU_RUN_SECTION_FIELDS)
+    )
     manifest = _merge_fbu_run_mutations(
         run_id,
         _load_fbu_run_manifest(run_id, refresh=refresh),
@@ -643,12 +879,6 @@ def load_fbu_run_snapshot_from_persistent(
         }
 
     payload = dict(manifest["run"])
-    requested = (
-        set(FBU_RUN_SECTION_FIELDS)
-        if sections is None
-        else set(sections).intersection(FBU_RUN_SECTION_FIELDS)
-    )
-
     def load_section(field: str) -> tuple[str, Any]:
         section = (manifest.get("sections") or {}).get(field) or {}
         recovery_expected = (
@@ -663,6 +893,7 @@ def load_fbu_run_snapshot_from_persistent(
         value = _download_json(
             _object_path(run_id, _section_relative_path(field)),
             refresh=refresh,
+            cache_version=str(section.get("updatedAt") or ""),
         )
         if value is None:
             return field, [] if field == "results" else {}
@@ -813,6 +1044,7 @@ def delete_fbu_files_from_persistent(run_id: str, relative_paths: Iterable[str])
 
 
 def delete_fbu_run_from_persistent(run_id: str) -> None:
+    postgres_state.delete_run(run_id)
     prefix = f"{_environment_prefix()}/{_safe_run_id(run_id)}"
     object_paths = [f"{prefix}/{entry['name']}" for entry in _list_objects(prefix) if entry.get("name")]
     if object_paths:

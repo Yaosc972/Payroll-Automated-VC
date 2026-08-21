@@ -15069,6 +15069,19 @@ _FBU_DIAGNOSTIC_SECTION_FIELDS = {
     "base_override_data",
 }
 
+_FBU_CALCULATION_SECTION_FIELDS = {
+    "attendance_data",
+    "salary_data",
+    "salary_verification_data",
+    "performance_data",
+    "adjustment_data",
+    "transfer_data",
+    "supplemental_leave_data",
+    "base_override_data",
+    "hourly_rate_policy_data",
+    "period_adjustment_data",
+}
+
 _FBU_RUN_CORE_RESPONSE_FIELDS = frozenset({
     "run_id",
     "created_at",
@@ -15270,13 +15283,33 @@ def _build_base_override_data_from_rule_lists(
     calc_month: str,
     payload: dict,
     roster_lookup: dict[str, dict] | None = None,
+    region_name: str = "",
 ) -> dict:
+    target_area = str(region_name or "").removeprefix("FBU").strip()
+    known_fbu_areas = {
+        str(region["name"]).removeprefix("FBU").strip()
+        for region in FBU_AMERICAS_REGIONS
+    }
+
+    def belongs_to_run_region(employee_id: str) -> bool:
+        if not roster_lookup or not target_area:
+            return True
+        roster_info = _rule_list_roster_info(roster_lookup, employee_id)
+        if not roster_info:
+            return False
+        employee_area = str(roster_info.get("area") or "").strip()
+        return (
+            not employee_area
+            or employee_area not in known_fbu_areas
+            or employee_area == target_area
+        )
+
     employees = []
     for row in payload.get("work_hour_employees", []):
         if not row.get("active", True):
             continue
         employee_id = str(row.get("employee_id") or "").strip()
-        if not employee_id:
+        if not employee_id or not belongs_to_run_region(employee_id):
             continue
         employees.append(_build_rule_list_override_row(
             row,
@@ -15290,7 +15323,7 @@ def _build_base_override_data_from_rule_lists(
         if not row.get("active", True):
             continue
         employee_id = str(row.get("employee_id") or "").strip()
-        if not employee_id:
+        if not employee_id or not belongs_to_run_region(employee_id):
             continue
         employees.append(_build_rule_list_override_row(
             row,
@@ -15434,6 +15467,7 @@ def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
         run.calc_month,
         saved,
         roster_lookup=parser.employee_roster,
+        region_name=run.region_name,
     )
     fbu_run_manager.update_run(
         run_id,
@@ -15613,7 +15647,7 @@ async def _await_fbu_job_with_heartbeat(
 async def _process_fbu_upload_job(run_id: str, job_id: str) -> None:
     processing_started = perf_counter()
     store = _fbu_upload_job_store()
-    job = store.load(run_id, job_id)
+    job = store.load(run_id, job_id, refresh=True)
     if not job:
         return
     try:
@@ -15787,7 +15821,7 @@ def _prepare_fbu_upload_job(run_id: str, job_id: str) -> tuple[dict, bool]:
     if not run:
         raise HTTPException(404, "任务不存在")
     store = _fbu_upload_job_store()
-    job = store.load(run_id, job_id)
+    job = store.load(run_id, job_id, refresh=True)
     if not job:
         raise HTTPException(404, "上传任务不存在")
     public = store.public(job)
@@ -15795,9 +15829,15 @@ def _prepare_fbu_upload_job(run_id: str, job_id: str) -> tuple[dict, bool]:
         return public, False
     if job.get("status") in {"queued", "processing"} and not public["recoverable"]:
         return public, False
+    allowed_from = (
+        ["queued", "processing"]
+        if public["recoverable"]
+        else ["uploading", "failed"]
+    )
     job = store.update(
         run_id,
         job_id,
+        allowed_from=allowed_from,
         status="queued",
         stage="queued",
         progress=5,
@@ -15805,7 +15845,8 @@ def _prepare_fbu_upload_job(run_id: str, job_id: str) -> tuple[dict, bool]:
         attempt=int(job.get("attempt") or 0) + 1,
         error="",
     )
-    return store.public(job), True
+    transition_applied = bool(job.pop("__transition_applied", True))
+    return store.public(job), transition_applied and job.get("status") == "queued"
 
 
 @app.post(
@@ -15829,7 +15870,7 @@ async def start_fbu_upload_job(
         raise HTTPException(400, str(exc)) from exc
     if should_process:
         await _process_fbu_upload_job(run_id, job_id)
-        persisted = _fbu_upload_job_store().load(run_id, job_id)
+        persisted = _fbu_upload_job_store().load(run_id, job_id, refresh=True)
         if persisted is None:
             raise HTTPException(500, "上传任务状态丢失，请重新上传。")
         job = _fbu_upload_job_store().public(persisted)
@@ -17245,7 +17286,11 @@ async def import_fbu_base_overrides(
 @app.post("/api/fbu-performance/runs/{run_id}/supplemental-leave/batch")
 def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
     """批量更新补充假勤确认状态。"""
-    run = fbu_run_manager.get_run(run_id, sections={"supplemental_leave_data"})
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections={"supplemental_leave_data"},
+        refresh=True,
+    )
     if not run:
         raise HTTPException(404, "任务不存在")
     if not run.supplemental_leave_data:
@@ -17534,7 +17579,11 @@ async def import_fbu_performance_data(
 @app.post("/api/fbu-performance/calculate/{run_id}")
 def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
     """执行FBU绩效核算"""
-    run = fbu_run_manager.get_run(run_id)
+    run = fbu_run_manager.get_run(
+        run_id,
+        sections=_FBU_CALCULATION_SECTION_FIELDS,
+        refresh=True,
+    )
     if not run:
         raise HTTPException(404, "任务不存在")
 
@@ -17542,6 +17591,15 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
     blocking_count = salary_verification.get("summary", {}).get("blocking_count", 0)
     if blocking_count:
         raise HTTPException(409, f"薪资历史核验仍有 {blocking_count} 条待处理差异，暂不能核算")
+    supplemental_pending_count = int(
+        (run.supplemental_leave_data or {}).get("summary", {}).get("pending_count", 0)
+        or 0
+    )
+    if supplemental_pending_count:
+        raise HTTPException(
+            409,
+            f"补充假勤仍有 {supplemental_pending_count} 条待确认，处理完成后再核算",
+        )
 
     try:
         parser = FBUPerformanceParser()
@@ -17579,6 +17637,11 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
 
         # 保存结果
         employees = engine.get_all_employees()
+        if not employees:
+            raise HTTPException(
+                409,
+                "未生成可核算员工，请检查已上传材料是否属于当前活动月份和划分区域",
+            )
         if run.supplemental_leave_data and run.base_override_data:
             offline_bases = run.base_override_data.get("offline_bases", [])
             if offline_bases:
@@ -17636,6 +17699,9 @@ def calculate_fbu_performance(run_id: str, response_mode: str = "") -> dict:
             "activity": activity_payload,
         }
 
+    except HTTPException as e:
+        fbu_run_manager.update_run(run_id, status="failed", error=str(e.detail))
+        raise
     except Exception as e:
         fbu_run_manager.update_run(run_id, status="failed", error=str(e))
         raise HTTPException(500, f"计算失败: {str(e)}")
@@ -17703,7 +17769,7 @@ def _prepare_fbu_calculation_job(run_id: str, job_id: str) -> tuple[dict, bool]:
     if not run:
         raise HTTPException(404, "任务不存在")
     store = _fbu_upload_job_store()
-    job = store.load(run_id, job_id)
+    job = store.load(run_id, job_id, refresh=True)
     if not job or job.get("kind") != "calculation":
         raise HTTPException(404, "核算任务不存在")
     public = store.public(job)
@@ -17711,9 +17777,15 @@ def _prepare_fbu_calculation_job(run_id: str, job_id: str) -> tuple[dict, bool]:
         return public, False
     if job.get("status") in {"queued", "processing"} and not public["recoverable"]:
         return public, False
+    allowed_from = (
+        ["queued", "processing"]
+        if public["recoverable"]
+        else ["uploading", "failed"]
+    )
     job = store.update(
         run_id,
         job_id,
+        allowed_from=allowed_from,
         status="queued",
         stage="queued",
         progress=5,
@@ -17721,14 +17793,15 @@ def _prepare_fbu_calculation_job(run_id: str, job_id: str) -> tuple[dict, bool]:
         attempt=int(job.get("attempt") or 0) + 1,
         error="",
     )
-    return store.public(job), True
+    transition_applied = bool(job.pop("__transition_applied", True))
+    return store.public(job), transition_applied and job.get("status") == "queued"
 
 
 async def _run_fbu_calculation_job_in_request(run_id: str, job_id: str) -> dict:
     job, should_process = _prepare_fbu_calculation_job(run_id, job_id)
     if should_process:
         await _process_fbu_calculation_job(run_id, job_id)
-        persisted = _fbu_upload_job_store().load(run_id, job_id)
+        persisted = _fbu_upload_job_store().load(run_id, job_id, refresh=True)
         if persisted is None:
             raise HTTPException(500, "核算任务状态丢失，请重新核算。")
         job = _fbu_upload_job_store().public(persisted)

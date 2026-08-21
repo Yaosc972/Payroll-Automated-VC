@@ -1206,9 +1206,9 @@ def test_fbu_attendance_upload_persists_run_state_once(monkeypatch, tmp_path):
     save_calls = []
     original_save_runs = manager._save_runs
 
-    def save_runs(changed_run_id=None, changed_fields=None):
+    def save_runs(changed_run_id=None, changed_fields=None, **kwargs):
         save_calls.append((changed_run_id, set(changed_fields or [])))
-        return original_save_runs(changed_run_id, changed_fields)
+        return original_save_runs(changed_run_id, changed_fields, **kwargs)
 
     monkeypatch.setattr(manager, "_save_runs", save_runs)
     response = client.post(
@@ -2128,9 +2128,9 @@ def test_final_salary_material_is_committed_in_one_snapshot(monkeypatch, tmp_pat
     commits = []
     original_save_runs = manager._save_runs
 
-    def record_save(changed_run_id=None, changed_fields=None):
+    def record_save(changed_run_id=None, changed_fields=None, **kwargs):
         commits.append(set(changed_fields or set()))
-        return original_save_runs(changed_run_id, changed_fields)
+        return original_save_runs(changed_run_id, changed_fields, **kwargs)
 
     monkeypatch.setattr(manager, "_save_runs", record_save)
     response = client.post(
@@ -2788,6 +2788,38 @@ def test_fbu_calculate_uses_saved_rule_lists_even_when_current_step_is_behind(mo
     assert result["work_hour_rule"] == "96工时制"
     assert result["calculation_path"] == "96工时制自动基数路径"
     assert save_calls == [run.run_id]
+
+
+def test_fbu_calculation_does_not_complete_with_empty_results(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    run = app_module.fbu_run_manager.create_run(calc_month="2026-07")
+    app_module.fbu_run_manager.update_run(
+        run.run_id,
+        attendance_data={"employees": [{"employee_id": "zt001"}]},
+        salary_data={"employees": [{"employee_id": "zt001"}]},
+        performance_data={"employees": [{"employee_id": "zt001"}]},
+    )
+
+    class EmptyEngine:
+        @staticmethod
+        def get_all_employees():
+            return []
+
+    monkeypatch.setattr(
+        app_module.FBUPerformanceParser,
+        "parse_all_from_step_data",
+        lambda self, **kwargs: EmptyEngine(),
+    )
+
+    response = TestClient(app_module.app).post(
+        f"/api/fbu-performance/calculate/{run.run_id}",
+    )
+
+    assert response.status_code == 409
+    assert "未生成可核算员工" in response.json()["detail"]
+    saved = app_module.fbu_run_manager.get_run(run.run_id, sections={"results"})
+    assert saved.status == "failed"
+    assert saved.results == []
 
 
 def test_fbu_diagnostics_reports_matching_issues_and_exports(monkeypatch, tmp_path):

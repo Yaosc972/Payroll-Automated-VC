@@ -50,3 +50,6 @@ labor-worker-desktop/release-gate-materials/
 .vercel
 .env*
 !.env.example
+
+# Supabase CLI local metadata
+supabase/.temp/

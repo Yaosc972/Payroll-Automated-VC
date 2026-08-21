@@ -9,6 +9,8 @@ import threading
 from typing import Any
 import uuid
 
+from . import postgres_state
+
 
 FBU_UPLOAD_JOB_STALL_SECONDS = 300
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{24}$")
@@ -85,6 +87,14 @@ class FBUUploadJobStore:
         *,
         refresh: bool = False,
     ) -> dict[str, Any] | None:
+        if postgres_state.fbu_postgres_state_requested():
+            remote = postgres_state.load_job(str(run_id), str(job_id))
+            if remote is not None:
+                if (
+                    remote.get("runId") == str(run_id)
+                    and remote.get("jobId") == str(job_id)
+                ):
+                    return remote
         relative_path = self.relative_path(job_id)
         try:
             if refresh:
@@ -113,6 +123,15 @@ class FBUUploadJobStore:
         job_id = self.validate_job_id(str(payload.get("jobId") or ""))
         if str(payload.get("runId") or "") != str(run_id):
             raise ValueError("上传任务与当前活动不匹配")
+        canonical = postgres_state.patch_job(
+            str(run_id),
+            job_id,
+            seed=payload,
+            patch=payload,
+        )
+        if canonical is not None:
+            canonical.pop("__transition_applied", None)
+            payload = canonical
         path = self.path(run_id, job_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -130,17 +149,43 @@ class FBUUploadJobStore:
             self.run_manager.persist_files(run_id, [self.relative_path(job_id)])
         return payload
 
-    def update(self, run_id: str, job_id: str, **changes: Any) -> dict[str, Any]:
+    def update(
+        self,
+        run_id: str,
+        job_id: str,
+        *,
+        allowed_from: list[str] | None = None,
+        **changes: Any,
+    ) -> dict[str, Any]:
         with self._lock:
-            payload = self.load(run_id, job_id)
+            payload = self.load(run_id, job_id, refresh=True)
             if payload is None:
                 raise FileNotFoundError(job_id)
-            payload.update(changes)
-            payload["updatedAt"] = _now()
-            return self.save(run_id, payload)
+            changes["updatedAt"] = _now()
+            canonical = postgres_state.patch_job(
+                str(run_id),
+                str(job_id),
+                seed=payload,
+                patch=changes,
+                allowed_from=allowed_from,
+            )
+            if canonical is not None:
+                applied = canonical.pop("__transition_applied", False)
+                if not applied:
+                    canonical["__transition_applied"] = False
+                    return canonical
+                payload = canonical
+            else:
+                if allowed_from is not None and str(payload.get("status") or "") not in allowed_from:
+                    return payload
+                payload.update(changes)
+            saved = self.save(run_id, payload)
+            saved["__transition_applied"] = True
+            return saved
 
     def public(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = dict(payload)
+        result.pop("__transition_applied", None)
         status = str(result.get("status") or "")
         updated_at = _parse_timestamp(result.get("updatedAt"))
         age_seconds = (

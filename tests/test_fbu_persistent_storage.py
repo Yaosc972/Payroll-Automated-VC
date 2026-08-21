@@ -708,6 +708,308 @@ def test_load_run_snapshot_refresh_bypasses_cached_manifest_and_sections(monkeyp
     assert refreshed["salary_verification_data"]["summary"]["blocking_count"] == 0
 
 
+def test_section_mutation_version_bypasses_stale_cross_instance_cache(monkeypatch):
+    """A new mutation must make another warm instance read the new section bytes."""
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    monkeypatch.setenv("SIGMA_FBU_JSON_CACHE_TTL_SECONDS", "30")
+    prefix = "fbu-performance-runs/production/run_123"
+    section_path = f"{prefix}/sections/supplemental_leave_data.json"
+    mutation_name = "00000000000000000002-new.json"
+    old_section = {
+        "rows": [{"row_id": "leave:1", "confirmation_status": "pending"}],
+        "summary": {"pending_count": 1},
+    }
+    new_section = {
+        "rows": [{"row_id": "leave:1", "confirmation_status": "confirmed"}],
+        "summary": {"pending_count": 0},
+    }
+    manifest = fbu_storage.build_fbu_run_manifest({
+        "run_id": "run_123",
+        "supplemental_leave_data": old_section,
+    })
+    manifest["sections"]["supplemental_leave_data"]["updatedAt"] = "2026-08-19T10:00:00"
+    mutation = {
+        "schemaVersion": 2,
+        "createdAt": "2026-08-19T10:00:01",
+        "run": {},
+        "sections": {
+            "supplemental_leave_data": {
+                **fbu_storage._section_manifest("supplemental_leave_data", new_section),
+                "updatedAt": "2026-08-19T10:00:01",
+            },
+        },
+    }
+    objects = {
+        f"{prefix}/summary.json": json.dumps(manifest).encode("utf-8"),
+        section_path: json.dumps(old_section).encode("utf-8"),
+    }
+    monkeypatch.setattr(fbu_storage, "_download_bytes", lambda path: objects.get(path))
+    monkeypatch.setattr(fbu_storage, "_list_objects", lambda path: [])
+
+    cached = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"supplemental_leave_data"},
+    )
+    assert cached["supplemental_leave_data"]["summary"]["pending_count"] == 1
+
+    objects[section_path] = json.dumps(new_section).encode("utf-8")
+    objects[f"{prefix}/mutations/{mutation_name}"] = json.dumps(mutation).encode("utf-8")
+    monkeypatch.setattr(
+        fbu_storage,
+        "_list_objects",
+        lambda path: [{"name": mutation_name}] if path.endswith("/mutations") else [],
+    )
+
+    restored = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"supplemental_leave_data"},
+    )
+
+    assert restored["supplemental_leave_data"] == new_section
+
+
+def test_same_section_updates_from_stale_instances_preserve_independent_row_changes(monkeypatch):
+    """Two warm production instances must not undo each other's row confirmations."""
+    monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
+    objects: dict[str, bytes] = {}
+
+    def upload(object_path: str, content: bytes, content_type: str) -> None:
+        objects[object_path] = content
+
+    def download(object_path: str) -> bytes | None:
+        return objects.get(object_path)
+
+    def list_objects(object_prefix: str) -> list[dict[str, str]]:
+        directory = f"{object_prefix.rstrip('/')}/"
+        return [
+            {"name": object_path.removeprefix(directory)}
+            for object_path in sorted(objects)
+            if object_path.startswith(directory)
+            and "/" not in object_path.removeprefix(directory)
+        ]
+
+    monkeypatch.setattr(fbu_storage, "_upload_bytes", upload)
+    monkeypatch.setattr(fbu_storage, "_download_bytes", download)
+    monkeypatch.setattr(fbu_storage, "_list_objects", list_objects)
+    database = {"core": {}, "core_revision": 0, "sections": {}, "revisions": {}}
+
+    monkeypatch.setattr(
+        fbu_storage.postgres_state,
+        "fbu_postgres_state_requested",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        fbu_storage.postgres_state,
+        "list_run_states",
+        lambda: [],
+    )
+
+    def rpc(name: str, payload: dict):
+        section = payload.get("p_section_name")
+        if name == "sigma_fbu_commit_snapshot":
+            specs = dict(payload.get("p_sections") or {})
+            expected_core = int(payload.get("p_expected_core_revision") or 0)
+            conflict = expected_core != database["core_revision"]
+            if not conflict:
+                for field, spec in specs.items():
+                    if not spec.get("replace") and int(spec.get("expected_revision") or 0) != database["revisions"].get(field, 0):
+                        conflict = True
+                        break
+            if conflict:
+                return {
+                    "applied": False,
+                    "data": dict(database["core"]),
+                    "revision": database["core_revision"],
+                    "sections": {
+                        field: {
+                            "data": json.loads(json.dumps(database["sections"].get(field, {}))),
+                            "revision": database["revisions"].get(field, 0),
+                        }
+                        for field in specs
+                    },
+                }
+            database["core"] = json.loads(json.dumps(payload.get("p_core_data") or {}))
+            database["core_revision"] += 1
+            section_results = {}
+            for field, spec in specs.items():
+                database["sections"][field] = json.loads(json.dumps(spec.get("data")))
+                database["revisions"][field] = database["revisions"].get(field, 0) + 1
+                section_results[field] = {
+                    "data": database["sections"][field],
+                    "revision": database["revisions"][field],
+                }
+            return {
+                "applied": True,
+                "data": dict(database["core"]),
+                "revision": database["core_revision"],
+                "sections": section_results,
+            }
+        if name == "sigma_fbu_commit_core":
+            database["core"].update(payload.get("p_seed") or {})
+            database["core"].update(payload.get("p_patch") or {})
+            database["core_revision"] += 1
+            return {"data": dict(database["core"]), "revision": database["core_revision"]}
+        if name == "sigma_fbu_cas_core":
+            if int(payload["p_expected_revision"]) != database["core_revision"]:
+                return {
+                    "applied": False,
+                    "data": dict(database["core"]),
+                    "revision": database["core_revision"],
+                }
+            database["core"] = json.loads(json.dumps(payload["p_data"]))
+            database["core_revision"] += 1
+            return {
+                "applied": True,
+                "data": dict(database["core"]),
+                "revision": database["core_revision"],
+            }
+        if name == "sigma_fbu_replace_section":
+            database["sections"][section] = json.loads(json.dumps(payload["p_data"]))
+            database["revisions"][section] = database["revisions"].get(section, 0) + 1
+            return {
+                "applied": True,
+                "data": database["sections"][section],
+                "revision": database["revisions"][section],
+            }
+        if name == "sigma_fbu_cas_section":
+            revision = database["revisions"].get(section, 0)
+            if int(payload["p_expected_revision"]) != revision:
+                return {
+                    "applied": False,
+                    "data": database["sections"][section],
+                    "revision": revision,
+                }
+            database["sections"][section] = json.loads(json.dumps(payload["p_data"]))
+            database["revisions"][section] = revision + 1
+            return {
+                "applied": True,
+                "data": database["sections"][section],
+                "revision": revision + 1,
+            }
+        raise AssertionError(name)
+
+    monkeypatch.setattr(fbu_storage.postgres_state, "_rpc", rpc)
+
+    def load_run_state(run_id: str, sections: set[str]):
+        if not database["core"]:
+            return {}
+        payload = dict(database["core"])
+        payload.update({
+            field: json.loads(json.dumps(database["sections"].get(field, {})))
+            for field in sections
+        })
+        payload["__section_revisions"] = {
+            field: database["revisions"].get(field, 0) for field in sections
+        }
+        return payload
+
+    monkeypatch.setattr(fbu_storage.postgres_state, "load_run_state", load_run_state)
+    original = {
+        "rows": [
+            {"row_id": "leave:1", "confirmation_status": "pending"},
+            {"row_id": "leave:2", "confirmation_status": "pending"},
+        ],
+        "summary": {"pending_count": 2},
+    }
+    base_payload = {
+        "run_id": "run_123",
+        "created_at": "2026-08-21T10:00:00",
+        "calc_month": "2026-07",
+        "supplemental_leave_data": original,
+    }
+    fbu_storage.save_fbu_run_snapshot_to_persistent("run_123", base_payload)
+
+    instance_a = json.loads(json.dumps(base_payload))
+    instance_a["supplemental_leave_data"]["rows"][0]["confirmation_status"] = "confirmed"
+    instance_a["supplemental_leave_data"]["summary"]["pending_count"] = 1
+    instance_b = json.loads(json.dumps(base_payload))
+    instance_b["supplemental_leave_data"]["rows"][1]["confirmation_status"] = "excluded"
+    instance_b["supplemental_leave_data"]["summary"]["pending_count"] = 1
+
+    fbu_storage.save_fbu_run_snapshot_to_persistent(
+        "run_123",
+        instance_a,
+        changed_fields={"supplemental_leave_data"},
+        base_sections={"supplemental_leave_data": original},
+        section_revisions={"supplemental_leave_data": 1},
+        base_core={key: value for key, value in base_payload.items() if key != "supplemental_leave_data"},
+        core_revision=1,
+    )
+    fbu_storage.save_fbu_run_snapshot_to_persistent(
+        "run_123",
+        instance_b,
+        changed_fields={"supplemental_leave_data"},
+        base_sections={"supplemental_leave_data": original},
+        section_revisions={"supplemental_leave_data": 1},
+        base_core={key: value for key, value in base_payload.items() if key != "supplemental_leave_data"},
+        core_revision=1,
+    )
+    restored = fbu_storage.load_fbu_run_snapshot_from_persistent(
+        "run_123",
+        sections={"supplemental_leave_data"},
+        refresh=True,
+    )
+
+    by_id = {
+        row["row_id"]: row["confirmation_status"]
+        for row in restored["supplemental_leave_data"]["rows"]
+    }
+    assert by_id == {"leave:1": "confirmed", "leave:2": "excluded"}
+    assert restored["supplemental_leave_data"]["summary"]["pending_count"] == 0
+
+
+def test_run_index_upserts_from_two_instances_do_not_erase_each_other(monkeypatch):
+    """Vercel instances do not share the process-local run-index lock."""
+    class NoopLock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    barrier = threading.Barrier(2)
+    saved_rows: list[list[dict]] = []
+    durable_entries: dict[str, dict] = {}
+
+    def stale_list() -> list[dict]:
+        barrier.wait(timeout=2)
+        return []
+
+    def save_rows(rows: list[dict]) -> None:
+        saved_rows.append(json.loads(json.dumps(rows)))
+
+    def save_entry(path: str, payload: dict) -> None:
+        durable_entries[path] = json.loads(json.dumps(payload))
+
+    monkeypatch.setattr(fbu_storage, "_RUN_INDEX_LOCK", NoopLock())
+    monkeypatch.setattr(fbu_storage, "list_fbu_run_summaries_from_persistent", stale_list)
+    monkeypatch.setattr(fbu_storage, "_save_fbu_run_index", save_rows)
+    monkeypatch.setattr(fbu_storage, "_upload_json", save_entry)
+    manifests = [
+        fbu_storage.build_fbu_run_manifest({
+            "run_id": run_id,
+            "created_at": f"2026-08-21T10:00:0{index}",
+            "calc_month": "2026-07",
+        })
+        for index, run_id in enumerate(("run_a", "run_b"), start=1)
+    ]
+
+    threads = [
+        threading.Thread(target=fbu_storage._upsert_fbu_run_index, args=(manifest,))
+        for manifest in manifests
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    final_ids = {
+        str((row.get("run") or {}).get("run_id") or "")
+        for row in durable_entries.values()
+    }
+    assert final_ids == {"run_a", "run_b"}
+
+
 def test_v2_incremental_snapshot_only_rewrites_changed_sections(monkeypatch):
     monkeypatch.setenv("SIGMA_FBU_STORAGE_ENV", "production")
     objects: dict[str, bytes] = {}

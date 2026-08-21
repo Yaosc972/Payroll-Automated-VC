@@ -6784,11 +6784,11 @@ function buildNeedsForStep(stepKey, activity) {
         );
       });
     } else {
-      const suggestedCount = toNumber(
-        getActivitySectionSummary(activity, 'supplemental_leave_data')?.suggested_count,
+      const pendingCount = toNumber(
+        getActivitySectionSummary(activity, 'supplemental_leave_data')?.pending_count,
       );
-      if (suggestedCount > 0) {
-        push('leave-suggestions', `请处理 ${suggestedCount} 条补充假勤建议`);
+      if (pendingCount > 0) {
+        push('leave-confirmations', `请处理 ${pendingCount} 条补充假勤待确认记录`);
       }
     }
   }

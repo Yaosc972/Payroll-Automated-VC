@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Optional
 from pathlib import Path
+import copy
 import shutil
 import json
 import os
@@ -724,6 +725,10 @@ class FBURunManager:
         self.runs: dict[str, FBURun] = {}
         self._manifests: dict[str, dict[str, Any]] = {}
         self._loaded_sections: dict[str, set[str]] = {}
+        self._section_bases: dict[str, dict[str, Any]] = {}
+        self._section_revisions: dict[str, dict[str, int]] = {}
+        self._core_bases: dict[str, dict[str, Any]] = {}
+        self._core_revisions: dict[str, int] = {}
         self._legacy_payloads: dict[str, dict[str, Any]] | None = None
         self._lock = threading.RLock()
         self._load_runs()
@@ -801,6 +806,10 @@ class FBURunManager:
                     self.runs[run.run_id] = run
                     self._manifests[run.run_id] = manifest
                     self._loaded_sections[run.run_id] = set()
+                    self._section_bases[run.run_id] = {}
+                    self._section_revisions[run.run_id] = {}
+                    self._core_bases[run.run_id] = dict(manifest["run"])
+                    self._core_revisions[run.run_id] = 0
                 return
 
         runs_file = self.data_dir / "runs.json"
@@ -826,6 +835,13 @@ class FBURunManager:
             self.runs[run.run_id] = run
             self._manifests[run.run_id] = build_fbu_run_manifest(run_data)
             self._loaded_sections[run.run_id] = set(FBU_RUN_SECTION_FIELDS)
+            self._section_bases[run.run_id] = {
+                field_name: copy.deepcopy(getattr(run, field_name))
+                for field_name in FBU_RUN_SECTION_FIELDS
+            }
+            self._section_revisions[run.run_id] = {}
+            self._core_bases[run.run_id] = dict(self._manifests[run.run_id]["run"])
+            self._core_revisions[run.run_id] = 0
 
     def _quarantine_corrupt_runs_file(self, runs_file: Path):
         suffix = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -897,6 +913,8 @@ class FBURunManager:
         self,
         changed_run_id: str | None = None,
         changed_fields: set[str] | None = None,
+        *,
+        replace_sections: set[str] | None = None,
     ):
         """保存运行记录"""
         with self._lock:
@@ -909,12 +927,61 @@ class FBURunManager:
                 )
             self._write_local_index()
             if fbu_persistent_storage_enabled() and run:
-                manifest = save_fbu_run_snapshot_to_persistent(
-                    changed_run_id,
-                    vars(run),
-                    changed_fields=changed_fields,
-                )
+                previous_manifest = self._manifests.get(changed_run_id) or {}
+                try:
+                    manifest = save_fbu_run_snapshot_to_persistent(
+                        changed_run_id,
+                        vars(run),
+                        changed_fields=changed_fields,
+                        base_sections=self._section_bases.get(changed_run_id),
+                        section_revisions=self._section_revisions.get(changed_run_id),
+                        replace_sections=replace_sections,
+                        base_core=self._core_bases.get(changed_run_id),
+                        core_revision=self._core_revisions.get(changed_run_id, 0),
+                    )
+                except TypeError as exc:
+                    if "unexpected keyword argument" not in str(exc):
+                        raise
+                    manifest = save_fbu_run_snapshot_to_persistent(
+                        changed_run_id,
+                        vars(run),
+                        changed_fields=changed_fields,
+                    )
                 self._manifests[changed_run_id] = manifest
+                effective = dict(manifest.pop("effectiveSections", {}) or {})
+                revisions = dict(manifest.pop("sectionRevisions", {}) or {})
+                core_revision = int(manifest.pop("coreRevision", 0) or 0)
+                for field_name, value in effective.items():
+                    setattr(run, field_name, value)
+                    self._write_json_atomic(
+                        self._local_section_path(changed_run_id, field_name),
+                        value,
+                    )
+                manifest["sections"] = {
+                    **dict(previous_manifest.get("sections") or {}),
+                    **dict(manifest.get("sections") or {}),
+                }
+                for field_name, value in dict(manifest.get("run") or {}).items():
+                    if field_name in self._run_fields():
+                        setattr(run, field_name, value)
+                self._write_json_atomic(
+                    self.data_dir / changed_run_id / "summary.json",
+                    manifest,
+                )
+                updated_sections = (
+                    set(FBU_RUN_SECTION_FIELDS)
+                    if changed_fields is None
+                    else set(changed_fields).intersection(FBU_RUN_SECTION_FIELDS)
+                )
+                for field_name in updated_sections:
+                    self._section_bases.setdefault(changed_run_id, {})[field_name] = copy.deepcopy(
+                        getattr(run, field_name)
+                    )
+                if revisions:
+                    self._section_revisions.setdefault(changed_run_id, {}).update(revisions)
+                self._core_bases[changed_run_id] = dict(manifest.get("run") or {})
+                if core_revision:
+                    self._core_revisions[changed_run_id] = core_revision
 
     def create_run(
         self,
@@ -947,13 +1014,29 @@ class FBURunManager:
         )
         self.runs[run.run_id] = run
         self._loaded_sections[run.run_id] = set(FBU_RUN_SECTION_FIELDS)
+        self._section_bases[run.run_id] = {
+            field_name: copy.deepcopy(getattr(run, field_name))
+            for field_name in FBU_RUN_SECTION_FIELDS
+        }
+        self._section_revisions[run.run_id] = {}
+        self._core_bases[run.run_id] = {
+            key: value
+            for key, value in vars(run).items()
+            if key not in FBU_RUN_SECTION_FIELDS and key != "roster_data"
+        }
+        self._core_revisions[run.run_id] = 0
         if persist:
             self._save_runs(run.run_id)
         return run
 
     def update_run(self, run_id: str, *, persist: bool = True, **kwargs):
         """更新运行状态"""
-        run = self.get_run(run_id, sections=set())
+        section_fields = set(kwargs).intersection(FBU_RUN_SECTION_FIELDS)
+        run = self.get_run(
+            run_id,
+            sections=section_fields,
+            refresh=bool(section_fields),
+        )
         if run:
             changed_fields = set(kwargs)
             if self.RESULT_INPUT_FIELDS.intersection(kwargs):
@@ -1001,7 +1084,11 @@ class FBURunManager:
         self._loaded_sections.setdefault(run_id, set()).update(
             changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
         )
-        self._save_runs(run_id, changed_fields)
+        self._save_runs(
+            run_id,
+            changed_fields,
+            replace_sections={"attendance_data", "attendance_view_data"},
+        )
 
     def save_salary_history_import(
         self,
@@ -1048,7 +1135,16 @@ class FBURunManager:
         self._loaded_sections.setdefault(run_id, set()).update(
             changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
         )
-        self._save_runs(run_id, changed_fields)
+        self._save_runs(
+            run_id,
+            changed_fields,
+            replace_sections=set(section_updates).union({
+                "salary_verification_data",
+                "salary_data",
+                "results",
+                "results_view_data",
+            }),
+        )
 
     def backfill_hourly_rate_policy_data(self, run_id: str, data: dict) -> None:
         """Persist generated defaults for legacy runs without invalidating saved results."""
@@ -1132,7 +1228,11 @@ class FBURunManager:
         self._loaded_sections.setdefault(run_id, set()).update(
             changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
         )
-        self._save_runs(run_id, changed_fields)
+        self._save_runs(
+            run_id,
+            changed_fields,
+            replace_sections=changed_fields.intersection(FBU_RUN_SECTION_FIELDS),
+        )
 
     def _load_legacy_payloads(self) -> dict[str, dict[str, Any]]:
         if self._legacy_payloads is not None:
@@ -1209,10 +1309,25 @@ class FBURunManager:
                 refresh=refresh,
             )
             if payload:
+                revisions = dict(payload.pop("__section_revisions", {}) or {})
+                core_revision = int(payload.pop("__core_revision", 0) or 0)
                 run = self._merge_run_payload(run_id, payload)
                 if not run:
                     return None
                 self._loaded_sections.setdefault(run_id, set()).update(requested)
+                for field_name in requested:
+                    self._section_bases.setdefault(run_id, {})[field_name] = copy.deepcopy(
+                        getattr(run, field_name)
+                    )
+                if revisions:
+                    self._section_revisions.setdefault(run_id, {}).update(revisions)
+                self._core_bases[run_id] = {
+                    key: copy.deepcopy(value)
+                    for key, value in payload.items()
+                    if key not in FBU_RUN_SECTION_FIELDS and key != "roster_data"
+                }
+                if core_revision:
+                    self._core_revisions[run_id] = core_revision
                 self._manifests[run_id] = build_fbu_run_manifest(
                     payload,
                     previous=self._manifests.get(run_id),
@@ -1279,6 +1394,10 @@ class FBURunManager:
             del self.runs[run_id]
             self._manifests.pop(run_id, None)
             self._loaded_sections.pop(run_id, None)
+            self._section_bases.pop(run_id, None)
+            self._section_revisions.pop(run_id, None)
+            self._core_bases.pop(run_id, None)
+            self._core_revisions.pop(run_id, None)
             self._write_local_index()
             if fbu_persistent_storage_enabled():
                 delete_fbu_run_from_persistent(run_id)
