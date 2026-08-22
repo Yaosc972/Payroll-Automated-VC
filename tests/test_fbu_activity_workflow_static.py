@@ -568,6 +568,21 @@ def test_supplemental_leave_moves_included_hours_into_the_title():
     assert ".supplemental-title-hours" in html
 
 
+def test_supplemental_leave_ignores_late_stale_save_responses():
+    js = _js()
+    save_area = js.split("async function updateSupplementalLeaveRow", 1)[1].split(
+        "// ═══ Render Results Data ═══", 1
+    )[0]
+    commit_helper = js.split("function applyCommittedSupplementalLeave", 1)[1].split(
+        "function updateSupplementalLeaveRowInPlace", 1
+    )[0]
+
+    assert "applyCommittedSupplementalLeave" in js
+    assert "data.section_revision" in commit_helper
+    assert "revision < state.supplementalLeaveRevision" in commit_helper
+    assert "applyCommittedSupplementalLeave(data)" in save_area
+
+
 def test_special_person_tags_are_rendered_near_name():
     js = _js()
 
@@ -641,6 +656,9 @@ def test_supplemental_leave_row_save_uses_visible_workbench_activity():
     save_handler = js.split("async function updateSupplementalLeaveRow", 1)[1].split(
         "// ═══ Render Results Data ═══", 1
     )[0]
+    compact_helper = js.split("function applySupplementalLeaveCompactResult", 1)[1].split(
+        "function restoreScrollPosition", 1
+    )[0]
 
     assert "const activity = getWorkbenchActivity();" in save_handler
     assert "activity?.run_id" in save_handler
@@ -649,6 +667,8 @@ def test_supplemental_leave_row_save_uses_visible_workbench_activity():
     assert "applyOptimisticSupplementalLeaveRow" in save_handler
     assert save_handler.index("applyOptimisticSupplementalLeaveRow") < save_handler.index("await apiJson")
     assert "applySupplementalLeaveCompactResult" in save_handler
+    assert "data.section_revision" in compact_helper
+    assert "revision < state.supplementalLeaveRevision" in compact_helper
     assert "rollbackOptimisticSupplementalLeaveRow" in save_handler
 
 

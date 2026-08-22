@@ -958,6 +958,149 @@ def test_same_section_updates_from_stale_instances_preserve_independent_row_chan
     assert restored["supplemental_leave_data"]["summary"]["pending_count"] == 0
 
 
+def test_run_manager_atomic_section_mutation_preserves_two_instance_updates(monkeypatch, tmp_path):
+    database = {
+        "core": {
+            "run_id": "run_atomic",
+            "created_at": "2026-08-22T09:00:00",
+            "calc_month": "2026-07",
+            "status": "completed",
+            "current_step": 5,
+        },
+        "section": {
+            "rows": [
+                {
+                    "row_id": "leave:1",
+                    "confirmation_status": "pending",
+                    "include_in_base": False,
+                    "included_hours": 0,
+                },
+                {
+                    "row_id": "leave:2",
+                    "confirmation_status": "pending",
+                    "include_in_base": False,
+                    "included_hours": 0,
+                },
+            ],
+            "summary": {"pending_count": 2},
+        },
+        "core_revision": 1,
+        "section_revision": 1,
+    }
+    database_lock = threading.Lock()
+    update_barrier = threading.Barrier(2)
+
+    monkeypatch.setattr(fbu_runs, "fbu_persistent_storage_enabled", lambda: True)
+
+    def load_snapshot(run_id, *, sections=None, refresh=False):
+        with database_lock:
+            payload = json.loads(json.dumps(database["core"]))
+            payload["__core_revision"] = database["core_revision"]
+            if sections and "supplemental_leave_data" in sections:
+                payload["supplemental_leave_data"] = json.loads(json.dumps(database["section"]))
+                payload["__section_revisions"] = {
+                    "supplemental_leave_data": database["section_revision"]
+                }
+            return payload
+
+    def save_snapshot(
+        run_id,
+        payload,
+        changed_fields=None,
+        base_sections=None,
+        section_revisions=None,
+        replace_sections=None,
+        base_core=None,
+        core_revision=0,
+    ):
+        with database_lock:
+            field = "supplemental_leave_data"
+            if field in set(changed_fields or ()):
+                desired = payload[field]
+                if section_revisions[field] == database["section_revision"]:
+                    effective = desired
+                else:
+                    effective = fbu_storage.postgres_state.merge_json_changes(
+                        base_sections[field],
+                        desired,
+                        database["section"],
+                    )
+                database["section"] = fbu_storage.postgres_state._normalize_section(
+                    field,
+                    effective,
+                )
+                database["section_revision"] += 1
+            database["core_revision"] += 1
+            manifest = fbu_storage.build_fbu_run_manifest(database["core"])
+            manifest["effectiveSections"] = {
+                field: json.loads(json.dumps(database["section"]))
+            }
+            manifest["sectionRevisions"] = {
+                field: database["section_revision"]
+            }
+            manifest["coreRevision"] = database["core_revision"]
+            return manifest
+
+    monkeypatch.setattr(fbu_runs, "load_fbu_run_snapshot_from_persistent", load_snapshot)
+    monkeypatch.setattr(fbu_runs, "save_fbu_run_snapshot_to_persistent", save_snapshot)
+
+    managers = [
+        fbu_runs.FBURunManager(str(tmp_path / "instance-a")),
+        fbu_runs.FBURunManager(str(tmp_path / "instance-b")),
+    ]
+    errors = []
+    results = []
+
+    def mutate(manager, row_id, updates):
+        try:
+            def apply(current):
+                update_barrier.wait(timeout=3)
+                return app_module.FBUPerformanceParser().apply_supplemental_leave_batch(
+                    current,
+                    [row_id],
+                    updates,
+                )
+
+            results.append(manager.mutate_section("run_atomic", "supplemental_leave_data", apply))
+        except Exception as exc:  # pragma: no cover - surfaced by the assertion below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=mutate,
+            args=(
+                managers[0],
+                "leave:1",
+                {"confirmation_status": "confirmed", "include_in_base": True, "included_hours": 8},
+            ),
+        ),
+        threading.Thread(
+            target=mutate,
+            args=(
+                managers[1],
+                "leave:2",
+                {"confirmation_status": "excluded", "include_in_base": False, "included_hours": 0},
+            ),
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == []
+    statuses = {
+        row["row_id"]: row["confirmation_status"]
+        for row in database["section"]["rows"]
+    }
+    assert statuses == {"leave:1": "confirmed", "leave:2": "excluded"}
+    assert database["section"]["summary"]["pending_count"] == 0
+    assert max(result["revision"] for result in results) == database["section_revision"]
+    assert next(
+        result for result in results if result["revision"] == database["section_revision"]
+    )["data"]["summary"]["pending_count"] == 0
+
+
 def test_run_index_upserts_from_two_instances_do_not_erase_each_other(monkeypatch):
     """Vercel instances do not share the process-local run-index lock."""
     class NoopLock:

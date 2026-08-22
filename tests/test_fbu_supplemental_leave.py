@@ -640,6 +640,55 @@ def test_supplemental_leave_import_and_batch_api_updates_run():
     assert detail["supplemental_leave_data"]["summary"]["excluded_count"] == 2
 
 
+def test_supplemental_leave_batch_returns_committed_section_revision(monkeypatch):
+    client = TestClient(app)
+    created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
+    run_id = created["run_id"]
+    imported = client.post(
+        "/api/fbu-performance/import-supplemental-leave",
+        data={"run_id": run_id},
+        files={
+            "file": (
+                "leave.xlsx",
+                _cross_month_leave_workbook_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    pending_row = imported.json()["preview"]["rows"][0]
+    real_get_run = app_module.fbu_run_manager.get_run
+    calls = []
+
+    def mutate_section(target_run_id, section_name, mutator):
+        calls.append((target_run_id, section_name))
+        current = real_get_run(
+            target_run_id,
+            sections={section_name},
+            refresh=True,
+        ).supplemental_leave_data
+        return {"data": mutator(current), "revision": 17}
+
+    monkeypatch.setattr(
+        app_module.fbu_run_manager,
+        "mutate_section",
+        mutate_section,
+        raising=False,
+    )
+
+    updated = client.post(
+        f"/api/fbu-performance/runs/{run_id}/supplemental-leave/batch",
+        json={
+            "row_ids": [pending_row["row_id"]],
+            "included_hours": 8,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert calls == [(run_id, "supplemental_leave_data")]
+    assert updated.json()["section_revision"] == 17
+    assert updated.json()["preview"]["summary"]["pending_count"] == 0
+
+
 def test_supplemental_leave_import_rejects_unrecognized_workbook_without_overwriting_existing_data():
     client = TestClient(app)
     created = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()
@@ -771,6 +820,7 @@ def test_supplemental_leave_api_supports_compact_row_response():
     assert payload["row"]["included_hours"] == 8
     assert payload["summary"]["pending_count"] == 0
     assert payload["summary"]["include_hours"] == 8
+    assert "section_revision" in payload
 
 
 def test_calculation_rejects_pending_supplemental_leave_confirmations():

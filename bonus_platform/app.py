@@ -17289,40 +17289,12 @@ async def import_fbu_base_overrides(
 @app.post("/api/fbu-performance/runs/{run_id}/supplemental-leave/batch")
 def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
     """批量更新补充假勤确认状态。"""
-    run = fbu_run_manager.get_run(
-        run_id,
-        sections={"supplemental_leave_data"},
-        refresh=True,
-    )
-    if not run:
-        raise HTTPException(404, "任务不存在")
-    if not run.supplemental_leave_data:
-        raise HTTPException(400, "尚未导入补充假勤表")
-
     apply_suggestions = bool(body.get("apply_suggestions"))
     row_ids = body.get("row_ids") or []
     if not row_ids and not apply_suggestions:
         raise HTTPException(400, "请选择需要处理的行")
-    if row_ids:
-        current_row_ids = {
-            row.get("row_id")
-            for row in run.supplemental_leave_data.get("rows", [])
-            if row.get("row_id")
-        }
-        if any(row_id not in current_row_ids for row_id in row_ids):
-            raise HTTPException(409, "补充假勤页面数据已更新，请刷新后重试")
 
     parser = FBUPerformanceParser()
-    if apply_suggestions:
-        preview, applied_count = parser.apply_supplemental_leave_all_suggestions(run.supplemental_leave_data)
-        fbu_run_manager.update_run(run_id, supplemental_leave_data=preview)
-        return {
-            "success": True,
-            "run_id": run_id,
-            "preview": preview,
-            "applied_count": applied_count,
-        }
-
     updates = {}
     if "confirmation_status" in body:
         status = str(body.get("confirmation_status") or "").strip()
@@ -17375,22 +17347,57 @@ def update_fbu_supplemental_leave_batch(run_id: str, body: dict) -> dict:
                 updates["confirmation_status"] = "excluded"
                 updates["include_in_base"] = False
 
-    preview = parser.apply_supplemental_leave_batch(run.supplemental_leave_data, row_ids, updates)
-    fbu_run_manager.update_run(run_id, supplemental_leave_data=preview)
+    mutation_result: dict[str, Any] = {}
+
+    def mutate(preview: dict) -> dict:
+        if not preview:
+            raise HTTPException(400, "尚未导入补充假勤表")
+        if row_ids:
+            current_row_ids = {
+                row.get("row_id")
+                for row in preview.get("rows", [])
+                if row.get("row_id")
+            }
+            if any(row_id not in current_row_ids for row_id in row_ids):
+                raise HTTPException(409, "补充假勤页面数据已更新，请刷新后重试")
+        if apply_suggestions:
+            updated, applied_count = parser.apply_supplemental_leave_all_suggestions(preview)
+            mutation_result["applied_count"] = applied_count
+            return updated
+        return parser.apply_supplemental_leave_batch(preview, row_ids, updates)
+
+    committed = fbu_run_manager.mutate_section(
+        run_id,
+        "supplemental_leave_data",
+        mutate,
+    )
+    if not committed:
+        raise HTTPException(404, "任务不存在")
+    committed_preview = committed["data"]
     if body.get("response_mode") == "row" and len(row_ids) == 1:
-        updated_row = next((row for row in preview.get("rows", []) if row.get("row_id") == row_ids[0]), None)
+        updated_row = next(
+            (
+                row
+                for row in committed_preview.get("rows", [])
+                if row.get("row_id") == row_ids[0]
+            ),
+            None,
+        )
         if updated_row is None:
             raise HTTPException(404, "补充假勤记录不存在")
         return {
             "success": True,
             "run_id": run_id,
             "row": updated_row,
-            "summary": preview.get("summary", {}),
+            "summary": committed_preview.get("summary", {}),
+            "section_revision": committed["revision"],
         }
     return {
         "success": True,
         "run_id": run_id,
-        "preview": preview,
+        "preview": committed_preview,
+        "section_revision": committed["revision"],
+        **mutation_result,
     }
 
 
@@ -18071,6 +18078,12 @@ def get_fbu_performance_run(
             )
         payload["diagnostics"] = _fbu_run_diagnostics(diagnostics_run)
     payload["loaded_sections"] = loaded_sections
+    section_revision_loader = getattr(fbu_run_manager, "get_section_revisions", None)
+    payload["section_revisions"] = (
+        section_revision_loader(run_id, set(loaded_sections))
+        if callable(section_revision_loader)
+        else {}
+    )
     return payload
 
 

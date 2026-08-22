@@ -17,6 +17,7 @@ const state = {
   performanceData: null,
   adjustmentData: null,
   supplementalLeaveData: null,
+  supplementalLeaveRevision: 0,
   baseOverrideData: null,
   ruleLists: null,
   ruleListsRequest: null,
@@ -3163,6 +3164,7 @@ function resetCurrentActivitySections() {
   state.performanceData = null;
   state.adjustmentData = null;
   state.supplementalLeaveData = null;
+  state.supplementalLeaveRevision = 0;
   state.baseOverrideData = null;
   state.diagnosticsData = null;
   state.resultsData = null;
@@ -3243,6 +3245,10 @@ function mergeCurrentActivityPayload(payload) {
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'supplemental_leave_data')) {
     state.supplementalLeaveData = payload.supplemental_leave_data || null;
+    state.supplementalLeaveRevision = Math.max(
+      state.supplementalLeaveRevision,
+      toNumber(payload.section_revisions?.supplemental_leave_data),
+    );
   }
   if (Object.prototype.hasOwnProperty.call(payload, 'base_override_data')) {
     state.baseOverrideData = payload.base_override_data || null;
@@ -5811,6 +5817,20 @@ function updateSupplementalSuggestionHeader() {
   button.textContent = `应用全部建议计入${suggestionCount ? `(${suggestionCount})` : ''}`;
 }
 
+function applyCommittedSupplementalLeave(data) {
+  if (!data?.preview) return false;
+  const revision = toNumber(data.section_revision);
+  if (revision && revision < state.supplementalLeaveRevision) return false;
+  const activity = getWorkbenchActivity();
+  if (!activity?.run_id) return false;
+  state.supplementalLeaveRevision = Math.max(
+    state.supplementalLeaveRevision,
+    revision,
+  );
+  applySupplementalLeavePreview(activity, data.preview);
+  return true;
+}
+
 function updateSupplementalLeaveRowInPlace(rowId) {
   const rowData = (state.supplementalLeaveData?.rows || []).find(row => row.row_id === rowId);
   const rowElement = findSupplementalLeaveRowElement(rowId);
@@ -5870,14 +5890,20 @@ function rollbackOptimisticSupplementalLeaveRow(rowId, snapshot) {
 
 function applySupplementalLeaveCompactResult(activity, rowId, data) {
   if (data.preview) {
-    applySupplementalLeavePreview(activity, data.preview);
-    return updateSupplementalLeaveRowInPlace(rowId);
+    return applyCommittedSupplementalLeave(data)
+      && updateSupplementalLeaveRowInPlace(rowId);
   }
   if (!data.row || !data.summary) return false;
+  const revision = toNumber(data.section_revision);
+  if (revision && revision < state.supplementalLeaveRevision) return false;
 
   const preview = state.supplementalLeaveData;
   const rowIndex = (preview?.rows || []).findIndex(row => row.row_id === rowId);
   if (!preview || rowIndex < 0) return false;
+  state.supplementalLeaveRevision = Math.max(
+    state.supplementalLeaveRevision,
+    revision,
+  );
   preview.rows[rowIndex] = data.row;
   preview.summary = data.summary;
   applyCurrentActivityPatch(
@@ -5952,7 +5978,7 @@ async function applySupplementalLeaveBatchFromToolbar() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    applySupplementalLeavePreview(activity, data.preview);
+    applyCommittedSupplementalLeave(data);
     renderSupplementalLeaveDataPreservingScroll(anchorRowId);
     showNotification(`已批量处理 ${rowIds.length} 行补充假勤`, 'success');
   } catch (error) {
@@ -5987,7 +6013,7 @@ async function applyAllSupplementalLeaveSuggestions() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apply_suggestions: true }),
     });
-    applySupplementalLeavePreview(activity, data.preview);
+    applyCommittedSupplementalLeave(data);
     renderSupplementalLeaveDataPreservingScroll(anchorRowId);
     showNotification(`已应用 ${data.applied_count || suggestionRows.length} 条建议计入`, 'success');
   } catch (error) {
@@ -6031,7 +6057,10 @@ async function updateSupplementalLeaveRow(rowId, explicitHours) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (applySupplementalLeaveCompactResult(activity, rowId, data)) {
+    if (
+      applyCommittedSupplementalLeave(data)
+      || applySupplementalLeaveCompactResult(activity, rowId, data)
+    ) {
       restoreScrollPosition(scrollX, scrollY);
     } else {
       renderSupplementalLeaveDataPreservingScroll(anchorRowId, { focusInput: true });

@@ -2,7 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from pathlib import Path
 import copy
 import shutil
@@ -1056,6 +1056,69 @@ class FBURunManager:
             )
             if persist:
                 self._save_runs(run_id, changed_fields)
+
+    def mutate_section(
+        self,
+        run_id: str,
+        field_name: str,
+        mutator: Callable[[Any], Any],
+    ) -> dict[str, Any] | None:
+        """Atomically derive and persist one section from the same loaded revision."""
+        if field_name not in FBU_RUN_SECTION_FIELDS:
+            raise ValueError(f"不支持的活动区块：{field_name}")
+
+        with self._lock:
+            run = self.get_run(
+                run_id,
+                sections={field_name},
+                refresh=True,
+            )
+            if not run:
+                return None
+
+            current = copy.deepcopy(getattr(run, field_name))
+            desired = mutator(current)
+            changed_fields = {field_name}
+            if field_name in self.RESULT_INPUT_FIELDS:
+                self._invalidate_results(run)
+                changed_fields.update({
+                    "results",
+                    "results_view_data",
+                    "total_employees",
+                    "total_bonus",
+                    "match_rate",
+                })
+            setattr(run, field_name, desired)
+            self.runs[run_id] = run
+            self._loaded_sections.setdefault(run_id, set()).update(
+                changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
+            )
+            self._save_runs(run_id, changed_fields)
+            return {
+                "data": copy.deepcopy(getattr(run, field_name)),
+                "revision": int(
+                    self._section_revisions.get(run_id, {}).get(field_name, 0)
+                    or 0
+                ),
+            }
+
+    def get_section_revisions(
+        self,
+        run_id: str,
+        sections: set[str] | None = None,
+    ) -> dict[str, int]:
+        """Return revisions already loaded for an activity's requested sections."""
+        requested = (
+            set(FBU_RUN_SECTION_FIELDS)
+            if sections is None
+            else set(sections).intersection(FBU_RUN_SECTION_FIELDS)
+        )
+        with self._lock:
+            revisions = self._section_revisions.get(run_id, {})
+            return {
+                field_name: int(revisions.get(field_name, 0) or 0)
+                for field_name in requested
+            }
 
     def save_attendance_import(self, run_id: str, data: dict, **metadata) -> None:
         """Persist attendance metadata and parsed sections in one durable snapshot."""
