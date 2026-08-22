@@ -583,6 +583,27 @@ def test_supplemental_leave_ignores_late_stale_save_responses():
     assert "applyCommittedSupplementalLeave(data)" in save_area
 
 
+def test_roster_and_rule_list_requests_follow_activity_scope():
+    js = _js()
+    enter_area = js.split("async function enterActivity", 1)[1].split(
+        "// ═══ New Activity ═══", 1
+    )[0]
+    roster_area = js.split("async function loadBaseRoster", 1)[1].split(
+        "const uploadTypeLabels", 1
+    )[0]
+
+    assert "ruleListsByRegion" in js
+    assert "ruleListRequestsByRegion" in js
+    assert "loadRuleLists(activity.region_code)" in enter_area
+    assert "loadBaseRoster(activity.calc_month)" in enter_area
+    assert "region_code=${encodeURIComponent(regionCode)}" in js
+    assert "calc_month=${encodeURIComponent(calcMonth)}" in roster_area
+    assert "formData.append('calc_month', calcMonth)" in roster_area
+    assert "检测到旧版全局名单" in js
+    assert "当前划分区域重新维护并保存" in js
+    assert "因划分区域不符未计入" in js
+
+
 def test_special_person_tags_are_rendered_near_name():
     js = _js()
 
@@ -1370,7 +1391,7 @@ def test_workbench_loads_activity_core_then_only_the_active_step_sections():
     assert "include=${encodeURIComponent(include)}" in step_loader
 
 
-def test_initial_workbench_overlaps_rule_list_and_activity_core_requests():
+def test_rule_list_requests_are_deduplicated_by_region_after_activity_core_loads():
     js = _js()
     load_rule_lists = js.split("async function loadRuleLists", 1)[1].split(
         "function getWorkbenchSourceKey", 1
@@ -1379,14 +1400,11 @@ def test_initial_workbench_overlaps_rule_list_and_activity_core_requests():
         "// ═══ New Activity ═══", 1
     )[0]
 
-    assert "state.ruleListsRequest" in load_rule_lists
-    assert "if (state.ruleListsRequest) return state.ruleListsRequest;" in load_rule_lists
-    request_start = "const ruleListsRequest = state.ruleLists ? null : loadRuleLists();"
+    assert "state.ruleListRequestsByRegion[regionCode]" in load_rule_lists
+    assert "return state.ruleListRequestsByRegion[regionCode];" in load_rule_lists
+    request_start = "loadRuleLists(activity.region_code)"
     assert request_start in enter_activity
-    assert enter_activity.index(request_start) < enter_activity.index("?include=core")
-    assert enter_activity.index("await ruleListsRequest;") > enter_activity.index(
-        "?include=core"
-    )
+    assert enter_activity.index("?include=core") < enter_activity.index(request_start)
 
 
 def test_lazy_step_status_uses_manifest_pending_count_after_refresh():

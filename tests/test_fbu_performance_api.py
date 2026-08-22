@@ -733,6 +733,7 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
 
     roster_response = client.post(
         "/api/fbu-performance/roster",
+        data={"calc_month": "2026-04"},
         files={"file": ("roster.xlsx", _roster_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert roster_response.status_code == 200
@@ -780,6 +781,78 @@ def test_base_roster_is_reused_by_new_fbu_activity(monkeypatch, tmp_path):
     assert download_response.status_code == 200
     assert download_response.content[:2] == b"PK"
     assert result_path.exists()
+
+
+def test_base_roster_is_shared_within_month_but_not_reused_across_months(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    client = TestClient(app_module.app)
+
+    uploaded = client.post(
+        "/api/fbu-performance/roster",
+        data={"calc_month": "2026-05"},
+        files={
+            "file": (
+                "may-roster.xlsx",
+                _roster_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert uploaded.status_code == 200
+    assert uploaded.json()["roster"]["calc_month"] == "2026-05"
+
+    may_nj = client.post(
+        "/api/fbu-performance/runs",
+        json={"calc_month": "2026-05", "region_code": "us_nj"},
+    ).json()
+    may_ca = client.post(
+        "/api/fbu-performance/runs",
+        json={"calc_month": "2026-05", "region_code": "us_ca"},
+    ).json()
+    june_nj = client.post(
+        "/api/fbu-performance/runs",
+        json={"calc_month": "2026-06", "region_code": "us_nj"},
+    ).json()
+
+    assert may_nj["roster_source"] == "base"
+    assert may_ca["roster_source"] == "base"
+    assert june_nj["roster_source"] == ""
+    assert june_nj["roster_file"] == ""
+    assert client.get("/api/fbu-performance/roster", params={"calc_month": "2026-06"}).json() == {
+        "has_roster": False,
+        "calc_month": "2026-06",
+    }
+
+
+def test_roster_upload_for_activity_attaches_same_month_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    client = TestClient(app_module.app)
+    run_id = client.post(
+        "/api/fbu-performance/runs",
+        json={"calc_month": "2026-06", "region_code": "us_nj"},
+    ).json()["run_id"]
+
+    uploaded = client.post(
+        "/api/fbu-performance/roster",
+        data={"calc_month": "2026-06", "run_id": run_id},
+        files={
+            "file": (
+                "june-roster.xlsx",
+                _roster_bytes(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert uploaded.status_code == 200
+    detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
+    assert detail["roster_file"] == "june-roster.xlsx"
+    assert detail["roster_source"] == "base"
+    assert detail["roster_data"]["employees"][0]["employee_id"] == "E001"
 
 
 def test_fbu_activities_record_creator_region_and_allow_duplicate_month_region(monkeypatch, tmp_path):

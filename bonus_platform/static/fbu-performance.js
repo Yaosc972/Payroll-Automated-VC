@@ -20,7 +20,8 @@ const state = {
   supplementalLeaveRevision: 0,
   baseOverrideData: null,
   ruleLists: null,
-  ruleListsRequest: null,
+  ruleListsByRegion: {},
+  ruleListRequestsByRegion: {},
   diagnosticsData: null,
   resultsData: null,
   baseRoster: null,
@@ -1684,18 +1685,30 @@ function getWorkbenchSupplementalRows(activity = getWorkbenchActivity()) {
   return activity?.supplemental_leave_data?.rows || state.supplementalLeaveData?.rows || [];
 }
 
-async function loadRuleLists() {
-  if (state.ruleLists) return state.ruleLists;
-  if (state.ruleListsRequest) return state.ruleListsRequest;
-  state.ruleListsRequest = apiJson(`${API_BASE}/rule-lists`)
+async function loadRuleLists(regionCode = state.currentActivity?.region_code || '') {
+  if (!regionCode) return null;
+  if (state.ruleListsByRegion[regionCode]) {
+    state.ruleLists = state.ruleListsByRegion[regionCode];
+    return state.ruleLists;
+  }
+  if (state.ruleListRequestsByRegion[regionCode]) {
+    return state.ruleListRequestsByRegion[regionCode];
+  }
+  const request = apiJson(
+    `${API_BASE}/rule-lists?region_code=${encodeURIComponent(regionCode)}`,
+  )
     .then((data) => {
-      state.ruleLists = data;
+      state.ruleListsByRegion[regionCode] = data;
+      if (state.currentActivity?.region_code === regionCode) {
+        state.ruleLists = data;
+      }
       return data;
     })
     .finally(() => {
-      state.ruleListsRequest = null;
+      delete state.ruleListRequestsByRegion[regionCode];
     });
-  return state.ruleListsRequest;
+  state.ruleListRequestsByRegion[regionCode] = request;
+  return request;
 }
 
 function getWorkbenchSourceKey(label) {
@@ -1778,6 +1791,9 @@ function renderMaintainedRuleList(kind, activity) {
   const isWorkHour = kind === 'workHour';
   const rows = isWorkHour ? (lists.work_hour_employees || []) : (lists.fixed_base_employees || []);
   const title = isWorkHour ? '96工时制员工' : '固定基数人员';
+  const scopeDescription = lists.legacy_unmigrated
+    ? '检测到旧版全局名单。为避免跨区串用，请按当前划分区域重新维护并保存。'
+    : `${activity?.region_name || '当前划分区域'}独立维护，可在同一区域后续月份沿用。`;
   const confirmed = isWorkHour
     ? (activity?.base_override_data?.employees || []).some(row => row.rule_type === '96工时制')
     : (activity?.base_override_data?.employees || []).some(row => row.rule_type === '线下固定基数覆盖');
@@ -1788,7 +1804,7 @@ function renderMaintainedRuleList(kind, activity) {
       <div class="section-head compact">
         <div>
           <h3>${title}</h3>
-          <p>${isWorkHour ? '本月默认沿用已确认的4名员工。' : '本月默认沿用已确认名单。'}</p>
+          <p>${escapeHtml(scopeDescription)}</p>
         </div>
         <div class="section-actions">
           <span class="status-badge ${confirmed ? 'success' : 'warning'}">${confirmed ? '已确认' : '未确认'}</span>
@@ -1992,16 +2008,26 @@ async function confirmMaintainedRuleList(kind) {
   setInlineActionNote(`ruleList-${kind}`, '确认中…', 'warning', { render: false });
   renderWorkbenchCurrentStep();
   try {
-    if (!state.ruleLists) await loadRuleLists();
+    const regionCode = state.currentActivity.region_code;
+    if (!state.ruleLists) await loadRuleLists(regionCode);
     const data = await apiJson(`${API_BASE}/runs/${state.currentActivity.run_id}/rule-lists/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(state.ruleLists),
     });
     state.baseOverrideData = data.preview;
+    state.ruleLists = data.rule_lists;
+    state.ruleListsByRegion[regionCode] = data.rule_lists;
     state.currentActivity.base_override_file = '页面维护';
     state.currentActivity.base_override_data = data.preview;
-    setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认', 'success', { render: false });
+    const excludedCount = toNumber(data.preview?.summary?.excluded_count);
+    const confirmedLabel = kind === 'workHour' ? '96工时制名单已确认' : '固定基数名单已确认';
+    setInlineActionNote(
+      `ruleList-${kind}`,
+      excludedCount ? `${confirmedLabel}，${excludedCount}人因划分区域不符未计入` : confirmedLabel,
+      excludedCount ? 'warning' : 'success',
+      { render: false },
+    );
   } catch (error) {
     setInlineActionNote(`ruleList-${kind}`, `名单确认失败：${error.message}`, 'warning', { render: false });
   } finally {
@@ -2081,7 +2107,8 @@ async function saveMaintainedRuleList(kind) {
   state.maintainedRulePending = `save:${kind}`;
   renderMaintainedRuleDialogBody();
   try {
-    if (!state.ruleLists) await loadRuleLists();
+    const regionCode = state.currentActivity?.region_code || '';
+    if (!state.ruleLists) await loadRuleLists(regionCode);
     const payload = {
       work_hour_employees: kind === 'workHour'
         ? normalizeMaintainedRuleRows('workHour')
@@ -2090,12 +2117,16 @@ async function saveMaintainedRuleList(kind) {
         ? normalizeMaintainedRuleRows('fixedBase')
         : (state.ruleLists.fixed_base_employees || []),
     };
-    const data = await apiJson(`${API_BASE}/rule-lists`, {
+    const data = await apiJson(
+      `${API_BASE}/rule-lists?region_code=${encodeURIComponent(regionCode)}`,
+      {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    });
+      },
+    );
     state.ruleLists = data;
+    state.ruleListsByRegion[regionCode] = data;
     state.maintainedRuleDrafts[kind] = cloneMaintainedRuleRows(kind);
     setInlineActionNote(`ruleList-${kind}`, kind === 'workHour' ? '96工时制名单已保存' : '固定基数名单已保存', 'success', { render: false });
     closeMaintainedRuleDialog();
@@ -2785,8 +2816,8 @@ function renderFoundationData() {
 
   if (el.foundationLeadMeta) {
     el.foundationLeadMeta.textContent = hasRoster
-      ? `${roster.filename || '已上传花名册'} · ${roster.total_employees || 0}人`
-      : '尚未上传基础花名册';
+      ? `${roster.calc_month || '-'} · ${roster.filename || '已上传花名册'} · ${roster.total_employees || 0}人`
+      : `${roster.calc_month || '当前月份'}尚未上传花名册`;
   }
   if (el.foundationActivityCount) {
     el.foundationActivityCount.textContent = state.activities.length;
@@ -2805,9 +2836,13 @@ function renderFoundationData() {
       <section>
         <h3 class="module-section-title">基础花名册</h3>
         <p class="module-description">
-          基础花名册是月度活动引用员工姓名、部门、区域和岗位类型的底座。更新后，新建或重新导入的活动会引用最新版本。
+          花名册按核算月份管理，同月不同划分区域可以沿用；跨月份不会自动引用上月版本。
         </p>
         <div class="meta-list">
+          <div class="meta-row">
+            <div class="meta-label">核算月份</div>
+            <div class="meta-value">${escapeHtml(roster.calc_month || '-')}</div>
+          </div>
           <div class="meta-row">
             <div class="meta-label">状态</div>
             <div class="meta-value">${rosterStatus}</div>
@@ -3337,8 +3372,6 @@ async function enterActivity(activityId, options = {}) {
   const previousStep = state.activityStep;
 
   try {
-    const ruleListsRequest = state.ruleLists ? null : loadRuleLists();
-    if (!state.baseRoster) loadBaseRoster();
     const isDifferentActivity = state.currentActivity?.run_id !== activityId;
     let activity = await apiJson(`${API_BASE}/runs/${activityId}?include=core`);
 
@@ -3362,6 +3395,12 @@ async function enterActivity(activityId, options = {}) {
     }
 
     activity = mergeCurrentActivityPayload(activity);
+    const [ruleLists] = await Promise.all([
+      loadRuleLists(activity.region_code),
+      loadBaseRoster(activity.calc_month),
+    ]);
+    if (state.currentActivity?.run_id !== activity.run_id) return null;
+    state.ruleLists = ruleLists;
     const ownedPreference = readLastOwnedActivityPreference();
     const preferredOwnedStep = isMyActivity(activity)
       && ownedPreference?.runId === activity.run_id
@@ -3378,7 +3417,6 @@ async function enterActivity(activityId, options = {}) {
       state.activityStep = getActivityStepFromActivity(activity);
     }
     rememberOwnedActivity(activity, state.activityStep);
-    if (ruleListsRequest) await ruleListsRequest;
     await ensureActivityStepData(state.activityStep, { render: false });
     activity = state.currentActivity;
     restoreFbuUploadJobs(activity.run_id);
@@ -3523,29 +3561,51 @@ async function deleteActivitiesByIds(ids, options = {}) {
 
 // ═══ Base Roster ═══
 
-async function loadBaseRoster() {
+async function loadBaseRoster(calcMonth = state.currentActivity?.calc_month || getDefaultCalcMonth()) {
   try {
-    const roster = await apiJson(`${API_BASE}/roster`);
-    state.baseRoster = roster;
+    const roster = await apiJson(
+      `${API_BASE}/roster?calc_month=${encodeURIComponent(calcMonth)}`,
+    );
+    if (!state.currentActivity || state.currentActivity.calc_month === calcMonth) {
+      state.baseRoster = roster;
+    }
     updateRosterButton();
     if (state.currentPage === 'foundation') {
       renderFoundationData();
     }
+    return roster;
   } catch (error) {
     console.error('加载基础花名册状态失败:', error);
+    return null;
   }
 }
 
 function updateRosterButton() {
   if (!el.btnUploadRoster) return;
   if (state.baseRoster?.has_roster) {
-    el.btnUploadRoster.textContent = `基础花名册 · ${state.baseRoster.total_employees || 0}人`;
+    el.btnUploadRoster.textContent = `${state.baseRoster.calc_month || ''} 花名册 · ${state.baseRoster.total_employees || 0}人`;
   } else {
     el.btnUploadRoster.textContent = '上传基础花名册';
   }
 }
 
-function chooseRosterFile() {
+async function chooseRosterFile() {
+  const monthResult = await openAppDialog({
+    title: '选择花名册月份',
+    message: '花名册只会在相同核算月份的活动之间沿用。',
+    confirmText: '选择文件',
+    cancelText: '取消',
+    input: {
+      kind: 'month',
+      label: '核算月份',
+      value: state.currentActivity?.calc_month || getDefaultCalcMonth(),
+      placeholder: '选择月份',
+      validate: value => /^\d{4}-(0[1-9]|1[0-2])$/.test(value)
+        || '月份格式应为 YYYY-MM，例如 2026-05',
+    },
+  });
+  if (!monthResult.confirmed) return;
+  const calcMonth = monthResult.value;
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.xlsx,.xls';
@@ -3554,6 +3614,7 @@ function chooseRosterFile() {
     if (!file) return;
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('calc_month', calcMonth);
     if (el.btnUploadRoster) {
       el.btnUploadRoster.disabled = true;
       el.btnUploadRoster.textContent = '花名册上传中...';
@@ -3566,7 +3627,7 @@ function chooseRosterFile() {
       state.baseRoster = data.roster;
       updateRosterButton();
       renderFoundationData();
-      showNotification('基础花名册已更新，后续新活动会自动引用', 'success');
+      showNotification(`${calcMonth} 花名册已更新，同月新活动会自动引用`, 'success');
     } catch (error) {
       showNotification('花名册上传失败: ' + error.message, 'error');
       updateRosterButton();
@@ -3625,8 +3686,15 @@ async function uploadWorkbenchRosterFile(file) {
     failWorkbenchUploadProgress('roster', file.name, '仅支持 .xlsx / .xls');
     return;
   }
+  const calcMonth = state.currentActivity?.calc_month || '';
+  if (!calcMonth) {
+    failWorkbenchUploadProgress('roster', file.name, '请先进入一个月度活动');
+    return;
+  }
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('calc_month', calcMonth);
+  formData.append('run_id', state.currentActivity.run_id);
   startWorkbenchUploadProgress('roster', file);
   if (el.btnUploadRoster) {
     el.btnUploadRoster.disabled = true;
@@ -3638,6 +3706,8 @@ async function uploadWorkbenchRosterFile(file) {
       body: formData,
     });
     state.baseRoster = data.roster;
+    state.currentActivity.roster_file = data.roster.filename;
+    state.currentActivity.roster_source = 'base';
     updateRosterButton();
     renderFoundationData();
     finishWorkbenchUploadProgress('roster', file.name, '已更新');

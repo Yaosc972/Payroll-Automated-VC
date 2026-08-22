@@ -1428,6 +1428,11 @@ def _install_fake_persistent_backend(monkeypatch):
 
     monkeypatch.setattr(fbu_runs, "save_fbu_files_to_persistent", save_files)
     monkeypatch.setattr(fbu_runs, "load_fbu_file_from_persistent", load_file)
+    monkeypatch.setattr(
+        fbu_runs,
+        "delete_fbu_files_from_persistent",
+        lambda run_id, relative_paths: [files.pop((run_id, path), None) for path in relative_paths],
+    )
     return metadata, files
 
 
@@ -1564,8 +1569,14 @@ def test_roster_and_rule_lists_survive_separate_store_instances(monkeypatch, tmp
     first_roster = fbu_runs.FBURosterStore(str(tmp_path / "instance-a"))
     first_rules = fbu_runs.FBURuleListStore(str(tmp_path / "instance-a"))
 
-    first_roster.save_active_roster(b"roster-content", "roster.xlsx", total_employees=3)
+    first_roster.save_active_roster(
+        b"roster-content",
+        "roster.xlsx",
+        total_employees=3,
+        calc_month="2026-05",
+    )
     first_rules.save(
+        "us_nj",
         {
             "work_hour_employees": [{"employee_id": "zt1", "name": "A", "active": True}],
             "fixed_base_employees": [
@@ -1577,11 +1588,64 @@ def test_roster_and_rule_lists_survive_separate_store_instances(monkeypatch, tmp
     second_roster = fbu_runs.FBURosterStore(str(tmp_path / "instance-b"))
     second_rules = fbu_runs.FBURuleListStore(str(tmp_path / "instance-b"))
 
-    assert second_roster.get_metadata()["total_employees"] == 3
-    copied = second_roster.copy_active_to_run("run-2")
+    assert second_roster.get_metadata("2026-05")["total_employees"] == 3
+    copied = second_roster.copy_active_to_run("run-2", "2026-05")
     assert copied is not None
     assert copied.read_bytes() == b"roster-content"
-    assert second_rules.get()["work_hour_employees"][0]["employee_id"] == "zt1"
+    assert second_rules.get("us_nj")["work_hour_employees"][0]["employee_id"] == "zt1"
+
+
+def test_month_rosters_and_region_rule_lists_do_not_overwrite_across_instances(monkeypatch, tmp_path):
+    _install_fake_persistent_backend(monkeypatch)
+    may_store = fbu_runs.FBURosterStore(str(tmp_path / "may-instance"))
+    june_store = fbu_runs.FBURosterStore(str(tmp_path / "june-instance"))
+    nj_store = fbu_runs.FBURuleListStore(str(tmp_path / "nj-instance"))
+    ca_store = fbu_runs.FBURuleListStore(str(tmp_path / "ca-instance"))
+
+    may_store.save_active_roster(
+        b"may-roster",
+        "may.xlsx",
+        total_employees=2,
+        calc_month="2026-05",
+    )
+    june_store.save_active_roster(
+        b"june-roster",
+        "june.xlsx",
+        total_employees=3,
+        calc_month="2026-06",
+    )
+    nj_store.save(
+        "us_nj",
+        {
+            "work_hour_employees": [{"employee_id": "NJ001", "name": "NJ", "active": True}],
+            "fixed_base_employees": [],
+        },
+    )
+    ca_store.save(
+        "us_ca",
+        {
+            "work_hour_employees": [],
+            "fixed_base_employees": [
+                {
+                    "employee_id": "CA001",
+                    "name": "CA",
+                    "fixed_performance_base": 2800,
+                    "active": True,
+                }
+            ],
+        },
+    )
+
+    reader_roster = fbu_runs.FBURosterStore(str(tmp_path / "reader-roster"))
+    reader_rules = fbu_runs.FBURuleListStore(str(tmp_path / "reader-rules"))
+    assert reader_roster.get_metadata("2026-05")["filename"] == "may.xlsx"
+    assert reader_roster.get_metadata("2026-06")["filename"] == "june.xlsx"
+    assert reader_roster.get_metadata("2026-07") == {
+        "has_roster": False,
+        "calc_month": "2026-07",
+    }
+    assert reader_rules.get("us_nj")["work_hour_employees"][0]["employee_id"] == "NJ001"
+    assert reader_rules.get("us_ca")["fixed_base_employees"][0]["employee_id"] == "CA001"
 
 
 def test_fbu_activity_upload_and_detail_work_across_three_instances(monkeypatch, tmp_path):

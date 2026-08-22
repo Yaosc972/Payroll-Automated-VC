@@ -8,6 +8,7 @@ import copy
 import shutil
 import json
 import os
+import re
 import threading
 import uuid
 
@@ -1696,68 +1697,108 @@ class FBURunManager:
 
 
 class FBURosterStore:
-    """FBU基础花名册存储。"""
+    """FBU基础花名册存储，按核算月份隔离。"""
 
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         self.roster_dir = self.data_dir / "_roster"
         self.roster_dir.mkdir(parents=True, exist_ok=True)
-        self.metadata_file = self.roster_dir / "metadata.json"
 
-    def _active_roster_path(self, metadata: Optional[dict] = None) -> Path:
+    @staticmethod
+    def _month_key(calc_month: str) -> str:
+        value = str(calc_month or "").strip()
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", value):
+            raise ValueError("核算月份格式无效，应为YYYY-MM")
+        return value
+
+    def _month_dir(self, calc_month: str) -> Path:
+        path = self.roster_dir / self._month_key(calc_month)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _persistent_scope(self, calc_month: str) -> str:
+        return f"_roster_{self._month_key(calc_month)}"
+
+    def _active_roster_path(
+        self,
+        calc_month: str,
+        metadata: Optional[dict] = None,
+    ) -> Path:
         extension = (metadata or {}).get("extension", ".xlsx")
         if extension not in {".xlsx", ".xls"}:
             extension = ".xlsx"
-        return self.roster_dir / f"active_roster{extension}"
+        return self._month_dir(calc_month) / f"active_roster{extension}"
 
-    def get_metadata(self) -> dict:
+    def get_metadata(self, calc_month: str) -> dict:
+        month = self._month_key(calc_month)
+        month_dir = self._month_dir(month)
+        metadata_file = month_dir / "metadata.json"
         if fbu_persistent_storage_enabled():
-            load_fbu_file_from_persistent("_roster", self.roster_dir, "metadata.json")
-        if not self.metadata_file.exists():
-            return {"has_roster": False}
-        with open(self.metadata_file, "r", encoding="utf-8") as f:
+            load_fbu_file_from_persistent(
+                self._persistent_scope(month),
+                month_dir,
+                "metadata.json",
+            )
+        if not metadata_file.exists():
+            return {"has_roster": False, "calc_month": month}
+        with open(metadata_file, "r", encoding="utf-8") as f:
             metadata = json.load(f)
         if fbu_persistent_storage_enabled():
             load_fbu_file_from_persistent(
-                "_roster",
-                self.roster_dir,
-                self._active_roster_path(metadata).name,
+                self._persistent_scope(month),
+                month_dir,
+                self._active_roster_path(month, metadata).name,
             )
-        metadata["has_roster"] = self._active_roster_path(metadata).exists()
+        metadata["has_roster"] = self._active_roster_path(month, metadata).exists()
+        metadata["calc_month"] = month
         return metadata
 
-    def save_active_roster(self, content: bytes, filename: str, total_employees: int = 0) -> dict:
+    def save_active_roster(
+        self,
+        content: bytes,
+        filename: str,
+        total_employees: int = 0,
+        *,
+        calc_month: str,
+    ) -> dict:
+        month = self._month_key(calc_month)
+        month_dir = self._month_dir(month)
         extension = Path(filename).suffix.lower()
         if extension not in {".xlsx", ".xls"}:
             extension = ".xlsx"
-        for existing in self.roster_dir.glob("active_roster.*"):
+        for existing in month_dir.glob("active_roster.*"):
             existing.unlink(missing_ok=True)
-        active_roster = self._active_roster_path({"extension": extension})
+        active_roster = self._active_roster_path(month, {"extension": extension})
         active_roster.write_bytes(content)
         metadata = {
             "has_roster": True,
+            "calc_month": month,
             "filename": filename,
             "extension": extension,
             "uploaded_at": datetime.now().isoformat(),
             "total_employees": total_employees,
         }
-        with open(self.metadata_file, "w", encoding="utf-8") as f:
+        with open(month_dir / "metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
         if fbu_persistent_storage_enabled():
             save_fbu_files_to_persistent(
-                "_roster",
-                self.roster_dir,
+                self._persistent_scope(month),
+                month_dir,
                 ["metadata.json", active_roster.name],
             )
         return metadata
 
-    def copy_active_to_run(self, run_id: str, metadata: Optional[dict] = None) -> Optional[Path]:
-        metadata = metadata or self.get_metadata()
-        active_roster = self._active_roster_path(metadata)
+    def copy_active_to_run(self, run_id: str, calc_month: str) -> Optional[Path]:
+        metadata = self.get_metadata(calc_month)
+        active_roster = self._active_roster_path(calc_month, metadata)
         if not active_roster.exists():
             return None
         run_dir = self.data_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
+        for existing_name in ("roster.xlsx", "roster.xls"):
+            (run_dir / existing_name).unlink(missing_ok=True)
+        if fbu_persistent_storage_enabled():
+            delete_fbu_files_from_persistent(run_id, ["roster.xlsx", "roster.xls"])
         target = run_dir / f"roster{metadata.get('extension', '.xlsx')}"
         shutil.copyfile(active_roster, target)
         if fbu_persistent_storage_enabled():
@@ -1765,68 +1806,94 @@ class FBURosterStore:
         return target
 
 
-DEFAULT_WORK_HOUR_EMPLOYEES = [
-    {"employee_id": "zt12979", "name": "赵婉妍", "active": True},
-    {"employee_id": "zt12988", "name": "陈海冰", "active": True},
-    {"employee_id": "zt14260", "name": "陈炜", "active": True},
-    {"employee_id": "zt17850", "name": "韩勇", "active": True},
-]
-
-DEFAULT_FIXED_BASE_EMPLOYEES = [
-    {
-        "employee_id": "zt15638",
-        "name": "万其鑫",
-        "fixed_performance_base": 3000,
-        "active": True,
-    },
-]
-
-
 class FBURuleListStore:
-    """Stores stable FBU 96-hour and fixed-base lists outside monthly uploads."""
+    """Stores stable FBU 96-hour and fixed-base lists by activity region."""
 
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         self.settings_dir = self.data_dir / "_settings"
         self.settings_dir.mkdir(parents=True, exist_ok=True)
-        self.rule_lists_file = self.settings_dir / "rule_lists.json"
+        self.rule_lists_dir = self.settings_dir / "rule-lists"
+        self.rule_lists_dir.mkdir(parents=True, exist_ok=True)
+        self.legacy_rule_lists_file = self.settings_dir / "rule_lists.json"
 
-    def _default_payload(self) -> dict:
+    @staticmethod
+    def _region_key(region_code: str) -> str:
+        value = str(region_code or "").strip()
+        valid_region_codes = {region["code"] for region in FBU_AMERICAS_REGIONS}
+        if value not in valid_region_codes:
+            raise ValueError("请选择有效的FBU美洲划分区域")
+        return value
+
+    def _empty_payload(self, region_code: str) -> dict:
         return {
-            "work_hour_employees": list(DEFAULT_WORK_HOUR_EMPLOYEES),
-            "fixed_base_employees": list(DEFAULT_FIXED_BASE_EMPLOYEES),
+            "region_code": self._region_key(region_code),
+            "work_hour_employees": [],
+            "fixed_base_employees": [],
         }
 
-    def _with_seed_rows(self, payload: dict) -> dict:
-        defaults = self._default_payload()
-        work_hour_employees = payload.get("work_hour_employees") or defaults["work_hour_employees"]
-        fixed_base_employees = payload.get("fixed_base_employees") or defaults["fixed_base_employees"]
-        return {
-            "work_hour_employees": work_hour_employees,
-            "fixed_base_employees": fixed_base_employees,
-        }
+    def _rule_lists_file(self, region_code: str) -> Path:
+        return self.rule_lists_dir / f"{self._region_key(region_code)}.json"
 
-    def get(self) -> dict:
+    def _persistent_scope(self, region_code: str) -> str:
+        return f"_rule_lists_{self._region_key(region_code)}"
+
+    def _legacy_data_available(self) -> bool:
         if fbu_persistent_storage_enabled():
-            load_fbu_file_from_persistent("_settings", self.settings_dir, "rule_lists.json")
-        if not self.rule_lists_file.exists():
-            return self._default_payload()
-        with open(self.rule_lists_file, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        return self._with_seed_rows(payload)
+            load_fbu_file_from_persistent(
+                "_settings",
+                self.settings_dir,
+                self.legacy_rule_lists_file.name,
+            )
+        if not self.legacy_rule_lists_file.exists():
+            return False
+        try:
+            with open(self.legacy_rule_lists_file, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return True
+        return bool(
+            payload.get("work_hour_employees")
+            or payload.get("fixed_base_employees")
+        )
 
-    def save(self, payload: dict) -> dict:
-        normalized = self._with_seed_rows({
+    def get(self, region_code: str) -> dict:
+        region = self._region_key(region_code)
+        rule_lists_file = self._rule_lists_file(region)
+        if fbu_persistent_storage_enabled():
+            load_fbu_file_from_persistent(
+                self._persistent_scope(region),
+                self.rule_lists_dir,
+                rule_lists_file.name,
+            )
+        if not rule_lists_file.exists():
+            empty = self._empty_payload(region)
+            if self._legacy_data_available():
+                empty["legacy_unmigrated"] = True
+            return empty
+        with open(rule_lists_file, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        return {
+            "region_code": region,
+            "work_hour_employees": payload.get("work_hour_employees") or [],
+            "fixed_base_employees": payload.get("fixed_base_employees") or [],
+        }
+
+    def save(self, region_code: str, payload: dict) -> dict:
+        region = self._region_key(region_code)
+        normalized = {
+            "region_code": region,
             "work_hour_employees": self._normalize_work_hour_rows(payload.get("work_hour_employees", [])),
             "fixed_base_employees": self._normalize_fixed_base_rows(payload.get("fixed_base_employees", [])),
-        })
-        with open(self.rule_lists_file, "w", encoding="utf-8") as f:
+        }
+        rule_lists_file = self._rule_lists_file(region)
+        with open(rule_lists_file, "w", encoding="utf-8") as f:
             json.dump(normalized, f, ensure_ascii=False, indent=2)
         if fbu_persistent_storage_enabled():
             save_fbu_files_to_persistent(
-                "_settings",
-                self.settings_dir,
-                ["rule_lists.json"],
+                self._persistent_scope(region),
+                self.rule_lists_dir,
+                [rule_lists_file.name],
             )
         return normalized
 

@@ -1817,11 +1817,16 @@ def test_base_roster_store_saves_metadata_and_copies_snapshot(tmp_path):
     store = FBURosterStore(str(tmp_path))
     content = b"fake roster bytes"
 
-    metadata = store.save_active_roster(content, "roster.xlsx", total_employees=12)
-    copied = store.copy_active_to_run("run123")
+    metadata = store.save_active_roster(
+        content,
+        "roster.xlsx",
+        total_employees=12,
+        calc_month="2026-05",
+    )
+    copied = store.copy_active_to_run("run123", "2026-05")
 
     assert metadata["filename"] == "roster.xlsx"
     assert metadata["total_employees"] == 12
-    assert store.get_metadata()["has_roster"] is True
+    assert store.get_metadata("2026-05")["has_roster"] is True
     assert copied.read_bytes() == content
     assert copied.name == "roster.xlsx"

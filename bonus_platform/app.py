@@ -15286,10 +15286,6 @@ def _build_base_override_data_from_rule_lists(
     region_name: str = "",
 ) -> dict:
     target_area = str(region_name or "").removeprefix("FBU").strip()
-    known_fbu_areas = {
-        str(region["name"]).removeprefix("FBU").strip()
-        for region in FBU_AMERICAS_REGIONS
-    }
 
     def belongs_to_run_region(employee_id: str, *, allow_missing: bool = False) -> bool:
         if not roster_lookup or not target_area:
@@ -15298,18 +15294,18 @@ def _build_base_override_data_from_rule_lists(
         if not roster_info:
             return allow_missing
         employee_area = str(roster_info.get("area") or "").strip()
-        return (
-            not employee_area
-            or employee_area not in known_fbu_areas
-            or employee_area == target_area
-        )
+        return employee_area == target_area
 
     employees = []
+    excluded_count = 0
     for row in payload.get("work_hour_employees", []):
         if not row.get("active", True):
             continue
         employee_id = str(row.get("employee_id") or "").strip()
-        if not employee_id or not belongs_to_run_region(employee_id):
+        if not employee_id:
+            continue
+        if not belongs_to_run_region(employee_id):
+            excluded_count += 1
             continue
         employees.append(_build_rule_list_override_row(
             row,
@@ -15323,10 +15319,10 @@ def _build_base_override_data_from_rule_lists(
         if not row.get("active", True):
             continue
         employee_id = str(row.get("employee_id") or "").strip()
-        if not employee_id or not belongs_to_run_region(
-            employee_id,
-            allow_missing=target_area == "新泽西区",
-        ):
+        if not employee_id:
+            continue
+        if not belongs_to_run_region(employee_id):
+            excluded_count += 1
             continue
         employees.append(_build_rule_list_override_row(
             row,
@@ -15344,7 +15340,7 @@ def _build_base_override_data_from_rule_lists(
         "summary": {
             "total_rows": len(employees),
             "active_count": len(employees),
-            "excluded_count": 0,
+            "excluded_count": excluded_count,
             "work_hour_rule_count": work_hour_rule_count,
             "fixed_base_count": fixed_base_count,
             "active_fixed_base": fixed_base_total,
@@ -15353,23 +15349,24 @@ def _build_base_override_data_from_rule_lists(
 
 
 def _load_fbu_roster_for_run(parser: FBUPerformanceParser, run_id: str) -> Path | None:
-    """加载活动花名册；没有活动花名册时复制并加载基础花名册。"""
+    """加载活动花名册；没有活动花名册时复制同月基础花名册。"""
+    run = fbu_run_manager.get_run(run_id, sections=set())
+    if not run:
+        return None
     run_dir = FBU_PERFORMANCE_RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     for filename in ("roster.xlsx", "roster.xls"):
         fbu_run_manager.materialize_file(run_id, filename)
     roster_path = next((path for path in [run_dir / "roster.xlsx", run_dir / "roster.xls"] if path.exists()), None)
     if roster_path is None:
-        roster_path = fbu_roster_store.copy_active_to_run(run_id)
+        roster_path = fbu_roster_store.copy_active_to_run(run_id, run.calc_month)
         if roster_path:
-            run = fbu_run_manager.get_run(run_id, sections=set())
-            metadata = fbu_roster_store.get_metadata()
-            if run:
-                fbu_run_manager.update_run(
-                    run_id,
-                    roster_file=metadata.get("filename", "active_roster.xlsx"),
-                    roster_source="base",
-                )
+            metadata = fbu_roster_store.get_metadata(run.calc_month)
+            fbu_run_manager.update_run(
+                run_id,
+                roster_file=metadata.get("filename", "active_roster.xlsx"),
+                roster_source="base",
+            )
     if roster_path and roster_path.exists():
         parser.load_roster(str(roster_path))
         return roster_path
@@ -15410,22 +15407,41 @@ def _fbu_roster_preview_for_run(run_id: str) -> dict | None:
 
 
 @app.get("/api/fbu-performance/roster")
-def get_fbu_base_roster() -> dict:
+def get_fbu_base_roster(calc_month: str) -> dict:
     """获取FBU基础花名册状态"""
-    return fbu_roster_store.get_metadata()
+    try:
+        return fbu_roster_store.get_metadata(calc_month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/fbu-performance/roster")
-async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
+async def upload_fbu_base_roster(
+    file: UploadFile = File(...),
+    calc_month: str = Form(...),
+    run_id: str = Form(""),
+) -> dict:
     """上传FBU基础花名册，供后续月度活动默认引用"""
+    tmp_path: Path | None = None
     try:
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in {".xlsx", ".xls"}:
             raise HTTPException(400, "请上传 .xlsx 或 .xls 格式的花名册")
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(calc_month or "").strip()):
+            raise HTTPException(400, "核算月份格式无效，应为YYYY-MM")
+        target_run = None
+        if run_id:
+            target_run = fbu_run_manager.get_run(run_id, sections=set())
+            if not target_run:
+                raise HTTPException(404, "任务不存在")
+            if target_run.calc_month != calc_month:
+                raise HTTPException(409, "花名册月份与活动核算月份不一致")
         content = await file.read()
-        tmp_path = FBU_PERFORMANCE_RUNS_DIR / "_roster" / f"_upload_check{suffix}"
-        tmp_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path.write_bytes(content)
+        temp_dir = FBU_PERFORMANCE_RUNS_DIR / "_roster"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(suffix=suffix, dir=temp_dir, delete=False) as tmp_file:
+            tmp_file.write(content)
+            tmp_path = Path(tmp_file.name)
 
         parser = FBUPerformanceParser()
         roster = parser.load_roster(str(tmp_path))
@@ -15433,24 +15449,37 @@ async def upload_fbu_base_roster(file: UploadFile = File(...)) -> dict:
             content=content,
             filename=file.filename,
             total_employees=len(roster),
+            calc_month=calc_month,
         )
-        tmp_path.unlink(missing_ok=True)
+        if target_run:
+            fbu_roster_store.copy_active_to_run(run_id, target_run.calc_month)
+            fbu_run_manager.update_run(
+                run_id,
+                roster_file=metadata.get("filename", "active_roster.xlsx"),
+                roster_source="base",
+            )
         return {"success": True, "roster": metadata}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, f"花名册解析失败: {str(e)}")
+    finally:
+        if tmp_path:
+            tmp_path.unlink(missing_ok=True)
 
 
 @app.get("/api/fbu-performance/rule-lists")
-def get_fbu_rule_lists() -> dict:
-    return fbu_rule_list_store.get()
+def get_fbu_rule_lists(region_code: str) -> dict:
+    try:
+        return fbu_rule_list_store.get(region_code)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/fbu-performance/rule-lists")
-def save_fbu_rule_lists(body: dict = Body(...)) -> dict:
+def save_fbu_rule_lists(region_code: str, body: dict = Body(...)) -> dict:
     try:
-        return fbu_rule_list_store.save(body)
+        return fbu_rule_list_store.save(region_code, body)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -15461,7 +15490,7 @@ def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
     if not run:
         raise HTTPException(404, "任务不存在")
     try:
-        saved = fbu_rule_list_store.save(body)
+        saved = fbu_rule_list_store.save(run.region_code, body)
     except ValueError as e:
         raise HTTPException(400, str(e))
     parser = FBUPerformanceParser()
@@ -17896,8 +17925,8 @@ def create_fbu_performance_run(request: Request, body: dict) -> dict:
         created_by_avatar_url=actor["avatarUrl"],
         persist=False,
     )
-    metadata = fbu_roster_store.get_metadata()
-    roster_path = fbu_roster_store.copy_active_to_run(run.run_id, metadata=metadata)
+    metadata = fbu_roster_store.get_metadata(run.calc_month)
+    roster_path = fbu_roster_store.copy_active_to_run(run.run_id, run.calc_month)
     roster_data = None
     if roster_path:
         parser = FBUPerformanceParser()
