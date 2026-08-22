@@ -967,25 +967,35 @@ def test_run_manager_atomic_section_mutation_preserves_two_instance_updates(monk
             "status": "completed",
             "current_step": 5,
         },
-        "section": {
-            "rows": [
-                {
-                    "row_id": "leave:1",
-                    "confirmation_status": "pending",
-                    "include_in_base": False,
-                    "included_hours": 0,
-                },
-                {
-                    "row_id": "leave:2",
-                    "confirmation_status": "pending",
-                    "include_in_base": False,
-                    "included_hours": 0,
-                },
-            ],
-            "summary": {"pending_count": 2},
+        "sections": {
+            "supplemental_leave_data": {
+                "rows": [
+                    {
+                        "row_id": "leave:1",
+                        "confirmation_status": "pending",
+                        "include_in_base": False,
+                        "included_hours": 0,
+                    },
+                    {
+                        "row_id": "leave:2",
+                        "confirmation_status": "pending",
+                        "include_in_base": False,
+                        "included_hours": 0,
+                    },
+                ],
+                "summary": {"pending_count": 2},
+            },
+            "results": [{"employee_id": "zt001", "payload": "x" * 100_000}],
+            "results_view_data": {
+                "rows": [{"employee_id": "zt001", "payload": "x" * 20_000}]
+            },
         },
         "core_revision": 1,
-        "section_revision": 1,
+        "section_revisions": {
+            "supplemental_leave_data": 1,
+            "results": 7,
+            "results_view_data": 7,
+        },
     }
     database_lock = threading.Lock()
     update_barrier = threading.Barrier(2)
@@ -997,9 +1007,13 @@ def test_run_manager_atomic_section_mutation_preserves_two_instance_updates(monk
             payload = json.loads(json.dumps(database["core"]))
             payload["__core_revision"] = database["core_revision"]
             if sections and "supplemental_leave_data" in sections:
-                payload["supplemental_leave_data"] = json.loads(json.dumps(database["section"]))
+                payload["supplemental_leave_data"] = json.loads(json.dumps(
+                    database["sections"]["supplemental_leave_data"]
+                ))
                 payload["__section_revisions"] = {
-                    "supplemental_leave_data": database["section_revision"]
+                    "supplemental_leave_data": database["section_revisions"][
+                        "supplemental_leave_data"
+                    ]
                 }
             return payload
 
@@ -1014,30 +1028,37 @@ def test_run_manager_atomic_section_mutation_preserves_two_instance_updates(monk
         core_revision=0,
     ):
         with database_lock:
-            field = "supplemental_leave_data"
-            if field in set(changed_fields or ()):
+            effective_sections = {}
+            revisions = {}
+            for field in set(changed_fields or ()).intersection(
+                fbu_storage.FBU_RUN_SECTION_FIELDS
+            ):
                 desired = payload[field]
-                if section_revisions[field] == database["section_revision"]:
+                current_revision = database["section_revisions"][field]
+                if (
+                    field in set(replace_sections or ())
+                    or int((section_revisions or {}).get(field) or 0) == current_revision
+                ):
                     effective = desired
                 else:
                     effective = fbu_storage.postgres_state.merge_json_changes(
-                        base_sections[field],
+                        (base_sections or {}).get(field, desired),
                         desired,
-                        database["section"],
+                        database["sections"][field],
                     )
-                database["section"] = fbu_storage.postgres_state._normalize_section(
+                database["sections"][field] = fbu_storage.postgres_state._normalize_section(
                     field,
                     effective,
                 )
-                database["section_revision"] += 1
+                database["section_revisions"][field] += 1
+                effective_sections[field] = json.loads(json.dumps(
+                    database["sections"][field]
+                ))
+                revisions[field] = database["section_revisions"][field]
             database["core_revision"] += 1
             manifest = fbu_storage.build_fbu_run_manifest(database["core"])
-            manifest["effectiveSections"] = {
-                field: json.loads(json.dumps(database["section"]))
-            }
-            manifest["sectionRevisions"] = {
-                field: database["section_revision"]
-            }
+            manifest["effectiveSections"] = effective_sections
+            manifest["sectionRevisions"] = revisions
             manifest["coreRevision"] = database["core_revision"]
             return manifest
 
@@ -1091,13 +1112,16 @@ def test_run_manager_atomic_section_mutation_preserves_two_instance_updates(monk
     assert errors == []
     statuses = {
         row["row_id"]: row["confirmation_status"]
-        for row in database["section"]["rows"]
+        for row in database["sections"]["supplemental_leave_data"]["rows"]
     }
     assert statuses == {"leave:1": "confirmed", "leave:2": "excluded"}
-    assert database["section"]["summary"]["pending_count"] == 0
-    assert max(result["revision"] for result in results) == database["section_revision"]
+    assert database["sections"]["supplemental_leave_data"]["summary"]["pending_count"] == 0
+    assert database["sections"]["results"] == []
+    assert database["sections"]["results_view_data"] == {}
+    supplemental_revision = database["section_revisions"]["supplemental_leave_data"]
+    assert max(result["revision"] for result in results) == supplemental_revision
     assert next(
-        result for result in results if result["revision"] == database["section_revision"]
+        result for result in results if result["revision"] == supplemental_revision
     )["data"]["summary"]["pending_count"] == 0
 
 

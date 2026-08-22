@@ -1079,6 +1079,7 @@ class FBURunManager:
             current = copy.deepcopy(getattr(run, field_name))
             desired = mutator(current)
             changed_fields = {field_name}
+            replace_sections: set[str] = set()
             if field_name in self.RESULT_INPUT_FIELDS:
                 self._invalidate_results(run)
                 changed_fields.update({
@@ -1088,12 +1089,17 @@ class FBURunManager:
                     "total_bonus",
                     "match_rate",
                 })
+                replace_sections.update({"results", "results_view_data"})
             setattr(run, field_name, desired)
             self.runs[run_id] = run
             self._loaded_sections.setdefault(run_id, set()).update(
                 changed_fields.intersection(FBU_RUN_SECTION_FIELDS)
             )
-            self._save_runs(run_id, changed_fields)
+            self._save_runs(
+                run_id,
+                changed_fields,
+                replace_sections=replace_sections,
+            )
             return {
                 "data": copy.deepcopy(getattr(run, field_name)),
                 "revision": int(
