@@ -309,6 +309,28 @@ def test_save_results_marks_district_manager_fixed_base_path(tmp_path):
     }]
 
 
+def test_export_run_creates_missing_output_directory(tmp_path):
+    manager = FBURunManager(str(tmp_path / "runs"))
+    run = manager.create_run(calc_month="2026-04")
+    employee = EmployeeData(
+        employee_id="zt001",
+        name="员工甲",
+        hourly_rate=20,
+        performance_ratio=0.05,
+        performance_score=95,
+        base_hours=80,
+    )
+    BonusCalculator.calculate(employee)
+    manager.save_results(run.run_id, [employee])
+    output_dir = tmp_path / "missing" / "platform_exports"
+
+    output_path = manager.export_run(run.run_id, str(output_dir))
+
+    assert output_path is not None
+    assert output_dir.is_dir()
+    assert openpyxl.load_workbook(output_path).sheetnames == ["绩效奖金明细", "汇总统计"]
+
+
 def test_save_results_preserves_standard_base_calculation_components(tmp_path):
     manager = FBURunManager(str(tmp_path))
     run = manager.create_run(calc_month="2026-04")

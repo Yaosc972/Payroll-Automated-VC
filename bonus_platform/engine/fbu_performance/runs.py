@@ -1684,7 +1684,9 @@ class FBURunManager:
 
         # 导出
         exporter = FBUPerformanceExporter()
-        output_path = Path(output_dir) / f"FBU绩效核算_{run.calc_month}_{run_id}.xlsx"
+        output_dir_path = Path(output_dir)
+        output_dir_path.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir_path / f"FBU绩效核算_{run.calc_month}_{run_id}.xlsx"
 
         summary = {
             "核算月份": run.calc_month,
