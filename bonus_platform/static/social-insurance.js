@@ -529,7 +529,6 @@
         if (runId) state.batchIndex.set(batchContextKey(context), runId);
       }
       if (!runId) {
-        if (silent && state.run) { renderRun(); return; }
         state.run = null;
         renderRun();
         if (!silent) showToast('该周期尚未生成主体批次，请点击“生成全部主体批次”', 'error');
@@ -1176,9 +1175,11 @@
       }
       return `离职数据时点校验：该提示用于确认离职数据是否覆盖到名单确认日，避免已离职人员被误纳入。${warning}`;
     }).join('；');
-    if (state.run) byId('lastSyncLabel').textContent = isCurrentBatch
-      ? `${state.run.periodStart} 至 ${state.run.periodEnd} · ${formatRunTimestamp(state.run.updatedAt)}`
-      : `上一批次 ${state.run.periodStart} 至 ${state.run.periodEnd}`;
+    byId('lastSyncLabel').textContent = state.run
+      ? (isCurrentBatch
+        ? `${state.run.periodStart} 至 ${state.run.periodEnd} · ${formatRunTimestamp(state.run.updatedAt)}`
+        : `上一批次 ${state.run.periodStart} 至 ${state.run.periodEnd}`)
+      : '本周期尚未生成';
     ensurePreflight();
   }
 

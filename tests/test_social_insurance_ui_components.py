@@ -44,13 +44,14 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=42" in page
-    assert "social-insurance.js?v=41" in page
+    assert "social-insurance.js?v=42" in page
 
 
-def test_silent_initial_refresh_keeps_latest_batch_as_reference_when_new_context_has_no_run():
+def test_silent_refresh_clears_a_batch_from_the_previous_selection():
     script = _read("social-insurance.js")
 
-    assert "if (silent && state.run) { renderRun(); return; }" in script
+    assert "if (silent && state.run)" not in script
+    assert "本周期尚未生成" in script
 
 
 def test_run_update_time_is_rendered_in_shanghai_business_time():
