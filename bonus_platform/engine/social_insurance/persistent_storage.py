@@ -129,8 +129,10 @@ def list_json(namespace: str) -> list[dict[str, Any]]:
             latest[pathname] = blob
     for pathname in sorted(latest):
         blob = latest[pathname]
-        version = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
-        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname), version=version))
+        # Blob list metadata can briefly lag an overwrite.  Always use a new
+        # cache-busting marker here so a second function instance reads the
+        # current object body even when the listed uploadedAt is still stale.
+        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
         if content is None:
             continue
         try:
@@ -202,8 +204,10 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
         relative = pathname[len(prefix) :]
         if not relative or relative.endswith("/") or relative == RUN_MANIFEST:
             continue
-        version = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
-        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname), version=version))
+        # The list response can expose the previous uploadedAt immediately
+        # after an overwrite.  A per-read marker prevents that stale metadata
+        # from reusing an older cached object body in another function.
+        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
         if content is None:
             continue
         target = run_dir / relative
@@ -232,8 +236,7 @@ def list_persisted_runs() -> list[dict[str, Any]]:
             latest[pathname] = blob
     rows: list[dict[str, Any]] = []
     for pathname, blob in latest.items():
-        version = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
-        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname), version=version))
+        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
         if content is None:
             continue
         try:

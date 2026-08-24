@@ -49,10 +49,13 @@ def test_blob_storage_restores_complete_run_on_another_instance(
     monkeypatch.setattr(storage, "blob_put_bytes", put)
     monkeypatch.setattr(storage, "blob_list_prefix", listed)
     get_calls: list[str] = []
+    cached_reads: dict[str, bytes | None] = {}
 
     def get(pathname: str):
         get_calls.append(pathname)
-        return objects.get(pathname.split("?", 1)[0])
+        if pathname not in cached_reads:
+            cached_reads[pathname] = objects.get(pathname.split("?", 1)[0])
+        return cached_reads[pathname]
 
     monkeypatch.setattr(storage, "blob_get_bytes", get)
 
@@ -80,6 +83,8 @@ def test_blob_storage_restores_complete_run_on_another_instance(
     storage.restore_run_directory(source.name, target)
 
     assert json.loads((target / "run.json").read_text(encoding="utf-8"))["subject"] == "深圳测试主体（已修改）"
+    run_reads = [pathname for pathname in get_calls if "/run.json?" in pathname]
+    assert len(set(run_reads)) >= 2
 
 
 def test_remote_connector_replaces_local_engine_for_subjects_and_sync(
