@@ -48,7 +48,13 @@ def test_blob_storage_restores_complete_run_on_another_instance(
 
     monkeypatch.setattr(storage, "blob_put_bytes", put)
     monkeypatch.setattr(storage, "blob_list_prefix", listed)
-    monkeypatch.setattr(storage, "blob_get_bytes", lambda pathname: objects.get(pathname))
+    get_calls: list[str] = []
+
+    def get(pathname: str):
+        get_calls.append(pathname)
+        return objects.get(pathname.split("?", 1)[0])
+
+    monkeypatch.setattr(storage, "blob_get_bytes", get)
 
     source = tmp_path / "instance-a" / "sir_20260824120000_abcd1234"
     source.mkdir(parents=True)
@@ -64,6 +70,16 @@ def test_blob_storage_restores_complete_run_on_another_instance(
     assert storage.restore_run_directory(source.name, target) is True
     assert json.loads((target / "run.json").read_text(encoding="utf-8"))["subject"] == "深圳测试主体"
     assert (target / "社保增员报盘.xlsx").read_bytes() == b"xlsx-content"
+    assert any("sigma-read-version=" in pathname for pathname in get_calls)
+
+    (source / "run.json").write_text(
+        json.dumps({"id": source.name, "subject": "深圳测试主体（已修改）", "employees": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    storage.persist_run_directory(source.name, source)
+    storage.restore_run_directory(source.name, target)
+
+    assert json.loads((target / "run.json").read_text(encoding="utf-8"))["subject"] == "深圳测试主体（已修改）"
 
 
 def test_remote_connector_replaces_local_engine_for_subjects_and_sync(

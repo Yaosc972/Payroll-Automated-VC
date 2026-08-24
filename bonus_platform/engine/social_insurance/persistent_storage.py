@@ -7,7 +7,9 @@ import mimetypes
 import os
 from pathlib import Path
 import re
+import time
 from typing import Any
+from urllib.parse import urlencode
 
 from ..labor.blob_storage import blob_get_bytes, blob_list_prefix, blob_put_bytes
 
@@ -76,6 +78,12 @@ def _json_path(namespace: str, key: str) -> str:
     return f"{_root()}/{safe_namespace}/{safe_key}.json"
 
 
+def _fresh_blob_target(pathname_or_url: str, *, version: str = "") -> str:
+    separator = "&" if "?" in pathname_or_url else "?"
+    marker = version or str(time.time_ns())
+    return f"{pathname_or_url}{separator}{urlencode({'sigma-read-version': marker})}"
+
+
 def persist_json(namespace: str, key: str, payload: dict[str, Any]) -> None:
     require_persistent_storage()
     if not persistent_storage_enabled():
@@ -91,7 +99,7 @@ def load_json(namespace: str, key: str) -> dict[str, Any] | None:
     require_persistent_storage()
     if not persistent_storage_enabled():
         return None
-    content = blob_get_bytes(_json_path(namespace, key))
+    content = blob_get_bytes(_fresh_blob_target(_json_path(namespace, key)))
     if content is None:
         return None
     try:
@@ -120,7 +128,9 @@ def list_json(namespace: str) -> list[dict[str, Any]]:
         if existing is None or uploaded_at >= existing_at:
             latest[pathname] = blob
     for pathname in sorted(latest):
-        content = blob_get_bytes(str(latest[pathname].get("url") or pathname))
+        blob = latest[pathname]
+        version = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
+        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname), version=version))
         if content is None:
             continue
         try:
@@ -137,7 +147,7 @@ def persist_run_directory(run_id: str, run_dir: Path) -> None:
     if not persistent_storage_enabled():
         return
     manifest_path = f"{_run_prefix(run_id)}/{RUN_MANIFEST}"
-    manifest_content = blob_get_bytes(manifest_path)
+    manifest_content = blob_get_bytes(_fresh_blob_target(manifest_path))
     try:
         previous_manifest = json.loads(manifest_content.decode("utf-8")) if manifest_content else {}
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -192,7 +202,8 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
         relative = pathname[len(prefix) :]
         if not relative or relative.endswith("/") or relative == RUN_MANIFEST:
             continue
-        content = blob_get_bytes(str(blob.get("url") or pathname))
+        version = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
+        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname), version=version))
         if content is None:
             continue
         target = run_dir / relative
@@ -221,7 +232,8 @@ def list_persisted_runs() -> list[dict[str, Any]]:
             latest[pathname] = blob
     rows: list[dict[str, Any]] = []
     for pathname, blob in latest.items():
-        content = blob_get_bytes(str(blob.get("url") or pathname))
+        version = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
+        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname), version=version))
         if content is None:
             continue
         try:
