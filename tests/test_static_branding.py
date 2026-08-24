@@ -895,7 +895,7 @@ def test_admin_console_is_static_permission_management_shell():
     assert "海外报账管理员" in js
     assert "进入模块" in js
     assert "提交核算" in js
-    assert "sigma-admin-console-draft-v3" in js
+    assert "sigma-admin-console-draft-v4" in js
     assert ".admin-user-table" in css
     assert ".admin-user-avatar" in css
     assert ".admin-role-dropdown" in css
