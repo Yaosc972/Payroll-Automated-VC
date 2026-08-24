@@ -91,6 +91,7 @@ FIELD_DEFINITIONS: tuple[dict[str, Any], ...] = tuple(
 FIELD_DEFINITION_BY_NAME = {item["name"]: item for item in FIELD_DEFINITIONS}
 
 _ADMIN_DIVISION_CACHE: dict[str, Any] = {"key": None, "values": [], "choices": []}
+_BUNDLED_ADMIN_DIVISIONS = Path(__file__).with_name("administrative_divisions.json")
 
 
 def public_field_definitions() -> list[dict[str, Any]]:
@@ -175,7 +176,26 @@ def _build_administrative_division_metadata(raw_values: list[Any]) -> tuple[list
     return values, choices
 
 
+def _load_bundled_administrative_divisions() -> list[str]:
+    try:
+        raw_values = json.loads(_BUNDLED_ADMIN_DIVISIONS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise FieldMetadataError("云端政务模板行政区划字典不可用") from exc
+    if not isinstance(raw_values, list):
+        raise FieldMetadataError("云端政务模板行政区划字典格式无效")
+    cache_key = f"bundled:{_BUNDLED_ADMIN_DIVISIONS.stat().st_mtime_ns}"
+    if _ADMIN_DIVISION_CACHE["key"] == cache_key:
+        return list(_ADMIN_DIVISION_CACHE["values"])
+    values, choices = _build_administrative_division_metadata(raw_values)
+    if not values:
+        raise FieldMetadataError("云端政务模板未包含6位区县行政区划字典")
+    _ADMIN_DIVISION_CACHE.update({"key": cache_key, "values": values, "choices": choices})
+    return list(values)
+
+
 def load_administrative_divisions() -> list[str]:
+    if os.environ.get("VERCEL"):
+        return _load_bundled_administrative_divisions()
     engine_dir = _engine_dir()
     template_path = _template_path()
     bridge = Path(__file__).with_name("metadata_bridge.mjs")

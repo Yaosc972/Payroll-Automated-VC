@@ -140,6 +140,27 @@ def test_administrative_division_search_choices_include_parent_city():
     assert "贵港市" in choices[0]["searchText"]
 
 
+def test_vercel_runtime_uses_bundled_administrative_divisions(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_ENGINE_DIR", raising=False)
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_TEMPLATE_FILE", raising=False)
+    monkeypatch.setattr(
+        field_metadata.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("Vercel metadata must not invoke the local Node bridge"),
+    )
+
+    values = field_metadata.load_administrative_divisions()
+    choices = field_metadata.load_administrative_division_choices()
+
+    assert len(values) > 3_000
+    assert "450801.市辖区" in values
+    assert len(choices) == len(values)
+    assert any(item["context"].endswith("贵港市") for item in choices if item["value"] == "450801.市辖区")
+
+
 def test_employee_drawer_uses_metadata_driven_controls():
     static_dir = Path(__file__).resolve().parents[1] / "bonus_platform" / "static"
     script = (static_dir / "social-insurance.js").read_text(encoding="utf-8")
