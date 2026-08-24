@@ -8,7 +8,7 @@ from bonus_platform.engine.fbu_performance.engines.base import CalculationSegmen
 from bonus_platform.engine.fbu_performance.engines.bonus import BonusCalculator
 from bonus_platform.engine.fbu_performance.engines.coefficient import CoefficientCalculator
 from bonus_platform.engine.fbu_performance.engines.salary import SalaryProcessor
-from bonus_platform.engine.fbu_performance.parser import FBUPerformanceParser
+from bonus_platform.engine.fbu_performance.parser import FBUPerformanceParser, classify_job_type
 from bonus_platform.engine.fbu_performance.runs import FBURosterStore, FBURunManager, build_final_result_rows
 
 
@@ -49,6 +49,23 @@ def test_warehouse_coefficient_boundaries():
 def test_functional_coefficient_normalizes_level_text():
     assert CoefficientCalculator.calc_functional_coefficient(" 符合预期+ ") == 1.2
     assert CoefficientCalculator.calc_functional_coefficient("未知等级") == 0
+
+
+def test_job_type_classification_recognizes_functional_departments_across_regions():
+    functional_departments = [
+        "FBU仓储事业部-美洲区-美东区-美东区渠道部",
+        "FBU仓储事业部-美洲区-美东区-美东区行政部",
+        "HRAS人力综合条线-美东区HRBP部",
+        "FBU仓储事业部-渠道管理部-美洲渠道组",
+        "FBU仓储事业部-美洲渠道管理部-加拿大渠道组",
+        "FBU仓储事业部-美洲区-加州区-加州区渠道部",
+    ]
+
+    for department in functional_departments:
+        assert classify_job_type("E001", department) == "functional"
+
+    assert classify_job_type("E001", "FBU仓储事业部-美洲区-美东区-美东区渠道仓") == "warehouse"
+    assert classify_job_type("E001", "FBU仓储事业部-美洲区-新泽西区-新泽西5号仓-行政组") == "warehouse"
 
 
 def test_bonus_formula_uses_performance_base_ratio_and_calculated_coefficient():

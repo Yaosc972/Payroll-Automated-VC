@@ -892,12 +892,8 @@ def _same_month(value: date | None, month_start: date | None) -> bool:
 
 
 DISTRICT_MANAGER_IDS = {"zt15638"}
-FUNCTIONAL_DEPARTMENT_KEYWORDS = (
-    "FBU HRBP Dept.",
-    "渠道管理部",
-    "新泽西区渠道部",
-    "新泽西区行政部",
-)
+FUNCTIONAL_DEPARTMENT_KEYWORDS = ("FBU HRBP Dept.",)
+FUNCTIONAL_DEPARTMENT_SUFFIXES = ("渠道管理部", "渠道部", "行政部", "HRBP部")
 DEFAULT_COEFFICIENT_POSITION_KEYWORDS = (
     "Management Trainee",
 )
@@ -912,7 +908,16 @@ def classify_job_type(employee_id: str, department: str) -> str:
     normalized_id = str(employee_id or "").strip().lower()
     if normalized_id in DISTRICT_MANAGER_IDS:
         return "district_manager"
-    if any(keyword in (department or "") for keyword in FUNCTIONAL_DEPARTMENT_KEYWORDS):
+    department_levels = [
+        level.strip()
+        for level in str(department or "").split("-")
+        if level and level.strip()
+    ]
+    if any(
+        any(keyword in level for keyword in FUNCTIONAL_DEPARTMENT_KEYWORDS)
+        or level.endswith(FUNCTIONAL_DEPARTMENT_SUFFIXES)
+        for level in department_levels
+    ):
         return "functional"
     return "warehouse"
 
