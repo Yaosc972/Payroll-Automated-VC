@@ -10,6 +10,14 @@ import secrets
 from typing import Any
 
 from ... import config
+from .persistent_storage import (
+    SocialInsuranceStorageError,
+    load_json,
+    persist_json,
+    persistent_storage_enabled,
+    require_persistent_storage,
+    serverless_runtime,
+)
 from .rule_catalog import RULE_VERSION
 from .runs import RunValidationError, list_runs, load_run
 
@@ -75,6 +83,26 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         pass
 
 
+def _persist_snapshot(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        require_persistent_storage()
+        persist_json("snapshots", path.stem, payload)
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("北森同步快照未能保存到持久化存储") from exc
+
+
+def _restore_snapshot(path: Path) -> None:
+    try:
+        require_persistent_storage()
+        if not persistent_storage_enabled():
+            return
+        payload = load_json("snapshots", path.stem)
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("北森同步快照未能从持久化存储恢复") from exc
+    if payload is not None:
+        _write_json_atomic(path, payload)
+
+
 def capture_reporting_snapshot(
     *,
     records: list[dict[str, Any]],
@@ -113,7 +141,9 @@ def capture_reporting_snapshot(
             if key not in {"rawApiResponse", "records", "employees"}
         },
     }
-    _write_json_atomic(_snapshot_path(context), payload)
+    path = _snapshot_path(context)
+    _write_json_atomic(path, payload)
+    _persist_snapshot(path, payload)
     return {"capturedAt": normalized_captured_at, "recordCount": len(records)}
 
 
@@ -131,6 +161,13 @@ def load_reporting_snapshot(
         subject=subject,
     )
     path = _snapshot_path(context)
+    if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
+        _restore_snapshot(path)
+    else:
+        try:
+            require_persistent_storage()
+        except SocialInsuranceStorageError as exc:
+            raise RunValidationError(str(exc)) from exc
     if not path.exists():
         return None
     try:

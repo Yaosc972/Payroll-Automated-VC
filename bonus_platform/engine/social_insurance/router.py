@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 import os
+import secrets
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,12 @@ from fastapi.responses import FileResponse
 
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
 from . import field_metadata
-from .adapter import cached_beisen_contract_subjects, list_beisen_contract_subjects, sync_beisen_candidates
+from .adapter import (
+    cached_beisen_contract_subjects,
+    connector_status,
+    list_beisen_contract_subjects,
+    sync_beisen_candidates,
+)
 from .baseline import (
     capture_monthly_baseline,
     ensure_monthly_baseline_confirmation_date,
@@ -32,7 +38,9 @@ from .prefetch import (
     prefetch_scheduler_status,
     queue_contract_subject_refresh,
     queue_reporting_snapshot_refresh,
+    refresh_latest_reporting_snapshot,
 )
+from .persistent_storage import storage_status
 from .rule_catalog import public_rule_catalog
 from .runs import (
     RunNotFoundError,
@@ -85,7 +93,24 @@ def get_config(request: Request) -> dict[str, Any]:
         "confirmationDate": date.today().isoformat(),
         "defaultSubject": "深圳市前海云途物流有限公司",
         "rpa": rpa_status(),
+        "runtime": {
+            "storage": storage_status(),
+            "connector": connector_status(),
+            "scheduler": "vercel-cron" if os.environ.get("VERCEL") else "local-development",
+        },
     }
+
+
+@router.get("/cron/refresh")
+def refresh_reporting_snapshot_from_cron(request: Request) -> dict[str, Any]:
+    expected = os.environ.get("CRON_SECRET", "").strip()
+    supplied = request.headers.get("authorization", "")
+    if not expected or not secrets.compare_digest(supplied, f"Bearer {expected}"):
+        raise HTTPException(status_code=401, detail="定时同步授权失败")
+    try:
+        return refresh_latest_reporting_snapshot()
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
 
 
 @router.get("/metadata")

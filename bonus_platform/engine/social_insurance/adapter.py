@@ -12,9 +12,16 @@ import threading
 import time
 from typing import Any
 
+import httpx
 from openpyxl import load_workbook
 
 from ... import config
+from .persistent_storage import (
+    SocialInsuranceStorageError,
+    load_json,
+    persist_json,
+    persistent_storage_enabled,
+)
 from .rule_catalog import RULE_VERSION
 from .runs import RunValidationError, TEMPLATE_FIELDS
 
@@ -27,6 +34,61 @@ _BEISEN_QUERY_LOCK = threading.Lock()
 _SUBJECT_CACHE_LOCK = threading.Lock()
 _SUBJECT_CACHE: dict[tuple[str, str, str], tuple[float, list[dict[str, Any]]]] = {}
 _SUBJECT_CACHE_GENERATION: dict[tuple[str, str, str], int] = {}
+
+
+def _connector_url() -> str:
+    return os.environ.get("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", "").strip().rstrip("/")
+
+
+def _connector_token() -> str:
+    return os.environ.get("SIGMA_SOCIAL_INSURANCE_CONNECTOR_TOKEN", "").strip()
+
+
+def connector_status() -> dict[str, Any]:
+    remote_url = _connector_url()
+    if remote_url:
+        ready = bool(_connector_token()) and (not os.environ.get("VERCEL") or remote_url.startswith("https://"))
+        return {"mode": "remote", "configured": True, "ready": ready}
+    engine_ready = (_engine_dir() / "lib" / "beisen-client.mjs").is_file()
+    return {
+        "mode": "local-development" if engine_ready else "not-configured",
+        "configured": engine_ready,
+        "ready": engine_ready and not bool(os.environ.get("VERCEL")),
+    }
+
+
+def _connector_cache_namespace() -> str:
+    return _connector_url() or str(_engine_dir())
+
+
+def _connector_call(operation: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+    base_url = _connector_url()
+    if not base_url:
+        raise RunValidationError("北森远程连接器未配置")
+    if os.environ.get("VERCEL") and not base_url.startswith("https://"):
+        raise RunValidationError("云端北森连接器必须使用 HTTPS")
+    token = _connector_token()
+    if not token:
+        raise RunValidationError("北森远程连接器授权未配置")
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(
+                f"{base_url}/{operation.lstrip('/')}",
+                headers={
+                    "authorization": f"Bearer {token}",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+        response.raise_for_status()
+        result = response.json()
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise RunValidationError("北森连接器响应超时，请稍后重试") from exc
+    except (httpx.HTTPStatusError, httpx.RemoteProtocolError, json.JSONDecodeError) as exc:
+        raise RunValidationError("北森连接器调用失败，请检查云端授权与运行状态") from exc
+    if not isinstance(result, dict):
+        raise RunValidationError("北森连接器返回格式无效")
+    return result
 
 
 def _subject_cache_root() -> Path:
@@ -67,10 +129,13 @@ def _cached_contract_subjects(key: tuple[str, str, str]) -> list[dict[str, Any]]
             _SUBJECT_CACHE.pop(key, None)
         path = _subject_cache_path(key)
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            if persistent_storage_enabled():
+                payload = load_json("subject-cache", path.stem) or {}
+            else:
+                payload = json.loads(path.read_text(encoding="utf-8"))
             remaining = float(payload.get("expiresAt") or 0) - time.time()
             subjects = payload.get("subjects")
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, SocialInsuranceStorageError):
             return None
         if remaining <= 0 or not isinstance(subjects, list):
             try:
@@ -105,6 +170,15 @@ def _cache_contract_subjects(key: tuple[str, str, str], subjects: list[dict[str,
         except OSError:
             pass
         temporary.replace(path)
+        if persistent_storage_enabled():
+            try:
+                persist_json(
+                    "subject-cache",
+                    path.stem,
+                    {"expiresAt": time.time() + SUBJECT_CACHE_SECONDS, "subjects": safe_subjects},
+                )
+            except SocialInsuranceStorageError as exc:
+                raise RunValidationError("合同主体缓存未能保存到持久化存储") from exc
 
 
 def _subject_cache_generation(key: tuple[str, str, str]) -> int:
@@ -128,7 +202,7 @@ def cached_beisen_contract_subjects(
     fixture = _fixture_payload()
     if fixture is not None:
         return _subject_options_from_records(fixture[0])
-    cache_key = (f"{_engine_dir()}::{RULE_VERSION}", start.isoformat(), end.isoformat())
+    cache_key = (f"{_connector_cache_namespace()}::{RULE_VERSION}", start.isoformat(), end.isoformat())
     return _cached_contract_subjects(cache_key)
 
 
@@ -215,11 +289,14 @@ def list_beisen_contract_subjects(
     fixture = _fixture_payload()
     if fixture is not None:
         return _subject_options_from_records(fixture[0])
+    if os.environ.get("VERCEL") and not _connector_url():
+        raise RunValidationError("云端北森同步必须配置远程连接器")
 
     engine_dir = _engine_dir()
-    if not (engine_dir / "lib" / "beisen-client.mjs").exists():
+    remote_connector = bool(_connector_url())
+    if not remote_connector and not (engine_dir / "lib" / "beisen-client.mjs").exists():
         raise RunValidationError("已验证的北森社保规则引擎未配置")
-    cache_key = (f"{engine_dir}::{RULE_VERSION}", start.isoformat(), end.isoformat())
+    cache_key = (f"{_connector_cache_namespace()}::{RULE_VERSION}", start.isoformat(), end.isoformat())
     initial_cache_generation = _subject_cache_generation(cache_key)
     if not force_refresh:
         cached = _cached_contract_subjects(cache_key)
@@ -237,32 +314,46 @@ def list_beisen_contract_subjects(
             cached = _cached_contract_subjects(cache_key)
             if cached is not None:
                 return cached
-        try:
-            completed = subprocess.run(
-                [
-                    _node_binary(),
-                    str(bridge),
-                    str(engine_dir),
-                    modified_start,
-                    modified_stop,
-                    start.isoformat(),
-                    end.isoformat(),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=180,
-                env={**os.environ, "NODE_TLS_REJECT_UNAUTHORIZED": "1"},
+        if remote_connector:
+            result = _connector_call(
+                "subjects",
+                {
+                    "periodStart": start.isoformat(),
+                    "periodEnd": end.isoformat(),
+                    "modifiedStart": modified_start,
+                    "modifiedStop": modified_stop,
+                    "ruleVersion": RULE_VERSION,
+                },
+                timeout=180.0,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise RunValidationError("北森合同主体加载超时，请稍后重试") from exc
-    if completed.returncode != 0:
-        raise RunValidationError("北森合同主体加载失败，请检查连接器授权")
-    try:
-        last_line = next(line for line in reversed(completed.stdout.splitlines()) if line.strip())
-        raw_subjects = json.loads(last_line).get("subjects")
-    except (StopIteration, AttributeError, json.JSONDecodeError) as exc:
-        raise RunValidationError("北森合同主体返回格式无效") from exc
+            raw_subjects = result.get("subjects")
+        else:
+            try:
+                completed = subprocess.run(
+                    [
+                        _node_binary(),
+                        str(bridge),
+                        str(engine_dir),
+                        modified_start,
+                        modified_stop,
+                        start.isoformat(),
+                        end.isoformat(),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                    env={**os.environ, "NODE_TLS_REJECT_UNAUTHORIZED": "1"},
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RunValidationError("北森合同主体加载超时，请稍后重试") from exc
+            if completed.returncode != 0:
+                raise RunValidationError("北森合同主体加载失败，请检查连接器授权")
+            try:
+                last_line = next(line for line in reversed(completed.stdout.splitlines()) if line.strip())
+                raw_subjects = json.loads(last_line).get("subjects")
+            except (StopIteration, AttributeError, json.JSONDecodeError) as exc:
+                raise RunValidationError("北森合同主体返回格式无效") from exc
     if not isinstance(raw_subjects, list):
         raise RunValidationError("北森合同主体返回格式无效")
 
@@ -387,7 +478,44 @@ def sync_beisen_candidates(
     fixture = _fixture_payload()
     if fixture is not None:
         return fixture
+    if os.environ.get("VERCEL") and not _connector_url():
+        raise RunValidationError("云端北森同步必须配置远程连接器")
 
+    try:
+        parsed_period_end = datetime.strptime(period_end, "%Y-%m-%d").date()
+        parsed_confirmation_date = datetime.strptime(confirmation_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError) as exc:
+        raise RunValidationError("名单确认日必须为 YYYY-MM-DD") from exc
+    if parsed_confirmation_date < parsed_period_end:
+        raise RunValidationError("名单确认日不能早于增员周期结束日")
+    if _connector_url():
+        result = _connector_call(
+            "sync",
+            {
+                "periodStart": period_start,
+                "periodEnd": period_end,
+                "confirmationDate": confirmation_date,
+                "subject": subject,
+                "ruleVersion": RULE_VERSION,
+            },
+            timeout=280.0,
+        )
+        records = result.get("records")
+        if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+            raise RunValidationError("北森连接器返回的候选人员格式无效")
+        source_summary = result.get("sourceSummary")
+        if not isinstance(source_summary, dict):
+            source_summary = {}
+        return records, {
+            "provider": "beisen-remote-connector",
+            **{
+                key: value
+                for key, value in source_summary.items()
+                if key not in {"rawApiResponse", "records", "employees"}
+            },
+            "rawApiResponseSaved": False,
+            "governmentSiteAccessed": False,
+        }
     engine_dir = _engine_dir()
     entrypoint = engine_dir / "mvp.mjs"
     if not entrypoint.exists():
@@ -397,14 +525,6 @@ def sync_beisen_candidates(
         output_dir.chmod(0o700)
     except OSError:
         pass
-
-    try:
-        parsed_period_end = datetime.strptime(period_end, "%Y-%m-%d").date()
-        parsed_confirmation_date = datetime.strptime(confirmation_date, "%Y-%m-%d").date()
-    except (TypeError, ValueError) as exc:
-        raise RunValidationError("名单确认日必须为 YYYY-MM-DD") from exc
-    if parsed_confirmation_date < parsed_period_end:
-        raise RunValidationError("名单确认日不能早于增员周期结束日")
     modified_start = (datetime.fromisoformat(period_start) - timedelta(days=90)).date().isoformat()
     modified_stop = (datetime.now() + timedelta(days=1)).date().isoformat()
     cutoff = f"{parsed_confirmation_date.isoformat()}T23:59:59+08:00"

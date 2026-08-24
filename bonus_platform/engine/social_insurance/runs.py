@@ -12,6 +12,15 @@ from typing import Any
 from ... import config
 from .coverage import build_coverage_tasks, coverage_summary, processing_plan
 from .field_metadata import FieldMetadataError, validate_report_field_value
+from .persistent_storage import (
+    SocialInsuranceStorageError,
+    list_persisted_runs,
+    persist_run_directory,
+    persistent_storage_enabled,
+    require_persistent_storage,
+    restore_run_directory,
+    serverless_runtime,
+)
 from .rule_catalog import RULE_VERSION
 from .template_schemas import hydrate_employee_template_reports, validate_template_updates
 
@@ -135,6 +144,29 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _require_storage() -> None:
+    try:
+        require_persistent_storage()
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError(str(exc)) from exc
+
+
+def _persist_run(run_id: str) -> None:
+    _require_storage()
+    try:
+        persist_run_directory(run_id, get_run_dir(run_id))
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("社保报盘批次未能保存到持久化存储") from exc
+
+
+def _restore_run(run_id: str) -> bool:
+    _require_storage()
+    try:
+        return restore_run_directory(run_id, get_run_dir(run_id))
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("社保报盘批次未能从持久化存储恢复") from exc
 
 
 def _parse_iso_date(value: str, label: str) -> date:
@@ -389,11 +421,16 @@ def create_run(
     run["summary"] = _summarize(employees)
     run["processingPlan"] = processing_plan(employees)
     _write_json_atomic(_run_path(run_id), run)
+    _persist_run(run_id)
     return run
 
 
 def load_run(run_id: str) -> dict[str, Any]:
     path = _run_path(run_id)
+    if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
+        _restore_run(run_id)
+    else:
+        _require_storage()
     if not path.exists():
         raise RunNotFoundError("社保报盘批次不存在")
     try:
@@ -425,7 +462,9 @@ def save_run(run: dict[str, Any]) -> dict[str, Any]:
     run["summary"] = _summarize(run.get("employees") or [])
     run["processingPlan"] = processing_plan(run.get("employees") or [])
     run["updatedAt"] = current_timestamp()
-    _write_json_atomic(_run_path(str(run.get("id") or "")), run)
+    run_id = str(run.get("id") or "")
+    _write_json_atomic(_run_path(run_id), run)
+    _persist_run(run_id)
     return run
 
 
@@ -438,11 +477,22 @@ def list_runs(
     subject: str = "",
 ) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
-    for path in _runs_root().glob("sir_*/run.json"):
+    _require_storage()
+    if persistent_storage_enabled():
         try:
-            run = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+            stored_runs = list_persisted_runs()
+        except SocialInsuranceStorageError as exc:
+            raise RunValidationError("社保报盘批次列表暂时不可读取") from exc
+    else:
+        stored_runs = []
+        for path in _runs_root().glob("sir_*/run.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                stored_runs.append(payload)
+    for run in stored_runs:
         if period_start and str(run.get("periodStart") or "") != period_start:
             continue
         if period_end and str(run.get("periodEnd") or "") != period_end:

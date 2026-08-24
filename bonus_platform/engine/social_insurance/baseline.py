@@ -10,6 +10,15 @@ import secrets
 from typing import Any
 
 from ... import config
+from .persistent_storage import (
+    SocialInsuranceStorageError,
+    list_json,
+    load_json,
+    persist_json,
+    persistent_storage_enabled,
+    require_persistent_storage,
+    serverless_runtime,
+)
 from .runs import RunValidationError
 
 
@@ -61,6 +70,26 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         pass
 
 
+def _persist_baseline(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        require_persistent_storage()
+        persist_json("baselines", path.stem, payload)
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("月度名单基线未能保存到持久化存储") from exc
+
+
+def _restore_baseline(path: Path) -> None:
+    try:
+        require_persistent_storage()
+        if not persistent_storage_enabled():
+            return
+        payload = load_json("baselines", path.stem)
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("月度名单基线未能从持久化存储恢复") from exc
+    if payload is not None:
+        _write_json_atomic(path, payload)
+
+
 def capture_monthly_baseline(
     *,
     records: list[dict[str, Any]],
@@ -72,12 +101,12 @@ def capture_monthly_baseline(
 ) -> dict[str, Any]:
     """首次同步时固化候选名单；同周期后续同步不会覆盖原始基线。"""
     path = _baseline_path(period_start=period_start, period_end=period_end, subject=subject)
-    if path.exists():
-        existing = load_monthly_baseline(
-            period_start=period_start,
-            period_end=period_end,
-            subject=subject,
-        )
+    existing = load_monthly_baseline(
+        period_start=period_start,
+        period_end=period_end,
+        subject=subject,
+    )
+    if existing is not None:
         return {
             "capturedAt": existing.get("capturedAt"),
             "recordCount": len(existing.get("records") or []),
@@ -105,6 +134,7 @@ def capture_monthly_baseline(
         "records": deepcopy(records),
     }
     _write_json_atomic(path, payload)
+    _persist_baseline(path, payload)
     return {
         "capturedAt": now,
         "recordCount": len(records),
@@ -115,6 +145,13 @@ def capture_monthly_baseline(
 
 def load_monthly_baseline(*, period_start: str, period_end: str, subject: str) -> dict[str, Any] | None:
     path = _baseline_path(period_start=period_start, period_end=period_end, subject=subject)
+    if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
+        _restore_baseline(path)
+    else:
+        try:
+            require_persistent_storage()
+        except SocialInsuranceStorageError as exc:
+            raise RunValidationError(str(exc)) from exc
     if not path.exists():
         return None
     try:
@@ -136,15 +173,25 @@ def list_monthly_baseline_subjects(*, period_start: str, period_end: str) -> lis
     """Return every subject already protected by the period baseline."""
     start, end = _validated_period(period_start, period_end)
     subjects: set[str] = set()
-    for path in _baseline_root().glob(f"{start}_{end}_*.json"):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RunValidationError("月度名单基线不可读取") from exc
+    try:
+        require_persistent_storage()
+        stored = list_json("baselines") if persistent_storage_enabled() else []
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("月度名单基线不可读取") from exc
+    if not persistent_storage_enabled():
+        stored = []
+        for path in _baseline_root().glob(f"{start}_{end}_*.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RunValidationError("月度名单基线不可读取") from exc
+            if isinstance(payload, dict):
+                stored.append(payload)
+    for payload in stored:
         if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
             raise RunValidationError("月度名单基线格式无效")
         if payload.get("periodStart") != start or payload.get("periodEnd") != end:
-            raise RunValidationError("月度名单基线与当前周期不一致")
+            continue
         subject = str(payload.get("subject") or "").strip()
         if not subject:
             raise RunValidationError("月度名单基线合同主体不能为空")
@@ -184,6 +231,7 @@ def ensure_monthly_baseline_confirmation_date(
     payload["confirmationDate"] = confirmation.isoformat()
     path = _baseline_path(period_start=period_start, period_end=period_end, subject=subject)
     _write_json_atomic(path, payload)
+    _persist_baseline(path, payload)
     return payload
 
 
