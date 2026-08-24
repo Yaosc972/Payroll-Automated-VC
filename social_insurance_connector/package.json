@@ -1,0 +1,11 @@
+{
+  "name": "sigma-social-insurance-connector-uat",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
