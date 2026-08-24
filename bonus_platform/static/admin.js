@@ -1,11 +1,11 @@
 (() => {
-  const storageKey = "sigma-admin-console-draft-v3";
+  const storageKey = "sigma-admin-console-draft-v4";
   const defaults = {
     selectedUserId: "payrollAdmin",
     users: [
       { id: "payrollAdmin", name: "Payroll Admin", roleIds: ["admin"], status: "启用" },
       { id: "recruitmentAdminUser", name: "Recruitment Admin", roleIds: ["recruitmentAdmin"], status: "启用" },
-      { id: "cnPayrollAdminUser", name: "CN Payroll Admin", roleIds: ["employeeAdmin", "domesticAdmin"], status: "启用" },
+      { id: "cnPayrollAdminUser", name: "CN Payroll Admin", roleIds: ["employeeAdmin", "domesticAdmin", "socialInsuranceAdmin"], status: "启用" },
       { id: "fbuAdminUser", name: "FBU Bonus Admin", roleIds: ["fbuAdmin"], status: "启用" },
       { id: "overseasAdminUser", name: "Overseas Audit Admin", roleIds: ["overseasAdmin"], status: "启用" },
     ],
@@ -16,6 +16,7 @@
       { id: "domesticAdmin", name: "国内外包工核算管理员", moduleId: "domestic" },
       { id: "fbuAdmin", name: "FBU美洲绩效核算管理员", moduleId: "fbu" },
       { id: "overseasAdmin", name: "海外报账管理员", moduleId: "overseas" },
+      { id: "socialInsuranceAdmin", name: "社保报盘管理员", moduleId: "social_insurance" },
     ],
     modules: [
       { id: "recruitment", name: "全球招聘奖金核算", owner: "招聘奖金核算管理员", enabled: true },
@@ -23,6 +24,7 @@
       { id: "domestic", name: "中国区外包工薪酬核算", owner: "国内外包工核算管理员", enabled: true },
       { id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true },
       { id: "overseas", name: "海外劳务报账核对", owner: "海外报账管理员", enabled: true },
+      { id: "social_insurance", name: "社保报盘工作台", owner: "社保报盘管理员", enabled: true },
     ],
     features: [
       { id: "enter", name: "进入模块", role: "对应模块管理员", enabled: true },
@@ -40,14 +42,16 @@
       domesticAdmin: { enter: true, import: true, calculate: true, review: true, export: false, archive: false, audit: false },
       fbuAdmin: { enter: true, import: true, calculate: true, review: true, export: false, archive: false, audit: false },
       overseasAdmin: { enter: true, import: true, calculate: true, review: true, export: false, archive: false, audit: false },
+      socialInsuranceAdmin: { enter: true, import: true, calculate: true, review: true, export: true, archive: false, audit: false },
     },
     moduleAccess: {
-      admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true },
-      recruitmentAdmin: { recruitment: true, employee: false, domestic: false, fbu: false, overseas: false },
-      employeeAdmin: { recruitment: false, employee: true, domestic: false, fbu: false, overseas: false },
-      domesticAdmin: { recruitment: false, employee: false, domestic: true, fbu: false, overseas: false },
-      fbuAdmin: { recruitment: false, employee: false, domestic: false, fbu: true, overseas: false },
-      overseasAdmin: { recruitment: false, employee: false, domestic: false, fbu: false, overseas: true },
+      admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true, social_insurance: true },
+      recruitmentAdmin: { recruitment: true, employee: false, domestic: false, fbu: false, overseas: false, social_insurance: false },
+      employeeAdmin: { recruitment: false, employee: true, domestic: false, fbu: false, overseas: false, social_insurance: false },
+      domesticAdmin: { recruitment: false, employee: false, domestic: true, fbu: false, overseas: false, social_insurance: false },
+      fbuAdmin: { recruitment: false, employee: false, domestic: false, fbu: true, overseas: false, social_insurance: false },
+      overseasAdmin: { recruitment: false, employee: false, domestic: false, fbu: false, overseas: true, social_insurance: false },
+      socialInsuranceAdmin: { recruitment: false, employee: false, domestic: false, fbu: false, overseas: false, social_insurance: true },
     },
     config: {
       defaultPeriod: "2026-05",

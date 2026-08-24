@@ -54,6 +54,10 @@
             <span>海外劳务报账核对</span>
             <b>Invoice Audit</b>
           </a>
+          <a href="social-insurance.html" data-module-id="social_insurance">
+            <span>社保报盘工作台</span>
+            <b>Social Insurance</b>
+          </a>
         </nav>
 
       </aside>
@@ -61,7 +65,8 @@
       <main class="dashboard-main">
         <p class="sr-only">
           Welcome to HRAS Global Payroll Workbench · HRAS 全球薪酬核算工作台 · Recruitment Bonus Reconciliation · 招聘奖金核算 ·
-          Domestic Labor Vendor Payroll · 劳务工薪酬核算 · Overseas Labor Invoice Audit · 海外劳务工报账核对
+          Domestic Labor Vendor Payroll · 劳务工薪酬核算 · Overseas Labor Invoice Audit · 海外劳务工报账核对 ·
+          Social Insurance Reporting · 社保报盘工作台
         </p>
         <header class="dashboard-topbar">
           <div>
@@ -71,7 +76,7 @@
           <label class="dashboard-search">
             <span>搜索/快捷入口</span>
             <input id="dashboardSearch" type="search" placeholder="搜索模块、批次、员工或异常" />
-            <small id="searchHint">可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块</small>
+            <small id="searchHint">可输入 FBU、招聘、正式工、外包、海外、社保，按 Enter 快速进入模块</small>
           </label>
           <details class="dashboard-user" id="dashboardUserMenu">
             <summary>
@@ -95,7 +100,7 @@
           <div>
             <p class="portal-kicker">Enterprise Payroll Intelligence</p>
             <h1>欢迎回来，<span class="welcome-title-brand">HRAS</span> 全球薪酬核算工作台已准备就绪</h1>
-            <span>统一管理招聘激励、正式工薪酬、外包工薪酬、FBU绩效奖金与海外劳务报账核对。</span>
+            <span>统一管理招聘激励、正式工薪酬、外包工薪酬、FBU绩效奖金、海外劳务报账与社保报盘。</span>
             <div class="workday-focus" aria-label="今日关注">
               <b>今日关注</b>
               <span>异常复核</span>
@@ -198,6 +203,23 @@
               </dl>
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
+
+            <a class="saas-module-card social-insurance-module pilot-card" href="social-insurance.html" data-module-id="social_insurance">
+              <div class="module-card-top">
+                <span class="module-status uat">MVP · 已验证主链路</span>
+                <span class="module-version">V0.1-MVP</span>
+              </div>
+              <div class="module-copy">
+                <p>Social Insurance Reporting</p>
+                <h2>社保报盘工作台</h2>
+                <span>北森一键同步、增员规则校验、网页人工确认、政务模板映射与报盘导出。</span>
+              </div>
+              <dl>
+                <div><dt>当前范围</dt><dd>深圳增员</dd></div>
+                <div><dt>政务提报</dt><dd>RPA待接入</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
           </div>
         </section>
 
@@ -236,7 +258,7 @@
           users: [
             { id: 'payrollAdmin', name: 'Payroll Admin', roleIds: ['admin'] },
             { id: 'recruitmentAdminUser', name: 'Recruitment Admin', roleIds: ['recruitmentAdmin'] },
-            { id: 'cnPayrollAdminUser', name: 'CN Payroll Admin', roleIds: ['employeeAdmin', 'domesticAdmin'] },
+            { id: 'cnPayrollAdminUser', name: 'CN Payroll Admin', roleIds: ['employeeAdmin', 'domesticAdmin', 'socialInsuranceAdmin'] },
             { id: 'fbuAdminUser', name: 'FBU Bonus Admin', roleIds: ['fbuAdmin'] },
             { id: 'overseasAdminUser', name: 'Overseas Audit Admin', roleIds: ['overseasAdmin'] },
           ],
@@ -247,6 +269,7 @@
             { id: 'domesticAdmin', name: '国内外包工核算管理员', moduleId: 'domestic' },
             { id: 'fbuAdmin', name: 'FBU美洲绩效核算管理员', moduleId: 'fbu' },
             { id: 'overseasAdmin', name: '海外报账管理员', moduleId: 'overseas' },
+            { id: 'socialInsuranceAdmin', name: '社保报盘管理员', moduleId: 'social_insurance' },
           ],
           modules: [
             { id: 'recruitment', name: '全球招聘奖金核算', href: 'recruitment.html', enabled: true },
@@ -254,6 +277,7 @@
             { id: 'domestic', name: '中国区外包工薪酬核算', href: 'domestic-labor.html', enabled: true },
             { id: 'fbu', name: 'FBU美洲绩效奖金核算', href: 'fbu-performance.html', enabled: true },
             { id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true },
+            { id: 'social_insurance', name: '社保报盘工作台', href: 'social-insurance.html', enabled: true },
           ],
           rolePermissions: {
             admin: { enter: true },
@@ -262,14 +286,16 @@
             domesticAdmin: { enter: true },
             fbuAdmin: { enter: true },
             overseasAdmin: { enter: true },
+            socialInsuranceAdmin: { enter: true },
           },
           moduleAccess: {
-            admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true },
+            admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true, social_insurance: true },
             recruitmentAdmin: { recruitment: true },
             employeeAdmin: { employee: true },
             domesticAdmin: { domestic: true },
             fbuAdmin: { fbu: true },
             overseasAdmin: { overseas: true },
+            socialInsuranceAdmin: { social_insurance: true },
           },
         };
         const readPermissionState = () => {
@@ -399,13 +425,14 @@
           { keys: ['正式', '正式工', 'employee', '餐补'], moduleId: 'employee', href: 'china-employee-payroll.html', label: '中国区正式工薪酬核算' },
           { keys: ['外包', '国内', '薪酬', '劳务工'], moduleId: 'domestic', href: 'domestic-labor.html', label: '中国区外包工薪酬核算' },
           { keys: ['海外', '报账', 'pdf', 'invoice'], moduleId: 'overseas', href: 'overseas-labor.html', label: '海外劳务报账核对' },
+          { keys: ['社保', '增员', '报盘', 'social'], moduleId: 'social_insurance', href: 'social-insurance.html', label: '社保报盘工作台' },
           { keys: ['后台', '管理', '权限', 'admin'], href: 'admin.html', label: '后台管理', adminOnly: true },
         ];
         search?.addEventListener('input', () => {
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
           const blocked = (match?.moduleId && !canEnterModule(match.moduleId)) || (match?.adminOnly && !isSystemAdmin);
-          hint.textContent = match ? (blocked ? `无权限进入：${match.label}` : `按 Enter 进入：${match.label}`) : '可输入 FBU、招聘、正式工、外包、海外，按 Enter 快速进入模块';
+          hint.textContent = match ? (blocked ? `无权限进入：${match.label}` : `按 Enter 进入：${match.label}`) : '可输入 FBU、招聘、正式工、外包、海外、社保，按 Enter 快速进入模块';
         });
         search?.addEventListener('keydown', (event) => {
           if (event.key !== 'Enter') return;

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>社保报盘工具 · HRAS 全球薪酬核算工作台</title>
+    <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
+  <link rel="stylesheet" href="social-insurance.css?v=42" />
+  </head>
+  <body>
+    <div class="si-shell">
+      <header class="si-topbar">
+        <div class="topbar-inner">
+          <a class="brand" href="/" aria-label="返回 HRAS 全球薪酬核算工作台">
+            <img class="brand-logo" src="assets/workbench-logo-2026.png" alt="" />
+            <span><b>HRAS 全球薪酬核算工作台</b><small>HRAS GLOBAL PAYROLL WORKBENCH</small></span>
+          </a>
+          <div class="module-heading">
+            <div><h1>社保报盘工具</h1><p>全国增员 · 北森数据源</p></div>
+          </div>
+          <div class="topbar-meta">
+            <a class="rules-entry" href="social-insurance-rules.html">点击查看业务规则</a>
+            <a class="nav-entry" href="/">返回模块导航</a>
+          </div>
+        </div>
+      </header>
+
+      <main class="si-main">
+        <section class="batch-console" aria-labelledby="batchTitle">
+          <div class="section-title">
+            <div class="title-lockup"><h2 id="batchTitle">新建批次</h2><span>选择周期与主体，系统自动同步并生成名单</span></div>
+            <div class="section-title-meta">
+              <div class="batch-stamp"><span>当前结果</span><strong id="lastSyncLabel">尚未同步</strong></div>
+            </div>
+          </div>
+          <div class="batch-form">
+            <div class="period-field form-field">
+              <span class="control-label">增员周期</span>
+              <div class="date-picker-wrap">
+                <button class="date-picker-trigger" id="periodRangeTrigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="periodCalendar">
+                  <span id="periodRangeValue">选择开始和结束日期</span><i class="calendar-trigger-icon" aria-hidden="true"></i>
+                </button>
+                <input id="periodStart" type="hidden" />
+                <input id="periodEnd" type="hidden" />
+                <div class="calendar-popover range-calendar-popover" id="periodCalendar" role="dialog" aria-label="选择增员周期" hidden>
+                  <header class="calendar-popover-header">
+                    <button id="periodCalendarPrevious" type="button" aria-label="上一个月">‹</button>
+                    <strong id="periodCalendarHeading">选择增员周期</strong>
+                    <button id="periodCalendarNext" type="button" aria-label="下一个月">›</button>
+                  </header>
+                  <div class="calendar-months" id="periodCalendarMonths"></div>
+                  <footer class="calendar-popover-footer"><span id="periodCalendarHint">先选择开始日期，再选择结束日期</span></footer>
+                </div>
+              </div>
+            </div>
+            <div class="confirmation-date-field form-field">
+              <span class="control-label">名单确认日</span>
+              <div class="date-picker-wrap">
+                <button class="date-picker-trigger" id="confirmationDateTrigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="confirmationCalendar">
+                  <span id="confirmationDateValue">选择确认日期</span><i class="calendar-trigger-icon" aria-hidden="true"></i>
+                </button>
+                <input id="confirmationDate" type="hidden" />
+                <div class="calendar-popover single-calendar-popover" id="confirmationCalendar" role="dialog" aria-label="选择名单确认日" hidden>
+                  <header class="calendar-popover-header">
+                    <button id="confirmationCalendarPrevious" type="button" aria-label="上一个月">‹</button>
+                    <strong id="confirmationCalendarHeading">选择名单确认日</strong>
+                    <button id="confirmationCalendarNext" type="button" aria-label="下一个月">›</button>
+                  </header>
+                  <div class="calendar-months" id="confirmationCalendarMonths"></div>
+                  <footer class="calendar-popover-footer"><span>按该日已知离职情况判断</span><button id="confirmationTodayButton" type="button">今天</button></footer>
+                </div>
+              </div>
+              <small>按此日已知离职情况判断</small>
+            </div>
+            <div class="subject-field form-field">
+              <label class="control-label" for="subject">合同主体</label>
+              <div class="subject-picker" id="subjectPicker">
+                <button class="subject-picker-trigger" id="subjectTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="subjectPickerPanel" disabled>
+                  <span class="subject-trigger-copy"><b id="subjectTriggerLabel">正在加载北森合同主体…</b><small id="subjectTriggerCount"></small></span>
+                  <i class="subject-trigger-chevron" aria-hidden="true"></i>
+                </button>
+                <select id="subject" hidden disabled><option value="">正在加载北森合同主体…</option></select>
+                <div class="subject-picker-panel" id="subjectPickerPanel" hidden>
+                  <label class="subject-search-control"><span aria-hidden="true">⌕</span><input id="subjectSearch" type="search" placeholder="搜索主体名称" autocomplete="off" /></label>
+                  <div class="subject-picker-options" id="subjectPickerOptions" role="listbox" aria-label="合同主体"></div>
+                  <footer><span id="subjectPickerSummary">0 个主体</span><small>选择后直接加载对应批次</small></footer>
+                </div>
+              </div>
+              <span class="subject-source-line"><small id="subjectSourceState">系统自动加载主体及本周期候选人数</small><button id="retrySubjectsButton" type="button" hidden>重新获取主体</button></span>
+            </div>
+            <button class="primary-button" id="syncButton" type="button" disabled>
+              <span class="button-batch-icon" aria-hidden="true"></span>
+              <span><b>生成全部主体批次</b><small>一次同步并按主体拆分</small></span>
+            </button>
+          </div>
+          <div class="notice-stack">
+            <p class="period-context-notice" id="periodContextNotice" hidden></p>
+            <p class="source-warning" id="sourceWarning" hidden></p>
+          </div>
+        </section>
+
+        <section class="batch-overview" aria-label="批次进度与统计">
+          <nav class="stage-rail" aria-label="社保报盘流程">
+            <div class="stage active" data-stage="sync"><b>01</b><span><strong>生成本批名单</strong><small>自动同步与字段映射</small></span></div>
+            <div class="stage" data-stage="review"><b>02</b><span><strong>人工确认</strong><small>异常与字段修改</small></span></div>
+            <div class="stage" data-stage="template"><b>03</b><span><strong>导入政务模板</strong><small>保留原始结构</small></span></div>
+            <div class="stage" data-stage="generate"><b>04</b><span><strong>生成报盘</strong><small>自动映射增员信息</small></span></div>
+            <div class="stage locked" data-stage="final"><b>05</b><span><strong>人工最终确认</strong><small>政务系统提交前</small></span></div>
+          </nav>
+
+          <section class="metrics" aria-label="批次统计">
+            <article><span>候选人数</span><strong id="metricTotal">—</strong></article>
+            <article class="success"><span>规则可报盘</span><strong id="metricReady">—</strong></article>
+            <article class="warning"><span>待人工确认</span><strong id="metricReview">—</strong></article>
+            <article><span>本批次纳入</span><strong id="metricIncluded">—</strong></article>
+            <article class="muted"><span>本批排除</span><strong id="metricExcluded">—</strong></article>
+          </section>
+        </section>
+
+        <div class="workspace-grid">
+          <section class="review-panel" aria-labelledby="reviewTitle">
+            <header class="panel-header">
+              <div><h2 id="reviewTitle">增员人员审核</h2></div>
+              <div class="batch-status" id="batchStatus"><i></i><span>等待同步</span></div>
+            </header>
+            <div class="review-toolbar">
+              <div class="review-query-tools">
+                <label class="search-control"><span aria-hidden="true">⌕</span><input id="employeeSearch" type="search" placeholder="搜索姓名、工号或证件号后四位" /></label>
+                <div class="filter-tabs" role="group" aria-label="状态筛选">
+                  <button class="active" type="button" data-filter="all">全部 <b id="filterAll">0</b></button>
+                  <button type="button" data-filter="needs_review">待确认 <b id="filterReview">0</b></button>
+                  <button type="button" data-filter="ready">可报盘 <b id="filterReady">0</b></button>
+                  <button type="button" data-filter="excluded">已排除 <b id="filterExcluded">0</b></button>
+                </div>
+              </div>
+              <div class="review-view-tools">
+                <div class="review-view-switch" role="group" aria-label="人员字段视图">
+                  <button class="active" type="button" data-view="business">业务审核</button>
+                  <button type="button" data-view="template">模板字段</button>
+                  <button type="button" data-view="source">北森源数据</button>
+                </div>
+                <select id="templateRouteSelect" class="template-route-select" aria-label="选择政务模板办理路径" hidden></select>
+              </div>
+              <div class="review-actions">
+                <button class="secondary-button supplement-button" id="openSupplementButton" type="button" disabled>＋ 补充增员</button>
+                <button class="secondary-button" id="auditExportButton" type="button" disabled>导出审核清单</button>
+                <button class="secondary-button" id="missingExportButton" type="button" disabled>导出待补资料</button>
+                <button class="secondary-button confirm-batch-button" id="confirmBatchButton" type="button" disabled>确认本批人员</button>
+              </div>
+            </div>
+            <div class="table-sticky-header" id="tableStickyHeader" aria-hidden="true"></div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr id="employeeTableHeader"></tr>
+                </thead>
+                <tbody id="employeeTableBody">
+                  <tr class="empty-row"><td colspan="12"><div><b>等待生成增员名单</b><span>选择周期和合同主体后点击“生成本批名单”</span></div></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="table-scroll-dock-slot" id="tableScrollDockSlot">
+              <div class="table-scroll-dock" id="tableScrollDock" aria-label="横向浏览人员字段">
+                <button id="tableScrollLeft" type="button" aria-label="向左浏览字段" title="向左浏览字段">‹</button>
+                <input id="tableScrollRange" type="range" min="0" max="0" value="0" step="1" aria-label="拖动横向浏览人员字段" />
+                <button id="tableScrollRight" type="button" aria-label="向右浏览字段" title="向右浏览字段">›</button>
+              </div>
+            </div>
+            <footer class="table-footer"><span id="tableCount">当前 0 人</span><span>通讯地址历史差异仅提示，不阻断报盘</span></footer>
+          </section>
+
+          <aside class="operation-column" aria-label="当前批次后续操作">
+            <header class="operation-heading"><div><h2>输出与办理</h2></div><span>按城市自动分流</span></header>
+            <section class="route-plan" id="routePlan" aria-label="办理去向">
+              <header><b>本批办理去向</b><span id="routePlanCount">等待同步</span></header>
+              <div id="routePlanList"><p>同步后显示模板批次与线下办理任务</p></div>
+            </section>
+            <section class="action-card preflight-card" id="preflightCard">
+              <header><b id="preflightState">等待名单</b></header>
+              <h3>生成前校验</h3>
+              <div class="preflight-list" id="preflightList"><p>生成名单后，按办理路径检查必填资料和模板版本。</p></div>
+            </section>
+            <section class="action-card" id="templateCard">
+              <header><b id="templateState">待人员确认</b></header>
+              <h3>确认模板版本</h3>
+              <p>优先匹配线下模板库；主体不匹配或版本变化时，再手动导入。</p>
+              <select id="templateUploadRoute" class="template-upload-route" aria-label="选择上传模板对应路径" disabled></select>
+              <div class="template-match-state" id="templateMatchState">等待名单与办理路径</div>
+              <input id="templateInput" type="file" accept=".xls,.xlsx" hidden />
+              <div class="template-dropzone" id="templateDropzone" role="button" tabindex="-1" aria-disabled="true" aria-describedby="templateDropzoneHint">
+                <span class="dropzone-icon" aria-hidden="true">⇧</span>
+                <span class="dropzone-copy"><b>拖入或选择政务模板</b><small id="templateDropzoneHint">仅支持 .xls / .xlsx，最大 20MB</small></span>
+                <span class="dropzone-action">浏览</span>
+              </div>
+              <div class="file-state" id="templateFileState"><span>未导入</span><small>支持 .xls / .xlsx，最大 20MB</small></div>
+            </section>
+
+            <section class="action-card" id="reportCard">
+              <header><b id="reportState">等待模板</b></header>
+              <h3>生成政务报盘包</h3>
+              <p>按办理路径生成报盘文件，并附审核清单、待补资料和生成说明。</p>
+              <button class="primary-button compact" id="generateButton" type="button" disabled>生成政务报盘包</button>
+              <a class="download-button hidden" id="downloadButton" href="#" download>下载政务报盘包 <span>↓</span></a>
+            </section>
+
+            <section class="rpa-card" aria-labelledby="rpaTitle">
+              <header><span class="rpa-indicator"></span><b>自动化待接入</b></header>
+              <h3 id="rpaTitle">政务系统自动操作</h3>
+              <p>尚未取得操作录屏，登录、验证码、U盾、上传与提交均未验证。</p>
+              <ul><li class="done">北森同步与字段映射</li><li class="done">网页人工确认与报盘包生成</li><li>政务模板自动下载</li><li>自动上传与提报</li></ul>
+              <button type="button" disabled>启动政务自动化</button>
+              <small>最终提交必须由业务人员人工确认</small>
+            </section>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+    <aside class="edit-drawer" id="editDrawer" aria-labelledby="drawerTitle" aria-hidden="true">
+      <header>
+        <div><h2 id="drawerTitle">人员信息确认</h2><span id="drawerIdentity"></span></div>
+        <button id="closeDrawerButton" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="drawer-alert" id="drawerAlert" hidden></div>
+      <form id="employeeForm">
+        <section class="coverage-review-section">
+          <div class="form-section-title"><b>社保 / 医保办理判断</b><span>来自线下源表状态与城市模板路由</span></div>
+          <div class="coverage-task-summary" id="coverageTaskSummary"></div>
+        </section>
+        <section>
+          <div class="form-section-title"><b>政务模板字段</b><span>缺失必填项优先显示，并标注字段来源</span></div>
+          <div class="drawer-route-tabs" id="drawerRouteTabs" role="tablist" aria-label="人员办理路径"></div>
+          <div class="field-grid" id="reportFields"></div>
+        </section>
+        <section>
+          <div class="form-section-title"><b>人工处理</b><span>异常人员需明确确认</span></div>
+          <div class="decision-grid">
+            <label><span>本批次处理</span><select id="employeeDecision"><option value="include">纳入报盘</option><option value="exclude">排除本批</option></select></label>
+            <label class="confirm-check"><input id="employeeConfirmed" type="checkbox" /><span><b>已人工核实</b><small>确认异常原因和修改值准确</small></span></label>
+          </div>
+          <label class="note-field"><span>确认备注</span><textarea id="employeeNote" rows="3" maxlength="500" placeholder="记录确认依据；正常人员可留空"></textarea></label>
+        </section>
+        <footer><button class="secondary-button" id="cancelEditButton" type="button">取消</button><button class="primary-button compact" type="submit">保存本次修改</button></footer>
+      </form>
+    </aside>
+
+    <div class="supplement-backdrop" id="supplementBackdrop" hidden></div>
+    <section class="supplement-dialog" id="supplementDialog" role="dialog" aria-modal="true" aria-labelledby="supplementTitle" hidden>
+      <header>
+        <div><h2 id="supplementTitle">补充增员</h2><span>仅用于上期漏报或延迟增员</span></div>
+        <button id="closeSupplementButton" type="button" aria-label="关闭补充增员">×</button>
+      </header>
+      <form id="supplementForm">
+        <div class="supplement-search-block">
+          <div class="supplement-pool-state" id="supplementPoolState" data-state="empty" role="status" aria-live="polite">
+            <i aria-hidden="true"></i>
+            <span><b>历史候选按需加载</b><small id="supplementPoolDetail">仅在查找上期漏报或延迟增员人员时使用</small></span>
+          </div>
+          <label for="supplementQuery">从北森查找人员</label>
+          <div class="supplement-search-row">
+            <input id="supplementQuery" type="search" autocomplete="off" placeholder="输入姓名或证件号后四位" minlength="2" maxlength="50" />
+            <button class="secondary-button" id="searchSupplementButton" type="button">查找</button>
+          </div>
+          <small>只查找当前批次开始日前一年内、同合同主体且符合当前参保规则的人员。</small>
+        </div>
+        <div class="supplement-results" id="supplementResults" aria-live="polite" aria-busy="false">
+          <div class="supplement-empty"><b>尚未查找</b><span>人员资料直接从北森带出，不需要重复手填。</span></div>
+        </div>
+        <div class="supplement-fields">
+          <label><span>补充原因</span><select id="supplementReason"><option value="prior_period_omission">上期漏报</option><option value="delayed_enrollment">延迟增员</option></select></label>
+          <label class="wide"><span>情况说明</span><textarea id="supplementNote" rows="3" maxlength="500" placeholder="例如：上期名单确认后发现遗漏，业务已复核"></textarea><small>至少填写4个字，加入后仍需逐项人工确认报盘字段。</small></label>
+        </div>
+        <footer><button class="secondary-button" id="cancelSupplementButton" type="button">取消</button><button class="primary-button compact" id="addSupplementButton" type="submit" disabled>加入当前批次</button></footer>
+      </form>
+    </section>
+
+    <div class="toast-stack" id="toastRegion" aria-live="polite" aria-atomic="false" aria-label="操作通知"></div>
+  <script src="social-insurance.js?v=41"></script>
+  </body>
+</html>

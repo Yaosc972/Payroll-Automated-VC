@@ -125,7 +125,7 @@
   const fallbackUsers = [
     { id: "payrollAdmin", name: "Payroll Admin", roleIds: ["admin"] },
     { id: "recruitmentAdminUser", name: "Recruitment Admin", roleIds: ["recruitmentAdmin"] },
-    { id: "cnPayrollAdminUser", name: "CN Payroll Admin", roleIds: ["employeeAdmin", "domesticAdmin"] },
+    { id: "cnPayrollAdminUser", name: "CN Payroll Admin", roleIds: ["employeeAdmin", "domesticAdmin", "socialInsuranceAdmin"] },
     { id: "fbuAdminUser", name: "FBU Bonus Admin", roleIds: ["fbuAdmin"] },
     { id: "overseasAdminUser", name: "Overseas Audit Admin", roleIds: ["overseasAdmin"] },
   ];
@@ -136,6 +136,7 @@
     domesticAdmin: "国内外包工核算管理员",
     fbuAdmin: "FBU美洲绩效核算管理员",
     overseasAdmin: "海外报账管理员",
+    socialInsuranceAdmin: "社保报盘管理员",
   };
   const userList = document.getElementById("loginUserList");
   const status = document.getElementById("loginStatus");

@@ -243,6 +243,11 @@ from .engine.fbu_performance.persistent_storage import (
     fbu_persistent_storage_enabled,
 )
 from .engine.fbu_performance.upload_jobs import FBUUploadJobStore
+from .engine.social_insurance.router import router as social_insurance_router
+from .engine.social_insurance.prefetch import (
+    start_social_insurance_prefetch_scheduler,
+    stop_social_insurance_prefetch_scheduler,
+)
 
 
 SUPPORTING_PDF_RE = re.compile(r"(?:supplement|support|time\s*card|timecard|detail|backup|appendix)", re.IGNORECASE)
@@ -885,10 +890,18 @@ async def lifespan(app: FastAPI):
     if not _is_vercel_runtime():
         _recover_stuck_labor_runs()
     _cleanup_expired_labor_data()
-    yield
+    social_insurance_scheduler_allowed = not _is_vercel_runtime()
+    if social_insurance_scheduler_allowed:
+        start_social_insurance_prefetch_scheduler()
+    try:
+        yield
+    finally:
+        if social_insurance_scheduler_allowed:
+            stop_social_insurance_prefetch_scheduler()
 
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
+app.include_router(social_insurance_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

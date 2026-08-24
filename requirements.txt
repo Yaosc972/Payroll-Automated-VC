@@ -11,3 +11,4 @@ psycopg[binary]>=3.2,<4
 msoffcrypto-tool
 xlrd
 Pillow
+APScheduler==3.11.3

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>社保报盘业务规则 · HRAS 全球薪酬核算工作台</title>
+    <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
+    <link rel="stylesheet" href="social-insurance-rules.css?v=4" />
+  </head>
+  <body>
+    <div class="rules-shell">
+      <header class="rules-topbar">
+        <a class="brand" href="/" aria-label="返回 HRAS 全球薪酬核算工作台">
+          <img class="brand-logo" src="assets/workbench-logo-2026.png" alt="" />
+          <span><b>HRAS 全球薪酬核算工作台</b><small>HRAS GLOBAL PAYROLL WORKBENCH</small></span>
+        </a>
+        <div class="module-heading">
+          <span class="module-mark" aria-hidden="true">规</span>
+          <div><h1>社保报盘业务规则</h1><p>全国增员 · 业务鉴定依据</p></div>
+        </div>
+        <nav class="topbar-actions" aria-label="页面导航">
+          <a class="primary-link" href="social-insurance.html">返回报盘工作台</a>
+          <a href="/">模块导航</a>
+        </nav>
+      </header>
+
+      <main class="rules-main">
+        <section class="rules-hero" aria-labelledby="rulesTitle">
+          <div>
+            <h2 id="rulesTitle">业务同事看得懂、可以逐条确认的报盘口径</h2>
+            <p id="rulesSummary">正在读取当前规则…</p>
+          </div>
+          <dl class="version-panel">
+            <div><dt>当前版本</dt><dd id="rulesVersion">—</dd></div>
+            <div><dt>更新日期</dt><dd id="rulesUpdatedAt">—</dd></div>
+            <div><dt>适用范围</dt><dd id="rulesScope">—</dd></div>
+            <div><dt>规则状态</dt><dd id="rulesStatus">—</dd></div>
+          </dl>
+        </section>
+
+        <section class="rules-toolbar" aria-label="规则查找">
+          <label class="search-box"><span aria-hidden="true">⌕</span><input id="ruleSearch" type="search" placeholder="搜索规则，例如：学历、离职、医疗档次" /></label>
+          <div class="view-status"><i></i><span>规则与当前报盘工具使用同一版本清单</span></div>
+        </section>
+
+        <div class="rules-layout">
+          <aside class="rules-index" aria-label="规则目录">
+            <p>规则目录</p>
+            <nav id="rulesIndex">
+              <a href="#candidate-list"><span>01</span>人员怎么进入本期名单</a>
+              <a href="#departure-check"><span>02</span>离职记录怎么处理</a>
+              <a href="#field-generation"><span>03</span>报盘字段怎么生成</a>
+              <a href="#manual-review"><span>04</span>必须人工确认的情况</a>
+              <a href="#report-output"><span>05</span>报盘生成与最终提交</a>
+            </nav>
+            <div class="review-note">
+              <b>鉴定建议</b>
+              <p>业务确认时，重点看黄色的“需人工”规则和每条规则右侧的处理结果。</p>
+            </div>
+          </aside>
+
+          <div class="rules-content">
+            <section class="rule-flow" aria-label="名单处理顺序">
+              <div><b>1</b><span><strong>筛选候选</strong><small>周期、深圳、雇佣关系</small></span></div>
+              <i>→</i>
+              <div><b>2</b><span><strong>确定主体</strong><small>当前有效合同</small></span></div>
+              <i>→</i>
+              <div><b>3</b><span><strong>生成字段</strong><small>北森值与模板字典</small></span></div>
+              <i>→</i>
+              <div><b>4</b><span><strong>人工把关</strong><small>异常、模板、最终提交</small></span></div>
+            </section>
+
+            <div id="rulesSections" class="rules-sections" aria-live="polite">
+              <div class="loading-card"><span></span><b>正在读取业务规则</b><small>只展示规则说明，不包含人员信息</small></div>
+            </div>
+
+            <section class="history-panel" aria-labelledby="historyTitle">
+              <header><div><h2 id="historyTitle">版本记录</h2></div><span>规则变化在这里留痕</span></header>
+              <div id="rulesHistory" class="history-list"></div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+    <div class="toast" id="rulesToast" role="alert" hidden></div>
+    <script src="social-insurance-rules.js?v=2"></script>
+  </body>
+</html>
