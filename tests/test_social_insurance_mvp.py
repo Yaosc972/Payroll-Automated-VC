@@ -1370,6 +1370,45 @@ def test_supplement_pool_is_reused_for_repeated_sync_of_the_same_period(
     assert [item["name"] for item in second_search.json()["candidates"]] == ["缓存候选员工乙"]
 
 
+def test_supplement_search_filters_subject_before_deduplicating_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-SUBJECT-POOL-001", name="当前名单员工")
+    current["source"]["subject"] = "测试主体甲"
+    wrong_subject = _record(identity="TEST-ID-SUBJECT-POOL-002", name="跨主体候选员工")
+    wrong_subject["entryDate"] = "2026-06-03"
+    wrong_subject["source"]["subject"] = "测试主体乙"
+    matching_subject = deepcopy(wrong_subject)
+    matching_subject["source"]["subject"] = "测试主体甲"
+    run = create_run(
+        records=[current],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-18",
+        subject="测试主体甲",
+        source="beisen",
+    )
+    capture_reporting_snapshot(
+        records=[wrong_subject, matching_subject],
+        source_summary={"dataMode": "supplement-candidate-pool-v1"},
+        period_start="2025-07-14",
+        period_end="2026-07-15",
+        confirmation_date="2026-08-18",
+        subject="*",
+    )
+
+    response = TestClient(app).post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "跨主体候选"},
+    )
+
+    assert response.status_code == 200
+    assert [item["subject"] for item in response.json()["candidates"]] == ["测试主体甲"]
+
+
 def test_supplement_search_reuses_published_pool_across_serverless_instances(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

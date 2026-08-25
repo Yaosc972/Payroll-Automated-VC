@@ -311,15 +311,15 @@ def search_beisen_supplement_candidates(run: dict[str, Any], query: str) -> list
             identity = _identity(record)
             report = record.get("report") if isinstance(record.get("report"), dict) else {}
             name = str(report.get("姓名") or "").strip()
+            record_subject = _record_subject(record)
+            if active_subject and record_subject != active_subject:
+                continue
             if not identity or identity in existing or identity in seen:
                 continue
             if normalized_query not in name.lower() and normalized_query not in identity[-4:].lower():
                 continue
             seen.add(identity)
             source = record.get("source") if isinstance(record.get("source"), dict) else {}
-            record_subject = _record_subject(record)
-            if active_subject and record_subject != active_subject:
-                continue
             candidate_id = _candidate_id(record)
             _RESOLUTION_CACHE[(run_id, candidate_id)] = (
                 time.monotonic() + SEARCH_CACHE_SECONDS,
