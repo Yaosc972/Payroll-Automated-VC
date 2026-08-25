@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import date
 import os
 import secrets
@@ -20,11 +19,8 @@ from .adapter import (
     sync_beisen_candidates,
 )
 from .baseline import (
-    capture_monthly_baseline,
-    ensure_monthly_baseline_confirmation_date,
     list_monthly_baseline_subjects,
     load_monthly_baseline,
-    merge_monthly_baseline,
 )
 from .field_metadata import FieldMetadataError
 from .report import build_audit_export, generate_report, resolve_download, rpa_status, store_template
@@ -36,9 +32,14 @@ from .report_package import (
 )
 from .prefetch import (
     prefetch_scheduler_status,
-    queue_contract_subject_refresh,
     queue_reporting_snapshot_refresh,
     refresh_latest_reporting_snapshot,
+)
+from .publication import (
+    load_latest_reporting_release,
+    load_reporting_release,
+    materialize_all_subject_runs,
+    materialize_subject_run,
 )
 from .persistent_storage import storage_status
 from .rule_catalog import public_rule_catalog
@@ -47,7 +48,6 @@ from .runs import (
     RunValidationError,
     add_supplement_employee,
     confirm_run,
-    create_run,
     default_reporting_window,
     list_runs,
     load_run,
@@ -101,6 +101,114 @@ def get_config(request: Request) -> dict[str, Any]:
             "scheduler": "vercel-cron" if os.environ.get("VERCEL") else "local-development",
         },
     }
+
+
+def _published_subject(release: dict[str, Any], subject: str) -> dict[str, Any] | None:
+    normalized = str(subject or "").strip()
+    return next(
+        (
+            item
+            for item in release.get("subjects") or []
+            if isinstance(item, dict) and str(item.get("value") or "").strip() == normalized
+        ),
+        None,
+    )
+
+
+def _public_published_subjects(release: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            key: item.get(key)
+            for key in ("value", "label", "code", "candidateCount", "runId")
+        }
+        for item in release.get("subjects") or []
+        if isinstance(item, dict)
+    ]
+
+
+def _published_run_bundle(release: dict[str, Any], subject: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    published_subject = _published_subject(release, subject)
+    if published_subject is None:
+        raise RunValidationError("所选合同主体不属于该成功集成版本")
+    run = load_run(str(published_subject.get("runId") or ""))
+    expected = (
+        str(release.get("periodStart") or ""),
+        str(release.get("periodEnd") or ""),
+        str(release.get("confirmationDate") or ""),
+        str(published_subject.get("value") or "").strip(),
+    )
+    actual = (
+        str(run.get("periodStart") or ""),
+        str(run.get("periodEnd") or ""),
+        str(run.get("confirmationDate") or ""),
+        str(run.get("subject") or "").strip(),
+    )
+    if actual != expected:
+        raise RunValidationError("成功集成版本引用的主体批次不匹配")
+    preflight = published_subject.get("preflight")
+    if (
+        not isinstance(preflight, dict)
+        or preflight.get("runId") != run.get("id")
+        or str(published_subject.get("runUpdatedAt") or "") != str(run.get("updatedAt") or "")
+    ):
+        preflight = build_export_preflight(run)
+    return run, preflight
+
+
+@router.get("/bootstrap")
+def get_bootstrap(request: Request) -> dict[str, Any]:
+    """Return the latest fully published integration without scans or live Beisen calls."""
+    _require_access(request)
+    try:
+        release = load_latest_reporting_release()
+        if release is None:
+            start, end = default_reporting_window()
+            return {
+                "state": "empty",
+                "label": "尚无成功发布的北森集成版本",
+                "config": {
+                    "periodStart": start,
+                    "periodEnd": end,
+                    "confirmationDate": date.today().isoformat(),
+                },
+                "release": None,
+                "subjects": [],
+                "selectedSubject": "",
+                "run": None,
+                "preflight": None,
+            }
+        selected_subject = str(release.get("selectedSubject") or "").strip()
+        if _published_subject(release, selected_subject) is None:
+            selected_subject = str((release.get("subjects") or [{}])[0].get("value") or "").strip()
+        run, preflight = _published_run_bundle(release, selected_subject)
+        return {
+            "state": "ready",
+            "config": {
+                "periodStart": release["periodStart"],
+                "periodEnd": release["periodEnd"],
+                "confirmationDate": release["confirmationDate"],
+            },
+            "release": {
+                key: release.get(key)
+                for key in (
+                    "id",
+                    "state",
+                    "ruleVersion",
+                    "periodStart",
+                    "periodEnd",
+                    "confirmationDate",
+                    "publishedAt",
+                    "batchCount",
+                    "source",
+                )
+            },
+            "subjects": _public_published_subjects(release),
+            "selectedSubject": selected_subject,
+            "run": run,
+            "preflight": preflight,
+        }
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
 
 
 @router.get("/cron/refresh")
@@ -208,6 +316,20 @@ def get_contract_subjects(
     _require_access(request)
     try:
         if not refresh and not os.environ.get("SIGMA_SOCIAL_INSURANCE_SYNC_FIXTURE"):
+            release = load_latest_reporting_release(
+                period_start=period_start,
+                period_end=period_end,
+            )
+            if release is not None:
+                return {
+                    "subjects": _public_published_subjects(release),
+                    "periodStart": period_start,
+                    "periodEnd": period_end,
+                    "confirmationDate": release["confirmationDate"],
+                    "source": "reporting-release",
+                    "releaseId": release["id"],
+                    "publishedAt": release["publishedAt"],
+                }
             cached_subjects = cached_beisen_contract_subjects(
                 period_start=period_start,
                 period_end=period_end,
@@ -219,31 +341,12 @@ def get_contract_subjects(
                     period_end=period_end,
                     source="beisen-contract-cache",
                 )
-            options: dict[str, dict[str, Any]] = {}
-            for run in list_runs(50):
-                value = str(run.get("subject") or "").strip()
-                if not value or value in options:
-                    continue
-                same_period = (
-                    str(run.get("periodStart") or "") == period_start
-                    and str(run.get("periodEnd") or "") == period_end
-                )
-                summary = run.get("summary") if isinstance(run.get("summary"), dict) else {}
-                options[value] = {
-                    "value": value,
-                    "label": value,
-                    "code": "",
-                    "candidateCount": int(summary.get("total") or 0) if same_period else 0,
-                }
-            if options:
-                refresh_queued = queue_contract_subject_refresh(period_start, period_end)
-                return _contract_subject_payload(
-                    subjects=list(options.values()),
-                    period_start=period_start,
-                    period_end=period_end,
-                    source="recent-beisen-runs",
-                    refreshQueued=refresh_queued,
-                )
+            return {
+                "subjects": [],
+                "periodStart": period_start,
+                "periodEnd": period_end,
+                "source": "no-published-release",
+            }
         try:
             subjects = list_beisen_contract_subjects(
                 period_start=period_start,
@@ -283,83 +386,14 @@ def _materialize_subject_run(
     confirmation_date: str,
     subject: str,
 ) -> dict[str, Any]:
-    """Apply the subject baseline and persist one review batch."""
-    source_summary = {**source_summary, "candidateCount": len(records)}
-    monthly_baseline = load_monthly_baseline(
-        period_start=period_start,
-        period_end=period_end,
-        subject=subject,
-    )
-    if (
-        monthly_baseline is not None
-        and not monthly_baseline.get("confirmationDate")
-        and source_summary.get("historicalBaselineSeedUsed")
-    ):
-        monthly_baseline = ensure_monthly_baseline_confirmation_date(
-            period_start=period_start,
-            period_end=period_end,
-            confirmation_date=confirmation_date,
-            subject=subject,
-        )
-    if monthly_baseline is not None:
-        preserve_baseline_decisions = monthly_baseline.get("confirmationDate") == confirmation_date
-        records, merge_summary = merge_monthly_baseline(
-            records,
-            monthly_baseline["records"],
-            preserve_baseline_decisions=preserve_baseline_decisions,
-        )
-        if merge_summary["baselineOnlyCount"] and not preserve_baseline_decisions:
-            warnings = source_summary.setdefault("warnings", [])
-            warnings.append(
-                f"月度名单基线有{merge_summary['baselineOnlyCount']}人未出现在北森当前任职结果中，已保留并转人工确认。"
-            )
-        source_summary["monthlyBaseline"] = {
-            "created": False,
-            "capturedAt": monthly_baseline.get("capturedAt"),
-            "source": monthly_baseline.get("source"),
-            **merge_summary,
-        }
-    elif records:
-        captured = capture_monthly_baseline(
-            records=records,
-            period_start=period_start,
-            period_end=period_end,
-            confirmation_date=confirmation_date,
-            subject=subject,
-            source=(
-                "beisen-api-plus-historical-source"
-                if source_summary.get("historicalBaselineSeedUsed")
-                else "beisen-monthly-snapshot"
-            ),
-        )
-        source_summary["monthlyBaseline"] = {
-            **captured,
-            "baselineCount": captured["recordCount"],
-            "currentCount": len(records),
-            "baselineOnlyCount": 0,
-            "baselineDecisionReuseCount": 0,
-            "mergedCount": len(records),
-        }
-    else:
-        source_summary["monthlyBaseline"] = {
-            "created": False,
-            "recordCount": 0,
-            "baselineCount": 0,
-            "currentCount": 0,
-            "baselineOnlyCount": 0,
-            "baselineDecisionReuseCount": 0,
-            "mergedCount": 0,
-        }
-    run = create_run(
+    return materialize_subject_run(
         records=records,
         period_start=period_start,
         period_end=period_end,
         confirmation_date=confirmation_date,
         subject=subject,
-        source="beisen",
         source_summary=source_summary,
     )
-    return run
 
 
 @router.post("/runs/sync")
@@ -479,66 +513,19 @@ def sync_all_runs(request: Request, payload: dict[str, Any] = Body(...)) -> dict
                 "snapshotAgeSeconds": 0,
                 "snapshotStale": False,
             }
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for record in records:
-            source = record.get("source") if isinstance(record.get("source"), dict) else {}
-            subject = str(source.get("subject") or source.get("subjectCode") or "").strip()
-            if subject:
-                grouped.setdefault(subject, []).append(record)
         cached_subjects = cached_beisen_contract_subjects(
             period_start=period_start,
             period_end=period_end,
         ) or []
-        subject_order = [
-            str(item.get("value") or item.get("label") or "").strip()
-            for item in cached_subjects
-            if isinstance(item, dict)
-        ]
-        subject_order = list(dict.fromkeys(subject for subject in subject_order if subject))
-        subject_order.extend(
-            subject
-            for subject in list_monthly_baseline_subjects(
-                period_start=period_start,
-                period_end=period_end,
-            )
-            if subject not in subject_order
+        return materialize_all_subject_runs(
+            records=records,
+            source_summary=shared_summary,
+            period_start=period_start,
+            period_end=period_end,
+            confirmation_date=confirmation_date,
+            subject_options=cached_subjects,
+            preferred_subject=preferred_subject,
         )
-        subject_order.extend(subject for subject in grouped if subject not in subject_order)
-        if preferred_subject in subject_order:
-            subject_order = [subject for subject in subject_order if subject != preferred_subject] + [preferred_subject]
-        grouped = {subject: grouped.get(subject, []) for subject in subject_order}
-        if not grouped:
-            raise RunValidationError("北森未返回本周期可生成的合同主体批次")
-
-        created_runs: list[dict[str, Any]] = []
-        selected_run: dict[str, Any] | None = None
-        for subject, subject_records in grouped.items():
-            subject_summary = {
-                **deepcopy(shared_summary),
-                "allSubjectBatchCount": len(grouped),
-            }
-            capture_reporting_snapshot(
-                records=subject_records,
-                source_summary=subject_summary,
-                period_start=period_start,
-                period_end=period_end,
-                confirmation_date=confirmation_date,
-                subject=subject,
-            )
-            run = _materialize_subject_run(
-                records=subject_records,
-                source_summary=subject_summary,
-                period_start=period_start,
-                period_end=period_end,
-                confirmation_date=confirmation_date,
-                subject=subject,
-            )
-            created_runs.append(run)
-            if subject == preferred_subject:
-                selected_run = run
-        selected_run = selected_run or created_runs[0]
-        summaries = [{key: value for key, value in run.items() if key != "employees"} for run in created_runs]
-        return {"batchCount": len(created_runs), "runs": summaries, "selectedRun": selected_run}
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
 
@@ -595,6 +582,29 @@ def get_current_run(
             "run": run,
             "preflight": build_export_preflight(run),
             "lookupSource": lookup_source,
+        }
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/releases/{release_id}/runs/current")
+def get_published_run(
+    request: Request,
+    release_id: str,
+    subject: str = Query(),
+) -> dict[str, Any]:
+    """Read the exact batch referenced by one immutable successful release."""
+    _require_access(request)
+    try:
+        release = load_reporting_release(release_id)
+        if release is None:
+            raise RunNotFoundError("成功集成版本不存在")
+        run, preflight = _published_run_bundle(release, subject)
+        return {
+            "run": run,
+            "preflight": preflight,
+            "lookupSource": "reporting-release",
+            "releaseId": release_id,
         }
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc

@@ -12,6 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from .adapter import list_beisen_contract_subjects, sync_beisen_candidates
+from .publication import materialize_all_subject_runs
 from .runs import default_reporting_window, list_runs, load_run
 from .supplements import prewarm_beisen_supplement_pool, supplement_pool_status
 from .sync_snapshot import capture_reporting_snapshot, seed_recent_reporting_snapshots
@@ -117,16 +118,40 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
                 subject=context["subject"],
                 output_dir=Path(temporary),
             )
+        captured = capture_reporting_snapshot(
+            records=records,
+            source_summary=source_summary,
+            period_start=context["periodStart"],
+            period_end=context["periodEnd"],
+            confirmation_date=context["confirmationDate"],
+            subject=context["subject"],
+        )
+        if context["subject"] != "*":
+            return {"state": "ready", **captured}
+        subjects = list_beisen_contract_subjects(
+            period_start=context["periodStart"],
+            period_end=context["periodEnd"],
+            force_refresh=True,
+        )
+        published = materialize_all_subject_runs(
+            records=records,
+            source_summary={
+                **source_summary,
+                "dataMode": "scheduled-beisen-release",
+                "snapshotCapturedAt": captured["capturedAt"],
+                "snapshotAgeSeconds": 0,
+                "snapshotStale": False,
+            },
+            period_start=context["periodStart"],
+            period_end=context["periodEnd"],
+            confirmation_date=context["confirmationDate"],
+            subject_options=subjects,
+        )
         return {
             "state": "ready",
-            **capture_reporting_snapshot(
-                records=records,
-                source_summary=source_summary,
-                period_start=context["periodStart"],
-                period_end=context["periodEnd"],
-                confirmation_date=context["confirmationDate"],
-                subject=context["subject"],
-            ),
+            **captured,
+            "batchCount": published["batchCount"],
+            "releaseId": published["releaseId"],
         }
     except Exception:  # noqa: BLE001 - connector details and employee data must not enter scheduler logs.
         LOGGER.warning("社保本期报盘快照后台更新失败；具体原因仅在受控业务操作中展示")

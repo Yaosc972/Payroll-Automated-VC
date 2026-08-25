@@ -44,7 +44,7 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=43" in page
-    assert "social-insurance.js?v=44" in page
+    assert "social-insurance.js?v=45" in page
 
 
 def test_silent_refresh_clears_a_batch_from_the_previous_selection():
@@ -58,13 +58,14 @@ def test_subject_switch_clears_previous_batch_before_loading_the_new_run():
     script = _read("social-insurance.js")
     loader = script.split("async function loadSelectedSubjectRun", 1)[1].split("function renderMetrics", 1)[0]
     loading_state = "state.runLoading = true;\n    state.run = null;\n    renderRun();\n    byId('lastSyncLabel').textContent = '正在加载主体批次…';"
-    request = "const payload = await api(`${API_ROOT}/runs/current?${params.toString()}`);"
+    request = "const payload = await api(path);"
 
     assert loading_state in loader
     assert loader.index(loading_state) < loader.index(request)
     assert "payload.run" in loader
     assert "payload.preflight" in loader
     assert "`${API_ROOT}/runs?${params.toString()}`" not in loader
+    assert "`${API_ROOT}/releases/${encodeURIComponent(state.release.id)}/runs/current?" in loader
 
 
 def test_subject_counts_distinguish_current_beisen_candidates_from_the_saved_batch():
@@ -87,6 +88,17 @@ def test_subject_switch_uses_an_in_memory_bundle_and_a_loading_skeleton():
     assert "batch-loading-placeholder" in script
     assert ".batch-loading-placeholder" in styles
     assert "batch-loading-shimmer" in styles
+
+
+def test_initial_page_bootstraps_from_the_latest_published_integration_without_polling():
+    script = _read("social-insurance.js")
+    initializer = script.split("async function initialize()", 1)[1].split("initialize();", 1)[0]
+
+    assert "`${API_ROOT}/bootstrap`" in initializer
+    assert "runs?limit=1" not in initializer
+    assert "loadContractSubjects" not in initializer
+    assert "recent-beisen-runs" not in script
+    assert "scheduleContractSubjectCompletion" not in script
 
 
 def test_run_update_time_is_rendered_in_shanghai_business_time():
@@ -383,18 +395,20 @@ def test_period_generation_creates_all_subject_batches_and_subject_switch_loads_
     assert "confirmationDate" in script
 
 
-def test_partial_recent_subjects_are_completed_automatically_without_manual_refresh():
+def test_page_never_polls_partial_recent_subjects():
     script = _read("social-insurance.js")
 
-    assert "scheduleContractSubjectCompletion" in script
+    assert "scheduleContractSubjectCompletion" not in script
+    assert "recent-beisen-runs" not in script
+    assert "后台正在补齐完整主体" not in script
 
 
-def test_initial_subject_selection_prefers_the_latest_run_over_the_legacy_default():
+def test_initial_subject_selection_comes_from_the_atomic_published_release():
     script = _read("social-insurance.js")
 
-    assert "state.run?.subject || config.defaultSubject" in script
-    assert "后台正在补齐完整主体" in script
-    assert "beisen-contract-cache" in script
+    assert "applyContractSubjects(subjects, payload.selectedSubject || '')" in script
+    assert "state.run?.subject || config.defaultSubject" not in script
+    assert "recent.runs?.[0]?.subject" not in script
 
 
 def test_batch_uses_explicit_confirmation_date_for_departure_cutoff():

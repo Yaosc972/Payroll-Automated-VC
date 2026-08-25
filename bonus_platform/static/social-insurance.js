@@ -62,12 +62,12 @@
     administrativeDivisionSet: new Set(),
     supplementCandidate: null,
     batchCache: new Map(),
+    release: null,
   };
   const byId = (id) => document.getElementById(id);
   let comboboxSequence = 0;
   let subjectRequestSequence = 0;
   let subjectLoadTimer = null;
-  let subjectCompletionTimer = null;
   let subjectAbortController = null;
   let supplementPoolStatusTimer = null;
   let runRequestSequence = 0;
@@ -573,8 +573,14 @@
     renderRun();
     byId('lastSyncLabel').textContent = '正在加载主体批次…';
     try {
-      const params = new URLSearchParams(context);
-      const payload = await api(`${API_ROOT}/runs/current?${params.toString()}`);
+      const releaseMatches = state.release
+        && state.release.periodStart === context.periodStart
+        && state.release.periodEnd === context.periodEnd
+        && state.release.confirmationDate === context.confirmationDate;
+      const path = releaseMatches
+        ? `${API_ROOT}/releases/${encodeURIComponent(state.release.id)}/runs/current?${new URLSearchParams({ subject: context.subject }).toString()}`
+        : `${API_ROOT}/runs/current?${new URLSearchParams(context).toString()}`;
+      const payload = await api(path);
       if (requestSequence !== runRequestSequence) return;
       if (!payload.run) {
         applyBatchBundle(null, null, { cache: false });
@@ -1322,55 +1328,13 @@
       option.textContent = `${subject.label}（北森当前${subject.candidateCount || 0}人）`;
       option.dataset.subjectLabel = subject.label;
       option.dataset.candidateCount = String(subject.candidateCount || 0);
+      if (subject.runId) option.dataset.runId = subject.runId;
       if (subject.code) option.dataset.subjectCode = subject.code;
       select.append(option);
     });
     const desired = preferredValue || previousValue || state.run?.subject || '';
     if (subjects.some((subject) => subject.value === desired)) select.value = desired;
     syncSubjectPicker();
-  }
-
-  function scheduleContractSubjectCompletion(preferredValue, requestSequence, attempt = 0) {
-    window.clearTimeout(subjectCompletionTimer);
-    if (attempt >= 40) {
-      byId('subjectSourceState').textContent = '已加载最近同步主体；后台自动补齐暂未完成';
-      byId('retrySubjectsButton').hidden = false;
-      return;
-    }
-    subjectCompletionTimer = window.setTimeout(async () => {
-      if (requestSequence !== subjectRequestSequence || state.operation) return;
-      const periodStart = byId('periodStart').value;
-      const periodEnd = byId('periodEnd').value;
-      if (!periodStart || !periodEnd) return;
-      try {
-        const params = new URLSearchParams({ periodStart, periodEnd });
-        const payload = await api(`${SUBJECTS_ENDPOINT}?${params.toString()}`);
-        if (requestSequence !== subjectRequestSequence) return;
-        const subjects = Array.isArray(payload.subjects) ? payload.subjects : [];
-        if (payload.source === 'recent-beisen-runs') {
-          byId('retrySubjectsButton').hidden = true;
-          byId('subjectSourceState').textContent = `已先加载 ${subjects.length} 个最近同步主体；后台正在补齐完整主体…`;
-          scheduleContractSubjectCompletion(preferredValue, requestSequence, attempt + 1);
-          return;
-        }
-        if (!subjects.length) return;
-        applyContractSubjects(subjects, preferredValue);
-        state.subjectsReady = true;
-        byId('subject').disabled = false;
-        syncSubjectPicker();
-        byId('syncButton').disabled = false;
-        byId('retrySubjectsButton').hidden = true;
-        byId('subjectSourceState').textContent = payload.source === 'beisen-contract-cache'
-          ? `已从后台缓存自动补齐 ${subjects.length} 个主体；不包含员工明细`
-          : `已从北森合同接口加载 ${subjects.length} 个主体；不包含员工明细`;
-        renderRun();
-        loadSelectedSubjectRun({ silent: true });
-      } catch {
-        if (requestSequence === subjectRequestSequence) {
-          scheduleContractSubjectCompletion(preferredValue, requestSequence, attempt + 1);
-        }
-      }
-    }, attempt === 0 ? 1500 : 3000);
   }
 
   async function loadContractSubjects(preferredValue = '', requestSequence = ++subjectRequestSequence, forceRefresh = false) {
@@ -1419,10 +1383,21 @@
       syncSubjectPicker();
       syncButton.disabled = false;
       retry.hidden = true;
-      if (payload.source === 'recent-beisen-runs') {
-        sourceState.textContent = `已先加载 ${subjects.length} 个最近同步主体；后台正在补齐完整主体…`;
-        scheduleContractSubjectCompletion(select.value || preferredValue, requestSequence);
+      if (payload.source === 'reporting-release') {
+        state.release = {
+          id: payload.releaseId,
+          periodStart,
+          periodEnd,
+          confirmationDate: payload.confirmationDate,
+          publishedAt: payload.publishedAt,
+        };
+        if (payload.confirmationDate) {
+          byId('confirmationDate').value = payload.confirmationDate;
+          renderDatePickerValues();
+        }
+        sourceState.textContent = `已读取最近成功集成 · ${formatRunTimestamp(payload.publishedAt)} · ${subjects.length} 个主体`;
       } else {
+        state.release = null;
         sourceState.textContent = payload.source === 'beisen-contract-cache'
           ? `已从后台缓存加载 ${subjects.length} 个主体；不包含员工明细`
           : `已从北森合同接口加载 ${subjects.length} 个主体；不包含员工明细`;
@@ -1453,9 +1428,9 @@
 
   function scheduleContractSubjectLoad(preferredValue = '', delay = 280, forceRefresh = false) {
     window.clearTimeout(subjectLoadTimer);
-    window.clearTimeout(subjectCompletionTimer);
     const requestSequence = ++subjectRequestSequence;
     subjectAbortController?.abort();
+    state.release = null;
     state.subjectsReady = false;
     state.subjectLoading = false;
     const select = byId('subject');
@@ -1994,6 +1969,11 @@
         body: JSON.stringify(selectedBatchContext()),
       });
       state.batchCache.clear();
+      state.release = payload.release || null;
+      if (payload.release?.subjects?.length) {
+        applyContractSubjects(payload.release.subjects, payload.selectedRun?.subject);
+        state.subjectsReady = true;
+      }
       state.run = payload.selectedRun;
       state.filter = 'all'; state.search = ''; byId('employeeSearch').value = '';
       document.querySelectorAll('.filter-tabs button').forEach((node) => node.classList.toggle('active', node.dataset.filter === 'all'));
@@ -2291,18 +2271,43 @@
 
   async function initialize() {
     bindEvents();
+    const metadataPromise = loadFieldMetadata();
     try {
-      const config = await api(`${API_ROOT}/config`);
-      byId('periodStart').value = config.periodStart;
-      byId('periodEnd').value = config.periodEnd;
-      byId('confirmationDate').value = config.confirmationDate;
+      const payload = await api(`${API_ROOT}/bootstrap`);
+      const config = payload.config;
+      byId('periodStart').value = config?.periodStart || '';
+      byId('periodEnd').value = config?.periodEnd || '';
+      byId('confirmationDate').value = config?.confirmationDate || '';
       renderDatePickerValues();
-      const recent = await api(`${API_ROOT}/runs?limit=1`);
-      const fallbackSubject = state.run?.subject || config.defaultSubject;
-      const preferredSubject = recent.runs?.[0]?.subject || fallbackSubject;
-      await Promise.all([loadContractSubjects(preferredSubject), loadFieldMetadata()]);
+      state.release = payload.release || null;
+      const subjects = Array.isArray(payload.subjects) ? payload.subjects : [];
+      applyContractSubjects(subjects, payload.selectedSubject || '');
+      state.subjectsReady = subjects.length > 0;
+      byId('subject').disabled = !state.subjectsReady;
+      byId('syncButton').disabled = !state.subjectsReady;
+      byId('retrySubjectsButton').hidden = state.subjectsReady;
+      if (state.subjectsReady) {
+        applyBatchBundle(payload.run, payload.preflight);
+        byId('subjectSourceState').textContent = `最近成功集成 · ${formatRunTimestamp(payload.release?.publishedAt)} · ${subjects.length} 个主体`;
+      } else {
+        applyBatchBundle(null, null, { cache: false });
+        const select = byId('subject');
+        select.replaceChildren();
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '等待北森定时集成发布';
+        select.append(option);
+        byId('subjectSourceState').textContent = payload.label || '尚无成功发布的北森集成版本';
+        syncSubjectPicker();
+      }
       renderRun();
     } catch (error) { showToast(error.message, 'error'); }
+    try {
+      await metadataPromise;
+      renderRun();
+    } catch (error) {
+      showToast(`政务字段字典加载失败：${error.message}`, 'error');
+    }
   }
 
   initialize();

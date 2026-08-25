@@ -1568,6 +1568,11 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
         return records, {"provider": "beisen-open-platform", "warnings": []}
 
     monkeypatch.setattr(prefetch, "sync_beisen_candidates", scheduled_sync)
+    monkeypatch.setattr(prefetch, "list_beisen_contract_subjects", lambda **_kwargs: [
+        {"value": "测试主体甲", "label": "测试主体甲", "code": "A", "candidateCount": 1},
+        {"value": "测试主体乙", "label": "测试主体乙", "code": "B", "candidateCount": 1},
+        {"value": "测试主体丙", "label": "测试主体丙", "code": "C", "candidateCount": 0},
+    ])
     monkeypatch.setattr(prefetch, "_current_reporting_context", lambda: {
         "periodStart": "2026-07-16",
         "periodEnd": "2026-08-15",
@@ -1588,6 +1593,187 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     assert snapshot is not None
     assert snapshot["stale"] is False
     assert {record["source"]["subject"] for record in snapshot["records"]} == {"测试主体甲", "测试主体乙"}
+
+    from bonus_platform.engine.social_insurance.publication import load_latest_reporting_release
+
+    release = load_latest_reporting_release()
+    assert release is not None
+    assert result["releaseId"] == release["id"]
+    assert result["batchCount"] == 3
+    assert release["periodStart"] == "2026-07-16"
+    assert release["periodEnd"] == "2026-08-15"
+    assert release["confirmationDate"] == "2026-08-24"
+    assert [subject["value"] for subject in release["subjects"]] == ["测试主体甲", "测试主体乙", "测试主体丙"]
+    assert [subject["candidateCount"] for subject in release["subjects"]] == [1, 1, 0]
+    assert all(subject.get("runId") for subject in release["subjects"])
+    assert all(load_run(subject["runId"])["subject"] == subject["value"] for subject in release["subjects"])
+    assert "定时员工" not in json.dumps(release, ensure_ascii=False)
+    assert "TEST-ID-SCHEDULE-ALL" not in json.dumps(release, ensure_ascii=False)
+
+
+def test_failed_all_subject_publication_keeps_the_previous_successful_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import publication
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    first = _record(identity="TEST-ID-RELEASE-001", name="上一成功版本员工")
+    first["source"]["subject"] = "测试主体甲"
+    published = publication.materialize_all_subject_runs(
+        records=[first],
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject_options=[{"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1}],
+    )
+    previous_release_id = published["releaseId"]
+
+    original_materialize = publication.materialize_subject_run
+    calls = 0
+
+    def fail_on_second_subject(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RunValidationError("模拟第二个主体生成失败")
+        return original_materialize(**kwargs)
+
+    monkeypatch.setattr(publication, "materialize_subject_run", fail_on_second_subject)
+    second_records = []
+    for index, subject in enumerate(("测试主体甲", "测试主体乙"), start=1):
+        record = _record(identity=f"TEST-ID-RELEASE-FAIL-{index}", name=f"失败版本员工{index}")
+        record["source"]["subject"] = subject
+        second_records.append(record)
+
+    with pytest.raises(RunValidationError, match="模拟第二个主体生成失败"):
+        publication.materialize_all_subject_runs(
+            records=second_records,
+            source_summary={"provider": "beisen-open-platform"},
+            period_start="2026-07-16",
+            period_end="2026-08-15",
+            confirmation_date="2026-08-25",
+            subject_options=[
+                {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
+                {"value": "测试主体乙", "label": "测试主体乙", "candidateCount": 1},
+            ],
+        )
+
+    latest = publication.load_latest_reporting_release()
+    assert latest is not None
+    assert latest["id"] == previous_release_id
+
+
+def test_bootstrap_reads_one_published_release_without_scanning_or_live_beisen(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import publication
+    from bonus_platform.engine.social_insurance import router as social_router
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    records = []
+    for index, subject in enumerate(("测试主体甲", "测试主体乙"), start=1):
+        record = _record(identity=f"TEST-ID-BOOTSTRAP-{index}", name=f"首屏员工{index}")
+        record["source"]["subject"] = subject
+        records.append(record)
+    published = publication.materialize_all_subject_runs(
+        records=records,
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        preferred_subject="测试主体乙",
+        subject_options=[
+            {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
+            {"value": "测试主体乙", "label": "测试主体乙", "candidateCount": 1},
+        ],
+    )
+
+    monkeypatch.setattr(social_router, "list_runs", lambda *_args, **_kwargs: pytest.fail("首屏不应扫描批次"))
+    monkeypatch.setattr(
+        social_router,
+        "list_beisen_contract_subjects",
+        lambda **_kwargs: pytest.fail("首屏不应实时查询北森合同主体"),
+    )
+    response = TestClient(app).get("/api/social-insurance/bootstrap")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "ready"
+    assert payload["release"]["id"] == published["releaseId"]
+    assert payload["config"] == {
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+    }
+    assert [subject["value"] for subject in payload["subjects"]] == ["测试主体甲", "测试主体乙"]
+    assert payload["selectedSubject"] == "测试主体乙"
+    assert payload["run"]["subject"] == "测试主体乙"
+    assert payload["preflight"]["runId"] == payload["run"]["id"]
+
+
+def test_subject_switch_stays_on_the_same_release_when_a_partial_new_run_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import publication
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    released_records = []
+    for index, subject in enumerate(("测试主体甲", "测试主体乙"), start=1):
+        record = _record(identity=f"TEST-ID-ATOMIC-{index}", name=f"发布版本员工{index}")
+        record["source"]["subject"] = subject
+        released_records.append(record)
+    published = publication.materialize_all_subject_runs(
+        records=released_records,
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject_options=[
+            {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
+            {"value": "测试主体乙", "label": "测试主体乙", "candidateCount": 1},
+        ],
+    )
+    released_subject = next(
+        subject for subject in published["release"]["subjects"] if subject["value"] == "测试主体乙"
+    )
+    partial = _record(identity="TEST-ID-PARTIAL-NEW", name="尚未发布的新员工")
+    partial["source"]["subject"] = "测试主体乙"
+    newer = create_run(
+        records=[partial],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject="测试主体乙",
+        source="beisen",
+    )
+    assert load_run_index(
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject="测试主体乙",
+    )["runId"] == newer["id"]
+
+    response = TestClient(app).get(
+        f"/api/social-insurance/releases/{published['releaseId']}/runs/current",
+        params={"subject": "测试主体乙"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lookupSource"] == "reporting-release"
+    assert payload["run"]["id"] == released_subject["runId"]
+    assert payload["run"]["employees"][0]["report"]["姓名"] == "发布版本员工2"
+    assert "尚未发布的新员工" not in response.text
 
 
 def test_contract_subject_options_are_derived_without_employee_details(
@@ -1620,7 +1806,7 @@ def test_contract_subject_options_are_derived_without_employee_details(
     assert "TEST-ID-SUBJECT" not in serialized
 
 
-def test_contract_subjects_use_recent_run_without_waiting_for_live_beisen(
+def test_contract_subjects_do_not_scan_recent_runs_or_call_live_beisen_without_a_release(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1638,11 +1824,15 @@ def test_contract_subjects_use_recent_run_without_waiting_for_live_beisen(
         source="beisen",
     )
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_ENGINE_DIR", str(tmp_path / "missing-engine"))
-    queued: list[tuple[str, str]] = []
     monkeypatch.setattr(
         social_router,
-        "queue_contract_subject_refresh",
-        lambda period_start, period_end: not queued.append((period_start, period_end)),
+        "list_runs",
+        lambda *_args, **_kwargs: pytest.fail("没有发布版本时也不应扫描历史批次"),
+    )
+    monkeypatch.setattr(
+        social_router,
+        "list_beisen_contract_subjects",
+        lambda **_kwargs: pytest.fail("普通页面读取不应实时查询北森"),
     )
 
     response = TestClient(app).get(
@@ -1651,15 +1841,12 @@ def test_contract_subjects_use_recent_run_without_waiting_for_live_beisen(
     )
 
     assert response.status_code == 200
-    assert response.json()["source"] == "recent-beisen-runs"
-    assert response.json()["refreshQueued"] is True
-    assert queued == [("2026-07-16", "2026-08-15")]
-    assert response.json()["subjects"] == [{
-        "value": "深圳市前海云途物流有限公司",
-        "label": "深圳市前海云途物流有限公司",
-        "code": "",
-        "candidateCount": 0,
-    }]
+    assert response.json() == {
+        "subjects": [],
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "source": "no-published-release",
+    }
 
 
 def test_contract_subjects_prefer_complete_cached_options_to_partial_recent_runs(
