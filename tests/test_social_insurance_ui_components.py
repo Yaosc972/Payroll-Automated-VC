@@ -44,7 +44,7 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=42" in page
-    assert "social-insurance.js?v=42" in page
+    assert "social-insurance.js?v=43" in page
 
 
 def test_silent_refresh_clears_a_batch_from_the_previous_selection():
@@ -52,6 +52,16 @@ def test_silent_refresh_clears_a_batch_from_the_previous_selection():
 
     assert "if (silent && state.run)" not in script
     assert "本周期尚未生成" in script
+
+
+def test_subject_switch_clears_previous_batch_before_loading_the_new_run():
+    script = _read("social-insurance.js")
+    loader = script.split("async function loadSelectedSubjectRun", 1)[1].split("function renderMetrics", 1)[0]
+    loading_state = "state.run = null;\n    renderRun();\n    byId('lastSyncLabel').textContent = '正在加载主体批次…';"
+    request = "const payload = await api(`${API_ROOT}/runs?${params.toString()}`);"
+
+    assert loading_state in loader
+    assert loader.index(loading_state) < loader.index(request)
 
 
 def test_run_update_time_is_rendered_in_shanghai_business_time():

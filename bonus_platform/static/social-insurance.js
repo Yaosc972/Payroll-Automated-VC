@@ -519,6 +519,9 @@
     if (!state.subjectsReady || !Object.values(context).every(Boolean)) return;
     if (selectionMatchesRun()) { indexRun(state.run); return; }
     const requestSequence = ++runRequestSequence;
+    state.run = null;
+    renderRun();
+    byId('lastSyncLabel').textContent = '正在加载主体批次…';
     try {
       let runId = state.batchIndex.get(batchContextKey(context));
       if (!runId) {
@@ -543,7 +546,9 @@
       indexRun(run);
       renderRun();
     } catch (error) {
-      if (requestSequence === runRequestSequence && !silent) showToast(error.message, 'error');
+      if (requestSequence !== runRequestSequence) return;
+      byId('lastSyncLabel').textContent = '主体批次加载失败';
+      if (!silent) showToast(error.message, 'error');
     }
   }
 
