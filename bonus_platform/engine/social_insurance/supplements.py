@@ -12,11 +12,14 @@ from typing import Any
 
 from .adapter import sync_beisen_candidates
 from .runs import RunValidationError, list_runs, load_run
+from .sync_snapshot import capture_reporting_snapshot, load_reporting_snapshot
 
 
 SEARCH_LOOKBACK_DAYS = 366
 SEARCH_CACHE_SECONDS = 600
 POOL_CACHE_SECONDS = max(600, int(os.environ.get("SIGMA_SOCIAL_INSURANCE_POOL_CACHE_SECONDS", "14400")))
+POOL_SNAPSHOT_DATA_MODE = "supplement-candidate-pool-v1"
+LOOKUP_SOURCE_FIELD = "_supplementLookupSource"
 _RESOLUTION_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 _POOL_CACHE: dict[str, tuple[float, str, str, list[dict[str, Any]]]] = {}
 _POOL_STATUS: dict[str, dict[str, Any]] = {}
@@ -40,6 +43,8 @@ def _pool_key(run: dict[str, Any]) -> str:
     return "|".join((
         str(Path(os.environ.get("SIGMA_SOCIAL_INSURANCE_RUNS_DIR") or "default-runs-root").expanduser()),
         str(run.get("periodStart") or ""),
+        str(run.get("periodEnd") or ""),
+        str(run.get("confirmationDate") or run.get("periodEnd") or ""),
     ))
 
 
@@ -64,22 +69,159 @@ def _mask_identity(identity: str) -> str:
     return f"{value[:4]}{'*' * min(10, len(value) - 8)}{value[-4:]}"
 
 
-def _query_records(run: dict[str, Any]) -> list[dict[str, Any]]:
+def _pool_window(run: dict[str, Any]) -> tuple[str, str, str]:
     try:
         period_start = date.fromisoformat(str(run.get("periodStart") or ""))
     except ValueError as exc:
         raise RunValidationError("当前批次周期无效") from exc
     entry_end = period_start - timedelta(days=1)
     entry_start = entry_end - timedelta(days=SEARCH_LOOKBACK_DAYS)
+    confirmation_date = str(run.get("confirmationDate") or run.get("periodEnd") or "")
+    return entry_start.isoformat(), entry_end.isoformat(), confirmation_date
+
+
+def _query_records(run: dict[str, Any]) -> list[dict[str, Any]]:
+    entry_start, entry_end, confirmation_date = _pool_window(run)
     with tempfile.TemporaryDirectory(prefix="sigma-social-supplement-") as temporary:
         records, _summary = sync_beisen_candidates(
-            period_start=entry_start.isoformat(),
-            period_end=entry_end.isoformat(),
-            confirmation_date=str(run.get("confirmationDate") or run.get("periodEnd") or ""),
+            period_start=entry_start,
+            period_end=entry_end,
+            confirmation_date=confirmation_date,
             subject="*",
             output_dir=Path(temporary),
         )
     return [record for record in records if str(record.get("status") or "") != "excluded"]
+
+
+def _record_subject(record: dict[str, Any]) -> str:
+    source = record.get("source") if isinstance(record.get("source"), dict) else {}
+    return str(source.get("subject") or source.get("subjectCode") or "").strip()
+
+
+def _historical_pool_records(run: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        active_period_start = date.fromisoformat(str(run.get("periodStart") or ""))
+    except ValueError as exc:
+        raise RunValidationError("当前批次周期无效") from exc
+    history_start = active_period_start - timedelta(days=SEARCH_LOOKBACK_DAYS + 1)
+    run_id = str(run.get("id") or "")
+    active_subject = str(run.get("subject") or "").strip()
+    output: list[dict[str, Any]] = []
+    for summary in list_runs(50):
+        historical_run_id = str(summary.get("id") or "")
+        if not historical_run_id or historical_run_id == run_id:
+            continue
+        if (
+            active_subject
+            and active_subject != "*"
+            and str(summary.get("subject") or "").strip() != active_subject
+        ):
+            continue
+        historical_run = load_run(historical_run_id)
+        for record in historical_run.get("employees") or []:
+            if not isinstance(record, dict) or str(record.get("status") or "") == "excluded":
+                continue
+            try:
+                entry_date = date.fromisoformat(str(record.get("entryDate") or ""))
+            except ValueError:
+                continue
+            if history_start <= entry_date < active_period_start:
+                candidate = deepcopy(record)
+                candidate[LOOKUP_SOURCE_FIELD] = "recent-beisen-run"
+                output.append(candidate)
+    return output
+
+
+def _merge_pool_records(
+    historical_records: list[dict[str, Any]],
+    beisen_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for records, lookup_source in (
+        (historical_records, "recent-beisen-run"),
+        (beisen_records, "beisen-pool"),
+    ):
+        for record in records:
+            identity = _identity(record)
+            if not identity:
+                continue
+            key = (identity, _record_subject(record))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidate = deepcopy(record)
+            candidate[LOOKUP_SOURCE_FIELD] = str(
+                candidate.get(LOOKUP_SOURCE_FIELD) or lookup_source
+            )
+            output.append(candidate)
+    return output
+
+
+def _build_pool_records(run: dict[str, Any]) -> list[dict[str, Any]]:
+    return _merge_pool_records(_historical_pool_records(run), _query_records(run))
+
+
+def _load_shared_pool(run: dict[str, Any]) -> tuple[str, list[dict[str, Any]]] | None:
+    period_start, period_end, confirmation_date = _pool_window(run)
+    snapshot = load_reporting_snapshot(
+        period_start=period_start,
+        period_end=period_end,
+        confirmation_date=confirmation_date,
+        subject="*",
+    )
+    if snapshot is None:
+        return None
+    source_summary = (
+        snapshot.get("sourceSummary")
+        if isinstance(snapshot.get("sourceSummary"), dict)
+        else {}
+    )
+    records = snapshot.get("records")
+    if source_summary.get("dataMode") != POOL_SNAPSHOT_DATA_MODE or not isinstance(records, list):
+        return None
+    return str(snapshot.get("capturedAt") or _timestamp_after()), records
+
+
+def _capture_shared_pool(run: dict[str, Any], records: list[dict[str, Any]]) -> str:
+    period_start, period_end, confirmation_date = _pool_window(run)
+    captured = capture_reporting_snapshot(
+        records=records,
+        source_summary={
+            "provider": "beisen-open-platform",
+            "dataMode": POOL_SNAPSHOT_DATA_MODE,
+            "rawApiResponseSaved": False,
+        },
+        period_start=period_start,
+        period_end=period_end,
+        confirmation_date=confirmation_date,
+        subject="*",
+    )
+    return str(captured["capturedAt"])
+
+
+def _store_pool_cache(
+    key: str,
+    records: list[dict[str, Any]],
+    *,
+    cached_at: str,
+) -> None:
+    expires_at = _timestamp_after(POOL_CACHE_SECONDS)
+    with _POOL_CONDITION:
+        _POOL_CACHE[key] = (
+            time.monotonic() + POOL_CACHE_SECONDS,
+            cached_at,
+            expires_at,
+            records,
+        )
+        _POOL_STATUS[key] = {
+            "state": "ready",
+            "label": "北森候选池已准备",
+            "cachedAt": cached_at,
+            "expiresAt": expires_at,
+            "recordCount": len(records),
+            "storage": "shared-snapshot",
+        }
 
 
 def _pool_records(run: dict[str, Any], *, force: bool = False) -> list[dict[str, Any]]:
@@ -101,7 +243,12 @@ def _pool_records(run: dict[str, Any], *, force: bool = False) -> list[dict[str,
             "startedAt": _timestamp_after(),
         }
     try:
-        records = _query_records(run)
+        shared_pool = None if force else _load_shared_pool(run)
+        if shared_pool is None:
+            records = _build_pool_records(run)
+            cached_at = _capture_shared_pool(run, records)
+        else:
+            cached_at, records = shared_pool
     except Exception:
         with _POOL_CONDITION:
             _POOL_STATUS[key] = {
@@ -112,22 +259,8 @@ def _pool_records(run: dict[str, Any], *, force: bool = False) -> list[dict[str,
             _POOL_REFRESHING.discard(key)
             _POOL_CONDITION.notify_all()
         raise
-    cached_at = _timestamp_after()
-    expires_at = _timestamp_after(POOL_CACHE_SECONDS)
+    _store_pool_cache(key, records, cached_at=cached_at)
     with _POOL_CONDITION:
-        _POOL_CACHE[key] = (
-            time.monotonic() + POOL_CACHE_SECONDS,
-            cached_at,
-            expires_at,
-            records,
-        )
-        _POOL_STATUS[key] = {
-            "state": "ready",
-            "label": "北森候选池已准备",
-            "cachedAt": cached_at,
-            "expiresAt": expires_at,
-            "recordCount": len(records),
-        }
         _POOL_REFRESHING.discard(key)
         _POOL_CONDITION.notify_all()
     return records
@@ -142,10 +275,16 @@ def supplement_pool_status(run: dict[str, Any]) -> dict[str, Any]:
     key = _pool_key(run)
     with _POOL_CONDITION:
         _clear_expired_cache()
-        status = deepcopy(_POOL_STATUS.get(key) or {
-            "state": "empty",
-            "label": "等待后台更新",
-        })
+        status = deepcopy(_POOL_STATUS.get(key) or {})
+    if not status:
+        shared_pool = _load_shared_pool(run)
+        if shared_pool is not None:
+            cached_at, records = shared_pool
+            _store_pool_cache(key, records, cached_at=cached_at)
+            with _POOL_CONDITION:
+                status = deepcopy(_POOL_STATUS[key])
+    if not status:
+        status = {"state": "empty", "label": "等待后台更新"}
     return {
         **status,
         "cacheSeconds": POOL_CACHE_SECONDS,
@@ -165,7 +304,7 @@ def search_beisen_supplement_candidates(run: dict[str, Any], query: str) -> list
     run_id = str(run.get("id") or "")
     active_subject = str(run.get("subject") or "").strip()
 
-    def matches(records: list[dict[str, Any]], lookup_source: str) -> list[dict[str, Any]]:
+    def matches(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
         seen: set[str] = set()
         for record in records:
@@ -178,7 +317,7 @@ def search_beisen_supplement_candidates(run: dict[str, Any], query: str) -> list
                 continue
             seen.add(identity)
             source = record.get("source") if isinstance(record.get("source"), dict) else {}
-            record_subject = str(source.get("subject") or source.get("subjectCode") or "").strip()
+            record_subject = _record_subject(record)
             if active_subject and record_subject != active_subject:
                 continue
             candidate_id = _candidate_id(record)
@@ -195,38 +334,13 @@ def search_beisen_supplement_candidates(run: dict[str, Any], query: str) -> list
                 "place": str(source.get("place") or ""),
                 "employType": str(source.get("employType") or ""),
                 "validation": "需复核字段" if str(record.get("status") or "") == "needs_review" else "字段已带出",
-                "lookupSource": lookup_source,
+                "lookupSource": str(record.get(LOOKUP_SOURCE_FIELD) or "beisen-pool"),
             })
             if len(output) >= 20:
                 break
         return output
 
-    try:
-        active_period_start = date.fromisoformat(str(run.get("periodStart") or ""))
-    except ValueError as exc:
-        raise RunValidationError("当前批次周期无效") from exc
-    history_start = active_period_start - timedelta(days=SEARCH_LOOKBACK_DAYS + 1)
-    historical_records: list[dict[str, Any]] = []
-    for summary in list_runs(50):
-        historical_run_id = str(summary.get("id") or "")
-        if not historical_run_id or historical_run_id == run_id:
-            continue
-        if str(summary.get("subject") or "").strip() != str(run.get("subject") or "").strip():
-            continue
-        historical_run = load_run(historical_run_id)
-        for record in historical_run.get("employees") or []:
-            if str(record.get("status") or "") == "excluded":
-                continue
-            try:
-                entry_date = date.fromisoformat(str(record.get("entryDate") or ""))
-            except ValueError:
-                continue
-            if history_start <= entry_date < active_period_start:
-                historical_records.append(record)
-    historical_matches = matches(historical_records, "recent-beisen-run")
-    if historical_matches:
-        return historical_matches
-    return matches(_pool_records(run), "beisen-pool")
+    return matches(_pool_records(run))
 
 
 def resolve_beisen_supplement_candidate(run: dict[str, Any], candidate_id: str) -> dict[str, Any]:

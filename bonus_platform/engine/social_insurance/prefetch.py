@@ -128,6 +128,14 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
         )
         if context["subject"] != "*":
             return {"state": "ready", **captured}
+        supplement_pool = prewarm_beisen_supplement_pool({
+            "id": "scheduled-supplement-pool",
+            "periodStart": context["periodStart"],
+            "periodEnd": context["periodEnd"],
+            "confirmationDate": context["confirmationDate"],
+            "subject": "*",
+            "employees": [],
+        }, force=True)
         subjects = list_beisen_contract_subjects(
             period_start=context["periodStart"],
             period_end=context["periodEnd"],
@@ -152,6 +160,8 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
             **captured,
             "batchCount": published["batchCount"],
             "releaseId": published["releaseId"],
+            "supplementCandidateCount": int(supplement_pool.get("recordCount") or 0),
+            "supplementPoolCachedAt": supplement_pool.get("cachedAt"),
         }
     except Exception:  # noqa: BLE001 - connector details and employee data must not enter scheduler logs.
         LOGGER.warning("社保本期报盘快照后台更新失败；具体原因仅在受控业务操作中展示")

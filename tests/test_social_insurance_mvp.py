@@ -1370,6 +1370,67 @@ def test_supplement_pool_is_reused_for_repeated_sync_of_the_same_period(
     assert [item["name"] for item in second_search.json()["candidates"]] == ["缓存候选员工乙"]
 
 
+def test_supplement_search_reuses_published_pool_across_serverless_instances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-SHARED-POOL-001", name="当前名单员工")
+    supplement = _record(identity="TEST-ID-SHARED-POOL-002", name="共享候选员工")
+    supplement["entryDate"] = "2026-06-03"
+    fixture_path = tmp_path / "shared-pool-fixture.json"
+    fixture_path.write_text(
+        json.dumps({"records": [current, supplement]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SYNC_FIXTURE", str(fixture_path))
+    run = create_run(
+        records=[current],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-18",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    client = TestClient(app)
+
+    first = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "共享候选"},
+    )
+
+    assert first.status_code == 200
+    assert [item["name"] for item in first.json()["candidates"]] == ["共享候选员工"]
+
+    from bonus_platform.engine.social_insurance import supplements
+
+    with supplements._POOL_CONDITION:
+        supplements._POOL_CACHE.clear()
+        supplements._POOL_STATUS.clear()
+        supplements._POOL_REFRESHING.clear()
+
+    def unexpected_source_query(*_args, **_kwargs):
+        raise AssertionError("共享候选快照存在时不得扫描历史批次或重新查询北森")
+
+    monkeypatch.setattr(supplements, "list_runs", unexpected_source_query)
+    monkeypatch.setattr(supplements, "_query_records", unexpected_source_query)
+
+    second = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "共享候选"},
+    )
+
+    assert second.status_code == 200
+    assert [item["name"] for item in second.json()["candidates"]] == ["共享候选员工"]
+    status = client.get(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/status"
+    ).json()
+    assert status["state"] == "ready"
+    assert status["storage"] == "shared-snapshot"
+
+
 def test_app_startup_prefetches_latest_supplement_pool_before_user_search(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1562,12 +1623,25 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
         record["source"]["subject"] = subject
         records.append(record)
     calls: list[str] = []
+    supplement_prefetch_calls: list[tuple[dict, bool]] = []
 
     def scheduled_sync(**kwargs):
         calls.append(kwargs["subject"])
         return records, {"provider": "beisen-open-platform", "warnings": []}
 
     monkeypatch.setattr(prefetch, "sync_beisen_candidates", scheduled_sync)
+    monkeypatch.setattr(
+        prefetch,
+        "prewarm_beisen_supplement_pool",
+        lambda run, force=False: (
+            supplement_prefetch_calls.append((deepcopy(run), force))
+            or {
+                "state": "ready",
+                "cachedAt": "2026-08-24T00:00:00Z",
+                "recordCount": 1162,
+            }
+        ),
+    )
     monkeypatch.setattr(prefetch, "list_beisen_contract_subjects", lambda **_kwargs: [
         {"value": "测试主体甲", "label": "测试主体甲", "code": "A", "candidateCount": 1},
         {"value": "测试主体乙", "label": "测试主体乙", "code": "B", "candidateCount": 1},
@@ -1584,6 +1658,14 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
 
     assert result["state"] == "ready"
     assert calls == ["*"]
+    assert len(supplement_prefetch_calls) == 1
+    supplement_context, supplement_force = supplement_prefetch_calls[0]
+    assert supplement_force is True
+    assert supplement_context["periodStart"] == "2026-07-16"
+    assert supplement_context["periodEnd"] == "2026-08-15"
+    assert supplement_context["confirmationDate"] == "2026-08-24"
+    assert supplement_context["subject"] == "*"
+    assert result["supplementCandidateCount"] == 1162
     snapshot = load_reporting_snapshot(
         period_start="2026-07-16",
         period_end="2026-08-15",
