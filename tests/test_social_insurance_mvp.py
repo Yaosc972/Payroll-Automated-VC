@@ -1281,6 +1281,12 @@ def test_supplement_search_and_add_api_uses_beisen_record_without_exposing_full_
     added = next(item for item in payload["employees"] if item["report"]["姓名"] == "待补充员工")
     assert added["supplemental"]["label"] == "延迟增员"
     assert added["status"] == "needs_review"
+    repeated_search = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "待补充"},
+    )
+    assert repeated_search.status_code == 200
+    assert repeated_search.json()["candidates"] == []
     assert query_call_count == 1
 
 
@@ -1407,6 +1413,122 @@ def test_supplement_search_filters_subject_before_deduplicating_identity(
 
     assert response.status_code == 200
     assert [item["subject"] for item in response.json()["candidates"]] == ["测试主体甲"]
+
+
+def test_supplement_search_uses_lightweight_context_without_loading_the_full_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(runs_root))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-LIGHTWEIGHT-001", name="当前名单员工")
+    candidate = _record(identity="TEST-ID-LIGHTWEIGHT-002", name="轻量查找候选")
+    candidate["entryDate"] = "2026-06-03"
+    run = create_run(
+        records=[current],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-18",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    capture_reporting_snapshot(
+        records=[current, candidate],
+        source_summary={"dataMode": "supplement-candidate-pool-v1"},
+        period_start="2025-07-14",
+        period_end="2026-07-15",
+        confirmation_date="2026-08-18",
+        subject="*",
+    )
+    context_text = (runs_root / ".supplement-context" / f"{run['id']}.json").read_text(
+        encoding="utf-8"
+    )
+    assert "existingCandidateIds" in context_text
+    assert "TEST-ID-LIGHTWEIGHT-001" not in context_text
+    (runs_root / run["id"] / "run.json").unlink()
+
+    response = TestClient(app).post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "轻量查找"},
+    )
+
+    assert response.status_code == 200
+    assert [item["name"] for item in response.json()["candidates"]] == ["轻量查找候选"]
+
+
+def test_supplement_status_uses_lightweight_context_without_loading_the_full_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(runs_root))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-LIGHTWEIGHT-STATUS-001", name="当前名单员工")
+    candidate = _record(identity="TEST-ID-LIGHTWEIGHT-STATUS-002", name="轻量状态候选")
+    candidate["entryDate"] = "2026-06-03"
+    run = create_run(
+        records=[current],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-18",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    capture_reporting_snapshot(
+        records=[candidate],
+        source_summary={"dataMode": "supplement-candidate-pool-v1"},
+        period_start="2025-07-14",
+        period_end="2026-07-15",
+        confirmation_date="2026-08-18",
+        subject="*",
+    )
+    (runs_root / run["id"] / "run.json").unlink()
+
+    response = TestClient(app).get(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/status"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "ready"
+    assert response.json()["recordCount"] == 1
+
+
+def test_supplement_search_falls_back_to_full_run_for_legacy_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(runs_root))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-LEGACY-CONTEXT-001", name="当前名单员工")
+    candidate = _record(identity="TEST-ID-LEGACY-CONTEXT-002", name="旧批次候选")
+    candidate["entryDate"] = "2026-06-03"
+    run = create_run(
+        records=[current],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-18",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    capture_reporting_snapshot(
+        records=[candidate],
+        source_summary={"dataMode": "supplement-candidate-pool-v1"},
+        period_start="2025-07-14",
+        period_end="2026-07-15",
+        confirmation_date="2026-08-18",
+        subject="*",
+    )
+    (runs_root / ".supplement-context" / f"{run['id']}.json").unlink()
+
+    response = TestClient(app).post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "旧批次"},
+    )
+
+    assert response.status_code == 200
+    assert [item["name"] for item in response.json()["candidates"]] == ["旧批次候选"]
 
 
 def test_supplement_search_reuses_published_pool_across_serverless_instances(

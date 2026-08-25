@@ -52,6 +52,7 @@ from .runs import (
     list_runs,
     load_run,
     load_run_index,
+    load_supplement_search_context,
     persist_run_index,
     update_employee,
 )
@@ -627,7 +628,7 @@ def search_supplement_candidates(
 ) -> dict[str, Any]:
     _require_access(request)
     try:
-        run = load_run(run_id)
+        run = load_supplement_search_context(run_id) or load_run(run_id)
         candidates = search_beisen_supplement_candidates(run, str(payload.get("query") or ""))
         return {"candidates": candidates, "rawApiResponseSaved": False}
     except (RunNotFoundError, RunValidationError) as exc:
@@ -639,7 +640,7 @@ def get_supplement_candidate_status(request: Request, run_id: str) -> dict[str, 
     _require_access(request)
     try:
         return {
-            **supplement_pool_status(load_run(run_id)),
+            **supplement_pool_status(load_supplement_search_context(run_id) or load_run(run_id)),
             "scheduler": prefetch_scheduler_status(),
         }
     except (RunNotFoundError, RunValidationError) as exc:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
-import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -11,7 +10,7 @@ import time
 from typing import Any
 
 from .adapter import sync_beisen_candidates
-from .runs import RunValidationError, list_runs, load_run
+from .runs import RunValidationError, list_runs, load_run, supplement_candidate_id
 from .sync_snapshot import capture_reporting_snapshot, load_reporting_snapshot
 
 
@@ -58,8 +57,7 @@ def _identity(record: dict[str, Any]) -> str:
 
 
 def _candidate_id(record: dict[str, Any]) -> str:
-    identity = _identity(record)
-    return f"sup_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}" if identity else ""
+    return supplement_candidate_id(_identity(record))
 
 
 def _mask_identity(identity: str) -> str:
@@ -300,6 +298,11 @@ def search_beisen_supplement_candidates(run: dict[str, Any], query: str) -> list
         str(item.get("report", {}).get("证件号码") or "").replace(" ", "").strip().upper()
         for item in run.get("employees") or []
     }
+    existing_candidate_ids = {
+        str(value or "")
+        for value in run.get("existingCandidateIds") or []
+        if str(value or "")
+    }
     _clear_expired_cache()
     run_id = str(run.get("id") or "")
     active_subject = str(run.get("subject") or "").strip()
@@ -309,18 +312,23 @@ def search_beisen_supplement_candidates(run: dict[str, Any], query: str) -> list
         seen: set[str] = set()
         for record in records:
             identity = _identity(record)
+            candidate_id = _candidate_id(record)
             report = record.get("report") if isinstance(record.get("report"), dict) else {}
             name = str(report.get("姓名") or "").strip()
             record_subject = _record_subject(record)
             if active_subject and record_subject != active_subject:
                 continue
-            if not identity or identity in existing or identity in seen:
+            if (
+                not identity
+                or identity in existing
+                or candidate_id in existing_candidate_ids
+                or identity in seen
+            ):
                 continue
             if normalized_query not in name.lower() and normalized_query not in identity[-4:].lower():
                 continue
             seen.add(identity)
             source = record.get("source") if isinstance(record.get("source"), dict) else {}
-            candidate_id = _candidate_id(record)
             _RESOLUTION_CACHE[(run_id, candidate_id)] = (
                 time.monotonic() + SEARCH_CACHE_SECONDS,
                 deepcopy(record),

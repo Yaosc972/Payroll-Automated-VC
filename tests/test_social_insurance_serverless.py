@@ -129,6 +129,51 @@ def test_run_context_index_is_persisted_without_employee_details(
     assert "不应进入索引" not in json.dumps(loaded, ensure_ascii=False)
 
 
+def test_supplement_search_context_is_shared_without_raw_employee_identity_details(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_blob(monkeypatch)
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-a"))
+    objects: dict[tuple[str, str], dict] = {}
+    monkeypatch.setattr(
+        runs,
+        "persist_json",
+        lambda namespace, key, payload: objects.__setitem__((namespace, key), json.loads(json.dumps(payload))),
+    )
+    monkeypatch.setattr(runs, "load_json", lambda namespace, key: objects.get((namespace, key)))
+    run = {
+        "id": "sir_20260825130000_abcd1234",
+        "ruleVersion": runs.RULE_VERSION,
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+        "subject": "深圳测试主体",
+        "updatedAt": "2026-08-25T05:00:00Z",
+        "employees": [
+            {
+                "report": {
+                    "姓名": "不应进入轻量上下文",
+                    "证件号码": "TEST-IDENTITY-CONTEXT-001",
+                }
+            }
+        ],
+    }
+
+    assert runs.persist_supplement_search_context(run) is True
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
+    loaded = runs.load_supplement_search_context(run["id"])
+
+    assert loaded is not None
+    assert loaded["id"] == run["id"]
+    assert loaded["subject"] == "深圳测试主体"
+    assert len(loaded["existingCandidateIds"]) == 1
+    serialized = json.dumps(loaded, ensure_ascii=False)
+    assert "不应进入轻量上下文" not in serialized
+    assert "TEST-IDENTITY-CONTEXT-001" not in serialized
+
+
 def test_remote_connector_replaces_local_engine_for_subjects_and_sync(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

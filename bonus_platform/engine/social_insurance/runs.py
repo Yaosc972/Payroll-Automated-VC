@@ -31,6 +31,8 @@ from .template_schemas import hydrate_employee_template_reports, validate_templa
 
 LOGGER = logging.getLogger(__name__)
 RUN_INDEX_NAMESPACE = "run-index"
+SUPPLEMENT_CONTEXT_NAMESPACE = "supplement-search-context"
+SUPPLEMENT_CONTEXT_VERSION = 1
 RUN_INDEX_SUMMARY_FIELDS = (
     "total",
     "ready",
@@ -173,6 +175,100 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _supplement_context_path(run_id: str) -> Path:
+    return _runs_root() / ".supplement-context" / f"{_safe_id(run_id, '批次ID')}.json"
+
+
+def supplement_candidate_id(identity: str) -> str:
+    normalized = str(identity or "").replace(" ", "").strip().upper()
+    if not normalized:
+        return ""
+    return f"sup_{hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _supplement_context_payload(run: dict[str, Any]) -> dict[str, Any]:
+    candidate_ids: set[str] = set()
+    for employee in run.get("employees") or []:
+        if not isinstance(employee, dict):
+            continue
+        report = employee.get("report") if isinstance(employee.get("report"), dict) else {}
+        candidate_id = supplement_candidate_id(str(report.get("证件号码") or ""))
+        if candidate_id:
+            candidate_ids.add(candidate_id)
+    return {
+        "version": SUPPLEMENT_CONTEXT_VERSION,
+        "ruleVersion": str(run.get("ruleVersion") or ""),
+        "runId": str(run.get("id") or ""),
+        "periodStart": str(run.get("periodStart") or ""),
+        "periodEnd": str(run.get("periodEnd") or ""),
+        "confirmationDate": str(run.get("confirmationDate") or ""),
+        "subject": str(run.get("subject") or "").strip(),
+        "runUpdatedAt": str(run.get("updatedAt") or ""),
+        "existingCandidateIds": sorted(candidate_ids),
+    }
+
+
+def persist_supplement_search_context(run: dict[str, Any]) -> bool:
+    """Persist the private read model without raw employee identity fields."""
+    payload = _supplement_context_payload(run)
+    if not all(
+        payload.get(key)
+        for key in (
+            "ruleVersion",
+            "runId",
+            "periodStart",
+            "periodEnd",
+            "confirmationDate",
+            "subject",
+            "runUpdatedAt",
+        )
+    ):
+        return False
+    try:
+        _write_json_atomic(_supplement_context_path(str(payload["runId"])), payload)
+        if persistent_storage_enabled():
+            persist_json(SUPPLEMENT_CONTEXT_NAMESPACE, str(payload["runId"]), payload)
+    except (OSError, SocialInsuranceStorageError, RuntimeError):
+        LOGGER.warning("社保补充增员轻量上下文写入失败，查询时将回退到完整批次")
+        return False
+    return True
+
+
+def load_supplement_search_context(run_id: str) -> dict[str, Any] | None:
+    """Load a direct private lookup object without restoring or hydrating a full run."""
+    normalized_run_id = _safe_id(str(run_id or ""), "批次ID")
+    path = _supplement_context_path(normalized_run_id)
+    payload: dict[str, Any] | None = None
+    if persistent_storage_enabled() and (serverless_runtime() or not path.is_file()):
+        try:
+            payload = load_json(SUPPLEMENT_CONTEXT_NAMESPACE, normalized_run_id)
+        except (SocialInsuranceStorageError, RuntimeError):
+            LOGGER.warning("社保补充增员轻量上下文读取失败，查询时将回退到完整批次")
+            return None
+    if payload is None and path.is_file():
+        try:
+            candidate = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            candidate = None
+        if isinstance(candidate, dict):
+            payload = candidate
+    candidate_ids = payload.get("existingCandidateIds") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("version") != SUPPLEMENT_CONTEXT_VERSION
+        or payload.get("ruleVersion") != RULE_VERSION
+        or payload.get("runId") != normalized_run_id
+        or not all(
+            str(payload.get(key) or "").strip()
+            for key in ("periodStart", "periodEnd", "confirmationDate", "subject", "runUpdatedAt")
+        )
+        or not isinstance(candidate_ids, list)
+        or any(not re.fullmatch(r"sup_[0-9a-f]{24}", str(value or "")) for value in candidate_ids)
+    ):
+        return None
+    return {**payload, "id": normalized_run_id}
 
 
 def _run_index_payload(run: dict[str, Any]) -> dict[str, Any]:
@@ -551,6 +647,7 @@ def create_run(
     _write_json_atomic(_run_path(run_id), run)
     _persist_run(run_id)
     persist_run_index(run, force=True)
+    persist_supplement_search_context(run)
     return run
 
 
@@ -595,6 +692,7 @@ def save_run(run: dict[str, Any]) -> dict[str, Any]:
     _write_json_atomic(_run_path(run_id), run)
     _persist_run(run_id)
     persist_run_index(run)
+    persist_supplement_search_context(run)
     return run
 
 
