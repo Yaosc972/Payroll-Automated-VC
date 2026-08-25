@@ -5,6 +5,7 @@ from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
+import logging
 from pathlib import Path
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import threading
 import time
 
 from openpyxl import Workbook, load_workbook
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -1900,6 +1902,224 @@ def test_reporting_snapshot_refresh_deduplicates_the_same_context(
     assert second_result["state"] == "warming"
 
 
+def test_reporting_refresh_returns_safe_stage_diagnostics_for_connector_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    from bonus_platform.engine.social_insurance import prefetch
+
+    sensitive_marker = "SECRET-EMPLOYEE-IDENTITY-440301199001010011"
+
+    def fail_sync(**_kwargs):
+        try:
+            raise httpx.ReadTimeout(sensitive_marker)
+        except httpx.ReadTimeout as exc:
+            raise RunValidationError(sensitive_marker) from exc
+
+    monkeypatch.setattr(prefetch, "sync_beisen_candidates", fail_sync)
+    monkeypatch.setattr(prefetch, "_current_reporting_context", lambda: {
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-26",
+        "subject": "*",
+    })
+
+    with caplog.at_level(logging.WARNING, logger="bonus_platform.social_insurance.prefetch"):
+        result = prefetch.refresh_latest_reporting_snapshot()
+
+    assert result["state"] == "error"
+    assert result["failedStage"] == "current_sync"
+    assert result["errorCategory"] == "connector_timeout"
+    assert set(result["stageTimingsMs"]) == {"current_sync"}
+    assert isinstance(result["stageTimingsMs"]["current_sync"], int)
+    assert result["stageTimingsMs"]["current_sync"] >= 0
+    assert isinstance(result["elapsedMs"], int)
+    assert result["elapsedMs"] >= result["stageTimingsMs"]["current_sync"]
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert sensitive_marker not in serialized
+    assert sensitive_marker not in caplog.text
+    assert "stage=current_sync" in caplog.text
+    assert "category=connector_timeout" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("target_name", "expected_stage", "expected_stages"),
+    [
+        (
+            "capture_reporting_snapshot",
+            "snapshot_persist",
+            {"current_sync", "snapshot_persist"},
+        ),
+        (
+            "prepare_beisen_supplement_pool",
+            "supplement_pool",
+            {"current_sync", "snapshot_persist", "supplement_pool"},
+        ),
+        (
+            "list_beisen_contract_subjects",
+            "subjects",
+            {"current_sync", "snapshot_persist", "supplement_pool", "subjects"},
+        ),
+    ],
+)
+def test_reporting_refresh_identifies_safe_prepublication_failure_stage(
+    target_name: str,
+    expected_stage: str,
+    expected_stages: set[str],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    from bonus_platform.engine.social_insurance import prefetch
+
+    sensitive_marker = "SECRET-REPORTING-STAGE-440301199001010022"
+    record = _record(identity="TEST-ID-STAGE-001", name="阶段诊断员工")
+    record["source"]["subject"] = "测试主体甲"
+
+    monkeypatch.setattr(
+        prefetch,
+        "sync_beisen_candidates",
+        lambda **_kwargs: ([record], {"provider": "beisen-open-platform"}),
+    )
+    monkeypatch.setattr(
+        prefetch,
+        "capture_reporting_snapshot",
+        lambda **_kwargs: {"capturedAt": "2026-08-26T00:00:00Z", "recordCount": 1},
+    )
+    monkeypatch.setattr(
+        prefetch,
+        "prepare_beisen_supplement_pool",
+        lambda *_args, **_kwargs: ([], {"state": "ready", "recordCount": 0}),
+    )
+    monkeypatch.setattr(
+        prefetch,
+        "list_beisen_contract_subjects",
+        lambda **_kwargs: [{"value": "测试主体甲", "label": "测试主体甲"}],
+    )
+
+    def fail_stage(*_args, **_kwargs):
+        raise RunValidationError(sensitive_marker)
+
+    monkeypatch.setattr(prefetch, target_name, fail_stage)
+    monkeypatch.setattr(prefetch, "_current_reporting_context", lambda: {
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-26",
+        "subject": "*",
+    })
+
+    with caplog.at_level(logging.WARNING, logger="bonus_platform.social_insurance.prefetch"):
+        result = prefetch.refresh_latest_reporting_snapshot()
+
+    assert result["state"] == "error"
+    assert result["failedStage"] == expected_stage
+    assert result["errorCategory"] == "validation"
+    assert set(result["stageTimingsMs"]) == expected_stages
+    assert sensitive_marker not in json.dumps(result, ensure_ascii=False)
+    assert sensitive_marker not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("expected_stage", "expected_category"),
+    [
+        ("batch_materialize", "validation"),
+        ("index_publish", "storage_timeout"),
+        ("release_publish", "storage_permission"),
+    ],
+)
+def test_reporting_refresh_keeps_previous_release_and_safely_identifies_publication_failure(
+    expected_stage: str,
+    expected_category: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    from bonus_platform.engine.labor.blob_storage import LaborBlobError
+    from bonus_platform.engine.social_insurance import prefetch, publication
+    from bonus_platform.engine.social_insurance.persistent_storage import (
+        SocialInsuranceStorageError,
+    )
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    previous = _record(identity="TEST-ID-DIAGNOSTIC-PREVIOUS", name="上一成功版本员工")
+    previous["source"]["subject"] = "测试主体甲"
+    previous_release = publication.materialize_all_subject_runs(
+        records=[previous],
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject_options=[{"value": "测试主体甲", "label": "测试主体甲"}],
+    )
+
+    current = _record(identity="TEST-ID-DIAGNOSTIC-CURRENT", name="本次诊断员工")
+    current["source"]["subject"] = "测试主体甲"
+    monkeypatch.setattr(
+        prefetch,
+        "sync_beisen_candidates",
+        lambda **_kwargs: ([current], {"provider": "beisen-open-platform"}),
+    )
+    monkeypatch.setattr(
+        prefetch,
+        "prepare_beisen_supplement_pool",
+        lambda *_args, **_kwargs: (
+            [current],
+            {"state": "ready", "recordCount": 1, "cachedAt": "2026-08-26T00:00:00Z"},
+        ),
+    )
+    monkeypatch.setattr(
+        prefetch,
+        "list_beisen_contract_subjects",
+        lambda **_kwargs: [{"value": "测试主体甲", "label": "测试主体甲"}],
+    )
+    monkeypatch.setattr(prefetch, "_current_reporting_context", lambda: {
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-26",
+        "subject": "*",
+    })
+    sensitive_marker = "SECRET-PUBLICATION-STAGE-440301199001010033"
+
+    def fail_publication(*_args, **_kwargs):
+        if expected_stage == "batch_materialize":
+            raise RunValidationError(sensitive_marker)
+        code = (
+            "LABOR_BLOB_TIMEOUT"
+            if expected_stage == "index_publish"
+            else "LABOR_BLOB_PERMISSION_DENIED"
+        )
+        try:
+            raise LaborBlobError(
+                code,
+                sensitive_marker,
+                retryable=expected_stage == "index_publish",
+            )
+        except LaborBlobError as exc:
+            raise SocialInsuranceStorageError(sensitive_marker) from exc
+
+    target_name = {
+        "batch_materialize": "materialize_subject_run",
+        "index_publish": "publish_supplement_search_indexes",
+        "release_publish": "_persist_release",
+    }[expected_stage]
+    monkeypatch.setattr(publication, target_name, fail_publication)
+
+    with caplog.at_level(logging.WARNING, logger="bonus_platform.social_insurance.prefetch"):
+        result = prefetch.refresh_latest_reporting_snapshot()
+
+    assert result["state"] == "error"
+    assert result["failedStage"] == expected_stage
+    assert result["errorCategory"] == expected_category
+    assert list(result["stageTimingsMs"])[-1] == expected_stage
+    assert result["elapsedMs"] >= sum(result["stageTimingsMs"].values())
+    assert sensitive_marker not in json.dumps(result, ensure_ascii=False)
+    assert sensitive_marker not in caplog.text
+    latest = publication.load_latest_reporting_release()
+    assert latest is not None
+    assert latest["id"] == previous_release["releaseId"]
+
+
 def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1976,6 +2196,22 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     assert supplement_context["subject"] == "*"
     assert result["supplementCandidateCount"] == 3
     assert result["supplementSearchIndexCount"] == 3
+    assert set(result["stageTimingsMs"]) == {
+        "current_sync",
+        "snapshot_persist",
+        "supplement_pool",
+        "subjects",
+        "batch_materialize",
+        "index_publish",
+        "release_publish",
+    }
+    assert all(
+        isinstance(duration, int) and duration >= 0
+        for duration in result["stageTimingsMs"].values()
+    )
+    assert result["elapsedMs"] >= sum(result["stageTimingsMs"].values())
+    assert "failedStage" not in result
+    assert "errorCategory" not in result
     snapshot = load_reporting_snapshot(
         period_start="2026-07-16",
         period_end="2026-08-15",

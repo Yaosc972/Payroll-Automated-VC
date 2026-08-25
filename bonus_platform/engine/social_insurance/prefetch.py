@@ -13,6 +13,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from .adapter import list_beisen_contract_subjects, sync_beisen_candidates
 from .publication import materialize_all_subject_runs
+from .reporting_diagnostics import ReportingRefreshDiagnostics, safe_error_category
 from .runs import default_reporting_window, list_runs, load_run
 from .supplements import (
     prepare_beisen_supplement_pool,
@@ -113,38 +114,43 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
         if refresh_key in _REPORTING_REFRESHING:
             return {"state": "warming", "label": "本期报盘快照正在后台更新"}
         _REPORTING_REFRESHING.add(refresh_key)
+    diagnostics = ReportingRefreshDiagnostics()
     try:
-        with tempfile.TemporaryDirectory(prefix="sigma-social-reporting-prefetch-") as temporary:
-            records, source_summary = sync_beisen_candidates(
+        with diagnostics.stage("current_sync"):
+            with tempfile.TemporaryDirectory(prefix="sigma-social-reporting-prefetch-") as temporary:
+                records, source_summary = sync_beisen_candidates(
+                    period_start=context["periodStart"],
+                    period_end=context["periodEnd"],
+                    confirmation_date=context["confirmationDate"],
+                    subject=context["subject"],
+                    output_dir=Path(temporary),
+                )
+        with diagnostics.stage("snapshot_persist"):
+            captured = capture_reporting_snapshot(
+                records=records,
+                source_summary=source_summary,
                 period_start=context["periodStart"],
                 period_end=context["periodEnd"],
                 confirmation_date=context["confirmationDate"],
                 subject=context["subject"],
-                output_dir=Path(temporary),
             )
-        captured = capture_reporting_snapshot(
-            records=records,
-            source_summary=source_summary,
-            period_start=context["periodStart"],
-            period_end=context["periodEnd"],
-            confirmation_date=context["confirmationDate"],
-            subject=context["subject"],
-        )
         if context["subject"] != "*":
-            return {"state": "ready", **captured}
-        supplement_records, supplement_pool = prepare_beisen_supplement_pool({
-            "id": "scheduled-supplement-pool",
-            "periodStart": context["periodStart"],
-            "periodEnd": context["periodEnd"],
-            "confirmationDate": context["confirmationDate"],
-            "subject": "*",
-            "employees": [],
-        }, force=True)
-        subjects = list_beisen_contract_subjects(
-            period_start=context["periodStart"],
-            period_end=context["periodEnd"],
-            force_refresh=True,
-        )
+            return {"state": "ready", **captured, **diagnostics.success_payload()}
+        with diagnostics.stage("supplement_pool"):
+            supplement_records, supplement_pool = prepare_beisen_supplement_pool({
+                "id": "scheduled-supplement-pool",
+                "periodStart": context["periodStart"],
+                "periodEnd": context["periodEnd"],
+                "confirmationDate": context["confirmationDate"],
+                "subject": "*",
+                "employees": [],
+            }, force=True)
+        with diagnostics.stage("subjects"):
+            subjects = list_beisen_contract_subjects(
+                period_start=context["periodStart"],
+                period_end=context["periodEnd"],
+                force_refresh=True,
+            )
         published = materialize_all_subject_runs(
             records=records,
             source_summary={
@@ -160,6 +166,7 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
             subject_options=subjects,
             supplement_pool_records=supplement_records,
             supplement_pool_status=supplement_pool,
+            diagnostics=diagnostics,
         )
         return {
             "state": "ready",
@@ -169,10 +176,23 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
             "supplementSearchIndexCount": published["supplementSearchIndexCount"],
             "supplementCandidateCount": int(supplement_pool.get("recordCount") or 0),
             "supplementPoolCachedAt": supplement_pool.get("cachedAt"),
+            **diagnostics.success_payload(),
         }
-    except Exception:  # noqa: BLE001 - connector details and employee data must not enter scheduler logs.
-        LOGGER.warning("社保本期报盘快照后台更新失败；具体原因仅在受控业务操作中展示")
-        return {"state": "error", "label": "本期报盘快照后台更新失败"}
+    except Exception as exc:  # noqa: BLE001 - only fixed safe diagnostics may enter scheduler logs.
+        diagnostics.fail_active_stage()
+        error = diagnostics.error_payload(safe_error_category(exc))
+        LOGGER.warning(
+            "社保本期报盘快照后台更新失败 stage=%s category=%s elapsedMs=%d stageTimingsMs=%s",
+            error["failedStage"],
+            error["errorCategory"],
+            error["elapsedMs"],
+            error["stageTimingsMs"],
+        )
+        return {
+            "state": "error",
+            "label": "本期报盘快照后台更新失败",
+            **error,
+        }
     finally:
         with _REPORTING_REFRESH_LOCK:
             _REPORTING_REFRESHING.discard(refresh_key)

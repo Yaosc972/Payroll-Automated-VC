@@ -25,6 +25,7 @@ from .persistent_storage import (
     serverless_runtime,
 )
 from .report_package import build_export_preflight
+from .reporting_diagnostics import ReportingRefreshDiagnostics
 from .rule_catalog import RULE_VERSION
 from .runs import RunValidationError, create_run, current_timestamp
 from .supplements import publish_supplement_search_indexes
@@ -273,8 +274,11 @@ def materialize_all_subject_runs(
     preferred_subject: str = "",
     supplement_pool_records: list[dict[str, Any]] | None = None,
     supplement_pool_status: dict[str, Any] | None = None,
+    diagnostics: ReportingRefreshDiagnostics | None = None,
 ) -> dict[str, Any]:
     """Create every subject batch, then atomically publish one PII-free release manifest."""
+    if diagnostics is not None:
+        diagnostics.begin_stage("batch_materialize")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
         subject = _subject_value(record)
@@ -376,18 +380,26 @@ def materialize_all_subject_runs(
         "source": safe_source,
     }
     supplement_index_summary = {"indexCount": 0, "candidateCount": 0}
+    if diagnostics is not None:
+        diagnostics.complete_active_stage()
+        diagnostics.begin_stage("index_publish")
     if supplement_pool_records is not None:
         supplement_index_summary = publish_supplement_search_indexes(
             created_runs,
             records=supplement_pool_records,
             pool_status=supplement_pool_status or {},
         )
+    if diagnostics is not None:
+        diagnostics.complete_active_stage()
+        diagnostics.begin_stage("release_publish")
     _persist_release(release)
     selected_run = run_by_subject[selected_subject]
     summaries = [
         {key: value for key, value in run.items() if key != "employees"}
         for run in created_runs
     ]
+    if diagnostics is not None:
+        diagnostics.complete_active_stage()
     return {
         "batchCount": len(created_runs),
         "runs": summaries,
