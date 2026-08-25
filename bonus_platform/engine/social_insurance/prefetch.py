@@ -14,7 +14,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .adapter import list_beisen_contract_subjects, sync_beisen_candidates
 from .publication import materialize_all_subject_runs
 from .runs import default_reporting_window, list_runs, load_run
-from .supplements import prewarm_beisen_supplement_pool, supplement_pool_status
+from .supplements import (
+    prepare_beisen_supplement_pool,
+    prewarm_beisen_supplement_pool,
+    supplement_pool_status,
+)
 from .sync_snapshot import capture_reporting_snapshot, seed_recent_reporting_snapshots
 
 
@@ -128,7 +132,7 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
         )
         if context["subject"] != "*":
             return {"state": "ready", **captured}
-        supplement_pool = prewarm_beisen_supplement_pool({
+        supplement_records, supplement_pool = prepare_beisen_supplement_pool({
             "id": "scheduled-supplement-pool",
             "periodStart": context["periodStart"],
             "periodEnd": context["periodEnd"],
@@ -154,12 +158,15 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
             period_end=context["periodEnd"],
             confirmation_date=context["confirmationDate"],
             subject_options=subjects,
+            supplement_pool_records=supplement_records,
+            supplement_pool_status=supplement_pool,
         )
         return {
             "state": "ready",
             **captured,
             "batchCount": published["batchCount"],
             "releaseId": published["releaseId"],
+            "supplementSearchIndexCount": published["supplementSearchIndexCount"],
             "supplementCandidateCount": int(supplement_pool.get("recordCount") or 0),
             "supplementPoolCachedAt": supplement_pool.get("cachedAt"),
         }

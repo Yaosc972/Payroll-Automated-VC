@@ -1494,6 +1494,146 @@ def test_supplement_status_uses_lightweight_context_without_loading_the_full_run
     assert response.json()["recordCount"] == 1
 
 
+def test_precomputed_supplement_index_serves_status_and_search_without_runtime_pool_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(runs_root))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-PRECOMPUTED-001", name="当前名单员工")
+    candidate = _record(identity="TEST-ID-PRECOMPUTED-002", name="预计算候选员工")
+    candidate["entryDate"] = "2026-06-03"
+    run = create_run(
+        records=[current],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-18",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    from bonus_platform.engine.social_insurance import supplements
+
+    supplements.publish_supplement_search_indexes(
+        [run],
+        records=[current, candidate],
+        pool_status={
+            "state": "ready",
+            "cachedAt": "2026-08-25T10:00:00Z",
+            "expiresAt": "2026-08-25T14:00:00Z",
+            "recordCount": 2,
+        },
+    )
+    supplements.clear_supplement_search_index_cache()
+    (runs_root / run["id"] / "run.json").unlink()
+    (runs_root / ".supplement-context" / f"{run['id']}.json").unlink()
+
+    client = TestClient(app)
+    status = client.get(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/status"
+    )
+    search = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "预计算候选"},
+    )
+
+    assert status.status_code == 200
+    assert status.json()["state"] == "ready"
+    assert status.json()["storage"] == "precomputed-search-index"
+    assert status.json()["recordCount"] == 2
+    assert search.status_code == 200
+    assert [item["name"] for item in search.json()["candidates"]] == ["预计算候选员工"]
+    assert "TEST-ID-PRECOMPUTED-002" not in search.text
+
+
+def test_precomputed_supplement_index_removes_candidate_after_successful_add(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    current = _record(identity="TEST-ID-INDEX-ADD-001", name="当前名单员工")
+    candidate = _record(identity="TEST-ID-INDEX-ADD-002", name="待加入索引候选")
+    candidate["entryDate"] = "2026-06-03"
+    fixture_path = tmp_path / "precomputed-index-add.json"
+    fixture_path.write_text(
+        json.dumps({"records": [current, candidate]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SYNC_FIXTURE", str(fixture_path))
+    run = create_run(
+        records=[current],
+        period_start="2026-06-16",
+        period_end="2026-07-15",
+        confirmation_date="2026-07-17",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    from bonus_platform.engine.social_insurance import supplements
+
+    records, status = supplements.prepare_beisen_supplement_pool(run)
+    supplements.publish_supplement_search_indexes([run], records=records, pool_status=status)
+    client = TestClient(app)
+    search = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "待加入索引"},
+    )
+    candidate_id = search.json()["candidates"][0]["id"]
+
+    added = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplements",
+        json={
+            "candidateId": candidate_id,
+            "reasonType": "delayed_enrollment",
+            "note": "员工资料延迟完善后补充",
+        },
+    )
+    repeated = client.post(
+        f"/api/social-insurance/runs/{run['id']}/supplement-candidates/search",
+        json={"query": "待加入索引"},
+    )
+
+    assert added.status_code == 200
+    assert repeated.status_code == 200
+    assert repeated.json()["candidates"] == []
+    index = supplements.load_supplement_search_index(run["id"])
+    assert index is not None
+    assert index["candidateCount"] == 0
+
+
+def test_identity_edit_invalidates_precomputed_supplement_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    current = _record(identity="TEST-ID-INDEX-PATCH-001", name="待修改证件员工")
+    candidate = _record(identity="TEST-ID-INDEX-PATCH-002", name="历史候选员工")
+    run = create_run(
+        records=[current],
+        period_start="2026-06-16",
+        period_end="2026-07-15",
+        confirmation_date="2026-07-17",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    from bonus_platform.engine.social_insurance import supplements
+
+    supplements.publish_supplement_search_indexes(
+        [run],
+        records=[candidate],
+        pool_status={"cachedAt": "2026-08-25T10:00:00Z", "recordCount": 1},
+    )
+    employee_id = run["employees"][0]["id"]
+
+    response = TestClient(app).patch(
+        f"/api/social-insurance/runs/{run['id']}/employees/{employee_id}",
+        json={"report": {"证件号码": "TEST-ID-INDEX-PATCH-NEW"}},
+    )
+
+    assert response.status_code == 200
+    assert supplements.load_supplement_search_index(run["id"]) is None
+
+
 def test_supplement_search_falls_back_to_full_run_for_legacy_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1783,6 +1923,11 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
         record = _record(identity=f"TEST-ID-SCHEDULE-ALL-{index}", name=f"定时员工{index}")
         record["source"]["subject"] = subject
         records.append(record)
+    supplement_records = []
+    for index, subject in enumerate(("测试主体甲", "测试主体乙", "测试主体丙"), start=1):
+        record = _record(identity=f"TEST-ID-SCHEDULE-SUPPLEMENT-{index}", name=f"历史候选{index}")
+        record["source"]["subject"] = subject
+        supplement_records.append(record)
     calls: list[str] = []
     supplement_prefetch_calls: list[tuple[dict, bool]] = []
 
@@ -1793,14 +1938,17 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     monkeypatch.setattr(prefetch, "sync_beisen_candidates", scheduled_sync)
     monkeypatch.setattr(
         prefetch,
-        "prewarm_beisen_supplement_pool",
+        "prepare_beisen_supplement_pool",
         lambda run, force=False: (
             supplement_prefetch_calls.append((deepcopy(run), force))
-            or {
-                "state": "ready",
-                "cachedAt": "2026-08-24T00:00:00Z",
-                "recordCount": 1162,
-            }
+            or (
+                supplement_records,
+                {
+                    "state": "ready",
+                    "cachedAt": "2026-08-24T00:00:00Z",
+                    "recordCount": len(supplement_records),
+                },
+            )
         ),
     )
     monkeypatch.setattr(prefetch, "list_beisen_contract_subjects", lambda **_kwargs: [
@@ -1826,7 +1974,8 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     assert supplement_context["periodEnd"] == "2026-08-15"
     assert supplement_context["confirmationDate"] == "2026-08-24"
     assert supplement_context["subject"] == "*"
-    assert result["supplementCandidateCount"] == 1162
+    assert result["supplementCandidateCount"] == 3
+    assert result["supplementSearchIndexCount"] == 3
     snapshot = load_reporting_snapshot(
         period_start="2026-07-16",
         period_end="2026-08-15",
@@ -1850,6 +1999,13 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     assert [subject["candidateCount"] for subject in release["subjects"]] == [1, 1, 0]
     assert all(subject.get("runId") for subject in release["subjects"])
     assert all(load_run(subject["runId"])["subject"] == subject["value"] for subject in release["subjects"])
+    from bonus_platform.engine.social_insurance import supplements
+
+    subject_b = next(subject for subject in release["subjects"] if subject["value"] == "测试主体乙")
+    supplements.clear_supplement_search_index_cache()
+    index = supplements.load_supplement_search_index(subject_b["runId"])
+    assert index is not None
+    assert [candidate["name"] for candidate in index["candidates"]] == ["历史候选2"]
     assert "定时员工" not in json.dumps(release, ensure_ascii=False)
     assert "TEST-ID-SCHEDULE-ALL" not in json.dumps(release, ensure_ascii=False)
 

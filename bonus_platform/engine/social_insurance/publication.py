@@ -27,6 +27,7 @@ from .persistent_storage import (
 from .report_package import build_export_preflight
 from .rule_catalog import RULE_VERSION
 from .runs import RunValidationError, create_run, current_timestamp
+from .supplements import publish_supplement_search_indexes
 from .sync_snapshot import capture_reporting_snapshot
 
 
@@ -270,6 +271,8 @@ def materialize_all_subject_runs(
     confirmation_date: str,
     subject_options: list[dict[str, Any]] | None = None,
     preferred_subject: str = "",
+    supplement_pool_records: list[dict[str, Any]] | None = None,
+    supplement_pool_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create every subject batch, then atomically publish one PII-free release manifest."""
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -372,6 +375,13 @@ def materialize_all_subject_runs(
         "subjects": subjects,
         "source": safe_source,
     }
+    supplement_index_summary = {"indexCount": 0, "candidateCount": 0}
+    if supplement_pool_records is not None:
+        supplement_index_summary = publish_supplement_search_indexes(
+            created_runs,
+            records=supplement_pool_records,
+            pool_status=supplement_pool_status or {},
+        )
     _persist_release(release)
     selected_run = run_by_subject[selected_subject]
     summaries = [
@@ -384,4 +394,6 @@ def materialize_all_subject_runs(
         "selectedRun": selected_run,
         "releaseId": release_id,
         "release": release,
+        "supplementSearchIndexCount": supplement_index_summary["indexCount"],
+        "supplementSearchCandidateCount": supplement_index_summary["candidateCount"],
     }

@@ -11,6 +11,7 @@ from bonus_platform.engine.social_insurance import adapter
 from bonus_platform.engine.social_insurance import persistent_storage as storage
 from bonus_platform.engine.social_insurance import router
 from bonus_platform.engine.social_insurance import runs
+from bonus_platform.engine.social_insurance import supplements
 from bonus_platform.engine.social_insurance.runs import RunValidationError
 
 
@@ -172,6 +173,124 @@ def test_supplement_search_context_is_shared_without_raw_employee_identity_detai
     serialized = json.dumps(loaded, ensure_ascii=False)
     assert "不应进入轻量上下文" not in serialized
     assert "TEST-IDENTITY-CONTEXT-001" not in serialized
+
+
+def test_precomputed_supplement_index_is_read_once_per_serverless_process(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_blob(monkeypatch)
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-a"))
+    objects: dict[tuple[str, str], dict] = {}
+    load_calls: list[tuple[str, str]] = []
+
+    def persist(namespace: str, key: str, payload: dict) -> None:
+        objects[(namespace, key)] = json.loads(json.dumps(payload))
+
+    def load(namespace: str, key: str) -> dict | None:
+        load_calls.append((namespace, key))
+        return objects.get((namespace, key))
+
+    monkeypatch.setattr(supplements, "persist_json", persist)
+    monkeypatch.setattr(supplements, "load_json", load)
+    run = {
+        "id": "sir_20260825140000_abcd1234",
+        "updatedAt": "2026-08-25T06:00:00Z",
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+        "subject": "深圳测试主体",
+        "employees": [],
+    }
+    candidate = {
+        "entryDate": "2026-06-03",
+        "status": "ready",
+        "report": {
+            "姓名": "进程缓存候选",
+            "证件号码": "TEST-IDENTITY-INDEX-001",
+        },
+        "source": {"subject": "深圳测试主体"},
+    }
+
+    supplements.publish_supplement_search_indexes(
+        [run],
+        records=[candidate],
+        pool_status={
+            "cachedAt": "2026-08-25T06:00:00Z",
+            "recordCount": 1,
+        },
+    )
+    persisted = objects[(supplements.SEARCH_INDEX_NAMESPACE, run["id"])]
+    assert "TEST-IDENTITY-INDEX-001" not in json.dumps(persisted, ensure_ascii=False)
+
+    supplements.clear_supplement_search_index_cache()
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
+    first = supplements.precomputed_supplement_status(run["id"])
+    second = supplements.search_precomputed_supplement_candidates(run["id"], "进程缓存")
+    third = supplements.search_precomputed_supplement_candidates(run["id"], "001")
+
+    assert first is not None
+    assert second is not None and [item["name"] for item in second] == ["进程缓存候选"]
+    assert third is not None and [item["name"] for item in third] == ["进程缓存候选"]
+    assert load_calls == [(supplements.SEARCH_INDEX_NAMESPACE, run["id"])]
+
+
+def test_supplement_index_mutation_bypasses_process_miss_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_blob(monkeypatch)
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance"))
+    objects: dict[tuple[str, str], dict] = {}
+    load_calls: list[tuple[str, str]] = []
+
+    def persist(namespace: str, key: str, payload: dict) -> None:
+        objects[(namespace, key)] = json.loads(json.dumps(payload))
+
+    def load(namespace: str, key: str) -> dict | None:
+        load_calls.append((namespace, key))
+        return objects.get((namespace, key))
+
+    monkeypatch.setattr(supplements, "persist_json", persist)
+    monkeypatch.setattr(supplements, "load_json", load)
+    run = {
+        "id": "sir_20260825150000_abcd1234",
+        "updatedAt": "2026-08-25T07:00:00Z",
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+        "subject": "深圳测试主体",
+        "employees": [],
+    }
+    candidate = {
+        "entryDate": "2026-06-03",
+        "status": "ready",
+        "report": {"姓名": "迟到索引候选", "证件号码": "TEST-IDENTITY-LATE-001"},
+        "source": {"subject": "深圳测试主体"},
+    }
+    supplements.publish_supplement_search_indexes(
+        [run],
+        records=[candidate],
+        pool_status={"cachedAt": "2026-08-25T07:00:00Z", "recordCount": 1},
+    )
+    object_key = (supplements.SEARCH_INDEX_NAMESPACE, run["id"])
+    published = objects.pop(object_key)
+    (tmp_path / "instance" / ".supplement-search-index" / f"{run['id']}.json").unlink()
+    supplements.clear_supplement_search_index_cache()
+    assert supplements.load_supplement_search_index(run["id"]) is None
+    objects[object_key] = published
+
+    removed = supplements.remove_supplement_candidate_from_search_index(
+        run["id"],
+        published["candidates"][0]["id"],
+        run_updated_at="2026-08-25T07:01:00Z",
+    )
+
+    assert removed is True
+    assert objects[object_key]["candidateCount"] == 0
+    assert load_calls == [object_key, object_key]
 
 
 def test_remote_connector_replaces_local_engine_for_subjects_and_sync(

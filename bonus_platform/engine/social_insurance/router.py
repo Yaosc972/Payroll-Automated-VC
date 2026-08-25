@@ -57,8 +57,12 @@ from .runs import (
     update_employee,
 )
 from .supplements import (
+    invalidate_supplement_search_index,
+    precomputed_supplement_status,
+    remove_supplement_candidate_from_search_index,
     resolve_beisen_supplement_candidate,
     search_beisen_supplement_candidates,
+    search_precomputed_supplement_candidates,
     supplement_pool_status,
 )
 from .sync_snapshot import capture_reporting_snapshot, load_reporting_snapshot
@@ -628,8 +632,11 @@ def search_supplement_candidates(
 ) -> dict[str, Any]:
     _require_access(request)
     try:
-        run = load_supplement_search_context(run_id) or load_run(run_id)
-        candidates = search_beisen_supplement_candidates(run, str(payload.get("query") or ""))
+        query = str(payload.get("query") or "")
+        candidates = search_precomputed_supplement_candidates(run_id, query)
+        if candidates is None:
+            run = load_supplement_search_context(run_id) or load_run(run_id)
+            candidates = search_beisen_supplement_candidates(run, query)
         return {"candidates": candidates, "rawApiResponseSaved": False}
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
@@ -639,8 +646,13 @@ def search_supplement_candidates(
 def get_supplement_candidate_status(request: Request, run_id: str) -> dict[str, Any]:
     _require_access(request)
     try:
+        status = precomputed_supplement_status(run_id)
+        if status is None:
+            status = supplement_pool_status(
+                load_supplement_search_context(run_id) or load_run(run_id)
+            )
         return {
-            **supplement_pool_status(load_supplement_search_context(run_id) or load_run(run_id)),
+            **status,
             "scheduler": prefetch_scheduler_status(),
         }
     except (RunNotFoundError, RunValidationError) as exc:
@@ -655,14 +667,21 @@ def add_supplement(
 ) -> dict[str, Any]:
     _require_access(request)
     try:
+        candidate_id = str(payload.get("candidateId") or "")
         run = load_run(run_id)
-        record = resolve_beisen_supplement_candidate(run, str(payload.get("candidateId") or ""))
-        return add_supplement_employee(
+        record = resolve_beisen_supplement_candidate(run, candidate_id)
+        updated = add_supplement_employee(
             run_id,
             record,
             reason_type=str(payload.get("reasonType") or ""),
             note=str(payload.get("note") or ""),
         )
+        remove_supplement_candidate_from_search_index(
+            run_id,
+            candidate_id,
+            run_updated_at=str(updated.get("updatedAt") or ""),
+        )
+        return updated
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
 
@@ -676,7 +695,16 @@ def patch_employee(
 ) -> dict[str, Any]:
     _require_access(request)
     try:
-        return update_employee(run_id, employee_id, payload)
+        updated = update_employee(run_id, employee_id, payload)
+        report_updates = payload.get("report") if isinstance(payload.get("report"), dict) else {}
+        template_updates = (
+            payload.get("templateReport")
+            if isinstance(payload.get("templateReport"), dict)
+            else {}
+        )
+        if "证件号码" in report_updates or "证件号码" in template_updates:
+            invalidate_supplement_search_index(run_id)
+        return updated
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
 
