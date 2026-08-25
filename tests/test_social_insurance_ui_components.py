@@ -43,8 +43,8 @@ def test_native_controls_receive_sigma_component_styling():
 def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
-    assert "social-insurance.css?v=42" in page
-    assert "social-insurance.js?v=43" in page
+    assert "social-insurance.css?v=43" in page
+    assert "social-insurance.js?v=44" in page
 
 
 def test_silent_refresh_clears_a_batch_from_the_previous_selection():
@@ -57,11 +57,36 @@ def test_silent_refresh_clears_a_batch_from_the_previous_selection():
 def test_subject_switch_clears_previous_batch_before_loading_the_new_run():
     script = _read("social-insurance.js")
     loader = script.split("async function loadSelectedSubjectRun", 1)[1].split("function renderMetrics", 1)[0]
-    loading_state = "state.run = null;\n    renderRun();\n    byId('lastSyncLabel').textContent = '正在加载主体批次…';"
-    request = "const payload = await api(`${API_ROOT}/runs?${params.toString()}`);"
+    loading_state = "state.runLoading = true;\n    state.run = null;\n    renderRun();\n    byId('lastSyncLabel').textContent = '正在加载主体批次…';"
+    request = "const payload = await api(`${API_ROOT}/runs/current?${params.toString()}`);"
 
     assert loading_state in loader
     assert loader.index(loading_state) < loader.index(request)
+    assert "payload.run" in loader
+    assert "payload.preflight" in loader
+    assert "`${API_ROOT}/runs?${params.toString()}`" not in loader
+
+
+def test_subject_counts_distinguish_current_beisen_candidates_from_the_saved_batch():
+    page = _read("social-insurance.html")
+    script = _read("social-insurance.js")
+
+    assert "<span>本批人数</span>" in page
+    assert "北森当前" in script
+    assert "基线保留" in script
+    assert "本批" in script
+    assert "monthlyBaseline?.baselineOnlyCount" in script
+
+
+def test_subject_switch_uses_an_in_memory_bundle_and_a_loading_skeleton():
+    script = _read("social-insurance.js")
+    styles = _read("social-insurance.css")
+
+    assert "batchCache: new Map()" in script
+    assert "state.batchCache.get" in script
+    assert "batch-loading-placeholder" in script
+    assert ".batch-loading-placeholder" in styles
+    assert "batch-loading-shimmer" in styles
 
 
 def test_run_update_time_is_rendered_in_shanghai_business_time():
@@ -433,11 +458,23 @@ def test_sync_completion_refreshes_supplement_action_state():
 def test_review_toolbar_can_export_all_enrollment_employees_in_one_workbook():
     page = _read("social-insurance.html")
     script = _read("social-insurance.js")
+    styles = _read("social-insurance.css")
 
     assert 'id="auditExportButton"' in page
     assert "导出审核清单" in page
     assert "/audit-export" in script
     assert "downloadAuditExport" in script
+    assert 'id="exportTransition"' in page
+    assert 'aria-live="polite"' in page
+    assert "async function downloadExportFile" in script
+    assert "response.blob()" in script
+    assert "URL.createObjectURL" in script
+    assert "aria-busy" in script
+    assert "exportTransitionSequence" in script
+    assert "window.location.assign" not in script
+    assert ".export-transition" in styles
+    assert ".export-transition.active" in styles
+    assert "export-track" in styles
 
 
 def test_review_supports_business_template_and_source_views_with_route_preflight():

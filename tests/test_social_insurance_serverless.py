@@ -10,6 +10,7 @@ from starlette.requests import Request
 from bonus_platform.engine.social_insurance import adapter
 from bonus_platform.engine.social_insurance import persistent_storage as storage
 from bonus_platform.engine.social_insurance import router
+from bonus_platform.engine.social_insurance import runs
 from bonus_platform.engine.social_insurance.runs import RunValidationError
 
 
@@ -85,6 +86,47 @@ def test_blob_storage_restores_complete_run_on_another_instance(
     assert json.loads((target / "run.json").read_text(encoding="utf-8"))["subject"] == "深圳测试主体（已修改）"
     run_reads = [pathname for pathname in get_calls if "/run.json?" in pathname]
     assert len(set(run_reads)) >= 2
+
+
+def test_run_context_index_is_persisted_without_employee_details(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_blob(monkeypatch)
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-a"))
+    objects: dict[tuple[str, str], dict] = {}
+    monkeypatch.setattr(
+        runs,
+        "persist_json",
+        lambda namespace, key, payload: objects.__setitem__((namespace, key), json.loads(json.dumps(payload))),
+    )
+    monkeypatch.setattr(runs, "load_json", lambda namespace, key: objects.get((namespace, key)))
+    run = {
+        "id": "sir_20260825120000_abcd1234",
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+        "subject": "深圳测试主体",
+        "createdAt": "2026-08-25T04:00:00Z",
+        "updatedAt": "2026-08-25T04:00:00Z",
+        "summary": {"total": 1, "latestEmployeeName": "不应进入索引"},
+        "employees": [{"report": {"姓名": "不应进入索引"}}],
+    }
+
+    assert runs.persist_run_index(run) is True
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
+    loaded = runs.load_run_index(
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject="深圳测试主体",
+    )
+
+    assert loaded is not None
+    assert loaded["runId"] == run["id"]
+    assert "employees" not in loaded
+    assert "不应进入索引" not in json.dumps(loaded, ensure_ascii=False)
 
 
 def test_remote_connector_replaces_local_engine_for_subjects_and_sync(

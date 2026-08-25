@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
 import json
@@ -234,18 +235,24 @@ def list_persisted_runs() -> list[dict[str, Any]]:
         existing_at = str(existing.get("uploadedAt") or existing.get("uploaded_at") or "") if existing else ""
         if existing is None or uploaded_at >= existing_at:
             latest[pathname] = blob
-    rows: list[dict[str, Any]] = []
-    for pathname, blob in latest.items():
+    def read_run(item: tuple[str, dict[str, Any]]) -> dict[str, Any] | None:
+        pathname, blob = item
         content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
         if content is None:
-            continue
+            return None
         try:
             payload = json.loads(content.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict):
-            rows.append(deepcopy(payload))
-    return rows
+            return None
+        return deepcopy(payload) if isinstance(payload, dict) else None
+
+    items = list(latest.items())
+    if len(items) <= 1:
+        loaded = [read_run(item) for item in items]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(items))) as executor:
+            loaded = list(executor.map(read_run, items))
+    return [payload for payload in loaded if payload is not None]
 
 
 def object_key(*values: str) -> str:

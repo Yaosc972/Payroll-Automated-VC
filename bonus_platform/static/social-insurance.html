@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>社保报盘工具 · HRAS 全球薪酬核算工作台</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
-  <link rel="stylesheet" href="social-insurance.css?v=42" />
+  <link rel="stylesheet" href="social-insurance.css?v=43" />
   </head>
   <body>
     <div class="si-shell">
@@ -109,7 +109,7 @@
           </nav>
 
           <section class="metrics" aria-label="批次统计">
-            <article><span>候选人数</span><strong id="metricTotal">—</strong></article>
+            <article><span>本批人数</span><strong id="metricTotal">—</strong></article>
             <article class="success"><span>规则可报盘</span><strong id="metricReady">—</strong></article>
             <article class="warning"><span>待人工确认</span><strong id="metricReview">—</strong></article>
             <article><span>本批次纳入</span><strong id="metricIncluded">—</strong></article>
@@ -275,7 +275,12 @@
       </form>
     </section>
 
+    <div class="export-transition" id="exportTransition" role="status" aria-live="polite" aria-busy="false" hidden>
+      <span class="export-transition-mark" aria-hidden="true"><i></i></span>
+      <span class="export-transition-copy"><b id="exportTransitionTitle">正在准备导出文件</b><small id="exportTransitionDetail">系统正在汇总当前批次数据</small></span>
+      <span class="export-transition-progress" aria-hidden="true"><i></i></span>
+    </div>
     <div class="toast-stack" id="toastRegion" aria-live="polite" aria-atomic="false" aria-label="操作通知"></div>
-  <script src="social-insurance.js?v=43"></script>
+  <script src="social-insurance.js?v=44"></script>
   </body>
 </html>

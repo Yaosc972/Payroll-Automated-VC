@@ -51,6 +51,8 @@ from .runs import (
     default_reporting_window,
     list_runs,
     load_run,
+    load_run_index,
+    persist_run_index,
     update_employee,
 )
 from .supplements import (
@@ -537,6 +539,63 @@ def sync_all_runs(request: Request, payload: dict[str, Any] = Body(...)) -> dict
         selected_run = selected_run or created_runs[0]
         summaries = [{key: value for key, value in run.items() if key != "employees"} for run in created_runs]
         return {"batchCount": len(created_runs), "runs": summaries, "selectedRun": selected_run}
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/runs/current")
+def get_current_run(
+    request: Request,
+    period_start: str = Query(alias="periodStart"),
+    period_end: str = Query(alias="periodEnd"),
+    confirmation_date: str = Query(alias="confirmationDate"),
+    subject: str = Query(),
+) -> dict[str, Any]:
+    """Resolve one exact batch through its PII-free index and return preflight in the same response."""
+    _require_access(request)
+    normalized_subject = subject.strip()
+    try:
+        if not normalized_subject:
+            raise RunValidationError("合同主体不能为空")
+        indexed = load_run_index(
+            period_start=period_start,
+            period_end=period_end,
+            confirmation_date=confirmation_date,
+            subject=normalized_subject,
+        )
+        run: dict[str, Any] | None = None
+        lookup_source = "run-index" if indexed else "none"
+        if indexed:
+            try:
+                run = load_run(str(indexed["runId"]))
+            except RunNotFoundError:
+                run = None
+        expected = (period_start, period_end, confirmation_date, normalized_subject)
+        if run is not None and (
+            str(run.get("periodStart") or ""),
+            str(run.get("periodEnd") or ""),
+            str(run.get("confirmationDate") or ""),
+            str(run.get("subject") or "").strip(),
+        ) != expected:
+            run = None
+        if run is None:
+            recent = list_runs(
+                1,
+                period_start=period_start,
+                period_end=period_end,
+                confirmation_date=confirmation_date,
+                subject=normalized_subject,
+            )
+            if not recent:
+                return {"run": None, "preflight": None, "lookupSource": "none"}
+            run = load_run(str(recent[0]["id"]))
+            persist_run_index(run, force=True)
+            lookup_source = "run-list-fallback"
+        return {
+            "run": run,
+            "preflight": build_export_preflight(run),
+            "lookupSource": lookup_source,
+        }
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
 

@@ -6,7 +6,6 @@
   const METADATA_ENDPOINT = '/api/social-insurance/metadata';
   const SYNC_ENDPOINT = '/api/social-insurance/runs/sync';
   const SYNC_ALL_ENDPOINT = '/api/social-insurance/runs/sync-all';
-  const RUN_ENDPOINT_PREFIX = '/api/social-insurance/runs/';
   const WIDE_FIELDS = new Set(['通讯地址', '国家职业资格或职业技能等级', '户口所在地行政区划代码']);
   const STATUS_LABELS = { ready: '可报盘', needs_review: '待人工确认', excluded: '已排除' };
   const STATUS_TEXT = { draft: '审核中', confirmed: '人员已确认', generated: '报盘已生成' };
@@ -43,6 +42,7 @@
 
   const state = {
     run: null,
+    runLoading: false,
     filter: 'all',
     search: '',
     editingId: null,
@@ -61,7 +61,7 @@
     administrativeDivisionChoices: [],
     administrativeDivisionSet: new Set(),
     supplementCandidate: null,
-    batchIndex: new Map(),
+    batchCache: new Map(),
   };
   const byId = (id) => document.getElementById(id);
   let comboboxSequence = 0;
@@ -71,6 +71,8 @@
   let subjectAbortController = null;
   let supplementPoolStatusTimer = null;
   let runRequestSequence = 0;
+  let exportTransitionTimer = null;
+  let exportTransitionSequence = 0;
   const datePickerState = {
     open: null,
     periodBaseMonth: null,
@@ -352,15 +354,37 @@
     return Array.from(byId('subject').options).filter((option) => option.value);
   }
 
+  function subjectCountPresentation(selected) {
+    if (!selected?.value) return { badge: '', current: 0, total: null, baselineOnly: 0, supplemental: 0 };
+    const current = Number(selected.dataset.candidateCount || 0);
+    const run = state.run
+      && state.run.periodStart === byId('periodStart').value
+      && state.run.periodEnd === byId('periodEnd').value
+      && state.run.confirmationDate === byId('confirmationDate').value
+      && state.run.subject === selected.value
+      ? state.run
+      : null;
+    const total = Number.isFinite(Number(run?.summary?.total)) ? Number(run.summary.total) : null;
+    const baselineOnly = Number(run?.sourceSummary?.monthlyBaseline?.baselineOnlyCount || 0);
+    const supplemental = Number(run?.summary?.supplemental || 0);
+    return {
+      current,
+      total,
+      baselineOnly,
+      supplemental,
+      badge: total !== null && total !== current
+        ? `北森当前 ${current} · 本批 ${total}`
+        : `北森当前 ${current}`,
+    };
+  }
+
   function syncSubjectPicker() {
     const select = byId('subject');
     const trigger = byId('subjectTrigger');
     const selected = select.selectedOptions[0];
     trigger.disabled = select.disabled;
     byId('subjectTriggerLabel').textContent = selected?.dataset.subjectLabel || selected?.textContent || '请选择合同主体';
-    byId('subjectTriggerCount').textContent = selected?.value && selected.dataset.candidateCount
-      ? `候选 ${selected.dataset.candidateCount}`
-      : '';
+    byId('subjectTriggerCount').textContent = subjectCountPresentation(selected).badge;
     if (subjectPickerState.open) renderSubjectPickerOptions(byId('subjectSearch').value);
   }
 
@@ -412,7 +436,7 @@
       button.append(
         textNode('span', 'subject-option-mark', option.selected ? '✓' : ''),
         textNode('span', 'subject-option-name', option.dataset.subjectLabel || option.textContent),
-        textNode('span', 'subject-option-count', `${option.dataset.candidateCount || 0} 人`),
+        textNode('span', 'subject-option-count', `北森当前 ${option.dataset.candidateCount || 0}`),
       );
       button.addEventListener('mouseenter', () => markSubjectOptionActive(index));
       button.addEventListener('click', () => chooseSubject(option));
@@ -509,44 +533,64 @@
     return [context.periodStart, context.periodEnd, context.confirmationDate, context.subject].join('::');
   }
 
-  function indexRun(run) {
+  function cacheBatchBundle(run, preflight = null) {
     if (!run?.id) return;
-    state.batchIndex.set(batchContextKey(run), run.id);
+    state.batchCache.set(batchContextKey(run), { run, preflight });
+  }
+
+  function invalidateBatchCache(runId = '') {
+    Array.from(state.batchCache.entries()).forEach(([key, bundle]) => {
+      if (!runId || bundle.run?.id === runId) state.batchCache.delete(key);
+    });
+  }
+
+  function applyBatchBundle(run, preflight = null, { cache = true } = {}) {
+    state.runLoading = false;
+    state.run = run || null;
+    state.preflight = preflight?.runId === run?.id ? preflight : null;
+    state.preflightKey = state.preflight ? `${run.id}:${run.updatedAt || ''}` : '';
+    state.preflightLoading = false;
+    if (cache && run) cacheBatchBundle(run, state.preflight);
   }
 
   async function loadSelectedSubjectRun({ silent = false } = {}) {
     const context = selectedBatchContext();
     if (!state.subjectsReady || !Object.values(context).every(Boolean)) return;
-    if (selectionMatchesRun()) { indexRun(state.run); return; }
+    if (selectionMatchesRun()) return;
     const requestSequence = ++runRequestSequence;
+    const contextKey = batchContextKey(context);
+    const cached = state.batchCache.get(contextKey);
+    if (cached) {
+      applyBatchBundle(cached.run, cached.preflight, { cache: false });
+      state.filter = 'all';
+      state.search = '';
+      byId('employeeSearch').value = '';
+      renderRun();
+      return;
+    }
+    state.runLoading = true;
     state.run = null;
     renderRun();
     byId('lastSyncLabel').textContent = '正在加载主体批次…';
     try {
-      let runId = state.batchIndex.get(batchContextKey(context));
-      if (!runId) {
-        const params = new URLSearchParams({ ...context, limit: '1' });
-        const payload = await api(`${API_ROOT}/runs?${params.toString()}`);
-        if (requestSequence !== runRequestSequence) return;
-        runId = payload.runs?.[0]?.id;
-        if (runId) state.batchIndex.set(batchContextKey(context), runId);
-      }
-      if (!runId) {
-        state.run = null;
+      const params = new URLSearchParams(context);
+      const payload = await api(`${API_ROOT}/runs/current?${params.toString()}`);
+      if (requestSequence !== runRequestSequence) return;
+      if (!payload.run) {
+        applyBatchBundle(null, null, { cache: false });
         renderRun();
         if (!silent) showToast('该周期尚未生成主体批次，请点击“生成全部主体批次”', 'error');
         return;
       }
-      const run = await api(`${RUN_ENDPOINT_PREFIX}${encodeURIComponent(runId)}`);
-      if (requestSequence !== runRequestSequence) return;
-      state.run = run;
+      applyBatchBundle(payload.run, payload.preflight);
       state.filter = 'all';
       state.search = '';
       byId('employeeSearch').value = '';
-      indexRun(run);
       renderRun();
     } catch (error) {
       if (requestSequence !== runRequestSequence) return;
+      state.runLoading = false;
+      renderRun();
       byId('lastSyncLabel').textContent = '主体批次加载失败';
       if (!silent) showToast(error.message, 'error');
     }
@@ -554,6 +598,9 @@
 
   function renderMetrics() {
     const summary = state.run?.summary || {};
+    const metrics = document.querySelector('.metrics');
+    metrics?.setAttribute('aria-busy', String(state.runLoading));
+    document.querySelector('.batch-overview')?.classList.toggle('loading-batch', state.runLoading);
     byId('metricTotal').textContent = summary.total ?? '—';
     byId('metricReady').textContent = summary.ready ?? '—';
     byId('metricReview').textContent = summary.needsReview ?? '—';
@@ -879,6 +926,25 @@
     renderTableHeader();
     const columns = currentTableColumns();
     const employees = filteredEmployees();
+    if (state.runLoading) {
+      const row = document.createElement('tr');
+      row.className = 'empty-row loading-row';
+      const cell = document.createElement('td');
+      cell.colSpan = columns.length + 3;
+      const holder = document.createElement('div');
+      holder.className = 'batch-loading-placeholder';
+      holder.setAttribute('role', 'status');
+      holder.setAttribute('aria-label', '正在加载主体批次');
+      for (let index = 0; index < 3; index += 1) {
+        const line = document.createElement('span');
+        line.append(textNode('i', '', ''), textNode('i', '', ''), textNode('i', '', ''));
+        holder.append(line);
+      }
+      cell.append(holder); row.append(cell); body.append(row);
+      byId('tableCount').textContent = '正在加载';
+      window.requestAnimationFrame(() => { syncTableHorizontalControl(); syncFloatingTableTools(true); });
+      return;
+    }
     if (!employees.length) {
       const row = document.createElement('tr');
       row.className = 'empty-row';
@@ -1068,6 +1134,7 @@
       if (state.run?.id !== run.id) return;
       state.preflight = payload;
       state.preflightKey = key;
+      cacheBatchBundle(run, payload);
     } catch (error) {
       if (state.run?.id === run.id) {
         state.preflight = null;
@@ -1163,6 +1230,7 @@
   function renderRun() {
     syncTemplateRouteSelectors();
     renderMetrics(); renderTable(); renderProcessingPlan(); renderPreflight(); renderStages(); renderActions();
+    syncSubjectPicker();
     const isCurrentBatch = selectionMatchesRun();
     const periodNotice = byId('periodContextNotice');
     periodNotice.hidden = !state.run || isCurrentBatch;
@@ -1171,15 +1239,24 @@
     }
     const sourceWarning = byId('sourceWarning');
     const warnings = state.run?.sourceSummary?.warnings || [];
-    sourceWarning.hidden = warnings.length === 0;
-    sourceWarning.textContent = warnings.map((warning) => {
+    const counts = subjectCountPresentation(byId('subject').selectedOptions[0]);
+    const countParts = [`北森当前 ${counts.current} 人`, `月度基线保留 ${counts.baselineOnly} 人`];
+    if (counts.supplemental > 0) countParts.push(`补充增员 ${counts.supplemental} 人`);
+    const countEquationMatches = counts.current + counts.baselineOnly + counts.supplemental === counts.total;
+    const countWarning = counts.total !== null && counts.baselineOnly > 0
+      ? `人数口径：${countParts.join(countEquationMatches ? ' + ' : '；')}${countEquationMatches ? ' = ' : '；'}本批 ${counts.total} 人。基线保留人员继续进入人工确认，不会自动报盘。`
+      : '';
+    const renderedWarnings = warnings.map((warning) => {
       if (!warning.includes('离职快照')) return warning;
       const confirmationDate = state.run?.confirmationDate || '名单确认日';
       if (warning.includes('日期无法从文件名识别')) {
         return `离职数据时点校验：该提示用于确认离职数据是否覆盖到名单确认日，避免已离职人员被误纳入。当前无法识别快照日期，请确认数据已更新至 ${confirmationDate}。`;
       }
       return `离职数据时点校验：该提示用于确认离职数据是否覆盖到名单确认日，避免已离职人员被误纳入。${warning}`;
-    }).join('；');
+    });
+    if (countWarning) renderedWarnings.unshift(countWarning);
+    sourceWarning.hidden = renderedWarnings.length === 0;
+    sourceWarning.textContent = renderedWarnings.join('；');
     byId('lastSyncLabel').textContent = state.run
       ? (isCurrentBatch
         ? `${state.run.periodStart} 至 ${state.run.periodEnd} · ${formatRunTimestamp(state.run.updatedAt)}`
@@ -1242,9 +1319,7 @@
     subjects.forEach((subject) => {
       const option = document.createElement('option');
       option.value = subject.value;
-      option.textContent = subject.candidateCount > 0
-        ? `${subject.label}（候选${subject.candidateCount}人）`
-        : subject.label;
+      option.textContent = `${subject.label}（北森当前${subject.candidateCount || 0}人）`;
       option.dataset.subjectLabel = subject.label;
       option.dataset.candidateCount = String(subject.candidateCount || 0);
       if (subject.code) option.dataset.subjectCode = subject.code;
@@ -1604,6 +1679,7 @@
       state.run = await api(`${API_ROOT}/runs/${state.run.id}/employees/${employee.id}`, {
         method: 'PATCH', body: JSON.stringify({ decision: checkbox.checked ? 'include' : 'exclude' }),
       });
+      invalidateBatchCache(state.run.id);
       renderRun(); showToast(checkbox.checked ? '已纳入本批报盘' : '已从本批报盘排除');
     } catch (error) { checkbox.checked = !checkbox.checked; showToast(error.message, 'error'); }
     finally { checkbox.disabled = false; }
@@ -1774,6 +1850,7 @@
       state.run = await api(`${API_ROOT}/runs/${state.run.id}/employees/${state.editingId}`, {
         method: 'PATCH', body: JSON.stringify(payload),
       });
+      invalidateBatchCache(state.run.id);
       closeDrawer(); renderRun(); showToast('人员信息已保存到当前批次');
     } catch (error) { showToast(error.message, 'error'); }
     finally { submit.disabled = false; }
@@ -1893,6 +1970,7 @@
           note,
         }),
       });
+      invalidateBatchCache(state.run.id);
       const added = [...state.run.employees].reverse().find((employee) => employee.supplemental && !employee.confirmed);
       state.operation = null; closeSupplementDialog(); renderRun();
       showToast('补充人员已加入当前批次，请复核报盘字段并人工确认');
@@ -1915,9 +1993,8 @@
         method: 'POST',
         body: JSON.stringify(selectedBatchContext()),
       });
-      (payload.runs || []).forEach(indexRun);
+      state.batchCache.clear();
       state.run = payload.selectedRun;
-      indexRun(state.run);
       state.filter = 'all'; state.search = ''; byId('employeeSearch').value = '';
       document.querySelectorAll('.filter-tabs button').forEach((node) => node.classList.toggle('active', node.dataset.filter === 'all'));
       const generationSource = state.run?.sourceSummary?.dataMode === 'background-all-subject-snapshot'
@@ -1934,6 +2011,7 @@
     const button = byId('confirmBatchButton'); button.disabled = true;
     try {
       state.run = await api(`${API_ROOT}/runs/${state.run.id}/confirm`, { method: 'POST' });
+      invalidateBatchCache(state.run.id);
       renderRun(); showToast('本批人员已确认，正在按办理路径校验模板与必填资料');
     } catch (error) { showToast(error.message, 'error'); }
     finally { state.operation = null; renderActions(); }
@@ -1964,6 +2042,7 @@
     try {
       const params = new URLSearchParams({ route });
       state.run = await api(`${API_ROOT}/runs/${state.run.id}/template?${params.toString()}`, { method: 'POST', body: form });
+      invalidateBatchCache(state.run.id);
       state.preflightKey = '';
       renderRun(); showToast(`${schemaForRoute(route)?.label || '政务模板'}已导入；生成时会再次校验表头`);
     } catch (error) { showToast(error.message, 'error'); }
@@ -2029,6 +2108,7 @@
     const syncButton = byId('syncButton'); syncButton.disabled = true;
     try {
       state.run = await api(`${API_ROOT}/runs/${state.run.id}/generate-package`, { method: 'POST' });
+      invalidateBatchCache(state.run.id);
       state.preflightKey = '';
       renderRun();
       const packageResult = state.run.reportPackage || {};
@@ -2046,16 +2126,116 @@
     }
   }
 
-  function downloadAuditExport() {
+  function showExportTransition(status, title, detail) {
+    window.clearTimeout(exportTransitionTimer);
+    const sequence = ++exportTransitionSequence;
+    const holder = byId('exportTransition');
+    holder.hidden = false;
+    holder.classList.remove('complete', 'error');
+    if (status !== 'loading') holder.classList.add(status);
+    holder.setAttribute('aria-busy', String(status === 'loading'));
+    byId('exportTransitionTitle').textContent = title;
+    byId('exportTransitionDetail').textContent = detail;
+    window.requestAnimationFrame(() => holder.classList.add('active'));
+    if (status !== 'loading') {
+      exportTransitionTimer = window.setTimeout(() => {
+        if (sequence !== exportTransitionSequence) return;
+        holder.classList.remove('active');
+        exportTransitionTimer = window.setTimeout(() => {
+          if (sequence === exportTransitionSequence) holder.hidden = true;
+        }, 180);
+      }, status === 'complete' ? 1200 : 2200);
+    }
+  }
+
+  function responseFilename(response, fallback) {
+    const disposition = response.headers.get('content-disposition') || '';
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    const plain = /filename="?([^";]+)"?/i.exec(disposition)?.[1];
+    let filename = fallback;
+    try { filename = encoded ? decodeURIComponent(encoded) : (plain || fallback); }
+    catch { filename = plain || fallback; }
+    return filename.split(/[\\/]/).pop() || fallback;
+  }
+
+  async function downloadExportFile(path, { control, title, detail, fallbackFilename }) {
     if (!state.run || state.operation) return;
+    state.operation = 'export';
+    renderActions();
+    control?.classList.add('exporting');
+    control?.setAttribute('aria-busy', 'true');
+    if (control?.tagName === 'A') control.setAttribute('aria-disabled', 'true');
+    showExportTransition('loading', `正在准备${title}`, detail);
+    try {
+      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+      if (response.status === 401) {
+        window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname)}`;
+        throw new Error('请先登录 HRAS 全球薪酬核算工作台');
+      }
+      if (!response.ok) {
+        let message = `${title}失败，请稍后重试`;
+        try {
+          const payload = await response.json();
+          message = typeof payload.detail === 'string' ? payload.detail : (payload.detail?.message || message);
+        } catch { /* response is not JSON */ }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      showExportTransition('loading', `${title}已生成`, '正在交给浏览器保存，请保持当前页面打开');
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = responseFilename(response, fallbackFilename);
+      anchor.hidden = true;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+      showExportTransition('complete', '下载已开始', `${title}已交给浏览器，可继续审核当前批次`);
+    } catch (error) {
+      showExportTransition('error', `${title}未完成`, error.message);
+      showToast(error.message, 'error');
+    } finally {
+      state.operation = null;
+      control?.classList.remove('exporting');
+      control?.setAttribute('aria-busy', 'false');
+      control?.removeAttribute('aria-disabled');
+      renderActions();
+    }
+  }
+
+  function downloadAuditExport() {
+    if (!state.run) return;
     const runId = encodeURIComponent(state.run.id);
-    window.location.assign(`${API_ROOT}/runs/${runId}/audit-export`);
+    downloadExportFile(`${API_ROOT}/runs/${runId}/audit-export`, {
+      control: byId('auditExportButton'),
+      title: '审核清单',
+      detail: '正在汇总本批纳入、排除及人工确认结果',
+      fallbackFilename: '社保增员审核清单.xlsx',
+    });
   }
 
   function downloadMissingExport() {
-    if (!state.run || state.operation) return;
+    if (!state.run) return;
     const runId = encodeURIComponent(state.run.id);
-    window.location.assign(`${API_ROOT}/runs/${runId}/missing-export`);
+    downloadExportFile(`${API_ROOT}/runs/${runId}/missing-export`, {
+      control: byId('missingExportButton'),
+      title: '待补资料表',
+      detail: '正在汇总缺失字段和对应办理路径',
+      fallbackFilename: '社保增员待补资料.xlsx',
+    });
+  }
+
+  function downloadReportPackage(event) {
+    event.preventDefault();
+    if (!state.run?.reportPackage) return;
+    const runId = encodeURIComponent(state.run.id);
+    downloadExportFile(`${API_ROOT}/runs/${runId}/package/download`, {
+      control: byId('downloadButton'),
+      title: '政务报盘包',
+      detail: '正在打包已生成的办理路径和复核说明',
+      fallbackFilename: '社保政务报盘包.zip',
+    });
   }
 
   function bindEvents() {
@@ -2066,8 +2246,8 @@
     byId('retrySubjectsButton').addEventListener('click', () => scheduleContractSubjectLoad(byId('subject').value, 0, true));
     byId('periodStart').addEventListener('change', () => scheduleContractSubjectLoad());
     byId('periodEnd').addEventListener('change', () => scheduleContractSubjectLoad());
-    byId('confirmationDate').addEventListener('change', () => { renderRun(); loadSelectedSubjectRun(); });
-    byId('subject').addEventListener('change', () => { syncSubjectPicker(); renderRun(); loadSelectedSubjectRun(); });
+    byId('confirmationDate').addEventListener('change', () => { loadSelectedSubjectRun(); });
+    byId('subject').addEventListener('change', () => { syncSubjectPicker(); loadSelectedSubjectRun(); });
     byId('openSupplementButton').addEventListener('click', openSupplementDialog);
     byId('closeSupplementButton').addEventListener('click', closeSupplementDialog);
     byId('cancelSupplementButton').addEventListener('click', closeSupplementDialog);
@@ -2078,6 +2258,7 @@
     byId('supplementForm').addEventListener('submit', addSupplementEmployee);
     byId('auditExportButton').addEventListener('click', downloadAuditExport);
     byId('missingExportButton').addEventListener('click', downloadMissingExport);
+    byId('downloadButton').addEventListener('click', downloadReportPackage);
     byId('confirmBatchButton').addEventListener('click', confirmBatch);
     byId('employeeSearch').addEventListener('input', (event) => { state.search = event.target.value; renderTable(); });
     document.querySelectorAll('.filter-tabs button').forEach((button) => button.addEventListener('click', () => {
@@ -2117,12 +2298,9 @@
       byId('confirmationDate').value = config.confirmationDate;
       renderDatePickerValues();
       const recent = await api(`${API_ROOT}/runs?limit=1`);
-      if (recent.runs?.[0]) {
-        state.run = await api(`${RUN_ENDPOINT_PREFIX}${recent.runs[0].id}`);
-        indexRun(state.run);
-        renderRun();
-      }
-      await Promise.all([loadContractSubjects(state.run?.subject || config.defaultSubject), loadFieldMetadata()]);
+      const fallbackSubject = state.run?.subject || config.defaultSubject;
+      const preferredSubject = recent.runs?.[0]?.subject || fallbackSubject;
+      await Promise.all([loadContractSubjects(preferredSubject), loadFieldMetadata()]);
       renderRun();
     } catch (error) { showToast(error.message, 'error'); }
   }

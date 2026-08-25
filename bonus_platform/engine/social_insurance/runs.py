@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -14,7 +15,10 @@ from .coverage import build_coverage_tasks, coverage_summary, processing_plan
 from .field_metadata import FieldMetadataError, validate_report_field_value
 from .persistent_storage import (
     SocialInsuranceStorageError,
+    load_json,
     list_persisted_runs,
+    object_key,
+    persist_json,
     persist_run_directory,
     persistent_storage_enabled,
     require_persistent_storage,
@@ -23,6 +27,23 @@ from .persistent_storage import (
 )
 from .rule_catalog import RULE_VERSION
 from .template_schemas import hydrate_employee_template_reports, validate_template_updates
+
+
+LOGGER = logging.getLogger(__name__)
+RUN_INDEX_NAMESPACE = "run-index"
+RUN_INDEX_SUMMARY_FIELDS = (
+    "total",
+    "ready",
+    "needsReview",
+    "excluded",
+    "included",
+    "infoOnly",
+    "supplemental",
+    "coverageReady",
+    "coverageNeedsReview",
+    "coverageScheduled",
+    "manualHandling",
+)
 
 
 TEMPLATE_FIELDS = (
@@ -127,6 +148,14 @@ def _run_path(run_id: str) -> Path:
     return get_run_dir(run_id) / "run.json"
 
 
+def _run_index_key(*, period_start: str, period_end: str, confirmation_date: str, subject: str) -> str:
+    return object_key(period_start, period_end, confirmation_date, subject.strip())
+
+
+def _run_index_path(key: str) -> Path:
+    return _runs_root() / ".run-index" / f"{key}.json"
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
@@ -144,6 +173,105 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _run_index_payload(run: dict[str, Any]) -> dict[str, Any]:
+    summary = run.get("summary") if isinstance(run.get("summary"), dict) else {}
+    summary_counts = {
+        field: summary[field]
+        for field in RUN_INDEX_SUMMARY_FIELDS
+        if isinstance(summary.get(field), int)
+    }
+    return {
+        "version": 1,
+        "runId": str(run.get("id") or ""),
+        "periodStart": str(run.get("periodStart") or ""),
+        "periodEnd": str(run.get("periodEnd") or ""),
+        "confirmationDate": str(run.get("confirmationDate") or ""),
+        "subject": str(run.get("subject") or "").strip(),
+        "createdAt": str(run.get("createdAt") or ""),
+        "updatedAt": str(run.get("updatedAt") or ""),
+        "summary": summary_counts,
+    }
+
+
+def persist_run_index(run: dict[str, Any], *, force: bool = False) -> bool:
+    """Persist a PII-free exact-context lookup without blocking core batch writes."""
+    payload = _run_index_payload(run)
+    if not all(payload.get(key) for key in ("runId", "periodStart", "periodEnd", "confirmationDate", "subject")):
+        return False
+    key = _run_index_key(
+        period_start=payload["periodStart"],
+        period_end=payload["periodEnd"],
+        confirmation_date=payload["confirmationDate"],
+        subject=payload["subject"],
+    )
+    try:
+        existing = None if force else load_run_index(
+            period_start=payload["periodStart"],
+            period_end=payload["periodEnd"],
+            confirmation_date=payload["confirmationDate"],
+            subject=payload["subject"],
+        )
+        if (
+            existing
+            and existing.get("runId") != payload["runId"]
+            and (str(existing.get("createdAt") or ""), str(existing.get("runId") or ""))
+                > (payload["createdAt"], payload["runId"])
+        ):
+            return True
+        _write_json_atomic(_run_index_path(key), payload)
+        if persistent_storage_enabled():
+            persist_json(RUN_INDEX_NAMESPACE, key, payload)
+    except (OSError, SocialInsuranceStorageError, RuntimeError):
+        LOGGER.warning("社保批次轻量索引写入失败，将在查询时回退到批次扫描")
+        return False
+    return True
+
+
+def load_run_index(
+    *,
+    period_start: str,
+    period_end: str,
+    confirmation_date: str,
+    subject: str,
+) -> dict[str, Any] | None:
+    key = _run_index_key(
+        period_start=period_start,
+        period_end=period_end,
+        confirmation_date=confirmation_date,
+        subject=subject,
+    )
+    payload: dict[str, Any] | None = None
+    path = _run_index_path(key)
+    if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
+        try:
+            payload = load_json(RUN_INDEX_NAMESPACE, key)
+        except (SocialInsuranceStorageError, RuntimeError):
+            payload = None
+    if payload is None and path.is_file():
+        try:
+            candidate = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            candidate = None
+        if isinstance(candidate, dict):
+            payload = candidate
+    if not isinstance(payload, dict):
+        return None
+    expected = {
+        "periodStart": period_start,
+        "periodEnd": period_end,
+        "confirmationDate": confirmation_date,
+        "subject": subject.strip(),
+    }
+    if any(str(payload.get(field) or "").strip() != value for field, value in expected.items()):
+        return None
+    run_id = str(payload.get("runId") or "")
+    try:
+        _safe_id(run_id, "批次ID")
+    except RunValidationError:
+        return None
+    return payload
 
 
 def _require_storage() -> None:
@@ -422,6 +550,7 @@ def create_run(
     run["processingPlan"] = processing_plan(employees)
     _write_json_atomic(_run_path(run_id), run)
     _persist_run(run_id)
+    persist_run_index(run, force=True)
     return run
 
 
@@ -465,6 +594,7 @@ def save_run(run: dict[str, Any]) -> dict[str, Any]:
     run_id = str(run.get("id") or "")
     _write_json_atomic(_run_path(run_id), run)
     _persist_run(run_id)
+    persist_run_index(run)
     return run
 
 

@@ -40,6 +40,8 @@ from bonus_platform.engine.social_insurance.runs import (
     default_reporting_window,
     list_runs,
     load_run,
+    load_run_index,
+    persist_run_index,
     update_employee,
 )
 
@@ -163,6 +165,115 @@ def test_runs_endpoint_filters_batches_by_period_confirmation_date_and_subject(
 
     assert response.status_code == 200
     assert [run["subject"] for run in response.json()["runs"]] == ["测试主体乙"]
+
+
+def test_current_run_endpoint_uses_the_context_index_and_returns_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import router as social_router
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    record = _record(identity="TEST-CURRENT-RUN-001", name="索引批次员工")
+    record["source"]["subject"] = "索引测试主体"
+    created = create_run(
+        records=[record],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject="索引测试主体",
+        source="fixture",
+    )
+
+    def fail_if_scanned(*_args, **_kwargs):
+        pytest.fail("精确主体查询不应扫描全部批次")
+
+    monkeypatch.setattr(social_router, "list_runs", fail_if_scanned)
+    response = TestClient(app).get(
+        "/api/social-insurance/runs/current",
+        params={
+            "periodStart": "2026-07-16",
+            "periodEnd": "2026-08-15",
+            "confirmationDate": "2026-08-25",
+            "subject": "索引测试主体",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lookupSource"] == "run-index"
+    assert payload["run"]["id"] == created["id"]
+    assert payload["preflight"]["runId"] == created["id"]
+    assert payload["run"]["employees"][0]["report"]["姓名"] == "索引批次员工"
+
+
+def test_saving_an_older_batch_does_not_replace_the_current_context_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import runs as social_runs
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    timestamps = iter(("2026-08-25T04:00:00.000001Z", "2026-08-25T04:00:00.000002Z"))
+    monkeypatch.setattr(social_runs, "current_timestamp", lambda: next(timestamps))
+    record = _record(identity="TEST-CURRENT-ORDER-001", name="索引顺序员工")
+    record["source"]["subject"] = "索引顺序主体"
+    context = {
+        "period_start": "2026-07-16",
+        "period_end": "2026-08-15",
+        "confirmation_date": "2026-08-25",
+        "subject": "索引顺序主体",
+    }
+    older = create_run(records=[record], source="fixture", **context)
+    newer = create_run(records=[record], source="fixture", **context)
+
+    assert older["createdAt"] < newer["createdAt"]
+    assert persist_run_index(older) is True
+
+    indexed = load_run_index(**context)
+    assert indexed is not None
+    assert indexed["runId"] == newer["id"]
+
+
+def test_current_run_endpoint_backfills_an_index_for_an_existing_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import router as social_router
+
+    runs_root = tmp_path / "runs"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(runs_root))
+    run_id = "sir_existing_without_index"
+    run_dir = runs_root / run_id
+    run_dir.mkdir(parents=True)
+    run_dir.joinpath("run.json").write_text(json.dumps({
+        "id": run_id,
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+        "subject": "历史索引主体",
+        "status": "draft",
+        "employees": [],
+        "summary": {"total": 0, "ready": 0, "needsReview": 0, "included": 0, "excluded": 0},
+        "processingPlan": [],
+        "createdAt": "2026-08-24T01:00:00Z",
+        "updatedAt": "2026-08-24T01:00:00Z",
+    }, ensure_ascii=False), encoding="utf-8")
+    params = {
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-25",
+        "subject": "历史索引主体",
+    }
+
+    first = TestClient(app).get("/api/social-insurance/runs/current", params=params)
+    assert first.status_code == 200
+    assert first.json()["lookupSource"] == "run-list-fallback"
+
+    monkeypatch.setattr(social_router, "list_runs", lambda *_args, **_kwargs: pytest.fail("索引回填后不应再次扫描"))
+    second = TestClient(app).get("/api/social-insurance/runs/current", params=params)
+    assert second.status_code == 200
+    assert second.json()["lookupSource"] == "run-index"
 
 
 def test_sync_all_fetches_beisen_once_and_creates_one_batch_per_subject(
