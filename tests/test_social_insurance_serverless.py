@@ -408,6 +408,160 @@ def test_blob_storage_restores_complete_run_on_another_instance(
     assert len(set(run_reads)) >= 2
 
 
+def test_run_document_fast_path_uses_the_existing_object_path_without_listing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_blob(monkeypatch)
+    objects: dict[str, bytes] = {}
+    put_paths: list[str] = []
+    get_paths: list[str] = []
+
+    def put(pathname: str, content: bytes, **_kwargs):
+        put_paths.append(pathname)
+        objects[pathname] = bytes(content)
+        return {"pathname": pathname}
+
+    def get(pathname: str):
+        get_paths.append(pathname)
+        return objects.get(pathname.split("?", 1)[0])
+
+    monkeypatch.setattr(storage, "blob_put_bytes", put)
+    monkeypatch.setattr(storage, "blob_get_bytes", get)
+    monkeypatch.setattr(
+        storage,
+        "blob_list_prefix",
+        lambda _prefix: pytest.fail("单字段决策更新不应扫描整个批次目录"),
+    )
+    run_id = "sir_20260826163000_abcd1234"
+    source = tmp_path / "instance-a" / run_id / "run.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps({"id": run_id, "subject": "深圳测试主体", "employees": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    storage.persist_run_document(run_id, source)
+    target = tmp_path / "instance-b" / run_id / "run.json"
+    assert storage.restore_run_document(run_id, target) is True
+
+    expected_path = f"social-insurance/test/runs/{run_id}/run.json"
+    assert put_paths == [expected_path]
+    assert get_paths and get_paths[0].split("?", 1)[0] == expected_path
+    assert json.loads(target.read_text(encoding="utf-8"))["subject"] == "深圳测试主体"
+
+
+def test_fast_run_document_update_remains_compatible_with_full_restore(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_blob(monkeypatch)
+    objects: dict[str, bytes] = {}
+
+    monkeypatch.setattr(
+        storage,
+        "blob_put_bytes",
+        lambda pathname, content, **_kwargs: objects.__setitem__(pathname, bytes(content))
+        or {"pathname": pathname},
+    )
+    monkeypatch.setattr(
+        storage,
+        "blob_get_bytes",
+        lambda pathname: objects.get(pathname.split("?", 1)[0]),
+    )
+    monkeypatch.setattr(
+        storage,
+        "blob_list_prefix",
+        lambda prefix: [
+            {"pathname": pathname, "uploadedAt": "2026-08-26T08:00:00Z"}
+            for pathname in objects
+            if pathname.startswith(prefix)
+        ],
+    )
+    run_id = "sir_20260826163500_abcd1234"
+    source_dir = tmp_path / "instance-a" / run_id
+    source_dir.mkdir(parents=True)
+    run_path = source_dir / "run.json"
+    run_path.write_text(
+        json.dumps({"id": run_id, "status": "draft", "employees": []}),
+        encoding="utf-8",
+    )
+    report_path = source_dir / "reports" / "社保增员报盘.xlsx"
+    report_path.parent.mkdir()
+    report_path.write_bytes(b"existing-report")
+    storage.persist_run_directory(run_id, source_dir)
+
+    run_path.write_text(
+        json.dumps({"id": run_id, "status": "confirmed", "employees": []}),
+        encoding="utf-8",
+    )
+    storage.persist_run_document(run_id, run_path)
+    restored_dir = tmp_path / "instance-b" / run_id
+
+    assert storage.restore_run_directory(run_id, restored_dir) is True
+    assert json.loads((restored_dir / "run.json").read_text(encoding="utf-8"))["status"] == "confirmed"
+    assert (restored_dir / "reports" / "社保增员报盘.xlsx").read_bytes() == b"existing-report"
+
+
+def test_decision_only_update_skips_full_directory_and_unchanged_search_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    run = runs.create_run(
+        records=[
+            {
+                "status": "ready",
+                "reason": "规则校验通过",
+                "issues": [],
+                "report": {
+                    "证件号码": "TEST-ID-FAST-DECISION-001",
+                    "姓名": "快速决策员工",
+                    "户籍": "广东省外户籍",
+                    "民族": "汉族",
+                    "手机号码": "13000000000",
+                    "岗位类别": "工人岗位",
+                    "个人身份": "工人",
+                    "用工形式": "合同工",
+                    "学历": "大学专科",
+                    "职称": "无",
+                    "国家职业资格或职业技能等级": "无",
+                    "医疗缴费档次": "职工二档",
+                    "户籍地类别": "农业",
+                    "户口所在地行政区划代码": "450801.市辖区",
+                    "就业形式": "雇佣就业",
+                    "就业前身份": "其他",
+                },
+                "source": {"subject": "深圳测试主体", "place": "深圳", "employType": "内部员工"},
+            }
+        ],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳测试主体",
+        source="beisen",
+    )
+    employee_id = run["employees"][0]["id"]
+    calls: list[str] = []
+    monkeypatch.setattr(runs, "persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(runs, "serverless_runtime", lambda: True)
+    monkeypatch.setattr(runs, "_restore_run_document", lambda _run_id: calls.append("restore-document") or True)
+    monkeypatch.setattr(runs, "_restore_run", lambda _run_id: pytest.fail("不应恢复完整批次目录"))
+    monkeypatch.setattr(runs, "_persist_run_document", lambda _run_id: calls.append("persist-document"))
+    monkeypatch.setattr(runs, "_persist_run", lambda _run_id: pytest.fail("不应写入完整批次目录"))
+    monkeypatch.setattr(runs, "persist_run_index", lambda _run, **_kwargs: calls.append("persist-index") or True)
+    monkeypatch.setattr(
+        runs,
+        "persist_supplement_search_context",
+        lambda _run: pytest.fail("决策变化不改变补充候选集合"),
+    )
+
+    updated = runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
+
+    assert updated["employees"][0]["status"] == "excluded"
+    assert calls == ["restore-document", "persist-document", "persist-index"]
+
+
 def test_run_context_index_is_persisted_without_employee_details(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

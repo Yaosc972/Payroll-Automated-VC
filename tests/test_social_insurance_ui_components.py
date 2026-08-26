@@ -43,8 +43,38 @@ def test_native_controls_receive_sigma_component_styling():
 def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
-    assert "social-insurance.css?v=43" in page
-    assert "social-insurance.js?v=45" in page
+    assert "social-insurance.css?v=44" in page
+    assert "social-insurance.js?v=46" in page
+
+
+def test_review_decision_uses_vertical_include_and_exclude_buttons():
+    script = _read("social-insurance.js")
+    styles = _read("social-insurance.css")
+    render_block = script.split("const decisionCell = document.createElement('td');", 1)[1].split(
+        "const person = document.createElement('td');", 1
+    )[0]
+
+    assert "decision-actions" in render_block
+    assert "['include', '纳入']" in render_block
+    assert "['exclude', '排除']" in render_block
+    assert render_block.index("['include', '纳入']") < render_block.index("['exclude', '排除']")
+    assert "aria-pressed" in render_block
+    assert "checkbox" not in render_block
+    decision_rule = styles.split(".decision-actions {", 1)[1].split("}", 1)[0]
+    assert "flex-direction: column" in decision_rule
+
+
+def test_quick_decision_shows_pending_state_before_waiting_and_rolls_back_on_failure():
+    script = _read("social-insurance.js")
+    handler = script.split("async function quickDecision", 1)[1].split(
+        "function drawerFieldDefinitions", 1
+    )[0]
+
+    assert "decisionUpdates: new Map()" in script
+    assert handler.index("state.decisionUpdates.set") < handler.index("await api")
+    assert "state.decisionUpdates.delete" in handler
+    assert "showToast(error.message, 'error')" in handler
+    assert "status-pill pending" in script
 
 
 def test_silent_refresh_clears_a_batch_from_the_previous_selection():

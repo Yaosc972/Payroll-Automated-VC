@@ -287,6 +287,44 @@ def list_json(namespace: str) -> list[dict[str, Any]]:
     return rows
 
 
+def persist_run_document(run_id: str, run_path: Path) -> None:
+    """Persist only run.json at the same object key used by full directory saves."""
+    require_persistent_storage()
+    if not persistent_storage_enabled():
+        return
+    try:
+        content = run_path.read_bytes()
+    except OSError as exc:
+        raise SocialInsuranceStorageError("社保报盘批次文件不可读取") from exc
+    _put_bytes(
+        f"{_run_prefix(run_id)}/run.json",
+        content,
+        content_type="application/json",
+    )
+
+
+def restore_run_document(run_id: str, run_path: Path) -> bool:
+    """Restore only run.json without listing or downloading report artifacts."""
+    require_persistent_storage()
+    if not persistent_storage_enabled():
+        return False
+    content = _get_bytes(
+        _fresh_storage_target(f"{_run_prefix(run_id)}/run.json")
+    )
+    if content is None:
+        return False
+    run_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = run_path.with_name(f".{run_path.name}.restore.tmp")
+    try:
+        temporary.write_bytes(content)
+        temporary.replace(run_path)
+        run_path.chmod(0o600)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise SocialInsuranceStorageError("社保报盘批次文件未能恢复") from exc
+    return True
+
+
 def persist_run_directory(run_id: str, run_dir: Path) -> None:
     require_persistent_storage()
     if not persistent_storage_enabled():

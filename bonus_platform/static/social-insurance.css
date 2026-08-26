@@ -554,15 +554,25 @@ tbody tr:hover td.sticky-action { background: #f8fbff; }
 .review-field-cell.subject-cell { min-width: 160px; max-width: 210px; }
 .review-field-cell.template-ready-cell { color: var(--success); font-weight: 750; }
 .review-field-cell.template-missing-cell { min-width: 150px; color: #8a5d0c; background: #fffaf0; font-weight: 750; }
-.decision-toggle { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
-.decision-toggle input, .confirm-check input { appearance: none; position: relative; width: 18px; height: 18px; margin: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; cursor: pointer; }
-.decision-toggle input:checked, .confirm-check input:checked { border-color: var(--blue); background: var(--blue); }
+.decision-actions { width: 60px; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.decision-button { position: relative; height: 25px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; color: var(--muted); font-size: 10px; font-weight: 750; line-height: 1; transition: border-color .15s, background .15s, color .15s, box-shadow .15s; }
+.decision-button.include:hover:not(:disabled) { border-color: #93b4e8; background: var(--blue-soft); color: var(--blue); }
+.decision-button.exclude:hover:not(:disabled) { border-color: #aeb9c7; background: #f2f4f7; color: #344054; }
+.decision-button.include.active { border-color: var(--blue); background: var(--blue); color: #fff; box-shadow: 0 2px 6px rgba(37, 99, 235, .18); }
+.decision-button.exclude.active { border-color: #667085; background: #667085; color: #fff; box-shadow: 0 2px 6px rgba(71, 84, 103, .16); }
+.decision-button:focus-visible { outline: 2px solid rgba(37, 99, 235, .35); outline-offset: 2px; }
+.decision-button:disabled { cursor: default; }
+.decision-button:not(.active):disabled { opacity: .48; }
+.decision-button.pending { padding-right: 21px; }
+.decision-button.pending::after { content: ""; position: absolute; top: 50%; right: 7px; width: 9px; height: 9px; margin-top: -5px; border: 1.5px solid rgba(255, 255, 255, .45); border-top-color: #fff; border-radius: 50%; animation: spin .75s linear infinite; }
+.confirm-check input { appearance: none; position: relative; width: 18px; height: 18px; margin: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: #fff; cursor: pointer; }
 .confirm-check input:checked { border-color: var(--success); background: var(--success); }
-.decision-toggle input:checked::after, .confirm-check input:checked::after { content: ""; position: absolute; left: 5px; top: 2px; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.confirm-check input:checked::after { content: ""; position: absolute; left: 5px; top: 2px; width: 5px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .status-pill { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 999px; font-size: 10px; font-weight: 750; }
 .status-pill.ready { background: var(--success-soft); color: var(--success); }
 .status-pill.needs_review { background: var(--warning-soft); color: #8a5d0c; }
 .status-pill.excluded { background: #f2f4f7; color: #475467; }
+.status-pill.pending { background: var(--blue-soft); color: var(--blue); }
 .issue-cell { max-width: 260px; }
 .issue-cell b { display: block; font-size: 11px; }
 .issue-cell span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.45; }

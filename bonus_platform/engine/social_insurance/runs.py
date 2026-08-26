@@ -19,9 +19,11 @@ from .persistent_storage import (
     list_persisted_runs,
     object_key,
     persist_json,
+    persist_run_document as persist_run_document_to_storage,
     persist_run_directory,
     persistent_storage_enabled,
     require_persistent_storage,
+    restore_run_document as restore_run_document_from_storage,
     restore_run_directory,
     serverless_runtime,
 )
@@ -385,10 +387,26 @@ def _persist_run(run_id: str) -> None:
         raise RunValidationError("社保报盘批次未能保存到持久化存储") from exc
 
 
+def _persist_run_document(run_id: str) -> None:
+    _require_storage()
+    try:
+        persist_run_document_to_storage(run_id, _run_path(run_id))
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("社保报盘批次未能保存到持久化存储") from exc
+
+
 def _restore_run(run_id: str) -> bool:
     _require_storage()
     try:
         return restore_run_directory(run_id, get_run_dir(run_id))
+    except SocialInsuranceStorageError as exc:
+        raise RunValidationError("社保报盘批次未能从持久化存储恢复") from exc
+
+
+def _restore_run_document(run_id: str) -> bool:
+    _require_storage()
+    try:
+        return restore_run_document_from_storage(run_id, _run_path(run_id))
     except SocialInsuranceStorageError as exc:
         raise RunValidationError("社保报盘批次未能从持久化存储恢复") from exc
 
@@ -651,10 +669,47 @@ def create_run(
     return run
 
 
-def load_run(run_id: str) -> dict[str, Any]:
+def _repair_employee_decision_status(employee: dict[str, Any]) -> bool:
+    """Repair legacy records whose decision and visible status disagree."""
+    decision = str(employee.get("decision") or "include")
+    status = str(employee.get("status") or "needs_review")
+    if decision == "exclude":
+        if status == "excluded":
+            return False
+        employee["status"] = "excluded"
+        return True
+    if status != "excluded":
+        return False
+    missing_required = any(
+        not str(employee.get("report", {}).get(field) or "").strip()
+        for field in REQUIRED_REPORT_FIELDS
+    )
+    has_blocking_issue = any(
+        issue.get("severity") == "blocking"
+        for issue in employee.get("issues") or []
+    )
+    has_template_missing = any(
+        report.get("missingRequired")
+        for report in (employee.get("templateReports") or {}).values()
+        if isinstance(report, dict)
+    )
+    employee["status"] = (
+        "needs_review"
+        if missing_required
+        or has_template_missing
+        or (has_blocking_issue and not employee.get("confirmed"))
+        else "ready"
+    )
+    return True
+
+
+def load_run(run_id: str, *, document_only: bool = False) -> dict[str, Any]:
     path = _run_path(run_id)
     if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
-        _restore_run(run_id)
+        if document_only:
+            _restore_run_document(run_id)
+        else:
+            _restore_run(run_id)
     else:
         _require_storage()
     if not path.exists():
@@ -668,20 +723,22 @@ def load_run(run_id: str) -> dict[str, Any]:
     for employee in payload.get("employees") or []:
         if not isinstance(employee, dict):
             continue
-        if not isinstance(employee.get("coverageTasks"), dict):
+        coverage_missing = not isinstance(employee.get("coverageTasks"), dict)
+        hydrate_employee_template_reports(employee, payload)
+        status_repaired = _repair_employee_decision_status(employee)
+        if coverage_missing or status_repaired:
             employee["coverageTasks"] = build_coverage_tasks(
                 coverage_source=employee.get("coverageSource"),
                 source=employee.get("source"),
                 employee_status=str(employee.get("status") or "needs_review"),
                 decision=str(employee.get("decision") or "include"),
             )
-        hydrate_employee_template_reports(employee, payload)
     payload["summary"] = _summarize(payload.get("employees") or [])
     payload["processingPlan"] = processing_plan(payload.get("employees") or [])
     return payload
 
 
-def save_run(run: dict[str, Any]) -> dict[str, Any]:
+def save_run(run: dict[str, Any], *, decision_only: bool = False) -> dict[str, Any]:
     for employee in run.get("employees") or []:
         if isinstance(employee, dict):
             hydrate_employee_template_reports(employee, run)
@@ -690,9 +747,15 @@ def save_run(run: dict[str, Any]) -> dict[str, Any]:
     run["updatedAt"] = current_timestamp()
     run_id = str(run.get("id") or "")
     _write_json_atomic(_run_path(run_id), run)
-    _persist_run(run_id)
+    if decision_only:
+        _persist_run_document(run_id)
+    else:
+        _persist_run(run_id)
     persist_run_index(run)
-    persist_supplement_search_context(run)
+    # Include/exclude does not change identity membership, so the supplement
+    # candidate context remains valid and does not need another remote write.
+    if not decision_only:
+        persist_supplement_search_context(run)
     return run
 
 
@@ -738,7 +801,8 @@ def list_runs(
 
 
 def update_employee(run_id: str, employee_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-    run = load_run(run_id)
+    decision_only = set(updates) == {"decision"}
+    run = load_run(run_id, document_only=decision_only)
     employee = next((item for item in run.get("employees") or [] if item.get("id") == employee_id), None)
     if employee is None:
         raise RunNotFoundError("批次人员不存在")
@@ -804,7 +868,7 @@ def update_employee(run_id: str, employee_id: str, updates: dict[str, Any]) -> d
         )
         if missing_required or (has_blocking_issue and not employee.get("confirmed")):
             employee["status"] = "needs_review"
-        elif employee.get("confirmed"):
+        elif employee.get("confirmed") or "decision" in updates:
             employee["status"] = "ready"
     employee["coverageTasks"] = build_coverage_tasks(
         coverage_source=employee.get("coverageSource"),
@@ -825,7 +889,7 @@ def update_employee(run_id: str, employee_id: str, updates: dict[str, Any]) -> d
         run["status"] = "draft"
         run["reportFile"] = None
         run["reportPackage"] = None
-    return save_run(run)
+    return save_run(run, decision_only=decision_only)
 
 
 def add_supplement_employee(

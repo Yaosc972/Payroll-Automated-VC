@@ -62,6 +62,7 @@
     administrativeDivisionSet: new Set(),
     supplementCandidate: null,
     batchCache: new Map(),
+    decisionUpdates: new Map(),
     release: null,
   };
   const byId = (id) => document.getElementById(id);
@@ -914,13 +915,25 @@
     row.append(issueCell);
   }
 
-  function appendActionCell(row, employee, isCurrentBatch) {
+  function decisionUpdateKey(runId, employeeId) {
+    return `${runId}:${employeeId}`;
+  }
+
+  function pendingDecision(employee) {
+    if (!state.run) return '';
+    return state.decisionUpdates.get(decisionUpdateKey(state.run.id, employee.id)) || '';
+  }
+
+  function appendActionCell(row, employee, isCurrentBatch, isPending) {
     const actionCell = document.createElement('td');
     actionCell.className = 'sticky-action';
-    const status = textNode('span', `status-pill ${employee.status}`, STATUS_LABELS[employee.status] || employee.status);
+    const status = isPending
+      ? textNode('span', 'status-pill pending', '处理中')
+      : textNode('span', `status-pill ${employee.status}`, STATUS_LABELS[employee.status] || employee.status);
+    if (isPending) status.setAttribute('role', 'status');
     const edit = textNode('button', 'edit-button', isCurrentBatch ? '查看 / 修改' : '上一批次');
     edit.type = 'button';
-    edit.disabled = !isCurrentBatch;
+    edit.disabled = !isCurrentBatch || isPending;
     edit.addEventListener('click', () => openDrawer(employee.id));
     actionCell.append(status, edit);
     row.append(actionCell);
@@ -969,18 +982,36 @@
       const report = employee.report || {};
       const row = document.createElement('tr');
       row.dataset.status = employee.status || '';
+      const updateDecision = pendingDecision(employee);
+      const isDecisionPending = Boolean(updateDecision);
+      const visibleDecision = updateDecision || employee.decision;
+      row.setAttribute('aria-busy', String(isDecisionPending));
 
       const decisionCell = document.createElement('td');
       decisionCell.className = 'sticky-key sticky-decision';
-      const decisionLabel = document.createElement('label');
-      decisionLabel.className = 'decision-toggle';
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox'; checkbox.checked = employee.decision === 'include';
-      checkbox.disabled = !isCurrentBatch;
-      checkbox.title = checkbox.checked ? '已纳入本批报盘' : '已排除本批报盘';
-      checkbox.addEventListener('change', () => quickDecision(employee, checkbox));
-      decisionLabel.append(checkbox, textNode('span', '', checkbox.checked ? '纳入' : '排除'));
-      decisionCell.append(decisionLabel); row.append(decisionCell);
+      const decisionActions = document.createElement('div');
+      decisionActions.className = 'decision-actions';
+      decisionActions.setAttribute('role', 'group');
+      decisionActions.setAttribute('aria-label', `${employee.report?.['姓名'] || '当前人员'}报盘处理`);
+      decisionActions.setAttribute('aria-busy', String(isDecisionPending));
+      [
+        ['include', '纳入'],
+        ['exclude', '排除'],
+      ].forEach(([decision, label]) => {
+        const isActive = visibleDecision === decision;
+        const button = textNode(
+          'button',
+          `decision-button ${decision}${isActive ? ' active' : ''}${isActive && isDecisionPending ? ' pending' : ''}`,
+          label,
+        );
+        button.type = 'button';
+        button.setAttribute('aria-pressed', String(isActive));
+        button.title = isActive ? `${label}（当前）` : `设为${label}`;
+        button.disabled = !isCurrentBatch || state.decisionUpdates.size > 0 || isActive;
+        button.addEventListener('click', () => quickDecision(employee, decision));
+        decisionActions.append(button);
+      });
+      decisionCell.append(decisionActions); row.append(decisionCell);
 
       const person = document.createElement('td'); person.className = 'person-cell review-field-cell sticky-key sticky-person';
       person.append(textNode('b', '', report['姓名'] || '未命名')); row.append(person);
@@ -1007,7 +1038,7 @@
         }
         row.append(createReviewFieldCell(column.value(employee), column.className || '', column.mask || ''));
       });
-      appendActionCell(row, employee, isCurrentBatch);
+      appendActionCell(row, employee, isCurrentBatch, isDecisionPending);
       body.append(row);
     });
     byId('tableCount').textContent = `当前 ${employees.length} 人`;
@@ -1648,16 +1679,25 @@
     return input;
   }
 
-  async function quickDecision(employee, checkbox) {
-    checkbox.disabled = true;
+  async function quickDecision(employee, decision) {
+    const runId = state.run?.id;
+    if (!runId || state.decisionUpdates.size > 0) return;
+    const updateKey = decisionUpdateKey(runId, employee.id);
+    state.decisionUpdates.set(updateKey, decision);
+    renderRun();
     try {
-      state.run = await api(`${API_ROOT}/runs/${state.run.id}/employees/${employee.id}`, {
-        method: 'PATCH', body: JSON.stringify({ decision: checkbox.checked ? 'include' : 'exclude' }),
+      const updatedRun = await api(`${API_ROOT}/runs/${runId}/employees/${employee.id}`, {
+        method: 'PATCH', body: JSON.stringify({ decision }),
       });
-      invalidateBatchCache(state.run.id);
-      renderRun(); showToast(checkbox.checked ? '已纳入本批报盘' : '已从本批报盘排除');
-    } catch (error) { checkbox.checked = !checkbox.checked; showToast(error.message, 'error'); }
-    finally { checkbox.disabled = false; }
+      invalidateBatchCache(runId);
+      if (state.run?.id === runId) state.run = updatedRun;
+      showToast(decision === 'include' ? '已纳入本批报盘' : '已从本批报盘排除');
+    } catch (error) {
+      showToast(error.message, 'error');
+    } finally {
+      state.decisionUpdates.delete(updateKey);
+      if (state.run?.id === runId) renderRun();
+    }
   }
 
   function drawerFieldDefinitions(employee) {

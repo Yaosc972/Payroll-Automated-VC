@@ -888,6 +888,59 @@ def test_blocking_exception_requires_human_confirmation(tmp_path: Path, monkeypa
     assert load_run(run["id"])["employees"][1]["reviewNote"] == "业务已确认"
 
 
+def test_reincluding_an_excluded_employee_restores_ready_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    record = _record(identity="TEST-ID-DECISION-001", name="重新纳入员工")
+    record["confirmed"] = False
+    run = create_run(
+        records=[record],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    employee_id = run["employees"][0]["id"]
+
+    excluded = update_employee(run["id"], employee_id, {"decision": "exclude"})
+    included = update_employee(run["id"], employee_id, {"decision": "include"})
+
+    assert excluded["employees"][0]["status"] == "excluded"
+    assert included["employees"][0]["decision"] == "include"
+    assert included["employees"][0]["status"] == "ready"
+    assert included["summary"]["included"] == 1
+    assert included["summary"]["excluded"] == 0
+
+
+def test_loading_a_legacy_include_excluded_mismatch_repairs_the_visible_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    run = create_run(
+        records=[_record(identity="TEST-ID-DECISION-002", name="历史错位员工")],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    run_path = tmp_path / "runs" / run["id"] / "run.json"
+    stored = json.loads(run_path.read_text(encoding="utf-8"))
+    stored["employees"][0]["decision"] = "include"
+    stored["employees"][0]["status"] = "excluded"
+    run_path.write_text(json.dumps(stored, ensure_ascii=False), encoding="utf-8")
+
+    repaired = load_run(run["id"])
+
+    assert repaired["employees"][0]["decision"] == "include"
+    assert repaired["employees"][0]["status"] == "ready"
+    assert repaired["summary"]["excluded"] == 0
+
+
 def test_address_history_difference_is_information_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path))
     run = create_run(
