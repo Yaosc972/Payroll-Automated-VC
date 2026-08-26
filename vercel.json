@@ -4,9 +4,17 @@
     "api/index.py": {
       "regions": ["pdx1"],
       "maxDuration": 300
+    },
+    "api/social_insurance_cron/index.py": {
+      "regions": ["pdx1"],
+      "maxDuration": 300
     }
   },
   "rewrites": [
+    {
+      "source": "/api/social-insurance/cron/refresh",
+      "destination": "/api/social_insurance_cron/index.py"
+    },
     {
       "source": "/(.*)",
       "destination": "/api/index.py"

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from http.client import HTTPConnection
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
+import os
 from pathlib import Path
+import subprocess
+import sys
+import threading
 
 import pytest
 from fastapi import HTTPException
@@ -15,10 +22,40 @@ from bonus_platform.engine.social_insurance import supplements
 from bonus_platform.engine.social_insurance.runs import RunValidationError
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 def _enable_blob(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_STORAGE_BACKEND", "blob")
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_STORAGE_ENV", "test")
     monkeypatch.setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_token")
+
+
+def _request_cron_handler(
+    handler_class: type[BaseHTTPRequestHandler],
+    *,
+    authorization: str = "",
+) -> tuple[int, str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+        headers = {"Authorization": authorization} if authorization else {}
+        connection.request(
+            "GET",
+            "/api/social-insurance/cron/refresh",
+            headers=headers,
+        )
+        response = connection.getresponse()
+        status = response.status
+        payload_text = response.read().decode("utf-8")
+        connection.close()
+        return status, payload_text
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_vercel_runtime_refuses_ephemeral_social_insurance_state(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -372,3 +409,146 @@ def test_cron_refresh_requires_secret_and_returns_refresh_result(monkeypatch: py
         "state": "ready",
         "recordCount": 34,
     }
+
+
+def test_vercel_routes_reporting_cron_to_a_minimal_dedicated_python_function() -> None:
+    config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
+
+    assert config["rewrites"][0] == {
+        "source": "/api/social-insurance/cron/refresh",
+        "destination": "/api/social_insurance_cron/index.py",
+    }
+    assert config["rewrites"][1] == {
+        "source": "/(.*)",
+        "destination": "/api/index.py",
+    }
+    assert config["functions"]["api/social_insurance_cron/index.py"] == {
+        "regions": ["pdx1"],
+        "maxDuration": 300,
+    }
+    requirements = {
+        line.strip()
+        for line in (
+            PROJECT_ROOT / "api" / "social_insurance_cron" / "requirements.txt"
+        ).read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert requirements == {
+        "APScheduler==3.11.3",
+        "httpx[socks]==0.28.1",
+        "openpyxl==3.1.5",
+    }
+
+
+def test_dedicated_reporting_cron_import_skips_the_monolithic_application(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json, logging, sys; "
+                "from api.social_insurance_cron import index; "
+                "print(json.dumps({"
+                "'refreshReady': index.refresh_latest_reporting_snapshot is not None, "
+                "'monolithicAppLoaded': 'bonus_platform.app' in sys.modules, "
+                "'moduleImportMs': index._MODULE_IMPORT_MS, "
+                "'httpxLogLevel': logging.getLogger('httpx').getEffectiveLevel()"
+                "}))"
+            ),
+        ],
+        cwd=PROJECT_ROOT,
+        env={
+            **os.environ,
+            "VERCEL": "1",
+            "SIGMA_WORKBENCH_HOME": str(tmp_path / "workbench"),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["refreshReady"] is True
+    assert payload["monolithicAppLoaded"] is False
+    assert isinstance(payload["moduleImportMs"], int)
+    assert payload["moduleImportMs"] >= 0
+    assert payload["httpxLogLevel"] >= logging.WARNING
+
+
+def test_dedicated_reporting_cron_preserves_auth_and_refresh_response_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.social_insurance_cron import index as cron_function
+
+    monkeypatch.setenv("CRON_SECRET", "cron-secret")
+    monkeypatch.setattr(
+        cron_function,
+        "refresh_latest_reporting_snapshot",
+        lambda: {"state": "ready", "recordCount": 34},
+    )
+    unauthorized_status, unauthorized_text = _request_cron_handler(
+        cron_function.handler,
+    )
+    authorized_status, authorized_text = _request_cron_handler(
+        cron_function.handler,
+        authorization="Bearer cron-secret",
+    )
+    unauthorized_payload = json.loads(unauthorized_text)
+    authorized_payload = json.loads(authorized_text)
+
+    assert unauthorized_status == 401
+    assert unauthorized_payload == {"detail": "定时同步授权失败"}
+    assert authorized_status == 200
+    assert authorized_payload["state"] == "ready"
+    assert authorized_payload["recordCount"] == 34
+    assert authorized_payload["runtime"] == "dedicated-cron-v1"
+    assert set(authorized_payload["runtimeTimingsMs"]) == {
+        "module_import",
+        "handler_dispatch",
+    }
+    assert all(
+        isinstance(duration, int) and duration >= 0
+        for duration in authorized_payload["runtimeTimingsMs"].values()
+    )
+
+
+def test_dedicated_reporting_cron_returns_safe_dispatch_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from api.social_insurance_cron import index as cron_function
+
+    sensitive_marker = "SECRET-CRON-EMPLOYEE-440301199001010044"
+    monkeypatch.setenv("CRON_SECRET", "cron-secret")
+
+    def fail_refresh():
+        raise RunValidationError(sensitive_marker)
+
+    monkeypatch.setattr(
+        cron_function,
+        "refresh_latest_reporting_snapshot",
+        fail_refresh,
+    )
+    with caplog.at_level(
+        logging.WARNING,
+        logger="bonus_platform.social_insurance.cron_function",
+    ):
+        status, payload_text = _request_cron_handler(
+            cron_function.handler,
+            authorization="Bearer cron-secret",
+        )
+
+    payload = json.loads(payload_text)
+    assert status == 500
+    assert payload["state"] == "error"
+    assert payload["failedStage"] == "function_dispatch"
+    assert payload["errorCategory"] == "validation"
+    assert payload["runtime"] == "dedicated-cron-v1"
+    assert payload["stageTimingsMs"] == {
+        "function_dispatch": payload["runtimeTimingsMs"]["handler_dispatch"],
+    }
+    assert payload["elapsedMs"] >= sum(payload["runtimeTimingsMs"].values())
+    assert sensitive_marker not in payload_text
+    assert sensitive_marker not in caplog.text
