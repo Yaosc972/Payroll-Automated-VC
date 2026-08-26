@@ -78,6 +78,12 @@ def safe_error_category(exc: Exception) -> str:
 
     for error in chain:
         code = str(getattr(error, "code", "") or "")
+        if code == "SOCIAL_INSURANCE_STORAGE_TIMEOUT":
+            return "storage_timeout"
+        if code == "SOCIAL_INSURANCE_STORAGE_PERMISSION_DENIED":
+            return "storage_permission"
+        if code.startswith("SOCIAL_INSURANCE_STORAGE_"):
+            return "storage_error"
         if code == "LABOR_BLOB_TIMEOUT":
             return "storage_timeout"
         if code == "LABOR_BLOB_PERMISSION_DENIED":

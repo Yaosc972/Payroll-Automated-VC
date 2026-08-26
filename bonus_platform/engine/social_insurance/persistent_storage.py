@@ -9,10 +9,21 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, NoReturn
 from urllib.parse import urlencode
 
+import httpx
+
 from ..labor.blob_storage import blob_get_bytes, blob_list_prefix, blob_put_bytes
+from ..labor.persistent_storage import (
+    _supabase_download_bytes as supabase_download_bytes,
+    _supabase_entry_path as supabase_entry_path,
+    _supabase_list_objects as supabase_list_objects,
+    _supabase_token as supabase_token,
+    _supabase_upload_bytes as supabase_upload_bytes,
+    _supabase_url as supabase_url,
+    labor_supabase_bucket,
+)
 
 
 ROOT_PREFIX = "social-insurance"
@@ -21,6 +32,19 @@ RUN_MANIFEST = ".storage-manifest.json"
 
 class SocialInsuranceStorageError(RuntimeError):
     """社保报盘持久化存储未就绪或读写失败。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "",
+        retryable: bool = False,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.status_code = status_code
 
 
 def storage_backend() -> str:
@@ -38,7 +62,12 @@ def storage_environment() -> str:
 
 
 def persistent_storage_enabled() -> bool:
-    return storage_backend() == "blob" and bool(os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip())
+    backend = storage_backend()
+    if backend == "blob":
+        return bool(os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip())
+    if backend == "supabase":
+        return bool(supabase_url() and supabase_token() and labor_supabase_bucket())
+    return False
 
 
 def serverless_runtime() -> bool:
@@ -79,17 +108,106 @@ def _json_path(namespace: str, key: str) -> str:
     return f"{_root()}/{safe_namespace}/{safe_key}.json"
 
 
-def _fresh_blob_target(pathname_or_url: str, *, version: str = "") -> str:
+def _fresh_storage_target(pathname_or_url: str, *, version: str = "") -> str:
     separator = "&" if "?" in pathname_or_url else "?"
     marker = version or str(time.time_ns())
     return f"{pathname_or_url}{separator}{urlencode({'sigma-read-version': marker})}"
+
+
+def _put_bytes(pathname: str, content: bytes, *, content_type: str) -> dict[str, Any]:
+    if storage_backend() == "supabase":
+        try:
+            return supabase_upload_bytes(pathname, content, content_type=content_type)
+        except Exception as exc:  # noqa: BLE001 - normalize vendor errors safely.
+            _raise_supabase_error(exc, operation="上传")
+    return blob_put_bytes(pathname, content, content_type=content_type)
+
+
+def _get_bytes(pathname_or_url: str) -> bytes | None:
+    if storage_backend() == "supabase":
+        try:
+            return supabase_download_bytes(pathname_or_url)
+        except Exception as exc:  # noqa: BLE001 - normalize vendor errors safely.
+            _raise_supabase_error(exc, operation="下载")
+    return blob_get_bytes(pathname_or_url)
+
+
+def _list_prefix(prefix: str) -> list[dict[str, Any]]:
+    if storage_backend() != "supabase":
+        return blob_list_prefix(prefix)
+    rows: list[dict[str, Any]] = []
+    normalized_prefix = prefix.rstrip("/")
+    pending = [normalized_prefix]
+    visited: set[str] = set()
+    try:
+        while pending:
+            current_prefix = pending.pop()
+            if current_prefix in visited:
+                continue
+            visited.add(current_prefix)
+            for entry in supabase_list_objects(current_prefix):
+                name = str(entry.get("name") or "").strip("/")
+                if not name or "/" in name or name in {".", ".."}:
+                    continue
+                pathname = supabase_entry_path(current_prefix, entry)
+                if not pathname or not pathname.startswith(f"{current_prefix}/"):
+                    continue
+                if entry.get("id") is None and entry.get("metadata") is None:
+                    pending.append(pathname)
+                    continue
+                rows.append(
+                    {
+                        "pathname": pathname,
+                        "uploadedAt": entry.get("updated_at")
+                        or entry.get("created_at")
+                        or "",
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001 - normalize vendor errors without leaking credentials.
+        _raise_supabase_error(exc, operation="列表读取")
+    return sorted(rows, key=lambda row: str(row["pathname"]))
+
+
+def _raise_supabase_error(exc: Exception, *, operation: str) -> NoReturn:
+    if isinstance(exc, SocialInsuranceStorageError):
+        raise exc
+    if isinstance(exc, httpx.TimeoutException):
+        raise SocialInsuranceStorageError(
+            f"Supabase Storage {operation}超时，请稍后重试。",
+            code="SOCIAL_INSURANCE_STORAGE_TIMEOUT",
+            retryable=True,
+        ) from exc
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = int(exc.response.status_code)
+        if status_code in {401, 403}:
+            raise SocialInsuranceStorageError(
+                f"Supabase Storage {operation}权限失败，请检查 Storage 凭证或 bucket 权限。",
+                code="SOCIAL_INSURANCE_STORAGE_PERMISSION_DENIED",
+                status_code=status_code,
+            ) from exc
+        raise SocialInsuranceStorageError(
+            f"Supabase Storage {operation}失败，HTTP {status_code}。",
+            code="SOCIAL_INSURANCE_STORAGE_HTTP_ERROR",
+            retryable=status_code >= 500,
+            status_code=status_code,
+        ) from exc
+    if isinstance(exc, httpx.RequestError):
+        raise SocialInsuranceStorageError(
+            f"Supabase Storage {operation}网络异常，请稍后重试。",
+            code="SOCIAL_INSURANCE_STORAGE_NETWORK_ERROR",
+            retryable=True,
+        ) from exc
+    raise SocialInsuranceStorageError(
+        f"Supabase Storage {operation}失败。",
+        code="SOCIAL_INSURANCE_STORAGE_ERROR",
+    ) from exc
 
 
 def persist_json(namespace: str, key: str, payload: dict[str, Any]) -> None:
     require_persistent_storage()
     if not persistent_storage_enabled():
         return
-    blob_put_bytes(
+    _put_bytes(
         _json_path(namespace, key),
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
         content_type="application/json",
@@ -100,7 +218,7 @@ def load_json(namespace: str, key: str) -> dict[str, Any] | None:
     require_persistent_storage()
     if not persistent_storage_enabled():
         return None
-    content = blob_get_bytes(_fresh_blob_target(_json_path(namespace, key)))
+    content = _get_bytes(_fresh_storage_target(_json_path(namespace, key)))
     if content is None:
         return None
     try:
@@ -119,7 +237,7 @@ def list_json(namespace: str) -> list[dict[str, Any]]:
     prefix = f"{_root()}/{namespace.strip('/')}/"
     rows: list[dict[str, Any]] = []
     latest: dict[str, dict[str, Any]] = {}
-    for blob in blob_list_prefix(prefix):
+    for blob in _list_prefix(prefix):
         pathname = str(blob.get("pathname") or "")
         if not pathname.endswith(".json"):
             continue
@@ -130,10 +248,9 @@ def list_json(namespace: str) -> list[dict[str, Any]]:
             latest[pathname] = blob
     for pathname in sorted(latest):
         blob = latest[pathname]
-        # Blob list metadata can briefly lag an overwrite.  Always use a new
-        # cache-busting marker here so a second function instance reads the
-        # current object body even when the listed uploadedAt is still stale.
-        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
+        # Object-store list metadata can briefly lag an overwrite.  Always use
+        # a new marker so another function instance reads the current body.
+        content = _get_bytes(_fresh_storage_target(str(blob.get("url") or pathname)))
         if content is None:
             continue
         try:
@@ -150,7 +267,7 @@ def persist_run_directory(run_id: str, run_dir: Path) -> None:
     if not persistent_storage_enabled():
         return
     manifest_path = f"{_run_prefix(run_id)}/{RUN_MANIFEST}"
-    manifest_content = blob_get_bytes(_fresh_blob_target(manifest_path))
+    manifest_content = _get_bytes(_fresh_storage_target(manifest_path))
     try:
         previous_manifest = json.loads(manifest_content.decode("utf-8")) if manifest_content else {}
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -168,13 +285,13 @@ def persist_run_directory(run_id: str, run_dir: Path) -> None:
         next_manifest[relative] = digest
         if previous_manifest.get(relative) == digest:
             continue
-        blob_put_bytes(
+        _put_bytes(
             f"{_run_prefix(run_id)}/{relative}",
             content,
             content_type=content_type or "application/octet-stream",
         )
     if previous_manifest != next_manifest:
-        blob_put_bytes(
+        _put_bytes(
             manifest_path,
             json.dumps(next_manifest, sort_keys=True, separators=(",", ":")).encode("utf-8"),
             content_type="application/json",
@@ -186,7 +303,7 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
     if not persistent_storage_enabled():
         return False
     prefix = f"{_run_prefix(run_id)}/"
-    blobs = blob_list_prefix(prefix)
+    blobs = _list_prefix(prefix)
     if not blobs:
         return False
     latest: dict[str, dict[str, Any]] = {}
@@ -205,10 +322,9 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
         relative = pathname[len(prefix) :]
         if not relative or relative.endswith("/") or relative == RUN_MANIFEST:
             continue
-        # The list response can expose the previous uploadedAt immediately
-        # after an overwrite.  A per-read marker prevents that stale metadata
-        # from reusing an older cached object body in another function.
-        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
+        # A per-read marker prevents stale list metadata from reusing an older
+        # cached object body in another function instance.
+        content = _get_bytes(_fresh_storage_target(str(blob.get("url") or pathname)))
         if content is None:
             continue
         target = run_dir / relative
@@ -226,7 +342,7 @@ def list_persisted_runs() -> list[dict[str, Any]]:
         return []
     prefix = f"{_root()}/runs/"
     latest: dict[str, dict[str, Any]] = {}
-    for blob in blob_list_prefix(prefix):
+    for blob in _list_prefix(prefix):
         pathname = str(blob.get("pathname") or "")
         if not pathname.endswith("/run.json"):
             continue
@@ -237,7 +353,7 @@ def list_persisted_runs() -> list[dict[str, Any]]:
             latest[pathname] = blob
     def read_run(item: tuple[str, dict[str, Any]]) -> dict[str, Any] | None:
         pathname, blob = item
-        content = blob_get_bytes(_fresh_blob_target(str(blob.get("url") or pathname)))
+        content = _get_bytes(_fresh_storage_target(str(blob.get("url") or pathname)))
         if content is None:
             return None
         try:

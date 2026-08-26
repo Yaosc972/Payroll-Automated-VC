@@ -10,12 +10,15 @@ import subprocess
 import sys
 import threading
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from bonus_platform.engine.social_insurance import adapter
 from bonus_platform.engine.social_insurance import persistent_storage as storage
+from bonus_platform.engine.social_insurance import publication
+from bonus_platform.engine.social_insurance import reporting_diagnostics
 from bonus_platform.engine.social_insurance import router
 from bonus_platform.engine.social_insurance import runs
 from bonus_platform.engine.social_insurance import supplements
@@ -29,6 +32,79 @@ def _enable_blob(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_STORAGE_BACKEND", "blob")
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_STORAGE_ENV", "test")
     monkeypatch.setenv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_token")
+
+
+def _enable_supabase(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_STORAGE_BACKEND", "supabase")
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_STORAGE_ENV", "test")
+    monkeypatch.setenv("SUPABASE_URL", "https://storage.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-role-secret")
+    monkeypatch.setenv("SIGMA_LABOR_SUPABASE_BUCKET", "sigma-labor-private")
+
+
+class FakeSupabaseClient:
+    def __init__(self, remote: dict[str, bytes]):
+        self.remote = remote
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def post(self, url, *, headers=None, content=None, json=None):
+        path = httpx.URL(url).path
+        if "/object/list/" in path:
+            prefix = str((json or {}).get("prefix") or "").rstrip("/")
+            offset = int((json or {}).get("offset") or 0)
+            limit = int((json or {}).get("limit") or 1000)
+            entries: dict[str, dict[str, object]] = {}
+            for key in sorted(self.remote):
+                if not key.startswith(prefix + "/"):
+                    continue
+                relative = key[len(prefix) + 1 :]
+                name, separator, _nested = relative.partition("/")
+                if separator:
+                    entries.setdefault(
+                        name,
+                        {"name": name, "id": None, "metadata": None},
+                    )
+                    continue
+                entries[name] = {
+                    "name": name,
+                    "id": "object-id",
+                    "metadata": {"size": len(self.remote[key])},
+                    "updated_at": "2026-08-26T08:00:00Z",
+                }
+            return self._response(
+                "POST",
+                url,
+                200,
+                json_body=list(entries.values())[offset : offset + limit],
+            )
+        marker = "/object/sigma-labor-private/"
+        object_path = path.split(marker, 1)[1]
+        self.remote[object_path] = bytes(content or b"")
+        return self._response("POST", url, 200, json_body={"Key": object_path})
+
+    def get(self, url, *, headers=None):
+        marker = "/object/sigma-labor-private/"
+        object_path = httpx.URL(url).path.split(marker, 1)[1]
+        if object_path not in self.remote:
+            return self._response("GET", url, 404)
+        return self._response("GET", url, 200, content=self.remote[object_path])
+
+    @staticmethod
+    def _response(method, url, status, *, content=b"", json_body=None):
+        request = httpx.Request(method, url)
+        if json_body is not None:
+            return httpx.Response(status, request=request, json=json_body)
+        return httpx.Response(status, request=request, content=content)
+
+
+class DeniedSupabaseClient(FakeSupabaseClient):
+    def get(self, url, *, headers=None):
+        return self._response("GET", url, 403)
 
 
 def _request_cron_handler(
@@ -65,6 +141,152 @@ def test_vercel_runtime_refuses_ephemeral_social_insurance_state(monkeypatch: py
 
     with pytest.raises(storage.SocialInsuranceStorageError, match="拒绝写入临时目录"):
         storage.require_persistent_storage()
+
+
+def test_supabase_storage_round_trips_and_lists_reporting_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_supabase(monkeypatch)
+    remote: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: FakeSupabaseClient(remote),
+    )
+
+    storage.persist_json(
+        "reporting-releases",
+        "latest",
+        {"releaseId": "release-20260826", "state": "ready"},
+    )
+
+    assert storage.storage_status()["backend"] == "supabase"
+    assert storage.storage_status()["persistent"] is True
+    assert storage.load_json("reporting-releases", "latest") == {
+        "releaseId": "release-20260826",
+        "state": "ready",
+    }
+    assert storage.list_json("reporting-releases") == [
+        {"releaseId": "release-20260826", "state": "ready"}
+    ]
+    assert set(remote) == {
+        "social-insurance/test/reporting-releases/latest.json"
+    }
+
+
+def test_supabase_storage_restores_complete_run_on_another_instance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_supabase(monkeypatch)
+    remote: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: FakeSupabaseClient(remote),
+    )
+    run_id = "sir_20260826120000_abcd1234"
+    source = tmp_path / "instance-a" / run_id
+    source.mkdir(parents=True)
+    (source / "run.json").write_text(
+        json.dumps(
+            {"id": run_id, "subject": "深圳测试主体", "employees": []},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    report = source / "reports" / "社保增员报盘.xlsx"
+    report.parent.mkdir()
+    report.write_bytes(b"xlsx-content")
+    (source / "ignored.tmp").write_bytes(b"temporary")
+
+    storage.persist_run_directory(run_id, source)
+
+    target = tmp_path / "instance-b" / run_id
+    assert storage.restore_run_directory(run_id, target) is True
+    restored_run = json.loads((target / "run.json").read_text(encoding="utf-8"))
+    assert restored_run["subject"] == "深圳测试主体"
+    assert (target / "reports" / "社保增员报盘.xlsx").read_bytes() == b"xlsx-content"
+    assert storage.list_persisted_runs() == [
+        {"id": run_id, "subject": "深圳测试主体", "employees": []}
+    ]
+
+    (source / "run.json").write_text(
+        json.dumps(
+            {"id": run_id, "subject": "深圳测试主体（已更新）", "employees": []},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    storage.persist_run_directory(run_id, source)
+    assert storage.restore_run_directory(run_id, target) is True
+    restored_run = json.loads((target / "run.json").read_text(encoding="utf-8"))
+    assert restored_run["subject"] == "深圳测试主体（已更新）"
+
+    assert "social-insurance/test/runs/sir_20260826120000_abcd1234/ignored.tmp" not in remote
+    assert set(remote) == {
+        "social-insurance/test/runs/sir_20260826120000_abcd1234/.storage-manifest.json",
+        "social-insurance/test/runs/sir_20260826120000_abcd1234/reports/社保增员报盘.xlsx",
+        "social-insurance/test/runs/sir_20260826120000_abcd1234/run.json",
+    }
+
+
+def test_supabase_permission_failure_keeps_storage_diagnostic_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_supabase(monkeypatch)
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: DeniedSupabaseClient({}),
+    )
+
+    with pytest.raises(storage.SocialInsuranceStorageError) as exc_info:
+        storage.load_json("reporting-releases", "latest")
+
+    assert reporting_diagnostics.safe_error_category(exc_info.value) == "storage_permission"
+    assert "service-role-secret" not in str(exc_info.value)
+
+
+def test_supabase_publication_is_readable_after_serverless_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_supabase(monkeypatch)
+    monkeypatch.setenv("VERCEL", "1")
+    instance_a = tmp_path / "instance-a"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(instance_a / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RELEASES_DIR", str(instance_a / "releases"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(instance_a / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(instance_a / "snapshots"))
+    remote: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: FakeSupabaseClient(remote),
+    )
+
+    published = publication.materialize_all_subject_runs(
+        records=[],
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject_options=[{"value": "深圳测试主体", "label": "深圳测试主体"}],
+    )
+    release_id = published["releaseId"]
+
+    instance_b = tmp_path / "instance-b"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(instance_b / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RELEASES_DIR", str(instance_b / "releases"))
+    loaded = publication.load_latest_reporting_release(
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+    )
+
+    assert loaded is not None
+    assert loaded["id"] == release_id
+    assert loaded["state"] == "ready"
+    assert loaded["batchCount"] == 1
+    assert loaded["subjects"][0]["value"] == "深圳测试主体"
+    assert f"social-insurance/test/reporting-releases/{release_id}.json" in remote
+    assert "social-insurance/test/reporting-releases/latest.json" in remote
 
 
 def test_blob_storage_restores_complete_run_on_another_instance(
