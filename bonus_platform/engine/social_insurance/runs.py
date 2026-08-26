@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+from time import perf_counter_ns
 from typing import Any
 
 from ... import config
@@ -800,9 +801,23 @@ def list_runs(
     return output[:max(1, min(limit, 100))]
 
 
-def update_employee(run_id: str, employee_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+def _elapsed_ms(started_ns: int) -> float:
+    return (perf_counter_ns() - started_ns) / 1_000_000
+
+
+def update_employee(
+    run_id: str,
+    employee_id: str,
+    updates: dict[str, Any],
+    *,
+    performance: dict[str, float | int] | None = None,
+) -> dict[str, Any]:
     decision_only = set(updates) == {"decision"}
+    load_started_ns = perf_counter_ns()
     run = load_run(run_id, document_only=decision_only)
+    if performance is not None:
+        performance["snapshot_load_ms"] = _elapsed_ms(load_started_ns)
+    mutation_started_ns = perf_counter_ns()
     employee = next((item for item in run.get("employees") or [] if item.get("id") == employee_id), None)
     if employee is None:
         raise RunNotFoundError("批次人员不存在")
@@ -889,7 +904,18 @@ def update_employee(run_id: str, employee_id: str, updates: dict[str, Any]) -> d
         run["status"] = "draft"
         run["reportFile"] = None
         run["reportPackage"] = None
-    return save_run(run, decision_only=decision_only)
+    if performance is not None:
+        performance["state_mutation_ms"] = _elapsed_ms(mutation_started_ns)
+    save_started_ns = perf_counter_ns()
+    updated = save_run(run, decision_only=decision_only)
+    if performance is not None:
+        performance["snapshot_save_ms"] = _elapsed_ms(save_started_ns)
+        try:
+            performance["snapshot_bytes"] = _run_path(run_id).stat().st_size
+        except OSError:
+            # Diagnostics must never change a successful business operation.
+            performance["snapshot_bytes"] = 0
+    return updated
 
 
 def add_supplement_employee(

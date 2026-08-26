@@ -1692,6 +1692,7 @@ def test_identity_edit_invalidates_precomputed_supplement_index(
 def test_decision_patch_can_bundle_preflight_without_a_second_run_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ):
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
     run = create_run(
@@ -1704,16 +1705,59 @@ def test_decision_patch_can_bundle_preflight_without_a_second_run_read(
     )
     employee_id = run["employees"][0]["id"]
 
-    response = TestClient(app).patch(
-        f"/api/social-insurance/runs/{run['id']}/employees/{employee_id}?includePreflight=true",
-        json={"decision": "exclude"},
-    )
+    with caplog.at_level(
+        logging.INFO,
+        logger="bonus_platform.social_insurance.performance",
+    ):
+        response = TestClient(app).patch(
+            f"/api/social-insurance/runs/{run['id']}/employees/{employee_id}?includePreflight=true",
+            json={"decision": "exclude"},
+        )
 
     assert response.status_code == 200
     payload = response.json()
+    assert set(payload) == {"run", "preflight"}
     assert payload["run"]["employees"][0]["decision"] == "exclude"
     assert payload["preflight"]["runId"] == run["id"]
     assert payload["preflight"]["summary"]["employeeCount"] == 0
+    request_id = response.headers["x-sigma-request-id"]
+    assert request_id
+    server_timings = {
+        name: float(duration)
+        for item in response.headers["server-timing"].split(",")
+        for name, duration in [item.strip().split(";dur=", 1)]
+    }
+    assert set(server_timings) == {
+        "snapshot-load",
+        "state-mutation",
+        "snapshot-save",
+        "preflight",
+        "total",
+    }
+    assert all(duration >= 0 for duration in server_timings.values())
+
+    performance_records = [
+        record
+        for record in caplog.records
+        if record.name == "bonus_platform.social_insurance.performance"
+    ]
+    assert len(performance_records) == 1
+    performance = json.loads(performance_records[0].message)
+    assert performance["event"] == "social_insurance_decision_performance"
+    assert performance["request_id"] == request_id
+    assert performance["snapshot_bytes"] > 0
+    assert performance["include_preflight"] is True
+    for field in (
+        "snapshot_load_ms",
+        "state_mutation_ms",
+        "snapshot_save_ms",
+        "preflight_ms",
+        "total_ms",
+    ):
+        assert isinstance(performance[field], float)
+        assert performance[field] >= 0
+    assert "TEST-ID-DECISION-BUNDLE-001" not in performance_records[0].message
+    assert "决策校验员工" not in performance_records[0].message
 
 
 def test_supplement_search_falls_back_to_full_run_for_legacy_batches(

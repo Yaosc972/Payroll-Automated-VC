@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import date
+import json
+import logging
 import os
 import secrets
 import tempfile
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Any
 
-from fastapi import APIRouter, Body, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
@@ -70,6 +73,50 @@ from .template_schemas import public_template_schemas
 
 
 router = APIRouter(prefix="/api/social-insurance", tags=["social-insurance"])
+PERFORMANCE_LOGGER = logging.getLogger("bonus_platform.social_insurance.performance")
+
+
+def _elapsed_ms(started_ns: int) -> float:
+    return (perf_counter_ns() - started_ns) / 1_000_000
+
+
+def _decision_server_timing(performance: dict[str, Any]) -> str:
+    metrics = (
+        ("snapshot-load", "snapshot_load_ms"),
+        ("state-mutation", "state_mutation_ms"),
+        ("snapshot-save", "snapshot_save_ms"),
+        ("preflight", "preflight_ms"),
+        ("total", "total_ms"),
+    )
+    return ", ".join(
+        f"{metric};dur={float(performance.get(field) or 0):.3f}"
+        for metric, field in metrics
+    )
+
+
+def _log_decision_performance(
+    response: Response,
+    *,
+    request_id: str,
+    include_preflight: bool,
+    performance: dict[str, float | int],
+) -> None:
+    event = {
+        "event": "social_insurance_decision_performance",
+        "request_id": request_id,
+        "include_preflight": include_preflight,
+        "snapshot_bytes": int(performance.get("snapshot_bytes") or 0),
+        "snapshot_load_ms": round(float(performance.get("snapshot_load_ms") or 0), 3),
+        "state_mutation_ms": round(float(performance.get("state_mutation_ms") or 0), 3),
+        "snapshot_save_ms": round(float(performance.get("snapshot_save_ms") or 0), 3),
+        "preflight_ms": round(float(performance.get("preflight_ms") or 0), 3),
+        "total_ms": round(float(performance.get("total_ms") or 0), 3),
+    }
+    response.headers["Server-Timing"] = _decision_server_timing(event)
+    response.headers["X-Sigma-Request-ID"] = request_id
+    PERFORMANCE_LOGGER.info(
+        json.dumps(event, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
 
 
 def _require_access(request: Request) -> None:
@@ -689,14 +736,25 @@ def add_supplement(
 @router.patch("/runs/{run_id}/employees/{employee_id}")
 def patch_employee(
     request: Request,
+    response: Response,
     run_id: str,
     employee_id: str,
     payload: dict[str, Any] = Body(...),
     include_preflight: bool = Query(default=False, alias="includePreflight"),
 ) -> dict[str, Any]:
     _require_access(request)
+    decision_performance: dict[str, float | int] | None = (
+        {} if set(payload) == {"decision"} else None
+    )
+    request_id = secrets.token_hex(8) if decision_performance is not None else ""
+    request_started_ns = perf_counter_ns()
     try:
-        updated = update_employee(run_id, employee_id, payload)
+        updated = update_employee(
+            run_id,
+            employee_id,
+            payload,
+            performance=decision_performance,
+        )
         report_updates = payload.get("report") if isinstance(payload.get("report"), dict) else {}
         template_updates = (
             payload.get("templateReport")
@@ -706,11 +764,26 @@ def patch_employee(
         if "证件号码" in report_updates or "证件号码" in template_updates:
             invalidate_supplement_search_index(run_id)
         if include_preflight:
-            return {
+            preflight_started_ns = perf_counter_ns()
+            result = {
                 "run": updated,
                 "preflight": build_export_preflight(updated),
             }
-        return updated
+            if decision_performance is not None:
+                decision_performance["preflight_ms"] = _elapsed_ms(preflight_started_ns)
+        else:
+            result = updated
+            if decision_performance is not None:
+                decision_performance["preflight_ms"] = 0.0
+        if decision_performance is not None:
+            decision_performance["total_ms"] = _elapsed_ms(request_started_ns)
+            _log_decision_performance(
+                response,
+                request_id=request_id,
+                include_preflight=include_preflight,
+                performance=decision_performance,
+            )
+        return result
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
 
