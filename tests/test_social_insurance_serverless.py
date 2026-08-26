@@ -233,6 +233,36 @@ def test_supabase_unrelated_bad_request_is_still_a_storage_error(
     assert exc_info.value.status_code == 400
 
 
+def test_run_document_and_decision_events_are_fetched_in_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    barrier = threading.Barrier(2, timeout=1)
+    monkeypatch.setattr(storage, "persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(storage, "require_persistent_storage", lambda: None)
+
+    def download(_target: str) -> bytes:
+        barrier.wait()
+        return json.dumps({"id": "sir_parallel_001", "employees": []}).encode("utf-8")
+
+    def list_direct(_prefix: str) -> list[dict]:
+        barrier.wait()
+        return []
+
+    monkeypatch.setattr(storage, "_get_bytes", download)
+    monkeypatch.setattr(storage, "_list_direct_prefix", list_direct)
+    run_path = tmp_path / "sir_parallel_001" / "run.json"
+
+    restored, decisions = storage.restore_run_document_with_decisions(
+        "sir_parallel_001",
+        run_path,
+    )
+
+    assert restored is True
+    assert decisions == []
+    assert json.loads(run_path.read_text(encoding="utf-8"))["id"] == "sir_parallel_001"
+
+
 def test_supabase_storage_restores_complete_run_on_another_instance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -578,9 +608,29 @@ def test_decision_only_update_skips_full_directory_and_unchanged_search_context(
     calls: list[str] = []
     monkeypatch.setattr(runs, "persistent_storage_enabled", lambda: True)
     monkeypatch.setattr(runs, "serverless_runtime", lambda: True)
-    monkeypatch.setattr(runs, "_restore_run_document", lambda _run_id: calls.append("restore-document") or True)
+    monkeypatch.setattr(
+        runs,
+        "_restore_run_document_with_decisions",
+        lambda _run_id: calls.append("restore-document-and-decisions") or (True, []),
+    )
     monkeypatch.setattr(runs, "_restore_run", lambda _run_id: pytest.fail("不应恢复完整批次目录"))
-    monkeypatch.setattr(runs, "_persist_run_document", lambda _run_id: calls.append("persist-document"))
+    monkeypatch.setattr(
+        runs,
+        "persist_run_decision_event_to_storage",
+        lambda _run_id, _run_dir, _employee_id, _decision: calls.append("persist-decision-event")
+        or {
+            "bytes": 160,
+            "createdAt": "2026-08-26T10:00:00.000000Z",
+            "decision": "exclude",
+            "employeeId": employee_id,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runs,
+        "_persist_run_document",
+        lambda _run_id: pytest.fail("决策事件不应覆盖完整 run.json"),
+    )
     monkeypatch.setattr(runs, "_persist_run", lambda _run_id: pytest.fail("不应写入完整批次目录"))
     monkeypatch.setattr(
         runs,
@@ -596,7 +646,8 @@ def test_decision_only_update_skips_full_directory_and_unchanged_search_context(
     updated = runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
 
     assert updated["employees"][0]["status"] == "excluded"
-    assert calls == ["restore-document", "persist-document"]
+    assert updated["updatedAt"] == "2026-08-26T10:00:00.000000Z"
+    assert calls == ["restore-document-and-decisions", "persist-decision-event"]
 
 
 def test_decision_only_update_is_durable_without_rewriting_the_context_index(
@@ -605,9 +656,16 @@ def test_decision_only_update_is_durable_without_rewriting_the_context_index(
 ) -> None:
     _enable_supabase(monkeypatch)
     remote: dict[str, bytes] = {}
+    downloaded_paths: list[str] = []
+
+    class TrackingSupabaseClient(LegacyMissingObjectSupabaseClient):
+        def get(self, url, *, headers=None):
+            downloaded_paths.append(httpx.URL(url).path)
+            return super().get(url, headers=headers)
+
     monkeypatch.setattr(
         "bonus_platform.engine.labor.persistent_storage.httpx.Client",
-        lambda **_kwargs: LegacyMissingObjectSupabaseClient(remote),
+        lambda **_kwargs: TrackingSupabaseClient(remote),
     )
     instance_a = tmp_path / "instance-a"
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(instance_a))
@@ -640,9 +698,28 @@ def test_decision_only_update_is_durable_without_rewriting_the_context_index(
     }
     employee_id = run["employees"][0]["id"]
     index_before = runs.load_run_index(**context)
+    run_object = f"social-insurance/test/runs/{run['id']}/run.json"
+    snapshot_before = remote[run_object]
 
     monkeypatch.setenv("VERCEL", "1")
-    updated = runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
+    performance: dict[str, float | int] = {}
+    updated = runs.update_employee(
+        run["id"],
+        employee_id,
+        {"decision": "exclude"},
+        performance=performance,
+    )
+    decision_objects = [
+        key
+        for key in remote
+        if f"social-insurance/test/runs/{run['id']}/.decision-event-" in key
+    ]
+    listed = runs.list_runs(
+        period_start=run["periodStart"],
+        period_end=run["periodEnd"],
+        confirmation_date=run["confirmationDate"],
+        subject=run["subject"],
+    )
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
     indexed_after = runs.load_run_index(**context)
     restored = runs.load_run(str(indexed_after["runId"]))
@@ -651,9 +728,131 @@ def test_decision_only_update_is_durable_without_rewriting_the_context_index(
     assert indexed_after is not None
     assert indexed_after["runId"] == run["id"]
     assert indexed_after["updatedAt"] == index_before["updatedAt"]
+    assert remote[run_object] == snapshot_before
+    assert len(decision_objects) == 1
+    assert len(remote[decision_objects[0]]) < len(snapshot_before) / 10
+    assert performance["snapshot_bytes"] == len(snapshot_before)
+    assert performance["persisted_bytes"] == len(remote[decision_objects[0]])
+    decision_payload = json.loads(remote[decision_objects[0]].decode("utf-8"))
+    assert set(decision_payload) == {
+        "version",
+        "runId",
+        "employeeId",
+        "decision",
+        "createdAt",
+    }
+    assert "TEST-ID-DURABLE-DECISION-001" not in remote[decision_objects[0]].decode("utf-8")
+    assert "持久化决策员工" not in remote[decision_objects[0]].decode("utf-8")
+    assert not any(".decision-event-" in path for path in downloaded_paths)
+    assert listed[0]["summary"]["excluded"] == 1
     assert updated["employees"][0]["decision"] == "exclude"
     assert restored["employees"][0]["decision"] == "exclude"
     assert restored["employees"][0]["status"] == "excluded"
+
+
+def test_concurrent_decision_events_merge_without_overwriting_each_other(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_supabase(monkeypatch)
+    remote: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: LegacyMissingObjectSupabaseClient(remote),
+    )
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-a"))
+    run = runs.create_run(
+        records=[
+            {
+                "status": "ready",
+                "report": {"证件号码": f"TEST-ID-MERGED-DECISION-{index}", "姓名": f"员工{index}"},
+                "source": {"subject": "深圳测试主体", "place": "深圳", "employType": "内部员工"},
+            }
+            for index in range(2)
+        ],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳测试主体",
+        source="beisen",
+    )
+    monkeypatch.setenv("VERCEL", "1")
+
+    barrier = threading.Barrier(2, timeout=1)
+    failures: list[BaseException] = []
+
+    def exclude(employee_id: str) -> None:
+        try:
+            barrier.wait()
+            runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
+        except BaseException as exc:  # noqa: BLE001 - surface thread failures in the test.
+            failures.append(exc)
+
+    threads = [
+        threading.Thread(target=exclude, args=(employee["id"],))
+        for employee in run["employees"]
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
+    restored = runs.load_run(run["id"], document_only=True)
+    event_objects = [key for key in remote if "/.decision-event-" in key]
+
+    assert failures == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert len(event_objects) == 2
+    assert {employee["decision"] for employee in restored["employees"]} == {"exclude"}
+    assert restored["summary"]["excluded"] == 2
+
+
+def test_latest_decision_event_wins_and_full_save_compacts_older_events(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_supabase(monkeypatch)
+    remote: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: LegacyMissingObjectSupabaseClient(remote),
+    )
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-a"))
+    run = runs.create_run(
+        records=[
+            {
+                "status": "ready",
+                "report": {"证件号码": "TEST-ID-LATEST-DECISION-001", "姓名": "连续切换员工"},
+                "source": {"subject": "深圳测试主体", "place": "深圳", "employType": "内部员工"},
+            }
+        ],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳测试主体",
+        source="beisen",
+    )
+    employee_id = run["employees"][0]["id"]
+    monkeypatch.setenv("VERCEL", "1")
+
+    runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
+    included = runs.update_employee(run["id"], employee_id, {"decision": "include"})
+    compacted = runs.update_employee(
+        run["id"],
+        employee_id,
+        {"decision": "exclude", "reviewNote": "完整编辑压实当前结果"},
+    )
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
+    restored = runs.load_run(run["id"], document_only=True)
+    event_objects = [key for key in remote if "/.decision-event-" in key]
+
+    assert included["employees"][0]["decision"] == "include"
+    assert len(event_objects) == 2
+    assert compacted["employees"][0]["decision"] == "exclude"
+    assert restored["employees"][0]["decision"] == "exclude"
+    assert restored["employees"][0]["reviewNote"] == "完整编辑压实当前结果"
 
 
 def test_run_context_index_is_persisted_without_employee_details(

@@ -1746,6 +1746,7 @@ def test_decision_patch_can_bundle_preflight_without_a_second_run_read(
     assert performance["event"] == "social_insurance_decision_performance"
     assert performance["request_id"] == request_id
     assert performance["snapshot_bytes"] > 0
+    assert 0 < performance["persisted_bytes"] <= performance["snapshot_bytes"]
     assert performance["include_preflight"] is True
     for field in (
         "snapshot_load_ms",

@@ -106,6 +106,7 @@ def _log_decision_performance(
         "request_id": request_id,
         "include_preflight": include_preflight,
         "snapshot_bytes": int(performance.get("snapshot_bytes") or 0),
+        "persisted_bytes": int(performance.get("persisted_bytes") or 0),
         "snapshot_load_ms": round(float(performance.get("snapshot_load_ms") or 0), 3),
         "state_mutation_ms": round(float(performance.get("state_mutation_ms") or 0), 3),
         "snapshot_save_ms": round(float(performance.get("snapshot_save_ms") or 0), 3),

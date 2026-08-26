@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import json
 import mimetypes
 import os
 from pathlib import Path
 import re
+import secrets
 import time
 from typing import Any, NoReturn
 from urllib.parse import urlencode
@@ -28,6 +30,12 @@ from ..labor.persistent_storage import (
 
 ROOT_PREFIX = "social-insurance"
 RUN_MANIFEST = ".storage-manifest.json"
+DECISION_EVENT_VERSION = 1
+_DECISION_EVENT_NAME = re.compile(
+    r"^\.decision-event-(?P<sequence>[0-9]{16,20})-"
+    r"(?P<nonce>[0-9a-f]{8})-(?P<employee_id>emp_[0-9a-f]{16})-"
+    r"(?P<decision>include|exclude)\.json$"
+)
 
 
 class SocialInsuranceStorageError(RuntimeError):
@@ -98,6 +106,50 @@ def _root() -> str:
 
 def _run_prefix(run_id: str) -> str:
     return f"{_root()}/runs/{run_id}"
+
+
+def _decision_event_created_at(sequence: int) -> str:
+    seconds, nanoseconds = divmod(sequence, 1_000_000_000)
+    value = datetime.fromtimestamp(seconds, tz=timezone.utc).replace(
+        microsecond=nanoseconds // 1_000
+    )
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _decision_event_from_pathname(pathname: str) -> dict[str, Any] | None:
+    match = _DECISION_EVENT_NAME.fullmatch(Path(pathname).name)
+    if match is None:
+        return None
+    sequence = int(match.group("sequence"))
+    nonce = match.group("nonce")
+    return {
+        "version": DECISION_EVENT_VERSION,
+        "sequence": sequence,
+        "nonce": nonce,
+        "createdAt": _decision_event_created_at(sequence),
+        "employeeId": match.group("employee_id"),
+        "decision": match.group("decision"),
+        "pathname": pathname,
+    }
+
+
+def _latest_decision_events(pathnames: list[str]) -> list[dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for pathname in pathnames:
+        event = _decision_event_from_pathname(pathname)
+        if event is None:
+            continue
+        employee_id = str(event["employeeId"])
+        existing = latest.get(employee_id)
+        if existing is None or (event["sequence"], event["nonce"]) > (
+            existing["sequence"],
+            existing["nonce"],
+        ):
+            latest[employee_id] = event
+    return sorted(
+        latest.values(),
+        key=lambda event: (event["sequence"], event["nonce"], event["employeeId"]),
+    )
 
 
 def _json_path(namespace: str, key: str) -> str:
@@ -180,6 +232,43 @@ def _list_prefix(prefix: str) -> list[dict[str, Any]]:
                 if entry.get("id") is None and entry.get("metadata") is None:
                     pending.append(pathname)
                     continue
+                rows.append(
+                    {
+                        "pathname": pathname,
+                        "uploadedAt": entry.get("updated_at")
+                        or entry.get("created_at")
+                        or "",
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001 - normalize vendor errors without leaking credentials.
+        _raise_supabase_error(exc, operation="列表读取")
+    return sorted(rows, key=lambda row: str(row["pathname"]))
+
+
+def _list_direct_prefix(prefix: str) -> list[dict[str, Any]]:
+    """List only immediate objects so decision reads do not scan report folders."""
+    normalized_prefix = prefix.rstrip("/")
+    if storage_backend() != "supabase":
+        rows: list[dict[str, Any]] = []
+        for entry in blob_list_prefix(f"{normalized_prefix}/"):
+            pathname = str(entry.get("pathname") or "")
+            relative = pathname.removeprefix(f"{normalized_prefix}/")
+            if relative and "/" not in relative:
+                rows.append(entry)
+        return sorted(rows, key=lambda row: str(row.get("pathname") or ""))
+    rows = []
+    try:
+        for entry in supabase_list_objects(normalized_prefix):
+            name = str(entry.get("name") or "").strip("/")
+            if (
+                not name
+                or "/" in name
+                or name in {".", ".."}
+                or (entry.get("id") is None and entry.get("metadata") is None)
+            ):
+                continue
+            pathname = supabase_entry_path(normalized_prefix, entry)
+            if pathname == f"{normalized_prefix}/{name}":
                 rows.append(
                     {
                         "pathname": pathname,
@@ -287,6 +376,92 @@ def list_json(namespace: str) -> list[dict[str, Any]]:
     return rows
 
 
+def load_run_decision_events(
+    run_id: str,
+    run_dir: Path,
+    *,
+    remote: bool = False,
+) -> list[dict[str, Any]]:
+    """Return the latest append-only decision for each employee without reading bodies."""
+    if remote and persistent_storage_enabled():
+        require_persistent_storage()
+        rows = _list_direct_prefix(_run_prefix(run_id))
+        return _latest_decision_events(
+            [str(row.get("pathname") or "") for row in rows]
+        )
+    return _latest_decision_events(
+        [path.as_posix() for path in run_dir.glob(".decision-event-*.json")]
+    )
+
+
+def persist_run_decision_event(
+    run_id: str,
+    run_dir: Path,
+    employee_id: str,
+    decision: str,
+) -> dict[str, Any]:
+    """Append one PII-free decision object and leave the large run snapshot untouched."""
+    normalized_run_id = str(run_id or "").strip()
+    normalized_employee_id = str(employee_id or "").strip()
+    normalized_decision = str(decision or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,80}", normalized_run_id):
+        raise SocialInsuranceStorageError("社保报盘批次ID格式无效")
+    if not re.fullmatch(r"emp_[0-9a-f]{16}", normalized_employee_id):
+        raise SocialInsuranceStorageError("社保报盘人员ID格式无效")
+    if normalized_decision not in {"include", "exclude"}:
+        raise SocialInsuranceStorageError("社保报盘人员决策格式无效")
+    sequence = time.time_ns()
+    nonce = secrets.token_hex(4)
+    filename = (
+        f".decision-event-{sequence}-{nonce}-{normalized_employee_id}-"
+        f"{normalized_decision}.json"
+    )
+    payload = {
+        "version": DECISION_EVENT_VERSION,
+        "runId": normalized_run_id,
+        "employeeId": normalized_employee_id,
+        "decision": normalized_decision,
+        "createdAt": _decision_event_created_at(sequence),
+    }
+    content = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    require_persistent_storage()
+    if persistent_storage_enabled():
+        _put_bytes(
+            f"{_run_prefix(normalized_run_id)}/{filename}",
+            content,
+            content_type="application/json",
+        )
+    run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = run_dir / filename
+    temporary = target.with_name(f".{target.name}.{secrets.token_hex(4)}.tmp")
+    try:
+        temporary.write_bytes(content)
+        temporary.replace(target)
+        target.chmod(0o600)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise SocialInsuranceStorageError("社保报盘决策事件未能保存") from exc
+    return {**payload, "bytes": len(content), "pathname": target.as_posix()}
+
+
+def _restore_run_document_bytes(content: bytes, run_path: Path) -> None:
+    run_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = run_path.with_name(
+        f".{run_path.name}.{secrets.token_hex(4)}.restore.tmp"
+    )
+    try:
+        temporary.write_bytes(content)
+        temporary.replace(run_path)
+        run_path.chmod(0o600)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise SocialInsuranceStorageError("社保报盘批次文件未能恢复") from exc
+
+
 def persist_run_document(run_id: str, run_path: Path) -> None:
     """Persist only run.json at the same object key used by full directory saves."""
     require_persistent_storage()
@@ -313,16 +488,33 @@ def restore_run_document(run_id: str, run_path: Path) -> bool:
     )
     if content is None:
         return False
-    run_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = run_path.with_name(f".{run_path.name}.restore.tmp")
-    try:
-        temporary.write_bytes(content)
-        temporary.replace(run_path)
-        run_path.chmod(0o600)
-    except OSError as exc:
-        temporary.unlink(missing_ok=True)
-        raise SocialInsuranceStorageError("社保报盘批次文件未能恢复") from exc
+    _restore_run_document_bytes(content, run_path)
     return True
+
+
+def restore_run_document_with_decisions(
+    run_id: str,
+    run_path: Path,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Restore the base snapshot while listing decision events in parallel."""
+    require_persistent_storage()
+    if not persistent_storage_enabled():
+        return False, load_run_decision_events(run_id, run_path.parent)
+    target = _fresh_storage_target(f"{_run_prefix(run_id)}/run.json")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        document_future = executor.submit(_get_bytes, target)
+        decisions_future = executor.submit(
+            load_run_decision_events,
+            run_id,
+            run_path.parent,
+            remote=True,
+        )
+        content = document_future.result()
+        decisions = decisions_future.result()
+    if content is None:
+        return False, decisions
+    _restore_run_document_bytes(content, run_path)
+    return True, decisions
 
 
 def persist_run_directory(run_id: str, run_dir: Path) -> None:
@@ -339,7 +531,12 @@ def persist_run_directory(run_id: str, run_dir: Path) -> None:
         previous_manifest = {}
     next_manifest: dict[str, str] = {}
     for path in sorted(run_dir.rglob("*")):
-        if not path.is_file() or path.name.endswith(".tmp") or path.name.startswith(".approved-"):
+        if (
+            not path.is_file()
+            or path.name.endswith(".tmp")
+            or path.name.startswith(".approved-")
+            or path.name.startswith(".decision-event-")
+        ):
             continue
         relative = path.relative_to(run_dir).as_posix()
         content_type, _ = mimetypes.guess_type(path.name)
@@ -385,12 +582,20 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
         relative = pathname[len(prefix) :]
         if not relative or relative.endswith("/") or relative == RUN_MANIFEST:
             continue
+        target = run_dir / relative
+        if _decision_event_from_pathname(pathname) is not None:
+            # Decision state is encoded in the immutable object name.  A local
+            # marker preserves it for materialization without another GET.
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            target.touch(exist_ok=True)
+            target.chmod(0o600)
+            restored = True
+            continue
         # A per-read marker prevents stale list metadata from reusing an older
         # cached object body in another function instance.
         content = _get_bytes(_fresh_storage_target(str(blob.get("url") or pathname)))
         if content is None:
             continue
-        target = run_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         temporary = target.with_name(f".{target.name}.restore.tmp")
         temporary.write_bytes(content)
@@ -405,8 +610,13 @@ def list_persisted_runs() -> list[dict[str, Any]]:
         return []
     prefix = f"{_root()}/runs/"
     latest: dict[str, dict[str, Any]] = {}
+    decision_pathnames: dict[str, list[str]] = {}
     for blob in _list_prefix(prefix):
         pathname = str(blob.get("pathname") or "")
+        relative = pathname.removeprefix(prefix)
+        run_id, separator, _filename = relative.partition("/")
+        if separator and _decision_event_from_pathname(pathname) is not None:
+            decision_pathnames.setdefault(run_id, []).append(pathname)
         if not pathname.endswith("/run.json"):
             continue
         uploaded_at = str(blob.get("uploadedAt") or blob.get("uploaded_at") or "")
@@ -423,7 +633,17 @@ def list_persisted_runs() -> list[dict[str, Any]]:
             payload = json.loads(content.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
-        return deepcopy(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        restored = deepcopy(payload)
+        relative = pathname.removeprefix(prefix)
+        run_id = relative.split("/", 1)[0]
+        decisions = _latest_decision_events(
+            decision_pathnames.get(run_id, [])
+        )
+        if decisions:
+            restored["_decisionEvents"] = decisions
+        return restored
 
     items = list(latest.items())
     if len(items) <= 1:

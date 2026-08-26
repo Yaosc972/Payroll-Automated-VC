@@ -17,14 +17,16 @@ from .field_metadata import FieldMetadataError, validate_report_field_value
 from .persistent_storage import (
     SocialInsuranceStorageError,
     load_json,
+    load_run_decision_events as load_run_decision_events_from_storage,
     list_persisted_runs,
     object_key,
     persist_json,
+    persist_run_decision_event as persist_run_decision_event_to_storage,
     persist_run_document as persist_run_document_to_storage,
     persist_run_directory,
     persistent_storage_enabled,
     require_persistent_storage,
-    restore_run_document as restore_run_document_from_storage,
+    restore_run_document_with_decisions as restore_run_document_with_decisions_from_storage,
     restore_run_directory,
     serverless_runtime,
 )
@@ -404,10 +406,15 @@ def _restore_run(run_id: str) -> bool:
         raise RunValidationError("社保报盘批次未能从持久化存储恢复") from exc
 
 
-def _restore_run_document(run_id: str) -> bool:
+def _restore_run_document_with_decisions(
+    run_id: str,
+) -> tuple[bool, list[dict[str, Any]]]:
     _require_storage()
     try:
-        return restore_run_document_from_storage(run_id, _run_path(run_id))
+        return restore_run_document_with_decisions_from_storage(
+            run_id,
+            _run_path(run_id),
+        )
     except SocialInsuranceStorageError as exc:
         raise RunValidationError("社保报盘批次未能从持久化存储恢复") from exc
 
@@ -704,23 +711,66 @@ def _repair_employee_decision_status(employee: dict[str, Any]) -> bool:
     return True
 
 
-def load_run(run_id: str, *, document_only: bool = False) -> dict[str, Any]:
-    path = _run_path(run_id)
-    if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
-        if document_only:
-            _restore_run_document(run_id)
-        else:
-            _restore_run(run_id)
-    else:
-        _require_storage()
-    if not path.exists():
-        raise RunNotFoundError("社保报盘批次不存在")
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RunValidationError("社保报盘批次文件不可读取") from exc
-    if not isinstance(payload, dict):
-        raise RunValidationError("社保报盘批次格式无效")
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _apply_run_decision_events(
+    run: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> bool:
+    """Overlay append-only decisions that are newer than the base run snapshot."""
+    base_updated_at = _parse_utc_timestamp(run.get("updatedAt"))
+    employees = {
+        str(employee.get("id") or ""): employee
+        for employee in run.get("employees") or []
+        if isinstance(employee, dict)
+    }
+    applied: list[dict[str, Any]] = []
+    for event in events:
+        employee = employees.get(str(event.get("employeeId") or ""))
+        created_at = _parse_utc_timestamp(event.get("createdAt"))
+        decision = str(event.get("decision") or "")
+        if (
+            employee is None
+            or created_at is None
+            or decision not in VALID_DECISIONS
+            or (base_updated_at is not None and created_at <= base_updated_at)
+        ):
+            continue
+        employee["decision"] = decision
+        applied.append(event)
+    if not applied:
+        return False
+    newest = max(
+        applied,
+        key=lambda event: (
+            int(event.get("sequence") or 0),
+            str(event.get("nonce") or ""),
+        ),
+    )
+    run["updatedAt"] = str(newest.get("createdAt") or run.get("updatedAt") or "")
+    if run.get("status") in {"confirmed", "generated"}:
+        run["status"] = "draft"
+        run["reportFile"] = None
+        run["reportPackage"] = None
+    return True
+
+
+def _materialize_run_payload(
+    payload: dict[str, Any],
+    decision_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    _apply_run_decision_events(payload, decision_events)
     for employee in payload.get("employees") or []:
         if not isinstance(employee, dict):
             continue
@@ -737,6 +787,35 @@ def load_run(run_id: str, *, document_only: bool = False) -> dict[str, Any]:
     payload["summary"] = _summarize(payload.get("employees") or [])
     payload["processingPlan"] = processing_plan(payload.get("employees") or [])
     return payload
+
+
+def load_run(run_id: str, *, document_only: bool = False) -> dict[str, Any]:
+    path = _run_path(run_id)
+    decision_events: list[dict[str, Any]] | None = None
+    if persistent_storage_enabled() and (serverless_runtime() or not path.exists()):
+        if document_only:
+            _restored, decision_events = _restore_run_document_with_decisions(run_id)
+        else:
+            _restore_run(run_id)
+    else:
+        _require_storage()
+    if not path.exists():
+        raise RunNotFoundError("社保报盘批次不存在")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RunValidationError("社保报盘批次文件不可读取") from exc
+    if not isinstance(payload, dict):
+        raise RunValidationError("社保报盘批次格式无效")
+    if decision_events is None:
+        try:
+            decision_events = load_run_decision_events_from_storage(
+                run_id,
+                get_run_dir(run_id),
+            )
+        except SocialInsuranceStorageError as exc:
+            raise RunValidationError("社保报盘批次决策记录不可读取") from exc
+    return _materialize_run_payload(payload, decision_events)
 
 
 def save_run(run: dict[str, Any], *, decision_only: bool = False) -> dict[str, Any]:
@@ -793,6 +872,10 @@ def list_runs(
             continue
         if subject and str(run.get("subject") or "").strip() != subject.strip():
             continue
+        if persistent_storage_enabled():
+            raw_events = run.pop("_decisionEvents", [])
+            decision_events = raw_events if isinstance(raw_events, list) else []
+            run = _materialize_run_payload(run, decision_events)
         output.append({key: value for key, value in run.items() if key != "employees"})
     output.sort(
         key=lambda run: (str(run.get("createdAt") or run.get("updatedAt") or ""), str(run.get("id") or "")),
@@ -907,14 +990,33 @@ def update_employee(
     if performance is not None:
         performance["state_mutation_ms"] = _elapsed_ms(mutation_started_ns)
     save_started_ns = perf_counter_ns()
-    updated = save_run(run, decision_only=decision_only)
+    decision_event_bytes = 0
+    if decision_only and persistent_storage_enabled():
+        run["summary"] = _summarize(run.get("employees") or [])
+        run["processingPlan"] = processing_plan(run.get("employees") or [])
+        try:
+            event = persist_run_decision_event_to_storage(
+                run_id,
+                get_run_dir(run_id),
+                employee_id,
+                str(employee.get("decision") or ""),
+            )
+        except SocialInsuranceStorageError as exc:
+            raise RunValidationError("社保报盘人员决策未能保存到持久化存储") from exc
+        run["updatedAt"] = str(event.get("createdAt") or current_timestamp())
+        decision_event_bytes = int(event.get("bytes") or 0)
+        updated = run
+    else:
+        updated = save_run(run, decision_only=decision_only)
     if performance is not None:
         performance["snapshot_save_ms"] = _elapsed_ms(save_started_ns)
         try:
-            performance["snapshot_bytes"] = _run_path(run_id).stat().st_size
+            snapshot_bytes = _run_path(run_id).stat().st_size
         except OSError:
             # Diagnostics must never change a successful business operation.
-            performance["snapshot_bytes"] = 0
+            snapshot_bytes = 0
+        performance["snapshot_bytes"] = snapshot_bytes
+        performance["persisted_bytes"] = decision_event_bytes or snapshot_bytes
     return updated
 
 
