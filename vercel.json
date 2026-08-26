@@ -1,23 +1,37 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.py": {
-      "regions": ["pdx1"],
-      "maxDuration": 300
+  "services": {
+    "workbench": {
+      "root": ".",
+      "runtime": "python",
+      "entrypoint": "api/index.py",
+      "functions": {
+        "api/index.py": {
+          "regions": ["pdx1"],
+          "maxDuration": 300
+        }
+      }
     },
-    "api/social_insurance_cron/index.py": {
-      "regions": ["pdx1"],
-      "maxDuration": 300
+    "social_insurance_cron": {
+      "root": ".",
+      "runtime": "python",
+      "entrypoint": "api/social_insurance_cron/index.py",
+      "functions": {
+        "api/social_insurance_cron/index.py": {
+          "regions": ["pdx1"],
+          "maxDuration": 300
+        }
+      }
     }
   },
   "rewrites": [
     {
       "source": "/api/social-insurance/cron/refresh",
-      "destination": "/api/social_insurance_cron/index.py"
+      "destination": {"service": "social_insurance_cron"}
     },
     {
       "source": "/(.*)",
-      "destination": "/api/index.py"
+      "destination": {"service": "workbench"}
     }
   ],
   "env": {

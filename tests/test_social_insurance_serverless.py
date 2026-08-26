@@ -411,20 +411,47 @@ def test_cron_refresh_requires_secret_and_returns_refresh_result(monkeypatch: py
     }
 
 
-def test_vercel_routes_reporting_cron_to_a_minimal_dedicated_python_function() -> None:
+def test_vercel_routes_reporting_cron_to_an_isolated_named_python_service() -> None:
     config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
 
+    assert "functions" not in config
+    assert config["services"] == {
+        "workbench": {
+            "root": ".",
+            "runtime": "python",
+            "entrypoint": "api/index.py",
+            "functions": {
+                "api/index.py": {
+                    "regions": ["pdx1"],
+                    "maxDuration": 300,
+                }
+            },
+        },
+        "social_insurance_cron": {
+            "root": ".",
+            "runtime": "python",
+            "entrypoint": "api/social_insurance_cron/index.py",
+            "functions": {
+                "api/social_insurance_cron/index.py": {
+                    "regions": ["pdx1"],
+                    "maxDuration": 300,
+                }
+            },
+        },
+    }
     assert config["rewrites"][0] == {
         "source": "/api/social-insurance/cron/refresh",
-        "destination": "/api/social_insurance_cron/index.py",
+        "destination": {"service": "social_insurance_cron"},
     }
     assert config["rewrites"][1] == {
         "source": "/(.*)",
-        "destination": "/api/index.py",
+        "destination": {"service": "workbench"},
     }
-    assert config["functions"]["api/social_insurance_cron/index.py"] == {
-        "regions": ["pdx1"],
-        "maxDuration": 300,
+    assert config["env"] == {
+        "SIGMA_WORKBENCH_HOME": "/tmp/sigma-workbench",
+        "SIGMA_WORKBENCH_SEED_DIR": "outputs",
+        "SIGMA_HIDE_DEVELOPING_MODULES": "0",
+        "SIGMA_OVERSEAS_LABOR_UAT_ROLES": "Payroll Admin,Compensation UAT",
     }
     requirements = {
         line.strip()

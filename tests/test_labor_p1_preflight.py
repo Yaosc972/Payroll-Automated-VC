@@ -43,7 +43,7 @@ def test_vercel_config_does_not_force_legacy_blob_storage_for_p1():
 
 def test_vercel_function_runs_in_supabase_west_region_with_fluid_duration():
     config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
-    function = config["functions"]["api/index.py"]
+    function = config["services"]["workbench"]["functions"]["api/index.py"]
 
     assert function["regions"] == ["pdx1"]
     assert function["maxDuration"] == 300
