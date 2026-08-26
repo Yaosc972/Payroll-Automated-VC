@@ -107,6 +107,38 @@ class DeniedSupabaseClient(FakeSupabaseClient):
         return self._response("GET", url, 403)
 
 
+class LegacyMissingObjectSupabaseClient(FakeSupabaseClient):
+    def get(self, url, *, headers=None):
+        marker = "/object/sigma-labor-private/"
+        object_path = httpx.URL(url).path.split(marker, 1)[1]
+        if object_path not in self.remote:
+            return self._response(
+                "GET",
+                url,
+                400,
+                json_body={
+                    "statusCode": "404",
+                    "error": "not_found",
+                    "message": "Object not found",
+                },
+            )
+        return super().get(url, headers=headers)
+
+
+class InvalidRequestSupabaseClient(FakeSupabaseClient):
+    def get(self, url, *, headers=None):
+        return self._response(
+            "GET",
+            url,
+            400,
+            json_body={
+                "statusCode": "400",
+                "error": "invalid_request",
+                "message": "Invalid request",
+            },
+        )
+
+
 def _request_cron_handler(
     handler_class: type[BaseHTTPRequestHandler],
     *,
@@ -173,6 +205,34 @@ def test_supabase_storage_round_trips_and_lists_reporting_json(
     }
 
 
+def test_supabase_legacy_missing_object_response_is_an_empty_json_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_supabase(monkeypatch)
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: LegacyMissingObjectSupabaseClient({}),
+    )
+
+    assert storage.load_json("baselines", "missing-baseline") is None
+
+
+def test_supabase_unrelated_bad_request_is_still_a_storage_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_supabase(monkeypatch)
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: InvalidRequestSupabaseClient({}),
+    )
+
+    with pytest.raises(storage.SocialInsuranceStorageError) as exc_info:
+        storage.load_json("baselines", "invalid-request")
+
+    assert exc_info.value.code == "SOCIAL_INSURANCE_STORAGE_HTTP_ERROR"
+    assert exc_info.value.status_code == 400
+
+
 def test_supabase_storage_restores_complete_run_on_another_instance(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -181,7 +241,7 @@ def test_supabase_storage_restores_complete_run_on_another_instance(
     remote: dict[str, bytes] = {}
     monkeypatch.setattr(
         "bonus_platform.engine.labor.persistent_storage.httpx.Client",
-        lambda **_kwargs: FakeSupabaseClient(remote),
+        lambda **_kwargs: LegacyMissingObjectSupabaseClient(remote),
     )
     run_id = "sir_20260826120000_abcd1234"
     source = tmp_path / "instance-a" / run_id
@@ -259,7 +319,7 @@ def test_supabase_publication_is_readable_after_serverless_restart(
     remote: dict[str, bytes] = {}
     monkeypatch.setattr(
         "bonus_platform.engine.labor.persistent_storage.httpx.Client",
-        lambda **_kwargs: FakeSupabaseClient(remote),
+        lambda **_kwargs: LegacyMissingObjectSupabaseClient(remote),
     )
 
     published = publication.materialize_all_subject_runs(

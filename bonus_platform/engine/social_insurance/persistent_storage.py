@@ -127,9 +127,34 @@ def _get_bytes(pathname_or_url: str) -> bytes | None:
     if storage_backend() == "supabase":
         try:
             return supabase_download_bytes(pathname_or_url)
+        except httpx.HTTPStatusError as exc:
+            if _supabase_object_missing(exc.response):
+                return None
+            _raise_supabase_error(exc, operation="下载")
         except Exception as exc:  # noqa: BLE001 - normalize vendor errors safely.
             _raise_supabase_error(exc, operation="下载")
     return blob_get_bytes(pathname_or_url)
+
+
+def _supabase_object_missing(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    embedded_status = str(
+        payload.get("statusCode") or payload.get("httpStatusCode") or ""
+    ).strip()
+    if embedded_status != "404":
+        return False
+    identifiers = {
+        str(payload.get("code") or "").strip().casefold(),
+        str(payload.get("error") or "").strip().casefold(),
+    }
+    return bool(identifiers & {"nosuchkey", "not_found", "notfound"})
 
 
 def _list_prefix(prefix: str) -> list[dict[str, Any]]:
