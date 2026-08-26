@@ -44,7 +44,7 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=44" in page
-    assert "social-insurance.js?v=46" in page
+    assert "social-insurance.js?v=47" in page
 
 
 def test_review_decision_uses_vertical_include_and_exclude_buttons():
@@ -75,6 +75,8 @@ def test_quick_decision_shows_pending_state_before_waiting_and_rolls_back_on_fai
     assert "state.decisionUpdates.delete" in handler
     assert "showToast(error.message, 'error')" in handler
     assert "status-pill pending" in script
+    assert "?includePreflight=true" in handler
+    assert "applyBatchBundle(payload.run, payload.preflight)" in handler
 
 
 def test_silent_refresh_clears_a_batch_from_the_previous_selection():

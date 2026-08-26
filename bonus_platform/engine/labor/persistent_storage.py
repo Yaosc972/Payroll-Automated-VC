@@ -32,6 +32,9 @@ _RUN_LOCKS_GUARD = threading.Lock()
 _RUN_LOCKS: dict[str, threading.RLock] = {}
 _STORAGE_HEALTH_LOCK = threading.Lock()
 _STORAGE_HEALTH_CACHE: dict[str, Any] = {"key": "", "checkedAt": 0.0, "value": None}
+_SUPABASE_HTTP_CLIENT_LOCK = threading.Lock()
+_SUPABASE_HTTP_CLIENT: Any = None
+_SUPABASE_HTTP_CLIENT_KEY: tuple[str, str, str, object] | None = None
 
 
 def _run_storage_lock(run_id: str) -> threading.RLock:
@@ -609,11 +612,43 @@ def _supabase_storage_url(path: str = "") -> str:
     return f"{base}/storage/v1/{suffix}" if suffix else f"{base}/storage/v1"
 
 
+def _shared_supabase_http_client() -> httpx.Client:
+    """Reuse TLS connections for repeated private object reads and writes."""
+    global _SUPABASE_HTTP_CLIENT, _SUPABASE_HTTP_CLIENT_KEY
+    token_digest = hashlib.sha256(_supabase_token().encode("utf-8")).hexdigest()
+    key = (
+        _supabase_url(),
+        token_digest,
+        labor_supabase_bucket(),
+        httpx.Client,
+    )
+    with _SUPABASE_HTTP_CLIENT_LOCK:
+        if _SUPABASE_HTTP_CLIENT is not None and _SUPABASE_HTTP_CLIENT_KEY == key:
+            return _SUPABASE_HTTP_CLIENT
+        previous = _SUPABASE_HTTP_CLIENT
+        _SUPABASE_HTTP_CLIENT = httpx.Client(
+            timeout=120.0,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30.0,
+            ),
+        )
+        _SUPABASE_HTTP_CLIENT_KEY = key
+        close = getattr(previous, "close", None)
+        if callable(close):
+            close()
+        return _SUPABASE_HTTP_CLIENT
+
+
 def _supabase_upload_bytes(object_path: str, content: bytes, *, content_type: str) -> dict[str, Any]:
     url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{object_path}")
     headers = _supabase_headers({"content-type": content_type, "x-upsert": "true"})
-    with httpx.Client(timeout=120.0) as client:
-        response = client.post(url, headers=headers, content=content)
+    response = _shared_supabase_http_client().post(
+        url,
+        headers=headers,
+        content=content,
+    )
     response.raise_for_status()
     if not response.content:
         return {}
@@ -625,8 +660,10 @@ def _supabase_upload_bytes(object_path: str, content: bytes, *, content_type: st
 
 def _supabase_download_bytes(object_path: str) -> bytes | None:
     url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{object_path}")
-    with httpx.Client(timeout=120.0) as client:
-        response = client.get(url, headers=_supabase_headers())
+    response = _shared_supabase_http_client().get(
+        url,
+        headers=_supabase_headers(),
+    )
     if response.status_code == 404:
         return None
     response.raise_for_status()

@@ -1689,6 +1689,33 @@ def test_identity_edit_invalidates_precomputed_supplement_index(
     assert supplements.load_supplement_search_index(run["id"]) is None
 
 
+def test_decision_patch_can_bundle_preflight_without_a_second_run_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    run = create_run(
+        records=[_record(identity="TEST-ID-DECISION-BUNDLE-001", name="决策校验员工")],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳市前海云途物流有限公司",
+        source="beisen",
+    )
+    employee_id = run["employees"][0]["id"]
+
+    response = TestClient(app).patch(
+        f"/api/social-insurance/runs/{run['id']}/employees/{employee_id}?includePreflight=true",
+        json={"decision": "exclude"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run"]["employees"][0]["decision"] == "exclude"
+    assert payload["preflight"]["runId"] == run["id"]
+    assert payload["preflight"]["summary"]["employeeCount"] == 0
+
+
 def test_supplement_search_falls_back_to_full_run_for_legacy_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

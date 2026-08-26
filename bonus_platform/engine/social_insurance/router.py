@@ -692,6 +692,7 @@ def patch_employee(
     run_id: str,
     employee_id: str,
     payload: dict[str, Any] = Body(...),
+    include_preflight: bool = Query(default=False, alias="includePreflight"),
 ) -> dict[str, Any]:
     _require_access(request)
     try:
@@ -704,6 +705,11 @@ def patch_employee(
         )
         if "证件号码" in report_updates or "证件号码" in template_updates:
             invalidate_supplement_search_index(run_id)
+        if include_preflight:
+            return {
+                "run": updated,
+                "preflight": build_export_preflight(updated),
+            }
         return updated
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc

@@ -451,6 +451,39 @@ def test_run_document_fast_path_uses_the_existing_object_path_without_listing(
     assert json.loads(target.read_text(encoding="utf-8"))["subject"] == "深圳测试主体"
 
 
+def test_supabase_run_document_round_trip_reuses_one_connection_pool(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_supabase(monkeypatch)
+    remote: dict[str, bytes] = {}
+    clients: list[FakeSupabaseClient] = []
+
+    def client_factory(**_kwargs):
+        client = FakeSupabaseClient(remote)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        client_factory,
+    )
+    run_id = "sir_20260826172600_abcd1234"
+    source = tmp_path / "instance-a" / run_id / "run.json"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps({"id": run_id, "subject": "深圳测试主体", "employees": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    storage.persist_run_document(run_id, source)
+    target = tmp_path / "instance-b" / run_id / "run.json"
+    assert storage.restore_run_document(run_id, target) is True
+
+    assert len(clients) == 1
+    assert json.loads(target.read_text(encoding="utf-8"))["id"] == run_id
+
+
 def test_fast_run_document_update_remains_compatible_with_full_restore(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -549,7 +582,11 @@ def test_decision_only_update_skips_full_directory_and_unchanged_search_context(
     monkeypatch.setattr(runs, "_restore_run", lambda _run_id: pytest.fail("不应恢复完整批次目录"))
     monkeypatch.setattr(runs, "_persist_run_document", lambda _run_id: calls.append("persist-document"))
     monkeypatch.setattr(runs, "_persist_run", lambda _run_id: pytest.fail("不应写入完整批次目录"))
-    monkeypatch.setattr(runs, "persist_run_index", lambda _run, **_kwargs: calls.append("persist-index") or True)
+    monkeypatch.setattr(
+        runs,
+        "persist_run_index",
+        lambda _run, **_kwargs: pytest.fail("决策变化不改变主体批次定位索引"),
+    )
     monkeypatch.setattr(
         runs,
         "persist_supplement_search_context",
@@ -559,7 +596,64 @@ def test_decision_only_update_skips_full_directory_and_unchanged_search_context(
     updated = runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
 
     assert updated["employees"][0]["status"] == "excluded"
-    assert calls == ["restore-document", "persist-document", "persist-index"]
+    assert calls == ["restore-document", "persist-document"]
+
+
+def test_decision_only_update_is_durable_without_rewriting_the_context_index(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _enable_supabase(monkeypatch)
+    remote: dict[str, bytes] = {}
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: LegacyMissingObjectSupabaseClient(remote),
+    )
+    instance_a = tmp_path / "instance-a"
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(instance_a))
+    run = runs.create_run(
+        records=[
+            {
+                "status": "ready",
+                "report": {
+                    "证件号码": "TEST-ID-DURABLE-DECISION-001",
+                    "姓名": "持久化决策员工",
+                },
+                "source": {
+                    "subject": "深圳测试主体",
+                    "place": "深圳",
+                    "employType": "内部员工",
+                },
+            }
+        ],
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-26",
+        subject="深圳测试主体",
+        source="beisen",
+    )
+    context = {
+        "period_start": run["periodStart"],
+        "period_end": run["periodEnd"],
+        "confirmation_date": run["confirmationDate"],
+        "subject": run["subject"],
+    }
+    employee_id = run["employees"][0]["id"]
+    index_before = runs.load_run_index(**context)
+
+    monkeypatch.setenv("VERCEL", "1")
+    updated = runs.update_employee(run["id"], employee_id, {"decision": "exclude"})
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "instance-b"))
+    indexed_after = runs.load_run_index(**context)
+    restored = runs.load_run(str(indexed_after["runId"]))
+
+    assert index_before is not None
+    assert indexed_after is not None
+    assert indexed_after["runId"] == run["id"]
+    assert indexed_after["updatedAt"] == index_before["updatedAt"]
+    assert updated["employees"][0]["decision"] == "exclude"
+    assert restored["employees"][0]["decision"] == "exclude"
+    assert restored["employees"][0]["status"] == "excluded"
 
 
 def test_run_context_index_is_persisted_without_employee_details(

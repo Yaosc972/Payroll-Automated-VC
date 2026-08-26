@@ -751,10 +751,10 @@ def save_run(run: dict[str, Any], *, decision_only: bool = False) -> dict[str, A
         _persist_run_document(run_id)
     else:
         _persist_run(run_id)
-    persist_run_index(run)
-    # Include/exclude does not change identity membership, so the supplement
-    # candidate context remains valid and does not need another remote write.
+    # A decision-only edit changes neither the exact-context lookup identity
+    # nor the supplement candidate membership, so both read models stay valid.
     if not decision_only:
+        persist_run_index(run)
         persist_supplement_search_context(run)
     return run
 

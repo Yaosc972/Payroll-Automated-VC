@@ -1686,11 +1686,11 @@
     state.decisionUpdates.set(updateKey, decision);
     renderRun();
     try {
-      const updatedRun = await api(`${API_ROOT}/runs/${runId}/employees/${employee.id}`, {
+      const payload = await api(`${API_ROOT}/runs/${runId}/employees/${employee.id}?includePreflight=true`, {
         method: 'PATCH', body: JSON.stringify({ decision }),
       });
       invalidateBatchCache(runId);
-      if (state.run?.id === runId) state.run = updatedRun;
+      if (state.run?.id === runId) applyBatchBundle(payload.run, payload.preflight);
       showToast(decision === 'include' ? '已纳入本批报盘' : '已从本批报盘排除');
     } catch (error) {
       showToast(error.message, 'error');
