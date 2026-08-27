@@ -2637,17 +2637,30 @@ def test_all_subject_publication_materializes_independent_batches_concurrently(
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
     monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
     records = []
-    for index, subject in enumerate(("测试主体甲", "测试主体乙"), start=1):
+    for index, subject in enumerate(("测试主体甲", "测试主体乙", "测试主体丙"), start=1):
         record = _record(identity=f"TEST-ID-CONCURRENT-PUBLISH-{index}", name=f"并发员工{index}")
         record["source"]["subject"] = subject
         records.append(record)
 
     rendezvous = threading.Barrier(2)
+    non_selected_complete = threading.Event()
+    completion_lock = threading.Lock()
+    completed_non_selected = 0
     original_materialize = publication.materialize_subject_run
 
     def rendezvous_before_materialize(**kwargs):
+        nonlocal completed_non_selected
+        if kwargs["subject"] == "测试主体丙":
+            assert non_selected_complete.is_set(), "首选主体必须在其他主体完成后落库"
+            return original_materialize(**kwargs)
         rendezvous.wait(timeout=2)
-        return original_materialize(**kwargs)
+        time.sleep(0.1)
+        run = original_materialize(**kwargs)
+        with completion_lock:
+            completed_non_selected += 1
+            if completed_non_selected == 2:
+                non_selected_complete.set()
+        return run
 
     monkeypatch.setattr(publication, "materialize_subject_run", rendezvous_before_materialize)
 
@@ -2657,15 +2670,22 @@ def test_all_subject_publication_materializes_independent_batches_concurrently(
         period_start="2026-07-16",
         period_end="2026-08-15",
         confirmation_date="2026-08-16",
+        preferred_subject="测试主体丙",
         subject_options=[
             {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
             {"value": "测试主体乙", "label": "测试主体乙", "candidateCount": 1},
+            {"value": "测试主体丙", "label": "测试主体丙", "candidateCount": 1},
         ],
     )
 
-    assert published["batchCount"] == 2
-    assert [item["value"] for item in published["release"]["subjects"]] == ["测试主体甲", "测试主体乙"]
-    assert [run["subject"] for run in published["runs"]] == ["测试主体乙", "测试主体甲"]
+    assert published["batchCount"] == 3
+    assert [item["value"] for item in published["release"]["subjects"]] == [
+        "测试主体甲",
+        "测试主体乙",
+        "测试主体丙",
+    ]
+    assert [run["subject"] for run in published["runs"]] == ["测试主体甲", "测试主体乙", "测试主体丙"]
+    assert list_runs(1)[0]["subject"] == "测试主体丙"
 
 
 def test_failed_all_subject_publication_keeps_the_previous_successful_release(

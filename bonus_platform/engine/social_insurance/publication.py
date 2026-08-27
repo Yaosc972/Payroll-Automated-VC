@@ -310,7 +310,7 @@ def materialize_all_subject_runs(
 
     normalized_preferred = str(preferred_subject or "").strip()
     selected_subject = normalized_preferred if normalized_preferred in subject_order else subject_order[0]
-    creation_order = [subject for subject in subject_order if subject != selected_subject] + [selected_subject]
+    concurrent_subjects = [subject for subject in subject_order if subject != selected_subject]
     run_by_subject: dict[str, dict[str, Any]] = {}
     created_runs: list[dict[str, Any]] = []
 
@@ -338,11 +338,12 @@ def materialize_all_subject_runs(
         )
         return subject, run
 
-    if len(creation_order) <= 1:
-        materialized = [materialize_one(subject) for subject in creation_order]
+    if len(concurrent_subjects) <= 1:
+        materialized = [materialize_one(subject) for subject in concurrent_subjects]
     else:
-        with ThreadPoolExecutor(max_workers=min(8, len(creation_order))) as executor:
-            materialized = list(executor.map(materialize_one, creation_order))
+        with ThreadPoolExecutor(max_workers=min(8, len(concurrent_subjects))) as executor:
+            materialized = list(executor.map(materialize_one, concurrent_subjects))
+    materialized.append(materialize_one(selected_subject))
     for subject, run in materialized:
         run_by_subject[subject] = run
         created_runs.append(run)
