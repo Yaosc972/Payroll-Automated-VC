@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
 import os
@@ -312,7 +313,8 @@ def materialize_all_subject_runs(
     creation_order = [subject for subject in subject_order if subject != selected_subject] + [selected_subject]
     run_by_subject: dict[str, dict[str, Any]] = {}
     created_runs: list[dict[str, Any]] = []
-    for subject in creation_order:
+
+    def materialize_one(subject: str) -> tuple[str, dict[str, Any]]:
         subject_records = grouped.get(subject, [])
         subject_summary = {
             **deepcopy(source_summary),
@@ -334,6 +336,14 @@ def materialize_all_subject_runs(
             confirmation_date=confirmation_date,
             subject=subject,
         )
+        return subject, run
+
+    if len(creation_order) <= 1:
+        materialized = [materialize_one(subject) for subject in creation_order]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(creation_order))) as executor:
+            materialized = list(executor.map(materialize_one, creation_order))
+    for subject, run in materialized:
         run_by_subject[subject] = run
         created_runs.append(run)
 

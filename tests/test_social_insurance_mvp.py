@@ -2627,6 +2627,47 @@ def test_reporting_subject_options_merge_current_records_and_cache_without_a_liv
     ]
 
 
+def test_all_subject_publication_materializes_independent_batches_concurrently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import publication
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    records = []
+    for index, subject in enumerate(("测试主体甲", "测试主体乙"), start=1):
+        record = _record(identity=f"TEST-ID-CONCURRENT-PUBLISH-{index}", name=f"并发员工{index}")
+        record["source"]["subject"] = subject
+        records.append(record)
+
+    rendezvous = threading.Barrier(2)
+    original_materialize = publication.materialize_subject_run
+
+    def rendezvous_before_materialize(**kwargs):
+        rendezvous.wait(timeout=2)
+        return original_materialize(**kwargs)
+
+    monkeypatch.setattr(publication, "materialize_subject_run", rendezvous_before_materialize)
+
+    published = publication.materialize_all_subject_runs(
+        records=records,
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-16",
+        subject_options=[
+            {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
+            {"value": "测试主体乙", "label": "测试主体乙", "candidateCount": 1},
+        ],
+    )
+
+    assert published["batchCount"] == 2
+    assert [item["value"] for item in published["release"]["subjects"]] == ["测试主体甲", "测试主体乙"]
+    assert [run["subject"] for run in published["runs"]] == ["测试主体乙", "测试主体甲"]
+
+
 def test_failed_all_subject_publication_keeps_the_previous_successful_release(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
