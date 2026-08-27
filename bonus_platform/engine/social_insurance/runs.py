@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -443,6 +443,15 @@ def default_reporting_window(today: date | None = None) -> tuple[str, str]:
         start = date(start_year, start_month, 16)
         end = date(end_year, end_month, 15)
     return start.isoformat(), end.isoformat()
+
+
+def default_confirmation_date(period_end: str) -> str:
+    """Return the first day after one completed enrollment period."""
+    try:
+        end = date.fromisoformat(str(period_end or "").strip())
+    except ValueError as exc:
+        raise RunValidationError("增员周期结束日必须为 YYYY-MM-DD") from exc
+    return (end + timedelta(days=1)).isoformat()
 
 
 def _mask_identity(identity: str) -> str:

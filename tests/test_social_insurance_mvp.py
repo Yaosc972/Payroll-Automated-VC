@@ -91,6 +91,28 @@ def test_default_reporting_window_uses_previous_16th_to_current_15th():
     assert default_reporting_window(date(2026, 8, 15)) == ("2026-06-16", "2026-07-15")
 
 
+def test_default_confirmation_date_is_the_day_after_the_period_end():
+    from bonus_platform.engine.social_insurance import runs as social_runs
+
+    assert social_runs.default_confirmation_date("2026-08-15") == "2026-08-16"
+    assert social_runs.default_confirmation_date("2026-02-28") == "2026-03-01"
+
+
+def test_scheduled_reporting_context_uses_the_day_after_the_period_end(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import prefetch
+
+    monkeypatch.setattr(prefetch, "default_reporting_window", lambda _today: ("2026-07-16", "2026-08-15"))
+
+    assert prefetch._current_reporting_context() == {
+        "periodStart": "2026-07-16",
+        "periodEnd": "2026-08-15",
+        "confirmationDate": "2026-08-16",
+        "subject": "*",
+    }
+
+
 def test_legacy_numeric_social_place_falls_back_to_work_place_for_template_routing():
     tasks = build_coverage_tasks(
         coverage_source={"socialPlace": "246", "socialMedicalStatus": "社保待审核，医保待审核"},
@@ -449,6 +471,81 @@ def test_sync_all_uses_fresh_period_snapshot_without_waiting_for_beisen(
     assert payload["selectedRun"]["subject"] == "测试主体乙"
     assert payload["selectedRun"]["sourceSummary"]["dataMode"] == "background-all-subject-snapshot"
     assert payload["selectedRun"]["sourceSummary"]["snapshotAgeSeconds"] >= 0
+
+
+def test_sync_all_reuses_a_rebasable_period_snapshot_for_a_new_confirmation_date(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    from bonus_platform.engine.social_insurance import router as social_router
+
+    record = _record(identity="TEST-ID-REBASED-ALL", name="跨确认日快照员工", status="excluded")
+    record["source"]["subject"] = "测试主体甲"
+    record["confirmationRuleContext"] = {
+        "version": 1,
+        "baseStatus": "ready",
+        "baseIssues": [],
+        "currentEntryDate": "2026-07-20",
+        "dimissionRecords": [{
+            "lastWorkDate": "2026-08-20",
+            "voluntaryStopFlag": "自愿停保",
+            "processCreatedTime": "2026-08-20T10:00:00+08:00",
+        }],
+    }
+    capture_reporting_snapshot(
+        records=[record],
+        source_summary={"provider": "beisen-open-platform", "confirmationDate": "2026-08-25"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject="*",
+    )
+
+    monkeypatch.setattr(
+        social_router,
+        "sync_beisen_candidates",
+        lambda **_kwargs: pytest.fail("可重算的周期快照不应因确认日变化再次请求北森"),
+    )
+    monkeypatch.setattr(social_router, "cached_beisen_contract_subjects", lambda **_kwargs: [
+        {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
+    ])
+
+    response = TestClient(app).post(
+        "/api/social-insurance/runs/sync-all",
+        json={
+            "periodStart": "2026-07-16",
+            "periodEnd": "2026-08-15",
+            "confirmationDate": "2026-08-16",
+            "subject": "测试主体甲",
+        },
+    )
+
+    assert response.status_code == 200
+    selected = response.json()["selectedRun"]
+    assert selected["confirmationDate"] == "2026-08-16"
+    assert selected["employees"][0]["status"] == "ready"
+    assert selected["summary"]["excluded"] == 0
+    assert selected["sourceSummary"]["dataMode"] == "background-all-subject-snapshot"
+    assert selected["sourceSummary"]["snapshotRebasedFromConfirmationDate"] == "2026-08-25"
+    assert "confirmationRuleContext" not in selected["employees"][0]
+
+    later_response = TestClient(app).post(
+        "/api/social-insurance/runs/sync-all",
+        json={
+            "periodStart": "2026-07-16",
+            "periodEnd": "2026-08-15",
+            "confirmationDate": "2026-08-21",
+            "subject": "测试主体甲",
+        },
+    )
+
+    assert later_response.status_code == 200
+    later_selected = later_response.json()["selectedRun"]
+    assert later_selected["employees"][0]["status"] == "excluded"
+    assert later_selected["summary"]["excluded"] == 1
 
 
 def test_sync_all_refreshes_an_expired_period_snapshot_once_before_creating_batches(
@@ -2470,11 +2567,47 @@ def test_bootstrap_reads_one_published_release_without_scanning_or_live_beisen(
     assert payload["config"] == {
         "periodStart": "2026-07-16",
         "periodEnd": "2026-08-15",
-        "confirmationDate": "2026-08-25",
+        "confirmationDate": "2026-08-16",
     }
     assert [subject["value"] for subject in payload["subjects"]] == ["测试主体甲", "测试主体乙"]
     assert payload["selectedSubject"] == "测试主体乙"
-    assert payload["run"]["subject"] == "测试主体乙"
+    assert payload["run"] is None
+    assert payload["preflight"] is None
+
+
+def test_bootstrap_returns_the_published_batch_when_it_uses_the_period_default_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from bonus_platform.engine.social_insurance import publication
+    from bonus_platform.engine.social_insurance import router as social_router
+
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    record = _record(identity="TEST-ID-BOOTSTRAP-DEFAULT", name="默认确认日员工")
+    record["source"]["subject"] = "测试主体甲"
+    publication.materialize_all_subject_runs(
+        records=[record],
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-16",
+        preferred_subject="测试主体甲",
+        subject_options=[{"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1}],
+    )
+
+    monkeypatch.setattr(social_router, "list_runs", lambda *_args, **_kwargs: pytest.fail("首屏不应扫描批次"))
+    monkeypatch.setattr(
+        social_router,
+        "list_beisen_contract_subjects",
+        lambda **_kwargs: pytest.fail("首屏不应实时查询北森合同主体"),
+    )
+
+    payload = TestClient(app).get("/api/social-insurance/bootstrap").json()
+
+    assert payload["config"]["confirmationDate"] == "2026-08-16"
+    assert payload["run"]["subject"] == "测试主体甲"
     assert payload["preflight"]["runId"] == payload["run"]["id"]
 
 

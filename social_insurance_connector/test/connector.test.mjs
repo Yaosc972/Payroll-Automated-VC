@@ -96,6 +96,35 @@ test("sync returns standardized records and strips raw upstream responses", asyn
   assert.equal("rawApiResponse" in result.sourceSummary, false);
 });
 
+test("sync includes a private confirmation rule context for snapshot rebasing", async () => {
+  setConfiguration();
+  process.env.SOCIAL_INSURANCE_DIMISSION_SNAPSHOT_GZIP_BASE64 = gzipSync(
+    Buffer.from(JSON.stringify([{
+      parent_IDNumber: "TEST-ID-001",
+      LastWorkDate: "2026-08-20",
+      extshifouziyuantingbao_109025_28464420: "自愿停保",
+      LookupPrefix_ApprovalObjectID_CreatedTime: "2026-08-20T10:00:00+08:00",
+      ApprovalStatus: "已通过",
+    }]), "utf8"),
+  ).toString("base64");
+
+  const result = await syncCandidates({
+    periodStart: "2026-07-16",
+    periodEnd: "2026-08-15",
+    confirmationDate: "2026-08-24",
+    subject: "SZ001",
+    ruleVersion: RULE_VERSION,
+  }, { client: fakeClient() });
+
+  const context = result.records[0].confirmationRuleContext;
+  assert.equal(context.version, 1);
+  assert.match(context.baseStatus, /^(ready|needs_review)$/u);
+  assert.equal(context.currentEntryDate, "2026-07-20");
+  assert.equal(context.dimissionRecords.length, 1);
+  assert.equal(context.dimissionRecords[0].voluntaryStopFlag, "自愿停保");
+  assert.equal("idNumber" in context.dimissionRecords[0], false);
+});
+
 test("connector endpoint requires bearer token and does not echo supplied credentials", async () => {
   setConfiguration();
   const response = responseRecorder();

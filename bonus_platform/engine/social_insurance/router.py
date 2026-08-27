@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date
 import json
 import logging
 import os
@@ -51,6 +50,7 @@ from .runs import (
     RunValidationError,
     add_supplement_employee,
     confirm_run,
+    default_confirmation_date,
     default_reporting_window,
     list_runs,
     load_run,
@@ -145,7 +145,7 @@ def get_config(request: Request) -> dict[str, Any]:
     return {
         "periodStart": start,
         "periodEnd": end,
-        "confirmationDate": date.today().isoformat(),
+        "confirmationDate": default_confirmation_date(end),
         "defaultSubject": "深圳市前海云途物流有限公司",
         "rpa": rpa_status(),
         "runtime": {
@@ -222,7 +222,7 @@ def get_bootstrap(request: Request) -> dict[str, Any]:
                 "config": {
                     "periodStart": start,
                     "periodEnd": end,
-                    "confirmationDate": date.today().isoformat(),
+                    "confirmationDate": default_confirmation_date(end),
                 },
                 "release": None,
                 "subjects": [],
@@ -233,13 +233,17 @@ def get_bootstrap(request: Request) -> dict[str, Any]:
         selected_subject = str(release.get("selectedSubject") or "").strip()
         if _published_subject(release, selected_subject) is None:
             selected_subject = str((release.get("subjects") or [{}])[0].get("value") or "").strip()
-        run, preflight = _published_run_bundle(release, selected_subject)
+        confirmation_date = default_confirmation_date(str(release.get("periodEnd") or ""))
+        run: dict[str, Any] | None = None
+        preflight: dict[str, Any] | None = None
+        if str(release.get("confirmationDate") or "") == confirmation_date:
+            run, preflight = _published_run_bundle(release, selected_subject)
         return {
             "state": "ready",
             "config": {
                 "periodStart": release["periodStart"],
                 "periodEnd": release["periodEnd"],
-                "confirmationDate": release["confirmationDate"],
+                "confirmationDate": confirmation_date,
             },
             "release": {
                 key: release.get(key)
@@ -454,10 +458,12 @@ def sync_run(request: Request, payload: dict[str, Any] = Body(...)) -> dict[str,
     _require_access(request)
     period_start = str(payload.get("periodStart") or "")
     period_end = str(payload.get("periodEnd") or "")
-    confirmation_date = str(payload.get("confirmationDate") or period_end)
+    confirmation_date = str(payload.get("confirmationDate") or "")
     subject = str(payload.get("subject") or "").strip()
     force_refresh = bool(payload.get("forceRefresh"))
     try:
+        if not confirmation_date:
+            confirmation_date = default_confirmation_date(period_end)
         reporting_snapshot = None if force_refresh else load_reporting_snapshot(
                 period_start=period_start,
                 period_end=period_end,
@@ -524,10 +530,12 @@ def sync_all_runs(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     _require_access(request)
     period_start = str(payload.get("periodStart") or "")
     period_end = str(payload.get("periodEnd") or "")
-    confirmation_date = str(payload.get("confirmationDate") or period_end)
+    confirmation_date = str(payload.get("confirmationDate") or "")
     preferred_subject = str(payload.get("subject") or "").strip()
     force_refresh = bool(payload.get("forceRefresh"))
     try:
+        if not confirmation_date:
+            confirmation_date = default_confirmation_date(period_end)
         reporting_snapshot = None if force_refresh else load_reporting_snapshot(
             period_start=period_start,
             period_end=period_end,

@@ -14,7 +14,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .adapter import list_beisen_contract_subjects, sync_beisen_candidates
 from .publication import materialize_all_subject_runs
 from .reporting_diagnostics import ReportingRefreshDiagnostics, safe_error_category
-from .runs import default_reporting_window, list_runs, load_run
+from .runs import default_confirmation_date, default_reporting_window, list_runs, load_run
 from .supplements import (
     prepare_beisen_supplement_pool,
     prewarm_beisen_supplement_pool,
@@ -203,7 +203,7 @@ def _current_reporting_context() -> dict[str, str]:
     return {
         "periodStart": period_start,
         "periodEnd": period_end,
-        "confirmationDate": date.today().isoformat(),
+        "confirmationDate": default_confirmation_date(period_end),
         "subject": "*",
     }
 

@@ -135,6 +135,10 @@ function issue(message) {
   return { field: "", severity: "blocking", message };
 }
 
+function normalizedStatus(status) {
+  return { "可报盘": "ready", "待人工确认": "needs_review", "规则排除": "excluded" }[status] || "needs_review";
+}
+
 export async function listSubjects(payload, { client = new BeisenClient() } = {}) {
   validatePeriod(payload);
   const { modifiedStart, modifiedStop } = modifiedWindow(payload.periodStart);
@@ -217,7 +221,8 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
     const cutoff = `${payload.confirmationDate}T23:59:59+08:00`;
     const records = filtered.map((employee) => {
       const id = text(employee.idNumber).replace(/\s+/gu, "");
-      const dimission = decideDimission(dimissionIndex.get(id) ?? [], cutoff, employee.entryDate);
+      const dimissionRecords = dimissionIndex.get(id) ?? [];
+      const dimission = decideDimission(dimissionRecords, cutoff, employee.entryDate);
       const evaluated = evaluateEmployee(employee, adminIndex);
       let status = evaluated.status;
       const reasons = [...evaluated.issues];
@@ -225,12 +230,14 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         status = "待人工确认";
         reasons.push("同批次证件号码重复");
       }
+      const baseStatus = normalizedStatus(status);
+      const baseIssues = reasons.filter(Boolean).map(issue);
       if (dimission.decision === "排除") status = "规则排除";
       if (dimission.decision === "待人工确认") status = "待人工确认";
       if (dimission.decision === "待人工确认") reasons.unshift(dimission.reason);
       if (status === "规则排除") reasons.splice(0, reasons.length, dimission.reason);
       return {
-        status: { "可报盘": "ready", "待人工确认": "needs_review", "规则排除": "excluded" }[status] || "needs_review",
+        status: normalizedStatus(status),
         confirmed: false,
         issues: reasons.filter(Boolean).map(issue),
         report: evaluated.report,
@@ -238,6 +245,17 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         entryDate: dateOnly(employee.entryDate),
         dimissionReason: dimission.reason,
         coverageSource: {},
+        confirmationRuleContext: {
+          version: 1,
+          baseStatus,
+          baseIssues,
+          currentEntryDate: dateOnly(employee.entryDate),
+          dimissionRecords: dimissionRecords.map((record) => ({
+            lastWorkDate: record.lastWorkDate ?? "",
+            voluntaryStopFlag: text(record.voluntaryStopFlag),
+            processCreatedTime: record.processCreatedTime ?? "",
+          })),
+        },
       };
     });
     const snapshotDate = dimissionSnapshotDate();

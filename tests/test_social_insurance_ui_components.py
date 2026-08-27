@@ -44,7 +44,7 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=44" in page
-    assert "social-insurance.js?v=47" in page
+    assert "social-insurance.js?v=48" in page
 
 
 def test_review_decision_uses_vertical_include_and_exclude_buttons():
@@ -98,6 +98,16 @@ def test_subject_switch_clears_previous_batch_before_loading_the_new_run():
     assert "payload.preflight" in loader
     assert "`${API_ROOT}/runs?${params.toString()}`" not in loader
     assert "`${API_ROOT}/releases/${encodeURIComponent(state.release.id)}/runs/current?" in loader
+
+
+def test_confirmation_date_change_clears_the_old_batch_without_loading_storage():
+    script = _read("social-insurance.js")
+    binding = script.split("byId('confirmationDate').addEventListener('change'", 1)[1].split(";", 1)[0]
+
+    assert "resetSelectedRunForConfirmationDate" in binding
+    assert "loadSelectedSubjectRun" not in binding
+    assert "function defaultConfirmationDate" in script
+    assert "defaultConfirmationDate(byId('periodEnd').value)" in script
 
 
 def test_subject_counts_distinguish_current_beisen_candidates_from_the_saved_batch():
@@ -417,7 +427,7 @@ def test_period_generation_creates_all_subject_batches_and_subject_switch_loads_
     script = _read("social-insurance.js")
 
     assert "生成全部主体批次" in page
-    assert "一次同步并按主体拆分" in page
+    assert "使用最新集成快照并按主体拆分" in page
     assert "runs/sync-all" in script
     assert "background-all-subject-snapshot" in script
     assert "使用定时快照生成" in script
@@ -441,6 +451,15 @@ def test_initial_subject_selection_comes_from_the_atomic_published_release():
     assert "applyContractSubjects(subjects, payload.selectedSubject || '')" in script
     assert "state.run?.subject || config.defaultSubject" not in script
     assert "recent.runs?.[0]?.subject" not in script
+
+
+def test_published_subject_loading_does_not_replace_the_period_default_confirmation_date():
+    script = _read("social-insurance.js")
+    loader = script.split("async function loadContractSubjects", 1)[1].split(
+        "function scheduleContractSubjectLoad", 1
+    )[0]
+
+    assert "byId('confirmationDate').value = payload.confirmationDate" not in loader
 
 
 def test_batch_uses_explicit_confirmation_date_for_departure_cutoff():

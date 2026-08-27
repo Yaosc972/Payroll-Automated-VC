@@ -156,6 +156,13 @@
     return `${year}-${month}-${day}`;
   }
 
+  function defaultConfirmationDate(periodEnd) {
+    const end = parseISODate(periodEnd);
+    if (!end) return '';
+    end.setDate(end.getDate() + 1);
+    return formatISODate(end);
+  }
+
   function formatDisplayDate(value) {
     return value ? value.replaceAll('-', '/') : '';
   }
@@ -552,6 +559,19 @@
     state.preflightKey = state.preflight ? `${run.id}:${run.updatedAt || ''}` : '';
     state.preflightLoading = false;
     if (cache && run) cacheBatchBundle(run, state.preflight);
+  }
+
+  function resetSelectedRunForConfirmationDate() {
+    const context = selectedBatchContext();
+    const cached = state.batchCache.get(batchContextKey(context));
+    runRequestSequence += 1;
+    state.release = null;
+    if (cached) applyBatchBundle(cached.run, cached.preflight, { cache: false });
+    else applyBatchBundle(null, null, { cache: false });
+    state.filter = 'all';
+    state.search = '';
+    byId('employeeSearch').value = '';
+    renderRun();
   }
 
   async function loadSelectedSubjectRun({ silent = false } = {}) {
@@ -1422,10 +1442,6 @@
           confirmationDate: payload.confirmationDate,
           publishedAt: payload.publishedAt,
         };
-        if (payload.confirmationDate) {
-          byId('confirmationDate').value = payload.confirmationDate;
-          renderDatePickerValues();
-        }
         sourceState.textContent = `已读取最近成功集成 · ${formatRunTimestamp(payload.publishedAt)} · ${subjects.length} 个主体`;
       } else {
         state.release = null;
@@ -2265,8 +2281,13 @@
     byId('syncButton').addEventListener('click', syncRun);
     byId('retrySubjectsButton').addEventListener('click', () => scheduleContractSubjectLoad(byId('subject').value, 0, true));
     byId('periodStart').addEventListener('change', () => scheduleContractSubjectLoad());
-    byId('periodEnd').addEventListener('change', () => scheduleContractSubjectLoad());
-    byId('confirmationDate').addEventListener('change', () => { loadSelectedSubjectRun(); });
+    byId('periodEnd').addEventListener('change', () => {
+      const confirmationDate = defaultConfirmationDate(byId('periodEnd').value);
+      if (confirmationDate) byId('confirmationDate').value = confirmationDate;
+      renderDatePickerValues();
+      scheduleContractSubjectLoad();
+    });
+    byId('confirmationDate').addEventListener('change', () => { resetSelectedRunForConfirmationDate(); });
     byId('subject').addEventListener('change', () => { syncSubjectPicker(); loadSelectedSubjectRun(); });
     byId('openSupplementButton').addEventListener('click', openSupplementDialog);
     byId('closeSupplementButton').addEventListener('click', closeSupplementDialog);
