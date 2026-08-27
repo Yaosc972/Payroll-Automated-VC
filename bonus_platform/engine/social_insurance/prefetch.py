@@ -110,53 +110,61 @@ def _reporting_interactive_delay_seconds() -> float:
 def _publication_subject_options(
     *,
     records: list[dict[str, Any]],
-    supplement_records: list[dict[str, Any]],
     cached_subjects: list[dict[str, Any]] | None,
 ) -> list[dict[str, Any]]:
     """Build complete subject options without another live Beisen request."""
     options: list[dict[str, Any]] = []
     option_by_value: dict[str, dict[str, Any]] = {}
-    current_counts: dict[str, int] = {}
+    option_by_code: dict[str, dict[str, Any]] = {}
 
-    def add_option(value: str, *, label: str = "", code: str = "") -> None:
+    def add_option(value: str, *, label: str = "", code: str = "") -> dict[str, Any] | None:
         normalized = value.strip()
-        if not normalized or normalized in option_by_value:
-            return
+        normalized_code = code.strip()
+        if not normalized:
+            return None
+        existing = option_by_code.get(normalized_code) if normalized_code else None
+        existing = existing or option_by_value.get(normalized)
+        if existing is not None:
+            if label.strip():
+                existing["label"] = label.strip()
+            if normalized_code and not existing["code"]:
+                existing["code"] = normalized_code
+                option_by_code[normalized_code] = existing
+            return existing
         option = {
             "value": normalized,
             "label": label.strip() or normalized,
-            "code": code.strip(),
+            "code": normalized_code,
             "candidateCount": 0,
         }
         option_by_value[normalized] = option
+        if normalized_code:
+            option_by_code[normalized_code] = option
         options.append(option)
-
-    for item in cached_subjects or []:
-        if not isinstance(item, dict):
-            continue
-        add_option(
-            str(item.get("value") or item.get("label") or ""),
-            label=str(item.get("label") or ""),
-            code=str(item.get("code") or ""),
-        )
+        return option
 
     for record in records:
         source = record.get("source") if isinstance(record.get("source"), dict) else {}
         value = str(source.get("subject") or source.get("subjectCode") or "").strip()
         if not value:
             continue
-        add_option(value, code=str(source.get("subjectCode") or ""))
-        current_counts[value] = current_counts.get(value, 0) + 1
+        option = add_option(value, code=str(source.get("subjectCode") or ""))
+        if option is not None:
+            option["candidateCount"] += 1
 
-    for record in supplement_records:
-        source = record.get("source") if isinstance(record.get("source"), dict) else {}
-        add_option(
-            str(source.get("subject") or source.get("subjectCode") or ""),
-            code=str(source.get("subjectCode") or ""),
+    for item in cached_subjects or []:
+        if not isinstance(item, dict):
+            continue
+        option = add_option(
+            str(item.get("value") or item.get("label") or ""),
+            label=str(item.get("label") or ""),
+            code=str(item.get("code") or ""),
         )
-
-    for value, option in option_by_value.items():
-        option["candidateCount"] = current_counts.get(value, 0)
+        if option is not None and option["candidateCount"] == 0:
+            try:
+                option["candidateCount"] = max(0, int(item.get("candidateCount") or 0))
+            except (TypeError, ValueError):
+                pass
     return options
 
 
@@ -205,7 +213,6 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
         with diagnostics.stage("subjects"):
             subjects = _publication_subject_options(
                 records=records,
-                supplement_records=supplement_records,
                 cached_subjects=cached_beisen_contract_subjects(
                     period_start=context["periodStart"],
                     period_end=context["periodEnd"],

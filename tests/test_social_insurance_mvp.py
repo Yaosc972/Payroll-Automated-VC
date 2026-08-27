@@ -2473,28 +2473,26 @@ def test_reporting_scheduler_refreshes_one_shared_all_subject_period_snapshot(
     assert "TEST-ID-SCHEDULE-ALL" not in json.dumps(release, ensure_ascii=False)
 
 
-def test_reporting_subject_options_merge_current_and_supplement_records_without_a_live_query():
+def test_reporting_subject_options_merge_current_records_and_cache_without_a_live_query():
     from bonus_platform.engine.social_insurance import prefetch
 
     current_a = _record(identity="TEST-ID-SUBJECT-OPTION-A", name="当前员工甲")
     current_a["source"].update({"subject": "测试主体甲", "subjectCode": "A"})
     current_b = _record(identity="TEST-ID-SUBJECT-OPTION-B", name="当前员工乙")
     current_b["source"].update({"subject": "测试主体乙", "subjectCode": "B"})
-    supplement_c = _record(identity="TEST-ID-SUBJECT-OPTION-C", name="补充候选丙")
-    supplement_c["source"].update({"subject": "测试主体丙", "subjectCode": "C"})
 
     options = prefetch._publication_subject_options(
         records=[current_a, current_b],
-        supplement_records=[supplement_c],
         cached_subjects=[
-            {"value": "测试主体乙", "label": "主体乙", "code": "B", "candidateCount": 99},
+            {"value": "旧主体乙标识", "label": "主体乙", "code": "B", "candidateCount": 99},
+            {"value": "测试主体丙", "label": "主体丙", "code": "C", "candidateCount": 0},
         ],
     )
 
     assert options == [
-        {"value": "测试主体乙", "label": "主体乙", "code": "B", "candidateCount": 1},
         {"value": "测试主体甲", "label": "测试主体甲", "code": "A", "candidateCount": 1},
-        {"value": "测试主体丙", "label": "测试主体丙", "code": "C", "candidateCount": 0},
+        {"value": "测试主体乙", "label": "主体乙", "code": "B", "candidateCount": 1},
+        {"value": "测试主体丙", "label": "主体丙", "code": "C", "candidateCount": 0},
     ]
 
 
