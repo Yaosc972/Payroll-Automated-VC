@@ -554,6 +554,83 @@ def test_sync_all_reuses_a_rebasable_period_snapshot_for_a_new_confirmation_date
     assert later_selected["summary"]["excluded"] == 1
 
 
+def test_sync_all_snapshot_reuse_publishes_precomputed_supplement_indexes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_BASELINES_DIR", str(tmp_path / "baselines"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    from bonus_platform.engine.social_insurance import router as social_router
+
+    current = _record(identity="TEST-ID-CURRENT-INDEX", name="当前周期员工")
+    current["source"]["subject"] = "测试主体甲"
+    current["confirmationRuleContext"] = {
+        "version": 1,
+        "baseStatus": "ready",
+        "baseIssues": [],
+        "currentEntryDate": "2026-07-20",
+        "dimissionRecords": [],
+    }
+    supplement = _record(identity="TEST-ID-SUPPLEMENT-INDEX", name="历史候选员工")
+    supplement["source"]["subject"] = "测试主体甲"
+    supplement["entryDate"] = "2026-06-03"
+    supplement["confirmationRuleContext"] = {
+        "version": 1,
+        "baseStatus": "ready",
+        "baseIssues": [],
+        "currentEntryDate": "2026-06-03",
+        "dimissionRecords": [],
+    }
+    capture_reporting_snapshot(
+        records=[current],
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-25",
+        subject="*",
+    )
+    capture_reporting_snapshot(
+        records=[supplement],
+        source_summary={
+            "provider": "beisen-open-platform",
+            "dataMode": "supplement-candidate-pool-v1",
+        },
+        period_start="2025-07-14",
+        period_end="2026-07-15",
+        confirmation_date="2026-08-25",
+        subject="*",
+    )
+
+    monkeypatch.setattr(
+        social_router,
+        "sync_beisen_candidates",
+        lambda **_kwargs: pytest.fail("可重用快照不应再次请求北森"),
+    )
+    monkeypatch.setattr(social_router, "cached_beisen_contract_subjects", lambda **_kwargs: [
+        {"value": "测试主体甲", "label": "测试主体甲", "candidateCount": 1},
+    ])
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/social-insurance/runs/sync-all",
+        json={
+            "periodStart": "2026-07-16",
+            "periodEnd": "2026-08-15",
+            "confirmationDate": "2026-08-21",
+            "subject": "测试主体甲",
+        },
+    )
+
+    assert response.status_code == 200
+    run_id = response.json()["selectedRun"]["id"]
+    status = client.get(f"/api/social-insurance/runs/{run_id}/supplement-candidates/status")
+    assert status.status_code == 200
+    assert status.json()["state"] == "ready"
+    assert status.json()["storage"] == "precomputed-search-index"
+    assert status.json()["candidateCount"] == 1
+
+
 def test_sync_all_refreshes_an_expired_period_snapshot_once_before_creating_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

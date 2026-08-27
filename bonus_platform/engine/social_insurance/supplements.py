@@ -698,6 +698,18 @@ def prepare_beisen_supplement_pool(
     return records, supplement_pool_status(run)
 
 
+def load_shared_supplement_pool(
+    run: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    """Load an existing shared pool without triggering a live Beisen query."""
+    shared_pool = _load_shared_pool(run)
+    if shared_pool is None:
+        return None
+    cached_at, records = shared_pool
+    _store_pool_cache(_pool_key(run), records, cached_at=cached_at)
+    return records, supplement_pool_status(run)
+
+
 def prewarm_beisen_supplement_pool(run: dict[str, Any], *, force: bool = False) -> dict[str, Any]:
     _records, status = prepare_beisen_supplement_pool(run, force=force)
     return status

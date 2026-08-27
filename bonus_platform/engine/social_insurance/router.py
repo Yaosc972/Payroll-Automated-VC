@@ -61,6 +61,7 @@ from .runs import (
 )
 from .supplements import (
     invalidate_supplement_search_index,
+    load_shared_supplement_pool,
     precomputed_supplement_status,
     remove_supplement_candidate_from_search_index,
     resolve_beisen_supplement_candidate,
@@ -536,6 +537,8 @@ def sync_all_runs(request: Request, payload: dict[str, Any] = Body(...)) -> dict
     try:
         if not confirmation_date:
             confirmation_date = default_confirmation_date(period_end)
+        supplement_pool_records = None
+        supplement_pool = None
         reporting_snapshot = None if force_refresh else load_reporting_snapshot(
             period_start=period_start,
             period_end=period_end,
@@ -551,6 +554,14 @@ def sync_all_runs(request: Request, payload: dict[str, Any] = Body(...)) -> dict
                 "snapshotAgeSeconds": reporting_snapshot.get("ageSeconds", 0),
                 "snapshotStale": False,
             }
+            shared_supplement_pool = load_shared_supplement_pool({
+                "periodStart": period_start,
+                "periodEnd": period_end,
+                "confirmationDate": confirmation_date,
+                "subject": "*",
+            })
+            if shared_supplement_pool is not None:
+                supplement_pool_records, supplement_pool = shared_supplement_pool
         else:
             with tempfile.TemporaryDirectory(prefix="sigma-social-sync-all-") as temporary:
                 records, shared_summary = sync_beisen_candidates(
@@ -586,6 +597,8 @@ def sync_all_runs(request: Request, payload: dict[str, Any] = Body(...)) -> dict
             confirmation_date=confirmation_date,
             subject_options=cached_subjects,
             preferred_subject=preferred_subject,
+            supplement_pool_records=supplement_pool_records,
+            supplement_pool_status=supplement_pool,
         )
     except (RunNotFoundError, RunValidationError) as exc:
         raise _http_error(exc) from exc
