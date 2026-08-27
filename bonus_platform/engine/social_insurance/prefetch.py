@@ -11,7 +11,11 @@ from typing import Any
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from .adapter import list_beisen_contract_subjects, sync_beisen_candidates
+from .adapter import (
+    cached_beisen_contract_subjects,
+    list_beisen_contract_subjects,
+    sync_beisen_candidates,
+)
 from .publication import materialize_all_subject_runs
 from .reporting_diagnostics import ReportingRefreshDiagnostics, safe_error_category
 from .runs import default_confirmation_date, default_reporting_window, list_runs, load_run
@@ -103,6 +107,59 @@ def _reporting_interactive_delay_seconds() -> float:
         return 5.0
 
 
+def _publication_subject_options(
+    *,
+    records: list[dict[str, Any]],
+    supplement_records: list[dict[str, Any]],
+    cached_subjects: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Build complete subject options without another live Beisen request."""
+    options: list[dict[str, Any]] = []
+    option_by_value: dict[str, dict[str, Any]] = {}
+    current_counts: dict[str, int] = {}
+
+    def add_option(value: str, *, label: str = "", code: str = "") -> None:
+        normalized = value.strip()
+        if not normalized or normalized in option_by_value:
+            return
+        option = {
+            "value": normalized,
+            "label": label.strip() or normalized,
+            "code": code.strip(),
+            "candidateCount": 0,
+        }
+        option_by_value[normalized] = option
+        options.append(option)
+
+    for item in cached_subjects or []:
+        if not isinstance(item, dict):
+            continue
+        add_option(
+            str(item.get("value") or item.get("label") or ""),
+            label=str(item.get("label") or ""),
+            code=str(item.get("code") or ""),
+        )
+
+    for record in records:
+        source = record.get("source") if isinstance(record.get("source"), dict) else {}
+        value = str(source.get("subject") or source.get("subjectCode") or "").strip()
+        if not value:
+            continue
+        add_option(value, code=str(source.get("subjectCode") or ""))
+        current_counts[value] = current_counts.get(value, 0) + 1
+
+    for record in supplement_records:
+        source = record.get("source") if isinstance(record.get("source"), dict) else {}
+        add_option(
+            str(source.get("subject") or source.get("subjectCode") or ""),
+            code=str(source.get("subjectCode") or ""),
+        )
+
+    for value, option in option_by_value.items():
+        option["candidateCount"] = current_counts.get(value, 0)
+    return options
+
+
 def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
     refresh_key = (
         str(context.get("periodStart") or ""),
@@ -146,10 +203,13 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
                 "employees": [],
             }, force=True)
         with diagnostics.stage("subjects"):
-            subjects = list_beisen_contract_subjects(
-                period_start=context["periodStart"],
-                period_end=context["periodEnd"],
-                force_refresh=True,
+            subjects = _publication_subject_options(
+                records=records,
+                supplement_records=supplement_records,
+                cached_subjects=cached_beisen_contract_subjects(
+                    period_start=context["periodStart"],
+                    period_end=context["periodEnd"],
+                ),
             )
         published = materialize_all_subject_runs(
             records=records,
