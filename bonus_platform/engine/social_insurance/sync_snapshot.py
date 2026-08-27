@@ -156,12 +156,19 @@ def _confirmation_decision(
 ) -> tuple[str, str]:
     cutoff = datetime.fromisoformat(f"{confirmation_date}T23:59:59.999999+08:00")
     known: list[tuple[datetime, dict[str, Any]]] = []
+    invalid_process_time = False
     for entry in context.get("dimissionRecords") or []:
         if not isinstance(entry, dict):
             continue
         process_date = _parse_rule_datetime(entry.get("processCreatedTime"))
+        if entry.get("processTimeReliable") is False:
+            return "review", "北森实时离职记录缺少可靠审批时间或停保属性，请人工确认"
+        if process_date is None:
+            invalid_process_time = True
         if process_date is not None and process_date <= cutoff:
             known.append((process_date, entry))
+    if invalid_process_time:
+        return "review", "离职任职记录缺少流程时间或停保属性，请人工确认"
     if not known:
         reason = (
             "确认时点前无已知离职流程"

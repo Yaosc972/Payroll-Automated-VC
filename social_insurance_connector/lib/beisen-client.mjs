@@ -10,6 +10,7 @@ const EMPLOYEE_CUSTOM = {
 
 const SERVICE_CUSTOM = {
   employmentPlace: "extempatsplc_109025_254164879",
+  voluntaryStopFlag: "extshifouziyuantingbao_109025_28464420",
 };
 
 const OFFER_CUSTOM = {

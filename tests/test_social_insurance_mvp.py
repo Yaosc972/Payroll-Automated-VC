@@ -631,6 +631,54 @@ def test_sync_all_snapshot_reuse_publishes_precomputed_supplement_indexes(
     assert status.json()["candidateCount"] == 1
 
 
+def test_snapshot_rebase_keeps_unreliable_live_dimission_context_in_review(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_RUNS_DIR", str(tmp_path / "runs"))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_SNAPSHOTS_DIR", str(tmp_path / "snapshots"))
+    record = _record(
+        identity="TEST-ID-LIVE-DIMISSION-REVIEW",
+        name="实时离职待确认员工",
+        status="needs_review",
+        issues=[{"field": "", "severity": "blocking", "message": "北森实时离职信息待确认"}],
+    )
+    record["confirmationRuleContext"] = {
+        "version": 1,
+        "baseStatus": "ready",
+        "baseIssues": [],
+        "currentEntryDate": "2026-07-20",
+        "dimissionRecords": [{
+            "lastWorkDate": "2026-08-20",
+            "voluntaryStopFlag": "自愿停保",
+            "processCreatedTime": "2026-08-20T10:00:00+08:00",
+            "processTimeReliable": False,
+            "source": "beisen-live-employment-record",
+        }],
+    }
+    capture_reporting_snapshot(
+        records=[record],
+        source_summary={"provider": "beisen-open-platform"},
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-24",
+        subject="*",
+    )
+
+    rebased = load_reporting_snapshot(
+        period_start="2026-07-16",
+        period_end="2026-08-15",
+        confirmation_date="2026-08-30",
+        subject="*",
+    )
+
+    assert rebased is not None
+    assert rebased["records"][0]["status"] == "needs_review"
+    assert rebased["records"][0]["dimissionReason"] == (
+        "北森实时离职记录缺少可靠审批时间或停保属性，请人工确认"
+    )
+
+
 def test_sync_all_refreshes_an_expired_period_snapshot_once_before_creating_batches(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1185,7 +1233,7 @@ def test_fixture_sync_api_supports_page_review_flow(tmp_path: Path, monkeypatch:
     assert response.status_code == 200
     run = response.json()
     assert run["summary"]["total"] == 2
-    assert run["ruleVersion"] == "2026.08.24-06"
+    assert run["ruleVersion"] == "2026.08.27-07"
     assert run["sourceSummary"]["rawApiResponseSaved"] is False
     assert run["sourceSummary"]["monthlyBaseline"]["created"] is True
     assert run["confirmationDate"] == "2026-08-17"
@@ -3100,7 +3148,7 @@ def test_business_rules_api_is_versioned_and_uses_business_language():
     assert response.status_code == 200
     payload = response.json()
     assert payload["version"]
-    assert payload["updatedAt"] == "2026-08-24"
+    assert payload["updatedAt"] == "2026-08-27"
     assert payload["scope"] == "全国社保增员"
     assert any(section["id"] == "candidate-list" for section in payload["sections"])
     serialized = response.text

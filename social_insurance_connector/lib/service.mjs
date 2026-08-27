@@ -25,7 +25,7 @@ function parseDateOnly(value, field) {
 }
 
 function validateRuleVersion(value) {
-  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.08.24-06").trim();
+  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.08.27-07").trim();
   if (!value || String(value) !== expected) {
     throw new ConnectorError("RULE_VERSION_MISMATCH", "连接器规则版本与工作台不一致", 409);
   }
@@ -99,6 +99,8 @@ function normalizedFromBeisen(rows, contracts, offerIndexes = {}) {
         email: fieldValue(employee, "email", { translated: false }) || fieldValue(employee, "emailAddress", { translated: false }),
         virtualEmployee: fieldValue(employee, BEISEN_FIELDS.EMPLOYEE_CUSTOM.virtualEmployee),
         employmentPlace: fieldValue(service, BEISEN_FIELDS.SERVICE_CUSTOM.employmentPlace),
+        voluntaryStopFlag: fieldValue(service, BEISEN_FIELDS.SERVICE_CUSTOM.voluntaryStopFlag) ||
+          fieldValue(employee, BEISEN_FIELDS.SERVICE_CUSTOM.voluntaryStopFlag),
         changeDescription: fieldValue(service, "changeDesc") || fieldValue(service, "changeDescription"),
       });
     }
@@ -129,6 +131,72 @@ function mergeByIdentity(rows) {
     merged.set(key, next);
   }
   return [...merged.values()];
+}
+
+function dimissionIndexForEmployees(employees) {
+  const compatibilityConfigured = Boolean(
+    String(process.env.SOCIAL_INSURANCE_DIMISSION_SNAPSHOT_GZIP_BASE64 || "").trim(),
+  );
+  const compatibilitySnapshotDate = dimissionSnapshotDate();
+  let compatibilityIndex = new Map();
+  let compatibilityWarning = "";
+  if (compatibilityConfigured && !compatibilitySnapshotDate) {
+    compatibilityWarning = "兼容离职快照日期缺失，已忽略；本次仅使用北森实时任职记录。";
+  } else if (compatibilityConfigured) {
+    try {
+      compatibilityIndex = getDimissionIndex();
+    } catch (error) {
+      if (!(error instanceof ConnectorError) || error.code !== "DIMISSION_SNAPSHOT_INVALID") throw error;
+      compatibilityWarning = "兼容离职快照不可读取，已忽略；本次仅使用北森实时任职记录。";
+    }
+  }
+  const compatibilitySnapshotUsable = compatibilityConfigured &&
+    Boolean(compatibilitySnapshotDate) &&
+    !compatibilityWarning;
+  const index = new Map();
+  let liveRecordCount = 0;
+  let liveStopFlagCount = 0;
+  for (const employee of employees) {
+    const identity = text(employee.idNumber).replace(/\s+/gu, "");
+    const lastWorkDate = dateOnly(employee.lastWorkDate);
+    const voluntaryStopFlag = text(employee.voluntaryStopFlag);
+    const dimissionStatus = text(employee.employeeStatus).includes("离职");
+    if (!identity || (!lastWorkDate && !voluntaryStopFlag && !dimissionStatus)) continue;
+    const records = index.get(identity) ?? [];
+    records.push({
+      lastWorkDate,
+      voluntaryStopFlag,
+      processCreatedTime: text(employee.modifiedTime),
+      processTimeReliable: false,
+      source: "beisen-live-employment-record",
+      approvalStatus: "",
+    });
+    index.set(identity, records);
+    liveRecordCount += 1;
+    if (voluntaryStopFlag) liveStopFlagCount += 1;
+  }
+  if (compatibilitySnapshotUsable) {
+    for (const [identity, records] of compatibilityIndex) {
+      if (!index.has(identity)) index.set(identity, [...records]);
+    }
+  }
+  return {
+    index,
+    liveRecordCount,
+    liveStopFlagCount,
+    compatibilitySnapshotUsable,
+    compatibilitySnapshotDate: compatibilitySnapshotUsable ? compatibilitySnapshotDate : null,
+    compatibilityWarning,
+  };
+}
+
+function shanghaiDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
 }
 
 function issue(message) {
@@ -216,7 +284,14 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
       const id = text(employee.idNumber).replace(/\s+/gu, "");
       if (id) idCounts.set(id, (idCounts.get(id) ?? 0) + 1);
     }
-    const dimissionIndex = getDimissionIndex();
+    const {
+      index: dimissionIndex,
+      liveRecordCount: liveDimissionRecordCount,
+      liveStopFlagCount: liveDimissionStopFlagCount,
+      compatibilitySnapshotUsable,
+      compatibilitySnapshotDate,
+      compatibilityWarning,
+    } = dimissionIndexForEmployees(employees);
     const adminIndex = createAdminIndex(getAdminDictionary());
     const cutoff = `${payload.confirmationDate}T23:59:59+08:00`;
     const records = filtered.map((employee) => {
@@ -254,14 +329,20 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
             lastWorkDate: record.lastWorkDate ?? "",
             voluntaryStopFlag: text(record.voluntaryStopFlag),
             processCreatedTime: record.processCreatedTime ?? "",
+            processTimeReliable: record.processTimeReliable !== false,
+            source: text(record.source),
           })),
         },
       };
     });
-    const snapshotDate = dimissionSnapshotDate();
+    const departureRuleSource = liveDimissionRecordCount
+      ? (compatibilitySnapshotUsable ? "beisen-live-with-configured-fallback" : "beisen-live-employee-records")
+      : (compatibilitySnapshotUsable ? "configured-snapshot-fallback" : "beisen-live-employee-records");
     const warnings = [];
-    if (!snapshotDate) warnings.push("离职快照日期未配置，请在最终提交前确认数据时点。");
-    else if (snapshotDate < payload.periodEnd) warnings.push(`离职快照日期为${snapshotDate}，早于周期结束日。`);
+    if (compatibilityWarning) warnings.push(compatibilityWarning);
+    if (compatibilitySnapshotUsable && compatibilitySnapshotDate < payload.periodEnd) {
+      warnings.push(`兼容离职快照日期为${compatibilitySnapshotDate}，早于周期结束日；仅用于北森实时离职记录缺失的人员。`);
+    }
     return {
       records,
       sourceSummary: {
@@ -270,8 +351,13 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         readyCount: records.filter((record) => record.status === "ready").length,
         manualCount: records.filter((record) => record.status === "needs_review").length,
         excludedCount: records.filter((record) => record.status === "excluded").length,
-        departureRuleSource: "uat-environment-snapshot",
-        departureSnapshotDate: snapshotDate,
+        departureRuleSource,
+        departureSnapshotDate: liveDimissionRecordCount || !compatibilitySnapshotUsable
+          ? shanghaiDate()
+          : compatibilitySnapshotDate,
+        departureCompatibilitySnapshotDate: compatibilitySnapshotDate,
+        departureLiveRecordCount: liveDimissionRecordCount,
+        departureLiveStopFlagCount: liveDimissionStopFlagCount,
         confirmationDate: payload.confirmationDate,
         rawApiResponseSaved: false,
         governmentSiteAccessed: false,

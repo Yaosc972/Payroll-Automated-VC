@@ -15,19 +15,17 @@ export function getAdminDictionary() {
 
 export function getDimissionIndex() {
   const encoded = String(process.env.SOCIAL_INSURANCE_DIMISSION_SNAPSHOT_GZIP_BASE64 || "").trim();
-  if (!encoded) {
-    throw new ConnectorError("DIMISSION_SNAPSHOT_MISSING", "UAT 离职快照未配置", 503);
-  }
+  if (!encoded) return new Map();
   if (encoded === cachedSnapshotValue) return cachedDimissionIndex;
   let rows;
   try {
     const decoded = gunzipSync(Buffer.from(encoded, "base64")).toString("utf8");
     rows = JSON.parse(decoded);
   } catch {
-    throw new ConnectorError("DIMISSION_SNAPSHOT_INVALID", "UAT 离职快照不可读取", 503);
+    throw new ConnectorError("DIMISSION_SNAPSHOT_INVALID", "兼容离职快照不可读取", 503);
   }
   if (!Array.isArray(rows)) {
-    throw new ConnectorError("DIMISSION_SNAPSHOT_INVALID", "UAT 离职快照格式无效", 503);
+    throw new ConnectorError("DIMISSION_SNAPSHOT_INVALID", "兼容离职快照格式无效", 503);
   }
   const index = new Map();
   for (const row of rows) {
@@ -38,6 +36,8 @@ export function getDimissionIndex() {
       lastWorkDate: row.LastWorkDate,
       voluntaryStopFlag: row.extshifouziyuantingbao_109025_28464420,
       processCreatedTime: row.LookupPrefix_ApprovalObjectID_CreatedTime || row.CreatedTime,
+      processTimeReliable: true,
+      source: "configured-snapshot",
       approvalStatus: row.ApprovalStatus,
     };
     if (!index.has(idNumber)) index.set(idNumber, []);
@@ -50,5 +50,9 @@ export function getDimissionIndex() {
 
 export function dimissionSnapshotDate() {
   const value = String(process.env.SOCIAL_INSURANCE_DIMISSION_SNAPSHOT_DATE || "").trim();
-  return /^20\d{2}-\d{2}-\d{2}$/u.test(value) ? value : null;
+  if (!/^20\d{2}-\d{2}-\d{2}$/u.test(value)) return null;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value
+    ? value
+    : null;
 }

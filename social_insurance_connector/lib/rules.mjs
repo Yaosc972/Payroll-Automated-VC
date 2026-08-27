@@ -405,8 +405,21 @@ export function evaluateEmployee(employee, adminIndex, options = {}) {
 export function decideDimission(records, cutoff, currentEntryDate = "") {
   const cutoffDate = parseDate(cutoff);
   if (!cutoffDate || !records?.length) return { decision: "增员", reason: "确认时点前无已知离职流程" };
-  const known = records
-    .map((record) => ({ ...record, processDate: parseDate(record.processCreatedTime) }))
+  const parsedRecords = records
+    .map((record) => ({ ...record, processDate: parseDate(record.processCreatedTime) }));
+  if (parsedRecords.some((record) => record.processTimeReliable === false)) {
+    return {
+      decision: "待人工确认",
+      reason: "北森实时离职记录缺少可靠审批时间或停保属性，请人工确认",
+    };
+  }
+  if (parsedRecords.some((record) => !record.processDate)) {
+    return {
+      decision: "待人工确认",
+      reason: "离职任职记录缺少流程时间或停保属性，请人工确认",
+    };
+  }
+  const known = parsedRecords
     .filter((record) => record.processDate && record.processDate <= cutoffDate)
     .sort((a, b) => b.processDate - a.processDate);
   if (!known.length) return { decision: "增员", reason: "离职流程晚于名单确认时点" };
