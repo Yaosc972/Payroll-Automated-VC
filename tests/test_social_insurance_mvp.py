@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import date
+from datetime import date, datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 import json
@@ -91,6 +91,12 @@ def test_default_reporting_window_uses_previous_16th_to_current_15th():
     assert default_reporting_window(date(2026, 8, 15)) == ("2026-06-16", "2026-07-15")
 
 
+def test_default_reporting_window_uses_shanghai_date_at_the_monthly_boundary():
+    assert default_reporting_window(
+        now=datetime(2026, 9, 15, 16, 30, tzinfo=timezone.utc)
+    ) == ("2026-08-16", "2026-09-15")
+
+
 def test_default_confirmation_date_is_the_day_after_the_period_end():
     from bonus_platform.engine.social_insurance import runs as social_runs
 
@@ -103,7 +109,7 @@ def test_scheduled_reporting_context_uses_the_day_after_the_period_end(
 ):
     from bonus_platform.engine.social_insurance import prefetch
 
-    monkeypatch.setattr(prefetch, "default_reporting_window", lambda _today: ("2026-07-16", "2026-08-15"))
+    monkeypatch.setattr(prefetch, "default_reporting_window", lambda: ("2026-07-16", "2026-08-15"))
 
     assert prefetch._current_reporting_context() == {
         "periodStart": "2026-07-16",

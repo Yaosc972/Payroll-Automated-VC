@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 import logging
 import os
 from pathlib import Path
@@ -266,7 +266,7 @@ def _refresh_reporting_context(context: dict[str, str]) -> dict[str, Any]:
 
 
 def _current_reporting_context() -> dict[str, str]:
-    period_start, period_end = default_reporting_window(date.today())
+    period_start, period_end = default_reporting_window()
     return {
         "periodStart": period_start,
         "periodEnd": period_end,

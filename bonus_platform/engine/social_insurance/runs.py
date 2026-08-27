@@ -10,6 +10,7 @@ import re
 import secrets
 from time import perf_counter_ns
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ... import config
 from .coverage import build_coverage_tasks, coverage_summary, processing_plan
@@ -430,9 +431,15 @@ def _previous_month(year: int, month: int) -> tuple[int, int]:
     return (year - 1, 12) if month == 1 else (year, month - 1)
 
 
-def default_reporting_window(today: date | None = None) -> tuple[str, str]:
+def default_reporting_window(
+    today: date | None = None,
+    *,
+    now: datetime | None = None,
+) -> tuple[str, str]:
     """返回最近一个已完整结束的 16 日至次月 15 日窗口。"""
-    current = today or date.today()
+    current = today or (now or datetime.now(ZoneInfo("Asia/Shanghai"))).astimezone(
+        ZoneInfo("Asia/Shanghai")
+    ).date()
     if current.day >= 16:
         start_year, start_month = _previous_month(current.year, current.month)
         start = date(start_year, start_month, 16)
