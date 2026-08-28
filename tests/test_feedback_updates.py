@@ -52,6 +52,26 @@ def test_release_announcements_seed_one_plain_language_note_per_business_module(
     assert len(feedback_store.list_announcements(db_path=db_path)) == 5
 
 
+def test_social_insurance_release_announcement_uses_its_annotated_preview():
+    announcement = feedback_store._announcement_from_row(
+        {
+            "id": "UPD-20260828-3C4059",
+            "kind": "feature",
+            "title": "社保报盘已上线试用",
+            "content": "社保报盘工具现已上线。",
+            "module_id": "home",
+            "module_name": "HRAS 全球薪酬核算工作台",
+            "visual_style": "sunny",
+            "created_by": "payrollAdmin",
+            "created_by_name": "Payroll Admin",
+            "published_at": "2026-08-28T03:08:00Z",
+        }
+    )
+
+    assert announcement["imageUrl"] == "/assets/announcement-previews/social-insurance.webp?v=20260828-1"
+    assert announcement["imageAlt"] == "社保报盘工作台功能说明界面"
+
+
 def test_feedback_submission_keeps_user_history_and_image_attachment(tmp_path, monkeypatch):
     _configure_store(tmp_path, monkeypatch)
     monkeypatch.setattr(admin_store.config, "ADMIN_BOOTSTRAP_IDENTIFIERS", ["姚硕灿"])

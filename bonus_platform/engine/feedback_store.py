@@ -63,6 +63,12 @@ ANNOUNCEMENT_MEDIA = {
         "imageAlt": "海外劳务报账核对页面界面",
     },
 }
+ANNOUNCEMENT_MEDIA_OVERRIDES = {
+    "UPD-20260828-3C4059": {
+        "imageUrl": "/assets/announcement-previews/social-insurance.webp?v=20260828-1",
+        "imageAlt": "社保报盘工作台功能说明界面",
+    },
+}
 
 
 def _now() -> str:
@@ -287,10 +293,13 @@ def get_feedback_attachment(feedback_id: str, attachment_id: str, db_path=None) 
 
 def _announcement_from_row(row: Any) -> dict[str, Any]:
     data = dict(row)
+    announcement_id = str(data["id"])
     module_id = str(data["module_id"])
-    media = ANNOUNCEMENT_MEDIA.get(module_id, {})
+    media = ANNOUNCEMENT_MEDIA_OVERRIDES.get(announcement_id) or ANNOUNCEMENT_MEDIA.get(
+        module_id, {}
+    )
     return {
-        "id": str(data["id"]),
+        "id": announcement_id,
         "kind": str(data["kind"]),
         "kindLabel": ANNOUNCEMENT_KIND_LABELS.get(str(data["kind"]), str(data["kind"])),
         "title": str(data["title"]),
