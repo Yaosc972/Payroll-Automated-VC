@@ -12,7 +12,7 @@
       if (!response.ok) return;
       const payload = await response.json();
       const avatarUrl = String(payload.contact?.avatarUrl || '').trim();
-      if (!avatarUrl.startsWith('https://')) return;
+      if (!avatarUrl.startsWith('/api/workbench/module-contacts/')) return;
       avatar.addEventListener('load', () => {
         avatar.hidden = false;
         initial.hidden = true;

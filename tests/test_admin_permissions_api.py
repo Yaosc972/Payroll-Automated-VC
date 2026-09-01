@@ -70,9 +70,42 @@ def test_module_contact_reuses_directory_avatar_without_exposing_identity_fields
         "contact": {
             "name": "夏盈盈",
             "department": "海外薪酬组",
-            "avatarUrl": "https://example.com/xia.png",
+            "avatarUrl": "/api/workbench/module-contacts/overseas-payroll/avatar",
         }
     }
+
+
+def test_module_contact_avatar_is_proxied_from_the_trusted_feishu_cdn(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.setattr(
+        app_module,
+        "list_users",
+        lambda: [
+            {
+                "name": "夏盈盈",
+                "status": "active",
+                "avatarUrl": "https://s1-imfile.feishucdn.com/avatar.png",
+            }
+        ],
+    )
+
+    class AvatarResponse:
+        status_code = 200
+        headers = {"content-type": "image/png"}
+        content = b"safe-avatar"
+
+    monkeypatch.setattr(app_module.httpx, "get", lambda *_args, **_kwargs: AvatarResponse())
+
+    with TestClient(app) as client:
+        login = client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        assert login.status_code == 200
+        response = client.get("/api/workbench/module-contacts/overseas-payroll/avatar")
+
+    assert response.status_code == 200
+    assert response.content == b"safe-avatar"
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=3600"
 
 
 def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
