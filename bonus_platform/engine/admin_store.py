@@ -534,6 +534,7 @@ def init_admin_store(db_path: Path | None = None) -> Path | str:
             connection.executescript(POSTGRES_SCHEMA if backend == "postgres" else SQLITE_SCHEMA)
             _migrate_schema(connection)
             _seed_defaults(connection)
+            _migrate_default_role_module_grants(connection)
             connection.commit()
             if db_path is None:
                 _STORE_INITIALIZED = True
@@ -746,6 +747,33 @@ def _seed_defaults(connection: _AdminConnection) -> None:
                 ["role_id", "feature_id", "enabled", "updated_at"],
                 ["role_id", "feature_id"],
                 {"role_id": role["id"], "feature_id": feature_id, "enabled": enabled, "updated_at": now},
+            )
+
+
+def _migrate_default_role_module_grants(connection: _AdminConnection) -> None:
+    """Backfill new bundled scopes without overriding an administrator's choice."""
+    now = _now()
+    for role_id, module_ids in DEFAULT_ROLE_MODULE_GRANTS.items():
+        for module_id in module_ids:
+            target_id = f"{module_id}:{role_id}"
+            manually_configured = connection.execute(
+                """
+                SELECT 1
+                FROM admin_audit_logs
+                WHERE action = ? AND target_type = ? AND target_id = ?
+                LIMIT 1
+                """,
+                ("set_module_role_access", "module_role", target_id),
+            ).fetchone()
+            if manually_configured:
+                continue
+            connection.execute(
+                """
+                UPDATE admin_role_module_permissions
+                SET can_enter = ?, updated_at = ?
+                WHERE role_id = ? AND module_id = ? AND can_enter = ?
+                """,
+                (1, now, role_id, module_id, 0),
             )
 
 

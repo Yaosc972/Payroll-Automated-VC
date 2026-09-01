@@ -85,10 +85,9 @@ def test_existing_permission_store_upgrades_role_label_and_adds_payroll_scope(tm
             ("FBU美洲绩效核算管理员", "fbuAdmin"),
         )
         connection.execute(
-            "DELETE FROM admin_role_module_permissions WHERE module_id = ?",
-            ("overseas_payroll",),
+            "UPDATE admin_role_module_permissions SET can_enter = 0 WHERE role_id = ? AND module_id = ?",
+            ("fbuAdmin", "overseas_payroll"),
         )
-        connection.execute("DELETE FROM admin_modules WHERE id = ?", ("overseas_payroll",))
         connection.commit()
 
     admin_store.init_admin_store(db_path)
@@ -99,6 +98,23 @@ def test_existing_permission_store_upgrades_role_label_and_adds_payroll_scope(tm
     assert permissions["fbuAdmin"]["fbu"] is True
     assert permissions["fbuAdmin"]["overseas_payroll"] is True
     assert permissions["fbuAdmin"]["overseas"] is False
+
+
+def test_existing_permission_store_preserves_manual_payroll_scope_override(tmp_path):
+    db_path = tmp_path / "admin.sqlite"
+    admin_store.init_admin_store(db_path)
+    admin_store.set_module_role_access(
+        "overseas_payroll",
+        "fbuAdmin",
+        False,
+        actor_user_id="payrollAdmin",
+        db_path=db_path,
+    )
+
+    admin_store.init_admin_store(db_path)
+    permissions = admin_store.get_permissions(db_path)["moduleAccess"]
+
+    assert permissions["fbuAdmin"]["overseas_payroll"] is False
 
 
 def test_module_contact_reuses_directory_avatar_without_exposing_identity_fields(tmp_path, monkeypatch):
