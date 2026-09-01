@@ -511,11 +511,13 @@ def test_feishu_oauth_skeleton_config_and_state_validation(tmp_path, monkeypatch
         config_response = client.get("/api/auth/feishu/config")
         unconfigured_login = client.get("/api/auth/feishu/login", follow_redirects=False)
         invalid_callback = client.get("/api/auth/feishu/callback", params={"code": "abc", "state": "bad"})
+        invalid_lark_callback = client.get("/api/auth/lark/callback", params={"code": "abc", "state": "bad"})
 
     assert config_response.status_code == 200
     assert config_response.json()["configured"] is False
     assert unconfigured_login.status_code == 503
     assert invalid_callback.status_code == 400
+    assert invalid_lark_callback.status_code == 400
 
 
 def test_upsert_feishu_user_creates_pending_user_without_roles(tmp_path, monkeypatch):

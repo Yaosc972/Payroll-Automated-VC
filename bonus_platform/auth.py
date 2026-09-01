@@ -306,6 +306,7 @@ def api_auth_feishu_login(next: str = "/") -> RedirectResponse:
 
 
 @router.get("/api/auth/feishu/callback")
+@router.get("/api/auth/lark/callback")
 def api_auth_feishu_callback(
     code: str = "",
     state: str = "",

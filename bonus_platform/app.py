@@ -2820,6 +2820,7 @@ def api_auth_feishu_login() -> RedirectResponse:
 
 
 @app.get("/api/auth/feishu/callback")
+@app.get("/api/auth/lark/callback")
 def api_auth_feishu_callback(
     background_tasks: BackgroundTasks,
     response: Response,
