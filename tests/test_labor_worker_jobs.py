@@ -219,6 +219,35 @@ def test_reconcile_job_cannot_use_preflight_completion(job_store):
         )
 
 
+def test_overseas_payroll_job_uses_typed_auxiliary_completion(job_store):
+    job = jobs.enqueue_labor_worker_job(
+        "payroll-task",
+        owner_user_id="user-1",
+        task_generation_id="payroll-task",
+        job_type="overseas_payroll",
+    )
+    claimed = jobs.claim_labor_worker_job(owner_user_id="user-1", device_id="device-a", worker_version="0.3.15")
+
+    assert claimed["jobType"] == "overseas_payroll"
+    completed = jobs.complete_labor_worker_auxiliary_job(
+        job["id"],
+        owner_user_id="user-1",
+        device_id="device-a",
+        job_type="overseas_payroll",
+        expected_task_generation_id="payroll-task",
+    )
+    assert completed["status"] == "succeeded"
+
+    with pytest.raises(jobs.LaborWorkerLeaseError):
+        jobs.complete_labor_worker_auxiliary_job(
+            job["id"],
+            owner_user_id="user-1",
+            device_id="device-a",
+            job_type="reconcile",
+            expected_task_generation_id="payroll-task",
+        )
+
+
 @pytest.mark.parametrize("value", ["0.3", "0.3.0-beta", "v0.3.0", "999999.0.0", ""])
 def test_worker_version_parser_rejects_ambiguous_or_unbounded_versions(value):
     with pytest.raises(ValueError):

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import hashlib
+import time
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
+from bonus_platform.app import app
 from bonus_platform.engine.overseas_payroll import service
-from bonus_platform.engine.overseas_payroll.router import FRONTEND_PATH, page_router, router
+from bonus_platform.engine.overseas_payroll import router as payroll_router
+from bonus_platform.engine.overseas_payroll import tasks
+from bonus_platform.engine.overseas_payroll.router import ASYNC_ADAPTER_PATH, FRONTEND_PATH, page_router, router
 
 
 def test_lists_eight_handover_tools() -> None:
@@ -38,7 +44,23 @@ def test_routers_expose_native_and_original_frontend_contracts() -> None:
 
     assert "/api/overseas-payroll/tools" in native_paths
     assert "/api/overseas-payroll/tools/{tool_id}/process" in native_paths
+    assert "/api/overseas-payroll/tasks" in native_paths
+    assert "/api/overseas-payroll/tasks/{task_id}/enqueue" in native_paths
     assert {"/overseas-payroll.html", "/api/tools", "/api/tool/{tool_id}/process"} <= compatibility_paths
+
+
+def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
+
+    with TestClient(app) as client:
+        page = client.get("/overseas-payroll.html")
+        adapter = client.get("/overseas-payroll-async.js")
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+    assert page.status_code == 200
+    assert '<script src="/overseas-payroll-async.js?v=1"></script>' in page.text
+    assert adapter.status_code == 200
+    assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
 
 
 def test_single_file_tool_returns_decoded_content(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,3 +100,56 @@ def test_rejects_wrong_extension_before_loading_parsers(monkeypatch: pytest.Monk
 def test_rejects_multiple_files_for_single_file_tool() -> None:
     with pytest.raises(ValueError, match="只支持一个文件"):
         service.process_files("italy_payslip", [("a.pdf", b"a"), ("b.pdf", b"b")])
+
+
+def test_local_async_task_upload_process_and_download(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = b"small-pdf-input"
+    result = service.ProcessResult(
+        filename="result.xlsx",
+        content=b"xlsx-output",
+        summary="1 名员工",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    monkeypatch.setattr(tasks, "TASK_ROOT", tmp_path / "tasks")
+    monkeypatch.setattr(payroll_router, "process_files", lambda _tool, files: result if files == [("tax.pdf", source)] else None)
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/overseas-payroll/tasks",
+            json={
+                "toolId": "swedish_tax",
+                "files": [
+                    {
+                        "filename": "tax.pdf",
+                        "sizeBytes": len(source),
+                        "sha256": hashlib.sha256(source).hexdigest(),
+                        "contentType": "application/pdf",
+                    }
+                ],
+            },
+        )
+        assert created.status_code == 200
+        payload = created.json()
+        task_id = payload["task"]["id"]
+        intent = payload["intents"][0]
+        assert client.put(intent["signedUrl"], content=source, headers=intent["headers"]).status_code == 200
+        assert client.post(
+            f"/api/overseas-payroll/tasks/{task_id}/files/{intent['fileId']}/finalize"
+        ).status_code == 200
+        assert client.post(f"/api/overseas-payroll/tasks/{task_id}/enqueue").status_code == 200
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            current = client.get(f"/api/overseas-payroll/tasks/{task_id}").json()
+            if current["status"] in {"succeeded", "failed"}:
+                break
+            time.sleep(0.02)
+
+        assert current["status"] == "succeeded"
+        download = client.get(f"/api/overseas-payroll/tasks/{task_id}/download").json()
+        response = client.get(download["signedUrl"])
+        assert response.content == result.content
+    asyncio.set_event_loop(asyncio.new_event_loop())

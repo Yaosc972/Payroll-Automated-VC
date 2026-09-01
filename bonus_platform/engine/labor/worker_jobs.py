@@ -16,7 +16,7 @@ from .worker_version import worker_version_at_least
 
 LABOR_WORKER_JOBS_DIR = OUTPUT_DIR / "labor_worker_jobs"
 ACTIVE_STATUSES = {"queued", "running", "retry_wait"}
-SUPPORTED_JOB_TYPES = {"reconcile", "mapping_preflight"}
+SUPPORTED_JOB_TYPES = {"reconcile", "mapping_preflight", "overseas_payroll"}
 DEFAULT_LEASE_SECONDS = 120
 _STORE_LOCK = threading.RLock()
 
@@ -140,6 +140,60 @@ def complete_labor_worker_preflight_job(
         )
         if str(job.get("jobType") or "reconcile") != "mapping_preflight":
             raise LaborWorkerLeaseError("正式核对任务不能使用字段预检完成通道。")
+        job.update(
+            {
+                "status": "succeeded",
+                "finishedAt": _utc_now(),
+                "updatedAt": _utc_now(),
+                "leaseExpiresAt": "",
+            }
+        )
+        _write_labor_worker_job(job)
+        return job
+
+
+def complete_labor_worker_auxiliary_job(
+    job_id: str,
+    *,
+    owner_user_id: str,
+    device_id: str,
+    job_type: str,
+    expected_task_generation_id: str = "",
+) -> dict[str, Any]:
+    """Complete a non-reconcile job after its owning API validates the result."""
+
+    normalized_job_type = _required_job_type(job_type)
+    if normalized_job_type in {"reconcile", "mapping_preflight"}:
+        raise LaborWorkerLeaseError("正式核对与字段预检必须使用各自的完成通道。")
+    store = _postgres_store()
+    if store:
+        try:
+            return store.complete_auxiliary(
+                job_id,
+                owner_user_id,
+                device_id,
+                normalized_job_type,
+                expected_task_generation_id,
+            )
+        except PermissionError as exc:
+            raise LaborWorkerLeaseError(str(exc)) from exc
+    with _STORE_LOCK:
+        existing = get_labor_worker_job(job_id)
+        if str(existing.get("jobType") or "reconcile") != normalized_job_type:
+            raise LaborWorkerLeaseError("Worker 任务类型不匹配。")
+        if existing.get("status") == "succeeded":
+            if existing.get("ownerUserId") != owner_user_id or existing.get("claimedDeviceId") != device_id:
+                raise LaborWorkerLeaseError("任务不属于当前 Worker。")
+            _assert_job_generation(existing, expected_task_generation_id)
+            return existing
+        job = _assert_lease(
+            job_id,
+            owner_user_id,
+            device_id,
+            expected_task_generation_id=expected_task_generation_id,
+        )
+        if str(job.get("jobType") or "reconcile") != normalized_job_type:
+            raise LaborWorkerLeaseError("Worker 任务类型不匹配。")
         job.update(
             {
                 "status": "succeeded",

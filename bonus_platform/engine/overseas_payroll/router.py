@@ -2,16 +2,32 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
+from ..labor.persistent_storage import labor_supabase_storage_enabled
+from ..labor.worker_jobs import enqueue_labor_worker_job, labor_worker_job_store_health
 from .service import _legacy_module, list_tools, process_files
+from .tasks import (
+    create_task,
+    finalize_input,
+    finalize_output,
+    load_task,
+    local_file_path,
+    output_download,
+    prepare_output,
+    store_local_file,
+    update_task,
+)
 
 
 router = APIRouter(prefix="/api/overseas-payroll", tags=["overseas-payroll"])
@@ -19,18 +35,47 @@ page_router = APIRouter(tags=["overseas-payroll-compat"])
 MAX_FILE_BYTES = 40 * 1024 * 1024
 MAX_REQUEST_BYTES = 80 * 1024 * 1024
 MAX_FILES = 12
-FRONTEND_PATH = Path(__file__).resolve().parent / "resources" / "index.html"
+RESOURCE_ROOT = Path(__file__).resolve().parent / "resources"
+FRONTEND_PATH = RESOURCE_ROOT / "index.html"
+ASYNC_ADAPTER_PATH = RESOURCE_ROOT / "async_adapter.js"
 logger = logging.getLogger("bonus_platform.overseas_payroll")
+_LOCAL_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="overseas-payroll")
+OVERSEAS_PAYROLL_REQUIRED_WORKER_VERSION = "0.3.16"
 
 
-def _require_access(request: Request) -> None:
+def _require_access(request: Request) -> str:
     if not labor_auth_required():
-        return
+        return "local-default"
     current = current_user_from_request(request)
     if current is None:
         raise HTTPException(status_code=401, detail="请先登录西格玛工作台。")
     if not user_can_enter_module(current, "overseas"):
         raise HTTPException(status_code=403, detail="当前用户没有海外模块权限。")
+    user = current.get("user") if isinstance(current.get("user"), dict) else {}
+    owner_user_id = str(user.get("id") or "").strip()
+    if not owner_user_id:
+        raise HTTPException(status_code=401, detail="当前登录用户缺少有效标识。")
+    return owner_user_id
+
+
+def _public_task(task: dict) -> dict:
+    files = [
+        {key: value for key, value in file.items() if key != "objectKey"}
+        for file in task.get("files", [])
+        if isinstance(file, dict)
+    ]
+    output = task.get("output") if isinstance(task.get("output"), dict) else None
+    if output:
+        output = {key: value for key, value in output.items() if key != "objectKey"}
+    return {key: value for key, value in {**task, "files": files, "output": output}.items() if key != "ownerUserId"}
+
+
+def _public_transfer_intent(intent: dict) -> dict:
+    return {
+        key: intent[key]
+        for key in ("fileId", "outputId", "filename", "signedUrl", "method", "headers", "expiresIn", "private")
+        if key in intent
+    }
 
 
 def _legacy_tool_payload() -> list[dict]:
@@ -63,7 +108,17 @@ def overseas_payroll_page(request: Request) -> HTMLResponse:
     # These are the same runtime substitutions made by the original server.
     # The checked-in frontend resource remains byte-identical to the handover.
     html = html.replace("__PASSCODE_HINT__", "").replace("__NO_AUTH__", "false")
+    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=1"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@page_router.get("/overseas-payroll-async.js")
+def overseas_payroll_async_adapter() -> Response:
+    return Response(
+        ASYNC_ADAPTER_PATH.read_bytes(),
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @page_router.get("/logout")
@@ -152,6 +207,162 @@ def overseas_payroll_tools(request: Request) -> dict:
     return {"tools": list_tools()}
 
 
+def _run_local_task(task_id: str, owner_user_id: str) -> None:
+    try:
+        task = update_task(
+            task_id,
+            owner_user_id=owner_user_id,
+            updater=lambda current: {
+                **current,
+                "status": "processing",
+                "statusLabel": "本地核对助手正在处理",
+                "progress": {"message": "正在解析工资文件"},
+            },
+        )
+        files = []
+        for file in task.get("files", []):
+            content = local_file_path(task_id, file["id"]).read_bytes()
+            if len(content) != int(file["sizeBytes"]):
+                raise ValueError(f"{file['filename']} 大小校验失败。")
+            files.append((file["filename"], content))
+        result = process_files(str(task["toolId"]), files)
+        _, intent = prepare_output(
+            task_id,
+            owner_user_id=owner_user_id,
+            filename=result.filename,
+            size_bytes=len(result.content),
+            sha256=hashlib.sha256(result.content).hexdigest(),
+            content_type=result.media_type,
+        )
+        store_local_file(task_id, intent["outputId"], result.content, output=True)
+        finalize_output(task_id, owner_user_id=owner_user_id, summary=result.summary)
+    except Exception as exc:  # noqa: BLE001 - persisted as a safe user-facing task failure.
+        logger.exception("Local overseas payroll task failed: %s", task_id)
+        try:
+            update_task(
+                task_id,
+                owner_user_id=owner_user_id,
+                updater=lambda current: {
+                    **current,
+                    "status": "failed",
+                    "statusLabel": "处理失败",
+                    "error": str(exc)[:500],
+                },
+            )
+        except Exception:
+            logger.exception("Failed to persist overseas payroll task failure: %s", task_id)
+
+
+@router.post("/tasks")
+def create_overseas_payroll_task(request: Request, payload: dict = Body(...)) -> dict:
+    owner_user_id = _require_access(request)
+    try:
+        task, intents = create_task(owner_user_id, str(payload.get("toolId") or ""), payload.get("files") or [])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"task": _public_task(task), "intents": [_public_transfer_intent(intent) for intent in intents]}
+
+
+@router.put("/tasks/{task_id}/files/{file_id}/content")
+async def upload_local_overseas_payroll_file(task_id: str, file_id: str, request: Request) -> dict:
+    owner_user_id = _require_access(request)
+    if labor_supabase_storage_enabled():
+        raise HTTPException(status_code=404, detail="生产文件必须使用签名地址直传私有存储。")
+    task = load_task(task_id, owner_user_id=owner_user_id)
+    file = next((item for item in task.get("files", []) if item.get("id") == file_id), None)
+    if not file:
+        raise HTTPException(status_code=404, detail="上传文件记录不存在。")
+    content = await request.body()
+    if len(content) > MAX_FILE_BYTES or len(content) != int(file["sizeBytes"]):
+        raise HTTPException(status_code=413, detail="上传文件大小与任务清单不一致。")
+    store_local_file(task_id, file_id, content)
+    return {"ok": True}
+
+
+@router.post("/tasks/{task_id}/files/{file_id}/finalize")
+def finalize_overseas_payroll_file(task_id: str, file_id: str, request: Request) -> dict:
+    owner_user_id = _require_access(request)
+    try:
+        task = finalize_input(task_id, file_id, owner_user_id=owner_user_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"task": _public_task(task)}
+
+
+@router.post("/tasks/{task_id}/enqueue")
+def enqueue_overseas_payroll_task(task_id: str, request: Request) -> dict:
+    owner_user_id = _require_access(request)
+    task = load_task(task_id, owner_user_id=owner_user_id)
+    if task.get("status") not in {"ready", "queued"}:
+        raise HTTPException(status_code=409, detail="任务文件尚未全部上传，不能开始处理。")
+    if not labor_supabase_storage_enabled():
+        if task.get("status") != "queued":
+            task = update_task(
+                task_id,
+                owner_user_id=owner_user_id,
+                updater=lambda current: {**current, "status": "queued", "statusLabel": "已进入本地处理队列"},
+            )
+            _LOCAL_EXECUTOR.submit(_run_local_task, task_id, owner_user_id)
+        return {"task": _public_task(task)}
+    health = labor_worker_job_store_health()
+    if not health.get("ready"):
+        raise HTTPException(status_code=503, detail="海外薪资 Worker 队列尚未配置完成。")
+    job = enqueue_labor_worker_job(
+        task_id,
+        owner_user_id=owner_user_id,
+        required_worker_version=OVERSEAS_PAYROLL_REQUIRED_WORKER_VERSION,
+        task_generation_id=task_id,
+        job_type="overseas_payroll",
+    )
+    task = update_task(
+        task_id,
+        owner_user_id=owner_user_id,
+        updater=lambda current: {
+            **current,
+            "status": "queued",
+            "statusLabel": "已进入本人核对助手队列",
+            "jobId": job["id"],
+        },
+    )
+    return {"task": _public_task(task)}
+
+
+@router.get("/tasks/{task_id}")
+def get_overseas_payroll_task(task_id: str, request: Request) -> dict:
+    owner_user_id = _require_access(request)
+    try:
+        return _public_task(load_task(task_id, owner_user_id=owner_user_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/download")
+def get_overseas_payroll_download(task_id: str, request: Request) -> dict:
+    owner_user_id = _require_access(request)
+    task = load_task(task_id, owner_user_id=owner_user_id)
+    try:
+        return output_download(task)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/tasks/{task_id}/output/content")
+def download_local_overseas_payroll_output(task_id: str, request: Request) -> FileResponse:
+    owner_user_id = _require_access(request)
+    if labor_supabase_storage_enabled():
+        raise HTTPException(status_code=404, detail="生产结果必须通过签名地址下载。")
+    task = load_task(task_id, owner_user_id=owner_user_id)
+    output = task.get("output") if isinstance(task.get("output"), dict) else None
+    if task.get("status") != "succeeded" or not output:
+        raise HTTPException(status_code=409, detail="处理结果尚未生成。")
+    path = local_file_path(task_id, output["id"], output=True)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="处理结果文件不存在。")
+    return FileResponse(path, filename=output["filename"], media_type=output.get("contentType") or "application/octet-stream")
+
+
 @router.post("/tools/{tool_id}/process")
 async def process_overseas_payroll_files(
     tool_id: str,
@@ -159,6 +370,8 @@ async def process_overseas_payroll_files(
     files: list[UploadFile] = File(...),
 ) -> Response:
     _require_access(request)
+    if os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV"):
+        raise HTTPException(status_code=410, detail="生产环境请使用异步任务和私有存储直传接口。")
     if len(files) > MAX_FILES:
         raise HTTPException(status_code=413, detail=f"一次最多上传 {MAX_FILES} 个文件。")
     uploaded: list[tuple[str, bytes]] = []

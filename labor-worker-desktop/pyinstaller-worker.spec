@@ -9,21 +9,26 @@ DESKTOP_ROOT = Path(SPECPATH)
 PROJECT_ROOT = DESKTOP_ROOT.parent
 rapidocr_datas, rapidocr_binaries, rapidocr_hiddenimports = collect_all("rapidocr")
 onnxruntime_datas, onnxruntime_binaries, onnxruntime_hiddenimports = collect_all("onnxruntime")
+payroll_datas, payroll_binaries, payroll_hiddenimports = collect_all(
+    "bonus_platform.engine.overseas_payroll"
+)
 
 
 a = Analysis(
     ["worker_entry.py"],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[*rapidocr_binaries, *onnxruntime_binaries],
+    binaries=[*rapidocr_binaries, *onnxruntime_binaries, *payroll_binaries],
     datas=[
         (str(DESKTOP_ROOT / "worker-static-placeholder"), "bonus_platform/static"),
         *rapidocr_datas,
         *onnxruntime_datas,
+        *payroll_datas,
     ],
     hiddenimports=[
         "tools.labor_ocr_worker_task",
         *rapidocr_hiddenimports,
         *onnxruntime_hiddenimports,
+        *payroll_hiddenimports,
     ],
 )
 pyz = PYZ(a.pure)

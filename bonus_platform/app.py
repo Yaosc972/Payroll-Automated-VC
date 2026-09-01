@@ -129,6 +129,7 @@ from .engine.labor.worker_jobs import (
     claim_labor_worker_job,
     clear_labor_worker_result_acceptance,
     complete_labor_worker_job,
+    complete_labor_worker_auxiliary_job,
     complete_labor_worker_preflight_job,
     fail_labor_worker_job,
     get_latest_labor_worker_job,
@@ -881,6 +882,15 @@ from .engine.runs import (
 from .engine.table_data import build_final_table_data, build_table_data, load_table_data, merge_diff_rows, save_table_data
 from .engine.workbook_io import build_final_workbook, build_pending_workbook, build_result_workbook, read_import_rows
 from .engine.overseas_payroll.router import page_router as overseas_payroll_page_router, router as overseas_payroll_router
+from .engine.overseas_payroll.tasks import (
+    finalize_output as finalize_overseas_payroll_output,
+    load_task as load_overseas_payroll_task,
+    local_file_path as overseas_payroll_local_file_path,
+    prepare_output as prepare_overseas_payroll_output,
+    store_local_file as store_local_overseas_payroll_file,
+    task_input_downloads as overseas_payroll_task_input_downloads,
+    update_task as update_overseas_payroll_task,
+)
 
 
 @asynccontextmanager
@@ -2333,6 +2343,8 @@ def _labor_p1_device_auth_response(request: Request) -> Response | None:
 def _labor_browser_auth_path(path: str) -> bool:
     if path.rstrip("/") in {"/overseas-labor.html", "/overseas-payroll.html"}:
         return True
+    if path.startswith("/api/overseas-payroll/worker/"):
+        return False
     if path.startswith("/api/overseas-payroll/"):
         return True
     if path == "/api/tools" or path.startswith("/api/tool/"):
@@ -4442,6 +4454,13 @@ def heartbeat_personal_labor_worker_job(
     try:
         identity = _labor_worker_identity(authorization)
         existing = get_labor_worker_job(job_id)
+        if str(existing.get("jobType") or "reconcile") == "overseas_payroll":
+            _, job, _ = _overseas_payroll_worker_context(
+                job_id,
+                authorization,
+                progress=payload.get("progress") if isinstance(payload, dict) else None,
+            )
+            return {"job": _public_labor_worker_job(job)}
         if (
             str(existing.get("status") or "") == "succeeded"
             and str(existing.get("ownerUserId") or "") == identity["userId"]
@@ -4468,6 +4487,161 @@ def heartbeat_personal_labor_worker_job(
                 )
             return {"job": _public_labor_worker_job(job)}
     except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _overseas_payroll_worker_context(
+    job_id: str,
+    authorization: str,
+    *,
+    progress: dict | None = None,
+) -> tuple[dict[str, str], dict, str]:
+    identity = _labor_worker_identity(authorization)
+    existing = get_labor_worker_job(job_id)
+    if str(existing.get("jobType") or "") != "overseas_payroll":
+        raise LaborWorkerLeaseError("Worker 任务不是海外薪资处理任务。")
+    generation = str(existing.get("taskGenerationId") or "").strip()
+    if not generation or generation != str(existing.get("runId") or "").strip():
+        raise LaborWorkerLeaseError("海外薪资 Worker 任务代次无效。")
+    job = heartbeat_labor_worker_job(
+        job_id,
+        owner_user_id=identity["userId"],
+        device_id=identity["deviceId"],
+        progress=progress,
+        expected_task_generation_id=generation,
+    )
+    return identity, job, generation
+
+
+@app.get("/api/overseas-payroll/worker/jobs/{job_id}/manifest")
+def get_overseas_payroll_worker_manifest(
+    job_id: str,
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        identity, job, _ = _overseas_payroll_worker_context(
+            job_id,
+            authorization,
+            progress={"status": "running", "message": "正在准备海外薪资文件"},
+        )
+        task_id = str(job.get("runId") or "")
+        task = update_overseas_payroll_task(
+            task_id,
+            owner_user_id=identity["userId"],
+            updater=lambda current: (
+                current
+                if current.get("status") == "succeeded"
+                else {
+                    **current,
+                    "status": "processing",
+                    "statusLabel": "本人核对助手正在下载文件",
+                    "progress": {"status": "running", "message": "正在下载待处理文件"},
+                }
+            ),
+        )
+        return {
+            "task": {
+                "id": task["id"],
+                "toolId": task["toolId"],
+                "toolName": task["toolName"],
+                "country": task["country"],
+                "status": task["status"],
+                "alreadyCompleted": task.get("status") == "succeeded",
+            },
+            "files": overseas_payroll_task_input_downloads(task),
+        }
+    except (FileNotFoundError, LaborWorkerLeaseError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/api/overseas-payroll/worker/tasks/{task_id}/files/{file_id}")
+def download_local_overseas_payroll_worker_input(
+    task_id: str,
+    file_id: str,
+    jobId: str,
+    authorization: str = Header(default=""),
+) -> FileResponse:
+    try:
+        identity, job, _ = _overseas_payroll_worker_context(jobId, authorization)
+        if str(job.get("runId") or "") != task_id:
+            raise LaborWorkerLeaseError("Worker 输入任务不匹配。")
+        task = load_overseas_payroll_task(task_id, owner_user_id=identity["userId"])
+        file = next((item for item in task.get("files", []) if item.get("id") == file_id), None)
+        if not file:
+            raise FileNotFoundError("Worker 输入文件不存在。")
+        path = overseas_payroll_local_file_path(task_id, file_id)
+        if not path.is_file():
+            raise FileNotFoundError("Worker 输入文件不存在。")
+        return FileResponse(path, filename=file["filename"], media_type=file.get("contentType") or "application/octet-stream")
+    except (FileNotFoundError, LaborWorkerLeaseError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/overseas-payroll/worker/jobs/{job_id}/output-intent")
+def create_overseas_payroll_worker_output_intent(
+    job_id: str,
+    payload: dict = Body(...),
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        identity, job, _ = _overseas_payroll_worker_context(
+            job_id,
+            authorization,
+            progress={"status": "running", "message": "正在保存海外薪资处理结果"},
+        )
+        task, intent = prepare_overseas_payroll_output(
+            str(job.get("runId") or ""),
+            owner_user_id=identity["userId"],
+            filename=str(payload.get("filename") or "result.xlsx"),
+            size_bytes=int(payload.get("sizeBytes") or 0),
+            sha256=str(payload.get("sha256") or ""),
+            content_type=str(payload.get("contentType") or "application/octet-stream"),
+        )
+        return {"taskId": task["id"], "intent": intent}
+    except (FileNotFoundError, LaborWorkerLeaseError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.put("/api/overseas-payroll/worker/tasks/{task_id}/output/{output_id}/content")
+async def upload_local_overseas_payroll_worker_output(
+    task_id: str,
+    output_id: str,
+    request: Request,
+    jobId: str,
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        identity, job, _ = _overseas_payroll_worker_context(jobId, authorization)
+        if str(job.get("runId") or "") != task_id:
+            raise LaborWorkerLeaseError("Worker 输出任务不匹配。")
+        task = load_overseas_payroll_task(task_id, owner_user_id=identity["userId"])
+        output = task.get("output") if isinstance(task.get("output"), dict) else None
+        if not output or output.get("id") != output_id:
+            raise FileNotFoundError("Worker 输出记录不存在。")
+        content = await request.body()
+        if len(content) != int(output.get("sizeBytes") or 0):
+            raise ValueError("Worker 输出大小与任务清单不一致。")
+        store_local_overseas_payroll_file(task_id, output_id, content, output=True)
+        return {"ok": True}
+    except (FileNotFoundError, LaborWorkerLeaseError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/overseas-payroll/worker/jobs/{job_id}/output-finalize")
+def finalize_overseas_payroll_worker_output(
+    job_id: str,
+    payload: dict = Body(default={}),
+    authorization: str = Header(default=""),
+) -> dict:
+    try:
+        identity, job, _ = _overseas_payroll_worker_context(job_id, authorization)
+        task = finalize_overseas_payroll_output(
+            str(job.get("runId") or ""),
+            owner_user_id=identity["userId"],
+            summary=str(payload.get("summary") or "处理完成"),
+        )
+        return {"taskId": task["id"], "status": task["status"]}
+    except (FileNotFoundError, LaborWorkerLeaseError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -5161,6 +5335,23 @@ def complete_personal_labor_worker_job(
 ) -> dict:
     _labor_assert_worker_version(x_worker_version)
     try:
+        existing = get_labor_worker_job(job_id)
+        if str(existing.get("jobType") or "reconcile") == "overseas_payroll":
+            identity, leased_job, generation = _overseas_payroll_worker_context(job_id, authorization)
+            task = load_overseas_payroll_task(
+                str(leased_job.get("runId") or ""),
+                owner_user_id=identity["userId"],
+            )
+            if task.get("status") != "succeeded":
+                raise LaborWorkerLeaseError("海外薪资处理结果尚未通过服务端校验，不能完成任务。")
+            job = complete_labor_worker_auxiliary_job(
+                job_id,
+                owner_user_id=identity["userId"],
+                device_id=identity["deviceId"],
+                job_type="overseas_payroll",
+                expected_task_generation_id=generation,
+            )
+            return {"job": _public_labor_worker_job(job)}
         with _leased_worker_job(job_id, authorization) as (identity, leased_job, run_dir, generation):
             _labor_assert_worker_version(x_worker_version, leased_job)
             if str(leased_job.get("jobType") or "reconcile") == "mapping_preflight":
@@ -5229,6 +5420,36 @@ def fail_personal_labor_worker_job(
     authorization: str = Header(default=""),
 ) -> dict:
     try:
+        existing = get_labor_worker_job(job_id)
+        if str(existing.get("jobType") or "reconcile") == "overseas_payroll":
+            identity, leased_job, generation = _overseas_payroll_worker_context(job_id, authorization)
+            job = fail_labor_worker_job(
+                job_id,
+                owner_user_id=identity["userId"],
+                device_id=identity["deviceId"],
+                error_code=str(payload.get("errorCode") or "OVERSEAS_PAYROLL_WORKER_FAILED"),
+                error_message=str(payload.get("errorMessage") or "海外薪资 Worker 任务失败。"),
+                retryable=bool(payload.get("retryable")),
+                expected_task_generation_id=generation,
+            )
+            status = str(job.get("status") or "failed")
+            update_overseas_payroll_task(
+                str(leased_job.get("runId") or ""),
+                owner_user_id=identity["userId"],
+                updater=lambda current: {
+                    **current,
+                    **(
+                        {}
+                        if current.get("status") == "succeeded"
+                        else {
+                            "status": "queued" if status == "retry_wait" else "failed",
+                            "statusLabel": "等待核对助手重试" if status == "retry_wait" else "处理失败",
+                            "error": str(job.get("errorMessage") or "海外薪资处理失败。")[:500],
+                        }
+                    ),
+                },
+            )
+            return {"job": _public_labor_worker_job(job)}
         with _leased_worker_job(job_id, authorization) as (identity, leased_job, _, generation):
             job = fail_labor_worker_job(
                 job_id,

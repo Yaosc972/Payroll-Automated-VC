@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -241,42 +241,49 @@ class PersonalLaborWorker:
         try:
             self._write_status("processing", "正在处理本人核对任务。", job=job)
             self.logger.info("claimed job=%s run=%s attempt=%s", job_id, run_id, job.get("attempt"))
-            is_mapping_preflight = str(job.get("jobType") or "reconcile") == "mapping_preflight"
-            if is_mapping_preflight:
-                self._update_progress_state(progress_state, phase="claimed", message="Worker 已领取任务。")
-                self._write_status("processing", "正在下载 Excel 工作表。", job=job)
-                self._update_progress_state(
-                    progress_state,
-                    phase="downloading_excel",
-                    message="正在下载 Excel。",
-                )
-            self._download_input(job_id, run_id)
-            if is_mapping_preflight:
-                self._write_status("processing", "正在读取 Excel 工作表和字段。", job=job)
-                self._update_progress_state(
-                    progress_state,
-                    phase="reading_workbook",
-                    message="正在读取工作表。",
-                )
+            job_type = str(job.get("jobType") or "reconcile")
+            is_mapping_preflight = job_type == "mapping_preflight"
+            is_overseas_payroll = job_type == "overseas_payroll"
+            if is_overseas_payroll:
+                self._write_status("processing", "正在处理海外薪资文件。", job=job)
+                self._process_overseas_payroll(job)
                 self._assert_worker_lease(lease_lost)
-                self._upload_mapping_preflight_result(job_id, run_id, progress_state=progress_state)
             else:
-                metrics_path = self.data_root / "worker-temp" / f"{job_id}-metrics.jsonl"
-                metrics_path.parent.mkdir(parents=True, exist_ok=True)
-                metrics_path.unlink(missing_ok=True)
-                previous_metrics_path = os.environ.get("LABOR_RUNTIME_METRICS_PATH")
-                os.environ["LABOR_RUNTIME_METRICS_PATH"] = str(metrics_path)
-                try:
-                    if self.runner(run_id) is False:
-                        raise RuntimeError("本地核对引擎返回失败状态。")
-                finally:
-                    if previous_metrics_path is None:
-                        os.environ.pop("LABOR_RUNTIME_METRICS_PATH", None)
-                    else:
-                        os.environ["LABOR_RUNTIME_METRICS_PATH"] = previous_metrics_path
-                self._assert_worker_lease(lease_lost)
-                self._upload_runtime_metrics(job_id, metrics_path)
-                self._upload_result(job_id, run_id)
+                if is_mapping_preflight:
+                    self._update_progress_state(progress_state, phase="claimed", message="Worker 已领取任务。")
+                    self._write_status("processing", "正在下载 Excel 工作表。", job=job)
+                    self._update_progress_state(
+                        progress_state,
+                        phase="downloading_excel",
+                        message="正在下载 Excel。",
+                    )
+                self._download_input(job_id, run_id)
+                if is_mapping_preflight:
+                    self._write_status("processing", "正在读取 Excel 工作表和字段。", job=job)
+                    self._update_progress_state(
+                        progress_state,
+                        phase="reading_workbook",
+                        message="正在读取工作表。",
+                    )
+                    self._assert_worker_lease(lease_lost)
+                    self._upload_mapping_preflight_result(job_id, run_id, progress_state=progress_state)
+                else:
+                    metrics_path = self.data_root / "worker-temp" / f"{job_id}-metrics.jsonl"
+                    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+                    metrics_path.unlink(missing_ok=True)
+                    previous_metrics_path = os.environ.get("LABOR_RUNTIME_METRICS_PATH")
+                    os.environ["LABOR_RUNTIME_METRICS_PATH"] = str(metrics_path)
+                    try:
+                        if self.runner(run_id) is False:
+                            raise RuntimeError("本地核对引擎返回失败状态。")
+                    finally:
+                        if previous_metrics_path is None:
+                            os.environ.pop("LABOR_RUNTIME_METRICS_PATH", None)
+                        else:
+                            os.environ["LABOR_RUNTIME_METRICS_PATH"] = previous_metrics_path
+                    self._assert_worker_lease(lease_lost)
+                    self._upload_runtime_metrics(job_id, metrics_path)
+                    self._upload_result(job_id, run_id)
             self._assert_worker_lease(lease_lost)
             completed = self.client.post(f"{self.api_url}/api/labor/worker/jobs/{job_id}/complete", headers=self.headers)
             completed.raise_for_status()
@@ -320,6 +327,95 @@ class PersonalLaborWorker:
             self.logger.warning("runtime metrics upload failed job=%s: %s", job_id, exc)
         finally:
             metrics_path.unlink(missing_ok=True)
+
+    def _process_overseas_payroll(self, job: dict[str, Any]) -> None:
+        from bonus_platform.engine.overseas_payroll.service import process_files
+
+        job_id = str(job["id"])
+        manifest_response = self.client.get(
+            f"{self.api_url}/api/overseas-payroll/worker/jobs/{job_id}/manifest",
+            headers=self.headers,
+        )
+        manifest_response.raise_for_status()
+        manifest = manifest_response.json()
+        task = manifest.get("task") if isinstance(manifest.get("task"), dict) else {}
+        entries = list(manifest.get("files") or [])
+        if task.get("alreadyCompleted"):
+            return
+        if not task.get("toolId") or not entries:
+            raise ValueError("海外薪资任务清单不完整。")
+
+        temp_dir = self.data_root / "worker-temp" / f"{job_id}-payroll"
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+        temp_dir.mkdir(parents=True)
+        try:
+            files: list[tuple[str, bytes]] = []
+            for entry in entries:
+                filename = Path(str(entry.get("filename") or "input.bin").replace("\\", "/")).name
+                destination = temp_dir / f"{str(entry.get('id') or len(files))}-{filename}"
+                digest = hashlib.sha256()
+                size = 0
+                download_url, download_headers = self._payroll_transfer_target(
+                    str(entry.get("downloadUrl") or ""), job_id
+                )
+                with self.client.stream("GET", download_url, headers=download_headers) as response:
+                    response.raise_for_status()
+                    with destination.open("wb") as handle:
+                        for chunk in response.iter_bytes():
+                            handle.write(chunk)
+                            digest.update(chunk)
+                            size += len(chunk)
+                if size != int(entry.get("sizeBytes") or -1) or digest.hexdigest() != str(entry.get("sha256") or ""):
+                    raise ValueError(f"海外薪资任务文件校验失败：{filename}")
+                files.append((filename, destination.read_bytes()))
+
+            result = process_files(str(task["toolId"]), files)
+            output_sha = hashlib.sha256(result.content).hexdigest()
+            intent_response = self.client.post(
+                f"{self.api_url}/api/overseas-payroll/worker/jobs/{job_id}/output-intent",
+                headers=self.headers,
+                json={
+                    "filename": result.filename,
+                    "sizeBytes": len(result.content),
+                    "sha256": output_sha,
+                    "contentType": result.media_type,
+                },
+            )
+            intent_response.raise_for_status()
+            intent = intent_response.json().get("intent") or {}
+            upload_url, auth_headers = self._payroll_transfer_target(str(intent.get("signedUrl") or ""), job_id)
+            upload_headers = {**auth_headers, **dict(intent.get("headers") or {})}
+            upload_response = self.client.request(
+                str(intent.get("method") or "PUT"),
+                upload_url,
+                headers=upload_headers,
+                content=result.content,
+            )
+            upload_response.raise_for_status()
+            finalized = self.client.post(
+                f"{self.api_url}/api/overseas-payroll/worker/jobs/{job_id}/output-finalize",
+                headers=self.headers,
+                json={"summary": result.summary},
+            )
+            finalized.raise_for_status()
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _payroll_transfer_target(self, raw_url: str, job_id: str) -> tuple[str, dict[str, str]]:
+        if not raw_url:
+            raise ValueError("海外薪资任务缺少文件传输地址。")
+        if raw_url.startswith("/"):
+            parsed = urlparse(f"{self.api_url}{raw_url}")
+            query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+            query["jobId"] = job_id
+            return urlunparse(parsed._replace(query=urlencode(query))), self.headers
+        parsed = urlparse(raw_url)
+        if parsed.scheme != "https" and not (
+            parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}
+        ):
+            raise ValueError("海外薪资任务包含不安全的私有存储地址。")
+        return raw_url, {}
 
     def run_forever(self, *, interval_seconds: float = 2.0) -> None:
         delay = max(1.0, interval_seconds)

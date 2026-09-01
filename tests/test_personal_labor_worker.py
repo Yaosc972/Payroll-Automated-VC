@@ -208,6 +208,90 @@ def test_personal_worker_processes_one_job_and_checks_update_after_completion(tm
     assert json.loads((tmp_path / "worker-update.json").read_text())["version"] == "0.2.0"
 
 
+def test_personal_worker_processes_overseas_payroll_via_private_storage(tmp_path, monkeypatch):
+    from bonus_platform.engine.overseas_payroll import service as payroll_service
+
+    source = b"private-payroll-pdf"
+    output = b"private-payroll-xlsx"
+    storage_authorization = []
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("/version"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/claim"):
+            return httpx.Response(
+                200,
+                json={"job": {"id": "job-payroll", "runId": "task-payroll", "jobType": "overseas_payroll", "attempt": 1}},
+            )
+        if request.url.path.endswith("/manifest"):
+            return httpx.Response(
+                200,
+                json={
+                    "task": {"id": "task-payroll", "toolId": "swedish_tax"},
+                    "files": [
+                        {
+                            "id": "file-1",
+                            "filename": "tax.pdf",
+                            "sizeBytes": len(source),
+                            "sha256": hashlib.sha256(source).hexdigest(),
+                            "downloadUrl": "https://storage.example.test/private/input",
+                        }
+                    ],
+                },
+            )
+        if request.url.host == "storage.example.test" and request.method == "GET":
+            storage_authorization.append(request.headers.get("authorization"))
+            return httpx.Response(200, content=source)
+        if request.url.path.endswith("/output-intent"):
+            assert request.headers["authorization"] == "Bearer secret"
+            return httpx.Response(
+                200,
+                json={
+                    "intent": {
+                        "signedUrl": "https://storage.example.test/private/output",
+                        "method": "PUT",
+                        "headers": {"content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+                    }
+                },
+            )
+        if request.url.host == "storage.example.test" and request.method == "PUT":
+            storage_authorization.append(request.headers.get("authorization"))
+            assert request.content == output
+            return httpx.Response(200)
+        if request.url.path.endswith("/output-finalize"):
+            return httpx.Response(200, json={"status": "succeeded"})
+        if request.url.path.endswith("/complete"):
+            return httpx.Response(200, json={"job": {"id": "job-payroll", "status": "succeeded"}})
+        raise AssertionError(request.url)
+
+    monkeypatch.setattr(
+        payroll_service,
+        "process_files",
+        lambda tool_id, files: payroll_service.ProcessResult(
+            "result.xlsx",
+            output,
+            "1 名员工",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ) if tool_id == "swedish_tax" and files == [("tax.pdf", source)] else None,
+    )
+    worker = PersonalLaborWorker(
+        api_url="https://example.test",
+        token="secret",
+        worker_version="0.3.15",
+        data_root=tmp_path,
+        runner=lambda _: pytest.fail("labor runner should not execute"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    completed = worker.process_once()
+
+    assert completed["status"] == "succeeded"
+    assert storage_authorization == [None, None]
+    assert ("POST", "/api/overseas-payroll/worker/jobs/job-payroll/output-finalize") in calls
+
+
 def test_personal_worker_downloads_p1_input_from_private_signed_url_and_materializes_paths(tmp_path):
     content = b"private-pdf-input"
     seen_storage_authorization = []

@@ -314,6 +314,43 @@ class PostgresLaborWorkerStore:
             conn.commit()
         return self._leased_row(row)
 
+    def complete_auxiliary(
+        self,
+        job_id: str,
+        owner: str,
+        device: str,
+        job_type: str,
+        expected_task_generation_id: str = "",
+    ) -> dict[str, Any]:
+        normalized_job_type = _job_type(job_type)
+        if normalized_job_type in {"reconcile", "mapping_preflight"}:
+            raise PermissionError("正式核对与字段预检必须使用各自的完成通道。")
+        existing = self.get(job_id)
+        generation = str(expected_task_generation_id or "").strip()
+        if existing["jobType"] != normalized_job_type:
+            raise PermissionError("Worker 任务类型不匹配。")
+        if existing["status"] == "succeeded":
+            if (
+                existing["ownerUserId"] != owner
+                or existing["claimedDeviceId"] != device
+                or existing["taskGenerationId"] != generation
+            ):
+                raise PermissionError("任务不属于当前 Worker，或任务代次已经失效。")
+            return existing
+        with self._connect() as conn:
+            row = conn.execute(
+                """update labor_jobs set status='succeeded', finished_at=now(), retryable=false,
+                       lease_expires_at=null, updated_at=now()
+                   where id=%s and job_type=%s and status='running' and worker_id=%s
+                     and metadata_snapshot->>'ownerUserId'=%s
+                     and coalesce(metadata_snapshot->>'taskGenerationId','')=%s
+                     and lease_expires_at > now()
+                   returning *""",
+                (job_id, normalized_job_type, device, owner, generation),
+            ).fetchone()
+            conn.commit()
+        return self._leased_row(row)
+
     def fail(
         self,
         job_id: str,
@@ -547,6 +584,6 @@ def _version_code(value: str) -> int:
 
 def _job_type(value: str) -> str:
     normalized = str(value or "reconcile").strip().lower()
-    if normalized not in {"reconcile", "mapping_preflight"}:
+    if normalized not in {"reconcile", "mapping_preflight", "overseas_payroll"}:
         raise PermissionError("未知的海外劳务 Worker 任务类型。")
     return normalized
