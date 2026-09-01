@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import hashlib
+import json
 import time
 from types import SimpleNamespace
 
@@ -259,6 +260,28 @@ def test_private_storage_enqueue_runs_in_vercel_function(monkeypatch: pytest.Mon
     assert response.status_code == 200
     assert response.json()["task"]["status"] == "succeeded"
     assert statuses == ["queued"]
+
+
+def test_private_task_manifest_reads_bypass_storage_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    task = {
+        "id": "payroll_task_cloud",
+        "ownerUserId": "user-1",
+        "toolId": "swedish_tax",
+        "status": "ready",
+        "files": [],
+        "output": None,
+    }
+    observed = {}
+
+    def get_manifest(_key, **kwargs):
+        observed.update(kwargs)
+        return json.dumps(task).encode("utf-8")
+
+    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(tasks, "get_labor_supabase_private_object", get_manifest)
+
+    assert tasks.load_task("payroll_task_cloud", owner_user_id="user-1")["status"] == "ready"
+    assert observed == {"bypass_cache": True}
 
 
 def test_private_task_inputs_are_downloaded_and_hash_verified(monkeypatch: pytest.MonkeyPatch) -> None:

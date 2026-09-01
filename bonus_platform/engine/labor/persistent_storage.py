@@ -415,8 +415,10 @@ def put_labor_supabase_private_object(
     return _supabase_upload_bytes(normalized_key, content, content_type=content_type)
 
 
-def get_labor_supabase_private_object(object_key: str) -> bytes | None:
+def get_labor_supabase_private_object(object_key: str, *, bypass_cache: bool = False) -> bytes | None:
     normalized_key = _normalize_labor_p1_object_key(object_key)
+    if bypass_cache:
+        return _supabase_download_bytes(normalized_key, bypass_cache=True)
     return _supabase_download_bytes(normalized_key)
 
 
@@ -658,11 +660,15 @@ def _supabase_upload_bytes(object_path: str, content: bytes, *, content_type: st
         return {}
 
 
-def _supabase_download_bytes(object_path: str) -> bytes | None:
+def _supabase_download_bytes(object_path: str, *, bypass_cache: bool = False) -> bytes | None:
     url = _supabase_storage_url(f"object/{labor_supabase_bucket()}/{object_path}")
+    headers = _supabase_headers()
+    if bypass_cache:
+        url = f"{url}?cache_bust={uuid4().hex}"
+        headers.update({"cache-control": "no-cache, no-store", "pragma": "no-cache"})
     response = _shared_supabase_http_client().get(
         url,
-        headers=_supabase_headers(),
+        headers=headers,
     )
     if response.status_code == 404:
         return None

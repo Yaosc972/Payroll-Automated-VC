@@ -113,7 +113,13 @@ def load_task(task_id: str, *, owner_user_id: str = "") -> dict[str, Any]:
     if labor_supabase_storage_enabled():
         if not owner_user_id:
             raise PermissionError("读取生产任务必须提供任务归属用户。")
-        payload = get_labor_supabase_private_object(_manifest_object_key(owner_user_id, normalized))
+        # Task manifests are mutable and finalize/enqueue can run in separate
+        # serverless invocations only milliseconds apart. Bypass the storage
+        # CDN so enqueue observes the status written by finalize immediately.
+        payload = get_labor_supabase_private_object(
+            _manifest_object_key(owner_user_id, normalized),
+            bypass_cache=True,
+        )
         if payload is None:
             raise FileNotFoundError("海外薪资处理任务不存在。")
         task = json.loads(payload.decode("utf-8"))
