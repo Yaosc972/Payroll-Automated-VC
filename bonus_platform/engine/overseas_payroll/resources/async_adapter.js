@@ -1,6 +1,9 @@
 (function () {
   'use strict';
 
+  document.getElementById('sidefoot')?.remove();
+  document.getElementById('hostwarn')?.remove();
+
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function sha256(file) {
