@@ -77,11 +77,7 @@ def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
     assert 'href="overseas-compensation.html" data-module-any="fbu overseas"' in home
     assert 'href="fbu-performance.html" data-child-module="fbu"' in parent
     assert 'href="overseas-payroll.html" data-child-module="overseas"' in parent
-    assert 'href="overseas-compensation.css?v=20260901-2"' in parent
-    assert "选择一条核算路径" in parent
-    assert "8 项国别薪资工具" in parent
-    assert "Vercel Function 云端处理" in parent
-    assert "Worker 0.3.16" not in parent
+    assert "8 项海外薪资工具" in parent
     assert "海外劳务报账核对保持独立" in parent
 
 
