@@ -6633,15 +6633,16 @@ body.filters-collapsed .filter-body {
 .overseas-payroll-module .module-contact {
   display: flex;
   align-items: center;
-  gap: 8px;
+  min-height: 36px;
+  gap: 10px;
 }
 
 .overseas-payroll-module .module-contact-avatar {
   position: relative;
   display: inline-grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   place-items: center;
   border: 1px solid rgba(255, 255, 255, 0.76);
   border-radius: 50%;
@@ -6668,20 +6669,42 @@ body.filters-collapsed .filter-body {
 
 .overseas-payroll-module .module-contact-copy {
   display: grid;
-  gap: 1px;
+  align-content: center;
+  gap: 3px;
+  min-width: 0;
 }
 
 .overseas-payroll-module .module-contact-copy strong {
   color: #0f172a;
   font-size: 12px;
-  line-height: 1.2;
+  line-height: 1.15;
+  white-space: nowrap;
 }
 
 .overseas-payroll-module .module-contact-copy small {
   color: #64748b;
   font-size: 10px;
   font-weight: var(--weight-medium);
-  line-height: 1.2;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+.overseas-payroll-module .module-card-top {
+  align-items: center;
+  gap: 12px;
+}
+
+.overseas-payroll-module .module-status,
+.overseas-payroll-module .module-version {
+  white-space: nowrap;
+}
+
+.overseas-payroll-module .module-status {
+  min-width: 0;
+}
+
+.overseas-payroll-module .module-version {
+  flex: 0 0 auto;
 }
 
 .saas-module-card .module-action {

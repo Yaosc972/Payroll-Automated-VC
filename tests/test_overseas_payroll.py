@@ -82,6 +82,8 @@ def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
     assert "夏盈盈" in parent
     assert "海外薪酬组" in parent
     assert "module-contact-avatar" in parent
+    assert "Worker 0.3.16" not in parent
+    assert 'href="styles.css?v=31"' in parent
     assert "/api/workbench/module-contacts/overseas-payroll" in (static_root / "overseas-compensation.js").read_text(encoding="utf-8")
     assert "海外劳务报账核对保持独立" in parent
 
