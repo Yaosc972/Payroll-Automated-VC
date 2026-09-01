@@ -1996,6 +1996,7 @@ def _protected_static_page_access_response(request: Request) -> Response | None:
         "/recruitment.html": {"module_id": "recruitment", "label": "全球招聘奖金核算"},
         "/china-employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
         "/employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
+        "/overseas-compensation.html": {"module_ids": ("fbu", "overseas"), "label": "海外薪酬核算"},
         "/admin.html": {"admin_only": True, "label": "后台管理"},
     }.get(path)
     if not page_config:
@@ -2020,6 +2021,8 @@ def _protected_static_page_access_response(request: Request) -> Response | None:
         except KeyError:
             current = {}
         can_enter = any(role.get("id") == "admin" for role in current.get("roles", []))
+    elif page_config.get("module_ids"):
+        can_enter = any(_user_can_enter_module(user_id, module_id) for module_id in page_config["module_ids"])
     else:
         can_enter = _user_can_enter_module(user_id, str(page_config["module_id"]))
     if can_enter:
@@ -2385,6 +2388,12 @@ def _workbench_home_auth_response(request: Request) -> Response | None:
 def _labor_auth_access_response(request: Request) -> Response | None:
     if not labor_auth_required() or not _labor_browser_auth_path(request.url.path):
         return None
+    is_overseas_payroll = request.url.path.rstrip("/") == "/overseas-payroll.html" or (
+        request.url.path.startswith("/api/overseas-payroll/")
+        or request.url.path == "/api/tools"
+        or request.url.path.startswith("/api/tool/")
+    )
+    module_label = "海外薪资工作台" if is_overseas_payroll else "海外劳务报账核对"
     current = _labor_current_user_from_request(request)
     if current is None:
         if request.url.path.startswith("/api/"):
@@ -2393,7 +2402,7 @@ def _labor_auth_access_response(request: Request) -> Response | None:
                     "detail": _labor_request_error(
                         message="请先登录西格玛工作台。",
                         error_code="LABOR_AUTH_REQUIRED",
-                        next_action="登录后重新进入海外劳务报账核对。",
+                        next_action=f"登录后重新进入{module_label}。",
                     )
                 },
                 status_code=401,
@@ -2407,7 +2416,7 @@ def _labor_auth_access_response(request: Request) -> Response | None:
             return JSONResponse(
                 {
                     "detail": _labor_request_error(
-                        message="当前用户没有海外劳务报账核对权限。",
+                        message=f"当前用户没有{module_label}权限。",
                         error_code="LABOR_MODULE_FORBIDDEN",
                         next_action="请联系系统管理员授予海外报账管理员角色。",
                     )
@@ -2415,7 +2424,7 @@ def _labor_auth_access_response(request: Request) -> Response | None:
                 status_code=403,
             )
         return HTMLResponse(
-            "<h1>无权限访问：海外劳务报账核对</h1><p>请联系系统管理员授予海外报账管理员角色。</p>",
+            f"<h1>无权限访问：{module_label}</h1><p>请联系系统管理员授予海外报账管理员角色。</p>",
             status_code=403,
         )
     request.state.labor_current_user = current

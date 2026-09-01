@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN" data-module-id="overseas-compensation">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1280" />
+    <title>海外薪酬核算 · HRAS 全球薪酬核算工作台</title>
+    <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
+    <link rel="stylesheet" href="styles.css?v=29" />
+    <link rel="stylesheet" href="feedback-widget.css?v=20260820-13" />
+  </head>
+  <body class="portal-shell dashboard-shell">
+    <div class="portal-mesh" aria-hidden="true">
+      <span class="mesh-orb cyan"></span>
+      <span class="mesh-orb violet"></span>
+      <span class="mesh-orb blue"></span>
+      <span class="mesh-grid"></span>
+    </div>
+
+    <div class="dashboard-frame" aria-label="海外薪酬核算模块导航">
+      <aside class="dashboard-sidebar" aria-label="主导航">
+        <a class="dashboard-logo" href="/" aria-label="返回 HRAS 全球薪酬核算工作台首页">
+          <img src="assets/workbench-logo-2026.png" alt="" />
+          <span>
+            <strong>HRAS 全球薪酬核算工作台</strong>
+            <small>HRAS Global Payroll Workbench</small>
+          </span>
+        </a>
+        <nav class="dashboard-nav">
+          <p class="nav-group-label">控制台</p>
+          <a href="/"><span>工作台</span><b>Overview</b></a>
+          <p class="nav-group-label">海外薪酬核算</p>
+          <a class="active" href="overseas-compensation.html"><span>模块概览</span><b>Overview</b></a>
+          <a href="fbu-performance.html" data-child-module="fbu"><span>FBU美洲绩效奖金核算</span><b>FBU Bonus</b></a>
+          <a href="overseas-payroll.html" data-child-module="overseas"><span>海外薪资工作台</span><b>Payroll Tools</b></a>
+          <p class="nav-group-label">独立模块</p>
+          <a href="overseas-labor.html" data-child-module="overseas"><span>海外劳务报账核对</span><b>Invoice Audit</b></a>
+        </nav>
+      </aside>
+
+      <main class="dashboard-main">
+        <header class="dashboard-topbar">
+          <div><p>当前模块</p><strong>海外薪酬核算</strong></div>
+          <div class="dashboard-search overseas-compensation-context">
+            <span>模块边界</span>
+            <strong>绩效奖金与海外薪资工具</strong>
+            <small>海外劳务报账核对保持独立，不纳入本模块。</small>
+          </div>
+          <a class="module-back-link" href="/">返回工作台</a>
+        </header>
+
+        <section class="welcome-panel overseas-compensation-hero">
+          <img class="dashboard-hras-watermark" src="assets/hras-logo-original.svg" alt="" aria-hidden="true" />
+          <div>
+            <p class="portal-kicker">Overseas Compensation</p>
+            <h1>海外薪酬核算</h1>
+            <span>统一承载 FBU 美洲绩效奖金核算与海外薪资工作台，两个子模块沿用各自现有权限和业务链路。</span>
+          </div>
+        </section>
+
+        <section class="dashboard-section" aria-labelledby="overseasModulesTitle">
+          <div class="section-bar">
+            <div><p>Modules</p><h2 id="overseasModulesTitle">选择子模块</h2></div>
+          </div>
+          <div class="saas-module-grid overseas-compensation-grid">
+            <a class="saas-module-card fbu-module" href="fbu-performance.html" data-child-module="fbu">
+              <div class="module-card-top">
+                <span class="module-status available">Available · 已上线</span>
+                <span class="module-version">V1.0</span>
+              </div>
+              <div class="module-copy">
+                <p>FBU Americas Performance</p>
+                <h2>FBU美洲绩效奖金核算</h2>
+                <span>月度活动、数据诊断、异常队列与绩效奖金结果复核。</span>
+              </div>
+              <dl>
+                <div><dt>最新批次</dt><dd>2026-05</dd></div>
+                <div><dt>状态</dt><dd>已上线</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
+
+            <a class="saas-module-card overseas-payroll-module" href="overseas-payroll.html" data-child-module="overseas">
+              <div class="module-card-top">
+                <span class="module-status available">Integrated · 已集成</span>
+                <span class="module-version">Worker 0.3.16</span>
+              </div>
+              <div class="module-copy">
+                <p>Overseas Payroll Workbench</p>
+                <h2>海外薪资工作台</h2>
+                <span>8 项海外薪资工具，支持异步私有直传、任务队列处理与签名结果下载。</span>
+              </div>
+              <dl>
+                <div><dt>工具数量</dt><dd>8</dd></div>
+                <div><dt>处理方式</dt><dd>异步任务</dd></div>
+              </dl>
+              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
+            </a>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="overseas-compensation.js?v=20260901-1"></script>
+    <script src="feedback-widget.js?v=20260820-13"></script>
+  </body>
+</html>

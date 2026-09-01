@@ -10878,6 +10878,35 @@ html:has(.china-employee-payroll-shell),
   box-shadow: 0 28px 76px rgba(15, 23, 42, 0.12), var(--inner-edge-glow);
 }
 
+.module-back-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border-radius: 12px;
+  padding: 0 16px;
+  color: #ffffff;
+  background: #1e3a8a;
+  font-size: 12px;
+  font-weight: var(--weight-black);
+  text-decoration: none;
+}
+
+.overseas-compensation-context strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: var(--weight-black);
+}
+
+.overseas-compensation-hero {
+  min-height: 184px;
+}
+
+.overseas-compensation-grid {
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  max-width: 920px;
+}
+
 .saas-module-card .module-version {
   border-radius: 999px;
   padding: 6px 8px;

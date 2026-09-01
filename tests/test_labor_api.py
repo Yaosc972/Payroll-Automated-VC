@@ -5776,14 +5776,19 @@ def test_labor_compare_endpoint_returns_running_status_before_polling(monkeypatc
     monkeypatch.setattr(app_module, "_run_labor_extract_compare", lambda run_id: queued.setdefault("completed", run_id))
     # 拦截 run_in_executor，直接同步调用
     import asyncio
-    original_run_in_executor = asyncio.get_event_loop().run_in_executor
+    try:
+        event_loop = asyncio.get_event_loop()
+    except RuntimeError:
+        event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(event_loop)
+    original_run_in_executor = event_loop.run_in_executor
     def fake_run_in_executor(executor, fn, *args):
         fn(*args)
         # 返回一个已完成的 future
         f = asyncio.Future()
         f.set_result(None)
         return f
-    monkeypatch.setattr(asyncio.get_event_loop(), "run_in_executor", fake_run_in_executor)
+    monkeypatch.setattr(event_loop, "run_in_executor", fake_run_in_executor)
 
     client = TestClient(app)
     run = client.post(

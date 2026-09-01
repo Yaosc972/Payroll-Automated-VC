@@ -46,9 +46,9 @@
             <span>中国区外包工薪酬核算</span>
             <b>CN Vendor Payroll</b>
           </a>
-          <a href="fbu-performance.html" data-module-id="fbu">
-            <span>FBU美洲绩效奖金核算</span>
-            <b>FBU Bonus</b>
+          <a href="overseas-compensation.html" data-module-any="fbu overseas">
+            <span>海外薪酬核算</span>
+            <b>Overseas Payroll</b>
           </a>
           <a href="overseas-labor.html" data-module-id="overseas">
             <span>海外劳务报账核对</span>
@@ -100,7 +100,7 @@
           <div>
             <p class="portal-kicker">Enterprise Payroll Intelligence</p>
             <h1>欢迎回来，<span class="welcome-title-brand">HRAS</span> 全球薪酬核算工作台已准备就绪</h1>
-            <span>统一管理招聘激励、正式工薪酬、外包工薪酬、FBU绩效奖金、海外劳务报账与社保报盘。</span>
+            <span>统一管理招聘激励、正式工薪酬、外包工薪酬、海外薪酬、海外劳务报账与社保报盘。</span>
             <div class="workday-focus" aria-label="今日关注">
               <b>今日关注</b>
               <span>异常复核</span>
@@ -170,19 +170,19 @@
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
-            <a class="saas-module-card fbu-module" href="fbu-performance.html" data-module-id="fbu">
+            <a class="saas-module-card overseas-compensation-module" href="overseas-compensation.html" data-module-any="fbu overseas">
               <div class="module-card-top">
                 <span class="module-status available">Available · 已上线</span>
-                <span class="module-version">V1.0</span>
+                <span class="module-version">2 个子模块</span>
               </div>
               <div class="module-copy">
-                <p>FBU Americas Performance</p>
-                <h2>FBU美洲绩效奖金核算</h2>
-                <span>月度活动、数据诊断、异常队列与绩效奖金结果复核。</span>
+                <p>Overseas Compensation</p>
+                <h2>海外薪酬核算</h2>
+                <span>统一进入 FBU 美洲绩效奖金核算与海外薪资工作台。</span>
               </div>
               <dl>
-                <div><dt>最新批次</dt><dd>2026-05</dd></div>
-                <div><dt>状态</dt><dd>已上线</dd></div>
+                <div><dt>绩效奖金</dt><dd>FBU 美洲</dd></div>
+                <div><dt>薪资工具</dt><dd>8 项</dd></div>
               </dl>
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
@@ -406,6 +406,19 @@
           if (status && !allowed) status.textContent = module.enabled ? 'Locked · 无权限' : 'Closed · 未开放';
         });
 
+        document.querySelectorAll('a[data-module-any]').forEach((entry) => {
+          const moduleIds = entry.dataset.moduleAny.split(/\s+/).filter(Boolean);
+          const allowed = moduleIds.some(canEnterModule);
+          entry.dataset.originalHref = entry.getAttribute('href') || '#';
+          entry.classList.toggle('permission-locked', !allowed);
+          entry.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+          entry.href = allowed ? entry.dataset.originalHref : '#';
+          const action = entry.querySelector('.module-action span');
+          if (action) action.textContent = allowed ? '进入模块' : '无权限进入';
+          const status = entry.querySelector('.module-status');
+          if (status && !allowed) status.textContent = 'Locked · 无权限';
+        });
+
         document.addEventListener('click', (event) => {
           const entry = event.target.closest('a[data-module-id]');
           if (!entry || canEnterModule(entry.dataset.moduleId)) return;
@@ -417,21 +430,34 @@
           if (hint) hint.textContent = hintText;
         });
 
+        document.addEventListener('click', (event) => {
+          const entry = event.target.closest('a[data-module-any]');
+          if (!entry) return;
+          const allowed = entry.dataset.moduleAny.split(/\s+/).filter(Boolean).some(canEnterModule);
+          if (allowed) return;
+          event.preventDefault();
+          const hint = document.getElementById('searchHint');
+          if (hint) hint.textContent = '当前用户没有海外薪酬核算下任一子模块权限';
+        });
+
         const search = document.getElementById('dashboardSearch');
         const hint = document.getElementById('searchHint');
         const shortcuts = [
+          { keys: ['海外薪酬', '海外工资', 'overseas payroll'], moduleIds: ['fbu', 'overseas'], href: 'overseas-compensation.html', label: '海外薪酬核算' },
           { keys: ['fbu', '绩效', '美洲'], moduleId: 'fbu', href: 'fbu-performance.html', label: 'FBU美洲绩效奖金核算' },
           { keys: ['招聘', '内推', 'recruit'], moduleId: 'recruitment', href: 'recruitment.html', label: '全球招聘奖金核算' },
           { keys: ['正式', '正式工', 'employee', '餐补'], moduleId: 'employee', href: 'china-employee-payroll.html', label: '中国区正式工薪酬核算' },
           { keys: ['外包', '国内', '薪酬', '劳务工'], moduleId: 'domestic', href: 'domestic-labor.html', label: '中国区外包工薪酬核算' },
-          { keys: ['海外', '报账', 'pdf', 'invoice'], moduleId: 'overseas', href: 'overseas-labor.html', label: '海外劳务报账核对' },
+          { keys: ['海外劳务', '报账', 'pdf', 'invoice'], moduleId: 'overseas', href: 'overseas-labor.html', label: '海外劳务报账核对' },
           { keys: ['社保', '增员', '报盘', 'social'], moduleId: 'social_insurance', href: 'social-insurance.html', label: '社保报盘工作台' },
           { keys: ['后台', '管理', '权限', 'admin'], href: 'admin.html', label: '后台管理', adminOnly: true },
         ];
         search?.addEventListener('input', () => {
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
-          const blocked = (match?.moduleId && !canEnterModule(match.moduleId)) || (match?.adminOnly && !isSystemAdmin);
+          const blocked = (match?.moduleId && !canEnterModule(match.moduleId))
+            || (match?.moduleIds && !match.moduleIds.some(canEnterModule))
+            || (match?.adminOnly && !isSystemAdmin);
           hint.textContent = match ? (blocked ? `无权限进入：${match.label}` : `按 Enter 进入：${match.label}`) : '可输入 FBU、招聘、正式工、外包、海外、社保，按 Enter 快速进入模块';
         });
         search?.addEventListener('keydown', (event) => {
@@ -439,7 +465,9 @@
           const value = search.value.trim().toLowerCase();
           const match = shortcuts.find(item => item.keys.some(key => value.includes(key)));
           if (!match) return;
-          if ((match.moduleId && !canEnterModule(match.moduleId)) || (match.adminOnly && !isSystemAdmin)) {
+          if ((match.moduleId && !canEnterModule(match.moduleId))
+            || (match.moduleIds && !match.moduleIds.some(canEnterModule))
+            || (match.adminOnly && !isSystemAdmin)) {
             hint.textContent = `当前用户无权限或模块未开放：${match.label}`;
             return;
           }
