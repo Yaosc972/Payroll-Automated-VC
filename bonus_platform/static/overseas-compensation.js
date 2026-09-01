@@ -14,7 +14,7 @@
       const avatarUrl = String(payload.contact?.avatarUrl || '').trim();
       if (!avatarUrl.startsWith('/api/workbench/module-contacts/')) return;
       avatar.addEventListener('load', () => {
-        avatar.hidden = false;
+        avatar.classList.add('is-loaded');
         initial.hidden = true;
       }, { once: true });
       avatar.src = avatarUrl;
