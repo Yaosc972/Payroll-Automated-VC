@@ -167,3 +167,120 @@ def test_local_async_task_upload_process_and_download(tmp_path, monkeypatch: pyt
         response = client.get(download["signedUrl"])
         assert response.content == result.content
     asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def test_cloud_task_downloads_processes_and_persists_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = b"private-object-input"
+    result = service.ProcessResult(
+        filename="cloud-result.xlsx",
+        content=b"private-object-output",
+        summary="云端处理完成",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    state = {
+        "id": "payroll_task_cloud",
+        "ownerUserId": "user-1",
+        "toolId": "swedish_tax",
+        "status": "queued",
+        "files": [{"id": "file-1", "filename": "tax.pdf"}],
+        "output": None,
+    }
+    stored = {}
+
+    def update(_task_id, *, owner_user_id, updater):
+        assert owner_user_id == "user-1"
+        state.update(updater(dict(state)))
+        return dict(state)
+
+    def prepare(_task_id, *, owner_user_id, filename, size_bytes, sha256, content_type):
+        assert owner_user_id == "user-1"
+        state["output"] = {"id": "output-1", "filename": filename}
+        assert size_bytes == len(result.content)
+        assert sha256 == hashlib.sha256(result.content).hexdigest()
+        assert content_type == result.media_type
+        return dict(state), {"outputId": "output-1"}
+
+    def store(_task_id, *, owner_user_id, output_id, content):
+        stored.update(owner=owner_user_id, output_id=output_id, content=content)
+
+    def finalize(_task_id, *, owner_user_id, summary):
+        assert owner_user_id == "user-1"
+        state.update(status="succeeded", statusLabel="处理完成", summary=summary)
+        return dict(state)
+
+    monkeypatch.setattr(payroll_router, "update_task", update)
+    monkeypatch.setattr(payroll_router, "load_task_inputs", lambda task: [("tax.pdf", source)])
+    monkeypatch.setattr(payroll_router, "process_files", lambda tool_id, files: result)
+    monkeypatch.setattr(payroll_router, "prepare_output", prepare)
+    monkeypatch.setattr(payroll_router, "store_task_output", store)
+    monkeypatch.setattr(payroll_router, "finalize_output", finalize)
+
+    completed = payroll_router._run_task("payroll_task_cloud", "user-1", cloud=True)
+
+    assert completed["status"] == "succeeded"
+    assert completed["summary"] == result.summary
+    assert stored == {"owner": "user-1", "output_id": "output-1", "content": result.content}
+
+
+def test_private_storage_enqueue_runs_in_vercel_function(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
+    task = {
+        "id": "payroll_task_cloud",
+        "ownerUserId": "local-default",
+        "toolId": "swedish_tax",
+        "status": "ready",
+        "files": [],
+        "output": None,
+    }
+    statuses = []
+
+    monkeypatch.setattr(payroll_router, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(payroll_router, "load_task", lambda *_args, **_kwargs: dict(task))
+
+    def update(_task_id, *, owner_user_id, updater):
+        updated = updater(dict(task))
+        task.update(updated)
+        statuses.append(task["status"])
+        return dict(task)
+
+    monkeypatch.setattr(payroll_router, "update_task", update)
+
+    def run(_task_id, owner_user_id, *, cloud):
+        assert owner_user_id == "local-default"
+        assert cloud is True
+        return {**task, "status": "succeeded", "statusLabel": "处理完成"}
+
+    monkeypatch.setattr(payroll_router, "_run_task", run)
+
+    with TestClient(app) as client:
+        response = client.post("/api/overseas-payroll/tasks/payroll_task_cloud/enqueue")
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+    assert response.status_code == 200
+    assert response.json()["task"]["status"] == "succeeded"
+    assert statuses == ["queued"]
+
+
+def test_private_task_inputs_are_downloaded_and_hash_verified(monkeypatch: pytest.MonkeyPatch) -> None:
+    content = b"verified-private-input"
+    task = {
+        "id": "payroll_task_cloud",
+        "files": [
+            {
+                "id": "file-1",
+                "filename": "tax.pdf",
+                "status": "uploaded",
+                "objectKey": "private/input.pdf",
+                "sizeBytes": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+    }
+    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(tasks, "get_labor_supabase_private_object", lambda key: content if key == "private/input.pdf" else None)
+
+    assert tasks.load_task_inputs(task) == [("tax.pdf", content)]
+
+    task["files"][0]["sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="SHA-256"):
+        tasks.load_task_inputs(task)

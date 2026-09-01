@@ -231,6 +231,49 @@ def store_local_file(task_id: str, file_id: str, content: bytes, *, output: bool
     os.replace(temporary, destination)
 
 
+def load_task_inputs(task: dict[str, Any]) -> list[tuple[str, bytes]]:
+    """Load and verify task inputs for either local or private-object execution."""
+    files: list[tuple[str, bytes]] = []
+    for file in task.get("files", []):
+        if file.get("status") != "uploaded":
+            raise ValueError("任务输入文件尚未完成上传。")
+        if labor_supabase_storage_enabled():
+            content = get_labor_supabase_private_object(str(file["objectKey"]))
+            if content is None:
+                raise FileNotFoundError(f"{file['filename']} 在私有存储中不存在。")
+        else:
+            path = local_file_path(str(task["id"]), str(file["id"]))
+            if not path.is_file():
+                raise FileNotFoundError(f"{file['filename']} 上传文件不存在。")
+            content = path.read_bytes()
+        if len(content) != int(file["sizeBytes"]):
+            raise ValueError(f"{file['filename']} 大小校验失败。")
+        if hashlib.sha256(content).hexdigest() != str(file["sha256"]).lower():
+            raise ValueError(f"{file['filename']} SHA-256 校验失败。")
+        files.append((str(file["filename"]), content))
+    return files
+
+
+def store_task_output(task_id: str, *, owner_user_id: str, output_id: str, content: bytes) -> None:
+    """Persist a generated result after validating it against the output manifest."""
+    task = load_task(task_id, owner_user_id=owner_user_id)
+    output = task.get("output") if isinstance(task.get("output"), dict) else None
+    if not output or str(output.get("id") or "") != str(output_id):
+        raise ValueError("任务输出记录不存在或已失效。")
+    if len(content) != int(output["sizeBytes"]):
+        raise ValueError("处理结果大小与任务清单不一致。")
+    if hashlib.sha256(content).hexdigest() != str(output["sha256"]).lower():
+        raise ValueError("处理结果 SHA-256 与任务清单不一致。")
+    if labor_supabase_storage_enabled():
+        put_labor_supabase_private_object(
+            str(output["objectKey"]),
+            content,
+            content_type=str(output.get("contentType") or "application/octet-stream"),
+        )
+    else:
+        store_local_file(task_id, output_id, content, output=True)
+
+
 def _observed_input(task: dict[str, Any], file: dict[str, Any]) -> dict[str, Any]:
     if labor_supabase_storage_enabled():
         return labor_supabase_object_metadata(str(file["objectKey"]))
