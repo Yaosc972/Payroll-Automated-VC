@@ -5,7 +5,9 @@ openpyxl
 pypdf
 pypdfium2
 pdfplumber
+pymupdf
 pymupdf4llm
+PyYAML
 httpx[socks]
 psycopg[binary]>=3.2,<4
 msoffcrypto-tool
