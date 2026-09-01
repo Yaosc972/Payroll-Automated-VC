@@ -414,7 +414,7 @@ OPEN_FOR_RELEASE_MODULE_IDS = {"recruitment", "employee", "domestic", "fbu", "ov
 CLOSED_UNTIL_RELEASE_MODULE_IDS: set[str] = set()
 
 DEFAULT_ROLE_MODULE_GRANTS = {
-    "fbuAdmin": {"fbu", "overseas_payroll"},
+    "fbuAdmin": {"overseas_payroll"},
 }
 
 DEFAULT_FEATURES = ["enter", "import", "calculate", "review", "export", "archive", "audit"]
@@ -751,29 +751,37 @@ def _seed_defaults(connection: _AdminConnection) -> None:
 
 
 def _migrate_default_role_module_grants(connection: _AdminConnection) -> None:
-    """Backfill new bundled scopes without overriding an administrator's choice."""
+    """Apply each bundled-scope migration once, then preserve later admin choices."""
     now = _now()
     for role_id, module_ids in DEFAULT_ROLE_MODULE_GRANTS.items():
         for module_id in module_ids:
             target_id = f"{module_id}:{role_id}"
-            manually_configured = connection.execute(
+            already_migrated = connection.execute(
                 """
                 SELECT 1
                 FROM admin_audit_logs
                 WHERE action = ? AND target_type = ? AND target_id = ?
                 LIMIT 1
                 """,
-                ("set_module_role_access", "module_role", target_id),
+                ("migrate_default_role_module_grant", "module_role", target_id),
             ).fetchone()
-            if manually_configured:
+            if already_migrated:
                 continue
             connection.execute(
                 """
                 UPDATE admin_role_module_permissions
                 SET can_enter = ?, updated_at = ?
-                WHERE role_id = ? AND module_id = ? AND can_enter = ?
+                WHERE role_id = ? AND module_id = ?
                 """,
-                (1, now, role_id, module_id, 0),
+                (1, now, role_id, module_id),
+            )
+            _insert_audit(
+                connection,
+                "system",
+                "migrate_default_role_module_grant",
+                "module_role",
+                target_id,
+                "can_enter=true",
             )
 
 
@@ -1447,7 +1455,10 @@ def set_feature_permission(
 def count_audit_logs(db_path: Path | None = None) -> int:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
-        row = connection.execute("SELECT COUNT(*) AS total FROM admin_audit_logs").fetchone()
+        row = connection.execute(
+            "SELECT COUNT(*) AS total FROM admin_audit_logs WHERE action != ?",
+            ("migrate_default_role_module_grant",),
+        ).fetchone()
     return int(row["total"] if row else 0)
 
 
@@ -1463,10 +1474,11 @@ def list_audit_logs(
             SELECT id, actor_user_id AS "actorUserId", action, target_type AS "targetType",
                    target_id AS "targetId", detail, created_at AS "createdAt"
             FROM admin_audit_logs
+            WHERE action != ?
             ORDER BY id DESC
             LIMIT ? OFFSET ?
             """,
-            (max(1, limit), max(0, offset)),
+            ("migrate_default_role_module_grant", max(1, limit), max(0, offset)),
         ).fetchall()
     return _rows_to_dicts(rows)
 

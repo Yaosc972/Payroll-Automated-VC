@@ -81,12 +81,24 @@ def test_existing_permission_store_upgrades_role_label_and_adds_payroll_scope(tm
     admin_store.init_admin_store(db_path)
     with admin_store._connect(db_path) as connection:
         connection.execute(
+            "DELETE FROM admin_audit_logs WHERE action = ? AND target_id = ?",
+            ("migrate_default_role_module_grant", "overseas_payroll:fbuAdmin"),
+        )
+        connection.execute(
             "UPDATE admin_roles SET name = ? WHERE id = ?",
             ("FBU美洲绩效核算管理员", "fbuAdmin"),
         )
         connection.execute(
             "UPDATE admin_role_module_permissions SET can_enter = 0 WHERE role_id = ? AND module_id = ?",
             ("fbuAdmin", "overseas_payroll"),
+        )
+        admin_store._insert_audit(
+            connection,
+            "payrollAdmin",
+            "set_module_role_access",
+            "module_role",
+            "overseas_payroll:fbuAdmin",
+            "False",
         )
         connection.commit()
 
