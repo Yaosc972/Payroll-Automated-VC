@@ -26,6 +26,7 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert {user["id"] for user in data["users"]} >= {"payrollAdmin", "cnPayrollAdminUser"}
     assert any(module["id"] == "employee" and module["enabled"] is True for module in data["modules"])
     assert any(module["id"] == "overseas" and module["enabled"] is True for module in data["modules"])
+    assert any(module["id"] == "overseas_payroll" and module["enabled"] is True for module in data["modules"])
     assert any(
         module["id"] == "domestic"
         and module["enabled"] is True
@@ -40,7 +41,64 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     )
     assert data["moduleAccess"]["employeeAdmin"]["employee"] is True
     assert data["moduleAccess"]["employeeAdmin"]["domestic"] is False
+    assert data["moduleAccess"]["fbuAdmin"]["fbu"] is True
+    assert data["moduleAccess"]["fbuAdmin"]["overseas_payroll"] is True
+    assert data["moduleAccess"]["fbuAdmin"]["overseas"] is False
+    assert data["moduleAccess"]["overseasAdmin"]["overseas"] is True
+    assert data["moduleAccess"]["overseasAdmin"]["overseas_payroll"] is False
     assert data["rolePermissions"]["admin"]["archive"] is True
+
+
+def test_overseas_payroll_and_invoice_audit_use_separate_roles(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "1")
+
+    with TestClient(app) as client:
+        assert client.post("/api/auth/mock-login", json={"userId": "fbuAdminUser"}).status_code == 200
+        compensation_page = client.get("/overseas-compensation.html")
+        payroll_page = client.get("/overseas-payroll.html")
+        payroll_api = client.get("/api/overseas-payroll/tools")
+        invoice_page_without_role = client.get("/overseas-labor.html")
+
+        client.post("/api/auth/logout")
+        assert client.post("/api/auth/mock-login", json={"userId": "overseasAdminUser"}).status_code == 200
+        payroll_page_without_role = client.get("/overseas-payroll.html")
+        payroll_api_without_role = client.get("/api/overseas-payroll/tools")
+        invoice_page = client.get("/overseas-labor.html")
+
+    assert compensation_page.status_code == 200
+    assert payroll_page.status_code == 200
+    assert payroll_api.status_code == 200
+    assert invoice_page_without_role.status_code == 403
+    assert payroll_page_without_role.status_code == 403
+    assert payroll_api_without_role.status_code == 403
+    assert invoice_page.status_code == 200
+
+
+def test_existing_permission_store_upgrades_role_label_and_adds_payroll_scope(tmp_path):
+    db_path = tmp_path / "admin.sqlite"
+    admin_store.init_admin_store(db_path)
+    with admin_store._connect(db_path) as connection:
+        connection.execute(
+            "UPDATE admin_roles SET name = ? WHERE id = ?",
+            ("FBU美洲绩效核算管理员", "fbuAdmin"),
+        )
+        connection.execute(
+            "DELETE FROM admin_role_module_permissions WHERE module_id = ?",
+            ("overseas_payroll",),
+        )
+        connection.execute("DELETE FROM admin_modules WHERE id = ?", ("overseas_payroll",))
+        connection.commit()
+
+    admin_store.init_admin_store(db_path)
+    roles = {role["id"]: role for role in admin_store.list_roles(db_path)}
+    permissions = admin_store.get_permissions(db_path)["moduleAccess"]
+
+    assert roles["fbuAdmin"]["name"] == "海外薪酬核算管理员"
+    assert permissions["fbuAdmin"]["fbu"] is True
+    assert permissions["fbuAdmin"]["overseas_payroll"] is True
+    assert permissions["fbuAdmin"]["overseas"] is False
 
 
 def test_module_contact_reuses_directory_avatar_without_exposing_identity_fields(tmp_path, monkeypatch):

@@ -134,8 +134,8 @@
     recruitmentAdmin: "招聘奖金核算管理员",
     employeeAdmin: "国内正式工核算管理员",
     domesticAdmin: "国内外包工核算管理员",
-    fbuAdmin: "FBU美洲绩效核算管理员",
-    overseasAdmin: "海外报账管理员",
+    fbuAdmin: "海外薪酬核算管理员",
+    overseasAdmin: "海外劳务报账核对管理员",
     socialInsuranceAdmin: "社保报盘管理员",
   };
   const userList = document.getElementById("loginUserList");

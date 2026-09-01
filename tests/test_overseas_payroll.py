@@ -74,9 +74,10 @@ def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
     home = (static_root / "index.html").read_text(encoding="utf-8")
     parent = (static_root / "overseas-compensation.html").read_text(encoding="utf-8")
 
-    assert 'href="overseas-compensation.html" data-module-any="fbu overseas"' in home
+    assert 'href="overseas-compensation.html" data-module-any="fbu overseas_payroll"' in home
     assert 'href="fbu-performance.html" data-child-module="fbu"' in parent
-    assert 'href="overseas-payroll.html" data-child-module="overseas"' in parent
+    assert 'href="overseas-payroll.html" data-child-module="overseas_payroll"' in parent
+    assert 'href="overseas-labor.html" data-child-module="overseas"' in parent
     assert "8 项海外薪资工具" in parent
     assert "对接人" in parent
     assert "夏盈盈" in parent

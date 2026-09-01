@@ -891,8 +891,8 @@ def test_admin_console_is_static_permission_management_shell():
     assert "招聘奖金核算管理员" in js
     assert "国内正式工核算管理员" in js
     assert "国内外包工核算管理员" in js
-    assert "FBU美洲绩效核算管理员" in js
-    assert "海外报账管理员" in js
+    assert "海外薪酬核算管理员" in js
+    assert "海外劳务报账核对管理员" in js
     assert "进入模块" in js
     assert "提交核算" in js
     assert "sigma-admin-console-draft-v4" in js
@@ -1362,15 +1362,16 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "试运行 · 已开放" in domestic_card
     assert "V0.7" in domestic_card
     assert "海外薪酬核算" in overseas_compensation_card
-    assert 'data-module-any="fbu overseas"' in index_html
+    assert 'data-module-any="fbu overseas_payroll"' in index_html
     assert "海外薪资工作台" in overseas_compensation_html
-    assert 'data-child-module="overseas"' in overseas_compensation_html
+    assert 'data-child-module="overseas_payroll"' in overseas_compensation_html
     assert "Available · 已上线" in fbu_card
     assert '<span class="module-version">V1.0</span>' in fbu_card
     assert "<dt>最新批次</dt><dd>2026-05</dd>" in fbu_card
     assert "真实回归" not in fbu_card
     assert "96.86%" not in fbu_card
-    assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
+    assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "海外薪酬核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
+    assert '{ id: "overseas_payroll", name: "海外薪资工作台", owner: "海外薪酬核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
     with Image.open(LOGIN_WORKBENCH_LOGO) as logo:
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0

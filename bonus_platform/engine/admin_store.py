@@ -290,8 +290,8 @@ DEFAULT_ROLES = [
     {"id": "recruitmentAdmin", "name": "招聘奖金核算管理员", "module_id": "recruitment", "is_system": 0},
     {"id": "employeeAdmin", "name": "国内正式工核算管理员", "module_id": "employee", "is_system": 0},
     {"id": "domesticAdmin", "name": "国内外包工核算管理员", "module_id": "domestic", "is_system": 0},
-    {"id": "fbuAdmin", "name": "FBU美洲绩效核算管理员", "module_id": "fbu", "is_system": 0},
-    {"id": "overseasAdmin", "name": "海外报账管理员", "module_id": "overseas", "is_system": 0},
+    {"id": "fbuAdmin", "name": "海外薪酬核算管理员", "module_id": "fbu", "is_system": 0},
+    {"id": "overseasAdmin", "name": "海外劳务报账核对管理员", "module_id": "overseas", "is_system": 0},
     {"id": "socialInsuranceAdmin", "name": "社保报盘管理员", "module_id": "social_insurance", "is_system": 0},
 ]
 
@@ -405,12 +405,17 @@ DEFAULT_MODULES = [
     {"id": "employee", "name": "中国区正式工薪酬核算", "href": "china-employee-payroll.html", "owner_role_id": "employeeAdmin", "enabled": 1, "development_status": "available"},
     {"id": "domestic", "name": "中国区外包工薪酬核算", "href": "domestic-labor.html", "owner_role_id": "domesticAdmin", "enabled": 1, "development_status": "uat"},
     {"id": "fbu", "name": "FBU美洲绩效奖金核算", "href": "fbu-performance.html", "owner_role_id": "fbuAdmin", "enabled": 1, "development_status": "available"},
+    {"id": "overseas_payroll", "name": "海外薪资工作台", "href": "overseas-payroll.html", "owner_role_id": "fbuAdmin", "enabled": 1, "development_status": "available"},
     {"id": "overseas", "name": "海外劳务报账核对", "href": "overseas-labor.html", "owner_role_id": "overseasAdmin", "enabled": 1, "development_status": "uat"},
     {"id": "social_insurance", "name": "社保报盘工作台", "href": "social-insurance.html", "owner_role_id": "socialInsuranceAdmin", "enabled": 1, "development_status": "uat"},
 ]
 
-OPEN_FOR_RELEASE_MODULE_IDS = {"recruitment", "employee", "domestic", "fbu", "overseas", "social_insurance"}
+OPEN_FOR_RELEASE_MODULE_IDS = {"recruitment", "employee", "domestic", "fbu", "overseas_payroll", "overseas", "social_insurance"}
 CLOSED_UNTIL_RELEASE_MODULE_IDS: set[str] = set()
+
+DEFAULT_ROLE_MODULE_GRANTS = {
+    "fbuAdmin": {"fbu", "overseas_payroll"},
+}
 
 DEFAULT_FEATURES = ["enter", "import", "calculate", "review", "export", "archive", "audit"]
 SESSION_TTL_DAYS = 7
@@ -618,6 +623,25 @@ def _seed_defaults(connection: _AdminConnection) -> None:
             ["id"],
             {**role, "created_at": now, "updated_at": now},
         )
+        parameters = (role["name"], role.get("module_id"), role["is_system"], now, role["id"])
+        if connection.backend == "postgres":
+            connection.execute(
+                """
+                UPDATE admin_roles
+                SET name = %s, module_id = %s, is_system = %s, updated_at = %s
+                WHERE id = %s
+                """,
+                parameters,
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE admin_roles
+                SET name = ?, module_id = ?, is_system = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                parameters,
+            )
     for module in DEFAULT_MODULES:
         _insert_seed(
             connection,
@@ -701,7 +725,12 @@ def _seed_defaults(connection: _AdminConnection) -> None:
         )
     for role in DEFAULT_ROLES:
         for module in DEFAULT_MODULES:
-            can_enter = 1 if role["id"] == "admin" or role.get("module_id") == module["id"] else 0
+            explicit_grants = DEFAULT_ROLE_MODULE_GRANTS.get(role["id"], set())
+            can_enter = 1 if (
+                role["id"] == "admin"
+                or role.get("module_id") == module["id"]
+                or module["id"] in explicit_grants
+            ) else 0
             _insert_seed(
                 connection,
                 "admin_role_module_permissions",
@@ -908,7 +937,8 @@ def list_modules(db_path: Path | None = None) -> list[dict[str, Any]]:
             LEFT JOIN admin_roles r ON r.id = m.owner_role_id
             ORDER BY CASE m.id
               WHEN 'recruitment' THEN 1 WHEN 'employee' THEN 2 WHEN 'domestic' THEN 3
-              WHEN 'fbu' THEN 4 WHEN 'overseas' THEN 5 WHEN 'social_insurance' THEN 6 ELSE 99 END
+              WHEN 'fbu' THEN 4 WHEN 'overseas_payroll' THEN 5 WHEN 'overseas' THEN 6
+              WHEN 'social_insurance' THEN 7 ELSE 99 END
             """
         ).fetchall()
     return [

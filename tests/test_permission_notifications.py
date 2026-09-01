@@ -54,7 +54,7 @@ def test_permission_change_payload_reports_role_and_module_differences():
     }
     after = {
         "user": {"id": "feishu_ou_user", "name": "业务用户", "feishuOpenId": "ou_user"},
-        "roles": [{"id": "fbuAdmin", "name": "FBU美洲绩效核算管理员"}],
+        "roles": [{"id": "fbuAdmin", "name": "海外薪酬核算管理员"}],
         "modules": [
             {"id": "employee", "name": "中国区正式工薪酬核算", "canEnter": False},
             {"id": "fbu", "name": "FBU美洲绩效奖金核算", "canEnter": True},
@@ -68,7 +68,7 @@ def test_permission_change_payload_reports_role_and_module_differences():
     )
 
     assert payload["recipientOpenId"] == "ou_user"
-    assert payload["addedRoles"] == ["FBU美洲绩效核算管理员"]
+    assert payload["addedRoles"] == ["海外薪酬核算管理员"]
     assert payload["removedRoles"] == ["国内正式工核算管理员"]
     assert payload["addedModules"] == ["FBU美洲绩效奖金核算"]
     assert payload["removedModules"] == ["中国区正式工薪酬核算"]
@@ -80,7 +80,7 @@ def test_permission_change_card_uses_clear_change_sections_and_workbench_link():
         {
             "userName": "业务用户",
             "actorName": "姚硕灿",
-            "addedRoles": ["FBU美洲绩效核算管理员"],
+            "addedRoles": ["海外薪酬核算管理员"],
             "removedRoles": ["国内正式工核算管理员"],
             "addedModules": ["FBU美洲绩效奖金核算"],
             "removedModules": ["中国区正式工薪酬核算"],
@@ -238,8 +238,8 @@ def test_role_update_queues_diff_card_and_delivery_failure_does_not_rollback(tmp
     notification = pending[0]
     assert notification["kind"] == "permission_changed"
     assert notification["recipientOpenId"] == "ou_target_user"
-    assert notification["payload"]["addedRoles"] == ["FBU美洲绩效核算管理员"]
-    assert notification["payload"]["addedModules"] == ["FBU美洲绩效奖金核算"]
+    assert notification["payload"]["addedRoles"] == ["海外薪酬核算管理员"]
+    assert notification["payload"]["addedModules"] == ["FBU美洲绩效奖金核算", "海外薪资工作台"]
     assert notification["attemptCount"] == 1
     assert notification["lastError"] == "temporary feishu failure"
 

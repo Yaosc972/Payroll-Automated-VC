@@ -157,6 +157,7 @@
       { id: "employee", name: "中国区正式工薪酬核算", enabled: false },
       { id: "domestic", name: "中国区外包工薪酬核算", enabled: true },
       { id: "fbu", name: "FBU美洲绩效奖金核算", enabled: true },
+      { id: "overseas_payroll", name: "海外薪资工作台", enabled: true },
       { id: "overseas", name: "海外劳务报账核对", enabled: true },
     ],
     rolePermissions: {
@@ -168,11 +169,11 @@
       overseasAdmin: { enter: true },
     },
     moduleAccess: {
-      admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true },
+      admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas_payroll: true, overseas: true },
       recruitmentAdmin: { recruitment: true },
       employeeAdmin: { employee: true },
       domesticAdmin: { domestic: true },
-      fbuAdmin: { fbu: true },
+      fbuAdmin: { fbu: true, overseas_payroll: true },
       overseasAdmin: { overseas: true },
     },
   };

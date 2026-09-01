@@ -1996,7 +1996,7 @@ def _protected_static_page_access_response(request: Request) -> Response | None:
         "/recruitment.html": {"module_id": "recruitment", "label": "全球招聘奖金核算"},
         "/china-employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
         "/employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
-        "/overseas-compensation.html": {"module_ids": ("fbu", "overseas"), "label": "海外薪酬核算"},
+        "/overseas-compensation.html": {"module_ids": ("fbu", "overseas_payroll"), "label": "海外薪酬核算"},
         "/admin.html": {"admin_only": True, "label": "后台管理"},
     }.get(path)
     if not page_config:
@@ -2110,7 +2110,7 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
               <head><meta charset="utf-8"><title>无权限访问</title></head>
               <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:48px;color:#0f172a;">
                 <h1>无权限访问：海外劳务报账核对</h1>
-                <p>该模块保持 UAT 试点，仅海外报账管理员或系统管理员可进入。</p>
+                <p>该模块保持 UAT 试点，仅海外劳务报账核对管理员或系统管理员可进入。</p>
                 <p><a href="/">返回西格玛工作台</a></p>
               </body>
             </html>
@@ -2411,20 +2411,22 @@ def _labor_auth_access_response(request: Request) -> Response | None:
             url=f"/login.html?next={request.url.path}",
             status_code=302,
         )
-    if not user_can_enter_module(current, "overseas"):
+    required_module_id = "overseas_payroll" if is_overseas_payroll else "overseas"
+    required_role_name = "海外薪酬核算管理员" if is_overseas_payroll else "海外劳务报账核对管理员"
+    if not user_can_enter_module(current, required_module_id):
         if request.url.path.startswith("/api/"):
             return JSONResponse(
                 {
                     "detail": _labor_request_error(
                         message=f"当前用户没有{module_label}权限。",
                         error_code="LABOR_MODULE_FORBIDDEN",
-                        next_action="请联系系统管理员授予海外报账管理员角色。",
+                        next_action=f"请联系系统管理员授予{required_role_name}角色。",
                     )
                 },
                 status_code=403,
             )
         return HTMLResponse(
-            f"<h1>无权限访问：{module_label}</h1><p>请联系系统管理员授予海外报账管理员角色。</p>",
+            f"<h1>无权限访问：{module_label}</h1><p>请联系系统管理员授予{required_role_name}角色。</p>",
             status_code=403,
         )
     request.state.labor_current_user = current

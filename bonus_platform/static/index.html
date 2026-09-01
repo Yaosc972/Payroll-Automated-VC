@@ -46,7 +46,7 @@
             <span>中国区外包工薪酬核算</span>
             <b>CN Vendor Payroll</b>
           </a>
-          <a href="overseas-compensation.html" data-module-any="fbu overseas">
+          <a href="overseas-compensation.html" data-module-any="fbu overseas_payroll">
             <span>海外薪酬核算</span>
             <b>Overseas Payroll</b>
           </a>
@@ -170,7 +170,7 @@
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
-            <a class="saas-module-card overseas-compensation-module" href="overseas-compensation.html" data-module-any="fbu overseas">
+            <a class="saas-module-card overseas-compensation-module" href="overseas-compensation.html" data-module-any="fbu overseas_payroll">
               <div class="module-card-top">
                 <span class="module-status available">Available · 已上线</span>
                 <span class="module-version">2 个子模块</span>
@@ -267,8 +267,8 @@
             { id: 'recruitmentAdmin', name: '招聘奖金核算管理员', moduleId: 'recruitment' },
             { id: 'employeeAdmin', name: '国内正式工核算管理员', moduleId: 'employee' },
             { id: 'domesticAdmin', name: '国内外包工核算管理员', moduleId: 'domestic' },
-            { id: 'fbuAdmin', name: 'FBU美洲绩效核算管理员', moduleId: 'fbu' },
-            { id: 'overseasAdmin', name: '海外报账管理员', moduleId: 'overseas' },
+            { id: 'fbuAdmin', name: '海外薪酬核算管理员', moduleId: 'fbu' },
+            { id: 'overseasAdmin', name: '海外劳务报账核对管理员', moduleId: 'overseas' },
             { id: 'socialInsuranceAdmin', name: '社保报盘管理员', moduleId: 'social_insurance' },
           ],
           modules: [
@@ -276,6 +276,7 @@
             { id: 'employee', name: '中国区正式工薪酬核算', href: 'china-employee-payroll.html', enabled: true },
             { id: 'domestic', name: '中国区外包工薪酬核算', href: 'domestic-labor.html', enabled: true },
             { id: 'fbu', name: 'FBU美洲绩效奖金核算', href: 'fbu-performance.html', enabled: true },
+            { id: 'overseas_payroll', name: '海外薪资工作台', href: 'overseas-payroll.html', enabled: true },
             { id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true },
             { id: 'social_insurance', name: '社保报盘工作台', href: 'social-insurance.html', enabled: true },
           ],
@@ -289,11 +290,11 @@
             socialInsuranceAdmin: { enter: true },
           },
           moduleAccess: {
-            admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas: true, social_insurance: true },
+            admin: { recruitment: true, employee: true, domestic: true, fbu: true, overseas_payroll: true, overseas: true, social_insurance: true },
             recruitmentAdmin: { recruitment: true },
             employeeAdmin: { employee: true },
             domesticAdmin: { domestic: true },
-            fbuAdmin: { fbu: true },
+            fbuAdmin: { fbu: true, overseas_payroll: true },
             overseasAdmin: { overseas: true },
             socialInsuranceAdmin: { social_insurance: true },
           },

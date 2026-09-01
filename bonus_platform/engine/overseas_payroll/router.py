@@ -49,8 +49,8 @@ def _require_access(request: Request) -> str:
     current = current_user_from_request(request)
     if current is None:
         raise HTTPException(status_code=401, detail="请先登录西格玛工作台。")
-    if not user_can_enter_module(current, "overseas"):
-        raise HTTPException(status_code=403, detail="当前用户没有海外模块权限。")
+    if not user_can_enter_module(current, "overseas_payroll"):
+        raise HTTPException(status_code=403, detail="当前用户没有海外薪资工作台权限。")
     user = current.get("user") if isinstance(current.get("user"), dict) else {}
     owner_user_id = str(user.get("id") or "").strip()
     if not owner_user_id:
