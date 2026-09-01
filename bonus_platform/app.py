@@ -2986,6 +2986,35 @@ def api_workbench_announcements(
     return {"announcements": list_announcements(limit=limit)}
 
 
+@app.get("/api/workbench/module-contacts/{contact_key}")
+def api_workbench_module_contact(
+    contact_key: str,
+    actor_user_id: str = Depends(_current_user_id),
+) -> dict:
+    contacts = {
+        "overseas-payroll": {
+            "name": "夏盈盈",
+            "department": "海外薪酬组",
+        },
+    }
+    contact = contacts.get(contact_key)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="未找到模块对接人。")
+    matched_user = next(
+        (
+            user
+            for user in list_users()
+            if str(user.get("name") or "").strip() == contact["name"]
+            and str(user.get("status") or "") == "active"
+        ),
+        None,
+    )
+    avatar_url = str((matched_user or {}).get("avatarUrl") or "").strip()
+    if not avatar_url.startswith("https://"):
+        avatar_url = ""
+    return {"contact": {**contact, "avatarUrl": avatar_url}}
+
+
 @app.get("/api/admin/feedback")
 def api_admin_feedback(
     limit: int = 100,

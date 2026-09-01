@@ -1,5 +1,27 @@
 (async () => {
   const entries = [...document.querySelectorAll('[data-child-module]')];
+  const hydrateOverseasPayrollContact = async () => {
+    const avatar = document.getElementById('overseasPayrollContactAvatar');
+    const initial = document.getElementById('overseasPayrollContactInitial');
+    if (!avatar || !initial) return;
+    try {
+      const response = await fetch('/api/workbench/module-contacts/overseas-payroll', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      const avatarUrl = String(payload.contact?.avatarUrl || '').trim();
+      if (!avatarUrl.startsWith('https://')) return;
+      avatar.addEventListener('load', () => {
+        avatar.hidden = false;
+        initial.hidden = true;
+      }, { once: true });
+      avatar.src = avatarUrl;
+    } catch (_) {
+      // Keep the initials avatar when the directory image is unavailable.
+    }
+  };
   const lockEntry = (entry, reason) => {
     entry.classList.add('permission-locked');
     entry.setAttribute('aria-disabled', 'true');
@@ -34,6 +56,7 @@
     entries.forEach((entry) => {
       if (!canEnter(entry.dataset.childModule)) lockEntry(entry, '当前用户没有该子模块权限');
     });
+    await hydrateOverseasPayrollContact();
   } catch (error) {
     entries.forEach((entry) => lockEntry(entry, '暂时无法确认模块权限，请刷新后重试'));
   }

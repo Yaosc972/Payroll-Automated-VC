@@ -43,6 +43,38 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert data["rolePermissions"]["admin"]["archive"] is True
 
 
+def test_module_contact_reuses_directory_avatar_without_exposing_identity_fields(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)
+    monkeypatch.setattr(
+        app_module,
+        "list_users",
+        lambda: [
+            {
+                "name": "夏盈盈",
+                "status": "active",
+                "avatarUrl": "https://example.com/xia.png",
+                "email": "private@example.com",
+                "feishuOpenId": "private-open-id",
+            }
+        ],
+    )
+
+    with TestClient(app) as client:
+        login = client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"})
+        assert login.status_code == 200
+        response = client.get("/api/workbench/module-contacts/overseas-payroll")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "contact": {
+            "name": "夏盈盈",
+            "department": "海外薪酬组",
+            "avatarUrl": "https://example.com/xia.png",
+        }
+    }
+
+
 def test_admin_api_updates_permissions_and_audit_logs(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: db_path)

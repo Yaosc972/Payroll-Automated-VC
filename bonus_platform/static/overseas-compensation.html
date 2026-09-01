@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=1280" />
     <title>海外薪酬核算 · HRAS 全球薪酬核算工作台</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
-    <link rel="stylesheet" href="styles.css?v=29" />
+    <link rel="stylesheet" href="styles.css?v=30" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260820-13" />
   </head>
   <body class="portal-shell dashboard-shell">
@@ -91,7 +91,16 @@
               </div>
               <dl>
                 <div><dt>工具数量</dt><dd>8</dd></div>
-                <div><dt>处理方式</dt><dd>异步任务</dd></div>
+                <div>
+                  <dt>对接人</dt>
+                  <dd class="module-contact">
+                    <span class="module-contact-avatar" aria-hidden="true">
+                      <img id="overseasPayrollContactAvatar" alt="" loading="lazy" hidden />
+                      <span id="overseasPayrollContactInitial">夏</span>
+                    </span>
+                    <span class="module-contact-copy"><strong>夏盈盈</strong><small>海外薪酬组</small></span>
+                  </dd>
+                </div>
               </dl>
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
@@ -100,7 +109,7 @@
       </main>
     </div>
 
-    <script src="overseas-compensation.js?v=20260901-1"></script>
+    <script src="overseas-compensation.js?v=20260901-2"></script>
     <script src="feedback-widget.js?v=20260820-13"></script>
   </body>
 </html>
