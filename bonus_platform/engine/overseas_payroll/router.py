@@ -15,17 +15,18 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
 from ..labor.persistent_storage import labor_supabase_storage_enabled
-from ..labor.worker_jobs import enqueue_labor_worker_job, labor_worker_job_store_health
 from .service import _legacy_module, list_tools, process_files
 from .tasks import (
     create_task,
     finalize_input,
     finalize_output,
+    load_task_inputs,
     load_task,
     local_file_path,
     output_download,
     prepare_output,
     store_local_file,
+    store_task_output,
     update_task,
 )
 
@@ -40,7 +41,6 @@ FRONTEND_PATH = RESOURCE_ROOT / "index.html"
 ASYNC_ADAPTER_PATH = RESOURCE_ROOT / "async_adapter.js"
 logger = logging.getLogger("bonus_platform.overseas_payroll")
 _LOCAL_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="overseas-payroll")
-OVERSEAS_PAYROLL_REQUIRED_WORKER_VERSION = "0.3.16"
 
 
 def _require_access(request: Request) -> str:
@@ -207,7 +207,7 @@ def overseas_payroll_tools(request: Request) -> dict:
     return {"tools": list_tools()}
 
 
-def _run_local_task(task_id: str, owner_user_id: str) -> None:
+def _run_task(task_id: str, owner_user_id: str, *, cloud: bool) -> dict:
     try:
         task = update_task(
             task_id,
@@ -215,16 +215,11 @@ def _run_local_task(task_id: str, owner_user_id: str) -> None:
             updater=lambda current: {
                 **current,
                 "status": "processing",
-                "statusLabel": "本地核对助手正在处理",
-                "progress": {"message": "正在解析工资文件"},
+                "statusLabel": "云端函数正在处理" if cloud else "本地核对助手正在处理",
+                "progress": {"message": "正在下载并解析工资文件" if cloud else "正在解析工资文件"},
             },
         )
-        files = []
-        for file in task.get("files", []):
-            content = local_file_path(task_id, file["id"]).read_bytes()
-            if len(content) != int(file["sizeBytes"]):
-                raise ValueError(f"{file['filename']} 大小校验失败。")
-            files.append((file["filename"], content))
+        files = load_task_inputs(task)
         result = process_files(str(task["toolId"]), files)
         _, intent = prepare_output(
             task_id,
@@ -234,12 +229,17 @@ def _run_local_task(task_id: str, owner_user_id: str) -> None:
             sha256=hashlib.sha256(result.content).hexdigest(),
             content_type=result.media_type,
         )
-        store_local_file(task_id, intent["outputId"], result.content, output=True)
-        finalize_output(task_id, owner_user_id=owner_user_id, summary=result.summary)
+        store_task_output(
+            task_id,
+            owner_user_id=owner_user_id,
+            output_id=intent["outputId"],
+            content=result.content,
+        )
+        return finalize_output(task_id, owner_user_id=owner_user_id, summary=result.summary)
     except Exception as exc:  # noqa: BLE001 - persisted as a safe user-facing task failure.
-        logger.exception("Local overseas payroll task failed: %s", task_id)
+        logger.exception("Overseas payroll task failed: %s", task_id)
         try:
-            update_task(
+            return update_task(
                 task_id,
                 owner_user_id=owner_user_id,
                 updater=lambda current: {
@@ -251,6 +251,11 @@ def _run_local_task(task_id: str, owner_user_id: str) -> None:
             )
         except Exception:
             logger.exception("Failed to persist overseas payroll task failure: %s", task_id)
+            raise
+
+
+def _run_local_task(task_id: str, owner_user_id: str) -> None:
+    _run_task(task_id, owner_user_id, cloud=False)
 
 
 @router.post("/tasks")
@@ -306,26 +311,18 @@ def enqueue_overseas_payroll_task(task_id: str, request: Request) -> dict:
             )
             _LOCAL_EXECUTOR.submit(_run_local_task, task_id, owner_user_id)
         return {"task": _public_task(task)}
-    health = labor_worker_job_store_health()
-    if not health.get("ready"):
-        raise HTTPException(status_code=503, detail="海外薪资 Worker 队列尚未配置完成。")
-    job = enqueue_labor_worker_job(
-        task_id,
-        owner_user_id=owner_user_id,
-        required_worker_version=OVERSEAS_PAYROLL_REQUIRED_WORKER_VERSION,
-        task_generation_id=task_id,
-        job_type="overseas_payroll",
-    )
-    task = update_task(
-        task_id,
-        owner_user_id=owner_user_id,
-        updater=lambda current: {
-            **current,
-            "status": "queued",
-            "statusLabel": "已进入本人核对助手队列",
-            "jobId": job["id"],
-        },
-    )
+    if task.get("status") == "ready":
+        task = update_task(
+            task_id,
+            owner_user_id=owner_user_id,
+            updater=lambda current: {
+                **current,
+                "status": "queued",
+                "statusLabel": "已进入 Vercel 云端处理",
+                "jobId": "",
+            },
+        )
+        task = _run_task(task_id, owner_user_id, cloud=True)
     return {"task": _public_task(task)}
 
 

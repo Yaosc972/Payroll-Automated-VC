@@ -1,17 +1,18 @@
 {
-  "version": 2,
-  "builds": [
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "fluid": true,
+  "rewrites": [
     {
-      "src": "api/index.py",
-      "use": "@vercel/python"
+      "source": "/(.*)",
+      "destination": "/api/index"
     }
   ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "api/index.py"
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 300
     }
-  ],
+  },
   "env": {
     "SIGMA_WORKBENCH_HOME": "/tmp/sigma-workbench",
     "SIGMA_WORKBENCH_SEED_DIR": "outputs",

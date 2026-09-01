@@ -67,7 +67,7 @@
       if (task.status === 'succeeded') return task;
       if (task.status === 'failed') throw new Error(task.error || '处理任务失败。');
       const progress = task.progress && task.progress.message;
-      setProgress(item, progress || task.statusLabel || '等待核对助手处理…');
+      setProgress(item, progress || task.statusLabel || '等待云端处理…');
       await sleep(2000);
     }
     throw new Error('处理时间超过 15 分钟，请稍后在任务记录中查看。');
@@ -151,7 +151,7 @@
           throw (uploadError && uploadError.reason) || finalizeError;
         }
       }
-      setProgress(item, '文件上传完成，正在创建处理任务…');
+      setProgress(item, '文件上传完成，正在云端处理…');
       await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(created.task.id) + '/enqueue', { method: 'POST' });
       const task = await waitForTask(created.task.id, item);
       await downloadTask(task, item);
