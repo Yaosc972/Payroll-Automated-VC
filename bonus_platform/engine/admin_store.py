@@ -785,6 +785,13 @@ def _migrate_default_role_module_grants(connection: _AdminConnection) -> None:
             )
 
 
+def _enforce_default_role_module_grants(module_access: dict[str, dict[str, bool]]) -> None:
+    for role_id, module_ids in DEFAULT_ROLE_MODULE_GRANTS.items():
+        role_access = module_access.setdefault(role_id, {})
+        for module_id in module_ids:
+            role_access[module_id] = True
+
+
 def _rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
@@ -1014,6 +1021,7 @@ def get_permissions(db_path: Path | None = None) -> dict[str, Any]:
     module_access: dict[str, dict[str, bool]] = {}
     for row in module_rows:
         module_access.setdefault(row["role_id"], {})[row["module_id"]] = bool(row["can_enter"])
+    _enforce_default_role_module_grants(module_access)
     role_permissions: dict[str, dict[str, bool]] = {}
     for row in feature_rows:
         role_permissions.setdefault(row["role_id"], {})[row["feature_id"]] = bool(row["enabled"])
@@ -1170,6 +1178,7 @@ def get_current_user(user_id: str = "payrollAdmin", db_path: Path | None = None)
             ).fetchall():
                 role_permissions[str(row["role_id"])][str(row["feature_id"])] = bool(row["enabled"])
 
+    _enforce_default_role_module_grants(module_access)
     allowed_modules = []
     for module in modules:
         can_enter = module["enabled"] and any(
@@ -1405,6 +1414,7 @@ def set_module_role_access(
 ) -> dict[str, Any]:
     init_admin_store(db_path)
     now = _now()
+    effective_can_enter = bool(can_enter) or module_id in DEFAULT_ROLE_MODULE_GRANTS.get(role_id, set())
     with _connect(db_path) as connection:
         if not connection.execute("SELECT 1 FROM admin_modules WHERE id = ?", (module_id,)).fetchone():
             raise KeyError("module_not_found")
@@ -1418,9 +1428,16 @@ def set_module_role_access(
               can_enter = excluded.can_enter,
               updated_at = excluded.updated_at
             """,
-            (role_id, module_id, 1 if can_enter else 0, now),
+            (role_id, module_id, 1 if effective_can_enter else 0, now),
         )
-        _insert_audit(connection, actor_user_id, "set_module_role_access", "module_role", f"{module_id}:{role_id}", str(can_enter))
+        _insert_audit(
+            connection,
+            actor_user_id,
+            "set_module_role_access",
+            "module_role",
+            f"{module_id}:{role_id}",
+            str(effective_can_enter),
+        )
         connection.commit()
     return get_permissions(db_path)["moduleAccess"].get(role_id, {})
 

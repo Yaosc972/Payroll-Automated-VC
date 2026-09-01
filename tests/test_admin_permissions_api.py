@@ -112,7 +112,7 @@ def test_existing_permission_store_upgrades_role_label_and_adds_payroll_scope(tm
     assert permissions["fbuAdmin"]["overseas"] is False
 
 
-def test_existing_permission_store_preserves_manual_payroll_scope_override(tmp_path):
+def test_existing_permission_store_keeps_bundled_payroll_scope_enabled_after_manual_disable(tmp_path):
     db_path = tmp_path / "admin.sqlite"
     admin_store.init_admin_store(db_path)
     admin_store.set_module_role_access(
@@ -126,7 +126,25 @@ def test_existing_permission_store_preserves_manual_payroll_scope_override(tmp_p
     admin_store.init_admin_store(db_path)
     permissions = admin_store.get_permissions(db_path)["moduleAccess"]
 
-    assert permissions["fbuAdmin"]["overseas_payroll"] is False
+    assert permissions["fbuAdmin"]["overseas_payroll"] is True
+
+
+def test_bundled_payroll_scope_remains_effective_with_stale_false_row(tmp_path):
+    db_path = tmp_path / "admin.sqlite"
+    admin_store.init_admin_store(db_path)
+    with admin_store._connect(db_path) as connection:
+        connection.execute(
+            "UPDATE admin_role_module_permissions SET can_enter = 0 WHERE role_id = ? AND module_id = ?",
+            ("fbuAdmin", "overseas_payroll"),
+        )
+        connection.commit()
+
+    permissions = admin_store.get_permissions(db_path)["moduleAccess"]
+    current = admin_store.get_current_user("fbuAdminUser", db_path)
+    payroll_module = next(module for module in current["modules"] if module["id"] == "overseas_payroll")
+
+    assert permissions["fbuAdmin"]["overseas_payroll"] is True
+    assert payroll_module["canEnter"] is True
 
 
 def test_module_contact_reuses_directory_avatar_without_exposing_identity_fields(tmp_path, monkeypatch):
