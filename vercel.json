@@ -1,23 +1,43 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": null,
-  "fluid": true,
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api/index"
-    }
-  ],
-  "functions": {
-    "api/index.py": {
-      "maxDuration": 300
+  "version": 2,
+  "services": {
+    "workbench": {
+      "root": ".",
+      "runtime": "python",
+      "entrypoint": "api/index.py",
+      "functions": {
+        "api/index.py": {
+          "regions": ["pdx1"],
+          "maxDuration": 300
+        }
+      }
+    },
+    "social_insurance_cron": {
+      "root": ".",
+      "runtime": "python",
+      "entrypoint": "api/social_insurance_cron/index.py",
+      "functions": {
+        "api/social_insurance_cron/index.py": {
+          "regions": ["pdx1"],
+          "maxDuration": 300
+        }
+      }
     }
   },
+  "rewrites": [
+    {
+      "source": "/api/social-insurance/cron/refresh",
+      "destination": {"service": "social_insurance_cron"}
+    },
+    {
+      "source": "/(.*)",
+      "destination": {"service": "workbench"}
+    }
+  ],
   "env": {
     "SIGMA_WORKBENCH_HOME": "/tmp/sigma-workbench",
     "SIGMA_WORKBENCH_SEED_DIR": "outputs",
-    "SIGMA_HIDE_DEVELOPING_MODULES": "1",
-    "SIGMA_OVERSEAS_LABOR_ACCESS": "uat_full",
+    "SIGMA_HIDE_DEVELOPING_MODULES": "0",
     "SIGMA_OVERSEAS_LABOR_UAT_ROLES": "Payroll Admin,Compensation UAT"
   }
 }
