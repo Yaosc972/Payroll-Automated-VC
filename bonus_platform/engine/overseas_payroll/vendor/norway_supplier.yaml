@@ -1,0 +1,200 @@
+# =====================================================================
+# 供应商模板：挪威标准工资单（兼容三种版式）
+# 适用：一页内含「本月明细」+「累计(Totalt i 2026)」的工资单
+# 已覆盖版式：
+#   A) Fastlønn + 报销/车补 + Skattepliktig grunnlag + Netto utbetaling
+#   B) Feriepenger u/skattetrekk + 车补
+#   C) Fastlønn Juli 2026 + Fast bilgodtgjørelse + tabelltrekk/prosentrekk
+#      + Sum (utbetales til konto ...) + 累计 Grunnlag skatt/feriepenger
+# 设计要点：
+#   1) 本月收入项组合可变；缺失不报错，实发校验只参与取到的项。
+#   2) 应税基数/税率在某些版式中不存在或无法简单计算，不列入必填。
+#   3) 核心必填只有：员工名、代扣税、实发金额。
+# 依赖：norway_pdf_parser.py（已支持 phrase anchor / rightmost_numeric /
+#                              regex / top_left / section / tax_math / payout_check）
+# =====================================================================
+
+supplier: "Norway_Standard_Payslip"
+
+# 必填项：每份工资单都一定出现、且核对所必需的字段
+required:
+  - employee_name
+  - skattetrekk_month
+  - sum_payout_month
+
+fields:
+  # --------------------------------------------------------------
+  # 页面头部：员工姓名（左上角第一行）
+  # --------------------------------------------------------------
+  employee_name:
+    capture: {mode: top_left}
+    type: text
+
+  # --------------------------------------------------------------
+  # 本月明细区（在 "Totalt i 2026" 上方）
+  # --------------------------------------------------------------
+  period_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Fastlønn|Månedens lønn"
+    capture:
+      mode: regex
+      pattern: "((?:Januar|Februar|Mars|April|Mai|Juni|Juli|August|September|Oktober|November|Desember)\\s+\\d{4})"
+      y_tol: 8
+    type: text
+
+  # 以下本月收入项：PDF 里有谁取谁；缺失不报错，实发校验只参与取到的项。
+  fastlønn_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Fastlønn"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  bonus_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Bonus"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  feriepenger_u_skattetrekk_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Feriepenger u/skattetrekk"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  elektronisk_kommunikasjon_utgiftsgodtgjorelse_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "utgiftsgodtgjørelse"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  fast_bilgodtgjorelse_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Fast bilgodtgjørelse"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  skattetrekk_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Skattetrekk"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  # 应税基数：部分工资单在本月明细区有 Skattepliktig grunnlag，部分没有
+  # （如版式 C 只有累计区的 Grunnlag skatt）。有则取，无则不参与校验。
+  tax_base_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Skattepliktig grunnlag"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  # 税率：从 Skattetrekk 行内说明文字抓 (34,0%) / (32,0%)
+  tax_percent_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Skattetrekk"
+    capture:
+      mode: regex
+      # 版式 A：税率在同一行右侧，如 "Skattetrekk (32,0%) 20 321,00"
+      # 版式 C：税率在下方多行说明里，如 "Grunnlag prosenttrekk (34,0%):"
+      pattern: "\\((\\d+,\\d+)%\\)"
+      y_tol: 45
+    type: number
+
+  sum_payout_month:
+    section: {anchor: "Totalt i 2026", relation: above, offset: 10}
+    anchor: "Netto utbetaling|Sum \\(utbetales til konto"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  # --------------------------------------------------------------
+  # 年度累计区（在 "Totalt i 2026" 下方）
+  # --------------------------------------------------------------
+  fastlønn_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Fastlønn"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  bonus_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Bonus"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  feriepenger_u_skattetrekk_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Feriepenger u/skattetrekk"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  elektronisk_kommunikasjon_utgiftsgodtgjorelse_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "utgiftsgodtgjørelse"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  fast_bilgodtgjorelse_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Fast bilgodtgjørelse"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  skattetrekk_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Skattetrekk"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  # 应税基数在累计区的叫法有两种：Grunnlag skatt 或 Skattepliktig grunnlag
+  grunnlag_skatt_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Grunnlag skatt|Skattepliktig grunnlag"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  grunnlag_feriepenger_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Grunnlag feriepenger"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  feriepenger_til_gode_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Feriepenger til gode"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+  sum_payout_ytd:
+    section: {anchor: "Totalt i 2026", relation: below, offset: 10}
+    anchor: "Netto utbetaling"
+    capture: {mode: rightmost_numeric, y_tol: 8}
+    type: number
+
+# ----------------------------------------------------------------------
+# 校验规则（双保险）
+# ----------------------------------------------------------------------
+
+# 1) 税款数学：税前基数 × 税率 ≈ |代扣税|
+#    仅当三个字段都存在时才执行。对 tabelltrekk + prosentrekk 混合税制
+#    （版式 C）tax_base_month 通常缺失，因此该校验会自动跳过。
+tax_math_checks:
+  - base: tax_base_month
+    percent: tax_percent_month
+    tax: skattetrekk_month
+    tol: 2.0
+
+# 2) 实发校验：实发 ≈ Σ(本月实际存在的收入项) + 代扣税
+#    代扣税以负数存储，程序内部会取 abs 后相减。
+#    示例 C：34 017 + 1 000 - 8 318 = 26 699 ✓
+payout_checks:
+  - payout: sum_payout_month
+    tax: skattetrekk_month
+    income_fields:
+      - fastlønn_month
+      - bonus_month
+      - feriepenger_u_skattetrekk_month
+      - elektronisk_kommunikasjon_utgiftsgodtgjorelse_month
+      - fast_bilgodtgjorelse_month
+    tol: 1.0
+
+# 环比波动阈值（与上一期结果对比，可选）
+delta_alert: 0.30

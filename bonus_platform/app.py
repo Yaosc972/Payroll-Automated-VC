@@ -880,6 +880,7 @@ from .engine.runs import (
 )
 from .engine.table_data import build_final_table_data, build_table_data, load_table_data, merge_diff_rows, save_table_data
 from .engine.workbook_io import build_final_workbook, build_pending_workbook, build_result_workbook, read_import_rows
+from .engine.overseas_payroll.router import page_router as overseas_payroll_page_router, router as overseas_payroll_router
 
 
 @asynccontextmanager
@@ -902,6 +903,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
 app.include_router(social_insurance_router)
+app.include_router(overseas_payroll_router)
+app.include_router(overseas_payroll_page_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -2328,7 +2331,11 @@ def _labor_p1_device_auth_response(request: Request) -> Response | None:
 
 
 def _labor_browser_auth_path(path: str) -> bool:
-    if path.rstrip("/") == "/overseas-labor.html":
+    if path.rstrip("/") in {"/overseas-labor.html", "/overseas-payroll.html"}:
+        return True
+    if path.startswith("/api/overseas-payroll/"):
+        return True
+    if path == "/api/tools" or path.startswith("/api/tool/"):
         return True
     if not path.startswith("/api/labor/"):
         return False
@@ -2527,8 +2534,10 @@ async def overseas_labor_access_gate(request: Request, call_next):
     overseas_access_response = _overseas_labor_access_response(request)
     if overseas_access_response is not None:
         return overseas_access_response
-    is_labor_api = path.startswith("/api/labor/") and path != "/api/labor/access"
-    is_labor_page = path.rstrip("/") == "/overseas-labor.html"
+    is_labor_api = (
+        path.startswith("/api/labor/") and path != "/api/labor/access"
+    ) or path.startswith("/api/overseas-payroll/") or path == "/api/tools" or path.startswith("/api/tool/")
+    is_labor_page = path.rstrip("/") in {"/overseas-labor.html", "/overseas-payroll.html"}
     if is_labor_api or is_labor_page:
         access = _overseas_labor_access_config()
         if not access["canUse"]:
@@ -2577,7 +2586,13 @@ async def overseas_labor_access_gate(request: Request, call_next):
     if legacy_upload_response is not None:
         return legacy_upload_response
     response = await call_next(request)
-    if path in {"/overseas-labor.html", "/overseas-labor.js", "/api/labor/access"}:
+    if path in {
+        "/overseas-labor.html",
+        "/overseas-labor.js",
+        "/overseas-payroll.html",
+        "/overseas-payroll.js",
+        "/api/labor/access",
+    }:
         build = _labor_build_snapshot()
         response.headers["Cache-Control"] = "no-store"
         response.headers["X-Sigma-Labor-Build"] = str(build["buildId"])[:64]
