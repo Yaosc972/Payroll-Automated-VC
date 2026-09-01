@@ -322,10 +322,12 @@
 
   const getUserModuleNames = (user) => {
     if (user.roleIds.includes("admin")) return ["全模块"];
-    return Array.from(new Set(user.roleIds
-      .map(roleId => getRole(roleId)?.moduleId)
-      .filter(Boolean)
-      .map(moduleId => getModule(moduleId)?.name)
+    return Array.from(new Set(state.modules
+      .filter(module => user.roleIds.some(roleId => (
+        state.moduleAccess[roleId]?.[module.id]
+        && state.rolePermissions[roleId]?.enter
+      )))
+      .map(module => module.name)
       .filter(Boolean)));
   };
 

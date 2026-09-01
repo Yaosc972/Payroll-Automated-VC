@@ -1370,8 +1370,12 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "<dt>最新批次</dt><dd>2026-05</dd>" in fbu_card
     assert "真实回归" not in fbu_card
     assert "96.86%" not in fbu_card
-    assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "海外薪酬核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
-    assert '{ id: "overseas_payroll", name: "海外薪资工作台", owner: "海外薪酬核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
+    admin_js = ADMIN_JS.read_text(encoding="utf-8")
+    assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "海外薪酬核算管理员", enabled: true }' in admin_js
+    assert '{ id: "overseas_payroll", name: "海外薪资工作台", owner: "海外薪酬核算管理员", enabled: true }' in admin_js
+    user_module_names = admin_js.split("const getUserModuleNames", 1)[1].split("const adminTagListMarkup", 1)[0]
+    assert "state.moduleAccess[roleId]?.[module.id]" in user_module_names
+    assert ".map(roleId => getRole(roleId)?.moduleId)" not in user_module_names
     with Image.open(LOGIN_WORKBENCH_LOGO) as logo:
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
