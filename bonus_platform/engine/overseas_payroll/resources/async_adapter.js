@@ -4,6 +4,59 @@
   document.getElementById('sidefoot')?.remove();
   document.getElementById('hostwarn')?.remove();
 
+  const moduleHomeUrl = '/overseas-labor.html';
+  const brand = document.querySelector('.sidebar .brand');
+  if (brand) {
+    const integrationStyle = document.createElement('style');
+    integrationStyle.textContent = '.sidebar .brand[role="link"]:focus-visible{outline:2px solid #2563eb;outline-offset:-2px;border-radius:10px}';
+    document.head.appendChild(integrationStyle);
+    brand.setAttribute('role', 'link');
+    brand.setAttribute('tabindex', '0');
+    brand.setAttribute('aria-label', '返回海外薪酬核算页面');
+    brand.setAttribute('title', '返回海外薪酬核算页面');
+    brand.style.cursor = 'pointer';
+    brand.addEventListener('click', () => { window.location.href = moduleHomeUrl; });
+    brand.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        window.location.href = moduleHomeUrl;
+      }
+    });
+  }
+
+  function renderFeishuAvatar(user) {
+    const avatar = document.getElementById('avatar');
+    if (!avatar || !user) return;
+    const fallback = String(user.name || user.email || 'U').trim().charAt(0) || 'U';
+    const avatarUrl = String(user.avatarUrl || '').trim();
+    avatar.replaceChildren();
+    avatar.style.overflow = 'hidden';
+    if (!avatarUrl.startsWith('https://')) {
+      avatar.textContent = fallback;
+      return;
+    }
+    const image = document.createElement('img');
+    image.src = avatarUrl;
+    image.alt = (user.name || '飞书用户') + '的头像';
+    image.referrerPolicy = 'no-referrer';
+    image.style.width = '100%';
+    image.style.height = '100%';
+    image.style.objectFit = 'cover';
+    image.addEventListener('error', () => {
+      avatar.replaceChildren();
+      avatar.textContent = fallback;
+    }, { once: true });
+    avatar.appendChild(image);
+  }
+
+  if (typeof renderBar === 'function') {
+    const originalRenderBar = renderBar;
+    renderBar = function (user) {
+      originalRenderBar(user);
+      renderFeishuAvatar(user);
+    };
+  }
+
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function sha256(file) {

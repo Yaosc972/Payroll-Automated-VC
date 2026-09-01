@@ -59,11 +59,14 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
     assert page.status_code == 200
-    assert '<script src="/overseas-payroll-async.js?v=1"></script>' in page.text
+    assert '<script src="/overseas-payroll-async.js?v=2"></script>' in page.text
     assert adapter.status_code == 200
     assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
     assert b"getElementById('sidefoot')?.remove()" in adapter.content
     assert b"getElementById('hostwarn')?.remove()" in adapter.content
+    assert b"const moduleHomeUrl = '/overseas-labor.html'" in adapter.content
+    assert b"user.avatarUrl" in adapter.content
+    assert b"brand.setAttribute('role', 'link')" in adapter.content
 
 
 def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
