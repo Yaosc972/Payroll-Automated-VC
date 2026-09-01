@@ -6,4 +6,6 @@
 - `resources/index.html` 是原 `templates/index.html` 的逐字节副本。Sigma 仅在响应时替换原服务本来就会替换的两个运行时占位符。
 - `vendor/legacy_web_extractor.py` 仅作为原始处理函数兼容层导入；模块的 `main()` 不会执行。
 - Sigma 对外接口位于 `router.py`，复用平台现有登录态与 `overseas` 模块权限。
+- 浏览器运行时额外挂载 `resources/async_adapter.js`，只替换上传/处理调用：原页面结构、样式和业务文案不变，文件不再经过 Base64 或 Vercel 函数转发。
+- 本地环境使用同一套异步任务接口和进程内单 Worker 验证；生产环境改用 Supabase 私有存储、Postgres 任务队列和本人核对助手。
 - 原始交付包未提供许可证文件；对外分发或开源前需补充代码权属确认。
