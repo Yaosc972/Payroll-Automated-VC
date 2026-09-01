@@ -4,7 +4,7 @@
   document.getElementById('sidefoot')?.remove();
   document.getElementById('hostwarn')?.remove();
 
-  const moduleHomeUrl = '/overseas-labor.html';
+  const moduleHomeUrl = '/overseas-compensation.html';
   const brand = document.querySelector('.sidebar .brand');
   if (brand) {
     const integrationStyle = document.createElement('style');

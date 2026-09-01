@@ -64,7 +64,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
     assert b"getElementById('sidefoot')?.remove()" in adapter.content
     assert b"getElementById('hostwarn')?.remove()" in adapter.content
-    assert b"const moduleHomeUrl = '/overseas-labor.html'" in adapter.content
+    assert b"const moduleHomeUrl = '/overseas-compensation.html'" in adapter.content
     assert b"user.avatarUrl" in adapter.content
     assert b"brand.setAttribute('role', 'link')" in adapter.content
 
