@@ -29,7 +29,7 @@ APP_PY = ROOT / "bonus_platform" / "app.py"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
 HEADER_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-blue.png"
-LOGIN_SIGMA_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "bonus-logo-header-transparent.png"
+LOGIN_WORKBENCH_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "workbench-logo-2026.png"
 FEISHU_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "feishu-logo.png"
 OVERSEAS_LABOR_LOGO = ROOT / "bonus_platform" / "static" / "assets" / "overseas-labor-logo-2026.png"
 DESKTOP_PACKAGE = ROOT / "desktop" / "package.json"
@@ -1314,14 +1314,18 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     js = LOGIN_JS.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert "登录西格玛工作台" in html
+    assert "登录 HRAS 全球薪酬核算工作台" in html
+    assert "Feishu SSO Ready" not in html
+    assert '<h1 id="loginTitle" class="sr-only">' in html
+    assert '<p class="portal-kicker">身份验证</p>' not in html
     assert "账号角色与模块权限" not in html
     assert "飞书应用已配置" not in html
     assert 'id="feishuLoginStatus"' not in html
     assert 'id="loginStatus"' not in html
     assert 'id="loginSmokeyCanvas"' in html
     assert "login-provider-icon" in html
-    assert 'src="assets/bonus-logo-header-transparent.png"' in html
+    assert 'src="assets/workbench-logo-2026.png"' in html
+    assert 'href="assets/workbench-logo-2026.png"' in html
     assert 'src="assets/feishu-logo.png"' in html
     assert "开发调试：模拟用户登录" in html
     assert "使用飞书登录" in html
@@ -1343,7 +1347,10 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert ".login-provider-icon" in css
     assert ".login-provider-icon img" in css
     assert ".login-panel .dashboard-logo img" in css
-    assert "background: transparent" in css.split(".login-panel .dashboard-logo img", 1)[1].split("}", 1)[0]
+    login_logo_rule = css.split(".login-panel .dashboard-logo img", 1)[1].split("}", 1)[0]
+    assert "background: transparent" in login_logo_rule
+    login_logo_color_rule = css.split(".login-shell .login-panel .dashboard-logo > img", 1)[1].split("}", 1)[0]
+    assert "filter: grayscale(1) brightness(0) invert(1)" in login_logo_color_rule
     assert "background: transparent" in css.split(".login-provider-icon", 1)[1].split("}", 1)[0]
     assert ".feishu-login-block" in css
     assert ".mock-login-panel" in css
@@ -1358,7 +1365,7 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "真实回归" not in fbu_card
     assert "96.86%" not in fbu_card
     assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")
-    with Image.open(LOGIN_SIGMA_LOGO) as logo:
+    with Image.open(LOGIN_WORKBENCH_LOGO) as logo:
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
     with Image.open(FEISHU_LOGO) as logo:

@@ -11844,6 +11844,10 @@ html:has(.china-employee-payroll-shell),
   box-shadow: none;
 }
 
+.login-shell .login-panel .dashboard-logo > img {
+  filter: grayscale(1) brightness(0) invert(1);
+}
+
 .login-panel .dashboard-logo small {
   color: rgba(226, 232, 240, 0.82);
 }

@@ -3,9 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=1280" />
-    <title>登录 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
-    <link rel="stylesheet" href="styles.css?v=login-2" />
+    <title>登录 · HRAS 全球薪酬核算工作台</title>
+    <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
+    <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
+    <link rel="stylesheet" href="styles.css?v=login-4" />
   </head>
   <body class="portal-shell dashboard-shell login-shell">
     <canvas id="loginSmokeyCanvas" class="login-smokey-canvas" aria-hidden="true"></canvas>
@@ -17,17 +18,13 @@
     </div>
 
     <main class="login-panel" aria-labelledby="loginTitle">
-      <a class="dashboard-logo" href="/" aria-label="西格玛工作台首页">
-        <img src="assets/bonus-logo-header-transparent.png" alt="" />
+      <h1 id="loginTitle" class="sr-only">登录 HRAS 全球薪酬核算工作台</h1>
+      <a class="dashboard-logo" href="/" aria-label="HRAS 全球薪酬核算工作台首页">
+        <img src="assets/workbench-logo-2026.png" alt="" />
         <span>
-          <strong>Σ Workbench</strong>
-          <small>Feishu SSO Ready</small>
+          <strong>HRAS 全球薪酬核算工作台</strong>
         </span>
       </a>
-      <div>
-        <p class="portal-kicker">Authentication</p>
-        <h1 id="loginTitle">登录西格玛工作台</h1>
-      </div>
       <div class="feishu-login-block">
         <a id="feishuLoginLink" href="/api/auth/feishu/login" aria-disabled="true">
           <span class="login-provider-icon" aria-hidden="true">
