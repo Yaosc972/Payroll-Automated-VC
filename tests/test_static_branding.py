@@ -1358,7 +1358,7 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     domestic_card = index_html.split('class="saas-module-card domestic-module"', 1)[1].split("</a>", 1)[0]
     overseas_compensation_html = (ROOT / "bonus_platform" / "static" / "overseas-compensation.html").read_text(encoding="utf-8")
     overseas_compensation_card = index_html.split('class="saas-module-card overseas-compensation-module"', 1)[1].split("</a>", 1)[0]
-    fbu_card = overseas_compensation_html.split('class="saas-module-card fbu-module"', 1)[1].split("</a>", 1)[0]
+    fbu_card = overseas_compensation_html.split('class="oc-lane oc-lane-fbu"', 1)[1].split("</a>", 1)[0]
     assert "试运行 · 已开放" in domestic_card
     assert "V0.7" in domestic_card
     assert "海外薪酬核算" in overseas_compensation_card
@@ -1366,8 +1366,10 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "海外薪资工作台" in overseas_compensation_html
     assert 'data-child-module="overseas"' in overseas_compensation_html
     assert "Available · 已上线" in fbu_card
-    assert '<span class="module-version">V1.0</span>' in fbu_card
     assert "<dt>最新批次</dt><dd>2026-05</dd>" in fbu_card
+    assert "活动配置" in fbu_card
+    assert "数据诊断" in fbu_card
+    assert "结果复核" in fbu_card
     assert "真实回归" not in fbu_card
     assert "96.86%" not in fbu_card
     assert '{ id: "fbu", name: "FBU美洲绩效奖金核算", owner: "FBU美洲绩效核算管理员", enabled: true }' in ADMIN_JS.read_text(encoding="utf-8")

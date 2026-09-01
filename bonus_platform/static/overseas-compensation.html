@@ -6,6 +6,7 @@
     <title>海外薪酬核算 · HRAS 全球薪酬核算工作台</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
     <link rel="stylesheet" href="styles.css?v=29" />
+    <link rel="stylesheet" href="overseas-compensation.css?v=20260901-2" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260820-13" />
   </head>
   <body class="portal-shell dashboard-shell">
@@ -37,65 +38,75 @@
         </nav>
       </aside>
 
-      <main class="dashboard-main">
-        <header class="dashboard-topbar">
-          <div><p>当前模块</p><strong>海外薪酬核算</strong></div>
-          <div class="dashboard-search overseas-compensation-context">
-            <span>模块边界</span>
-            <strong>绩效奖金与海外薪资工具</strong>
-            <small>海外劳务报账核对保持独立，不纳入本模块。</small>
+      <main class="dashboard-main oc-main">
+        <header class="oc-command-bar">
+          <div class="oc-breadcrumb" aria-label="当前位置">
+            <a href="/">工作台</a><span aria-hidden="true">/</span><strong>海外薪酬核算</strong>
           </div>
-          <a class="module-back-link" href="/">返回工作台</a>
+          <p>选择业务路径后进入对应核算工作区</p>
+          <a class="oc-home-link" href="/">返回工作台 <span aria-hidden="true">↗</span></a>
         </header>
 
-        <section class="welcome-panel overseas-compensation-hero">
-          <img class="dashboard-hras-watermark" src="assets/hras-logo-original.svg" alt="" aria-hidden="true" />
-          <div>
-            <p class="portal-kicker">Overseas Compensation</p>
-            <h1>海外薪酬核算</h1>
-            <span>统一承载 FBU 美洲绩效奖金核算与海外薪资工作台，两个子模块沿用各自现有权限和业务链路。</span>
+        <section class="oc-intro" aria-labelledby="overseasModulesTitle">
+          <div class="oc-index" aria-hidden="true">
+            <span>OC</span>
+            <b>02</b>
+            <small>Operating lanes</small>
           </div>
+          <div class="oc-intro-copy">
+            <p>Overseas Compensation</p>
+            <h1 id="overseasModulesTitle">选择一条核算路径</h1>
+            <span>绩效奖金与海外薪资分开作业，共用统一入口，但保留各自的权限、数据和处理链路。</span>
+          </div>
+          <aside class="oc-boundary-note">
+            <span>范围说明</span>
+            <strong>海外劳务报账核对保持独立</strong>
+            <a href="overseas-labor.html" data-child-module="overseas">前往独立模块 <b aria-hidden="true">→</b></a>
+          </aside>
         </section>
 
-        <section class="dashboard-section" aria-labelledby="overseasModulesTitle">
-          <div class="section-bar">
-            <div><p>Modules</p><h2 id="overseasModulesTitle">选择子模块</h2></div>
-          </div>
-          <div class="saas-module-grid overseas-compensation-grid">
-            <a class="saas-module-card fbu-module" href="fbu-performance.html" data-child-module="fbu">
-              <div class="module-card-top">
-                <span class="module-status available">Available · 已上线</span>
-                <span class="module-version">V1.0</span>
-              </div>
-              <div class="module-copy">
-                <p>FBU Americas Performance</p>
-                <h2>FBU美洲绩效奖金核算</h2>
-                <span>月度活动、数据诊断、异常队列与绩效奖金结果复核。</span>
-              </div>
-              <dl>
-                <div><dt>最新批次</dt><dd>2026-05</dd></div>
-                <div><dt>状态</dt><dd>已上线</dd></div>
-              </dl>
-              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
-            </a>
+        <section class="oc-lanes" aria-label="海外薪酬核算业务路径">
+          <a class="oc-lane oc-lane-fbu" href="fbu-performance.html" data-child-module="fbu">
+            <div class="oc-lane-head">
+              <span class="oc-lane-number">01</span>
+              <span class="module-status available">Available · 已上线</span>
+            </div>
+            <div class="oc-lane-title">
+              <p>FBU Americas Performance</p>
+              <h2>FBU美洲绩效奖金核算</h2>
+              <span>围绕月度活动完成数据诊断、异常处理和绩效奖金结果复核。</span>
+            </div>
+            <ol class="oc-flow" aria-label="FBU 绩效奖金核算流程">
+              <li><b>01</b><span>活动配置</span></li>
+              <li><b>02</b><span>数据诊断</span></li>
+              <li><b>03</b><span>结果复核</span></li>
+            </ol>
+            <div class="oc-lane-foot">
+              <dl><div><dt>业务周期</dt><dd>月度</dd></div><div><dt>最新批次</dt><dd>2026-05</dd></div></dl>
+              <div class="module-action"><span>进入奖金核算</span><b aria-hidden="true">→</b></div>
+            </div>
+          </a>
 
-            <a class="saas-module-card overseas-payroll-module" href="overseas-payroll.html" data-child-module="overseas">
-              <div class="module-card-top">
-                <span class="module-status available">Integrated · 已集成</span>
-                <span class="module-version">Worker 0.3.16</span>
-              </div>
-              <div class="module-copy">
-                <p>Overseas Payroll Workbench</p>
-                <h2>海外薪资工作台</h2>
-                <span>8 项海外薪资工具，支持异步私有直传、任务队列处理与签名结果下载。</span>
-              </div>
-              <dl>
-                <div><dt>工具数量</dt><dd>8</dd></div>
-                <div><dt>处理方式</dt><dd>异步任务</dd></div>
-              </dl>
-              <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
-            </a>
-          </div>
+          <a class="oc-lane oc-lane-payroll" href="overseas-payroll.html" data-child-module="overseas">
+            <div class="oc-lane-head">
+              <span class="oc-lane-number">02</span>
+              <span class="module-status available">Cloud · 已集成</span>
+            </div>
+            <div class="oc-lane-title">
+              <p>Overseas Payroll Workbench</p>
+              <h2>海外薪资工作台</h2>
+              <span>8 项国别薪资工具，文件私有直传后由 Vercel Function 云端处理并生成签名下载结果。</span>
+            </div>
+            <ol class="oc-flow" aria-label="海外薪资工具处理流程">
+              <li><b>01</b><span>私有直传</span></li>
+              <li><b>02</b><span>云端处理</span></li>
+              <li><b>03</b><span>签名下载</span></li>
+            </ol>
+            <div class="oc-lane-foot">
+              <dl><div><dt>国别工具</dt><dd>8 项</dd></div><div><dt>执行方式</dt><dd>云端函数</dd></div></dl>
+              <div class="module-action"><span>进入薪资工具</span><b aria-hidden="true">→</b></div>
+            </div>
+          </a>
         </section>
       </main>
     </div>
