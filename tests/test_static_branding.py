@@ -25,6 +25,7 @@ RELEASE_INFO_JSON = ROOT / "bonus_platform" / "static" / "release-info.json"
 VERCEL_JSON = ROOT / "vercel.json"
 LOGIN_HTML = ROOT / "bonus_platform" / "static" / "login.html"
 STYLES_CSS = ROOT / "bonus_platform" / "static" / "styles.css"
+DASHBOARD_USER_SUMMARY_CSS = ROOT / "bonus_platform" / "static" / "dashboard-user-summary.css"
 APP_PY = ROOT / "bonus_platform" / "app.py"
 APP_JS = ROOT / "bonus_platform" / "static" / "app.js"
 STORY_HTML = ROOT / "bonus_platform" / "static" / "vibecoding-story.html"
@@ -788,10 +789,17 @@ def test_portal_feedback_and_creative_updates_are_lightweight_and_available():
     assert "login.html?next=" in html
     assert "permission-locked" in html
     assert 'id="dashboardUserAvatar"' in html
-    assert 'id="dashboardRoleTags"' in html
+    assert 'id="dashboardAccessSummary"' in html
+    assert 'id="dashboardRoleList"' in html
+    assert 'id="dashboardModuleList"' in html
+    assert "可进入模块" in html
+    assert "accessibleModules.length" in html
     assert "avatarUrl" in html
     assert ".dashboard-user-avatar" in STYLES_CSS.read_text(encoding="utf-8")
-    assert ".dashboard-role-tags" in STYLES_CSS.read_text(encoding="utf-8")
+    summary_css = DASHBOARD_USER_SUMMARY_CSS.read_text(encoding="utf-8")
+    assert ".dashboard-access-summary" in summary_css
+    assert ".dashboard-user-access-list" in summary_css
+    assert 'dashboard-user-summary.css?v=1' in html
 
 
 def test_portal_auth_bootstrap_does_not_depend_on_optional_gsap():

@@ -7,6 +7,7 @@
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
     <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
     <link rel="stylesheet" href="styles.css?v=29" />
+    <link rel="stylesheet" href="dashboard-user-summary.css?v=1" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260820-13" />
   </head>
   <body class="portal-shell dashboard-shell">
@@ -84,11 +85,21 @@
               <span id="dashboardUserFallback" class="dashboard-user-avatar fallback" aria-hidden="true">PA</span>
               <span class="dashboard-user-meta">
                 <strong id="dashboardCurrentUser">Payroll Admin</strong>
-                <span id="dashboardRoleTags" class="dashboard-role-tags"><em>管理员</em></span>
+                <span id="dashboardAccessSummary" class="dashboard-access-summary">1 个角色 · 7 个可进入模块</span>
               </span>
               <i aria-hidden="true"></i>
             </summary>
             <div class="dashboard-user-menu" role="menu">
+              <div class="dashboard-user-access" aria-label="当前账号权限">
+                <section>
+                  <small>角色</small>
+                  <div id="dashboardRoleList" class="dashboard-user-access-list" role="list"></div>
+                </section>
+                <section>
+                  <small>可进入模块</small>
+                  <div id="dashboardModuleList" class="dashboard-user-access-list" role="list"></div>
+                </section>
+              </div>
               <a id="dashboardAdminLink" href="admin.html" role="menuitem" hidden>进入后台管理</a>
               <a id="dashboardLogout" href="/api/auth/logout?next=%2Flogin.html%3Fnext%3D%252F" role="menuitem">退出登录</a>
             </div>
@@ -349,9 +360,12 @@
         const currentUserName = document.getElementById('dashboardCurrentUser');
         const currentUserAvatar = document.getElementById('dashboardUserAvatar');
         const currentUserFallback = document.getElementById('dashboardUserFallback');
-        const roleTags = document.getElementById('dashboardRoleTags');
+        const accessSummary = document.getElementById('dashboardAccessSummary');
+        const roleList = document.getElementById('dashboardRoleList');
+        const moduleList = document.getElementById('dashboardModuleList');
         const adminMenuLink = document.getElementById('dashboardAdminLink');
         const isSystemAdmin = currentUser.roleIds.includes('admin') || roleNames.includes('系统管理员');
+        const accessibleModules = permissionState.modules.filter(module => canEnterModule(module.id));
         if (currentUserName) currentUserName.textContent = currentUser.name;
         const initials = (currentUser.name || currentUser.email || 'U').trim().slice(0, 2).toUpperCase();
         if (currentUserFallback) currentUserFallback.textContent = initials;
@@ -360,16 +374,23 @@
           currentUserAvatar.hidden = false;
           if (currentUserFallback) currentUserFallback.hidden = true;
         }
-        if (roleTags) {
-          roleTags.innerHTML = '';
-          const visibleRoles = roleNames.length ? roleNames : ['待授权'];
-          visibleRoles.forEach((roleName) => {
-            const tag = document.createElement('em');
-            tag.textContent = roleName;
-            tag.classList.toggle('is-admin', roleName === '系统管理员');
-            roleTags.appendChild(tag);
-          });
+        const visibleRoles = roleNames.length ? roleNames : ['待授权'];
+        const visibleModules = accessibleModules.length ? accessibleModules.map(module => module.name) : ['暂无可进入模块'];
+        if (accessSummary) {
+          accessSummary.textContent = `${roleNames.length} 个角色 · ${accessibleModules.length} 个可进入模块`;
         }
+        const renderAccessList = (container, items) => {
+          if (!container) return;
+          container.innerHTML = '';
+          items.forEach((item) => {
+            const tag = document.createElement('span');
+            tag.setAttribute('role', 'listitem');
+            tag.textContent = item;
+            container.appendChild(tag);
+          });
+        };
+        renderAccessList(roleList, visibleRoles);
+        renderAccessList(moduleList, visibleModules);
         if (adminMenuLink) adminMenuLink.hidden = !isSystemAdmin;
 
         const userMenu = document.getElementById('dashboardUserMenu');
