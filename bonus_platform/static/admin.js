@@ -3,12 +3,19 @@
   const defaults = {
     selectedUserId: "payrollAdmin",
     users: [
-      { id: "payrollAdmin", name: "Payroll Admin", roleIds: ["admin"], status: "启用" },
-      { id: "recruitmentAdminUser", name: "Recruitment Admin", roleIds: ["recruitmentAdmin"], status: "启用" },
-      { id: "cnPayrollAdminUser", name: "CN Payroll Admin", roleIds: ["employeeAdmin", "domesticAdmin", "socialInsuranceAdmin"], status: "启用" },
-      { id: "fbuAdminUser", name: "FBU Bonus Admin", roleIds: ["fbuAdmin"], status: "启用" },
-      { id: "overseasAdminUser", name: "Overseas Audit Admin", roleIds: ["overseasAdmin"], status: "启用" },
+      { id: "payrollAdmin", name: "姚硕灿", email: "admin@example.com", employeeNumber: "HRAS0001", feishuUserId: "u_demo_admin", directoryScope: "hras", departmentNames: ["HRAS 人力综合条线"], departments: [{ id: "od_hras", name: "HRAS 人力综合条线", isPrimary: true }], roleIds: ["admin"], status: "启用" },
+      { id: "recruitmentAdminUser", name: "吴金凤", email: "recruitment@example.com", employeeNumber: "HRAS0012", feishuUserId: "u_demo_recruitment", directoryScope: "hras", departmentNames: ["招聘运营部"], departments: [{ id: "od_recruitment", name: "招聘运营部", isPrimary: true }], roleIds: ["recruitmentAdmin"], status: "启用" },
+      { id: "cnPayrollAdminUser", name: "吴清莲", email: "cn-payroll@example.com", employeeNumber: "HRAS0028", feishuUserId: "u_demo_cn_payroll", directoryScope: "hras", departmentNames: ["薪酬核算部"], departments: [{ id: "od_payroll", name: "薪酬核算部", isPrimary: true }], roleIds: ["employeeAdmin", "domesticAdmin", "socialInsuranceAdmin"], status: "启用" },
+      { id: "fbuAdminUser", name: "夏盈盈", email: "overseas-payroll@example.com", employeeNumber: "HRAS0036", feishuUserId: "u_demo_overseas_payroll", directoryScope: "hras", departmentNames: ["海外薪酬组"], departments: [{ id: "od_overseas_payroll", name: "海外薪酬组", isPrimary: true }], roleIds: ["fbuAdmin"], status: "启用" },
+      { id: "overseasAdminUser", name: "陈伟力", email: "outside@example.com", employeeNumber: "", feishuUserId: "u_demo_external", directoryScope: "external", departmentNames: [], departments: [], roleIds: ["overseasAdmin"], status: "启用" },
     ],
+    departments: [
+      { id: "od_hras", name: "HRAS 人力综合条线", parentId: "0", rootId: "od_hras", userCount: 4 },
+      { id: "od_payroll", name: "薪酬核算部", parentId: "od_hras", rootId: "od_hras", userCount: 1 },
+      { id: "od_overseas_payroll", name: "海外薪酬组", parentId: "od_hras", rootId: "od_hras", userCount: 1 },
+      { id: "od_recruitment", name: "招聘运营部", parentId: "od_hras", rootId: "od_hras", userCount: 1 },
+    ],
+    directory: { environment: "local", enabled: false, canSync: false, rootDepartmentConfigured: false, rootDepartmentName: "HRAS 人力综合条线" },
     roles: [
       { id: "admin", name: "系统管理员" },
       { id: "recruitmentAdmin", name: "招聘奖金核算管理员", moduleId: "recruitment" },
@@ -90,6 +97,7 @@
   const userListUi = {
     query: "",
     status: "all",
+    departmentId: "all",
     page: 1,
     pageSize: 10,
   };
@@ -127,6 +135,8 @@
     return {
       ...state,
       users: apiState.users || state.users,
+      departments: apiState.departments || state.departments,
+      directory: apiState.directory || state.directory,
       roles: apiState.roles || state.roles,
       modules: (apiState.modules || state.modules).map(module => ({
         ...module,
@@ -338,21 +348,82 @@
     </div>`;
   };
 
+  const departmentDescendantIds = (departmentId) => {
+    const ids = new Set([departmentId]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      (state.departments || []).forEach(department => {
+        if (ids.has(department.parentId) && !ids.has(department.id)) {
+          ids.add(department.id);
+          changed = true;
+        }
+      });
+    }
+    return ids;
+  };
+
   const filteredUsers = () => {
     const query = userListUi.query.trim().toLocaleLowerCase("zh-CN");
     return state.users.filter(user => {
       if (userListUi.status !== "all" && getStatusKey(user.status) !== userListUi.status) return false;
+      if (userListUi.departmentId === "all" && user.directoryScope !== "hras") return false;
+      if (userListUi.departmentId === "external" && user.directoryScope !== "external") return false;
+      if (userListUi.departmentId !== "all" && userListUi.departmentId !== "external") {
+        const departmentIds = (user.departments || []).map(department => department.id);
+        const allowedDepartmentIds = departmentDescendantIds(userListUi.departmentId);
+        if (!departmentIds.some(departmentId => allowedDepartmentIds.has(departmentId))) return false;
+      }
       if (!query) return true;
       const searchable = [
         user.name,
         user.email,
         user.id,
+        user.employeeNumber,
+        user.feishuUserId,
+        ...(user.departmentNames || []),
         ...getUserRoleNames(user),
         ...getUserModuleNames(user),
         getStatusLabel(user.status),
       ].filter(Boolean).join(" ").toLocaleLowerCase("zh-CN");
       return searchable.includes(query);
     });
+  };
+
+  const renderDepartmentTree = () => {
+    const tree = document.getElementById("adminDepartmentTree");
+    if (!tree) return;
+    const departments = Array.isArray(state.departments) ? state.departments : [];
+    const scopedCount = state.users.filter(user => user.directoryScope === "hras").length;
+    const externalCount = state.users.filter(user => user.directoryScope !== "hras").length;
+    const rootName = state.directory?.rootDepartmentName || "HRAS 人力综合条线";
+    const childrenOf = parentId => departments.filter(item => item.parentId === parentId);
+    const rootDepartment = departments.find(item => item.id === item.rootId)
+      || departments.find(item => item.name === rootName);
+    const departmentUserCount = departmentId => {
+      const allowedIds = departmentDescendantIds(departmentId);
+      return state.users.filter(user => (
+        user.directoryScope === "hras"
+        && (user.departments || []).some(department => allowedIds.has(department.id))
+      )).length;
+    };
+    const itemMarkup = (department, depth = 0) => `
+      <button type="button" class="admin-department-item ${userListUi.departmentId === department.id ? "is-active" : ""}" data-department-id="${escapeHtml(department.id)}" style="--depth:${depth}">
+        <span>${escapeHtml(department.name)}</span><b>${departmentUserCount(department.id)}</b>
+      </button>
+      ${childrenOf(department.id).map(child => itemMarkup(child, depth + 1)).join("")}
+    `;
+    tree.innerHTML = `
+      <button type="button" class="admin-department-item is-root ${userListUi.departmentId === "all" ? "is-active" : ""}" data-department-id="all">
+        <span>${escapeHtml(rootName)}</span><b>${scopedCount}</b>
+      </button>
+      ${rootDepartment ? childrenOf(rootDepartment.id).map(item => itemMarkup(item, 1)).join("") : ""}
+      ${departments.filter(item => item.id !== rootDepartment?.id && item.parentId && !departments.some(candidate => candidate.id === item.parentId)).map(item => itemMarkup(item, 1)).join("")}
+      <div class="admin-department-divider"></div>
+      <button type="button" class="admin-department-item ${userListUi.departmentId === "external" ? "is-active" : ""}" data-department-id="external">
+        <span>组织外已登录</span><b>${externalCount}</b>
+      </button>
+    `;
   };
 
   const userPaginationMarkup = (total, totalPages) => {
@@ -384,6 +455,8 @@
       const roleNames = getUserRoleNames(user);
       const moduleNames = getUserModuleNames(user);
       const statusKey = getStatusKey(user.status);
+      const primaryDepartment = (user.departments || []).find(department => department.isPrimary)
+        || (user.departments || [])[0];
       return `
         <tr>
           <td>
@@ -391,20 +464,25 @@
               ${userAvatarMarkup(user)}
               <div>
                 <strong>${escapeHtml(user.name)}</strong>
-                <span>${escapeHtml(user.email || user.id)}</span>
+                <span>${escapeHtml(user.email || "未提供企业邮箱")}</span>
               </div>
             </div>
           </td>
-          <td>${adminTagListMarkup(roleNames, "未配置角色")}</td>
-          <td>${adminTagListMarkup(moduleNames, "未配置模块")}</td>
+          <td><strong class="admin-directory-value">${escapeHtml(user.employeeNumber || "—")}</strong></td>
+          <td><strong class="admin-directory-value">${escapeHtml(primaryDepartment?.name || "组织外")}</strong></td>
+          <td><code class="admin-feishu-user-id">${escapeHtml(user.feishuUserId || "登录后待补齐")}</code></td>
           <td><span class="admin-status-pill is-${statusKey}">${escapeHtml(getStatusLabel(user.status))}</span></td>
           <td>
             <details class="admin-role-dropdown" data-role-dropdown data-user="${escapeHtml(user.id)}">
               <summary>
-                <span>${escapeHtml(user.roleIds.length ? `${user.roleIds.length} 个角色` : "默认权限")}</span>
-                <b>选择角色</b>
+                <span>${escapeHtml(user.roleIds.length ? `${user.roleIds.length} 个角色 · ${moduleNames.length} 个模块` : "默认权限")}</span>
+                <b>编辑</b>
               </summary>
               <div class="admin-role-menu" data-user="${escapeHtml(user.id)}">
+                <div class="admin-role-menu-context">
+                  <strong>${escapeHtml(user.name)}</strong>
+                  <span>${adminTagListMarkup(roleNames, "未配置角色")}</span>
+                </div>
                 ${roleOptionMarkup(user)}
                 <button type="button" data-type="save-user-roles" data-user="${escapeHtml(user.id)}">保存授权</button>
               </div>
@@ -414,7 +492,7 @@
       `;
     }).join("") || `
       <tr>
-        <td colspan="5">
+        <td colspan="7">
           <div class="admin-user-empty">
             <strong>没有匹配的用户</strong>
             <span>请调整搜索词或账号状态筛选。</span>
@@ -426,18 +504,20 @@
       <table class="admin-user-table">
         <colgroup>
           <col class="admin-user-column" />
-          <col class="admin-role-column" />
-          <col class="admin-scope-column" />
+          <col class="admin-employee-column" />
+          <col class="admin-department-column" />
+          <col class="admin-feishu-column" />
           <col class="admin-status-column" />
           <col class="admin-action-column" />
         </colgroup>
         <thead>
           <tr>
             <th>用户</th>
-            <th>当前角色</th>
-            <th>可进入范围</th>
+            <th>工号</th>
+            <th>主部门</th>
+            <th>飞书用户 ID</th>
             <th>状态</th>
-            <th>角色授权</th>
+            <th>角色与权限</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -723,6 +803,26 @@
         .filter(Boolean).length;
     }
     if (adminLogCount) adminLogCount.textContent = auditLogUi.total;
+    const scoped = state.users.filter(user => user.directoryScope === "hras").length;
+    const external = state.users.length - scoped;
+    const pending = state.users.filter(user => getStatusKey(user.status) === "pending").length;
+    const scopedCount = document.getElementById("adminScopedUserCount");
+    const externalCount = document.getElementById("adminExternalUserCount");
+    const pendingCount = document.getElementById("adminPendingUserCount");
+    if (scopedCount) scopedCount.textContent = scoped;
+    if (externalCount) externalCount.textContent = external;
+    if (pendingCount) pendingCount.textContent = pending;
+    const syncButton = document.getElementById("adminDirectorySync");
+    const syncHint = document.getElementById("adminDirectorySyncHint");
+    const environment = document.getElementById("adminDirectoryEnvironment");
+    if (syncButton) {
+      syncButton.disabled = !state.directory?.canSync;
+      syncButton.title = state.directory?.canSync ? "从飞书同步 HRAS 组织人员" : "真实同步仅允许在生产环境执行";
+    }
+    if (syncHint) syncHint.textContent = state.directory?.canSync
+      ? "仅同步 HRAS 人力综合条线"
+      : "本地与 Preview 不执行真实同步";
+    if (environment) environment.textContent = `当前环境：${state.directory?.environment || "local"} · ${state.directory?.canSync ? "可同步" : "只读"}`;
   };
 
   const focusRequestedUser = () => {
@@ -744,6 +844,7 @@
   };
 
   const render = () => {
+    renderDepartmentTree();
     renderUsers();
     renderModules();
     renderFeatures();
@@ -871,6 +972,37 @@
   });
 
   document.addEventListener("click", async (event) => {
+    const departmentButton = event.target.closest("[data-department-id]");
+    if (departmentButton) {
+      userListUi.departmentId = departmentButton.dataset.departmentId || "all";
+      userListUi.page = 1;
+      renderDepartmentTree();
+      renderUsers();
+      return;
+    }
+
+    const syncButton = event.target.closest("#adminDirectorySync");
+    if (syncButton) {
+      if (!state.directory?.canSync || syncButton.disabled) return;
+      syncButton.disabled = true;
+      syncButton.textContent = "同步中…";
+      try {
+        const response = await fetch("/api/admin/directory/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail || `API ${response.status}`);
+        await refreshApiState(`已同步 ${payload.sync?.userCount || 0} 位组织人员`);
+      } catch (error) {
+        saveState(error.message || "飞书通讯录同步失败");
+      } finally {
+        syncButton.textContent = "同步飞书通讯录";
+        renderMetrics();
+      }
+      return;
+    }
+
     const auditPageButton = event.target.closest("[data-audit-page]");
     if (auditPageButton && !auditPageButton.disabled) {
       const nextPage = auditLogUi.page + (auditPageButton.dataset.auditPage === "next" ? 1 : -1);

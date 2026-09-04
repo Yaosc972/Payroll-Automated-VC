@@ -197,6 +197,7 @@ from .engine.fbu_performance.runs import (
 )
 from .engine.fbu_performance.runs import FBURuleListStore
 from .engine.admin_store import (
+    apply_feishu_directory_snapshot,
     claim_admin_notification,
     count_audit_logs,
     create_session,
@@ -1482,12 +1483,134 @@ def _feishu_identity_from_payloads(token_data: dict[str, Any], user_info: dict[s
         raise HTTPException(status_code=502, detail="飞书用户 open_id 为空。")
     avatar_url = _extract_feishu_avatar_url(merged)
     return {
+        "feishu_user_id": str(merged.get("user_id") or merged.get("userId") or "").strip() or None,
         "feishu_open_id": open_id,
         "feishu_union_id": str(merged.get("union_id") or merged.get("unionId") or "").strip() or None,
         "email": str(merged.get("email") or merged.get("enterprise_email") or "").strip() or None,
         "avatar_url": avatar_url,
         "name": str(merged.get("name") or merged.get("en_name") or merged.get("nickname") or open_id).strip(),
     }
+
+
+def _directory_sync_config() -> dict[str, Any]:
+    environment = str(os.environ.get("VERCEL_ENV") or "local").strip().lower() or "local"
+    enabled = _env_flag("SIGMA_FEISHU_DIRECTORY_SYNC_ENABLED", False)
+    root_department_id = str(os.environ.get("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID") or "").strip()
+    return {
+        "environment": environment,
+        "enabled": enabled,
+        "canSync": environment == "production" and enabled and bool(root_department_id),
+        "rootDepartmentConfigured": bool(root_department_id),
+        "rootDepartmentName": str(
+            os.environ.get("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_NAME") or "HRAS 人力综合条线"
+        ).strip(),
+    }
+
+
+def _feishu_directory_get(path: str, token: str, params: dict[str, Any]) -> dict[str, Any]:
+    query = urlencode({key: value for key, value in params.items() if value not in (None, "")})
+    payload = _feishu_get_json(f"{path}?{query}" if query else path, token)
+    if payload.get("code") != 0:
+        raise _feishu_api_error("同步飞书组织通讯录", payload)
+    data = payload.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _fetch_feishu_directory_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read only the configured HRAS department subtree using the production app identity."""
+    root_id = str(os.environ.get("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID") or "").strip()
+    if not root_id:
+        raise HTTPException(status_code=503, detail="未配置 HRAS 飞书根部门 ID。")
+    token = _get_feishu_tenant_access_token()
+    root_data = _feishu_directory_get(
+        f"/contact/v3/departments/{quote(root_id, safe='')}",
+        token,
+        {"department_id_type": "department_id"},
+    )
+    root_department = root_data.get("department") if isinstance(root_data.get("department"), dict) else {}
+    departments_by_id: dict[str, dict[str, Any]] = {
+        root_id: {
+            "departmentId": root_id,
+            "name": str(root_department.get("name") or _directory_sync_config()["rootDepartmentName"]),
+            "parentDepartmentId": str(root_department.get("parent_department_id") or "0"),
+        }
+    }
+    queue = [root_id]
+    while queue:
+        parent_id = queue.pop(0)
+        page_token = ""
+        while True:
+            data = _feishu_directory_get(
+                f"/contact/v3/departments/{quote(parent_id, safe='')}/children",
+                token,
+                {
+                    "department_id_type": "department_id",
+                    "fetch_child": "false",
+                    "page_size": 50,
+                    "page_token": page_token,
+                },
+            )
+            for raw in data.get("items") or []:
+                if not isinstance(raw, dict):
+                    continue
+                department_id = str(raw.get("department_id") or "").strip()
+                if not department_id or department_id in departments_by_id:
+                    continue
+                departments_by_id[department_id] = {
+                    "departmentId": department_id,
+                    "name": str(raw.get("name") or department_id).strip(),
+                    "parentDepartmentId": str(raw.get("parent_department_id") or parent_id).strip(),
+                }
+                queue.append(department_id)
+            if not data.get("has_more"):
+                break
+            page_token = str(data.get("page_token") or "").strip()
+            if not page_token:
+                break
+
+    users_by_id: dict[str, dict[str, Any]] = {}
+    for department_id in departments_by_id:
+        page_token = ""
+        while True:
+            data = _feishu_directory_get(
+                "/contact/v3/users/find_by_department",
+                token,
+                {
+                    "department_id": department_id,
+                    "department_id_type": "department_id",
+                    "user_id_type": "user_id",
+                    "page_size": 50,
+                    "page_token": page_token,
+                },
+            )
+            for raw in data.get("items") or []:
+                if not isinstance(raw, dict):
+                    continue
+                user_id = str(raw.get("user_id") or "").strip()
+                open_id = str(raw.get("open_id") or "").strip()
+                if not user_id or not open_id:
+                    continue
+                current = users_by_id.setdefault(user_id, {
+                    "feishuUserId": user_id,
+                    "feishuOpenId": open_id,
+                    "feishuUnionId": str(raw.get("union_id") or "").strip() or None,
+                    "name": str(raw.get("name") or user_id).strip(),
+                    "email": str(raw.get("enterprise_email") or raw.get("email") or "").strip() or None,
+                    "employeeNumber": str(raw.get("employee_no") or "").strip() or None,
+                    "avatarUrl": _extract_feishu_avatar_url(raw),
+                    "departmentIds": [],
+                })
+                raw_department_ids = raw.get("department_ids") if isinstance(raw.get("department_ids"), list) else []
+                scoped_ids = [str(value) for value in raw_department_ids if str(value) in departments_by_id]
+                if department_id not in scoped_ids:
+                    scoped_ids.append(department_id)
+                current["departmentIds"] = list(dict.fromkeys([*current["departmentIds"], *scoped_ids]))
+            if not data.get("has_more"):
+                break
+            page_token = str(data.get("page_token") or "").strip()
+            if not page_token:
+                break
+    return list(departments_by_id.values()), list(users_by_id.values())
 
 
 def _overseas_labor_access_config() -> dict:
@@ -2839,13 +2962,24 @@ def api_auth_feishu_callback(
     token_data = _get_feishu_user_access_token(code, app_access_token)
     user_info = _get_feishu_user_info(str(token_data["access_token"]))
     identity = _feishu_identity_from_payloads(token_data, user_info)
-    if not identity.get("avatar_url"):
+    should_enrich_directory_identity = (
+        not identity.get("feishu_user_id")
+        and _directory_sync_config()["environment"] == "production"
+        and _directory_sync_config()["enabled"]
+    )
+    if not identity.get("avatar_url") or should_enrich_directory_identity:
         try:
             tenant_access_token = _get_feishu_tenant_access_token()
             contact_user = _get_feishu_contact_user(str(identity["feishu_open_id"]), tenant_access_token)
-            identity["avatar_url"] = _extract_feishu_avatar_url(contact_user)
+            identity["avatar_url"] = identity.get("avatar_url") or _extract_feishu_avatar_url(contact_user)
+            identity["feishu_user_id"] = _first_nonempty_string(
+                identity.get("feishu_user_id"), contact_user.get("user_id"), contact_user.get("userId")
+            )
+            identity["employee_number"] = _first_nonempty_string(
+                contact_user.get("employee_no"), contact_user.get("employeeNumber")
+            )
         except HTTPException:
-            identity["avatar_url"] = None
+            pass
     user = upsert_feishu_user(**identity)
     session_token = create_session(user["id"], action="feishu_login")
     notification = _queue_new_user_permission_notification(user)
@@ -3122,12 +3256,33 @@ def api_publish_workbench_announcement(
 
 @app.get("/api/admin/state")
 def api_admin_state(actor_user_id: str = Depends(_require_admin_user)) -> dict:
-    return get_admin_state()
+    return {**get_admin_state(), "directory": _directory_sync_config()}
 
 
 @app.get("/api/admin/users")
 def api_admin_users(actor_user_id: str = Depends(_require_admin_user)) -> dict:
     return {"users": get_admin_state()["users"]}
+
+
+@app.post("/api/admin/directory/sync")
+def api_admin_directory_sync(actor_user_id: str = Depends(_require_admin_user)) -> dict:
+    sync_config = _directory_sync_config()
+    if sync_config["environment"] != "production":
+        raise HTTPException(status_code=409, detail="飞书组织同步仅允许在生产环境执行。")
+    if not sync_config["enabled"]:
+        raise HTTPException(status_code=503, detail="飞书组织同步未启用。")
+    root_department_id = str(os.environ.get("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID") or "").strip()
+    if not root_department_id:
+        raise HTTPException(status_code=503, detail="未配置 HRAS 飞书根部门 ID。")
+    departments, users = _fetch_feishu_directory_snapshot()
+    result = apply_feishu_directory_snapshot(
+        root_department_id=root_department_id,
+        departments=departments,
+        users=users,
+        actor_user_id=actor_user_id,
+    )
+    _clear_current_user_cache()
+    return {"sync": result}
 
 
 @app.put("/api/admin/users/{user_id}/roles")

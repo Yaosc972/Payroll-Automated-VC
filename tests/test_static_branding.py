@@ -838,13 +838,13 @@ def test_admin_console_is_static_permission_management_shell():
     assert "功能权限" in html
     assert "模块配置" in html
     assert "操作日志" in html
-    assert "权限配置中心" in html
-    assert "localStorage 模拟" in html
+    assert "组织人员与权限" in html
+    assert "组织同步仅在生产环境启用" in html
     assert 'data-admin-only="true"' in html
     assert "permission-guard.js" in html
     assert 'id="activeAdminUser"' in html
-    assert 'src="admin.js?v=20260812-3"' in html
-    assert 'href="admin-directory.css?v=20260812-3"' in html
+    assert 'src="admin.js?v=20260905-1"' in html
+    assert 'href="admin-directory.css?v=20260905-1"' in html
     assert 'id="adminUserSearch"' in html
     assert 'id="adminUserStatusFilter"' in html
     assert 'id="adminUserPagination"' in html

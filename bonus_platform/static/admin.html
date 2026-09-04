@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=1280" />
     <title>后台管理 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
-    <link rel="apple-touch-icon" href="assets/bonus-logo-dark.png" />
+    <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
+    <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
     <link rel="stylesheet" href="styles.css?v=admin-users-20260810" />
-    <link rel="stylesheet" href="admin-directory.css?v=20260812-3" />
+    <link rel="stylesheet" href="admin-directory.css?v=20260905-1" />
     <link rel="stylesheet" href="admin-feedback.css?v=20260820-1" />
     <script src="permission-guard.js?v=9"></script>
   </head>
@@ -22,10 +22,10 @@
     <div class="dashboard-frame admin-console-frame" aria-label="西格玛工作台后台管理">
       <aside class="dashboard-sidebar" aria-label="后台导航">
         <a class="dashboard-logo" href="/" aria-label="返回西格玛工作台首页">
-          <img src="assets/bonus-logo-header-blue.png" alt="" />
+          <img src="assets/workbench-logo-2026.png" alt="" />
           <span>
-            <strong>Σ Admin</strong>
-            <small>Access Console</small>
+            <strong>HRAS 管理后台</strong>
+            <small>Global Payroll Workbench</small>
           </span>
         </a>
 
@@ -71,12 +71,12 @@
       <main class="dashboard-main admin-console-main">
         <header class="dashboard-topbar admin-console-topbar">
           <div>
-            <p>当前空间</p>
-            <strong>后台管理 · 权限配置雏形</strong>
+            <p>用户与角色 / HRAS 人力综合条线</p>
+            <strong>HRAS 全球薪酬核算工作台</strong>
           </div>
           <div class="admin-save-state" role="status" aria-live="polite">
-            <span id="adminSaveState">使用本地草稿配置</span>
-            <small>localStorage 模拟 · 未接入真实登录</small>
+            <span id="adminSaveState">正在读取权限数据</span>
+            <small id="adminDirectoryEnvironment">组织同步仅在生产环境启用</small>
           </div>
           <label class="admin-user-switch">
             <span>模拟当前用户</span>
@@ -89,46 +89,64 @@
 
         <section class="admin-hero-panel" aria-labelledby="adminHeroTitle">
           <div>
-            <p class="portal-kicker">Governance Layer</p>
-            <h1 id="adminHeroTitle">权限配置中心</h1>
-            <span>管理模块开放状态、用户角色与角色可进入模块。当前为本地草稿模式，不影响真实业务核算逻辑。</span>
+            <p class="portal-kicker">People & Access</p>
+            <h1 id="adminHeroTitle">组织人员与权限</h1>
+            <span>同步 HRAS 人力综合条线组织人员，统一查看身份、登录状态和业务权限；组织范围外用户仍可正常登录并单独授权。</span>
           </div>
           <div class="admin-hero-metrics" aria-label="后台配置摘要">
-            <span><b id="enabledModuleCount">4</b><small>开放模块</small></span>
-            <span><b id="enabledFeatureCount">8</b><small>启用功能</small></span>
-            <span><b id="adminLogCount">5</b><small>模拟日志</small></span>
+            <span><b id="adminScopedUserCount">0</b><small>组织内人员</small></span>
+            <span><b id="adminExternalUserCount">0</b><small>组织外已登录</small></span>
+            <span><b id="adminPendingUserCount">0</b><small>待授权</small></span>
           </div>
         </section>
 
         <section id="usersRoles" class="admin-console-section" aria-labelledby="usersRolesTitle">
           <div class="section-bar">
             <div>
-              <p>Users & Roles</p>
-              <h2 id="usersRolesTitle">用户与角色</h2>
+              <p>Directory & Access</p>
+              <h2 id="usersRolesTitle">组织与人员</h2>
             </div>
-            <button class="admin-secondary-action" type="button" data-log-action="新增用户草稿">新增用户</button>
+            <div class="admin-directory-actions">
+              <span id="adminDirectorySyncHint">本地不会执行真实同步</span>
+              <button id="adminDirectorySync" class="admin-secondary-action" type="button">同步飞书通讯录</button>
+            </div>
           </div>
 
-          <div class="admin-user-toolbar" aria-label="用户列表筛选">
-            <label class="admin-user-search">
-              <span class="admin-user-search-icon" aria-hidden="true"></span>
-              <span class="sr-only">搜索用户</span>
-              <input id="adminUserSearch" type="search" autocomplete="off" placeholder="搜索姓名、邮箱、角色或模块" />
-            </label>
-            <label class="admin-user-filter">
-              <span>账号状态</span>
-              <select id="adminUserStatusFilter">
-                <option value="all">全部状态</option>
-                <option value="active">启用</option>
-                <option value="pending">待授权</option>
-                <option value="disabled">停用</option>
-              </select>
-            </label>
-            <div class="admin-user-list-summary" id="adminUserListSummary" aria-live="polite"></div>
-          </div>
+          <div class="admin-directory-layout">
+            <aside class="admin-department-panel" aria-label="组织架构">
+              <div class="admin-department-heading">
+                <strong>组织架构</strong>
+                <small>HRAS 人力综合条线</small>
+              </div>
+              <div id="adminDepartmentTree" class="admin-department-tree"></div>
+              <div class="admin-department-note">
+                <strong>范围说明</strong>
+                <span>组织内人员来自生产飞书通讯录；组织外账号仅在登录后出现，不会被同步移除。</span>
+              </div>
+            </aside>
+            <div class="admin-people-panel">
+              <div class="admin-user-toolbar" aria-label="用户列表筛选">
+                <label class="admin-user-search">
+                  <span class="admin-user-search-icon" aria-hidden="true"></span>
+                  <span class="sr-only">搜索用户</span>
+                  <input id="adminUserSearch" type="search" autocomplete="off" placeholder="搜索姓名、工号、飞书用户 ID、部门或角色" />
+                </label>
+                <label class="admin-user-filter">
+                  <span>账号状态</span>
+                  <select id="adminUserStatusFilter">
+                    <option value="all">全部状态</option>
+                    <option value="active">启用</option>
+                    <option value="pending">待授权</option>
+                    <option value="disabled">停用</option>
+                  </select>
+                </label>
+                <div class="admin-user-list-summary" id="adminUserListSummary" aria-live="polite"></div>
+              </div>
 
-          <div class="admin-user-table-wrap" id="userRoleList"></div>
-          <div class="admin-user-pagination" id="adminUserPagination" aria-label="用户列表分页"></div>
+              <div class="admin-user-table-wrap" id="userRoleList"></div>
+              <div class="admin-user-pagination" id="adminUserPagination" aria-label="用户列表分页"></div>
+            </div>
+          </div>
         </section>
 
         <section id="modulePermissions" class="admin-console-section" aria-labelledby="modulePermissionsTitle">
@@ -269,7 +287,7 @@
       </main>
     </div>
 
-    <script src="admin.js?v=20260812-3"></script>
+    <script src="admin.js?v=20260905-1"></script>
     <script src="admin-feedback.js?v=20260820-2"></script>
   </body>
 </html>
