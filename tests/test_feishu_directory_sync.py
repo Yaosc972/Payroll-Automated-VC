@@ -116,6 +116,38 @@ def test_user_removed_from_hras_scope_becomes_external_without_deletion_or_role_
     assert moved["status"] == "active"
 
 
+def test_directory_snapshot_uses_bounded_database_connections(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    _reset_store(monkeypatch, db_path)
+    admin_store.init_admin_store(db_path)
+    original_connect = admin_store._connect
+    connection_count = 0
+
+    def counted_connect(path=None):
+        nonlocal connection_count
+        connection_count += 1
+        return original_connect(path)
+
+    monkeypatch.setattr(admin_store, "_connect", counted_connect)
+    admin_store.apply_feishu_directory_snapshot(
+        root_department_id="od_hras",
+        departments=[{"departmentId": "od_hras", "name": "HRAS 人力综合条线", "parentDepartmentId": "0"}],
+        users=[
+            {
+                "feishuUserId": f"u_{index}",
+                "feishuOpenId": f"ou_{index}",
+                "name": f"同步用户 {index}",
+                "departmentIds": ["od_hras"],
+            }
+            for index in range(20)
+        ],
+        actor_user_id="payrollAdmin",
+        db_path=db_path,
+    )
+
+    assert connection_count <= 2
+
+
 def test_directory_sync_endpoint_is_production_only(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     _reset_store(monkeypatch, db_path)

@@ -1160,33 +1160,39 @@ def _user_matches_bootstrap_admin(user: dict[str, Any]) -> bool:
 def ensure_bootstrap_admin_for_user(user_id: str, db_path: Path | None = None) -> None:
     init_admin_store(db_path)
     with _connect(db_path) as connection:
-        user = connection.execute(
-            """
-            SELECT id, name, email, avatar_url AS "avatarUrl", feishu_user_id AS "feishuUserId",
-                   feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId"
-            FROM admin_users
-            WHERE id = ?
-            """,
-            (user_id,),
-        ).fetchone()
-        if not user:
-            return
-        user_dict = dict(user)
-        if not _user_matches_bootstrap_admin(user_dict):
-            return
-        if connection.execute(
-            "SELECT 1 FROM admin_user_roles WHERE user_id = ? AND role_id = ?",
-            (user_id, "admin"),
-        ).fetchone():
-            return
-        now = _now()
-        connection.execute(
-            "INSERT INTO admin_user_roles (user_id, role_id, created_at) VALUES (?, ?, ?)",
-            (user_id, "admin", now),
-        )
-        connection.execute("UPDATE admin_users SET status = 'active', updated_at = ? WHERE id = ?", (now, user_id))
-        _insert_audit(connection, "system", "bootstrap_admin", "user", user_id, "admin")
-        connection.commit()
+        changed = _ensure_bootstrap_admin_on_connection(connection, user_id, _now())
+        if changed:
+            connection.commit()
+
+
+def _ensure_bootstrap_admin_on_connection(
+    connection: _AdminConnection,
+    user_id: str,
+    now: str,
+) -> bool:
+    user = connection.execute(
+        """
+        SELECT id, name, email, avatar_url AS "avatarUrl", feishu_user_id AS "feishuUserId",
+               feishu_open_id AS "feishuOpenId", feishu_union_id AS "feishuUnionId"
+        FROM admin_users
+        WHERE id = ?
+        """,
+        (user_id,),
+    ).fetchone()
+    if not user or not _user_matches_bootstrap_admin(dict(user)):
+        return False
+    if connection.execute(
+        "SELECT 1 FROM admin_user_roles WHERE user_id = ? AND role_id = ?",
+        (user_id, "admin"),
+    ).fetchone():
+        return False
+    connection.execute(
+        "INSERT INTO admin_user_roles (user_id, role_id, created_at) VALUES (?, ?, ?)",
+        (user_id, "admin", now),
+    )
+    connection.execute("UPDATE admin_users SET status = 'active', updated_at = ? WHERE id = ?", (now, user_id))
+    _insert_audit(connection, "system", "bootstrap_admin", "user", user_id, "admin")
+    return True
 
 
 def get_current_user(user_id: str = "payrollAdmin", db_path: Path | None = None) -> dict[str, Any]:
@@ -1337,59 +1343,87 @@ def upsert_feishu_user(
     init_admin_store(db_path)
     now = _now()
     with _connect(db_path) as connection:
-        existing = connection.execute(
-            """
-            SELECT id FROM admin_users
-            WHERE (feishu_user_id IS NOT NULL AND feishu_user_id = ?)
-               OR feishu_open_id = ?
-               OR (feishu_union_id IS NOT NULL AND feishu_union_id = ?)
-               OR (email IS NOT NULL AND email = ?)
-            LIMIT 1
-            """,
-            (feishu_user_id, feishu_open_id, feishu_union_id, email),
-        ).fetchone()
-        identity = feishu_user_id or feishu_open_id
-        user_id = str(existing["id"]) if existing else f"feishu_{identity}"
-        if existing:
-            connection.execute(
-                """
-                UPDATE admin_users
-                SET name = COALESCE(?, name),
-                    email = COALESCE(?, email),
-                    avatar_url = COALESCE(?, avatar_url),
-                    feishu_user_id = COALESCE(?, feishu_user_id),
-                    feishu_open_id = ?,
-                    feishu_union_id = COALESCE(?, feishu_union_id),
-                    employee_number = COALESCE(?, employee_number),
-                    updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    name, email, avatar_url, feishu_user_id, feishu_open_id,
-                    feishu_union_id, employee_number, now, user_id,
-                ),
-            )
-        else:
-            connection.execute(
-                """
-                INSERT INTO admin_users (
-                  id, name, email, avatar_url, feishu_user_id, feishu_open_id, feishu_union_id,
-                  employee_number, directory_scope, status, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'external', 'pending', ?, ?)
-                """,
-                (
-                    user_id, name or email or identity, email, avatar_url, feishu_user_id,
-                    feishu_open_id, feishu_union_id, employee_number, now, now,
-                ),
-            )
-        if audit:
-            _insert_audit(connection, user_id, "feishu_user_upsert", "user", user_id, email or feishu_open_id)
+        user_id, created = _upsert_feishu_user_on_connection(
+            connection,
+            feishu_open_id=feishu_open_id,
+            feishu_user_id=feishu_user_id,
+            feishu_union_id=feishu_union_id,
+            email=email,
+            avatar_url=avatar_url,
+            employee_number=employee_number,
+            name=name,
+            audit=audit,
+            now=now,
+        )
         connection.commit()
     ensure_bootstrap_admin_for_user(user_id, db_path)
     result = next(user for user in list_users(db_path) if user["id"] == user_id)
-    result["_created"] = not bool(existing)
+    result["_created"] = created
     return result
+
+
+def _upsert_feishu_user_on_connection(
+    connection: _AdminConnection,
+    *,
+    feishu_open_id: str,
+    feishu_user_id: str | None,
+    feishu_union_id: str | None,
+    email: str | None,
+    avatar_url: str | None,
+    employee_number: str | None,
+    name: str | None,
+    audit: bool,
+    now: str,
+) -> tuple[str, bool]:
+    existing = connection.execute(
+        """
+        SELECT id FROM admin_users
+        WHERE (feishu_user_id IS NOT NULL AND feishu_user_id = ?)
+           OR feishu_open_id = ?
+           OR (feishu_union_id IS NOT NULL AND feishu_union_id = ?)
+           OR (email IS NOT NULL AND email = ?)
+        LIMIT 1
+        """,
+        (feishu_user_id, feishu_open_id, feishu_union_id, email),
+    ).fetchone()
+    identity = feishu_user_id or feishu_open_id
+    user_id = str(existing["id"]) if existing else f"feishu_{identity}"
+    if existing:
+        connection.execute(
+            """
+            UPDATE admin_users
+            SET name = COALESCE(?, name),
+                email = COALESCE(?, email),
+                avatar_url = COALESCE(?, avatar_url),
+                feishu_user_id = COALESCE(?, feishu_user_id),
+                feishu_open_id = ?,
+                feishu_union_id = COALESCE(?, feishu_union_id),
+                employee_number = COALESCE(?, employee_number),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                name, email, avatar_url, feishu_user_id, feishu_open_id,
+                feishu_union_id, employee_number, now, user_id,
+            ),
+        )
+    else:
+        connection.execute(
+            """
+            INSERT INTO admin_users (
+              id, name, email, avatar_url, feishu_user_id, feishu_open_id, feishu_union_id,
+              employee_number, directory_scope, status, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'external', 'pending', ?, ?)
+            """,
+            (
+                user_id, name or email or identity, email, avatar_url, feishu_user_id,
+                feishu_open_id, feishu_union_id, employee_number, now, now,
+            ),
+        )
+    if audit:
+        _insert_audit(connection, user_id, "feishu_user_upsert", "user", user_id, email or feishu_open_id)
+    return user_id, not bool(existing)
 
 
 def apply_feishu_directory_snapshot(
@@ -1434,34 +1468,34 @@ def apply_feishu_directory_snapshot(
                 "UPDATE admin_departments SET name = ?, parent_id = ?, root_id = ?, synced_at = ? WHERE id = ?",
                 (values["name"], values["parent_id"], root_department_id, now, department_id),
             )
-        connection.commit()
 
-    synced_user_ids: list[str] = []
-    for item in users:
-        feishu_user_id = str(item.get("feishuUserId") or "").strip()
-        open_id = str(item.get("feishuOpenId") or "").strip()
-        if not feishu_user_id or not open_id:
-            continue
-        user = upsert_feishu_user(
-            feishu_user_id=feishu_user_id,
-            feishu_open_id=open_id,
-            feishu_union_id=str(item.get("feishuUnionId") or "").strip() or None,
-            email=str(item.get("email") or "").strip() or None,
-            avatar_url=str(item.get("avatarUrl") or "").strip() or None,
-            employee_number=str(item.get("employeeNumber") or "").strip() or None,
-            name=str(item.get("name") or "").strip() or None,
-            audit=False,
-            db_path=db_path,
-        )
-        synced_user_ids.append(user["id"])
-        raw_department_ids = item.get("departmentIds") if isinstance(item.get("departmentIds"), list) else []
-        scoped_department_ids = [str(value) for value in raw_department_ids if str(value) in department_ids]
-        with _connect(db_path) as connection:
+        synced_user_ids: list[str] = []
+        for item in users:
+            feishu_user_id = str(item.get("feishuUserId") or "").strip()
+            open_id = str(item.get("feishuOpenId") or "").strip()
+            if not feishu_user_id or not open_id:
+                continue
+            user_id, _ = _upsert_feishu_user_on_connection(
+                connection,
+                feishu_user_id=feishu_user_id,
+                feishu_open_id=open_id,
+                feishu_union_id=str(item.get("feishuUnionId") or "").strip() or None,
+                email=str(item.get("email") or "").strip() or None,
+                avatar_url=str(item.get("avatarUrl") or "").strip() or None,
+                employee_number=str(item.get("employeeNumber") or "").strip() or None,
+                name=str(item.get("name") or "").strip() or None,
+                audit=False,
+                now=now,
+            )
+            _ensure_bootstrap_admin_on_connection(connection, user_id, now)
+            synced_user_ids.append(user_id)
+            raw_department_ids = item.get("departmentIds") if isinstance(item.get("departmentIds"), list) else []
+            scoped_department_ids = [str(value) for value in raw_department_ids if str(value) in department_ids]
             connection.execute(
                 "UPDATE admin_users SET directory_scope = 'hras', directory_synced_at = ?, updated_at = ? WHERE id = ?",
-                (now, now, user["id"]),
+                (now, now, user_id),
             )
-            connection.execute("DELETE FROM admin_user_departments WHERE user_id = ?", (user["id"],))
+            connection.execute("DELETE FROM admin_user_departments WHERE user_id = ?", (user_id,))
             for index, department_id in enumerate(scoped_department_ids):
                 _insert_seed(
                     connection,
@@ -1469,15 +1503,12 @@ def apply_feishu_directory_snapshot(
                     ["user_id", "department_id", "is_primary", "synced_at"],
                     ["user_id", "department_id"],
                     {
-                        "user_id": user["id"],
+                        "user_id": user_id,
                         "department_id": department_id,
                         "is_primary": 1 if index == 0 else 0,
                         "synced_at": now,
                     },
                 )
-            connection.commit()
-
-    with _connect(db_path) as connection:
         stale_rows = connection.execute(
             "SELECT id FROM admin_users WHERE directory_scope = 'hras'"
         ).fetchall()
