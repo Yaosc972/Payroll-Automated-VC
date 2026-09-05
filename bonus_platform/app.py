@@ -1535,44 +1535,40 @@ def _fetch_feishu_directory_snapshot() -> tuple[list[dict[str, Any]], list[dict[
             "parentDepartmentId": str(root_department.get("parent_department_id") or "0"),
         }
     }
-    queue = [root_id]
-    while queue:
-        parent_id = queue.pop(0)
-        page_token = ""
-        while True:
-            data = _feishu_directory_get(
-                f"/contact/v3/departments/{quote(parent_id, safe='')}/children",
-                token,
-                {
-                    "department_id_type": "department_id",
-                    "fetch_child": "false",
-                    "page_size": 50,
-                    "page_token": page_token,
-                },
-            )
-            for raw in data.get("items") or []:
-                if not isinstance(raw, dict):
-                    continue
-                department_id = str(raw.get("department_id") or "").strip()
-                if not department_id or department_id in departments_by_id:
-                    continue
-                departments_by_id[department_id] = {
-                    "departmentId": department_id,
-                    "name": str(raw.get("name") or department_id).strip(),
-                    "parentDepartmentId": str(raw.get("parent_department_id") or parent_id).strip(),
-                }
-                queue.append(department_id)
-            if not data.get("has_more"):
-                break
-            page_token = str(data.get("page_token") or "").strip()
-            if not page_token:
-                break
+    page_token = ""
+    while True:
+        data = _feishu_directory_get(
+            f"/contact/v3/departments/{quote(root_id, safe='')}/children",
+            token,
+            {
+                "department_id_type": "department_id",
+                "fetch_child": "true",
+                "page_size": 50,
+                "page_token": page_token,
+            },
+        )
+        for raw in data.get("items") or []:
+            if not isinstance(raw, dict):
+                continue
+            department_id = str(raw.get("department_id") or "").strip()
+            if not department_id or department_id in departments_by_id:
+                continue
+            departments_by_id[department_id] = {
+                "departmentId": department_id,
+                "name": str(raw.get("name") or department_id).strip(),
+                "parentDepartmentId": str(raw.get("parent_department_id") or root_id).strip(),
+            }
+        if not data.get("has_more"):
+            break
+        page_token = str(data.get("page_token") or "").strip()
+        if not page_token:
+            break
 
-    users_by_id: dict[str, dict[str, Any]] = {}
-    for department_id in departments_by_id:
-        page_token = ""
+    def _fetch_department_members(department_id: str) -> tuple[str, list[dict[str, Any]]]:
+        members: list[dict[str, Any]] = []
+        member_page_token = ""
         while True:
-            data = _feishu_directory_get(
+            member_data = _feishu_directory_get(
                 "/contact/v3/users/find_by_department",
                 token,
                 {
@@ -1580,10 +1576,24 @@ def _fetch_feishu_directory_snapshot() -> tuple[list[dict[str, Any]], list[dict[
                     "department_id_type": "department_id",
                     "user_id_type": "user_id",
                     "page_size": 50,
-                    "page_token": page_token,
+                    "page_token": member_page_token,
                 },
             )
-            for raw in data.get("items") or []:
+            members.extend(raw for raw in member_data.get("items") or [] if isinstance(raw, dict))
+            if not member_data.get("has_more"):
+                break
+            member_page_token = str(member_data.get("page_token") or "").strip()
+            if not member_page_token:
+                break
+        return department_id, members
+
+    users_by_id: dict[str, dict[str, Any]] = {}
+    department_ids = list(departments_by_id)
+    max_workers = min(8, len(department_ids))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        member_batches = executor.map(_fetch_department_members, department_ids)
+        for department_id, members in member_batches:
+            for raw in members:
                 if not isinstance(raw, dict):
                     continue
                 user_id = str(raw.get("user_id") or "").strip()
@@ -1605,11 +1615,6 @@ def _fetch_feishu_directory_snapshot() -> tuple[list[dict[str, Any]], list[dict[
                 if department_id not in scoped_ids:
                     scoped_ids.append(department_id)
                 current["departmentIds"] = list(dict.fromkeys([*current["departmentIds"], *scoped_ids]))
-            if not data.get("has_more"):
-                break
-            page_token = str(data.get("page_token") or "").strip()
-            if not page_token:
-                break
     return list(departments_by_id.values()), list(users_by_id.values())
 
 

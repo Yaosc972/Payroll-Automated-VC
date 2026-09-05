@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 import sqlite3
+import threading
 
 import bonus_platform.app as app_module
 import bonus_platform.engine.admin_store as admin_store
@@ -149,9 +150,14 @@ def test_feishu_directory_fetch_walks_subtree_and_deduplicates_members(monkeypat
         if path.endswith("/departments/od_hras"):
             return {"department": {"name": "HRAS 人力综合条线", "parent_department_id": "0"}}
         if path.endswith("/departments/od_hras/children"):
-            return {"items": [{"department_id": "od_payroll", "name": "薪酬组", "parent_department_id": "od_hras"}], "has_more": False}
-        if path.endswith("/departments/od_payroll/children"):
-            return {"items": [], "has_more": False}
+            assert params["fetch_child"] == "true"
+            return {
+                "items": [
+                    {"department_id": "od_payroll", "name": "薪酬组", "parent_department_id": "od_hras"},
+                    {"department_id": "od_overseas", "name": "海外薪酬组", "parent_department_id": "od_payroll"},
+                ],
+                "has_more": False,
+            }
         if path.endswith("/users/find_by_department"):
             department_id = params["department_id"]
             return {
@@ -170,11 +176,47 @@ def test_feishu_directory_fetch_walks_subtree_and_deduplicates_members(monkeypat
 
     departments, users = app_module._fetch_feishu_directory_snapshot()
 
-    assert {item["departmentId"] for item in departments} == {"od_hras", "od_payroll"}
+    assert {item["departmentId"] for item in departments} == {"od_hras", "od_payroll", "od_overseas"}
     assert len(users) == 1
     assert users[0]["feishuUserId"] == "u_one"
     assert users[0]["employeeNumber"] == "ZT1"
-    assert users[0]["departmentIds"] == ["od_hras", "od_payroll"]
+    assert users[0]["departmentIds"] == ["od_hras", "od_payroll", "od_overseas"]
+
+
+def test_feishu_directory_fetch_loads_department_members_concurrently(monkeypatch):
+    monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID", "od_hras")
+    monkeypatch.setattr(app_module, "_get_feishu_tenant_access_token", lambda: "tenant-token")
+    member_barrier = threading.Barrier(2)
+
+    def fake_get(path, token, params):
+        assert token == "tenant-token"
+        if path.endswith("/departments/od_hras"):
+            return {"department": {"name": "HRAS 人力综合条线", "parent_department_id": "0"}}
+        if path.endswith("/departments/od_hras/children"):
+            return {
+                "items": [{"department_id": "od_payroll", "name": "薪酬组", "parent_department_id": "od_hras"}],
+                "has_more": False,
+            }
+        if path.endswith("/users/find_by_department"):
+            member_barrier.wait(timeout=1)
+            department_id = params["department_id"]
+            return {
+                "items": [{
+                    "user_id": f"u_{department_id}",
+                    "open_id": f"ou_{department_id}",
+                    "name": department_id,
+                    "department_ids": [department_id],
+                }],
+                "has_more": False,
+            }
+        raise AssertionError(path)
+
+    monkeypatch.setattr(app_module, "_feishu_directory_get", fake_get)
+
+    departments, users = app_module._fetch_feishu_directory_snapshot()
+
+    assert len(departments) == 2
+    assert {item["feishuUserId"] for item in users} == {"u_od_hras", "u_od_payroll"}
 
 
 def test_production_directory_sync_applies_snapshot_once(tmp_path, monkeypatch):
