@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import gzip
+import hashlib
 import json
 import mimetypes
 import os
@@ -28,6 +29,7 @@ class DomesticLaborStorageStatusError(RuntimeError):
             code = ""
         suffix = f" ({code})" if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", code) else ""
         super().__init__(f"Supabase Storage returned HTTP {status_code}{suffix}")
+        self.error_code = code if suffix else ""
         self.status_code = status_code
         self.text = text
 
@@ -138,7 +140,7 @@ def save_domestic_labor_file_to_persistent(run_id: str, run_dir: Path, path: str
     relative_path = source.relative_to(run_dir).as_posix()
     content_type, _ = mimetypes.guess_type(source.name)
     _upload_bytes(
-        _object_path(run_id, relative_path),
+        _file_object_path(run_id, relative_path),
         source.read_bytes(),
         content_type=content_type or "application/octet-stream",
     )
@@ -152,7 +154,18 @@ def load_domestic_labor_file_from_persistent(
     normalized = _normalize_relative_path(relative_path)
     target = run_dir / normalized
     target.parent.mkdir(parents=True, exist_ok=True)
-    return target if _download_to_path(_object_path(run_id, normalized), target) else None
+    object_path = _file_object_path(run_id, normalized)
+    if _download_to_path(object_path, target):
+        return target
+    legacy_path = _object_path(run_id, normalized)
+    if legacy_path != object_path:
+        try:
+            if _download_to_path(legacy_path, target):
+                return target
+        except DomesticLaborStorageStatusError as exc:
+            if exc.error_code != "InvalidKey":
+                raise
+    return None
 
 
 def create_domestic_labor_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:
@@ -226,6 +239,14 @@ def _environment_prefix() -> str:
 
 def _object_path(run_id: str, relative_path: str) -> str:
     return f"{_environment_prefix()}/{_safe_run_id(run_id)}/{_normalize_relative_path(relative_path)}"
+
+
+def _file_object_path(run_id: str, relative_path: str) -> str:
+    normalized = _normalize_relative_path(relative_path)
+    # Storage rejects Unicode object keys; keep the display/download name unchanged.
+    if not normalized.isascii():
+        normalized = "file_" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return _object_path(run_id, normalized)
 
 
 def _supabase_url() -> str:

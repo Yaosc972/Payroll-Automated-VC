@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+import pytest
 
 from bonus_platform.engine.domestic_labor import persistent_storage, runs
 
@@ -129,3 +130,52 @@ def _write_remote_file(run_dir, relative_path):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(b"persisted")
     return target
+
+
+def test_unicode_export_uses_ascii_storage_key_and_restores_original_name(monkeypatch, tmp_path):
+    objects = {}
+    monkeypatch.setattr(persistent_storage, "_upload_bytes", lambda key, data, **kwargs: objects.update({key: data}))
+    def download(key, target):
+        if key not in objects:
+            return False
+        target.write_bytes(objects[key])
+        return True
+    monkeypatch.setattr(persistent_storage, "_download_to_path", download)
+    path = tmp_path / "岗位补贴核算结果_202607.xlsx"
+    path.write_bytes(b"synthetic-export")
+    persistent_storage.save_domestic_labor_file_to_persistent("payroll_qa", tmp_path, path)
+    assert all(key.isascii() for key in objects)
+    path.unlink()
+    restored = persistent_storage.load_domestic_labor_file_from_persistent("payroll_qa", tmp_path, path.name)
+    assert restored == path
+    assert path.read_bytes() == b"synthetic-export"
+
+
+def test_unicode_export_can_read_legacy_object_key(monkeypatch, tmp_path):
+    legacy = persistent_storage._object_path("payroll_qa", "旧导出.xlsx")
+    def download(key, target):
+        if key != legacy:
+            return False
+        target.write_bytes(b"legacy")
+        return True
+    monkeypatch.setattr(persistent_storage, "_download_to_path", download)
+    restored = persistent_storage.load_domestic_labor_file_from_persistent("payroll_qa", tmp_path, "旧导出.xlsx")
+    assert restored.read_bytes() == b"legacy"
+
+
+def test_ascii_storage_keys_remain_unchanged():
+    assert persistent_storage._file_object_path("payroll_qa", "upload_abc.xlsx") == persistent_storage._object_path("payroll_qa", "upload_abc.xlsx")
+
+
+@pytest.mark.parametrize("error_code", ["InvalidKey", "AccessDenied"])
+def test_missing_unicode_export_only_ignores_legacy_invalid_key(monkeypatch, tmp_path, error_code):
+    def download(key, target):
+        if key.isascii():
+            return False
+        raise persistent_storage.DomesticLaborStorageStatusError(400, json.dumps({"error": error_code}))
+    monkeypatch.setattr(persistent_storage, "_download_to_path", download)
+    if error_code == "InvalidKey":
+        assert persistent_storage.load_domestic_labor_file_from_persistent("payroll_qa", tmp_path, "不存在.xlsx") is None
+    else:
+        with pytest.raises(persistent_storage.DomesticLaborStorageStatusError):
+            persistent_storage.load_domestic_labor_file_from_persistent("payroll_qa", tmp_path, "不存在.xlsx")
