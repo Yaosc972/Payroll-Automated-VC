@@ -58,6 +58,35 @@
   }
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const taskHistoryKey = 'wb_payroll_async_tasks_v1';
+  const taskHistoryMax = 25;
+  let restoreGeneration = 0;
+
+  function getTaskHistory() {
+    try {
+      const value = JSON.parse(localStorage.getItem(taskHistoryKey) || '[]');
+      return Array.isArray(value) ? value.filter(item => item && item.id && item.toolId) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function saveTaskHistory(items) {
+    try {
+      localStorage.setItem(taskHistoryKey, JSON.stringify(items.slice(0, taskHistoryMax)));
+    } catch (_) {}
+  }
+
+  function rememberTask(task) {
+    if (!task || !task.id || !task.toolId) return;
+    const items = getTaskHistory().filter(item => item.id !== task.id);
+    items.unshift({ id: task.id, toolId: task.toolId, createdAt: task.createdAt || new Date().toISOString() });
+    saveTaskHistory(items);
+  }
+
+  function forgetTask(taskId) {
+    saveTaskHistory(getTaskHistory().filter(item => item.id !== taskId));
+  }
 
   async function sha256(file) {
     const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
@@ -71,7 +100,9 @@
     if (!response.ok) {
       const detail = payload.detail;
       const message = typeof detail === 'string' ? detail : (detail && detail.message) || payload.error || ('请求失败 (' + response.status + ')');
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return payload;
   }
@@ -126,7 +157,15 @@
     throw new Error('处理时间超过 15 分钟，请稍后在任务记录中查看。');
   }
 
-  async function downloadTask(task, item) {
+  function appendDownloadButton(item) {
+    const button = document.createElement('button');
+    button.textContent = '下载 Excel';
+    button.className = 'btn-dl';
+    button.onclick = () => { window.location.href = item.dataset.downloadUrl; };
+    item.appendChild(button);
+  }
+
+  async function downloadTask(task, item, autoDownload) {
     const download = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/download');
     const summary = task.summary || '处理完成';
     const meta = {
@@ -140,20 +179,88 @@
       const summaryBox = document.createElement('div');
       summaryBox.className = 'summary';
       summaryBox.textContent = summary;
-      const button = document.createElement('button');
-      button.textContent = '下载 Excel';
-      button.className = 'btn-dl';
-      button.onclick = () => { window.location.href = item.dataset.downloadUrl; };
       item.appendChild(summaryBox);
-      item.appendChild(button);
+      appendDownloadButton(item);
     } else {
       setItem(item, true, summary.replace(/\n/g, ' ｜ '), meta);
-      const anchor = document.createElement('a');
-      anchor.href = download.signedUrl;
-      anchor.download = download.filename || '';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
+      if (autoDownload !== false) {
+        const anchor = document.createElement('a');
+        anchor.href = download.signedUrl;
+        anchor.download = download.filename || '';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } else {
+        appendDownloadButton(item);
+      }
+    }
+  }
+
+  function taskDisplayName(task) {
+    const names = (task.files || []).map(file => file.filename).filter(Boolean);
+    return names.join(' ＋ ') || task.toolName || '海外薪资处理任务';
+  }
+
+  async function resumeTask(task, item) {
+    if (task.status === 'failed') {
+      const message = task.error || '处理任务失败。';
+      setItem(item, false, '失败: ' + message);
+      showErrorDetail(item, message);
+      return;
+    }
+    if (task.status === 'succeeded') {
+      await downloadTask(task, item, false);
+      return;
+    }
+    if (task.status === 'uploading') {
+      const message = '页面刷新中断了本次上传，请重新选择文件。';
+      setItem(item, false, message);
+      showErrorDetail(item, '浏览器刷新后无法继续传输尚未上传完成的文件，云端未保存不完整文件。');
+      return;
+    }
+    if (task.status === 'ready') {
+      setProgress(item, '文件已上传，正在恢复云端处理…');
+      const response = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/enqueue', { method: 'POST' });
+      task = response.task || task;
+    }
+    if (task.status === 'failed') {
+      const message = task.error || '处理任务失败。';
+      setItem(item, false, '失败: ' + message);
+      showErrorDetail(item, message);
+      return;
+    }
+    if (task.status === 'succeeded') {
+      await downloadTask(task, item, false);
+      return;
+    }
+    setProgress(item, (task.progress && task.progress.message) || task.statusLabel || '正在恢复任务状态…');
+    const completed = await waitForTask(task.id, item);
+    await downloadTask(completed, item, false);
+  }
+
+  async function restoreTaskHistory(toolId) {
+    const generation = ++restoreGeneration;
+    const refs = getTaskHistory().filter(item => item.toolId === toolId);
+    if (!refs.length) return;
+    const results = await Promise.all(refs.map(async ref => {
+      try {
+        return { ref, task: await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(ref.id)) };
+      } catch (error) {
+        return { ref, error };
+      }
+    }));
+    if (generation !== restoreGeneration || !CURRENT_TOOL || CURRENT_TOOL.id !== toolId) return;
+    for (const result of results.slice().reverse()) {
+      if (result.error) {
+        if (result.error.status === 404) forgetTask(result.ref.id);
+        continue;
+      }
+      const item = addItem(taskDisplayName(result.task));
+      resumeTask(result.task, item).catch(error => {
+        const message = error && error.message ? error.message : String(error || '恢复任务失败');
+        setItem(item, false, '恢复失败: ' + message);
+        showErrorDetail(item, message);
+      });
     }
   }
 
@@ -177,6 +284,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ toolId: CURRENT_TOOL.id, files: fileSpecs }),
       });
+      rememberTask(created.task);
       const uploadedBytes = new Array(files.length).fill(0);
       const totalBytes = files.reduce((total, file) => total + file.size, 0);
       let nextUpload = 0;
@@ -207,7 +315,7 @@
       setProgress(item, '文件上传完成，正在云端处理…');
       await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(created.task.id) + '/enqueue', { method: 'POST' });
       const task = await waitForTask(created.task.id, item);
-      await downloadTask(task, item);
+      await downloadTask(task, item, true);
     } catch (error) {
       const message = error && error.message ? error.message : String(error || '未知错误');
       setItem(item, false, '失败: ' + message);
@@ -226,4 +334,15 @@
     const displayName = list.map(file => file.name).join(' ＋ ');
     return runAsyncTask(list, displayName, displayName + '|batch');
   };
+
+  if (typeof showTool === 'function') {
+    const originalShowTool = showTool;
+    showTool = function (id) {
+      originalShowTool(id);
+      restoreTaskHistory(id);
+    };
+  }
+  if (typeof CURRENT_TOOL !== 'undefined' && CURRENT_TOOL) {
+    restoreTaskHistory(CURRENT_TOOL.id);
+  }
 })();
