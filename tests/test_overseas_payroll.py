@@ -59,7 +59,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
     assert page.status_code == 200
-    assert '<script src="/overseas-payroll-async.js?v=2"></script>' in page.text
+    assert '<script src="/overseas-payroll-async.js?v=3"></script>' in page.text
     assert adapter.status_code == 200
     assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
     assert b"getElementById('sidefoot')?.remove()" in adapter.content
