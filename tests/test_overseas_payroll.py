@@ -8,6 +8,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 from bonus_platform.app import app
@@ -218,6 +219,26 @@ def test_download_link_is_signed_again_on_each_request(monkeypatch: pytest.Monke
     }}
     assert tasks.output_download(task)["signedUrl"] != tasks.output_download(task)["signedUrl"]
     assert calls == [("owner/result", "result.xlsx", 300)] * 2
+
+
+@pytest.mark.parametrize("status,detail,expected", [
+    (400, {"statusCode": "404", "error": "not_found", "message": "Object not found"}, FileNotFoundError),
+    (404, {}, FileNotFoundError),
+    (400, {"message": "Invalid JWT"}, httpx.HTTPStatusError),
+    (403, {}, httpx.HTTPStatusError),
+    (503, {}, httpx.HTTPStatusError),
+])
+def test_cloud_interrupted_upload_reports_missing_file(status, detail, expected, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    request = httpx.Request("HEAD", "https://storage.invalid/object/synthetic.pdf")
+    def metadata(_):
+        httpx.Response(400, request=request).raise_for_status()
+    monkeypatch.setattr(tasks, "labor_supabase_object_metadata", metadata)
+    transport = httpx.MockTransport(lambda request: httpx.Response(status, json=detail))
+    client = httpx.Client(transport=transport)
+    monkeypatch.setattr(tasks, "_input_probe_client", lambda: client)
+    with pytest.raises(expected):
+        tasks._observed_input({"id": "qa"}, {"objectKey": "synthetic.pdf"})
 
 
 def test_cloud_task_downloads_processes_and_persists_result(monkeypatch: pytest.MonkeyPatch) -> None:

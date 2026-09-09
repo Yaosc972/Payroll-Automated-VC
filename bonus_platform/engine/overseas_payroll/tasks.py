@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
+import httpx
+
 from ...config import OUTPUT_DIR
 from ..labor.persistent_storage import (
     create_labor_supabase_signed_download,
@@ -280,9 +282,46 @@ def store_task_output(task_id: str, *, owner_user_id: str, output_id: str, conte
         store_local_file(task_id, output_id, content, output=True)
 
 
+def _input_probe_client() -> httpx.Client:
+    return httpx.Client(timeout=30.0)
+
+
 def _observed_input(task: dict[str, Any], file: dict[str, Any]) -> dict[str, Any]:
     if labor_supabase_storage_enabled():
-        return labor_supabase_object_metadata(str(file["objectKey"]))
+        key = str(file["objectKey"])
+        try:
+            return labor_supabase_object_metadata(key)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                raise FileNotFoundError("上传文件不存在。") from exc
+            if exc.response.status_code != 400 or exc.request.method != "HEAD":
+                raise
+            # Supabase can return an empty HEAD 400 for an absent object.
+            # A ranged GET distinguishes missing input from auth/service errors.
+            headers = dict(exc.request.headers)
+            headers["range"] = "bytes=0-0"
+            headers["cache-control"] = "no-cache, no-store"
+            with _input_probe_client() as client:
+                with client.stream("GET", exc.request.url, headers=headers) as response:
+                    missing = response.status_code == 404
+                    if response.status_code == 400:
+                        response.read()
+                        try:
+                            detail = response.json()
+                        except ValueError:
+                            detail = {}
+                        if isinstance(detail, dict):
+                            missing = (str(detail.get("statusCode")) == "404"
+                                       or detail.get("code") == "NoSuchKey"
+                                       or detail.get("error") == "not_found"
+                                       or str(detail.get("message", "")).lower() in {
+                                           "object not found", "the resource was not found",
+                                       })
+                    if missing:
+                        raise FileNotFoundError("上传文件不存在。") from exc
+                    response.raise_for_status()
+            # The upload may have completed between the HEAD and probe.
+            return labor_supabase_object_metadata(key)
     path = local_file_path(str(task["id"]), str(file["id"]))
     if not path.is_file():
         raise FileNotFoundError("上传文件不存在。")
