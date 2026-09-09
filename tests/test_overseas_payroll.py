@@ -59,7 +59,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
     assert page.status_code == 200
-    assert '<script src="/overseas-payroll-async.js?v=3"></script>' in page.text
+    assert '<script src="/overseas-payroll-async.js?v=4"></script>' in page.text
     assert adapter.status_code == 200
     assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
     assert b"getElementById('sidefoot')?.remove()" in adapter.content
@@ -179,6 +179,45 @@ def test_local_async_task_upload_process_and_download(tmp_path, monkeypatch: pyt
         response = client.get(download["signedUrl"])
         assert response.content == result.content
     asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+@pytest.mark.parametrize("status", ["queued", "processing", "succeeded", "failed"])
+def test_repeated_finalize_does_not_reset_task(status, monkeypatch: pytest.MonkeyPatch) -> None:
+    task = {"status": status, "files": [{"id": "file-1", "status": "uploaded"}]}
+    monkeypatch.setattr(tasks, "update_task", lambda task_id, owner_user_id, updater: updater(task))
+    monkeypatch.setattr(tasks, "_observed_input", lambda *_: pytest.fail("Must not revalidate an already enqueued task"))
+    assert tasks.finalize_input("task-1", "file-1", owner_user_id="owner")["status"] == status
+
+
+@pytest.mark.parametrize("suffix", ["", "/download", "/output/content"])
+def test_foreign_task_is_not_exposed(suffix, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tasks, "TASK_ROOT", tmp_path)
+    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: False)
+    monkeypatch.setattr(payroll_router, "labor_supabase_storage_enabled", lambda: False)
+    task, _ = tasks.create_task("owner-a", "norway_payment", [{
+        "filename": "synthetic.pdf", "sizeBytes": 1, "sha256": "0" * 64,
+        "contentType": "application/pdf",
+    }])
+    monkeypatch.setattr(payroll_router, "_require_access", lambda _: "owner-b")
+    with TestClient(app) as client:
+        response = client.get(f"/api/overseas-payroll/tasks/{task['id']}{suffix}")
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    assert response.status_code == 404
+    assert "synthetic.pdf" not in response.text
+
+
+def test_download_link_is_signed_again_on_each_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    def sign(key, *, filename, expires_in):
+        calls.append((key, filename, expires_in))
+        return {"signedUrl": f"https://storage.invalid/result?signature={len(calls)}"}
+    monkeypatch.setattr(tasks, "create_labor_supabase_signed_download", sign)
+    task = {"status": "succeeded", "output": {
+        "status": "ready", "objectKey": "owner/result", "filename": "result.xlsx",
+    }}
+    assert tasks.output_download(task)["signedUrl"] != tasks.output_download(task)["signedUrl"]
+    assert calls == [("owner/result", "result.xlsx", 300)] * 2
 
 
 def test_cloud_task_downloads_processes_and_persists_result(monkeypatch: pytest.MonkeyPatch) -> None:

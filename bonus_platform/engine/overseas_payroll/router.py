@@ -108,7 +108,7 @@ def overseas_payroll_page(request: Request) -> HTMLResponse:
     # These are the same runtime substitutions made by the original server.
     # The checked-in frontend resource remains byte-identical to the handover.
     html = html.replace("__PASSCODE_HINT__", "").replace("__NO_AUTH__", "false")
-    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=3"></script></body>')
+    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=4"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
@@ -338,9 +338,11 @@ def get_overseas_payroll_task(task_id: str, request: Request) -> dict:
 @router.get("/tasks/{task_id}/download")
 def get_overseas_payroll_download(task_id: str, request: Request) -> dict:
     owner_user_id = _require_access(request)
-    task = load_task(task_id, owner_user_id=owner_user_id)
     try:
+        task = load_task(task_id, owner_user_id=owner_user_id)
         return output_download(task)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -350,7 +352,10 @@ def download_local_overseas_payroll_output(task_id: str, request: Request) -> Fi
     owner_user_id = _require_access(request)
     if labor_supabase_storage_enabled():
         raise HTTPException(status_code=404, detail="生产结果必须通过签名地址下载。")
-    task = load_task(task_id, owner_user_id=owner_user_id)
+    try:
+        task = load_task(task_id, owner_user_id=owner_user_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     output = task.get("output") if isinstance(task.get("output"), dict) else None
     if task.get("status") != "succeeded" or not output:
         raise HTTPException(status_code=409, detail="处理结果尚未生成。")

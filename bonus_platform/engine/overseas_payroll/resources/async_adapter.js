@@ -52,36 +52,48 @@
   if (typeof renderBar === 'function') {
     const originalRenderBar = renderBar;
     renderBar = function (user) {
+      const previousId = CURRENT_USER && CURRENT_USER.id;
+      if (previousId !== (user && user.id)) {
+        restoreGeneration += 1;
+        document.getElementById('log')?.replaceChildren();
+      }
       originalRenderBar(user);
       renderFeishuAvatar(user);
     };
   }
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const taskHistoryKey = 'wb_payroll_async_tasks_v1';
+  const taskHistoryPrefix = 'wb_payroll_async_tasks_v2:';
   const taskHistoryMax = 25;
   let restoreGeneration = 0;
 
-  function getTaskHistory() {
+  function historyKey() {
+    return CURRENT_USER && CURRENT_USER.id
+      ? taskHistoryPrefix + encodeURIComponent(CURRENT_USER.id) : '';
+  }
+
+  function getTaskHistory(key = historyKey()) {
+    if (!key) return [];
     try {
-      const value = JSON.parse(localStorage.getItem(taskHistoryKey) || '[]');
+      const value = JSON.parse(localStorage.getItem(key) || '[]');
       return Array.isArray(value) ? value.filter(item => item && item.id && item.toolId) : [];
     } catch (_) {
       return [];
     }
   }
 
-  function saveTaskHistory(items) {
+  function saveTaskHistory(items, key = historyKey()) {
+    if (!key) return;
     try {
-      localStorage.setItem(taskHistoryKey, JSON.stringify(items.slice(0, taskHistoryMax)));
+      localStorage.setItem(key, JSON.stringify(items.slice(0, taskHistoryMax)));
     } catch (_) {}
   }
 
-  function rememberTask(task) {
+  function rememberTask(task, key = historyKey()) {
     if (!task || !task.id || !task.toolId) return;
-    const items = getTaskHistory().filter(item => item.id !== task.id);
+    const items = getTaskHistory(key).filter(item => item.id !== task.id);
     items.unshift({ id: task.id, toolId: task.toolId, createdAt: task.createdAt || new Date().toISOString() });
-    saveTaskHistory(items);
+    saveTaskHistory(items, key);
   }
 
   function forgetTask(taskId) {
@@ -147,6 +159,7 @@
   async function waitForTask(taskId, item) {
     const deadline = Date.now() + 15 * 60 * 1000;
     while (Date.now() < deadline) {
+      if (!item.isConnected || item.dataset.historyKey !== historyKey()) throw new Error('任务视图已切换，请在对应账号下重新查看。');
       const task = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(taskId));
       if (task.status === 'succeeded') return task;
       if (task.status === 'failed') throw new Error(task.error || '处理任务失败。');
@@ -157,43 +170,66 @@
     throw new Error('处理时间超过 15 分钟，请稍后在任务记录中查看。');
   }
 
-  function appendDownloadButton(item) {
+  async function startDownload(task, item) {
+    const current = await jsonRequest('/api/me', { cache: 'no-store' });
+    const currentKey = current.user && current.user.id
+      ? taskHistoryPrefix + encodeURIComponent(current.user.id) : '';
+    if (!currentKey || currentKey !== item.dataset.historyKey) {
+      renderBar(current.user || null);
+      throw new Error('登录账号已变化，请刷新后查看当前账号任务。');
+    }
+    const download = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/download', { cache: 'no-store' });
+    if (!item.isConnected || item.dataset.historyKey !== historyKey()) return;
+    const anchor = document.createElement('a');
+    anchor.href = download.signedUrl;
+    anchor.download = download.filename || '';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
+  function appendDownloadButton(task, item) {
     const button = document.createElement('button');
-    button.textContent = '下载 Excel';
+    button.textContent = '下载结果';
     button.className = 'btn-dl';
-    button.onclick = () => { window.location.href = item.dataset.downloadUrl; };
+    button.onclick = async () => {
+      button.disabled = true;
+      item.querySelector('.download-error')?.remove();
+      try {
+        await startDownload(task, item);
+      } catch (error) {
+        const message = document.createElement('div');
+        message.className = 'download-error';
+        message.setAttribute('role', 'alert');
+        message.textContent = '下载失败，可重试：' + error.message;
+        item.appendChild(message);
+      } finally {
+        button.disabled = false;
+      }
+    };
     item.appendChild(button);
+    return button;
   }
 
   async function downloadTask(task, item, autoDownload) {
-    const download = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/download');
+    if (!item.isConnected || item.dataset.historyKey !== historyKey()) return;
     const summary = task.summary || '处理完成';
     const meta = {
       in_bytes: (task.files || []).reduce((total, file) => total + Number(file.sizeBytes || 0), 0),
       out_bytes: task.output && task.output.sizeBytes,
     };
-    item.dataset.fname = download.filename || (task.output && task.output.filename) || 'result.xlsx';
-    item.dataset.downloadUrl = download.signedUrl;
+    item.dataset.fname = (task.output && task.output.filename) || 'result.xlsx';
     if (CURRENT_TOOL && CURRENT_TOOL.preview) {
       setItem(item, true, '已生成', meta);
       const summaryBox = document.createElement('div');
       summaryBox.className = 'summary';
       summaryBox.textContent = summary;
       item.appendChild(summaryBox);
-      appendDownloadButton(item);
     } else {
       setItem(item, true, summary.replace(/\n/g, ' ｜ '), meta);
-      if (autoDownload !== false) {
-        const anchor = document.createElement('a');
-        anchor.href = download.signedUrl;
-        anchor.download = download.filename || '';
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-      } else {
-        appendDownloadButton(item);
-      }
     }
+    const button = appendDownloadButton(task, item);
+    if (autoDownload !== false && !(CURRENT_TOOL && CURRENT_TOOL.preview)) await button.onclick();
   }
 
   function taskDisplayName(task) {
@@ -213,15 +249,28 @@
       return;
     }
     if (task.status === 'uploading') {
-      const message = '页面刷新中断了本次上传，请重新选择文件。';
-      setItem(item, false, message);
-      showErrorDetail(item, '浏览器刷新后无法继续传输尚未上传完成的文件，云端未保存不完整文件。');
-      return;
+      try {
+        for (const file of task.files || []) {
+          const response = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/files/' + encodeURIComponent(file.id) + '/finalize', { method: 'POST' });
+          task = response.task || task;
+        }
+      } catch (error) {
+        if (error.status !== 404 && error.status !== 409) throw error;
+        setItem(item, false, '上传未完成，请重新选择文件。');
+        showErrorDetail(item, '刷新后无法继续传输未完成的文件。已上传的文件不代表整个任务已可处理，请重新选择本次所需文件。');
+        return;
+      }
     }
     if (task.status === 'ready') {
       setProgress(item, '文件已上传，正在恢复云端处理…');
-      const response = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/enqueue', { method: 'POST' });
-      task = response.task || task;
+      try {
+        const response = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id) + '/enqueue', { method: 'POST' });
+        task = response.task || task;
+      } catch (error) {
+        if (error.status !== 409) throw error;
+        task = await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(task.id));
+        if (task.status === 'ready' || task.status === 'uploading') throw error;
+      }
     }
     if (task.status === 'failed') {
       const message = task.error || '处理任务失败。';
@@ -240,6 +289,7 @@
 
   async function restoreTaskHistory(toolId) {
     const generation = ++restoreGeneration;
+    const key = historyKey();
     const refs = getTaskHistory().filter(item => item.toolId === toolId);
     if (!refs.length) return;
     const results = await Promise.all(refs.map(async ref => {
@@ -249,13 +299,14 @@
         return { ref, error };
       }
     }));
-    if (generation !== restoreGeneration || !CURRENT_TOOL || CURRENT_TOOL.id !== toolId) return;
+    if (generation !== restoreGeneration || key !== historyKey() || !CURRENT_TOOL || CURRENT_TOOL.id !== toolId) return;
     for (const result of results.slice().reverse()) {
       if (result.error) {
         if (result.error.status === 404) forgetTask(result.ref.id);
         continue;
       }
       const item = addItem(taskDisplayName(result.task));
+      item.dataset.historyKey = key;
       resumeTask(result.task, item).catch(error => {
         const message = error && error.message ? error.message : String(error || '恢复任务失败');
         setItem(item, false, '恢复失败: ' + message);
@@ -268,7 +319,11 @@
     if (_processing.has(lockKey)) return;
     _processing.add(lockKey);
     const item = addItem(displayName);
+    const key = historyKey();
+    const toolId = CURRENT_TOOL.id;
+    item.dataset.historyKey = key;
     try {
+      if (!key) throw new Error('请先登录后再上传。');
       setProgress(item, '正在校验文件…');
       const fileSpecs = [];
       for (const file of files) {
@@ -282,9 +337,9 @@
       const created = await jsonRequest('/api/overseas-payroll/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toolId: CURRENT_TOOL.id, files: fileSpecs }),
+        body: JSON.stringify({ toolId, files: fileSpecs }),
       });
-      rememberTask(created.task);
+      rememberTask(created.task, key);
       const uploadedBytes = new Array(files.length).fill(0);
       const totalBytes = files.reduce((total, file) => total + file.size, 0);
       let nextUpload = 0;

@@ -298,6 +298,9 @@ def finalize_input(task_id: str, file_id: str, *, owner_user_id: str) -> dict[st
         file = next((item for item in task.get("files", []) if item.get("id") == file_id), None)
         if not file:
             raise FileNotFoundError("上传文件记录不存在。")
+        # Refresh recovery may repeat finalize after processing has already begun.
+        if task.get("status") not in {"uploading", "ready"}:
+            return task
         observed = _observed_input(task, file)
         if int(observed.get("sizeBytes") or 0) != int(file["sizeBytes"]):
             raise ValueError("上传文件大小与任务清单不一致。")
