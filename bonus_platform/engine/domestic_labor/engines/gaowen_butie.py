@@ -34,9 +34,9 @@ JINJIANG_ELIGIBLE_POSITIONS = {"操作员", "门禁员", "操作组长"}
 
 REGION_STANDARDS = {
     "东莞": {"hourly_rate": 1.725, "daily_cap": 13.8, "monthly_cap": 300.0},
-    # 当前线下规则表仍按13.8元/天执行；浙江室内/室外拆分待薪酬组确认后再分流。
-    "嘉善": {"hourly_rate": 1.725, "daily_cap": 13.8, "monthly_cap": 300.0},
-    "义乌": {"hourly_rate": 1.725, "daily_cap": 13.8, "monthly_cap": 300.0},
+    # 薪酬已确认本批华东仓库内作业按浙江室内标准核算；原线下13.8元/天公式有误。
+    "嘉善": {"hourly_rate": 1.15, "daily_cap": 9.2, "monthly_cap": 200.0},
+    "义乌": {"hourly_rate": 1.15, "daily_cap": 9.2, "monthly_cap": 200.0},
     "晋江": {"hourly_rate": 1.5, "daily_cap": 12.0, "monthly_cap": 260.0},
 }
 
@@ -197,6 +197,8 @@ class GaoWenBuTieEngine(BaseEngine):
         name = _text(employee_data.get("姓名"))
         work_area = _text(employee_data.get("工作地区"))
         position = _text(employee_data.get("岗位名称") or employee_data.get("岗位"))
+        if _text(employee_data.get("办公地点是否有空调")) == "是":
+            return "办公地点有空调，不享有高温补贴", "办公地点是否有空调=是，按已确认规则不计发高温补贴"
         if "东莞" in work_area and name in DONGGUAN_EXCLUDED_NAMES:
             return "固定排除名单", "东莞高温补贴固定排除人员"
         if work_area in {"嘉善", "义乌"} and name in ZHEJIANG_EXCLUDED_NAMES:
@@ -230,7 +232,11 @@ class GaoWenBuTieEngine(BaseEngine):
         position = _text(employee_data.get("岗位名称") or employee_data.get("岗位"))
         daily_attendance = daily_attendance or []
         standard = REGION_STANDARDS.get(work_area)
-        site = resolve_temperature_site(employee_data)
+        fallback_site = resolve_temperature_site(employee_data)
+        attendance_sites = [
+            _text(row.get("测温网点")) or fallback_site for row in daily_attendance
+        ]
+        site = "、".join(dict.fromkeys(value for value in attendance_sites if value)) if daily_attendance else fallback_site
         qualification, qualification_basis = self._qualification(employee_data)
         exceptions: List[PayrollException] = []
         warnings: List[str] = []
@@ -257,15 +263,15 @@ class GaoWenBuTieEngine(BaseEngine):
                 "确认工作地区及适用省份后重新核算；当前不阻止任务创建。",
             ))
             standard = {"hourly_rate": 0.0, "daily_cap": 0.0, "monthly_cap": 0.0}
-        elif not site:
-            message = "无法根据组织字段识别对应测温网点"
+        elif (daily_attendance and any(not value for value in attendance_sites)) or (not daily_attendance and not site):
+            message = "部分日考勤未填写测温网点，且无法根据组织字段识别对应网点"
             warnings.append(message)
             exceptions.append(_exception(
                 "HIGH_TEMPERATURE_SITE_UNRESOLVED",
                 employee_id,
                 employee_name,
                 message,
-                "核对员工组织归属与测温网点映射；不要把漏传测温文件当作无测温区域全额发放。",
+                "补充日考勤测温网点或核对员工组织归属与测温网点映射；不要把漏传测温文件当作无测温区域全额发放。",
             ))
 
         daily_results: List[Dict[str, Any]] = []
@@ -274,10 +280,10 @@ class GaoWenBuTieEngine(BaseEngine):
         payable_days = 0
         excluded_qualification = qualification != "符合当前适用范围"
 
-        for attendance in daily_attendance:
+        for attendance, daily_site in zip(daily_attendance, attendance_sites):
             attendance_day = _date_value(attendance.get("出勤日期") or attendance.get("日期"))
             shift = _attendance_shift(attendance)
-            temperature = self.temperature_index.get((site, attendance_day, shift)) if site and attendance_day and shift else None
+            temperature = self.temperature_index.get((daily_site, attendance_day, shift)) if daily_site and attendance_day and shift else None
             hours, hours_reason = self._hours(attendance)
             status = "excluded"
             reason_code = ""
@@ -289,7 +295,7 @@ class GaoWenBuTieEngine(BaseEngine):
                 reason_code = "outside_high_temperature_season"
             elif excluded_qualification:
                 reason_code = "employee_or_position_excluded"
-            elif not site:
+            elif not daily_site:
                 reason_code = "measurement_site_unresolved"
             elif not shift:
                 reason_code = "attendance_shift_unresolved"
@@ -314,7 +320,7 @@ class GaoWenBuTieEngine(BaseEngine):
             daily_results.append(HighTemperatureDayResult(
                 attendance_date=attendance_day.isoformat() if attendance_day else "",
                 shift=shift,
-                site=site,
+                site=daily_site,
                 temperature=temperature,
                 attendance_hours=_excel_round(hours, 4),
                 amount=_excel_round(float(amount), 4),
@@ -358,7 +364,8 @@ class GaoWenBuTieEngine(BaseEngine):
             "reason_counts": status_counts,
             "exceptions": [item.to_dict() for item in exceptions],
             "validation_note": (
-                "嘉善/义乌当前沿用线下规则表13.8元/天；浙江室内9.2元/室外13.8元的岗位映射待薪酬组确认。"
+                "嘉善/义乌按已确认的浙江室内标准1.15元/小时、9.2元/天、200元/月核算；"
+                "原线下13.8元/天公式不作为正确对照。"
                 if work_area in {"嘉善", "义乌"} else ""
             ),
             "audit_explanation": AuditExplanation(
@@ -371,6 +378,7 @@ class GaoWenBuTieEngine(BaseEngine):
                     "姓名": employee_name,
                     "工作地区": work_area,
                     "岗位名称": position,
+                    "办公地点是否有空调": _text(employee_data.get("办公地点是否有空调")),
                     "测温网点": site,
                     "日考勤记录数": len(daily_attendance),
                     "测温记录数": len(self.temperature_records),
@@ -386,8 +394,8 @@ class GaoWenBuTieEngine(BaseEngine):
                     "月度封顶": standard["monthly_cap"],
                 },
                 steps=[
-                    "根据员工工作地区和组织层级识别实际测温网点",
-                    "根据班次名称或班次时间段识别白班/夜班",
+                    "优先使用每条日考勤的测温网点，空值时根据员工工作地区和组织层级识别",
+                    "优先使用日考勤测温班次，缺失时依次根据排班时间、班次名称、上班打卡识别白班/夜班",
                     "匹配同网点、同出勤日期、同班次的最高温度",
                     "温度达到33℃且有实际出勤时，取正班时数与刷卡加班较大值",
                     f"按{standard['hourly_rate']:g}元/小时计算，单日封顶{standard['daily_cap']:g}元",

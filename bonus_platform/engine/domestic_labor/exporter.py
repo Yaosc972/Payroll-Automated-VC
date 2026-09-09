@@ -1,4 +1,5 @@
 """Excel export for domestic labor calculation results."""
+import math
 from pathlib import Path
 from typing import Any, Dict, List
 from datetime import date, datetime, time
@@ -42,14 +43,13 @@ class ExcelExporter:
         "补贴标准", "应发外宿补贴", "异常/提示",
     ]
     YEBAN_SUMMARY_HEADERS = [
-        "工号", "姓名", "工作地区", "部门", "岗位", "正常核算日", "暂算需确认日", "无需补贴日",
-        "异常未计金额日", "应发夜班补贴", "核算结果", "需处理事项",
+        "工号", "姓名", "工作地区", "部门", "岗位", "应发夜班补贴", "需处理事项",
     ]
     YEBAN_HEADERS = [
         "工号", "姓名", "工作地区", "岗位", "出勤日期", "班次", "当日结果", "业务原因",
         "上班打卡", "下班打卡", "计薪上班", "计薪下班", "夜班时长（小时）",
         "晚上休息扣除（小时）", "早上休息扣除（小时）", "休息扣除合计（小时）",
-        "当日夜班补贴", "需处理事项",
+        "当日夜班补贴", "需处理事项", "计算过程",
     ]
     GANGWEI_HEADERS = [
         "工号", "姓名", "工作地区", "部门", "岗位", "资格判断", "岗位补贴标准", "排班天数",
@@ -94,12 +94,14 @@ class ExcelExporter:
         "invalid_break_period": "班次休息时间配置错误",
         "partial_break_overlap": "实际出勤只覆盖部分休息时段",
         "negative_effective_duration": "扣除休息后没有有效夜班时长",
-        "three_am_shift_pending": "凌晨3点班早退口径待确认",
+        "three_am_shift_rule": "凌晨3点班按正班有效出勤折算",
         "work_area_scope_pending": "工作地区口径待确认",
         "jinjiang_special_list_unconfirmed": "晋江特殊名单尚未确认",
         "jinjiang_piecework_excluded": "晋江计件岗位不享有夜班补贴",
         "jinjiang_special_list_excluded": "属于晋江不享有夜班补贴名单",
         "jinjiang_gatekeeper_excluded": "晋江门禁岗位不享有夜班补贴",
+        "jiashan_yiwu_position_excluded": "嘉善/义乌固定排除岗位不享有夜班补贴",
+        "dongguan_lb39_excluded": "东莞LB39保洁班次不享有夜班补贴",
         "shift_break_config_missing": "班次休息时间尚未维护",
     }
     GENERAL_HEADERS = [
@@ -118,6 +120,7 @@ class ExcelExporter:
         results: List[Dict[str, Any]],
         attendance_month: str,
         summary: Dict[str, Any] = None,
+        night_shift_config: Dict[str, Any] = None,
     ) -> str:
         """Export results to Excel.
 
@@ -140,7 +143,9 @@ class ExcelExporter:
             self._write_yeban_summary_sheet(ws_detail, cleaned_results)
             ws_daily = wb.create_sheet("每日明细")
             self._write_yeban_detail_sheet(ws_daily, cleaned_results)
+            self._write_yeban_shift_sheet(wb.create_sheet("平台班次表"), night_shift_config)
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._finish_detail_exports(wb, cleaned_results)
             wb.save(str(self.output_path))
             wb.close()
             return str(self.output_path)
@@ -150,6 +155,7 @@ class ExcelExporter:
             ws_daily = wb.create_sheet("每日明细")
             self._write_gaowen_detail_sheet(ws_daily, cleaned_results)
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._finish_detail_exports(wb, cleaned_results)
             wb.save(str(self.output_path))
             wb.close()
             return str(self.output_path)
@@ -157,6 +163,7 @@ class ExcelExporter:
             ws_detail.title = "岗位补贴核算结果"
             self._write_gangwei_detail_sheet(ws_detail, cleaned_results)
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._finish_detail_exports(wb, cleaned_results)
             wb.save(str(self.output_path))
             wb.close()
             return str(self.output_path)
@@ -170,6 +177,7 @@ class ExcelExporter:
             or self._is_yeban_only(cleaned_results)
         ):
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._finish_detail_exports(wb, cleaned_results)
             wb.save(str(self.output_path))
             wb.close()
             return str(self.output_path)
@@ -186,10 +194,77 @@ class ExcelExporter:
 
         # 保存
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._finish_detail_exports(wb, cleaned_results)
         wb.save(str(self.output_path))
         wb.close()
 
         return str(self.output_path)
+
+    @classmethod
+    def _calculation_process(cls, result):
+        """Use saved audit evidence, including every subject in combined exports."""
+        parts = []
+        for subject, label in cls.SUBJECTS:
+            if subject not in cls._present_subjects([result]):
+                continue
+            audit = cls._subject_audit(result, subject)
+            amount = result.get(subject, cls._subject_detail(result, subject).get("amount"))
+            evidence = []
+            if audit.get("formula"):
+                evidence.append(f"公式：{audit['formula']}")
+            if audit.get("inputs"):
+                evidence.append("代入数据：" + cls._format_mapping(audit["inputs"]).replace("\n", "；"))
+            if audit.get("intermediate_values"):
+                evidence.append("中间结果：" + cls._format_mapping(audit["intermediate_values"]).replace("\n", "；"))
+            evidence.extend(str(step) for step in audit.get("steps", []) if step)
+            if not evidence:
+                evidence.append("本记录未保存计算过程，重新核算后可查看完整公式和步骤")
+            evidence.append(f"核算金额={cls._format_value(amount)}元" if amount is not None else "金额待确认")
+            parts.append(f"【{label}】" + "；".join(evidence))
+        return "；".join(parts) or "本记录未保存计算过程，重新核算后可查看"
+
+    @classmethod
+    def _high_temperature_process(cls, result, daily):
+        fmt = lambda value: "" if value is None else str(value)
+        detail = cls._subject_detail(result, "gaowen_butie")
+        if not daily:
+            return cls._calculation_process(result)
+        reason = daily.get("reason_code", "")
+        if daily.get("status") != "calculated":
+            return f"{cls.GAOWEN_REASON_LABELS.get(reason, reason or '原因待确认')}；当日补贴={fmt(daily.get('amount', 0))}元"
+        rate, cap = detail.get("小时单价"), detail.get("单日封顶")
+        if rate is None or cap is None:
+            return f"当日已核算{fmt(daily.get('amount'))}元；本记录未保存小时单价或封顶标准，重新核算后可查看完整公式"
+        text = (f"同网点同日同班次最高温{fmt(daily.get('temperature'))}℃≥33℃；"
+                f"当日补贴=MIN({fmt(daily.get('attendance_hours'))}小时×{fmt(rate)}元/小时,"
+                f"{fmt(cap)}元)={fmt(daily.get('amount'))}元")
+        if detail.get("月度封顶") is not None:
+            text += (f"；逐日金额为月度封顶前金额；月应发=ROUND(MIN({fmt(detail.get('月度封顶前金额'))},"
+                     f"{fmt(detail['月度封顶'])}),2)={fmt(result.get('gaowen_butie', detail.get('amount')))}元")
+        return text
+
+    def _finish_detail_exports(self, wb, results):
+        """Append explanations and keep detail row heights stable in Excel/WPS."""
+        for ws in wb.worksheets:
+            if ws.title not in {"计算详情", "岗位补贴核算结果", "每日明细"}:
+                continue
+            if ws.cell(1, ws.max_column).value != "计算过程":
+                column = ws.max_column + 1
+                self._write_header_cell(ws, 1, column, "计算过程")
+                if ws.title == "每日明细" and self._is_gaowen_only(results):
+                    processes = [self._high_temperature_process(result, daily)
+                                 for result in results
+                                 for daily in self._subject_detail(result, "gaowen_butie").get("daily_results") or [{}]]
+                else:
+                    processes = [self._calculation_process(result) for result in results]
+                for index, process in enumerate(processes, 2):
+                    self._write_body_cell(ws, index, column, process.replace("\n", "；"))
+                ws.column_dimensions[openpyxl.utils.get_column_letter(column)].width = 100
+            for row in ws.iter_rows(min_row=2):
+                ws.row_dimensions[row[0].row].height = 24
+                for cell in row:
+                    cell.alignment = Alignment(vertical="center", wrap_text=False)
+            ws.auto_filter.ref = ws.dimensions
 
     def _write_detail_sheet(self, ws, results: List[Dict[str, Any]]):
         """Write detail sheet."""
@@ -339,6 +414,43 @@ class ExcelExporter:
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
 
+    @classmethod
+    def _night_shift_formula(cls, daily):
+        reason = daily.get("reason_code", "")
+        amount = daily.get("amount")
+        if reason == "missing_punch":
+            return "缺少有效上班或下班打卡，当日不计夜班补贴。"
+        if amount is None:
+            return f"{cls._night_shift_reason_label(reason)}；无法计算当日金额。"
+        if daily.get("status") == "excluded":
+            return f"{cls._night_shift_reason_label(reason)}；当日补贴=0元。"
+        windows = daily.get("window_results") or []
+        if windows:
+            parts = [f"{item.get('window', '')}：{cls._night_shift_formula(item)}" for item in windows]
+            amounts = "+".join(f"{float(item.get('amount') or 0):g}" for item in windows)
+            return "；".join(parts) + f"；当日合计=min({amounts},25)={float(amount):g}元。"
+        night = float(daily.get("night_minutes") or 0)
+        rest = float(daily.get("break_minutes") or 0)
+        effective = max(0, night - rest)
+        start = cls._minutes_as_clock(daily.get("rounded_start_minutes"))
+        end = cls._minutes_as_clock(daily.get("rounded_end_minutes"))
+        prefix = f"计薪时段 {start}—{end}；" if start and end else ""
+        if reason == "three_am_shift_rule" or daily.get("shift_code") == "LB15":
+            return prefix + f"凌晨3点班：正班有效出勤{night / 60:g}小时÷8小时×25元，封顶25元；当日补贴={float(amount):g}元。"
+        units = math.floor(effective / 30) if effective >= 60 else 0
+        expected = min(25, units * 1.5)
+        # Historical dual-window rows may contain only aggregate minutes. Do not
+        # fabricate per-window values or imply a different formula produced the amount.
+        if any(item.get("night_window") for item in daily.get("break_details", [])) or not math.isclose(expected, float(amount), abs_tol=0.000001):
+            return prefix + ("普通规则：每个夜班窗口扣除休息，满60分钟后按完整30分钟×1.5元计算；"
+                             "当日补贴=min(早晨金额+晚间金额,25元)。"
+                             f"本记录夜班合计{night:g}分钟、扣休息{rest:g}分钟，已核算金额={float(amount):g}元；"
+                             "历史记录未保留各窗口独立金额。")
+        calculation = (f"有效时长{effective:g}分钟不足60分钟，补贴=0元" if effective < 60
+                       else f"补贴=min(向下取整({effective:g}÷30)×1.5,25)=min({units}×1.5,25)={float(amount):g}元")
+        suffix = "；暂算，仍需确认：" + cls._night_shift_reason_label(reason) if daily.get("status") in {"calculated_pending", "calculated_review"} else ""
+        return prefix + f"夜班{night:g}分钟−休息{rest:g}分钟={effective:g}分钟；" + calculation + suffix
+
     def _write_yeban_detail_sheet(self, ws, results: List[Dict[str, Any]]):
         """Write one business-readable row per employee attendance day."""
         for col, header in enumerate(self.YEBAN_HEADERS, 1):
@@ -370,9 +482,12 @@ class ExcelExporter:
                     self._minutes_as_hours(daily.get("break_minutes")),
                     self._number(daily.get("amount")),
                     self._night_shift_daily_action(daily),
+                    self._night_shift_formula(daily),
                 ]
                 for col, value in enumerate(values, 1):
                     self._write_body_cell(ws, row_index, col, value)
+                    ws.cell(row=row_index, column=col).alignment = Alignment(vertical="center", wrap_text=False)
+                ws.row_dimensions[row_index].height = 24
                 ws.cell(row=row_index, column=5).number_format = "yyyy-mm-dd"
                 ws.cell(row=row_index, column=13).number_format = "0.00"
                 ws.cell(row=row_index, column=14).number_format = "0.00"
@@ -388,7 +503,7 @@ class ExcelExporter:
 
         self._set_widths(
             ws,
-            [14, 12, 12, 14, 13, 12, 18, 30, 12, 12, 12, 13, 16, 21, 21, 21, 16, 38],
+            [14, 12, 12, 14, 13, 12, 18, 30, 12, 12, 12, 13, 16, 21, 21, 21, 16, 38, 100],
         )
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
@@ -505,6 +620,31 @@ class ExcelExporter:
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
 
+    def _write_yeban_shift_sheet(self, ws, config=None):
+        from .night_shift_config import load_baseline_shift_breaks
+
+        config = config or {}
+        rows = config.get("effective_shift_breaks") or config.get("shift_breaks")
+        source = "本批次核算配置" if rows is not None else "当前平台基线（批次未留存班次表）"
+        if rows is None:
+            rows = load_baseline_shift_breaks()
+        headers = ["班次编号", "班次类别", "班次名称", "班次时间", "正班时数", "生效日期",
+                   "休息段1类型", "休息段1时间", "休息段2类型", "休息段2时间", "休息段3类型", "休息段3时间",
+                   "备注", "配置来源"]
+        for col, header in enumerate(headers, 1):
+            self._write_header_cell(ws, 1, col, header)
+        for index, row in enumerate(rows, 2):
+            segments = row.get("break_segments") or [{"period": p, "category": "其他休息"} for p in row.get("break_periods", [])]
+            values = [row.get(key, "") for key in ("shift_code", "shift_category", "shift_name", "shift_time", "regular_hours", "effective_start_date")]
+            for segment in (segments + [{}, {}, {}])[:3]:
+                values.extend([segment.get("category", ""), segment.get("period", "")])
+            values.extend([row.get("note", ""), source])
+            for col, value in enumerate(values, 1):
+                self._write_body_cell(ws, index, col, value)
+        self._set_widths(ws, [14, 16, 32, 24, 12, 16, 14, 20, 14, 20, 14, 20, 30, 42])
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
     def _write_yeban_summary_sheet(self, ws, results: List[Dict[str, Any]]):
         """Write one employee-level summary row with explicit follow-up actions."""
         for col, header in enumerate(self.YEBAN_SUMMARY_HEADERS, 1):
@@ -514,9 +654,7 @@ class ExcelExporter:
             detail = self._subject_detail(result, "yeban_butie")
             audit = self._subject_audit(result, "yeban_butie")
             inputs = audit.get("inputs", {}) if audit else {}
-            calculated_days = int(detail.get("calculated_days") or 0)
             review_days = int(detail.get("review_calculated_days") or 0)
-            excluded_days = int(detail.get("excluded_days") or 0)
             unpriced_days = int(detail.get("unpriced_review_days") or 0)
             values = [
                 result.get("employee_id", ""),
@@ -524,24 +662,19 @@ class ExcelExporter:
                 inputs.get("工作地区", ""),
                 result.get("department", ""),
                 inputs.get("岗位名称", ""),
-                calculated_days,
-                review_days,
-                excluded_days,
-                unpriced_days,
                 self._number(result.get("yeban_butie", detail.get("amount", 0))),
-                "金额已核算",
                 self._night_shift_employee_action(review_days, unpriced_days),
             ]
             for col, value in enumerate(values, 1):
                 self._write_body_cell(ws, row_index, col, value)
-            ws.cell(row=row_index, column=10).number_format = "0.00"
+            ws.cell(row=row_index, column=6).number_format = "0.00"
             if review_days or unpriced_days:
                 for col in range(1, len(self.YEBAN_SUMMARY_HEADERS) + 1):
                     ws.cell(row=row_index, column=col).fill = self.WARNING_FILL
             else:
-                ws.cell(row=row_index, column=11).fill = self.OK_FILL
+                ws.cell(row=row_index, column=7).fill = self.OK_FILL
 
-        self._set_widths(ws, [14, 12, 12, 18, 14, 13, 16, 14, 13, 16, 14, 42])
+        self._set_widths(ws, [14, 12, 12, 18, 14, 18, 42])
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
 

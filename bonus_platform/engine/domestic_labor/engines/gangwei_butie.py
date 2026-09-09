@@ -43,8 +43,8 @@ SPECIAL_GROUP_LEADERS = {
     "贾万": {
         "employee_ids": set(),
         "areas": {"晋江"},
-        "standard": 800.0,
-        "review_message": "晋江贾万当前按特殊安检组长800元标准暂算，需核对生产线下结果",
+        "standard": 600.0,
+        "review_message": "晋江贾万当前按特殊安检组长600元标准暂算，需核对生产线下结果",
     },
 }
 

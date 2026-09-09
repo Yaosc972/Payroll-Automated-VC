@@ -135,7 +135,7 @@ def test_special_group_leaders_are_recognized_by_person_not_grade():
     jia = engine.calculate(_row("OWHN-JW", "贾万", "操作组长", 25, work_area="晋江"))
 
     assert chen.amount == 800
-    assert jia.amount == 800
+    assert jia.amount == 600
     assert chen.details["资格依据"] == "特殊安检组长名单"
     assert jia.details["资格依据"] == "特殊安检组长名单"
     assert chen.warnings == []
@@ -328,9 +328,21 @@ def test_position_allowance_api_and_export_reconcile_july_baseline():
         sheet = workbook["岗位补贴核算结果"]
         assert [cell.value for cell in sheet[1]] == [
             "工号", "姓名", "工作地区", "部门", "岗位", "资格判断", "岗位补贴标准", "排班天数",
-            "缺勤合计时数", "扣减天数", "岗位补贴计发天数", "应发岗位补贴", "核算状态", "需处理事项",
+            "缺勤合计时数", "扣减天数", "岗位补贴计发天数", "应发岗位补贴", "核算状态", "需处理事项", "计算过程",
         ]
         assert sum(sheet.cell(row=row_index, column=12).value for row_index in range(2, 20)) == 15074
         workbook.close()
     finally:
         client.delete(f"/api/domestic-labor/runs/{run_id}")
+
+
+def test_current_rule_package_matches_jia_temporary_standard():
+    from fastapi.testclient import TestClient
+    from bonus_platform.app import app
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    subject = next(item for item in package["subjects"] if item["id"] == "gangwei_butie")
+    region = next(item for item in subject["regions"] if item["name"] == "晋江")
+    assert subject["version"] == "DL-GANGWEI.v0.9.2"
+    assert "600元" in region["rule"]
+    assert "800元" not in str(region)
+    assert any("贾万" in text and "600元" in text for text in subject["pending_confirmations"])

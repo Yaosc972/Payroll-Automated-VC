@@ -53,7 +53,7 @@ from .auth import (
     user_is_system_admin,
 )
 from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, LABOR_RUNS_DIR, PROJECT_ROOT, ensure_data_files
-from .engine.domestic_labor.parser import MultiFilePayrollDataLoader
+from .engine.domestic_labor.parser import MultiFilePayrollDataLoader, SheetConfirmationRequired
 from .engine.domestic_labor.engines import (
     QuanQinJiangEngine,
     CanBuEngine,
@@ -64,6 +64,7 @@ from .engine.domestic_labor.engines import (
     GaoWenBuTieEngine,
 )
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
+from .engine.domestic_labor.engines.yeban_butie import find_missing_payable_shifts
 from .engine.domestic_labor.exporter import ExcelExporter
 from .engine.domestic_labor.night_shift_config import (
     build_night_shift_config_snapshot,
@@ -14413,7 +14414,7 @@ DOMESTIC_LABOR_SUBJECT_NAMES = {
     "gaowen_butie": "高温补贴",
     "yeban_butie": "夜班补贴",
 }
-DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260813.1"
+DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260909.5"
 DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST = ".export-cache.json"
 
 
@@ -14507,12 +14508,38 @@ def _domestic_labor_region_for_department(department: str) -> str:
     return "default"
 
 
+def _domestic_direct_confirmation(loader, engines, config, decision):
+    if "yeban_butie" not in engines:
+        return None
+    daily = loader.group_daily_by_employee()
+    jinjiang_ids = set()
+    for employee in loader.monthly.rows:
+        employee_id = str(employee.get("工号", ""))
+        days = daily.get(employee_id, [])
+        areas = [day.get("工作地区") or employee.get("工作地区", "") for day in days] or [employee.get("工作地区", "")]
+        if any("晋江" in str(area) for area in areas):
+            jinjiang_ids.add(employee_id)
+    if jinjiang_ids and decision != "confirmed":
+        return {"code": "jinjiang_roster_confirmation_required",
+                "message": "已识别到晋江考勤，请确认是否需要上传不享有夜班补贴人员名单。",
+                "employee_count": len(jinjiang_ids), "roster_count": len(config.get("jinjiang_exclusions", []))}
+    if jinjiang_ids:
+        config["jinjiang_list_confirmed"] = True
+    missing = find_missing_payable_shifts(loader.monthly.rows, daily, config)
+    if missing:
+        return {"code": "night_shift_configuration_required",
+                "message": "发现未配置或生效日期未覆盖考勤的班次，请补齐后再核算。",
+                "records": missing, "config": config}
+    return None
+
+
 def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
                               hrbp_list: list = None,
                               validate_inputs: bool = False,
                               initial_metadata: dict | None = None,
-                              night_shift_config: dict | None = None) -> dict:
+                              night_shift_config: dict | None = None,
+                              sheet_mapping: dict | None = None) -> dict:
     """Load Excel, run engines, and persist the terminal task state."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     calculation_started = monotonic()
@@ -14528,7 +14555,7 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
             monotonic() - running_state_started,
         )
         workbook_load_started = monotonic()
-        with MultiFilePayrollDataLoader(file_paths, password=password) as loader:
+        with MultiFilePayrollDataLoader(file_paths, password=password, sheet_mapping=sheet_mapping) as loader:
             payroll_logger.info(
                 "Opened %d payroll workbooks for %s in %.2fs",
                 len(file_paths),
@@ -14540,6 +14567,15 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 validation_started = monotonic()
                 try:
                     input_summary = loader.validate_inputs(engines, attendance_month)
+                    confirmation = _domestic_direct_confirmation(
+                        loader, engines, night_shift_config,
+                        (initial_metadata or {}).get("jinjiangRosterDecision"),
+                    )
+                    if confirmation:
+                        return update_payroll_metadata(run_id, {
+                            "status": "待确认", "errorCode": "INPUT_CONFIRMATION_REQUIRED",
+                            "confirmationDetail": confirmation,
+                        })
                     payroll_logger.info(
                         "Payroll input parsed for %s in %.2fs: files=%s monthly=%s daily=%s housing=%s",
                         run_id,
@@ -14549,6 +14585,15 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                         input_summary.get("daily_rows", 0),
                         input_summary.get("housing_rows", 0),
                     )
+                except SheetConfirmationRequired as exc:
+                    names = (initial_metadata or {}).get("fileNames") or []
+                    for sheet in exc.sheets:
+                        index = int(sheet["key"].split(":", 1)[0])
+                        sheet["file_name"] = names[index] if index < len(names) else Path(file_paths[index]).name
+                    return update_payroll_metadata(run_id, {
+                        "status": "待确认", "errorCode": "INPUT_CONFIRMATION_REQUIRED",
+                        "confirmationDetail": {"code": "sheet_confirmation_required", "message": str(exc), "sheets": exc.sheets},
+                    })
                 except Exception as exc:
                     payroll_logger.warning("Payroll input validation failed for %s: %s", run_id, exc)
                     return update_payroll_metadata(run_id, {
@@ -14725,10 +14770,22 @@ def _normalize_domestic_collection_roster(raw_roster: Any) -> list[dict]:
 async def create_domestic_labor_run(files: list[UploadFile] = File(None),
                                      file: UploadFile = File(None), engines: str = Body(""),
                                      attendance_month: str = Body(""),
-                                     password: str = Body(""), hrbp_list: str = Body("")):
+                                     password: str = Body(""), hrbp_list: str = Body(""),
+                                     sheet_mapping: str = Body(""),
+                                     jinjiang_roster_decision: str = Body("")):
     uploaded_files = [*(files or []), *([file] if file else [])]
     if not uploaded_files:
         raise HTTPException(400, "请至少上传一个 Excel 文件")
+    try:
+        mapping = __import__("json").loads(sheet_mapping) if sheet_mapping else {}
+        if not isinstance(mapping, dict) or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            or value not in {"monthly", "daily", "housing", "temperature", "ignore"}
+            for key, value in mapping.items()
+        ):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "工作表用途确认格式错误")
     for uploaded_file in uploaded_files:
         if not uploaded_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
             raise HTTPException(400, f"请上传 Excel 文件（.xlsx / .xlsm / .xls）：{uploaded_file.filename} 格式不支持")
@@ -14780,12 +14837,51 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         saved_paths.append(file_path)
 
     try:
-        with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None) as loader:
+        with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None, sheet_mapping=mapping) as loader:
             input_summary = loader.validate_inputs(engine_list, attendance_month)
+            jinjiang_ids = set()
+            if "yeban_butie" in engine_list:
+                daily_by_employee = loader.group_daily_by_employee()
+                for employee in loader.monthly.rows:
+                    employee_id = str(employee.get("工号", ""))
+                    days = daily_by_employee.get(employee_id, [])
+                    areas = [day.get("工作地区") or employee.get("工作地区", "") for day in days] or [employee.get("工作地区", "")]
+                    if any("晋江" in str(area) for area in areas):
+                        jinjiang_ids.add(employee_id)
+                if jinjiang_ids and jinjiang_roster_decision == "confirmed":
+                    # The user confirms this submission; preserve existing roster
+                    # and avoid changing other batches' monthly configuration.
+                    night_shift_config["jinjiang_list_confirmed"] = True
+            missing_shifts = find_missing_payable_shifts(
+                loader.monthly.rows, loader.group_daily_by_employee(), night_shift_config
+            ) if "yeban_butie" in engine_list else []
+    except SheetConfirmationRequired as exc:
+        for sheet in exc.sheets:
+            sheet["file_name"] = uploaded_files[int(sheet["key"].split(":", 1)[0])].filename
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(409, {"code": "sheet_confirmation_required", "message": str(exc), "sheets": exc.sheets}) from exc
     except Exception as exc:
         message = f"数据文件校验失败：{exc}"
         shutil.rmtree(run_dir, ignore_errors=True)
         raise HTTPException(400, message) from exc
+
+    if jinjiang_ids and jinjiang_roster_decision != "confirmed":
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(409, {
+            "code": "jinjiang_roster_confirmation_required",
+            "message": "已识别到晋江考勤，请确认是否需要上传不享有夜班补贴人员名单。",
+            "employee_count": len(jinjiang_ids),
+            "roster_count": len(night_shift_config.get("jinjiang_exclusions", [])),
+        })
+
+    if missing_shifts:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(409, {
+            "code": "night_shift_configuration_required",
+            "message": "发现未配置或生效日期未覆盖考勤的班次，请补齐后再核算。",
+            "records": missing_shifts,
+            "config": night_shift_config,
+        })
 
     requires_collection_roster = bool(input_summary.get("requires_collection_seniority_roster"))
     if requires_collection_roster and (
@@ -14804,6 +14900,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "savedFileNames": [path.name for path in saved_paths],
         "fileSize": sum(path.stat().st_size for path in saved_paths),
         "inputSummary": input_summary,
+        "sheetMapping": mapping,
         "collectionSeniorityRoster": collection_roster if "gonglingjiang" in engine_list else [],
         "collectionSeniorityRosterCount": len(collection_roster) if "gonglingjiang" in engine_list else 0,
         "nightShiftConfigSnapshot": night_shift_config if "yeban_butie" in engine_list else None,
@@ -14821,6 +14918,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         _run_payroll_calculation, run_id, [str(path) for path in saved_paths],
         attendance_month, engine_list, password or None, hrbp,
         night_shift_config=night_shift_config,
+        sheet_mapping=mapping,
     )
 
     status = metadata.get("status", "失败")
@@ -14995,6 +15093,12 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
     hrbp = [item["employee_id"] for item in collection_roster]
     attendance_month = str(payload.get("attendanceMonth") or "")
     password = str(payload.get("password") or "") or None
+    mapping = payload.get("sheetMapping") or {}
+    if not isinstance(mapping, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) or value not in {"monthly", "daily", "housing", "temperature", "ignore"}
+        for key, value in mapping.items()
+    ):
+        raise HTTPException(400, "工作表用途确认格式错误")
     night_shift_config = None
     if "yeban_butie" in engine_list:
         try:
@@ -15005,6 +15109,10 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
             raise HTTPException(400, f"夜班补贴配置校验失败：{exc}") from exc
     actual_size = sum(path.stat().st_size for path in file_paths)
     initial_metadata = {
+        "sheetMapping": mapping,
+        "jinjiangRosterDecision": str(payload.get("jinjiangRosterDecision") or ""),
+        "fileNames": metadata.get("fileNames", []),
+        "errorCode": "", "confirmationDetail": None,
         "engines": engine_list,
         "attendanceMonth": attendance_month,
         "filePath": str(file_paths[0]),
@@ -15023,6 +15131,8 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         if "yeban_butie" in engine_list
         else {}
     )
+    if mapping:
+        calculation_kwargs["sheet_mapping"] = mapping
     result = await asyncio.to_thread(
         _run_payroll_calculation,
         run_id,
@@ -15036,6 +15146,8 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         **calculation_kwargs,
     )
     status = result.get("status", "失败")
+    if result.get("errorCode") == "INPUT_CONFIRMATION_REQUIRED":
+        raise HTTPException(409, result["confirmationDetail"])
     if result.get("errorCode") == "INPUT_VALIDATION_FAILED":
         raise HTTPException(400, result.get("error") or "数据文件校验失败。")
     input_summary = result.get("inputSummary") or {}
@@ -15100,7 +15212,8 @@ def export_domestic_labor(run_id: str) -> dict:
     exporter = ExcelExporter(str(temp_path))
     summary = metadata.get("summary", {})
     try:
-        exporter.export(results, metadata.get("attendanceMonth", ""), summary)
+        exporter.export(results, metadata.get("attendanceMonth", ""), summary,
+                        night_shift_config=metadata.get("nightShiftConfigSnapshot"))
         temp_path.replace(out_path)
         _save_domestic_labor_export_cache(run_dir, metadata, file_name)
         persist_payroll_file(run_id, out_path)

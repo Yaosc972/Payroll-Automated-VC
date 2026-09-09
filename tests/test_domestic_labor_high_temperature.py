@@ -95,6 +95,41 @@ def test_hours_use_larger_of_regular_and_swipe_overtime_with_daily_and_monthly_c
     assert all(row["amount"] == 13.8 for row in result.details["daily_results"])
 
 
+def test_jiashan_and_yiwu_use_confirmed_zhejiang_indoor_rate_and_caps():
+    days = [date(2026, 7, day) for day in range(1, 32)]
+    measurements = [
+        _temperature(day, "夜班", 35, "华东枢纽-嘉善仓")
+        for day in days
+    ]
+    attendance = [
+        _day(day, regular=4 if day == date(2026, 7, 1) else 8, actual=8)
+        for day in days
+    ]
+
+    result = GaoWenBuTieEngine(measurements).calculate(
+        _employee(work_area="嘉善"),
+        attendance,
+    )
+
+    assert result.details["小时单价"] == 1.15
+    assert result.details["单日封顶"] == 9.2
+    assert result.details["月度封顶"] == 200
+    assert result.details["daily_results"][0]["amount"] == 4.6
+    assert result.details["daily_results"][1]["amount"] == 9.2
+    assert result.details["月度封顶前金额"] == 280.6
+    assert result.amount == 200
+    assert "原线下13.8元/天公式不作为正确对照" in result.details["validation_note"]
+
+    yiwu_day = date(2026, 7, 1)
+    yiwu = GaoWenBuTieEngine([
+        _temperature(yiwu_day, "夜班", 35, "华东B2B枢纽-义乌仓"),
+    ]).calculate(
+        _employee(work_area="义乌"),
+        [_day(yiwu_day, regular=4, actual=4)],
+    )
+    assert yiwu.amount == 4.6
+
+
 def test_explicit_zero_actual_attendance_does_not_pay_from_half_hour_swipe_overtime():
     measurements = [_temperature(date(2026, 7, 11), "夜班", 35)]
     attendance = [
@@ -423,11 +458,15 @@ def test_rule_package_and_subject_card_publish_high_temperature_as_validating():
     high_temperature = next(subject for subject in package["subjects"] if subject["id"] == "gaowen_butie")
     payload = str(high_temperature)
 
-    assert package["version"] == "1.4.0"
+    assert package["version"] == "1.4.9"
     assert high_temperature["status"] == "验证中"
     assert "同测温网点、同出勤日期、同白/夜班" in payload
     assert "MAX(正班时数,刷卡加班)" in payload
     assert "浙江室内" in payload
+    assert "1.15" in payload
+    assert "9.2" in payload
+    assert "200" in payload
+    assert "当前沿用线下规则表13.8元/天验证" not in payload
     assert "无测温区域" in payload
     assert "99.64%" in payload
 
@@ -440,3 +479,103 @@ def test_rule_package_and_subject_card_publish_high_temperature_as_validating():
     assert "renderGaowenResults" in js
     assert "renderHighTemperatureExplanation" in js
     assert "同仓同日同班次最高温" in js
+
+
+def test_daily_temperature_site_and_shift_override_organization_and_schedule():
+    day = date(2026, 7, 2)
+    site = "中国仓组-东莞茶山仓"
+    engine = GaoWenBuTieEngine([
+        _temperature(day, "夜班", 36),
+        _temperature(day, "白班", 33, site=site),
+        _temperature(day, "夜班", 32, site=site),
+    ])
+    result = engine.calculate(_employee(), [
+        _day(day, **{"测温网点": site, "测温班次": "白班"}),
+    ])
+    assert result.amount == 13.8
+    assert result.details["测温网点"] == site
+    detail = result.details["daily_results"][0]
+    assert detail["site"] == site
+    assert detail["shift"] == "白班"
+    assert detail["temperature"] == 33
+
+
+def test_daily_temperature_sites_allow_transfer_and_blank_fallback():
+    day1, day2 = date(2026, 7, 1), date(2026, 7, 2)
+    site = "中国仓组-东莞茶山仓"
+    engine = GaoWenBuTieEngine([
+        _temperature(day1, "夜班", 33, site=site),
+        _temperature(day2, "夜班", 34),
+    ])
+    result = engine.calculate(_employee(), [
+        _day(day1, **{"测温网点": site}),
+        _day(day2, **{"测温网点": "  "}),
+    ])
+    assert result.amount == 27.6
+    assert [row["site"] for row in result.details["daily_results"]] == [site, "华南1号枢纽-寮步仓"]
+    assert result.details["测温网点"] == site + "、华南1号枢纽-寮步仓"
+
+
+def test_explicit_site_without_night_temperature_does_not_borrow_other_site_or_day_shift():
+    day = date(2026, 7, 1)
+    site = "华东B2B枢纽-义乌仓"
+    engine = GaoWenBuTieEngine([
+        _temperature(day, "夜班", 35, site="华东枢纽-嘉善仓"),
+        _temperature(day, "白班", 35, site=site),
+    ])
+    result = engine.calculate(_employee(work_area="嘉善"), [
+        _day(day, **{"测温网点": site, "测温班次": "夜班"}),
+    ])
+    assert result.amount == 0
+    assert result.details["daily_results"][0]["reason_code"] == "no_matching_temperature"
+
+
+def test_explicit_daily_site_works_without_resolvable_organization():
+    day = date(2026, 7, 1)
+    site = "中国仓组-东莞茶山仓"
+    engine = GaoWenBuTieEngine([_temperature(day, "夜班", 33, site=site)])
+    employee = _employee(**{"一级部门名称": "", "二级部门名称": "", "三级部门名称": ""})
+    result = engine.calculate(employee, [_day(day, **{"测温网点": site})])
+    assert result.amount == 13.8
+    assert not result.warnings
+
+
+def test_air_conditioning_roster_is_joined_by_id_even_without_temperature_on_same_row(tmp_path):
+    book = Workbook()
+    monthly = book.active
+    monthly.title = "月考勤"
+    monthly.append(["工号", "姓名", "工作地区", "岗位名称", "一级部门名称", "考勤月份"])
+    monthly.append(["OWHN101", "同名员工", "东莞", "操作员", "寮步区", "202607"])
+    monthly.append(["OWHN102", "同名员工", "东莞", "操作员", "寮步区", "202607"])
+    daily = book.create_sheet("日考勤")
+    daily.append(["工号", "出勤日期", "测温网点", "测温班次", "正班时数"])
+    for eid in ("OWHN101", "OWHN102"):
+        daily.append([eid, date(2026, 7, 1), "华南1号枢纽-寮步仓", "白班", 8])
+    temperature = book.create_sheet("高温测温登记表")
+    temperature.append(["班次日期", "测温班次", "测温网点", "测温温度", "工号", "姓名", "办公地点是否有空调"])
+    temperature.append([date(2026, 7, 1), "白班", "华南1号枢纽-寮步仓", 35, "OWHN102", "同名员工", "否"])
+    temperature.append([None, None, None, None, "OWHN101", "同名员工", " 是 "])
+    path = tmp_path / "attendance.xlsx"
+    book.save(path)
+    loader = MultiFilePayrollDataLoader([str(path)])
+    loader.load()
+    try:
+        employees = loader.monthly.rows
+        engine = GaoWenBuTieEngine(loader.temperature.rows)
+        days = loader.group_daily_by_employee()
+        results = {row["工号"]: engine.calculate(row, days[row["工号"]]) for row in employees}
+        assert results["OWHN101"].amount == 0
+        assert "办公地点有空调" in results["OWHN101"].details["资格判断"]
+        assert results["OWHN101"].details["daily_results"][0]["reason_code"] == "employee_or_position_excluded"
+        assert results["OWHN102"].amount == 13.8
+    finally:
+        for parser in loader.parsers:
+            parser.close()
+
+
+def test_air_conditioning_qualification_requires_explicit_yes():
+    day = date(2026, 7, 1)
+    engine = GaoWenBuTieEngine([_temperature(day, "夜班", 35)])
+    for flag, expected in [("是", 0), (" 是 ", 0), ("否", 13.8), ("", 13.8), (None, 13.8)]:
+        result = engine.calculate(_employee(**{"办公地点是否有空调": flag}), [_day(day)])
+        assert result.amount == expected

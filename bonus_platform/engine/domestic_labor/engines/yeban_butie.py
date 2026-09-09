@@ -21,8 +21,11 @@ from ..night_shift_config import (
 SUBJECT = "yeban_butie"
 NIGHT_START_MINUTES = 22 * 60
 NIGHT_END_MINUTES = 32 * 60
-MAX_PLAUSIBLE_SHIFT_MINUTES = 16 * 60
 THREE_AM_SHIFT_CODES = {"LB15"}
+THREE_AM_SHIFT_DEFAULT_PERIOD = (3 * 60, 11 * 60 + 30)
+JIASHAN_YIWU_WORK_AREAS = {"嘉善", "义乌"}
+JIASHAN_YIWU_EXCLUDED_POSITIONS = {"保洁", "HRBP专员", "数据专员"}
+DONGGUAN_EXCLUDED_SHIFT_CODES = {"LB39"}
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class NightShiftDayResult:
     other_break_minutes: float = 0.0
     break_minutes: float = 0.0
     break_details: List[Dict[str, Any]] = field(default_factory=list)
+    window_results: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
@@ -87,7 +91,7 @@ def _normalize_actual(start_value: Any, end_value: Any) -> Optional[Tuple[float,
     if start is None or end is None:
         return None
 
-    # 00:00—08:00 开始、白天结束的记录属于前一晚夜班窗口的后半段。
+    # 凌晨开工且白天结束的记录对齐早晨窗口；超长早班由排班进一步判断。
     if start < 8 * 60 and start < end < 22 * 60:
         start += 24 * 60
         end += 24 * 60
@@ -112,6 +116,36 @@ def _parse_break_period(value: Any) -> Optional[Tuple[float, float]]:
         start = start_hour * 60 + start_minute
         end = end_hour * 60 + end_minute
     if end <= start:
+        end += 24 * 60
+    return start, end
+
+
+def _parse_schedule_period(value: Any) -> Optional[Tuple[float, float]]:
+    """Parse the first scheduled work period from an attendance row."""
+    clock_parts = [
+        (int(hour), int(minute))
+        for hour, minute in re.findall(r"(\d{1,2}):(\d{2})", _text(value))
+        if int(minute) < 60
+    ]
+    if len(clock_parts) < 2:
+        return None
+    start_hour, start_minute = clock_parts[0]
+    end_hour, end_minute = clock_parts[1]
+    start = start_hour * 60 + start_minute
+    end = end_hour * 60 + end_minute
+    if end <= start:
+        end += 24 * 60
+    return start, end
+
+
+def _align_schedule_to_attendance(
+    period: Tuple[float, float],
+    attendance_start: float,
+) -> Tuple[float, float]:
+    """Align early-morning schedules with normalized post-midnight punches."""
+    start, end = period
+    if attendance_start >= 24 * 60 and end <= 24 * 60:
+        start += 24 * 60
         end += 24 * 60
     return start, end
 
@@ -230,18 +264,66 @@ class YeBanBuTieEngine(BaseEngine):
                     raw_end=end_value,
                 )
             return NightShiftDayResult(
-                status="manual_review",
+                status="excluded",
                 reason_code="missing_punch",
-                amount=None,
+                amount=0.0,
                 shift_code=shift_code,
                 attendance_date=attendance_date,
                 raw_start=start_value,
                 raw_end=end_value,
             )
         start, end = normalized
+        schedule = _parse_schedule_period(attendance.get("班次时间段"))
+        spans_both_windows = False
+        if (
+            shift_code not in THREE_AM_SHIFT_CODES
+            and start < 8 * 60 and 23 * 60 <= end < 24 * 60
+            and schedule is not None and schedule[0] < 8 * 60
+            and max(math.ceil(start / 30) * 30, schedule[0]) < 8 * 60
+        ):
+            # Each window independently applies rounding, actual breaks and the
+            # one-hour threshold. Splitting punches prevents recursive re-entry.
+            morning = self.calculate_day(dict(attendance, 下班一="08:00"), break_periods)
+            evening = self.calculate_day(dict(attendance, 上班一="22:00"), break_periods)
+            parts = (morning, evening)
+            if all(part.amount is not None for part in parts):
+                combined = sum(part.amount for part in parts)
+                # The morning and evening windows share one daily cap.
+                payload = evening.to_dict()
+                payload.update(
+                    raw_start=start_value, raw_end=end_value,
+                    normalized_start_minutes=start, normalized_end_minutes=end,
+                    rounded_start_minutes=math.ceil(start / 30) * 30,
+                    rounded_end_minutes=math.floor(end / 30) * 30,
+                    amount=min(combined, 25.0),
+                    window_results=[dict(part.to_dict(), window=window) for window, part in zip(("早晨", "晚间"), parts)],
+                    status="calculated",
+                    reason_code="generic_rule",
+                    break_details=[
+                        dict(detail, night_window=window)
+                        for window, part in zip(("morning", "evening"), parts)
+                        for detail in part.break_details
+                    ],
+                )
+                for key in ("night_minutes", "break_minutes", "evening_break_minutes",
+                            "morning_break_minutes", "other_break_minutes"):
+                    payload[key] = sum(getattr(part, key) for part in parts)
+                return NightShiftDayResult(**payload)
+        if (
+            start < 8 * 60 and end >= 22 * 60 and end < 24 * 60
+            and schedule is not None and schedule[0] < 8 * 60
+            and max(math.ceil(start / 30) * 30, schedule[0]) < 8 * 60
+        ):
+            if end < 23 * 60:
+                # 当晚不足1小时，修复已确认早班的早晨窗口归属。
+                start += 24 * 60
+                end += 24 * 60
+            else:
+                # 分段计算缺少有效结果时保留原暂算并提示复核。
+                spans_both_windows = True
         provisional_reason = None
-        if end - start <= 0 or end - start > MAX_PLAUSIBLE_SHIFT_MINUTES:
-            provisional_reason = "implausible_duration"
+        if spans_both_windows:
+            provisional_reason = "multiple_night_windows_pending"
 
         rounded_start = math.ceil(start / 30) * 30
         rounded_end = math.floor(end / 30) * 30
@@ -261,11 +343,70 @@ class YeBanBuTieEngine(BaseEngine):
             )
 
         if shift_code in THREE_AM_SHIFT_CODES:
-            rounded_duration = max(0.0, rounded_end - rounded_start)
-            amount = min(25.0, rounded_duration / (8 * 60) * 25)
+            scheduled_period = (
+                _parse_break_period(attendance.get("班次时间段"))
+                or THREE_AM_SHIFT_DEFAULT_PERIOD
+            )
+            scheduled_start, scheduled_end = _align_break_to_attendance(
+                scheduled_period,
+                rounded_start,
+                rounded_end,
+            )
+            regular_start = max(rounded_start, scheduled_start)
+            regular_end = min(rounded_end, scheduled_end)
+            regular_minutes = max(0.0, regular_end - regular_start)
+            if regular_minutes <= 0:
+                return NightShiftDayResult(
+                    status="excluded",
+                    reason_code="no_effective_attendance",
+                    amount=0.0,
+                    shift_code=shift_code,
+                    attendance_date=attendance_date,
+                    raw_start=start_value,
+                    raw_end=end_value,
+                    normalized_start_minutes=start,
+                    normalized_end_minutes=end,
+                    rounded_start_minutes=rounded_start,
+                    rounded_end_minutes=rounded_end,
+                )
+
+            late_minutes = max(0.0, rounded_start - scheduled_start)
+            early_leave_minutes = max(0.0, scheduled_end - rounded_end)
+            effective_minutes = max(
+                0.0,
+                8 * 60 - late_minutes - early_leave_minutes,
+            )
+            if effective_minutes <= 0:
+                return NightShiftDayResult(
+                    status="excluded",
+                    reason_code="no_effective_attendance",
+                    amount=0.0,
+                    shift_code=shift_code,
+                    attendance_date=attendance_date,
+                    raw_start=start_value,
+                    raw_end=end_value,
+                    normalized_start_minutes=start,
+                    normalized_end_minutes=end,
+                    rounded_start_minutes=rounded_start,
+                    rounded_end_minutes=rounded_end,
+                )
+
+            break_details: List[Dict[str, Any]] = []
+            for raw_segment in break_periods or ():
+                try:
+                    segment = normalize_break_segments([raw_segment])[0]
+                except (IndexError, ValueError):
+                    segment = {"period": _text(raw_segment), "category": ""}
+                break_details.append({
+                    "period": _text(segment.get("period")),
+                    "category": segment.get("category"),
+                    "deducted_minutes": 0.0,
+                })
+
+            amount = min(25.0, effective_minutes / (8 * 60) * 25)
             return NightShiftDayResult(
-                status="calculated_review",
-                reason_code="three_am_shift_pending",
+                status="calculated_review" if provisional_reason else "calculated",
+                reason_code=provisional_reason or "three_am_shift_rule",
                 amount=amount,
                 shift_code=shift_code,
                 attendance_date=attendance_date,
@@ -275,10 +416,19 @@ class YeBanBuTieEngine(BaseEngine):
                 normalized_end_minutes=end,
                 rounded_start_minutes=rounded_start,
                 rounded_end_minutes=rounded_end,
-                night_minutes=min(rounded_duration, 8 * 60),
+                night_minutes=effective_minutes,
+                break_details=break_details,
             )
 
-        night_start = max(rounded_start, NIGHT_START_MINUTES)
+        scheduled_period = _parse_schedule_period(attendance.get("班次时间段"))
+        scheduled_start = rounded_start
+        if scheduled_period is not None:
+            scheduled_start, _ = _align_schedule_to_attendance(
+                scheduled_period,
+                rounded_start,
+            )
+
+        night_start = max(rounded_start, scheduled_start, NIGHT_START_MINUTES)
         night_end = min(rounded_end, NIGHT_END_MINUTES)
         night_minutes = max(0.0, night_end - night_start)
         if night_minutes <= 0:
@@ -334,12 +484,16 @@ class YeBanBuTieEngine(BaseEngine):
                 rounded_start,
                 rounded_end,
             )
-            overlap = max(0.0, min(rounded_end, break_end) - max(rounded_start, break_start))
-            duration = break_end - break_start
+            window_break_start = max(break_start, NIGHT_START_MINUTES)
+            window_break_end = min(break_end, NIGHT_END_MINUTES)
+            duration = max(0.0, window_break_end - window_break_start)
+            overlap = max(
+                0.0,
+                min(rounded_end, window_break_end) - max(rounded_start, window_break_start),
+            )
             deducted_minutes = 0.0
             if 0 < overlap < duration:
                 deducted_minutes = overlap
-                provisional_reason = provisional_reason or "partial_break_overlap"
             if overlap == duration:
                 deducted_minutes = duration
             break_minutes += deducted_minutes
@@ -360,7 +514,9 @@ class YeBanBuTieEngine(BaseEngine):
             effective_minutes = 0.0
             provisional_reason = "negative_effective_duration"
 
-        amount = min(25.0, effective_minutes / 60 * 3)
+        # 普通夜班：扣休息后满1小时起算，余下不足30分钟舍去。
+        payable_minutes = math.floor(effective_minutes / 30) * 30 if effective_minutes >= 60 else 0
+        amount = min(25.0, payable_minutes / 60 * 3)
         return NightShiftDayResult(
             status="calculated_review" if provisional_reason else "calculated",
             reason_code=provisional_reason or "generic_rule",
@@ -396,9 +552,7 @@ class YeBanBuTieEngine(BaseEngine):
         config = config or {}
         effective_shifts = config.get("effective_shift_breaks") or config.get("shift_breaks", [])
         configured_shifts = {
-            _text(row.get("shift_code")): list(
-                row.get("break_segments") or row.get("break_periods") or []
-            )
+            _text(row.get("shift_code")): row
             for row in effective_shifts or []
             if _text(row.get("shift_code"))
         }
@@ -418,6 +572,19 @@ class YeBanBuTieEngine(BaseEngine):
                 day_date = _attendance_date(attendance.get("出勤日期") or attendance.get("日期"))
                 if day_date is None:
                     result = _direct_day_result(attendance, "manual_review", "invalid_attendance_date")
+                elif (
+                    work_area in JIASHAN_YIWU_WORK_AREAS
+                    and position in JIASHAN_YIWU_EXCLUDED_POSITIONS
+                ):
+                    result = _direct_day_result(
+                        attendance,
+                        "excluded",
+                        "jiashan_yiwu_position_excluded",
+                    )
+                elif work_area == "东莞" and shift_code in DONGGUAN_EXCLUDED_SHIFT_CODES:
+                    result = _direct_day_result(attendance, "excluded", "dongguan_lb39_excluded")
+                elif work_area == "东莞" and position == "保洁":
+                    result = _direct_day_result(attendance, "excluded", "dongguan_cleaner_excluded")
                 elif "晋江" in work_area and ("计件" in position or "计件" in work_type):
                     result = _direct_day_result(attendance, "excluded", "jinjiang_piecework_excluded")
                 elif "晋江" in work_area and "门禁" in position:
@@ -430,11 +597,22 @@ class YeBanBuTieEngine(BaseEngine):
                     pending_reason = "jinjiang_special_list_unconfirmed"
                 elif work_area not in {"东莞", "嘉善", "义乌", "晋江"}:
                     pending_reason = "work_area_scope_pending"
-                if not shift_code or shift_code not in configured_shifts:
+                configured_shift = configured_shifts.get(shift_code)
+                effective_start_date = _attendance_date(
+                    configured_shift.get("effective_start_date") if configured_shift else None
+                )
+                if (
+                    not configured_shift
+                    or (effective_start_date is not None and day_date is not None and day_date < effective_start_date)
+                ):
                     pending_reason = pending_reason or "shift_break_config_missing"
                     break_periods = ()
                 else:
-                    break_periods = configured_shifts[shift_code]
+                    break_periods = list(
+                        configured_shift.get("break_segments")
+                        or configured_shift.get("break_periods")
+                        or []
+                    )
             if result is None:
                 result = self.calculate_day(
                     attendance,
@@ -442,7 +620,14 @@ class YeBanBuTieEngine(BaseEngine):
                 )
                 if pending_reason:
                     result = _mark_calculated_pending(result, pending_reason)
-            daily_results.append(result.to_dict())
+            daily_payload = result.to_dict()
+            daily_payload.update({
+                "shift_category": _text(attendance.get("班次类别名称") or attendance.get("班次类别")),
+                "shift_name": _text(attendance.get("班次名称")),
+                "shift_time": _text(attendance.get("班次时间段") or attendance.get("班次时间点描述")),
+                "work_area": _text(attendance.get("工作地区") or employee_data.get("工作地区")),
+            })
+            daily_results.append(daily_payload)
             status_counts[result.status] = status_counts.get(result.status, 0) + 1
             if result.status in {"calculated", "calculated_review", "calculated_pending"} and result.amount is not None:
                 total += Decimal(str(result.amount))
@@ -467,16 +652,19 @@ class YeBanBuTieEngine(BaseEngine):
 
         reason_labels = {
             "invalid_attendance_date": "出勤日期缺失或格式错误",
-            "missing_punch": "员工缺勤（考勤异常）",
+            "missing_punch": "打卡不完整，当日不计补贴",
             "implausible_duration": "上下班时长超出合理范围",
+            "multiple_night_windows_pending": "同日早晚窗口分段计算缺少有效结果，需复核考勤",
             "no_effective_attendance": "取整后无有效出勤时段",
             "no_night_overlap": "取整后未覆盖夜班窗口",
             "invalid_break_period": "班次休息时间格式错误",
             "partial_break_overlap": "实际出勤只覆盖部分休息时段",
             "negative_effective_duration": "扣除休息后有效时长为负数",
-            "three_am_shift_pending": "凌晨3点班早退口径待确认",
             "work_area_scope_pending": "工作地区不在当前夜班补贴口径内",
             "jinjiang_special_list_unconfirmed": "当月晋江特殊名单尚未上传确认",
+            "jiashan_yiwu_position_excluded": "嘉善/义乌固定排除岗位不享有夜班补贴",
+            "dongguan_lb39_excluded": "东莞LB39保洁班次不享有夜班补贴",
+            "dongguan_cleaner_excluded": "东莞保洁不论班次均不享有夜班补贴",
             "shift_break_config_missing": "班次休息表未维护该班次",
         }
         unresolved_reasons = sorted({
@@ -508,10 +696,12 @@ class YeBanBuTieEngine(BaseEngine):
             "audit_explanation": AuditExplanation(
                 subject=SUBJECT,
                 amount=amount,
-                rule_name="普通夜班通用规则",
+                rule_name="夜班补贴地区资格及通用计算规则",
                 formula=(
-                    "min((夜班窗口分钟-晚上休息分钟-早上休息分钟-其他休息分钟)/60*3, 25)，"
-                    "月度汇总后保留2位"
+                    "命中嘉善/义乌固定排除岗位或东莞LB39班次时为0元；东莞保洁不论班次均为0元；其他记录按"
+                    "扣休息后的有效夜班分钟满60分钟起算，不足60分钟为0元；满60分钟后按"
+                    "min(floor(有效夜班分钟/30)*1.5, 25)计算；LB15按"
+                    "max(8小时-迟到折算-早退折算,0)/8小时*25元计算；月度汇总后保留2位"
                 ),
                 inputs={
                     "日考勤记录数": len(daily_attendance),
@@ -522,10 +712,13 @@ class YeBanBuTieEngine(BaseEngine):
                 },
                 intermediate_values=status_counts,
                 steps=[
+                    "先应用嘉善/义乌固定岗位、东莞LB39及晋江固定资格排除规则",
                     "上班向后、下班向前取整到半小时",
-                    "截取22:00至次日08:00夜班窗口",
-                    "按班次配置分别扣除实际出勤覆盖的晚上休息、早上休息及其他休息时间",
-                    "单日按3元/小时计算并封顶25元",
+                    "普通班次从排班开始时间与取整后上班时间的较晚值起算",
+                    "截取22:00至次日08:00夜班窗口；排班开始前不计发",
+                    "按班次配置分别扣除与实际出勤及夜班窗口都重叠的休息时间",
+                    "扣休息后不足1小时不计发；达到1小时后按完整30分钟计发，不足30分钟舍去，单日封顶25元",
+                    "LB15以8小时正班为基准扣减取整后的迟到、早退，满8小时发25元，不足8小时折算",
                     "有计算依据的未确认及异常记录先计入暂算金额并标记复核",
                     "完全缺少打卡等无计算依据记录不计金额，进入人工复核",
                 ],
@@ -538,3 +731,32 @@ class YeBanBuTieEngine(BaseEngine):
             details=details,
             warnings=warnings,
         )
+
+
+def find_missing_payable_shifts(monthly_rows, daily_by_employee, config):
+    """Preflight only: expose missing shift inputs, never provisional amounts."""
+    shifts = {str(row.get("shift_code", "")): row for row in config.get("shift_breaks", [])}
+    blockers = []
+    engine = YeBanBuTieEngine()
+    for employee in monthly_rows:
+        employee_id = str(employee.get("工号", ""))
+        days = daily_by_employee.get(employee_id, [])
+        checked = engine.calculate(employee, days, config=config).details["daily_results"]
+        missing = []
+        for day in checked:
+            # Missing punches, invalid dates and explicitly excluded records do
+            # not need a rest configuration to determine their outcome.
+            if day["status"] not in {"calculated", "calculated_review", "calculated_pending"} or not day.get("amount"):
+                continue
+            shift = shifts.get(day.get("shift_code", ""))
+            date_value = _attendance_date(day.get("attendance_date"))
+            effective = _attendance_date(shift.get("effective_start_date")) if shift else None
+            if shift is not None and (effective is None or date_value >= effective):
+                continue
+            missing.append({key: day.get(key) for key in (
+                "shift_code", "shift_category", "shift_name", "shift_time", "work_area", "attendance_date"
+            )} | {"reason_code": "shift_break_config_missing"})
+        if missing:
+            blockers.append({"employee_id": employee_id, "employee_name": employee.get("姓名", ""),
+                             "subject_details": {"yeban_butie": {"details": {"daily_results": missing}}}})
+    return blockers

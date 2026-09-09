@@ -1569,6 +1569,7 @@ _RULE_PACKAGE["subjects"].append({
     ],
     "common_rules": [
         "发放期间为每年6月1日至10月31日；5月及其他非高温月份不计发。",
+        "办公地点是否有空调明确为是的员工不计发高温补贴；测温登记中的办公人员名单按工号关联，不按测温记录行号关联。",
         "测温区按同测温网点、同出勤日期、同白/夜班匹配最高温度；达到33℃才进入当日金额计算。",
         "实际高温出勤时长=MAX(正班时数,刷卡加班)；实际上班时数的0缓存不覆盖明确正班，仅正班为0且最多残留0.5小时刷卡时按无实际出勤处理。",
         "工作日、休息日和法定节假日只要有符合条件的实际出勤，均按同一逐日公式计算。",
@@ -1579,13 +1580,13 @@ _RULE_PACKAGE["subjects"].append({
     "field_calculations": [
         {
             "field": "对应测温网点",
-            "definition": "根据工作地区及一级至六级组织归属识别员工实际作业仓库。",
-            "formula": "测温网点=固定组织到物理仓库映射[工作地区, 各级组织名称]",
+            "definition": "优先使用每条日考勤填写的测温网点；为空时，根据工作地区及一级至六级组织归属识别。",
+            "formula": "测温网点=日考勤测温网点；为空时取固定组织到物理仓库映射[工作地区, 各级组织名称]",
             "example": "中国仓安全组→中国仓组-东莞茶山仓；华南B2B枢纽组→华南B2B枢纽-清溪仓。",
         },
         {
             "field": "测温班次",
-            "definition": "优先读取班次名称；无法直接识别时按班次时间段起始时间划分白班/夜班。",
+            "definition": "优先读取日考勤测温班次；缺失时依次按排班起始时间、班次名称、上班打卡识别白班/夜班。",
             "formula": "起始时间≥18:00或<06:00→夜班；其余→白班",
             "example": "19:00-28:00识别为夜班；09:00-18:00识别为白班。",
         },
@@ -1679,7 +1680,558 @@ _RULE_PACKAGE["version_history"] = [
 ]
 
 
+_RULE_PACKAGE_V1_4_0 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_0)
+_RULE_PACKAGE.update({
+    "version": "1.4.1",
+    "display_version": "DL-PAYROLL.v1.4.1",
+    "released_at": "2026-09-03",
+    "effective_from": "2026-07",
+})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.4"
+_yeban_butie["data_sources"][2] = (
+    "平台班次休息基线：当前内置143个班次；华东班次已补充薪酬提供的"
+    "《基础班次资料(2)》，仍可按核算月份保存调整。"
+)
+_yeban_butie["common_rules"][2] = (
+    "可扣休息取班次休息段、取整后实际出勤段与22:00至次日08:00夜班窗口的交集；"
+    "夜班窗口外的休息不扣除，窗口内只覆盖部分休息段时继续暂算并标记复核。"
+)
+_dongguan_huadong_index = next(
+    index for index, region in enumerate(_yeban_butie["regions"])
+    if region["name"] == "东莞 / 嘉善 / 义乌"
+)
+_yeban_butie["regions"][_dongguan_huadong_index:_dongguan_huadong_index + 1] = [
+    {
+        "name": "东莞",
+        "rule": "LB39保洁专用班次不享有夜班补贴；其他岗位和班次按通用夜班规则核算。",
+        "formula": "LB39为0元；其他符合资格记录按有效夜班时长×3元/小时，单日最高25元",
+        "details": [
+            "东莞LB39按班次编号精确排除，不使用岗位名称模糊匹配。",
+            "其他班次休息时间未维护时仍按现有打卡暂算，但不扣休息并标记确认。",
+        ],
+    },
+    {
+        "name": "嘉善 / 义乌",
+        "rule": "保洁、HRBP专员、数据专员不享有夜班补贴；其他岗位按通用夜班规则核算。",
+        "formula": "命中固定排除岗位时0元；其他符合资格记录按有效夜班时长×3元/小时，单日最高25元",
+        "details": [
+            "嘉善、义乌的保洁、HRBP专员、数据专员按岗位名称精确排除。",
+            "HD048理货入库18点班固定休息为晚上23:00至24:00、次日06:00至06:30。",
+            "其他岗位不要求额外维护岗位范围；班次休息时间未维护时暂算并标记确认。",
+        ],
+    },
+]
+for _rest_field_name in (
+    "晚上休息扣除（小时）",
+    "早上休息扣除（小时）",
+    "休息扣除合计（小时）",
+):
+    _rest_field = next(
+        item for item in _yeban_butie["field_calculations"]
+        if item["field"] == _rest_field_name
+    )
+    _rest_field["definition"] = (
+        "对应分类的班次休息段与取整后实际出勤段、22:00至次日08:00夜班窗口"
+        "三者重叠的时长。"
+    )
+    _rest_field["formula"] = "Σ（班次休息段 ∩ 取整后实际出勤段 ∩ 夜班窗口）分钟 ÷ 60。"
+_yeban_butie["verification"][:0] = [
+    (
+        "2026年7月华南、华东31,148条可匹配日明细全量重算：30,073条日金额精确一致，"
+        "一致率96.55%；其中线下有金额的21,105条记录，20,496条精确一致，一致率97.11%。"
+    ),
+    (
+        "补充班次资料后新增108条精确一致记录，逐日绝对金额差由2,296.06元降至"
+        "2,081.56元；主要修复HD023、HD042、HD046、HD052、HD059。"
+    ),
+    (
+        "HD048共1,374条可匹配日明细，保留23:00至24:00和次日06:00至06:30后金额"
+        "全部一致；若完全照新班次表删除早休，会新增720.50元差异。"
+    ),
+]
+_yeban_butie["pending_confirmations"][0] = (
+    "华东HD003、HD004、HD005、HD050等早班实际打卡落入夜班窗口时是否计发，"
+    "以及是否需要限制在排班起止时间内；班次资料本身不能确认计发口径。"
+)
+_yeban_butie["pending_confirmations"].insert(1, (
+    "本次班次资料未包含LB68、LS09和HJ007；2026年7月分别有190条、7条和2条考勤，"
+    "需补充这三个班次的休息段及生效时间。"
+))
+_yeban_butie["pending_confirmations"].insert(2, (
+    "白班、早班的实际打卡落入22:00至次日08:00时是否享有夜班补贴，以及早于排班的打卡"
+    "是否从排班开始时间起算，仍需薪酬确认。"
+))
+_yeban_butie["pending_confirmations"].insert(3, (
+    "周六、周日标记为休息但存在实际打卡时是否享有夜班补贴，线下数据存在计发与不计发两种"
+    "结果，需统一口径。"
+))
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.4",
+    "released_at": "2026-09-03",
+    "changes": (
+        "休息扣除限定在22:00至次日08:00夜班窗口内；新增嘉善/义乌保洁、HRBP专员、"
+        "数据专员固定排除，新增东莞LB39班次固定排除；根据薪酬班次资料补齐20个华东班次，"
+        "并保留经7月线下数据验证的HD048早休配置。"
+    ),
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.4.1",
+        "display_version": "DL-PAYROLL.v1.4.1",
+        "status": "当前版本",
+        "released_at": "2026-09-03",
+        "effective_from": "2026-07",
+        "subject_ids": [
+            "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie",
+            "gangwei_butie", "gaowen_butie",
+        ],
+        "summary": "夜班补贴修正休息窗口，并固化HD048休息、嘉善/义乌岗位排除及东莞LB39班次排除。",
+    },
+    {
+        **_RULE_PACKAGE_V1_4_0["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_4_0["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_4_1 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_1)
+_RULE_PACKAGE.update({
+    "version": "1.4.2",
+    "display_version": "DL-PAYROLL.v1.4.2",
+    "released_at": "2026-09-04",
+    "effective_from": "2026-07",
+})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.5"
+_yeban_butie["common_rules"][2] = (
+    "可扣休息取班次休息段、取整后实际出勤段与22:00至次日08:00夜班窗口的交集；"
+    "夜班窗口外的休息不扣除，窗口内实际覆盖多少休息时间就扣多少，正常计算且不标记复核。"
+)
+_yeban_butie["common_rules"].insert(4, (
+    "凌晨3点班LB15不套用22:00至次日08:00窗口；只计算03:00至11:30正班区间内的"
+    "取整出勤，以8小时为正班基准扣减迟到、早退，满8小时发25元，不足8小时按比例折算。"
+))
+_yeban_butie["common_rules"][5] = (
+    "上下班时长超过16小时等异常日期仍按现有数据暂算，暂算金额已计入本月应发并标记确认。"
+)
+_three_am_region = next(
+    region for region in _yeban_butie["regions"]
+    if region["name"] == "凌晨3点班（LB15）"
+)
+_three_am_region.update({
+    "rule": "按03:00至11:30正班有效出勤核算；正班后的加班不抵扣迟到或早退。",
+    "formula": "min（max（8小时−迟到折算−早退折算，0）÷8小时×25元，25元）",
+    "details": [
+        "上班向后、下班向前取整到半小时，再截取03:00至11:30正班区间。",
+        "班次休息时间为18:00至18:30，不在03:00至11:30正班区间内，不从正班折算时长中扣除。",
+        "正班有效出勤满8小时发25元，不足8小时按实际有效时长折算。",
+    ],
+})
+_three_am_field = next(
+    item for item in _yeban_butie["field_calculations"]
+    if item["field"] == "凌晨3点班当日补贴（LB15）"
+)
+_three_am_field.update({
+    "definition": "凌晨3点班按正班有效出勤核算的当日补贴，不套用普通夜班窗口。",
+    "formula": (
+        "min（max（8小时−取整后的迟到时长−取整后的早退时长，0）"
+        "÷8小时×25元，25元）。"
+    ),
+    "example": (
+        "03:05—11:30取整为03:30—11:30，按迟到0.5小时计7.5小时，"
+        "7.5÷8×25=23.4375元"
+    ),
+})
+_yeban_butie["verification"][0] = (
+    "2026年7月华南、华东31,148条可匹配日明细全量重算：30,120条日金额精确一致，"
+    "一致率96.70%；其中线下有金额的21,105条记录，20,543条精确一致，一致率97.34%。"
+)
+_yeban_butie["verification"][1] = (
+    "补充班次资料并固化LB15后新增155条精确一致记录，逐日绝对金额差由2,296.06元"
+    "降至2,005.00元；其中LB15消除47条差异、76.56元。"
+)
+_yeban_butie["verification"].insert(2, (
+    "LB15共244条日考勤；220条有完整打卡且金额全部与线下一致，24条缺卡保持不计金额并待核。"
+))
+_yeban_butie["verification"].insert(3, (
+    "2026年7月HD050的32条、HD059的1条剩余差异已由业务确认为线下公式下拉错误；"
+    "平台计算和班次休息配置不调整，不再列为平台待闭环口径。"
+))
+_yeban_butie["verification"].insert(4, (
+    "HD007、HD010、HD016、HD017、HD018、HD021、LB12、LB23涉及的148条休息差异"
+    "已确认按取整后实际覆盖时长扣除；线下扣整段属于公式下拉问题，不调整平台规则。"
+))
+_yeban_butie["pending_confirmations"] = [
+    item for item in _yeban_butie["pending_confirmations"]
+    if "凌晨3点班" not in item and "LB15" not in item
+]
+_yeban_butie["pending_confirmations"] = [
+    item.replace("HD003、HD004、HD005、HD050等", "HD003、HD004、HD005等").replace(
+        "超过16小时的异常打卡、只覆盖部分休息时段和扣除休息后有效时长异常的日期",
+        "超过16小时的异常打卡和扣除休息后有效时长异常的日期",
+    )
+    for item in _yeban_butie["pending_confirmations"]
+]
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.5",
+    "released_at": "2026-09-04",
+    "changes": (
+        "固化LB15凌晨3点班：休息时间确认为18:00至18:30；补贴以8小时正班为基准"
+        "扣减迟到、早退，满8小时25元、不足8小时折算，正班后的加班不抵扣迟到或早退。"
+    ),
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.4.2",
+        "display_version": "DL-PAYROLL.v1.4.2",
+        "status": "当前版本",
+        "released_at": "2026-09-04",
+        "effective_from": "2026-07",
+        "subject_ids": [
+            "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie",
+            "gangwei_butie", "gaowen_butie",
+        ],
+        "summary": "夜班补贴固化LB15凌晨3点班正班有效出勤折算规则。",
+    },
+    {
+        **_RULE_PACKAGE_V1_4_1["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_4_1["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_4_2 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_2)
+_RULE_PACKAGE.update({
+    "version": "1.4.3",
+    "display_version": "DL-PAYROLL.v1.4.3",
+    "released_at": "2026-09-04",
+    "effective_from": "2026-07",
+})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.6"
+_yeban_butie["common_rules"].insert(2, (
+    "普通夜班计薪起点取取整后实际上班时间、排班开始时间和22:00中的最晚时间；"
+    "排班开始前的打卡不计发夜班补贴。"
+))
+_start_field = next(
+    item for item in _yeban_butie["field_calculations"]
+    if item["field"] == "计薪上班"
+)
+_start_field["definition"] = "用于核算的起始时间，普通夜班不得早于排班开始时间。"
+_start_field["formula"] = (
+    "上班打卡向后取整到最近的半小时；普通夜班再取该时间与排班开始时间中的较晚值。"
+)
+_night_hours_field = next(
+    item for item in _yeban_butie["field_calculations"]
+    if item["field"] == "夜班时长（小时）"
+)
+_night_hours_field["formula"] = (
+    "夜班窗口交集分钟 ÷ 60；交集起点取计薪上班、排班开始时间与22:00中的最晚值，"
+    "终点取计薪下班与次日08:00中的较早值。"
+)
+_yeban_butie["pending_confirmations"] = [
+    item for item in _yeban_butie["pending_confirmations"]
+    if "早于排班的打卡是否从排班开始时间起算" not in item
+]
+_yeban_butie["pending_confirmations"] = [
+    (
+        "华东HD003、HD004、HD005等白班、早班在排班时间内覆盖22:00至次日08:00时"
+        "是否享有夜班补贴；排班开始前不计发已确认，排班结束后的夜间打卡边界仍需另行确认。"
+        if "华东HD003、HD004、HD005等早班" in item else item
+    )
+    for item in _yeban_butie["pending_confirmations"]
+]
+_yeban_butie["pending_confirmations"] = [
+    item.replace(
+        "本次班次资料未包含LB68、LS09和HJ007；2026年7月分别有190条、7条和2条考勤，需补充这三个班次的休息段及生效时间。",
+        "本次班次资料未包含LS09和HJ007；2026年7月分别有7条和2条考勤，需补充这两个班次的休息段及生效时间。",
+    )
+    for item in _yeban_butie["pending_confirmations"]
+]
+_yeban_butie["pending_confirmations"].insert(2, (
+    "LB68排班12:00至20:30，7月有190条考勤；排班结束后实际打卡进入22:00至次日08:00"
+    "是否继续计发，属于排班结束边界问题，不再列为缺少班次休息资料。"
+))
+_yeban_butie["pending_confirmations"].insert(3, (
+    "HD007在2026年7月12日为星期日休息，排班09:00至18:00、实际06:00上班；"
+    "线下公式计4.5元，与已确认的排班开始前不计发口径冲突。该条登记为线下历史公式差异，"
+    "不新增平台例外。"
+))
+_yeban_butie["verification"].insert(0, (
+    "按2026年7月华南、华东31,148条全量数据复核排班开始边界：受影响82条、20人；"
+    "其中80条调整后与线下完全一致。全量精确一致30,200条，一致率96.96%；"
+    "线下有金额的21,105条中精确一致20,618条，一致率97.69%。"
+    "HD005仍涉及白班早间资格，HD007属于线下历史公式冲突。"
+))
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.6",
+    "released_at": "2026-09-04",
+    "changes": (
+        "普通夜班增加排班开始边界：排班开始前的打卡不计发；不限制排班结束后的夜间打卡。"
+        "HD007休息日线下公式冲突登记为历史差异，不新增平台例外。"
+    ),
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.4.3",
+        "display_version": "DL-PAYROLL.v1.4.3",
+        "status": "当前版本",
+        "released_at": "2026-09-04",
+        "effective_from": "2026-07",
+        "subject_ids": [
+            "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie",
+            "gangwei_butie", "gaowen_butie",
+        ],
+        "summary": "夜班补贴增加排班开始边界，明确排班开始前不计发，并登记HD007线下历史公式冲突。",
+    },
+    {
+        **_RULE_PACKAGE_V1_4_2["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_4_2["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_4_3 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_3)
+_RULE_PACKAGE.update({
+    "version": "1.4.4",
+    "display_version": "DL-PAYROLL.v1.4.4",
+    "released_at": "2026-09-07",
+    "effective_from": "2026-06",
+})
+_gaowen_butie = next(
+    subject for subject in _RULE_PACKAGE["subjects"]
+    if subject["id"] == "gaowen_butie"
+)
+_gaowen_butie["version"] = "DL-GAOWEN.v0.9.1"
+_zhejiang_high_temperature = next(
+    region for region in _gaowen_butie["regions"]
+    if region["name"] == "浙江（嘉善 / 义乌）"
+)
+_zhejiang_high_temperature.update({
+    "rule": "华东本批嘉善、义乌仓库内作业人员按浙江室内标准，并按同仓同日同班次33℃门槛核算。",
+    "formula": "MIN(MAX(正班时数,刷卡加班)×1.15,9.2)，月度封顶200元",
+    "details": [
+        "张青、盛菊英、周钰铉/周钰炫、叶玉、樊明雪固定排除。",
+        "薪酬已确认华东本批核算范围只看室内作业；原线下13.8元/天公式有误，不作为正确口径。",
+    ],
+})
+_gaowen_butie["verification"].insert(0, (
+    "2026-09-07薪酬确认：华东线下表格日公式有误；嘉善、义乌本批人员正确口径为"
+    "1.15元/小时、9.2元/天、200元/月，平台原1.725元/小时、13.8元/天、300元/月需同步修正。"
+))
+_gaowen_butie["pending_confirmations"] = [
+    item for item in _gaowen_butie["pending_confirmations"]
+    if not item.startswith("浙江室内作业9.2元/天")
+]
+_gaowen_butie["change_log"].insert(0, {
+    "version": "DL-GAOWEN.v0.9.1",
+    "released_at": "2026-09-07",
+    "changes": (
+        "根据薪酬确认将嘉善、义乌本批高温补贴改为浙江室内标准："
+        "1.15元/小时、9.2元/天、200元/月；原线下13.8元/天公式登记为线下错误。"
+    ),
+})
+_RULE_PACKAGE["version_history"] = [
+    {
+        "version": "1.4.4",
+        "display_version": "DL-PAYROLL.v1.4.4",
+        "status": "当前版本",
+        "released_at": "2026-09-07",
+        "effective_from": "2026-06",
+        "subject_ids": [
+            "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie",
+            "gangwei_butie", "gaowen_butie",
+        ],
+        "summary": "高温补贴将嘉善、义乌本批人员切换为浙江室内1.15元/小时、9.2元/天、200元/月标准。",
+    },
+    {
+        **_RULE_PACKAGE_V1_4_3["version_history"][0],
+        "status": "历史版本",
+    },
+    *_RULE_PACKAGE_V1_4_3["version_history"][1:],
+]
+
+
+_RULE_PACKAGE_V1_4_4 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_4)
+_RULE_PACKAGE.update({"version": "1.4.5", "display_version": "DL-PAYROLL.v1.4.5"})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.7"
+_minimum_night_rule = (
+    "普通夜班扣除休息后的有效时长满1小时才计发；不足1小时为0元。"
+    "达到1小时后按完整30分钟计算，不足30分钟的部分舍去，按3元/小时、单日25元封顶。"
+    "LB15保留独立的8小时正班折算规则。"
+)
+_yeban_butie["common_rules"].append(_minimum_night_rule)
+_daily_field = next(item for item in _yeban_butie["field_calculations"] if item["field"] == "当日夜班补贴")
+_daily_field.update({
+    "formula": "有效夜班时长不足1小时为0；否则min（floor（有效夜班分钟/30）×1.5元，25元）。",
+    "example": "扣休息后59分钟为0元；60分钟为3元；89分钟为3元；90分钟为4.5元。",
+})
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.7", "released_at": "2026-09-07", "changes": _minimum_night_rule,
+})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_4["version_history"][0],
+    "version": "1.4.5", "display_version": "DL-PAYROLL.v1.4.5",
+    "summary": _minimum_night_rule,
+}, {**_RULE_PACKAGE_V1_4_4["version_history"][0], "status": "历史版本"},
+    *_RULE_PACKAGE_V1_4_4["version_history"][1:]]
+
+
+_RULE_PACKAGE_V1_4_5 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_5)
+_RULE_PACKAGE.update({"version": "1.4.6", "display_version": "DL-PAYROLL.v1.4.6"})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.8"
+_cleaner_rule = "东莞保洁不论班次均不享有夜班补贴；保留东莞LB39班次固定排除，其他地区沿用原资格规则。"
+_yeban_butie["common_rules"].append(_cleaner_rule)
+_dongguan = next(region for region in _yeban_butie["regions"] if region["name"] == "东莞")
+_dongguan.update({
+    "rule": _cleaner_rule,
+    "formula": "岗位为保洁或班次为LB39时0元；其他记录按普通夜班1小时门槛、完整30分钟计发，单日最高25元。",
+    "details": ["岗位名称精确为保洁时排除，不依赖班次编号；东莞LB39仍按班次编号排除。",
+                "2026-09-07用户确认：飞书第337、339—341、345行的东莞LB05保洁不享有。"],
+})
+_yeban_butie["change_log"].insert(0, {"version": "DL-YEBAN.v0.9.8", "released_at": "2026-09-07", "changes": _cleaner_rule})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_5["version_history"][0], "version": "1.4.6",
+    "display_version": "DL-PAYROLL.v1.4.6", "summary": _cleaner_rule,
+}, {**_RULE_PACKAGE_V1_4_5["version_history"][0], "status": "历史版本"},
+    *_RULE_PACKAGE_V1_4_5["version_history"][1:]]
+
+
+_RULE_PACKAGE_V1_4_6 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_6)
+_RULE_PACKAGE.update({"version": "1.4.7", "display_version": "DL-PAYROLL.v1.4.7"})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.9"
+_morning_rule = (
+    "排班与实际出勤均覆盖08:00前、下班在22:00至23:00之前的早班，按早晨所在夜班窗口计算，"
+    "不因下班达到22:00而遗漏早晨时段。"
+    "HD003的05:58至22:30出勤从06:00排班开始计至08:00，发6元；超长打卡仍保留复核。"
+)
+_yeban_butie["common_rules"].append(_morning_rule)
+_yeban_butie["pending_confirmations"].append(
+    "同一次早班超长出勤又覆盖当晚至少1小时，保留原有暂算金额并标记复核；早晚窗口计发、门槛合并及封顶归属待确认。"
+)
+_yeban_butie["change_log"].insert(0, {"version": "DL-YEBAN.v0.9.9", "released_at": "2026-09-07", "changes": _morning_rule})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_6["version_history"][0], "version": "1.4.7",
+    "display_version": "DL-PAYROLL.v1.4.7", "summary": _morning_rule,
+}, {**_RULE_PACKAGE_V1_4_6["version_history"][0], "status": "历史版本"},
+    *_RULE_PACKAGE_V1_4_6["version_history"][1:]]
+
+
+_RULE_PACKAGE_V1_4_7 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_7)
+_RULE_PACKAGE.update({"version": "1.4.8", "display_version": "DL-PAYROLL.v1.4.8", "released_at": "2026-09-08"})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.10"
+_dual_window_rule = (
+    "同日早班出勤同时覆盖早晨和晚间夜班窗口时，各窗口分别扣实际休息、独立判断满1小时门槛，"
+    "达到后按完整30分钟计算再汇总。合计不超过25元时计入；超过25元的封顶归属未确认，保留原暂算并提示复核。"
+    "HD003的05:56至23:00计早晨6元、晚间3元，共9元；05:58至22:30仍计6元。超16小时保留考勤复核，LB15规则不变。"
+)
+_yeban_butie["common_rules"].append(_dual_window_rule)
+_yeban_butie["pending_confirmations"] = [
+    item for item in _yeban_butie["pending_confirmations"] if not item.startswith("同一次早班超长出勤")
+]
+_yeban_butie["pending_confirmations"].append("早晚两个夜班窗口合计超过25元时，封顶归属仍待业务确认，当前保留原暂算金额并提示复核。")
+_yeban_butie["change_log"].insert(0, {"version": "DL-YEBAN.v0.9.10", "released_at": "2026-09-08", "changes": _dual_window_rule})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_7["version_history"][0], "version": "1.4.8",
+    "display_version": "DL-PAYROLL.v1.4.8", "released_at": "2026-09-08", "summary": _dual_window_rule,
+}, {**_RULE_PACKAGE_V1_4_7["version_history"][0], "status": "历史版本"},
+    *_RULE_PACKAGE_V1_4_7["version_history"][1:]]
+
+
+_RULE_PACKAGE_V1_4_8 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_8)
+_RULE_PACKAGE.update({"version": "1.4.9", "display_version": "DL-PAYROLL.v1.4.9", "released_at": "2026-09-08"})
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.11"
+_combined_cap_rule = (
+    "同日早晨和晚间两个夜班窗口各自扣除实际休息、独立判断满1小时门槛并按完整30分钟计发，"
+    "再合计金额，两个窗口共同适用单日25元封顶，不分别封顶后重复发放。"
+    "早晨6元加晚间3元仍发9元；两窗口合计27元则发25元，超16小时考勤复核及LB15规则不变。"
+)
+_yeban_butie["common_rules"] = [
+    _combined_cap_rule if item == _dual_window_rule else item
+    for item in _yeban_butie["common_rules"]
+]
+_yeban_butie["pending_confirmations"] = [
+    item for item in _yeban_butie["pending_confirmations"]
+    if not item.startswith("早晚两个夜班窗口合计超过25元")
+]
+_daily_field = next(item for item in _yeban_butie["field_calculations"] if item["field"] == "当日夜班补贴")
+_daily_field.update({
+    "definition": "计算普通夜班当天应发金额，早晚两个窗口合计共用25元上限。",
+    "formula": "各窗口扣休息后的有效夜班时长不足1小时为0，否则按floor（有效夜班分钟/30）×1.5元计发；当日补贴=min（各窗口金额合计，25元）。",
+    "example": "早晨6元＋晚间3元＝9元；早晨22.5元＋晚间4.5元＝27元，当日封顶发25元。",
+})
+_yeban_butie["change_log"].insert(0, {"version": "DL-YEBAN.v0.9.11", "released_at": "2026-09-08", "changes": _combined_cap_rule})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_8["version_history"][0], "version": "1.4.9",
+    "display_version": "DL-PAYROLL.v1.4.9", "released_at": "2026-09-08", "summary": _combined_cap_rule,
+}, {**_RULE_PACKAGE_V1_4_8["version_history"][0], "status": "历史版本"},
+    *_RULE_PACKAGE_V1_4_8["version_history"][1:]]
+
+
+# 2026-09-09 业务确认：缺卡与超过16小时不再进入异常复核。
+_yeban_butie["common_rules"] = [
+    item.replace("，超16小时考勤复核及LB15规则不变。", "，LB15规则不变。")
+    for item in _yeban_butie["common_rules"]
+    if not item.startswith(("上下班时长超过16小时", "员工缺勤导致的考勤异常"))
+] + [
+    "缺少有效上班或下班打卡时，当日不计夜班补贴，不报异常、不要求复核；补齐打卡后可重新核算。",
+    "打卡跨度超过16小时按现有夜班补贴公式正常核算，不因跨度进入暂算或异常。",
+    "日期无效、休息时间配置错误等无法计算的记录仍进入异常复核。",
+    "其他待确认口径按现有规则暂算，暂算金额已计入本月应发并标记确认。",
+]
+_yeban_butie["pending_confirmations"] = [
+    item.replace("超过16小时的异常打卡和", "")
+    for item in _yeban_butie["pending_confirmations"]
+    if not item.startswith("员工缺勤导致")
+]
+_yeban_butie["verification"] = [item.replace("24条缺卡保持不计金额并待核", "24条缺卡不计金额，无需复核") for item in _yeban_butie["verification"]]
+for _field in _yeban_butie["field_calculations"]:
+    if _field["field"] == "本月应发夜班补贴":
+        _field["example"] = "暂算需确认日已计入应发；缺卡当天不计补贴且不报异常。"
+
+
+_yeban_butie["common_rules"].append("正式核算前检查需要计发补贴的班次；缺少休息配置或生效日期未覆盖考勤时，必须补齐后才能生成结果。缺卡不计补贴、明确排除和无需计发的记录不因此阻塞；无休息安排须明确确认。")
+
+_yeban_butie["common_rules"].append("晋江计件岗、门禁同时支持考勤自动识别和上传名单；任一方式命中即排除，同一人同一天重复命中只排除一次，上传名单按生效和失效日期判断。")
+
+# 2026-09-09：按业务确认调整当前暂算标准，历史规则快照保留原值。
+_gangwei = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gangwei_butie")
+_gangwei["version"] = "DL-GANGWEI.v0.9.2"
+for _region in _gangwei["regions"]:
+    if _region["name"] == "晋江":
+        _region["rule"] = "贾万按特殊安检组长资格识别，当前按600元月标准暂算。"
+        _region["details"] = ["按业务要求暂用600元月标准，仍需核对晋江生产线下结果。"]
+_gangwei["pending_confirmations"] = [text.replace("贾万当前按特殊安检组长800元", "贾万当前按特殊安检组长600元") for text in _gangwei["pending_confirmations"]]
+_gangwei["change_log"].insert(0, {
+    "version": "DL-GANGWEI.v0.9.2",
+    "released_at": "2026-09-09",
+    "changes": "晋江贾万暂算月度标准由800元调整为600元，保留线下核对提示。",
+})
+
 _RULE_PACKAGE_VERSIONS = {
+    _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
+    _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
+    _RULE_PACKAGE_V1_4_6["version"]: _RULE_PACKAGE_V1_4_6,
+    _RULE_PACKAGE_V1_4_5["version"]: _RULE_PACKAGE_V1_4_5,
+    _RULE_PACKAGE_V1_4_4["version"]: _RULE_PACKAGE_V1_4_4,
     _RULE_PACKAGE_V1_0_0["version"]: _RULE_PACKAGE_V1_0_0,
     _RULE_PACKAGE_V1_1_0["version"]: _RULE_PACKAGE_V1_1_0,
     _RULE_PACKAGE_V1_1_1["version"]: _RULE_PACKAGE_V1_1_1,
@@ -1701,6 +2253,10 @@ _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_3_0["version"]: _RULE_PACKAGE_V1_3_0,
     _RULE_PACKAGE_V1_3_1["version"]: _RULE_PACKAGE_V1_3_1,
     _RULE_PACKAGE_V1_3_2["version"]: _RULE_PACKAGE_V1_3_2,
+    _RULE_PACKAGE_V1_4_0["version"]: _RULE_PACKAGE_V1_4_0,
+    _RULE_PACKAGE_V1_4_1["version"]: _RULE_PACKAGE_V1_4_1,
+    _RULE_PACKAGE_V1_4_2["version"]: _RULE_PACKAGE_V1_4_2,
+    _RULE_PACKAGE_V1_4_3["version"]: _RULE_PACKAGE_V1_4_3,
     _RULE_PACKAGE["version"]: _RULE_PACKAGE,
 }
 
