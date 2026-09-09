@@ -302,7 +302,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.4.0"
+    assert package["version"] == "1.4.9"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {
@@ -321,7 +321,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.4.0"
+    assert package["version_history"][0]["version"] == "1.4.9"
     assert package["version_history"][0]["subject_ids"] == [
         "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
         "gaowen_butie",
@@ -334,15 +334,51 @@ def test_rule_package_marks_night_shift_allowance_as_validating():
     payload = str(yeban)
 
     assert yeban["status"] == "验证中"
-    assert yeban["version"] == "DL-YEBAN.v0.9.3"
+    assert yeban["version"] == "DL-YEBAN.v0.9.11"
+    assert not any('封顶归属' in item for item in yeban['pending_confirmations'])
+    assert '共同适用单日25元封顶' in str(yeban['common_rules'])
+    assert "不因下班达到22:00而遗漏早晨时段" in payload
+    assert "东莞保洁不论班次均不享有" in payload
+    assert "满1小时才计发" in payload
+    assert "不足30分钟的部分舍去" in payload
     assert "22:00至次日08:00" in payload
     assert "上班向后、下班向前" in payload
     assert "3元/小时" in payload
     assert "单日最高25元" in payload
     assert "平台班次休息基线" in payload
     assert "晋江计件岗位和门禁岗位" in payload
+    assert "嘉善、义乌的保洁、HRBP专员、数据专员" in payload
+    assert "东莞LB39" in payload
+    assert "HD048理货入库18点班固定休息为晚上23:00至24:00、次日06:00至06:30" in payload
+    assert "当前内置143个班次" in payload
+    assert "夜班窗口外的休息不扣除" in payload
     assert "暂算金额已计入" in payload
-    assert "员工缺勤导致的考勤异常日不计夜班补贴" in payload
+    assert "当日不计夜班补贴，不报异常、不要求复核" in payload
+    assert "31,148" in payload
+    assert "96.70%" in payload
+    assert "2,005.00元" in payload
+    assert "LB15共244条日考勤" in payload
+    assert "03:05—11:30取整为03:30—11:30" in payload
+    assert "班次休息时间为18:00至18:30" in payload
+    assert "按迟到0.5小时计7.5小时" in payload
+    assert "正班后的加班不抵扣迟到或早退" in payload
+    assert "LS09和HJ007" in payload
+    assert "LB68、LS09和HJ007" not in payload
+    assert "LB68排班12:00至20:30" in payload
+    assert "周六、周日标记为休息" in payload
+    assert "HD050的32条、HD059的1条剩余差异" in payload
+    assert "线下公式下拉错误" in payload
+    assert "涉及的148条休息差异" in payload
+    assert "按取整后实际覆盖时长扣除" in payload
+    assert "实际覆盖多少休息时间就扣多少" in payload
+    assert "排班开始前不计发" in payload
+    assert "HD007" in payload
+    assert "线下历史公式差异" in payload
+    assert "只覆盖部分休息时段和扣除休息后" not in payload
+    assert "华东HD048等班次" not in payload
+    assert all("HD048" not in item for item in yeban["pending_confirmations"])
+    assert all("LB15" not in item for item in yeban["pending_confirmations"])
+    assert all("HD050" not in item for item in yeban["pending_confirmations"])
     assert "补充上下班打卡" not in payload
     assert "补卡" not in payload
     assert "84.83%" in payload
@@ -355,7 +391,19 @@ def test_rule_package_marks_night_shift_allowance_as_validating():
     assert "17:53 → 18:00" in fields["计薪上班"]["example"]
     assert "07:13 → 次日07:00" in fields["计薪下班"]["example"]
     assert "9.5小时 − 晚上休息1小时 − 早上休息0.5小时 = 8小时" in fields["有效夜班时长（小时）"]["example"]
-    assert "有效夜班时长 × 3元/小时" in fields["当日夜班补贴"]["formula"]
+    assert "有效夜班时长不足1小时为0" in fields["当日夜班补贴"]["formula"]
+    assert "floor（有效夜班分钟/30）×1.5元" in fields["当日夜班补贴"]["formula"]
+
+
+def test_rule_package_preserves_version_before_confirmed_night_shift_rules():
+    package = TestClient(app).get(
+        "/api/domestic-labor/rule-package", params={"version": "1.4.0"}
+    ).json()
+    yeban = next(subject for subject in package["subjects"] if subject["id"] == "yeban_butie")
+
+    assert package["display_version"] == "DL-PAYROLL.v1.4.0"
+    assert yeban["version"] == "DL-YEBAN.v0.9.3"
+    assert "嘉善、义乌的保洁、HRBP专员、数据专员" not in str(yeban)
 
 
 def test_rule_package_preserves_previous_attendance_bonus_rule():
@@ -560,7 +608,7 @@ def test_historical_rule_package_keeps_latest_version_available_for_navigation()
     ).json()
 
     assert package["version"] == "1.1.3"
-    assert package["available_versions"][0]["version"] == "1.4.0"
+    assert package["available_versions"][0]["version"] == "1.4.9"
     assert package["available_versions"][0]["status"] == "当前版本"
     assert any(item["version"] == "1.1.3" for item in package["available_versions"])
 
@@ -1088,7 +1136,7 @@ def test_canbu_export_outputs_business_reconciliation_sheet(tmp_path):
     headers = [cell.value for cell in ws[1]]
     assert headers == [
         "工号", "姓名", "工作地区", "部门", "岗位", "餐补口径",
-        "01日餐补", "02日餐补", "03日餐补", "餐补合计",
+        "01日餐补", "02日餐补", "03日餐补", "餐补合计", "计算过程",
     ]
     assert wb.sheetnames == ["计算详情"]
     assert ws.max_row == 2
@@ -1163,7 +1211,7 @@ def test_waisu_butie_export_outputs_business_reconciliation_sheet(tmp_path):
     assert [cell.value for cell in ws[1]] == [
         "工号", "姓名", "工作地区", "部门", "岗位", "外宿补贴口径",
         "在职天数", "住宿扣除天数", "外宿补贴天数", "缺勤时数",
-        "补贴标准", "应发外宿补贴", "异常/提示",
+        "补贴标准", "应发外宿补贴", "异常/提示", "计算过程",
     ]
     assert [cell.value for cell in ws[2]][:12] == [
         "OWHN001", "张三", "嘉善", "华东操作", "操作员", "嘉善外宿补贴",
@@ -1233,14 +1281,15 @@ def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
     exporter.export(results, "202608", {"total_employees": 1})
 
     wb = load_workbook(output_path)
-    assert wb.sheetnames == ["核算汇总", "每日明细"]
+    assert wb.sheetnames == ["核算汇总", "每日明细", "平台班次表"]
+    assert wb["平台班次表"].max_row == 144
+    assert wb["平台班次表"].cell(1, 7).value == "休息段1类型"
     summary = wb["核算汇总"]
-    assert [cell.value for cell in summary[1]][:12] == [
-        "工号", "姓名", "工作地区", "部门", "岗位", "正常核算日", "暂算需确认日", "无需补贴日",
-        "异常未计金额日", "应发夜班补贴", "核算结果", "需处理事项",
+    assert [cell.value for cell in summary[1]] == [
+        "工号", "姓名", "工作地区", "部门", "岗位", "应发夜班补贴", "需处理事项",
     ]
-    assert [cell.value for cell in summary[2]][5:12] == [
-        1, 0, 0, 1, 24, "金额已核算", "查看1天异常未计金额原因",
+    assert [cell.value for cell in summary[2]][5:] == [
+        24, "查看1天异常未计金额原因",
     ]
 
     ws = wb["每日明细"]
@@ -1248,7 +1297,7 @@ def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
         "工号", "姓名", "工作地区", "岗位", "出勤日期", "班次", "当日结果", "业务原因",
         "上班打卡", "下班打卡", "计薪上班", "计薪下班", "夜班时长（小时）",
         "晚上休息扣除（小时）", "早上休息扣除（小时）", "休息扣除合计（小时）",
-        "当日夜班补贴", "需处理事项",
+        "当日夜班补贴", "需处理事项", "计算过程",
     ]
     assert ws.cell(2, 5).number_format == "yyyy-mm-dd"
     assert ws.cell(2, 9).value == "22:03"
@@ -1259,6 +1308,9 @@ def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
     assert ws.cell(2, 14).value == 1
     assert ws.cell(2, 15).value == 0.5
     assert ws.cell(2, 16).value == 1.5
+    assert "570分钟−休息90分钟=480分钟" in ws.cell(2, 19).value
+    assert "min(16×1.5,25)=24元" in ws.cell(2, 19).value
+    assert "缺少有效上班或下班打卡" in ws.cell(3, 19).value
     assert ws.cell(2, 17).value == 24
     assert ws.cell(2, 7).value == "正常核算"
     assert ws.cell(2, 8).value == "按通用夜班规则计算"
@@ -1269,6 +1321,78 @@ def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
     assert "calculated" not in all_text
     assert "generic_rule" not in all_text
     wb.close()
+
+
+def test_night_shift_export_preserves_batch_shift_snapshot(tmp_path):
+    path = tmp_path / "snapshot.xlsx"
+    ExcelExporter(str(path)).export(
+        [{"employee_id": "TEST001", "yeban_butie": 25, "subject_details": {"yeban_butie": {"amount": 25}}}],
+        "202607", night_shift_config={"shift_breaks": [{
+            "shift_code": "TEST_SHIFT", "shift_name": "当月调整班次", "regular_hours": 8.5,
+            "break_segments": [{"category": "晚上休息", "period": "24:00-25:00"}],
+        }]},
+    )
+    wb = load_workbook(path)
+    ws = wb["平台班次表"]
+    assert ws.max_row == 2
+    assert ws.cell(2, 1).value == "TEST_SHIFT"
+    assert ws.cell(2, 7).value == "晚上休息"
+    assert ws.cell(2, 8).value == "24:00-25:00"
+    assert ws.cell(2, 14).value == "本批次核算配置"
+    wb.close()
+
+
+def test_night_shift_export_labels_confirmed_position_and_shift_exclusions(tmp_path):
+    output_path = tmp_path / "night_shift_exclusions.xlsx"
+    results = [{
+        "employee_id": "TEST001",
+        "employee_name": "测试员工",
+        "department": "操作部",
+        "yeban_butie": 0,
+        "total": 0,
+        "warnings": "",
+        "exceptions": [],
+        "subject_details": {
+            "yeban_butie": {
+                "amount": 0,
+                "details": {
+                    "calculated_days": 0,
+                    "excluded_days": 2,
+                    "review_calculated_days": 0,
+                    "unpriced_review_days": 0,
+                    "daily_results": [
+                        {
+                            "attendance_date": "2026-07-01",
+                            "shift_code": "HD01",
+                            "status": "excluded",
+                            "reason_code": "jiashan_yiwu_position_excluded",
+                            "amount": 0,
+                        },
+                        {
+                            "attendance_date": "2026-07-02",
+                            "shift_code": "LB39",
+                            "status": "excluded",
+                            "reason_code": "dongguan_lb39_excluded",
+                            "amount": 0,
+                        },
+                    ],
+                },
+                "audit_explanation": {
+                    "inputs": {"工作地区": "嘉善", "岗位名称": "保洁"},
+                },
+            },
+        },
+    }]
+
+    ExcelExporter(str(output_path)).export(results, "202607", {"total_employees": 1})
+
+    workbook = load_workbook(output_path, read_only=True, data_only=True)
+    worksheet = workbook["每日明细"]
+    assert worksheet.cell(2, 8).value == "嘉善/义乌固定排除岗位不享有夜班补贴"
+    assert worksheet.cell(3, 8).value == "东莞LB39保洁班次不享有夜班补贴"
+    assert worksheet.cell(2, 18).value == "无需处理"
+    assert worksheet.cell(3, 18).value == "无需处理"
+    workbook.close()
 
 
 def test_waisu_butie_full_api_workflow_exposes_audit_and_export():
@@ -3004,3 +3128,49 @@ def _operation_employee() -> dict:
         "排休请假天数": 0,
         "工伤假天数": 0,
     }
+
+
+@pytest.mark.parametrize("monthly_area,daily_area,decision,code", [
+    ("嘉善", "", "", "night_shift_configuration_required"),
+    ("晋江", "", "", "jinjiang_roster_confirmation_required"),
+    ("晋江", "", "confirmed", "night_shift_configuration_required"),
+    ("嘉善", "晋江", "", "jinjiang_roster_confirmation_required"),
+    ("晋江", "嘉善", "", "night_shift_configuration_required"),
+    ("晋江", "", "confirmed", None),
+])
+def test_missing_night_shift_returns_409_before_worker_and_removes_unsubmitted_run(monkeypatch, tmp_path, monthly_area, daily_area, decision, code):
+    import importlib
+    from types import SimpleNamespace
+    api = importlib.import_module("bonus_platform.app")
+    runs = importlib.import_module("bonus_platform.engine.domestic_labor.runs")
+    monkeypatch.setattr(api, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(runs, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(api, "load_night_shift_config", lambda *a, **k: {"shift_breaks": [] if code else [{"shift_code":"NEW","break_periods":[]}], "jinjiang_list_confirmed": False, "jinjiang_exclusions":[{"employee_id":"OTHER","start_date":"2026-07-01","reason":"计件岗"}]})
+    monkeypatch.setattr(api, "build_night_shift_config_snapshot", lambda config: config)
+    class Loader:
+        monthly = SimpleNamespace(rows=[{"工号": "A", "工作地区": monthly_area, "岗位名称": "操作员"}])
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def validate_inputs(self, *a): return {}
+        def group_daily_by_employee(self):
+            return {"A": [{"出勤日期": "2026-07-02", "班次编号": "NEW", "工作地区": daily_area, "上班一": "20:00", "下班一": "08:00"}]}
+    monkeypatch.setattr(api, "MultiFilePayrollDataLoader", Loader)
+    calls = []
+    monkeypatch.setattr(api, "_run_payroll_calculation", lambda *a: calls.append(a))
+    response = TestClient(app).post("/api/domestic-labor/runs", data={"engines": "yeban_butie", "attendance_month": "202607", "jinjiang_roster_decision": decision},
+                                    files={"file": ("input.xlsx", b"test", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    if code is None:
+        assert response.status_code == 200
+        assert len(calls) == 1
+        assert calls[0][6]["jinjiang_list_confirmed"] is True
+        assert calls[0][6]["jinjiang_exclusions"][0]["employee_id"] == "OTHER"
+        return
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == code
+    if code == "night_shift_configuration_required":
+        assert len(response.json()["detail"]["records"]) == 1
+    else:
+        assert response.json()["detail"]["employee_count"] == 1
+    assert calls == []
+    assert list(tmp_path.iterdir()) == []

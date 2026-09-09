@@ -266,12 +266,12 @@ def test_domestic_labor_subject_cards_show_operation_and_all_region_scope():
     assert '<span class="dl-subject-status-tag">验证中</span>' in html
     assert ".dl-subject-card.primary.validating" in html
     assert "#FFF7E6" in html
-    assert "平台内置班次休息表，晋江额外排除人员按月确认" in html
+    assert "平台内置班次休息表，并固化嘉善/义乌岗位与东莞LB39排除规则" in html
     assert "班次休息表、地区岗位、晋江特殊名单和连班登记" not in html
     assert "btnSaveNightShiftBreaks" in js
     assert "复制上月晋江名单" in js
     assert "确认本月无额外排除人员" in js
-    assert "计件岗、门禁由系统自动排除" in js
+    assert "考勤自动识别与上传名单共同生效" in js
     assert "晋江不享有夜班补贴人员名单" in js
     assert "晚上休息扣除" in js
     assert "早上休息扣除" in js
@@ -287,7 +287,7 @@ def test_domestic_labor_subject_cards_show_operation_and_all_region_scope():
     assert "有未核算日" not in js
     assert "本月核算结果" in js
     assert "需要处理的日期" in js
-    assert "员工缺勤（考勤异常）" in js
+    assert "打卡不完整，当日不计补贴" in js
     assert "补充当天上下班打卡" not in js
     assert "只计算22:00至次日08:00内的有效时长" in js
     assert "Calculation explanation" not in html
@@ -375,18 +375,34 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     assert 'id="rulePackageView"' in html
     assert 'id="rulePackageCategoryTabs"' in html
     assert 'id="rulePackageVersionSelect"' in html
-    assert "DL-PAYROLL.v1.4.0" in html
+    assert "DL-PAYROLL.v1.4.4" in html
     assert "已验证规则 4 项 · 验证中规则 3 项" in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js
     assert "data-rule-category" in js
     assert "data-rule-subject" in js
     assert "核算规则包" in html
-    assert "当前版本 1.4.0" in html
+    assert "当前版本 1.4.4" in html
     assert "字段计算公式" in js
     assert "renderRuleFieldCalculations" in js
     assert "RULE PACKAGE · CURRENT" not in html
     assert "position: absolute" in html.split(".dl-rule-package-entry {", 1)[1].split("}", 1)[0]
+
+
+def test_night_shift_results_offer_guided_missing_shift_configuration():
+    html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
+
+    assert ".dl-missing-shift-layout" in html
+    assert "补齐待确认班次" in js
+    assert "沿用已有班次" in js
+    assert "填写休息时间" in js
+    assert "无休息安排" in js
+    assert "何时开始采用此安排？" in js
+    assert "defaultNightShiftEffectiveDate" in js
+    assert "确认此班次" in js
+    assert 'class="dl-break-range"' in js
+    assert 'data-break-part="startDay"' not in js
 
 
 def test_overseas_labor_page_is_separate_audit_workbench():

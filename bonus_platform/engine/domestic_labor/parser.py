@@ -572,10 +572,16 @@ class PayrollDataLoader:
                     row["入离职缺勤时数"] = diff * 8
 
 
+class SheetConfirmationRequired(ValueError):
+    def __init__(self, sheets):
+        super().__init__("请确认工作表用途后继续字段检查")
+        self.sheets = sheets
+
+
 class MultiFilePayrollDataLoader(PayrollDataLoader):
     """Merge monthly, daily and housing sheets across one or more workbooks."""
 
-    def __init__(self, file_paths: Sequence[str], password: str = None):
+    def __init__(self, file_paths: Sequence[str], password: str = None, sheet_mapping=None):
         paths = [str(path) for path in file_paths if path]
         if not paths:
             raise ValueError("未提供考勤数据文件")
@@ -589,6 +595,7 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         self._scanned = False
         self._source_summary: List[Dict[str, Any]] = []
         self._present_types = set()
+        self.sheet_mapping = sheet_mapping or {}
 
     def load(self):
         for parser in self.parsers:
@@ -601,31 +608,60 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
 
     @staticmethod
     def _sheet_type(name: str, headers: Sequence[str]) -> Optional[str]:
+        candidates = MultiFilePayrollDataLoader._sheet_candidates(name, headers)
+        return candidates[0] if len(candidates) == 1 else None
+
+    @staticmethod
+    def _sheet_candidates(name: str, headers: Sequence[str]) -> List[str]:
         sheet_name = str(name or "").strip()
-        header_set = {str(header or "").strip() for header in headers}
+        header_set = {_normalized_header_name(header) for header in headers}
         if any(marker in sheet_name for marker in ("核算比对", "线下核对", "核对版")):
             # 生产核对工作簿常把线下金额、AI金额和月考勤基础字段放在同一结果页。
             # 结果页只用于人工比对，不能再次作为月考勤并入，否则每名员工会重复。
-            return None
+            return []
+        employee = "工号" in header_set
+        named = next((kind for marker, kind in (
+            ("月考勤", "monthly"), ("月报", "monthly"), ("日考勤", "daily"),
+            ("住宿", "housing"), ("宿舍", "housing"), ("测温", "temperature"),
+        ) if marker in sheet_name), None)
         temperature_signals = header_set.intersection({"班次日期", "测温班次", "测温网点", "测温温度"})
-        if "测温" in sheet_name or len(temperature_signals) >= 3:
-            return "temperature"
-        if "住宿" in sheet_name or "宿舍" in sheet_name or (
-            "工号" in header_set
-            and header_set.intersection({"入住时间", "入宿时间", "退宿时间", "离宿时间"})
-        ):
-            return "housing"
-        daily_signals = header_set.intersection({"日期", "工作状态", "正班时数", "刷卡加班", "上班一", "下班一"})
-        if "日考勤" in sheet_name or ("工号" in header_set and "日期" in header_set and len(daily_signals) >= 2):
-            return "daily"
+        daily = employee and bool(header_set.intersection({"日期", "出勤日期"}))
         monthly_signals = header_set.intersection({
             "考勤月份", "排班天数", "实际在职工作日天数", "正班出勤天数", "入职日期",
         })
-        if "月考勤" in sheet_name or "月报" in sheet_name or (
-            "工号" in header_set and len(monthly_signals) >= 2
-        ):
-            return "monthly"
-        return None
+        monthly = employee and (len(monthly_signals) >= 2 or (
+            named == "monthly" and bool(monthly_signals)
+            and bool(header_set.intersection({"工作地区", "岗位名称", "岗位"})) and not daily
+        ))
+        housing = employee and bool(header_set.intersection({"入住时间", "入宿时间", "退宿时间", "离宿时间"}))
+        signals = {"monthly": monthly, "daily": daily, "housing": housing,
+                   "temperature": len(temperature_signals) >= 3}
+        # 明确名称需要字段支持；冲突名称交给用户确认，不抢先覆盖字段证据。
+        if named and signals[named]:
+            return [named]
+        candidates = [kind for kind, matched in signals.items() if matched]
+        if named:
+            return list(dict.fromkeys([named, *candidates])) if candidates else []
+        # 考勤主表附带住宿日期很常见，不应因此被当作住宿记录。
+        if monthly or daily:
+            candidates = [kind for kind in candidates if kind != "housing"]
+        return candidates
+
+    @staticmethod
+    def _validate_sheet_choice(kind, headers, name):
+        fields = {_normalized_header_name(header) for header in headers}
+        requirements = {
+            "monthly": [{"工号"}, {"考勤月份", "排班天数", "正班出勤天数", "实际在职工作日天数", "入职日期", "工作地区", "岗位名称", "岗位"}],
+            "daily": [{"工号"}, {"日期", "出勤日期"}],
+            "housing": [{"工号"}, {"入住时间", "入宿时间", "退宿时间", "离宿时间"}],
+            "temperature": [{"班次日期"}, {"测温班次"}, {"测温网点"}, {"测温温度"}],
+            "ignore": [],
+        }
+        if kind not in requirements:
+            raise ValueError("工作表用途无效")
+        missing = [" / ".join(sorted(group)) for group in requirements[kind] if not fields.intersection(group)]
+        if missing:
+            raise ValueError(f"工作表「{name}」缺少所选用途的必需字段：{'、'.join(missing)}")
 
     @staticmethod
     def _merge_headers(parts: Sequence[SheetData]) -> List[str]:
@@ -693,11 +729,28 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         if self._scanned:
             return
         parts = {"monthly": [], "daily": [], "housing": [], "temperature": []}
-        for parser in self.parsers:
+        pending = []
+        for file_index, parser in enumerate(self.parsers):
             recognized = []
             for sheet_name in parser.get_sheet_names():
                 raw = parser.parse_sheet(sheet_name)
                 sheet_type = self._sheet_type(sheet_name, raw.headers)
+                key = f"{file_index}:{sheet_name}"
+                choice = self.sheet_mapping.get(key)
+                if choice is not None:
+                    self._validate_sheet_choice(choice, raw.headers, sheet_name)
+                    sheet_type = None if choice == "ignore" else choice
+                elif not sheet_type and raw.rows and self._sheet_candidates(sheet_name, raw.headers) and not any(
+                    marker in sheet_name for marker in ("核算比对", "线下核对", "核对版", "汇总")
+                ):
+                    preview_headers = [h for h in raw.headers if h in {
+                        "考勤月份", "工作地区", "岗位", "岗位名称", "日期", "出勤日期", "班次", "班次名称", "排班天数",
+                    }][:6]
+                    pending.append({"key": key, "file_name": parser.file_path.name,
+                                    "sheet": sheet_name, "headers": raw.headers,
+                                    "candidates": self._sheet_candidates(sheet_name, raw.headers),
+                                    "row_count": raw.row_count,
+                                    "preview": [{h: str(row.get(h) or "") for h in preview_headers} for row in raw.rows[:3]]})
                 if not sheet_type:
                     continue
                 parts[sheet_type].append(raw)
@@ -712,9 +765,24 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
                 "sheets": recognized,
             })
 
+        if pending:
+            raise SheetConfirmationRequired(pending)
+
         monthly_rows = self._normalize_valid_rows([
             row for part in parts["monthly"] for row in part.rows
         ])
+        # 测温登记右侧是独立的办公人员名单，按工号关联，不能与左侧测温逐行关联。
+        # 在过滤无测温值的行之前提取，避免丢掉名单中没有同排测温记录的员工。
+        air_conditioned_ids = {
+            str(row.get("工号", "") or "").strip()
+            for part in parts["temperature"] for row in part.rows
+            if str(row.get("办公地点是否有空调", "") or "").strip() == "是"
+            and self._has_valid_employee_id(row)
+        }
+        for row in monthly_rows:
+            if str(row.get("工号", "") or "").strip() in air_conditioned_ids:
+                row["办公地点是否有空调"] = "是"
+
         daily_rows = [
             row for part in parts["daily"] for row in part.rows if self._has_valid_employee_id(row)
         ]

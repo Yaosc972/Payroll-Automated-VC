@@ -19,6 +19,7 @@ def _config():
                 "shift_name": "处理中心20:00晚班-当月调整",
                 "shift_time": "20:00-29:00;",
                 "regular_hours": 9,
+                "effective_start_date": "2026-08-01",
                 "break_periods": ["00:00-00:30"],
                 "note": "当月临时调整",
             }
@@ -41,19 +42,34 @@ def test_platform_baseline_contains_unique_existing_shift_table():
     shifts = config_module.load_baseline_shift_breaks()
     by_code = {row["shift_code"]: row for row in shifts}
 
-    assert len(shifts) == 122
-    assert len(by_code) == 122
+    assert len(shifts) == 143
+    assert len(by_code) == 143
     assert by_code["DN06"]["break_periods"] == ["24:00-25:00"]
+    assert by_code["LB29"]["break_periods"] == ["06:00-06:30", "12:00-13:00"]
+    assert by_code["LB15"]["break_periods"] == ["18:00-18:30"]
     assert by_code["HD024"]["break_periods"] == ["06:00-06:30"]
+    assert by_code["HD023"]["break_periods"] == ["30:00-30:30"]
+    assert by_code["HD042"]["break_periods"] == ["23:00-24:00", "06:00-06:30"]
+    assert by_code["HD046"]["break_periods"] == ["23:00-24:00", "06:00-06:30"]
+    assert by_code["HD048"]["break_periods"] == ["23:00-24:00", "06:00-06:30"]
+    assert by_code["HD052"]["break_periods"] == ["24:00-25:00", "30:00-30:30"]
+    assert by_code["HD059"]["break_periods"] == ["24:00-25:00", "30:30-31:00"]
     assert by_code["DN06"]["break_segments"] == [
         {"period": "24:00-25:00", "category": "晚上休息"}
     ]
     assert by_code["HD024"]["break_segments"] == [
         {"period": "06:00-06:30", "category": "早上休息"}
     ]
+    assert by_code["LB15"]["break_segments"] == [
+        {"period": "18:00-18:30", "category": "其他休息"}
+    ]
+    assert by_code["HD048"]["break_segments"] == [
+        {"period": "23:00-24:00", "category": "晚上休息"},
+        {"period": "06:00-06:30", "category": "早上休息"},
+    ]
     assert {category: sum(row["shift_category"] == category for row in shifts) for category in {
         "寮步班次", "华东班次", "东南班次",
-    }} == {"寮步班次": 55, "华东班次": 39, "东南班次": 28}
+    }} == {"寮步班次": 55, "华东班次": 60, "东南班次": 28}
 
 
 def test_save_load_and_copy_only_monthly_jinjiang_list(monkeypatch, tmp_path):
@@ -66,12 +82,13 @@ def test_save_load_and_copy_only_monthly_jinjiang_list(monkeypatch, tmp_path):
     second = config_module.save_night_shift_config("202608", changed, updated_by="test")
 
     assert saved["revision"] == 1
-    assert saved["counts"]["baseline_shift_count"] == 122
+    assert saved["counts"]["baseline_shift_count"] == 143
     assert saved["counts"]["shift_break_override_count"] == 1
     assert next(row for row in saved["effective_shift_breaks"] if row["shift_code"] == "DN06")["break_periods"] == ["00:00-00:30"]
     assert next(row for row in saved["effective_shift_breaks"] if row["shift_code"] == "DN06")["break_segments"] == [
         {"period": "00:00-00:30", "category": "晚上休息"}
     ]
+    assert saved["shift_break_overrides"][0]["effective_start_date"] == "2026-08-01"
     assert copied["month"] == "202609"
     assert copied["copied_from"] == "202608"
     assert copied["revision"] == 1
@@ -94,6 +111,15 @@ def test_duplicate_business_keys_are_rejected(monkeypatch, tmp_path):
     payload["shift_break_overrides"].append(dict(payload["shift_break_overrides"][0]))
 
     with pytest.raises(ValueError, match="重复班次"):
+        config_module.save_night_shift_config("202608", payload)
+
+
+def test_shift_effective_date_must_be_inside_payroll_month(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_module, "NIGHT_SHIFT_CONFIG_DIR", tmp_path)
+    payload = _config()
+    payload["shift_break_overrides"][0]["effective_start_date"] = "2026-09-01"
+
+    with pytest.raises(ValueError, match="必须在核算月份 202608 内"):
         config_module.save_night_shift_config("202608", payload)
 
 
@@ -142,17 +168,18 @@ def test_config_workbook_accepts_legacy_sheet_name():
     assert imported["jinjiang_exclusions"][0]["employee_id"] == "OWHN002"
 
 
-def test_config_workbook_rejects_reason_that_system_already_handles():
+@pytest.mark.parametrize("reason", ["计件岗", "门禁"])
+def test_config_workbook_accepts_automatically_identifiable_people(reason):
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "晋江不享有名单"
     sheet.append(["工号", "姓名", "排除原因", "生效日期", "失效日期", "备注"])
-    sheet.append(["OWHN003", "王五", "计件岗", "2026-08-01", "", ""])
+    sheet.append(["OWHN003", "王五", reason, "2026-08-01", "", ""])
     output = BytesIO()
     workbook.save(output)
 
-    with pytest.raises(ValueError, match="排除原因只能选择"):
-        config_module.parse_night_shift_config_workbook(output.getvalue())
+    parsed = config_module.parse_night_shift_config_workbook(output.getvalue())
+    assert parsed["jinjiang_exclusions"][0]["reason"] == reason
 
 
 def test_config_workbook_rejects_reversed_dates():
@@ -201,15 +228,15 @@ def test_night_shift_config_api_import_copy_and_download(monkeypatch, tmp_path):
 
     assert missing.status_code == 200
     assert missing.json()["exists"] is False
-    assert missing.json()["counts"]["baseline_shift_count"] == 122
-    assert missing.json()["counts"]["effective_shift_count"] == 122
+    assert missing.json()["counts"]["baseline_shift_count"] == 143
+    assert missing.json()["counts"]["effective_shift_count"] == 143
     assert missing.json()["jinjiang_list_confirmed"] is False
     assert blank_template.status_code == 200
     assert load_workbook(BytesIO(blank_template.content)).sheetnames == ["晋江不享有名单"]
     assert saved.status_code == 200
     assert saved.json()["revision"] == 1
     assert saved.json()["counts"]["shift_break_override_count"] == 1
-    assert saved.json()["counts"]["effective_shift_count"] == 122
+    assert saved.json()["counts"]["effective_shift_count"] == 143
     assert history.status_code == 200
     assert [item["revision"] for item in history.json()["revisions"]] == [1]
     assert downloaded.status_code == 200
@@ -297,8 +324,8 @@ def test_night_shift_run_can_use_platform_baseline_without_monthly_config(monkey
     snapshot = created.json()["night_shift_config_snapshot"]
     assert snapshot["exists"] is False
     assert snapshot["revision"] == 0
-    assert snapshot["counts"]["effective_shift_count"] == 122
-    assert len(snapshot["shift_breaks"]) == 122
+    assert snapshot["counts"]["effective_shift_count"] == 143
+    assert len(snapshot["shift_breaks"]) == 143
     for _ in range(30):
         metadata = client.get(f"/api/domestic-labor/runs/{created.json()['run_id']}").json()
         if metadata["status"] in {"已完成", "失败"}:

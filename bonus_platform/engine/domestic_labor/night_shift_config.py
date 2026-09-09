@@ -24,11 +24,10 @@ NIGHT_SHIFT_CONFIG_DIR = DOMESTIC_LABOR_RUNS_DIR.parent / "domestic_labor_config
 BASELINE_SHIFT_BREAKS_PATH = Path(__file__).parent / "data" / "night_shift_breaks.json"
 MONTH_PATTERN = re.compile(r"^\d{6}$")
 
-# 线下需要按月维护的只有晋江额外排除人员。计件岗、门禁由固定规则自动排除；
-# 轻松岗位等无法从考勤字段稳定识别的人员，才需要进入本名单。
+# 晋江自动识别与上传名单共同排除；日考勤信息不足时允许名单补充计件岗、门禁。
 JINJIANG_INPUT_SHEET = "晋江不享有名单"
 JINJIANG_LEGACY_SHEET = "晋江特殊名单"
-JINJIANG_REASON_OPTIONS = ("轻松岗位", "其他线下确认不享有")
+JINJIANG_REASON_OPTIONS = ("计件岗", "门禁", "轻松岗位", "其他线下确认不享有")
 BREAK_CATEGORY_EVENING = "晚上休息"
 BREAK_CATEGORY_MORNING = "早上休息"
 BREAK_CATEGORY_OTHER = "其他休息"
@@ -168,6 +167,10 @@ def _normalize_shift_row(raw: Mapping[str, Any]) -> Dict[str, Any]:
         "shift_time": _text(raw.get("shift_time") or raw.get("班次时间点描述")),
         "regular_hours": _regular_hours(
             raw.get("regular_hours") if "regular_hours" in raw else raw.get("正班时数")
+        ),
+        "effective_start_date": _date_text(
+            raw.get("effective_start_date") or raw.get("生效日期"),
+            "班次生效日期",
         ),
         # break_periods 保留给历史调用方；break_segments 是新的可审计配置源。
         "break_periods": [segment["period"] for segment in segments],
@@ -343,6 +346,12 @@ def save_night_shift_config(
 ) -> Dict[str, Any]:
     month_text = normalize_month(month)
     normalized = _normalize_payload(payload)
+    for row in normalized["shift_break_overrides"]:
+        effective_start_date = row.get("effective_start_date", "")
+        if effective_start_date and effective_start_date[:7].replace("-", "") != month_text:
+            raise ValueError(
+                f"{row['shift_code']} 的班次生效日期必须在核算月份 {month_text} 内"
+            )
     current = load_night_shift_config(month_text, required=False)
     saved = {
         "month": month_text,
@@ -427,9 +436,9 @@ def _add_input_validation(ws) -> None:
         formula1=f'"{reason_list}"',
         allow_blank=False,
     )
-    reason_validation.error = "请从下拉项选择：轻松岗位 / 其他线下确认不享有"
+    reason_validation.error = "请从下拉项选择：计件岗 / 门禁 / 轻松岗位 / 其他线下确认不享有"
     reason_validation.errorTitle = "排除原因不正确"
-    reason_validation.prompt = "计件岗和门禁无需填写，系统会自动排除。"
+    reason_validation.prompt = "支持计件岗、门禁等人员；与考勤自动识别重复命中时，只排除一次。"
     reason_validation.promptTitle = "请选择排除原因"
     reason_validation.showErrorMessage = True
     reason_validation.showInputMessage = True
@@ -544,8 +553,7 @@ def parse_night_shift_config_workbook(data: bytes) -> Dict[str, Any]:
             raise ValueError(f"{sheet_name} 第 {row_index} 行姓名不能为空")
         if row["reason"] not in JINJIANG_REASON_OPTIONS:
             raise ValueError(
-                f"{sheet_name} 第 {row_index} 行排除原因只能选择：{' / '.join(JINJIANG_REASON_OPTIONS)}；"
-                "计件岗和门禁无需填写"
+                f"{sheet_name} 第 {row_index} 行排除原因只能选择：{' / '.join(JINJIANG_REASON_OPTIONS)}"
             )
         if row["reason"] == "其他线下确认不享有" and not row["note"]:
             raise ValueError(f"{sheet_name} 第 {row_index} 行选择其他原因时，备注必须填写线下依据")

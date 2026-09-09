@@ -28,6 +28,7 @@ const state = {
   rulePackageLoading: false,
   nightShiftConfigs: {},
   nightShiftConfigLoading: {},
+  activeNightShiftMissingCode: '',
   activeRuleCategory: 'all',
   activeRuleSubject: 'canbu',
   pollTimer: null,
@@ -593,6 +594,15 @@ function bindEvents() {
     openRulePackageView();
   });
   el.rulePackageEntry?.addEventListener('click', openRulePackageView);
+  document.querySelector('#btnToggleRuleSidebar')?.addEventListener('click', (event) => {
+    const button = event.currentTarget;
+    const collapsed = button.closest('.dl-rule-layout').classList.toggle('is-nav-collapsed');
+    document.querySelector('#ruleSidebarContents').hidden = collapsed;
+    button.setAttribute('aria-expanded', String(!collapsed));
+    button.setAttribute('aria-label', collapsed ? '展开规则导航' : '收起规则导航');
+    button.title = collapsed ? '展开规则导航' : '收起规则导航';
+    button.textContent = collapsed ? '›' : '‹ 收起';
+  });
   el.btnBackFromRules?.addEventListener('click', () => {
     showView('home');
     renderRecentBatchTable();
@@ -771,7 +781,6 @@ function renderRulePackage() {
   }
   if (el.rulePackageSummary) {
     const summary = [
-      ['当前版本', packageData.display_version],
       ['发布状态', packageData.status],
       ['规则科目', String((packageData.subjects || []).length)],
       ['生效月份', formatRuleEffectiveMonth(packageData.effective_from)],
@@ -816,6 +825,37 @@ function renderRulePackageNavigation() {
   }
 }
 
+// Exact formula keys keep explanations tied to the displayed rule version.
+const RULE_FORMULA_MEANINGS = {
+  'ROUND(min(Σ单日未舍入餐补, 500元), 2)': '计算本月应发餐补，将每日餐补合计后按500元封顶，最后保留两位小数。',
+  'min(逐日餐补合计, 500元)': '计算本月应发餐补，取每日餐补合计与500元上限中的较小金额。',
+  '300/排班天数×(实际在职工作日天数-事假时数/8-旷工天数-病假时数/8×0.4)': '计算本月应发餐补，以300元月标准折算日单价，再按在职工作日扣除事假、旷工及按四成折算的病假天数计发。',
+  '150/月自然日天数×有效补贴天数': '计算本月应发外宿补贴，将150元月标准按当月自然日均摊，再乘以有效补贴天数。',
+  '150-入离职扣减-请假扣减': '计算本月应发外宿补贴，从150元月标准中减去入离职和请假对应的扣减金额。',
+  '150元×司龄，封顶600元，再按缺勤和入离职折算': '计算本月工龄奖，先按司龄确定每年150元、最高600元的标准，再根据缺勤和入离职情况折算。',
+  '50元×司龄，封顶150元，再按缺勤和入离职折算': '计算本月工龄奖，先按司龄确定每年50元、最高150元的标准，再根据缺勤和入离职情况折算。',
+  '工龄奖标准/排班天数×（排班天数-（入离职缺勤时数+事假时数+病假时数+旷工天数×8）/8）': '计算本月工龄奖，将月标准折算为排班日单价，再按扣除入离职、事假、病假和旷工后的天数计发。',
+  '满足全部发放条件 ? 100元 : 0元': '判断本月是否发放全勤奖，全部条件满足发100元，否则不发。',
+  '岗位为保洁或班次为LB39时0元；其他记录按普通夜班1小时门槛、完整30分钟计发，单日最高25元。': '计算普通夜班当日补贴，先排除保洁和LB39班次，再对满1小时的有效夜班按完整半小时计发，最高25元。',
+  '命中固定排除岗位时0元；其他符合资格记录按有效夜班时长×3元/小时，单日最高25元': '计算符合资格员工的当日夜班补贴，按有效夜班时长每小时3元计发、最高25元，排除岗位不发。',
+  '符合资格时按通用规则；命中排除规则时0元': '判断当日夜班补贴是否计发，符合资格后按通用规则计算，命中排除条件则不发。',
+  'min（max（8小时−迟到折算−早退折算，0）÷8小时×25元，25元）': '计算LB15班次的当日补贴，从8小时标准出勤中扣除迟到和早退折算时长，再按25元满额标准折算。',
+  '按通用规则暂算': '按通用夜班规则计算暂算金额，供后续确认该地区的适用口径。',
+  '按通用56小时缺勤折算公式': '计算本月岗位补贴，缺勤不足56小时不扣减，达到56小时后将全部缺勤折算成天数扣减。',
+  'MIN(MAX(正班时数,刷卡加班)×1.725,13.8)，月度封顶300元': '计算符合条件的高温补贴，取正班与刷卡加班的较大时数按每小时1.725元计发，单日最多13.8元、每月最多300元。',
+  'MIN(MAX(正班时数,刷卡加班)×1.15,9.2)，月度封顶200元': '计算符合条件的高温补贴，取正班与刷卡加班的较大时数按每小时1.15元计发，单日最多9.2元、每月最多200元。',
+  'MIN(MAX(正班时数,刷卡加班)×1.5,12)，月度封顶260元': '计算符合条件的高温补贴，取正班与刷卡加班的较大时数按每小时1.5元计发，单日最多12元、每月最多260元。',
+};
+
+function getRegionFormulaMeaning(subject, region) {
+  if (region.formula === '0元') return `说明${region.name}在本规则范围内不发放${subject.name}，金额为0元。`;
+  return RULE_FORMULA_MEANINGS[region.formula] || `用于确定${region.name}在所选规则版本下的${subject.name}金额，适用条件以该地区细则为准。`;
+}
+
+function renderRuleFormulaBox(label, formula, meaning) {
+  return `<div class="dl-rule-formula-box"><span>${escapeHtml(label)}</span><p>${escapeHtml(formula)}</p><div class="dl-rule-formula-meaning"><strong>公式释义</strong><span>${escapeHtml(meaning)}</span></div></div>`;
+}
+
 function renderRulePackageSubject() {
   if (!el.rulePackageContent || !state.rulePackage) return;
   const subject = state.rulePackage.subjects.find(item => item.id === state.activeRuleSubject);
@@ -823,6 +863,15 @@ function renderRulePackageSubject() {
     el.rulePackageContent.innerHTML = '<div class="dl-rule-loading">当前分类暂无规则科目。</div>';
     return;
   }
+  const regions = subject.regions || [];
+  const pending = subject.pending_confirmations || [];
+  const sections = [
+    ['overview', '口径概览'], ['regions', '地区标准'], ['common', '通用口径'],
+    ['formulas', '公式与示例'], ['sources', '数据与依据'],
+    ...(subject.id === 'yeban_butie' ? [['shifts', '班次休息表']] : []),
+    ['pending', `待确认 · ${pending.length}`], ['history', '版本记录'], ['all', '全部明细'],
+  ];
+  const disclosure = (title, items) => `<section class="dl-rule-evidence"><h4>${escapeHtml(title)} <span class="dl-rule-count">${items.length} 条</span></h4>${renderRuleList(items)}</section>`;
   el.rulePackageContent.innerHTML = `
     <div class="dl-rule-subject-head">
       <div>
@@ -832,28 +881,136 @@ function renderRulePackageSubject() {
       </div>
       <span class="dl-rule-version-tag">${escapeHtml(subject.version)}</span>
     </div>
-    ${renderRulePackageBlock('数据来源', subject.data_sources)}
-    ${renderRulePackageBlock('通用规则', subject.common_rules)}
-    ${renderRuleFieldCalculations(subject.field_calculations, subject.name)}
-    <section class="dl-rule-block">
-      <h3>地区口径</h3>
-      <div class="dl-rule-region-grid">
-        ${(subject.regions || []).map((region) => `
-          <article class="dl-rule-region">
-            <div class="dl-rule-region-head">
-              <strong>${escapeHtml(region.name)}</strong>
-              <span class="dl-rule-formula">${escapeHtml(region.formula)}</span>
-            </div>
-            <p>${escapeHtml(region.rule)}</p>
-            ${renderRuleList(region.details)}
-          </article>
-        `).join('')}
+    ${pending.length ? `<button type="button" class="dl-rule-attention" data-rule-go="pending"><span>有 ${pending.length} 项口径待确认 · ${escapeHtml(subject.status)}不代表全部事项已闭环</span><strong>查看事项 →</strong></button>` : ''}
+    <div class="dl-rule-tools"><label for="ruleContentSearch">搜索本科目规则</label><input id="ruleContentSearch" type="search" placeholder="例如：封顶、保洁、休息、入职" autocomplete="off"><span>规则原文全文搜索 · 班次表内另可筛选</span></div>
+    <nav class="dl-rule-sections" aria-label="本科目规则分区">${sections.map(([key, label]) => `<button type="button" data-rule-section="${key}" aria-pressed="${key === 'all'}" ${key !== 'all' ? `aria-controls="rulePanel-${key}"` : ''}>${escapeHtml(label)}</button>`).join('')}</nav>
+    <div data-rule-search-results hidden aria-live="polite"></div>
+    <div id="rulePanel-overview" data-rule-panel="overview">
+      <div class="dl-rule-reading-path" aria-label="规则阅读指引">
+        ${[['regions', '01', '先看适用地区', '定位标准与享有条件'], ['common', '02', '再核对通用口径', '检查资格、扣减与例外'], ['formulas', '03', '最后核对计算', '查看公式及已有示例']].map(([key, number, title, note]) => `<button type="button" data-rule-go="${key}"><span>${number}</span><div><strong>${title}</strong><small>${note}</small></div><b aria-hidden="true">→</b></button>`).join('')}
       </div>
-    </section>
-    ${renderRulePackageBlock('验证依据', subject.verification)}
-    ${(subject.pending_confirmations || []).length ? renderRulePackageBlock('待薪酬确认', subject.pending_confirmations) : ''}
-    ${renderRulePackageBlock('科目版本记录', (subject.change_log || []).map(item => `${item.version} · ${item.released_at} · ${item.changes}`))}
+      <section class="dl-rule-block"><h3>地区标准速览 <span class="dl-rule-count">${regions.length} 组</span></h3><p class="dl-rule-block-note">先定位地区；以下标准须结合通用口径及适用条件，不可仅凭公式判断享有资格。</p>
+        <div class="dl-rule-region-index">${regions.map((region, index) => `<button type="button" data-rule-region-link="${index}">${escapeHtml(region.name)} <span>↓</span></button>`).join('')}</div>
+      </section>
+    </div>
+    <div id="rulePanel-regions" data-rule-panel="regions" hidden>
+      <section class="dl-rule-block"><h3>地区口径</h3><label class="dl-rule-region-picker">查看地区 <select data-rule-region-filter><option value="all">全部地区</option>${regions.map((region, index) => `<option value="${index}">${escapeHtml(region.name)}</option>`).join('')}</select></label>
+      <div class="dl-rule-region-grid">${regions.map((region, index) => `<article class="dl-rule-region" data-rule-region-card="${index}"><h4>${escapeHtml(region.name)}</h4>${renderRuleFormulaBox('计发标准 / 公式', region.formula, getRegionFormulaMeaning(subject, region))}<h5>适用条件</h5><p>${escapeHtml(region.rule)}</p><h5>计算与例外细则</h5>${renderRuleList(region.details)}</article>`).join('')}</div></section>
+    </div>
+    <div id="rulePanel-common" data-rule-panel="common" hidden>${renderRulePackageBlock('通用规则', subject.common_rules)}</div>
+    <div id="rulePanel-formulas" data-rule-panel="formulas" hidden>${renderRuleFieldCalculations(subject.field_calculations, subject.name) || `<section class="dl-rule-block"><h3>计算公式</h3><p class="dl-rule-block-note">本科目未单独配置字段计算示例，请按地区查看现有公式；不额外推导未经确认的口径。</p>${regions.map(region => renderRuleFormulaBox(region.name, region.formula, getRegionFormulaMeaning(subject, region))).join('')}</section>`}</div>
+    <div id="rulePanel-sources" data-rule-panel="sources" hidden><section class="dl-rule-block"><h3>数据与依据</h3>${disclosure('数据来源', subject.data_sources || [])}${disclosure('验证依据', subject.verification || [])}</section></div>
+    ${subject.id === 'yeban_butie' ? '<div id="rulePanel-shifts" data-rule-panel="shifts" hidden><section class="dl-rule-block" id="ruleNightShiftTable"></section></div>' : ''}
+    <div id="rulePanel-pending" data-rule-panel="pending" hidden>${pending.length ? renderRulePackageBlock('待薪酬确认', pending) : '<section class="dl-rule-block"><h3>待薪酬确认</h3><p>当前规则版本未列出待确认事项。</p></section>'}</div>
+    <div id="rulePanel-history" data-rule-panel="history" hidden>${renderRulePackageBlock('科目版本记录', (subject.change_log || []).map(item => `${item.version} · ${item.released_at} · ${item.changes}`))}</div>
   `;
+  bindRuleReader(subject);
+  if (subject.id === 'yeban_butie') renderRuleNightShiftTable();
+}
+
+function bindRuleReader(subject) {
+  const root = el.rulePackageContent;
+  const search = root.querySelector('#ruleContentSearch');
+  const results = root.querySelector('[data-rule-search-results]');
+  let active = 'all';
+  const show = key => {
+    active = key;
+    search.value = '';
+    results.hidden = true;
+    root.querySelectorAll('[data-rule-panel]').forEach(panel => { panel.hidden = false; });
+    root.querySelectorAll('[data-rule-section]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.ruleSection === key)));
+    if (key !== 'all') root.querySelector(`[data-rule-panel="${key}"]`)?.scrollIntoView({ block: 'start' });
+  };
+  const regionSelect = root.querySelector('[data-rule-region-filter]');
+  const filterRegions = () => root.querySelectorAll('[data-rule-region-card]').forEach(card => { card.hidden = regionSelect.value !== 'all' && card.dataset.ruleRegionCard !== regionSelect.value; });
+  regionSelect.addEventListener('change', filterRegions);
+  root.querySelectorAll('[data-rule-section], [data-rule-go], [data-rule-region-link]').forEach(button => button.addEventListener('click', () => {
+    const region = button.dataset.ruleRegionLink;
+    show(region !== undefined ? 'regions' : button.dataset.ruleSection || button.dataset.ruleGo);
+    if (region !== undefined) {
+      regionSelect.value = 'all'; filterRegions();
+      root.querySelector(`[data-rule-region-card="${region}"]`)?.scrollIntoView({ block: 'start' });
+    } else if (active === 'all') { regionSelect.value = 'all'; filterRegions(); }
+  }));
+  const entries = [
+    ...(subject.common_rules || []).map(text => ['通用口径', text]),
+    ...(subject.regions || []).flatMap(region => [region.rule, region.formula, ...(region.details || [])].map(text => [`地区标准 · ${region.name}`, text])),
+    ...(subject.field_calculations || []).map(item => ['公式与示例', [item.field, item.definition, item.formula, item.example].join(' · ')]),
+    ...(subject.data_sources || []).map(text => ['数据来源', text]),
+    ...(subject.verification || []).map(text => ['验证依据', text]),
+    ...(subject.pending_confirmations || []).map(text => ['待薪酬确认', text]),
+    ...(subject.change_log || []).map(item => ['版本记录', `${item.version} · ${item.released_at} · ${item.changes}`]),
+  ];
+  search.addEventListener('input', () => {
+    const query = search.value.trim().toLowerCase();
+    if (!query) { show(active); return; }
+    root.querySelectorAll('[data-rule-panel]').forEach(panel => { panel.hidden = true; });
+    root.querySelectorAll('[data-rule-section]').forEach(button => button.setAttribute('aria-pressed', 'false'));
+    const matched = entries.filter(([, text]) => String(text).toLowerCase().includes(query));
+    results.hidden = false;
+    results.innerHTML = `<section class="dl-rule-block"><h3>找到 ${matched.length} 条相关口径</h3><p class="dl-rule-block-note">${subject.id === 'yeban_butie' ? '班次编号及休息时段请使用“班次休息表”内的搜索。' : '结果来自当前科目的完整规则原文。'}</p>${matched.map(([group, text]) => `<article class="dl-rule-search-hit"><span>${escapeHtml(group)}</span><p>${escapeHtml(String(text))}</p></article>`).join('') || '<p>未找到匹配内容，请更换关键词或清空搜索查看全部分区。</p>'}</section>`;
+  });
+  show('all');
+}
+
+function renderRuleNightShiftTable() {
+  const root = document.querySelector('#ruleNightShiftTable');
+  if (!root) return;
+  const now = new Date();
+  const month = nightShiftMonth() || `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  root.innerHTML = `
+    <h3>平台班次休息表</h3>
+    <p class="dl-rule-block-note">实时读取所选月份的有效配置（平台基线＋当月调整），不代表历史规则版本快照。修改请前往夜班补贴核算配置页。24:00及以上表示次日时间，例如30:00为次日06:00。</p>
+    <div class="dl-rule-shift-toolbar">
+      <label>配置月份 <input type="month" data-rule-shift-month value="${month.slice(0, 4)}-${month.slice(4)}"></label>
+      <label>筛选班次 <input type="search" data-rule-shift-search placeholder="班次编号、名称或类别"></label>
+    </div>
+    <p class="inline-status" data-rule-shift-status aria-live="polite"></p>
+    <div class="dl-rule-shift-scroll" data-rule-shift-table tabindex="0" role="region" aria-label="班次休息明细，可横向及纵向滚动"></div>`;
+  const monthInput = root.querySelector('[data-rule-shift-month]');
+  const searchInput = root.querySelector('[data-rule-shift-search]');
+  const status = root.querySelector('[data-rule-shift-status]');
+  const table = root.querySelector('[data-rule-shift-table]');
+  let config = null;
+  let requestId = 0;
+  const draw = () => {
+    const allRows = config?.effective_shift_breaks || config?.shift_breaks || [];
+    const query = searchInput.value.trim().toLowerCase();
+    const rows = allRows.filter(row => [row.shift_code, row.shift_name, row.shift_category].join(' ').toLowerCase().includes(query));
+    const overrides = new Set((config?.shift_break_overrides || []).map(row => String(row.shift_code)));
+    status.textContent = `${monthInput.value} · 共 ${allRows.length} 条有效班次，${overrides.size} 条当月调整；当前显示 ${rows.length} 条`;
+    table.innerHTML = `<table class="dl-rule-shift-table"><colgroup>${[180,90,130,70,130,130,130,110,180].map(width => `<col style="width:${width}px">`).join('')}</colgroup><thead><tr><th scope="col">班次编号 / 名称</th><th scope="col">班次类别</th><th scope="col">班次时间</th><th scope="col">正班时数</th><th scope="col" class="night">晚上休息</th><th scope="col" class="morning">早上休息</th><th scope="col">其他休息</th><th scope="col">配置 / 生效日期</th><th scope="col">备注</th></tr></thead><tbody>${rows.map(row => {
+      const adjusted = overrides.has(String(row.shift_code));
+      const segments = getNightShiftBreakSegments(row).filter(segment => segment.period);
+      return `<tr>
+      <th scope="row"><strong class="dl-rule-shift-code">${escapeHtml(row.shift_code || '—')}</strong><span class="dl-rule-shift-name">${escapeHtml(row.shift_name || '—')}</span></th>
+      <td>${escapeHtml(row.shift_category || '—')}</td>
+      <td class="dl-rule-shift-time">${escapeHtml(row.shift_time || '—')}</td>
+      <td class="dl-rule-shift-hours">${escapeHtml(String(row.regular_hours ?? '—'))}</td>
+      ${NIGHT_SHIFT_BREAK_CATEGORIES.map(category => `<td class="dl-rule-shift-time">${segments.filter(segment => segment.category === category).map(segment => `<span class="dl-rule-shift-period">${escapeHtml(segment.period)}</span>`).join('') || '<span class="dl-rule-shift-empty">—</span>'}</td>`).join('')}
+      <td><span class="dl-rule-shift-source ${adjusted ? 'adjusted' : ''}">${adjusted ? '当月调整' : '平台基线'}</span><span class="dl-rule-shift-date">${escapeHtml(row.effective_start_date || '未设置日期')}</span></td>
+      <td class="dl-rule-shift-note">${escapeHtml(row.note || '—')}</td></tr>`;
+    }).join('') || '<tr><td colspan="9" class="dl-rule-shift-no-results">暂无匹配班次</td></tr>'}</tbody></table>`;
+  };
+  const load = async () => {
+    const id = ++requestId;
+    config = null;
+    table.innerHTML = '';
+    const selected = monthInput.value.replace('-', '');
+    if (!/^\d{6}$/.test(selected)) { status.textContent = '请选择配置月份。'; return; }
+    status.textContent = '正在读取班次休息配置…';
+    try {
+      const result = await requestJson(`/api/domestic-labor/night-shift/config/${selected}`);
+      if (id !== requestId || !root.isConnected) return;
+      config = result;
+      draw();
+    } catch (error) {
+      if (id === requestId && root.isConnected) status.textContent = `读取失败：${error.message}，请重新选择月份重试。`;
+    }
+  };
+  monthInput.addEventListener('change', load);
+  searchInput.addEventListener('input', () => { if (config) draw(); });
+  load();
 }
 
 function renderRuleFieldCalculations(items = [], subjectName = '') {
@@ -862,21 +1019,7 @@ function renderRuleFieldCalculations(items = [], subjectName = '') {
     <section class="dl-rule-block">
       <h3>字段计算公式</h3>
       <p class="dl-rule-block-note">对应${escapeHtml(subjectName || '当前科目')}结果及导出明细，按业务字段从输入到应发金额逐步说明。</p>
-      <div class="dl-table-wrap">
-        <table class="dl-table dl-rule-formula-table">
-          <thead><tr><th>结果字段</th><th>字段含义</th><th>计算公式</th><th>计算示例</th></tr></thead>
-          <tbody>
-            ${items.map(item => `
-              <tr>
-                <td>${escapeHtml(item.field)}</td>
-                <td>${escapeHtml(item.definition)}</td>
-                <td class="dl-rule-formula-text">${escapeHtml(item.formula)}</td>
-                <td>${escapeHtml(item.example)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
+      <div class="dl-rule-calculations">${items.map((item, index) => `<article class="dl-rule-calculation"><header><span>${String(index + 1).padStart(2, '0')}</span><h4>${escapeHtml(item.field)}</h4></header>${renderRuleFormulaBox('计算公式', item.formula, item.definition || `用于计算${item.field}。`)}<div class="dl-rule-example"><strong>计算示例</strong><p>${escapeHtml(item.example)}</p></div></article>`).join('')}</div>
     </section>
   `;
 }
@@ -1229,140 +1372,290 @@ function getNightShiftBreakSegments(row) {
   }));
 }
 
+let nightShiftEditor = null;
+
+function normalizeNightShiftEditorRow(row) {
+  return {
+    shift_category: String(row.shift_category || ''), shift_name: String(row.shift_name || ''),
+    shift_code: String(row.shift_code || ''), shift_time: String(row.shift_time || ''),
+    regular_hours: row.regular_hours === '' || row.regular_hours == null ? null : Number(row.regular_hours),
+    effective_start_date: String(row.effective_start_date || ''),
+    break_segments: getNightShiftBreakSegments(row).filter(segment => segment.period),
+    note: String(row.note || ''),
+  };
+}
+
+function getNightShiftEditor(config) {
+  const key = `${nightShiftMonth()}:${config.revision || 0}`;
+  if (!nightShiftEditor || nightShiftEditor.key !== key) {
+    const rows = (config.effective_shift_breaks || config.shift_breaks || []).map(normalizeNightShiftEditorRow);
+    nightShiftEditor = { key, rows, original: JSON.stringify(rows), selected: '', tab: 'breaks', search: '', category: '' };
+  }
+  return nightShiftEditor;
+}
+
+function nightShiftDraftCount() {
+  if (!nightShiftEditor) return 0;
+  const original = new Map(JSON.parse(nightShiftEditor.original).map(row => [row.shift_code, JSON.stringify(row)]));
+  return nightShiftEditor.rows.filter(row => JSON.stringify(row) !== original.get(row.shift_code)).length;
+}
+
+function editorTimeLabel(period) {
+  const matches = String(period).match(/(\d+):(\d+)\s*[-—–]\s*(\d+):(\d+)/);
+  if (!matches) return '选择时间';
+  const clock = (h, m) => `${Number(h) >= 48 ? '后日 ' : Number(h) >= 24 ? '次日 ' : ''}${String(Number(h) % 24).padStart(2,'0')}:${m}`;
+  return `${clock(matches[1], matches[2])} — ${clock(matches[3], matches[4])}`;
+}
+
+function renderEditorTimeField(key, label, value = '') {
+  const periods = String(value).split(';').filter(Boolean);
+  return `<div class="dl-editor-time-field" data-editor-time-field><span class="dl-editor-label">${label}</span><input type="hidden" data-shift-field="${key}" value="${escapeHtml(value)}">
+    ${(periods.length ? periods : ['']).map((period, index) => {
+      const match = period.match(/(\d+):(\d+)\s*[-—–]\s*(\d+):(\d+)/);
+      const parts = match ? match.slice(1).map(Number) : [0,0,1,0];
+      return `<details class="dl-editor-picker" data-period-index="${index}" data-period-value="${escapeHtml(period)}"><summary><span class="dl-editor-clock" aria-hidden="true">◷</span><span data-editor-time-label>${editorTimeLabel(period)}</span><span class="dl-editor-chevron" aria-hidden="true">⌄</span></summary>
+        <div class="dl-editor-time-popup"><div class="dl-editor-endpoints">${['开始','结束'].map((side,i) => {
+          const h=parts[i*2], minute=parts[i*2+1];
+          return `<section data-time-side="${i}" data-day="${Math.floor(h/24)}" data-hour="${h%24}" data-minute="${minute}"><strong>${side}时间</strong><div class="dl-editor-days">${['当日','次日','后日'].map((day,n)=>`<button type="button" data-clock-unit="day" data-clock-value="${n}" aria-pressed="${Math.floor(h/24)===n}">${day}</button>`).join('')}</div>
+            <div class="dl-editor-clock-head"><span>时</span><span>分</span></div><div class="dl-editor-clock-columns">${['hour','minute'].map(unit=>`<div>${Array.from({length:unit==='hour'?24:60},(_,n)=>`<button type="button" data-clock-unit="${unit}" data-clock-value="${n}" aria-pressed="${n===(unit==='hour'?h%24:minute)}">${String(n).padStart(2,'0')}</button>`).join('')}</div>`).join('')}</div></section>`;
+        }).join('')}</div><p class="dl-editor-picker-status" role="status">跨零点请选择“次日”，不会更改休息类型。</p><div class="dl-editor-picker-actions">${key.startsWith('break_')?'<button type="button" data-time-clear>清空时段</button>':''}<button type="button" data-time-apply>确定时间</button></div></div>
+      </details>`;
+    }).join('')}</div>`;
+}
+
+function renderEditorDateField(value) {
+  const month = nightShiftMonth();
+  const year = Number(month.slice(0,4)), m = Number(month.slice(4,6));
+  const days = new Date(year,m,0).getDate();
+  const offset = (new Date(year,m-1,1).getDay()+6)%7;
+  return `<div class="dl-editor-date-field"><span class="dl-editor-label">生效日期</span><input type="hidden" data-shift-field="effective_start_date" value="${escapeHtml(value || '')}"><details class="dl-editor-picker dl-editor-calendar"><summary><span aria-hidden="true">▦</span><span data-editor-date-label>${escapeHtml(value || '选择生效日期')}</span><span class="dl-editor-chevron">⌄</span></summary><div class="dl-editor-calendar-popup"><strong>${year}年${m}月</strong><div class="dl-editor-calendar-grid">${['一','二','三','四','五','六','日'].map(day=>`<span>${day}</span>`).join('')}${'<i></i>'.repeat(offset)}${Array.from({length:days},(_,i)=>{const date=`${month.slice(0,4)}-${month.slice(4,6)}-${String(i+1).padStart(2,'0')}`;return `<button type="button" data-editor-date="${date}" aria-pressed="${date===value}">${i+1}</button>`}).join('')}</div><button type="button" data-editor-date="" class="dl-editor-date-clear">清除日期</button></div></details></div>`;
+}
+
 function renderNightShiftBreakSegment(segment, index) {
   const number = index + 1;
-  return `
-    <td>
-      <div class="dl-break-segment-input">
-        <select data-shift-field="break_category_${number}" aria-label="休息段${number}类型">
-          ${NIGHT_SHIFT_BREAK_CATEGORIES.map(category => `
-            <option value="${escapeHtml(category)}" ${segment.category === category ? 'selected' : ''}>${escapeHtml(category)}</option>
-          `).join('')}
-        </select>
-        <input class="dl-roster-input" data-shift-field="break_${number}" value="${escapeHtml(segment.period)}" placeholder="HH:MM-HH:MM" aria-label="休息段${number}时段">
-      </div>
-    </td>
-  `;
+  return `<section class="dl-editor-rest"><div class="dl-editor-rest-head"><strong>休息段 ${number}</strong><span>${segment.period ? '已设置' : '未设置'}</span></div><input type="hidden" data-shift-field="break_category_${number}" value="${escapeHtml(segment.category)}"><div class="dl-editor-rest-types" aria-label="休息段${number}类型">${NIGHT_SHIFT_BREAK_CATEGORIES.map(category=>`<button type="button" data-rest-category="${category}" aria-pressed="${category===segment.category}">${category}</button>`).join('')}</div>${renderEditorTimeField(`break_${number}`, '休息时间', segment.period)}</section>`;
+}
+
+function renderNightShiftBreakList(config) {
+  const editor = getNightShiftEditor(config);
+  const overrides = new Set((config.shift_break_overrides || []).map(row => row.shift_code));
+  const original = new Map(JSON.parse(editor.original).map(row => [row.shift_code, JSON.stringify(row)]));
+  const rows = editor.rows.filter(row => (!editor.category || row.shift_category === editor.category) &&
+    [row.shift_code, row.shift_name, row.shift_category].join(' ').toLowerCase().includes(editor.search));
+  return rows.length ? rows.map(row => {
+    const dirty = JSON.stringify(row) !== original.get(row.shift_code);
+    return `<tr class="${editor.selected === row.shift_code ? 'is-selected' : ''}" data-night-shift-list-row="${escapeHtml(row.shift_code)}">
+      <td><strong>${escapeHtml(row.shift_code)}</strong><small>${escapeHtml(row.shift_category)}</small></td>
+      <td><span>${escapeHtml(row.shift_name)}</span><small>${escapeHtml(row.shift_time)} · ${row.regular_hours ?? '—'} 小时</small></td>
+      <td>${row.break_segments.length ? row.break_segments.map(segment => `<span class="dl-shift-rest"><em>${escapeHtml(segment.category.replace('休息', ''))}</em>${escapeHtml(segment.period)}</span>`).join('') : '<span class="dl-muted">无休息段</span>'}</td>
+      <td><span class="dl-shift-state ${dirty ? 'is-draft' : ''}">${dirty ? '未保存' : overrides.has(row.shift_code) ? '当月调整' : '平台基线'}</span><button type="button" class="dl-shift-edit" data-edit-night-shift="${escapeHtml(row.shift_code)}" aria-label="调整${escapeHtml(row.shift_code)}班次">调整</button></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" class="dl-shift-empty">没有符合条件的班次，请更换关键词或类别。</td></tr>';
+}
+
+function renderNightShiftBreakForm(config) {
+  const editor = getNightShiftEditor(config);
+  const row = editor.rows.find(item => item.shift_code === editor.selected);
+  if (!row) return '<p class="inline-status">选择一个班次查看和调整。</p>';
+  const field = (key, label, type = 'text') => `<label class="dl-shift-form-field"><span>${label}</span><input data-shift-field="${key}" type="${type}" value="${escapeHtml(row[key] ?? '')}"></label>`;
+  return `<div class="dl-shift-form-head"><span>当前班次</span><h3>${escapeHtml(row.shift_code)} <small>${escapeHtml(row.shift_name)}</small></h3></div>
+    <div data-night-shift-break-row data-shift-code="${escapeHtml(row.shift_code)}" class="dl-shift-form-fields">
+      ${renderEditorTimeField('shift_time', '班次时间', row.shift_time)}${field('regular_hours', '正班时数', 'number')}
+      <p class="dl-shift-form-caption">休息类型按业务口径选择，跨零点时段不自动改判。</p>
+      ${getNightShiftBreakSegments(row).map(renderNightShiftBreakSegment).join('')}
+      ${renderEditorDateField(row.effective_start_date)}
+      ${field('note', '调整备注')}
+      ${field('shift_name', '班次名称')}${field('shift_category', '班次类别')}
+    </div><button class="dl-shift-reset" type="button" id="btnResetNightShiftRow">撤销本条未保存修改</button>`;
 }
 
 function renderNightShiftBreakEditor(config) {
-  const rows = config.effective_shift_breaks || config.shift_breaks || [];
-  const overrideCodes = new Set((config.shift_break_overrides || []).map(row => String(row.shift_code || '')));
-  return `
-    <div class="dl-night-shift-break-editor">
-      <div class="dl-break-editor-toolbar">
-        <label class="dl-break-search-field">
-          <span>筛选班次</span>
-          <input id="nightShiftBreakSearch" type="search" placeholder="输入班次编号、名称或类别">
-        </label>
-        <p class="inline-status">每段休息必须明确选择“晚上休息 / 早上休息 / 其他休息”；00:00—01:00等跨零点时段不会被系统自行改判。</p>
-        <button class="btn-primary" id="btnSaveNightShiftBreaks" type="button">保存当月班次调整</button>
-      </div>
-      <div class="dl-roster-table-wrap dl-break-table-wrap">
-        <table class="dl-roster-table dl-break-edit-table">
-          <thead><tr><th>状态</th><th>班次类别</th><th>班次编号</th><th>班次名称</th><th>班次时间</th><th>正班时数</th><th>休息段1（类型/时段）</th><th>休息段2（类型/时段）</th><th>休息段3（类型/时段）</th><th>备注</th></tr></thead>
-          <tbody>${rows.map(row => {
-            const breakSegments = getNightShiftBreakSegments(row);
-            const searchText = [row.shift_category, row.shift_code, row.shift_name].filter(Boolean).join(' ').toLowerCase();
-            const adjusted = overrideCodes.has(String(row.shift_code || ''));
-            return `
-              <tr data-night-shift-break-row data-shift-code="${escapeHtml(row.shift_code || '')}" data-search-text="${escapeHtml(searchText)}">
-                <td><span class="dl-badge ${adjusted ? 'warn' : 'neutral'}">${adjusted ? '当月调整' : '平台基线'}</span></td>
-                <td><input class="dl-roster-input" data-shift-field="shift_category" value="${escapeHtml(row.shift_category || '')}" aria-label="班次类别"></td>
-                <td><strong class="dl-shift-code">${escapeHtml(row.shift_code || '')}</strong></td>
-                <td><input class="dl-roster-input" data-shift-field="shift_name" value="${escapeHtml(row.shift_name || '')}" aria-label="班次名称"></td>
-                <td><input class="dl-roster-input" data-shift-field="shift_time" value="${escapeHtml(row.shift_time || '')}" aria-label="班次时间"></td>
-                <td><input class="dl-roster-input" data-shift-field="regular_hours" inputmode="decimal" value="${escapeHtml(row.regular_hours ?? '')}" aria-label="正班时数"></td>
-                ${breakSegments.map(renderNightShiftBreakSegment).join('')}
-                <td><input class="dl-roster-input" data-shift-field="note" value="${escapeHtml(row.note || '')}" aria-label="备注"></td>
-              </tr>
-            `;
-          }).join('')}</tbody>
-        </table>
-      </div>
-    </div>
-  `;
+  const editor = getNightShiftEditor(config);
+  const categories = [...new Set(editor.rows.map(row => row.shift_category).filter(Boolean))];
+  return `<div class="dl-night-editor-layout">
+    <section class="dl-night-shift-list" aria-label="平台班次休息表">
+      <div class="dl-night-list-tools"><label class="dl-break-search-field"><span class="sr-only">筛选班次</span><input id="nightShiftBreakSearch" type="search" value="${escapeHtml(editor.search)}" placeholder="搜索班次编号或名称" aria-label="筛选班次"></label>
+      <input type="hidden" id="nightShiftBreakCategory" value="${escapeHtml(editor.category)}"><details class="dl-editor-picker dl-editor-category-filter"><summary><span data-category-filter-label>${escapeHtml(editor.category || '全部类别')}</span><span class="dl-editor-chevron">⌄</span></summary><div class="dl-editor-calendar-popup">${['', ...categories].map(category=>`<button type="button" data-editor-category-filter="${escapeHtml(category)}" aria-pressed="${editor.category===category}">${escapeHtml(category || '全部类别')}</button>`).join('')}</div></details><span>${editor.rows.length} 个班次</span></div>
+      <div class="dl-night-list-scroll"><table class="dl-night-list-table"><thead><tr><th>编号 / 类别</th><th>班次 / 时间</th><th>休息安排</th><th>操作</th></tr></thead><tbody id="nightShiftBreakList">${renderNightShiftBreakList(config)}</tbody></table></div>
+    </section><aside class="dl-night-shift-form" id="nightShiftBreakForm" aria-label="调整选中班次">${renderNightShiftBreakForm(config)}</aside>
+  </div>`;
 }
 
 function collectNightShiftBreakOverrides(config) {
-  const baselineByCode = new Map((config.baseline_shift_breaks || []).map(row => [String(row.shift_code || ''), row]));
-  const fields = ['shift_category', 'shift_name', 'shift_code', 'shift_time', 'regular_hours', 'break_segments', 'note'];
-  const comparable = row => Object.fromEntries(fields.map(field => [field, row?.[field] ?? (field === 'break_segments' ? [] : '')]));
-  return Array.from(document.querySelectorAll('[data-night-shift-break-row]')).map(row => {
-    const value = field => row.querySelector(`[data-shift-field="${field}"]`)?.value.trim() || '';
-    const regularHoursText = value('regular_hours');
-    const breakSegments = [1, 2, 3].map(index => ({
-      period: value(`break_${index}`),
-      category: value(`break_category_${index}`) || '其他休息',
-    })).filter(segment => segment.period);
-    return {
-      shift_category: value('shift_category'),
-      shift_name: value('shift_name'),
-      shift_code: row.dataset.shiftCode || '',
-      shift_time: value('shift_time'),
-      regular_hours: regularHoursText === '' ? null : Number(regularHoursText),
-      break_periods: breakSegments.map(segment => segment.period),
-      break_segments: breakSegments,
-      note: value('note'),
-    };
-  }).filter(row => JSON.stringify(comparable(row)) !== JSON.stringify(comparable(baselineByCode.get(row.shift_code))));
+  const baseline = new Map((config.baseline_shift_breaks || []).map(row => [row.shift_code, JSON.stringify(normalizeNightShiftEditorRow(row))]));
+  return getNightShiftEditor(config).rows.filter(row => JSON.stringify(row) !== baseline.get(row.shift_code)).map(row => ({...row, break_periods: row.break_segments.map(segment => segment.period)}));
 }
 
 function renderNightShiftConfigPanel(batch) {
-  const month = nightShiftMonth(batch);
+  return getNightShiftConfig(batch) ? renderNightShiftConfigWorkspace(batch)
+    : '<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace"><div class="dl-panel-head"><h2>夜班核算配置</h2><p role="status">正在读取当月配置…</p></div></section>';
+}
+
+function renderNightShiftConfigWorkspace(batch) {
   const config = getNightShiftConfig(batch);
-  const loading = Boolean(state.nightShiftConfigLoading[month]);
-  if (!config) {
-    return `
-      <section class="dl-panel">
-        <div class="dl-panel-head"><div><h2 class="dl-panel-title">当月夜班配置</h2><p class="dl-panel-sub">${loading ? '正在读取配置版本…' : '准备读取配置版本。'}</p></div></div>
-      </section>
-    `;
-  }
-  const counts = config.counts || {};
-  const ready = isNightShiftConfigReady(batch);
-  const listConfirmed = Boolean(config.jinjiang_list_confirmed);
-  const updatedText = config.updated_at
-    ? `最近更新：${escapeHtml(formatDateTime(config.updated_at))}${config.copied_from ? ` · 晋江名单复制自 ${escapeHtml(config.copied_from)}` : ''}`
-    : '平台班次基线已加载。请确认本月是否存在晋江额外排除人员；未确认前，晋江普通岗进入待确认。';
-  const exclusionCount = Number(counts.jinjiang_exclusion_count || 0);
-  const listStatus = !listConfirmed ? '未确认' : exclusionCount ? `已确认 ${exclusionCount} 人` : '已确认无额外排除';
-  return `
-    <section class="dl-panel">
-      <div class="dl-panel-head">
-        <div>
-          <h2 class="dl-panel-title">${escapeHtml(formatMonthLabel(batch.month))} 夜班特殊配置</h2>
-          <p class="dl-panel-sub">班次休息以平台基线为准，可保存当月差异；地区范围由固定线下规则判断；晋江仅需确认额外不享有人员。</p>
-        </div>
-        <span class="dl-badge ${listConfirmed ? 'ok' : 'warn'}">${listConfirmed ? `版本 ${Number(config.revision || 0)} · ${listStatus}` : '平台基线可核算 · 晋江名单未确认'}</span>
-      </div>
-      <div class="dl-result-summary">
-        <div class="dl-result-stat primary"><span>平台有效班次</span><strong>${Number(counts.effective_shift_count || 0)}</strong></div>
-        <div class="dl-result-stat"><span>当月班次调整</span><strong>${Number(counts.shift_break_override_count || 0)}</strong></div>
-        <div class="dl-result-stat"><span>适用地区规则</span><strong>固定内置</strong></div>
-        <div class="dl-result-stat"><span>晋江额外排除人数</span><strong>${exclusionCount}</strong></div>
-        <div class="dl-result-stat ${listConfirmed ? '' : 'warning'}"><span>晋江名单状态</span><strong>${listStatus}</strong></div>
-      </div>
-      <div class="dl-night-config-guide" aria-label="晋江名单填写说明">
-        <div class="dl-night-config-guide-item is-purpose"><strong>这份名单会做什么</strong><p>名单内人员在填写的生效日期范围内，不计算晋江夜班补贴。</p></div>
-        <div class="dl-night-config-guide-item"><strong>需要人工维护</strong><p>考勤字段无法稳定识别，但因轻松岗位或其他线下确认原因不享有补贴的人员。</p></div>
-        <div class="dl-night-config-guide-item"><strong>不要重复维护</strong><p>计件岗、门禁由系统自动排除；其他地区人员也不填这份名单。</p></div>
-      </div>
-      <div class="dl-actions-inline dl-night-config-actions">
-        ${!listConfirmed ? '<button class="dl-btn" id="btnConfirmNoJinjiangExclusions" type="button">确认本月无额外排除人员</button>' : ''}
-        <a class="dl-btn" href="/api/domestic-labor/night-shift/config-template/download" download>下载有名单时的填写模板</a>
-        ${listConfirmed ? `<a class="dl-btn" href="/api/domestic-labor/night-shift/config/${month}/download" download>下载当前晋江名单</a>` : ''}
-        <button class="dl-btn" id="btnCopyNightShiftConfig" type="button" ${listConfirmed ? 'disabled' : ''}>复制上月晋江名单</button>
-        <button class="btn-primary" id="btnImportNightShiftConfig" type="button">${listConfirmed ? '更新不享有名单' : '上传填写完成的名单'}</button>
-        <input id="nightShiftConfigFile" type="file" accept=".xlsx,.xlsm" hidden>
-      </div>
-      <p class="inline-status" id="nightShiftConfigStatus">${updatedText}</p>
-      <details class="dl-parameter-panel" open><summary><span>平台班次休息表</span><strong>${Number(counts.effective_shift_count || 0)} 条 · ${Number(counts.shift_break_override_count || 0)} 条当月调整</strong></summary><div class="dl-parameter-panel-body">${renderNightShiftBreakEditor(config)}</div></details>
-        <details class="dl-parameter-panel"><summary><span>晋江不享有夜班补贴人员名单</span><strong>${exclusionCount} 人 · ${listStatus}</strong></summary><div class="dl-parameter-panel-body">${renderNightShiftConfigRows(config.jinjiang_exclusions, [
-          { label: '工号', value: row => row.employee_id || '' }, { label: '姓名', value: row => row.employee_name || '' }, { label: '排除原因', value: row => row.reason || '' }, { label: '有效期', value: row => `${row.start_date || ''} 至 ${row.end_date || '持续有效'}` },
-        ], listConfirmed ? '本月已确认无额外排除人员。计件岗和门禁仍由系统自动排除。' : '请先确认本月无人，或下载模板填写后上传。')}</div></details>
+  const editor = getNightShiftEditor(config);
+  const month = nightShiftMonth(batch);
+  const confirmed = Boolean(config.jinjiang_list_confirmed);
+  const count = Number(config.counts?.jinjiang_exclusion_count || 0);
+  const updated = config.updated_at ? `更新于 ${formatDateTime(config.updated_at)}` : '使用平台班次基线';
+  return `<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace">
+    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p class="dl-config-ready">已使用平台班次配置，可直接上传考勤；有调整时在下方修改。</p><p>配置按月份共用。保存后用于后续核算，已完成批次需重新核算才会更新。</p></div><span class="dl-badge neutral">当月配置 · 版本 ${Number(config.revision || 0)}</span></header>
+    <nav class="dl-night-config-tabs" aria-label="夜班配置内容"><button type="button" data-night-config-tab="breaks" class="${editor.tab === 'breaks' ? 'active' : ''}" aria-pressed="${editor.tab === 'breaks'}">班次休息 <span>${Number(config.counts?.effective_shift_count || 0)}</span></button><button type="button" data-night-config-tab="roster" class="${editor.tab === 'roster' ? 'active' : ''}" aria-pressed="${editor.tab === 'roster'}">晋江不享有名单 <span class="${confirmed ? '' : 'needs-confirm'}">${confirmed ? `${count} 人` : '待确认'}</span></button></nav>
+    <div id="nightConfigBreaks" ${editor.tab === 'breaks' ? '' : 'hidden'}>${renderNightShiftBreakEditor(config)}</div>
+    <section class="dl-night-roster" id="nightConfigRoster" ${editor.tab === 'roster' ? '' : 'hidden'}>
+      <div class="dl-night-roster-heading"><div><h3>晋江不享有夜班补贴人员名单</h3><p>可上传计件岗、门禁、轻松岗位等不享有人员；名单按生效日期范围执行。</p></div><span class="dl-badge ${confirmed ? 'ok' : 'warn'}">${confirmed ? count ? `已确认 ${count} 人` : '已确认无额外排除' : '本月尚未确认'}</span></div>
+      <p class="dl-night-roster-note">考勤自动识别与上传名单共同生效。日考勤未带计件信息时可用名单补充；同一人同一天重复命中只排除一次，不影响核算。</p>
+      <div class="dl-night-roster-actions">${!confirmed ? '<button class="btn-primary" id="btnConfirmNoJinjiangExclusions" type="button">确认本月无额外排除人员</button>' : ''}<button class="${confirmed ? 'btn-primary' : 'dl-btn'}" id="btnImportNightShiftConfig" type="button">${confirmed ? '更新不享有名单' : '上传不享有名单'}</button><button class="dl-btn" id="btnCopyNightShiftConfig" type="button" ${confirmed ? 'disabled' : ''}>复制上月晋江名单</button><span class="dl-night-roster-downloads"><a href="/api/domestic-labor/night-shift/config-template/download" download>下载填写模板</a>${confirmed ? `<a href="/api/domestic-labor/night-shift/config/${month}/download" download>下载当前名单</a>` : ''}</span><input id="nightShiftConfigFile" type="file" accept=".xlsx,.xlsm" hidden></div>
+      ${renderNightShiftConfigRows(config.jinjiang_exclusions, [{label:'工号',value:row=>row.employee_id||''},{label:'姓名',value:row=>row.employee_name||''},{label:'排除原因',value:row=>row.reason||''},{label:'有效期',value:row=>`${row.start_date||''} 至 ${row.end_date||'持续有效'}`}], confirmed ? '本月无额外不享有人员。' : '本月名单待确认：无人时直接确认，有人时上传填写完成的名单。')}
     </section>
-  `;
+    <footer class="dl-night-workspace-footer"><div><span id="nightShiftDraftStatus">${nightShiftDraftCount() ? `${nightShiftDraftCount()} 条修改未保存` : '暂无未保存的班次调整'}</span><p class="inline-status" id="nightShiftConfigStatus" role="status">${escapeHtml(updated)}</p></div><button class="btn-primary" id="btnSaveNightShiftBreaks" type="button" ${nightShiftDraftCount() ? '' : 'disabled'}>保存当月班次调整</button></footer>
+  </section>`;
+}
+
+function refreshNightShiftConfiguration(resetDrafts = false) {
+  const inWorkspace = Boolean(document.querySelector('#nightConfigWorkspace'));
+  const tab = nightShiftEditor?.tab || 'breaks';
+  if (resetDrafts) nightShiftEditor = null;
+  else if (nightShiftEditor) nightShiftEditor.key = `${nightShiftMonth()}:${getNightShiftConfig()?.revision || 0}`;
+  if (inWorkspace) getNightShiftEditor(getNightShiftConfig()).tab = tab;
+  if (inWorkspace) {
+    document.querySelector('#nightConfigWorkspace').outerHTML = renderNightShiftConfigPanel(getActiveCanbuBatch());
+    bindNightShiftConfigEvents();
+  } else renderCanbuStepContent('upload');
+}
+
+function bindNightShiftEditorEvents() {
+  const config = getNightShiftConfig();
+  const workspace = document.querySelector('#nightConfigWorkspace');
+  if (!workspace || !config) return;
+  const editor = getNightShiftEditor(config);
+  workspace.addEventListener('keydown', event => {
+    const picker = event.target.closest('.dl-editor-picker');
+    if (event.key === 'Escape' && picker?.open) {
+      event.preventDefault(); picker.open = false; picker.querySelector('summary').focus();
+    }
+    const clock = event.target.closest('[data-clock-unit]');
+    if (clock && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Home','End'].includes(event.key)) {
+      event.preventDefault();
+      const buttons = [...clock.closest('[data-time-side]').querySelectorAll(`[data-clock-unit="${clock.dataset.clockUnit}"]`)];
+      const index = buttons.indexOf(clock);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length-1 : Math.max(0,Math.min(buttons.length-1,index+(['ArrowDown','ArrowRight'].includes(event.key)?1:-1)));
+      buttons[next].click(); buttons[next].focus();
+    }
+  });
+  const refreshList = () => { document.querySelector('#nightShiftBreakList').innerHTML = renderNightShiftBreakList(config); };
+  const refreshDraft = () => {
+    const count = nightShiftDraftCount();
+    document.querySelector('#nightShiftDraftStatus').textContent = count ? `${count} 条修改未保存` : '暂无未保存的班次调整';
+    document.querySelector('#btnSaveNightShiftBreaks').disabled = count === 0;
+    refreshList();
+  };
+  workspace.querySelectorAll('[data-night-config-tab]').forEach(button => button.addEventListener('click', () => {
+    editor.tab = button.dataset.nightConfigTab;
+    workspace.querySelectorAll('[data-night-config-tab]').forEach(item => { item.classList.toggle('active', item === button); item.setAttribute('aria-pressed', String(item === button)); });
+    document.querySelector('#nightConfigBreaks').hidden = editor.tab !== 'breaks';
+    document.querySelector('#nightConfigRoster').hidden = editor.tab !== 'roster';
+    document.querySelector('#btnSaveNightShiftBreaks').hidden = editor.tab !== 'breaks';
+  }));
+  document.querySelector('#nightShiftBreakSearch').addEventListener('input', event => { editor.search = event.target.value.trim().toLowerCase(); refreshList(); });
+  workspace.querySelectorAll('[data-editor-category-filter]').forEach(button=>button.addEventListener('click',()=>{
+    editor.category = button.dataset.editorCategoryFilter;
+    document.querySelector('#nightShiftBreakCategory').value = editor.category;
+    workspace.querySelector('[data-category-filter-label]').textContent = editor.category || '全部类别';
+    workspace.querySelectorAll('[data-editor-category-filter]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));
+    button.closest('details').open = false;
+    refreshList();
+  }));
+  document.querySelector('#nightShiftBreakCategory').addEventListener('change', event => { editor.category = event.target.value; refreshList(); });
+  document.querySelector('#nightShiftBreakList').addEventListener('click', event => {
+    const button = event.target.closest('[data-edit-night-shift]');
+    if (!button) return;
+    editor.selected = button.dataset.editNightShift;
+    document.querySelector('#nightShiftBreakForm').innerHTML = renderNightShiftBreakForm(config);
+    refreshList();
+    document.querySelector('#nightShiftBreakForm summary')?.focus({preventScroll:true});
+  });
+  const form = document.querySelector('#nightShiftBreakForm');
+  form.addEventListener('toggle', event => {
+    const picker = event.target;
+    if (!picker.matches?.('.dl-editor-picker') || !picker.open) return;
+    form.querySelectorAll('.dl-editor-picker[open]').forEach(other => { if (other !== picker) other.open = false; });
+    picker.querySelectorAll('.dl-editor-clock-columns > div').forEach(column => {
+      const selected = column.querySelector('[aria-pressed="true"]');
+      if (selected) column.scrollTop = selected.offsetTop - column.firstElementChild.offsetTop - 42;
+    });
+  }, true);
+  form.addEventListener('click', event => {
+    const category = event.target.closest('[data-rest-category]');
+    if (category) {
+      const section = category.closest('.dl-editor-rest');
+      section.querySelector('input[data-shift-field]').value = category.dataset.restCategory;
+      section.querySelectorAll('[data-rest-category]').forEach(button => button.setAttribute('aria-pressed', String(button === category)));
+      section.querySelector('input').dispatchEvent(new Event('input', {bubbles:true}));
+      return;
+    }
+    const clock = event.target.closest('[data-clock-unit]');
+    if (clock) {
+      const side = clock.closest('[data-time-side]');
+      side.dataset[clock.dataset.clockUnit] = clock.dataset.clockValue;
+      side.querySelectorAll(`[data-clock-unit="${clock.dataset.clockUnit}"]`).forEach(button => button.setAttribute('aria-pressed', String(button === clock)));
+      return;
+    }
+    const apply = event.target.closest('[data-time-apply], [data-time-clear]');
+    if (apply) {
+      const picker = apply.closest('.dl-editor-picker');
+      const field = picker.closest('[data-editor-time-field]');
+      let period = '';
+      if (apply.hasAttribute('data-time-apply')) {
+        const sides = [...picker.querySelectorAll('[data-time-side]')];
+        const minutes = sides.map(side => (Number(side.dataset.day)*24+Number(side.dataset.hour))*60+Number(side.dataset.minute));
+        if (minutes[1] <= minutes[0]) {
+          picker.querySelector('[role="status"]').textContent = '结束时间须晚于开始时间；跨零点请将结束日期选为次日。';
+          return;
+        }
+        const asClock = total => `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+        period = `${asClock(minutes[0])}-${asClock(minutes[1])}`;
+      }
+      picker.dataset.periodValue = period;
+      picker.querySelector('[data-editor-time-label]').textContent = editorTimeLabel(period);
+      const input = field.querySelector('input[data-shift-field]');
+      input.value = [...field.querySelectorAll('[data-period-value]')].map(item=>item.dataset.periodValue).filter(Boolean).join(';');
+      if (input.dataset.shiftField === 'shift_time' && input.value) input.value += ';';
+      picker.open = false;
+      picker.querySelector('summary').focus();
+      const restState = picker.closest('.dl-editor-rest')?.querySelector('.dl-editor-rest-head span');
+      if (restState) restState.textContent = period ? '已设置' : '未设置';
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      return;
+    }
+    const date = event.target.closest('[data-editor-date]');
+    if (date) {
+      const field = date.closest('.dl-editor-date-field');
+      const input = field.querySelector('input');
+      input.value = date.dataset.editorDate;
+      field.querySelector('[data-editor-date-label]').textContent = input.value || '选择生效日期';
+      field.querySelectorAll('[data-editor-date]').forEach(button=>button.setAttribute('aria-pressed', String(button.dataset.editorDate===input.value)));
+      field.querySelector('details').open = false;
+      field.querySelector('summary').focus();
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+    }
+  });
+  form.addEventListener('input', () => {
+    const value = key => form.querySelector(`[data-shift-field="${key}"]`)?.value.trim() || '';
+    const row = editor.rows.find(item => item.shift_code === editor.selected);
+    for (const key of ['shift_category','shift_name','shift_time','effective_start_date','note']) row[key] = value(key);
+    row.regular_hours = value('regular_hours') === '' ? null : Number(value('regular_hours'));
+    row.break_segments = [1,2,3].map(i => ({period:value(`break_${i}`),category:value(`break_category_${i}`)||'其他休息'})).filter(segment => segment.period);
+    refreshDraft();
+  });
+  form.addEventListener('click', event => {
+    if (!event.target.closest('#btnResetNightShiftRow')) return;
+    const index = editor.rows.findIndex(row => row.shift_code === editor.selected);
+    editor.rows[index] = JSON.parse(editor.original).find(row => row.shift_code === editor.selected);
+    form.innerHTML = renderNightShiftBreakForm(config);
+    refreshDraft();
+  });
+  document.querySelector('#btnSaveNightShiftBreaks').hidden = editor.tab !== 'breaks';
 }
 
 function renderCanbuStepContent(step, results = []) {
@@ -1380,7 +1673,7 @@ function renderCanbuStepContent(step, results = []) {
   if (step === 'upload') {
     const isNightShift = batch?.subject === 'yeban_butie';
     root.innerHTML = `
-      ${isNightShift ? renderNightShiftConfigPanel(batch) : ''}
+      ${isNightShift ? '<div class="dl-night-upload-layout">' : ''}
       <section class="dl-panel">
         <div class="dl-panel-head">
           <div>
@@ -1433,12 +1726,31 @@ function renderCanbuStepContent(step, results = []) {
           <p class="upload-sub" id="payrollFileName">点击选择一个或多个文件 · 支持 .xlsx / .xlsm / .xls</p>
         </div>
         <div class="dl-selected-files" id="selectedPayrollFileList" hidden></div>
+        <div id="sheetConfirmation" class="dl-upload-parameter-body" hidden></div>
         <div class="drawer-footer compact">
           <p id="uploadStatus" class="inline-status">选择文件后开始字段检查。</p>
           <button id="btnSubmitCanbuBatch" class="btn-primary-lg" type="button" disabled>开始字段检查</button>
         </div>
       </section>
+      ${isNightShift ? `${renderNightShiftConfigPanel(batch)}</div>` : ''}
     `;
+    if (isNightShift) {
+      const upload = root.querySelector('.dl-night-upload-layout > .dl-panel');
+      upload.classList.add('dl-upload-primary');
+      const heading = upload.querySelector('.dl-panel-head');
+      const description = heading.querySelector('.dl-panel-sub');
+      heading.querySelector('.dl-panel-title').textContent = '上传考勤数据';
+      description.remove();
+      heading.querySelector('div').insertAdjacentHTML('afterbegin', '<span class="dl-upload-start">第 1 步 · 从这里开始</span>');
+      heading.querySelector('div').insertAdjacentHTML('beforeend', '<p class="dl-panel-sub">上传本月考勤，开始夜班补贴核算。</p>');
+      const zone = upload.querySelector('#fileUploadZone');
+      heading.after(zone);
+      zone.after(upload.querySelector('#selectedPayrollFileList'));
+      const requirements = upload.querySelector('.dl-upload-list');
+      requirements.insertAdjacentHTML('beforebegin', '<h3 class="dl-upload-requirements-title">需要哪些数据</h3>');
+      description.classList.add('dl-upload-full-description');
+      requirements.after(description);
+    }
     refreshUploadRefs();
     bindCanbuUploadEvents();
     renderSelectedPayrollFiles();
@@ -1520,34 +1832,14 @@ function renderSelectedPayrollFiles(message = '') {
     button.addEventListener('click', () => {
       const key = button.dataset.removePayrollFile;
       state.payrollFiles = state.payrollFiles.filter(file => payrollFileKey(file) !== key);
+      document.querySelector('#sheetConfirmation')?.replaceChildren();
       renderSelectedPayrollFiles('已更新待上传文件清单。');
     });
   });
 }
 
-function bindCanbuUploadEvents() {
-  const submit = document.querySelector('#btnSubmitCanbuBatch');
-  const collectionRosterRows = document.querySelector('#workbenchCollectionRosterRows');
-  const collectionRosterCount = document.querySelector('#workbenchCollectionRosterCount');
-  const syncCollectionRoster = () => {
-    const roster = collectCollectionRosterTable();
-    updateActiveCanbuBatch({ collectionSeniorityRoster: roster });
-    if (collectionRosterCount) collectionRosterCount.textContent = String(roster.length);
-  };
-  collectionRosterRows?.addEventListener('input', syncCollectionRoster);
-  collectionRosterRows?.addEventListener('click', (event) => {
-    const removeButton = event.target.closest('.dl-roster-remove');
-    if (!removeButton) return;
-    removeButton.closest('[data-collection-roster-row]')?.remove();
-    if (!collectionRosterRows.querySelector('[data-collection-roster-row]')) {
-      collectionRosterRows.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
-    }
-    syncCollectionRoster();
-  });
-  document.querySelector('#btnAddCollectionRosterPerson')?.addEventListener('click', () => {
-    collectionRosterRows?.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
-    collectionRosterRows?.querySelector('tr:last-child [data-roster-field="employeeId"]')?.focus();
-  });
+function bindNightShiftConfigEvents() {
+  bindNightShiftEditorEvents();
   const nightShiftConfigInput = document.querySelector('#nightShiftConfigFile');
   document.querySelector('#btnConfirmNoJinjiangExclusions')?.addEventListener('click', async () => {
     const batch = getActiveCanbuBatch();
@@ -1570,7 +1862,7 @@ function bindCanbuUploadEvents() {
         }
       );
       toast('已确认本月无额外排除人员。');
-      renderCanbuStepContent('upload');
+      refreshNightShiftConfiguration();
     } catch (error) {
       setText(status, error.message, true);
       toast(error.message);
@@ -1593,8 +1885,12 @@ function bindCanbuUploadEvents() {
         `/api/domestic-labor/night-shift/config/${month}/import`,
         { method: 'POST', body: form }
       );
-      toast('当月晋江不享有夜班补贴人员名单已保存。');
-      renderCanbuStepContent('upload');
+      if (state.jinjiangRosterUploadKey) {
+        state.jinjiangRosterConfirmedKey = state.jinjiangRosterUploadKey;
+        state.jinjiangRosterUploadKey = null;
+      }
+      toast('名单已保存，可点击“开始字段检查”继续核算。');
+      refreshNightShiftConfiguration();
     } catch (error) {
       setText(status, error.message, true);
       toast(error.message);
@@ -1614,17 +1910,11 @@ function bindCanbuUploadEvents() {
         { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
       );
       toast('已复制上月晋江不享有名单，请核对后再提交核算。');
-      renderCanbuStepContent('upload');
+      refreshNightShiftConfiguration();
     } catch (error) {
       setText(status, error.message, true);
       toast(error.message);
     }
-  });
-  document.querySelector('#nightShiftBreakSearch')?.addEventListener('input', (event) => {
-    const keyword = event.target.value.trim().toLowerCase();
-    document.querySelectorAll('[data-night-shift-break-row]').forEach(row => {
-      row.hidden = Boolean(keyword) && !String(row.dataset.searchText || '').includes(keyword);
-    });
   });
   document.querySelector('#btnSaveNightShiftBreaks')?.addEventListener('click', async () => {
     const batch = getActiveCanbuBatch();
@@ -1651,11 +1941,37 @@ function bindCanbuUploadEvents() {
         }
       );
       toast(overrides.length ? `已保存 ${overrides.length} 条当月班次调整。` : '已恢复使用完整平台班次基线。');
-      renderCanbuStepContent('upload');
+      refreshNightShiftConfiguration(true);
     } catch (error) {
       setText(status, error.message, true);
       toast(error.message);
     }
+  });
+}
+
+function bindCanbuUploadEvents() {
+  bindNightShiftConfigEvents();
+  const submit = document.querySelector('#btnSubmitCanbuBatch');
+  const collectionRosterRows = document.querySelector('#workbenchCollectionRosterRows');
+  const collectionRosterCount = document.querySelector('#workbenchCollectionRosterCount');
+  const syncCollectionRoster = () => {
+    const roster = collectCollectionRosterTable();
+    updateActiveCanbuBatch({ collectionSeniorityRoster: roster });
+    if (collectionRosterCount) collectionRosterCount.textContent = String(roster.length);
+  };
+  collectionRosterRows?.addEventListener('input', syncCollectionRoster);
+  collectionRosterRows?.addEventListener('click', (event) => {
+    const removeButton = event.target.closest('.dl-roster-remove');
+    if (!removeButton) return;
+    removeButton.closest('[data-collection-roster-row]')?.remove();
+    if (!collectionRosterRows.querySelector('[data-collection-roster-row]')) {
+      collectionRosterRows.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
+    }
+    syncCollectionRoster();
+  });
+  document.querySelector('#btnAddCollectionRosterPerson')?.addEventListener('click', () => {
+    collectionRosterRows?.insertAdjacentHTML('beforeend', renderCollectionRosterRow());
+    collectionRosterRows?.querySelector('tr:last-child [data-roster-field="employeeId"]')?.focus();
   });
   el.fileUploadZone?.addEventListener('click', (event) => {
     if (event.target === el.payrollFile) return;
@@ -1671,6 +1987,7 @@ function bindCanbuUploadEvents() {
     const existingKeys = new Set(state.payrollFiles.map(payrollFileKey));
     const addedFiles = selectedFiles.filter(file => !existingKeys.has(payrollFileKey(file)));
     state.payrollFiles = [...state.payrollFiles, ...addedFiles];
+    if (addedFiles.length) document.querySelector('#sheetConfirmation')?.replaceChildren();
     el.payrollFile.value = '';
     const duplicateCount = selectedFiles.length - addedFiles.length;
     const message = duplicateCount
@@ -2314,8 +2631,10 @@ function getNightShiftDailyCounts(row) {
 function getNightShiftReasonLabel(reasonCode) {
   const labels = {
     generic_rule: '按通用夜班规则计算',
+    dongguan_cleaner_excluded: '东莞保洁不论班次均不享有夜班补贴',
+    multiple_night_windows_pending: '同日覆盖早晚两个夜班窗口，晚间计发及合并口径待确认',
     invalid_attendance_date: '出勤日期缺失或格式错误',
-    missing_punch: '员工缺勤（考勤异常）',
+    missing_punch: '打卡不完整，当日不计补贴',
     implausible_duration: '上下班时长超出合理范围',
     no_effective_attendance: '取整后没有有效出勤时段',
     no_night_overlap: '当天未覆盖夜班时段',
@@ -2363,7 +2682,7 @@ function getNightShiftDailyAction(daily) {
   if (status === 'calculated_review' || status === 'calculated_pending') {
     return `当日${formatMoney(daily?.amount)}元已计入，请确认后留档`;
   }
-  if (reasonCode === 'missing_punch') return '员工当天缺勤，按考勤异常处理，当日不计夜班补贴';
+  if (reasonCode === 'missing_punch') return '当天缺少有效上班或下班打卡，不计夜班补贴，无需复核';
   if (reasonCode === 'shift_break_config_missing' || reasonCode === 'invalid_break_period') {
     return '维护该班次休息时间后重新核算；当前金额未包含这一天';
   }
@@ -2571,6 +2890,474 @@ function filterNightShiftResults(results) {
   });
 }
 
+function getNightShiftConfigSource() {
+  return getNightShiftConfig()
+    || state.currentRun?.nightShiftConfigSnapshot
+    || state.currentRun?.night_shift_config_snapshot
+    || null;
+}
+
+function nightShiftGroupIsCovered(group, config) {
+  const row = (config?.effective_shift_breaks || config?.shift_breaks || []).find(item => String(item.shift_code) === group.shiftCode);
+  return Boolean(row && (!row.effective_start_date || group.dates.every(date => date >= row.effective_start_date)));
+}
+
+function showNightShiftGate(records) {
+  state.nightShiftGateRecords = records;
+  let dialog = document.querySelector('#nightShiftGateDialog');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'nightShiftGateDialog';
+    document.body.append(dialog);
+    dialog.addEventListener('close', () => { state.nightShiftGateRecords = null; dialog.remove(); });
+  }
+  dialog.innerHTML = `<div class="dl-gate-heading"><div><h2>补齐班次配置后才能核算</h2><p>以下班次影响本批次夜班补贴。请确认休息安排及生效日期，再继续核算。</p></div><button class="dl-btn" id="btnCloseNightShiftGate" type="button">返回修改数据</button></div>${renderNightShiftMissingPanel(records)}`;
+  dialog.querySelector('#btnCloseNightShiftGate').onclick = () => dialog.close();
+  const proceed = dialog.querySelector('#btnRecalculateNightShiftMissing');
+  if (proceed) proceed.textContent = '配置已齐全，继续核算';
+  bindNightShiftMissingPanel(records);
+  if (!dialog.open) dialog.showModal();
+}
+
+function refreshNightShiftMissingView(records) {
+  if (state.nightShiftGateRecords) showNightShiftGate(records);
+  else renderNightShiftResults(records);
+}
+
+function getMissingNightShiftGroups(results = []) {
+  const groups = new Map();
+  const baseline = getNightShiftConfigSource()?.baseline_shift_breaks;
+  const baselineCodes = new Set((baseline || []).map(row => row.shift_code));
+  const snapshot = state.currentRun?.nightShiftConfigSnapshot || state.currentRun?.night_shift_config_snapshot || {};
+  const addedCodes = new Set([
+    ...(getNightShiftConfigSource()?.shift_break_overrides || []), ...(snapshot.shift_break_overrides || []),
+  ].map(row => row.shift_code).filter(code => baseline && !baselineCodes.has(code)));
+  (results || []).forEach(row => {
+    const dailyResults = getNightShiftDetails(row).daily_results || [];
+    dailyResults.forEach(daily => {
+      if (daily?.reason_code !== 'shift_break_config_missing'
+          && !addedCodes.has(daily.shift_code)) return;
+      const shiftCode = String(daily.shift_code || '').trim() || '班次编号缺失';
+      if (!groups.has(shiftCode)) {
+        groups.set(shiftCode, {
+          shiftCode,
+          shiftCategory: String(daily.shift_category || '').trim(),
+          shiftName: String(daily.shift_name || '').trim(),
+          shiftTime: String(daily.shift_time || '').trim(),
+          workAreas: new Set(),
+          employees: new Set(),
+          dates: [],
+          records: 0,
+        });
+      }
+      const group = groups.get(shiftCode);
+      group.records += 1;
+      if (row.employee_id) group.employees.add(String(row.employee_id));
+      if (daily.work_area) group.workAreas.add(String(daily.work_area));
+      const attendanceDate = formatNightShiftAttendanceDate(daily.attendance_date);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(attendanceDate)) group.dates.push(attendanceDate);
+      if (!group.shiftCategory && daily.shift_category) group.shiftCategory = String(daily.shift_category).trim();
+      if (!group.shiftName && daily.shift_name) group.shiftName = String(daily.shift_name).trim();
+      if (!group.shiftTime && daily.shift_time) group.shiftTime = String(daily.shift_time).trim();
+    });
+  });
+  return [...groups.values()].sort((left, right) => right.records - left.records || left.shiftCode.localeCompare(right.shiftCode));
+}
+
+function defaultNightShiftEffectiveDate() {
+  const month = nightShiftMonth();
+  return /^\d{6}$/.test(month) ? `${month.slice(0, 4)}-${month.slice(4, 6)}-01` : '';
+}
+
+function parseNightShiftPeriodForForm(period = '') {
+  const numbers = String(period).match(/\d+/g)?.map(Number) || [];
+  if (numbers.length < 4) return { startDay: 'same', startTime: '', endDay: 'same', endTime: '' };
+  let [startHour, startMinute, endHour, endMinute] = numbers.slice(-4);
+  let startTotal = startHour * 60 + startMinute;
+  let endTotal = endHour * 60 + endMinute;
+  if (endTotal <= startTotal) endTotal += 24 * 60;
+  const clock = total => `${String(Math.floor((total % (24 * 60)) / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  return {
+    startDay: startTotal >= 24 * 60 ? 'next' : 'same',
+    startTime: clock(startTotal),
+    endDay: endTotal >= 24 * 60 ? 'next' : 'same',
+    endTime: clock(endTotal),
+  };
+}
+
+function renderNightShiftMissingSegment(segment = {}, index = 0) {
+  const value = segment.period ? parseNightShiftPeriodForForm(segment.period) : {
+    startDay: 'same', startTime: '', endDay: 'same', endTime: '',
+  };
+  return `
+    <div class="dl-missing-shift-segment" data-missing-break-segment>
+      <span class="dl-missing-shift-segment-label">第${index + 1}段</span>
+      <details class="dl-break-range">
+        <summary aria-label="选择第${index + 1}段休息时间"><span data-range-label>${value.startTime ? `${value.startDay === 'next' ? '次日 ' : ''}${escapeHtml(value.startTime)} — ${value.endDay === 'next' ? '次日 ' : ''}${escapeHtml(value.endTime)}` : '选择休息时间'}</span><span aria-hidden="true">⌄</span></summary>
+        <div class="dl-break-range-editor">
+          ${['startTime', 'endTime'].map((part, side) => `<div class="dl-time-endpoint">
+            <label>${side ? '结束时间' : '开始时间'}<input type="text" inputmode="numeric" maxlength="5" placeholder="HH:MM" data-break-part="${part}" value="${escapeHtml(value[part])}" aria-label="第${index + 1}段${side ? '结束' : '开始'}时间"></label>
+            <div class="dl-time-columns">${['hour', 'minute'].map(unit => `<div class="dl-time-column" aria-label="${side ? '结束' : '开始'}${unit === 'hour' ? '小时' : '分钟'}">${Array.from({length: unit === 'hour' ? 24 : 60}, (_, n) => `<button type="button" data-time-field="${part}" data-time-unit="${unit}" data-time-value="${String(n).padStart(2, '0')}" aria-label="${side ? '结束' : '开始'}${unit === 'hour' ? '小时' : '分钟'} ${n}">${String(n).padStart(2, '0')}</button>`).join('')}</div>`).join('')}</div>
+          </div>`).join('')}
+          <small data-range-hint>可点选或直接输入时间，跨天自动识别。</small>
+        </div>
+      </details>
+      <button class="dl-icon-btn" data-remove-missing-break type="button" aria-label="删除第${index + 1}段休息">×</button>
+    </div>
+  `;
+}
+
+function formatNightShiftBreakSummary(row) {
+  const segments = getNightShiftBreakSegments(row).filter(segment => segment.period);
+  return segments.length ? segments.map(segment => segment.period).join('、') : '无休息';
+}
+
+function renderMissingShiftCalendar(value) {
+  const [year, month, day] = value.split('-').map(Number);
+  const count = new Date(year, month, 0).getDate();
+  const offset = (new Date(year, month - 1, 1).getDay() + 6) % 7;
+  return `<details class="dl-shift-calendar dl-compact-picker"><summary><span>▦ <span data-effective-label>${escapeHtml(value)}</span></span><span>⌄</span></summary>
+    <input id="missingShiftEffectiveDate" type="hidden" value="${escapeHtml(value)}">
+    <div class="dl-shift-calendar-popup"><strong>${year} 年 ${month} 月</strong><div class="dl-shift-calendar-grid">
+    ${['一','二','三','四','五','六','日'].map(d => `<span>${d}</span>`).join('')}
+    ${'<span></span>'.repeat(offset)}${Array.from({length: count}, (_, i) => `<button type="button" aria-label="${month}月${i + 1}日" aria-pressed="${i + 1 === day}" data-effective-day="${value.slice(0, 8)}${String(i + 1).padStart(2, '0')}">${i + 1}</button>`).join('')}</div><small>仅选择本次核算月内的日期</small></div></details>`;
+}
+
+function renderNightShiftMissingPanel(results) {
+  const allGroups = getMissingNightShiftGroups(results);
+  if (!allGroups.length) return '';
+  const config = getNightShiftConfigSource() || {};
+  const configuredCodes = new Set((config.effective_shift_breaks || config.shift_breaks || []).map(row => String(row.shift_code || '')));
+  const pendingGroups = allGroups.filter(group => !nightShiftGroupIsCovered(group, config));
+  const completedCount = allGroups.length - pendingGroups.length;
+
+  if (!allGroups.some(group => group.shiftCode === state.activeNightShiftMissingCode)) {
+    state.activeNightShiftMissingCode = (pendingGroups[0] || allGroups[0]).shiftCode;
+  }
+  const active = allGroups.find(group => group.shiftCode === state.activeNightShiftMissingCode) || allGroups[0];
+  const saved = (config.effective_shift_breaks || config.shift_breaks || []).find(row => row.shift_code === active.shiftCode);
+  const savedSegments = saved ? getNightShiftBreakSegments(saved).filter(segment => segment.period) : [];
+  const dates = [...active.dates].sort();
+  const dateRange = dates.length ? `${dates[0]}${dates.length > 1 ? ` 至 ${dates[dates.length - 1]}` : ''}` : '日期待核对';
+  const workAreas = [...active.workAreas].join('、') || '地区待识别';
+  return `
+    <section class="dl-panel dl-missing-shift-panel">
+      <div class="dl-panel-head">
+        <div><h2 class="dl-panel-title">补齐待确认班次</h2><p class="dl-panel-sub">本批次 ${allGroups.length} 个补充班次全部列在左侧。请逐项确认休息安排及生效日期，全部补齐后继续核算。</p></div>
+        <span class="dl-badge ${pendingGroups.length ? 'warn' : 'ok'}">${completedCount}/${allGroups.length} 已完成</span>
+      </div>
+      <div class="dl-missing-shift-layout">
+        <aside class="dl-missing-shift-list" aria-label="待确认班次">
+          ${allGroups.map(group => `
+            <button class="dl-missing-shift-item ${group.shiftCode === active.shiftCode ? 'active' : ''}" data-missing-shift-code="${escapeHtml(group.shiftCode)}" type="button">
+              <span><strong>${escapeHtml(group.shiftCode)}</strong><small>${escapeHtml(group.shiftName || group.shiftTime || '名称待补')}</small></span>
+              <span><b>${nightShiftGroupIsCovered(group, config) ? '已确认' : '待确认'}</b><small>${group.records} 条考勤</small></span>
+            </button>
+          `).join('')}
+        </aside>
+        <div class="dl-missing-shift-form">
+          <div class="dl-missing-shift-head">
+            <div><h3>${escapeHtml(active.shiftCode)}${active.shiftName ? ` · ${escapeHtml(active.shiftName)}` : ''}</h3></div>
+            <div class="dl-missing-shift-impact"><strong>${active.employees.size}</strong><span>人</span><strong>${active.records}</strong><span>条考勤</span></div>
+          </div>
+          <div class="dl-missing-shift-meta">
+            <span>排班：${escapeHtml(active.shiftTime || '待补')}</span><span>地区：${escapeHtml(workAreas)}</span><span>考勤：${escapeHtml(dateRange)}</span>
+          </div>
+          <div class="dl-shift-edit-grid"><div class="dl-shift-primary">
+          <fieldset class="dl-shift-segmented"><legend>休息安排</legend>
+          ${[['custom','填写休息时间'],['template','沿用已有班次'],['none','无休息安排']].map(([mode, label]) => `<label><input type="radio" name="missingShiftMode" value="${mode}" ${(saved && !savedSegments.length ? mode === 'none' : mode === 'custom') ? 'checked' : ''}><span>${label}</span></label>`).join('')}</fieldset>
+          <div class="dl-missing-shift-template" id="missingShiftTemplateArea">
+            <input id="missingShiftTemplateSelect" type="hidden">
+            <details class="dl-shift-search dl-compact-picker"><summary><span id="missingShiftTemplateLabel">搜索相同安排的班次</span><span>⌕</span></summary>
+            <div class="dl-shift-search-popup"><input type="search" id="missingShiftTemplateSearch" placeholder="搜索编号、名称或休息时间" aria-label="搜索班次" autocomplete="off"><div id="missingShiftTemplateOptions" aria-label="班次搜索结果"></div><small id="missingShiftTemplateCount"></small></div></details>
+          </div>
+          <div class="dl-missing-shift-breaks" id="missingShiftBreakRows">${(savedSegments.length ? savedSegments : [{}]).map(renderNightShiftMissingSegment).join('')}</div>
+          <button class="dl-btn dl-missing-shift-add" id="btnAddMissingShiftBreak" type="button">＋ 添加休息时段</button>
+          <p id="missingShiftNoBreakHint" class="inline-status" hidden>确认该班次没有休息，系统将不扣减休息时长。</p></div>
+          <aside class="dl-shift-review"><span class="dl-shift-field-label">何时开始采用此安排？</span>${renderMissingShiftCalendar(saved?.effective_start_date || defaultNightShiftEffectiveDate())}
+          <small>默认核算月第一天</small><div class="dl-shift-review-plan"><span class="dl-shift-field-label">安排预览</span><p id="missingShiftArrangementPreview">${saved ? escapeHtml(formatNightShiftBreakSummary(saved)) : '选好时间后，这里显示完整休息安排。'}</p></div></aside></div>
+          <p class="inline-status" id="missingShiftSaveStatus" role="status"></p>
+          <div class="dl-missing-shift-actions">${!pendingGroups.length ? '<button class="dl-btn" id="btnRecalculateNightShiftMissing" type="button">重新核算</button>' : ''}<button class="btn-primary" id="btnSaveMissingShift" type="button">${saved ? '保存修改' : '确认此班次'}</button></div>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function resolveMissingShiftPeriod(startTime, endTime, shiftTime = '') {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)) throw new Error('请按 HH:MM 填写有效的休息起止时间。');
+  const minutes = clock => { const [hour, minute] = clock.split(':').map(Number); return hour * 60 + minute; };
+  const shiftStart = shiftTime.match(/\d{1,2}:\d{2}/)?.[0];
+  let start = minutes(startTime);
+  let end = minutes(endTime);
+  if (start === end) throw new Error('休息开始和结束时间不能相同。');
+  if (!shiftStart) throw new Error('缺少排班起始时间，无法判断休息归属日期，请先补齐班次时间。');
+  while (start < minutes(shiftStart)) start += 1440;
+  while (end <= start) end += 1440;
+  const format = total => `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  const display = total => `${total >= 1440 ? '次日 ' : ''}${format(total % 1440)}`;
+  const category = start >= 30 * 60 && start < 32 * 60 ? '早上休息' : (start >= 22 * 60 && start < 30 * 60 ? '晚上休息' : '其他休息');
+  return { period: `${format(start)}-${format(end)}`, category, label: `${display(start)} — ${display(end)}`, duration: end - start };
+}
+
+function collectMissingShiftBreakSegments() {
+  const active = getMissingNightShiftGroups(state.currentResults).find(group => group.shiftCode === state.activeNightShiftMissingCode);
+  return [...document.querySelectorAll('[data-missing-break-segment]')].map((row, index) => {
+    const value = part => row.querySelector(`[data-break-part="${part}"]`)?.value || '';
+    const startTime = value('startTime');
+    const endTime = value('endTime');
+    if (!startTime || !endTime) throw new Error(`请完整填写第${index + 1}段休息的开始和结束时间。`);
+    const {period, category} = resolveMissingShiftPeriod(startTime, endTime, active?.shiftTime || '');
+    return { period, category };
+  });
+}
+
+function bindNightShiftMissingPanel(results) {
+  const allGroups = getMissingNightShiftGroups(results);
+  state.shiftPickerEvents?.abort();
+  state.shiftPickerEvents = new AbortController();
+  const eventOptions = { signal: state.shiftPickerEvents.signal };
+  document.querySelectorAll('[data-missing-shift-code]').forEach(button => button.addEventListener('click', () => {
+    state.activeNightShiftMissingCode = button.dataset.missingShiftCode || '';
+    refreshNightShiftMissingView(results);
+  }));
+  const rowsRoot = document.querySelector('#missingShiftBreakRows');
+  const templateArea = document.querySelector('#missingShiftTemplateArea');
+  const templateSelect = document.querySelector('#missingShiftTemplateSelect');
+  const addButton = document.querySelector('#btnAddMissingShiftBreak');
+  const modeValue = () => document.querySelector('input[name="missingShiftMode"]:checked')?.value || 'custom';
+  const updatePreview = () => {
+    const preview = document.querySelector('#missingShiftArrangementPreview');
+    if (!preview) return;
+    if (modeValue() === 'template' && !templateSelect?.value) {
+      preview.textContent = '搜索并选择班次后，预览对应的休息安排。'; return;
+    }
+    const labels = [...(rowsRoot?.querySelectorAll('[data-range-label]') || [])].map(node => node.textContent).filter(text => text !== '选择休息时间');
+    preview.textContent = modeValue() === 'none' ? '无休息安排' : labels.join('；') || (templateSelect?.value && !rowsRoot?.children.length ? '无休息安排' : '选好时间后，这里显示完整休息安排。');
+  };
+  const syncMode = mode => {
+    const waitingForTemplate = mode === 'template' && !templateSelect?.value;
+    if (templateArea) templateArea.hidden = mode !== 'template';
+    if (rowsRoot) rowsRoot.hidden = mode === 'none' || waitingForTemplate;
+    if (addButton) addButton.hidden = mode === 'none' || waitingForTemplate;
+    const noneHint = document.querySelector('#missingShiftNoBreakHint');
+    if (noneHint) noneHint.hidden = mode !== 'none';
+    updatePreview();
+  };
+  document.querySelectorAll('input[name="missingShiftMode"]').forEach(input => input.addEventListener('change', event => {
+    syncMode(event.target.value);
+    if (event.target.value === 'custom' && rowsRoot && !rowsRoot.querySelector('[data-missing-break-segment]')) {
+      rowsRoot.innerHTML = renderNightShiftMissingSegment({}, 0);
+    }
+  }));
+  syncMode(modeValue());
+  rowsRoot?.addEventListener('input', event => {
+    const row = event.target.closest('[data-missing-break-segment]');
+    if (!row) return;
+    const start = row.querySelector('[data-break-part="startTime"]').value;
+    const end = row.querySelector('[data-break-part="endTime"]').value;
+    row.querySelectorAll('[data-time-value]').forEach(button => {
+      const clock = button.dataset.timeField === 'startTime' ? start : end;
+      const selected = clock.split(':')[button.dataset.timeUnit === 'hour' ? 0 : 1] === button.dataset.timeValue;
+      button.setAttribute('aria-pressed', String(selected));
+      button.tabIndex = selected || (!clock && button.dataset.timeValue === '00') ? 0 : -1;
+    });
+    if (!start || !end) { row.querySelector('[data-range-label]').textContent = '选择休息时间'; updatePreview(); return; }
+    try {
+      const active = allGroups.find(group => group.shiftCode === state.activeNightShiftMissingCode);
+      const period = resolveMissingShiftPeriod(start, end, active?.shiftTime || '');
+      row.querySelector('[data-range-label]').textContent = period.label;
+      row.querySelector('[data-range-hint]').textContent = `共 ${period.duration} 分钟 · 已按排班识别日期`;
+      updatePreview();
+    } catch (error) {
+      row.querySelector('[data-range-label]').textContent = '请检查起止时间';
+      row.querySelector('[data-range-hint]').textContent = error.message;
+      updatePreview();
+    }
+  });
+  document.addEventListener('click', event => {
+    document.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(details => {
+      if (!details.contains(event.target)) details.open = false;
+    });
+  }, eventOptions);
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    document.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(details => {
+      details.open = false; details.querySelector('summary')?.focus();
+    });
+  }, eventOptions);
+  document.addEventListener('toggle', event => {
+    const details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.open || !details.closest('.dl-missing-shift-panel')) return;
+    const popup = details.querySelector('.dl-break-range-editor, .dl-shift-search-popup, .dl-shift-calendar-popup');
+    if (!popup) return;
+    delete details.dataset.popupAbove;
+    const bounds = popup.getBoundingClientRect();
+    const trigger = details.querySelector('summary').getBoundingClientRect();
+    if (bounds.bottom > window.innerHeight - 12 && trigger.top > window.innerHeight - trigger.bottom) details.dataset.popupAbove = 'true';
+    details.querySelectorAll('.dl-time-column').forEach(column => {
+      const sample = column.querySelector('[data-time-value]');
+      const input = details.querySelector(`[data-break-part="${sample.dataset.timeField}"]`);
+      const index = sample.dataset.timeUnit === 'hour' ? 0 : 1;
+      const value = input?.value?.split(':')[index];
+      column.querySelectorAll('button').forEach(button => {
+        const selected = button.dataset.timeValue === (value || '00');
+        button.tabIndex = selected ? 0 : -1;
+        button.setAttribute('aria-pressed', String(Boolean(value) && selected));
+      });
+      const selected = [...column.querySelectorAll('button')].find(button => button.dataset.timeValue === value);
+      if (selected) { selected.setAttribute('aria-pressed', 'true'); column.scrollTop = selected.offsetTop - column.offsetTop - 50; }
+    });
+  }, {...eventOptions, capture: true});
+  const search = document.querySelector('#missingShiftTemplateSearch');
+  const templates = (getNightShiftConfigSource()?.effective_shift_breaks || [])
+    .filter(row => row.shift_code !== state.activeNightShiftMissingCode);
+  const renderSearch = () => {
+    const query = (search?.value || '').trim().toLowerCase();
+    const matches = templates.filter(row => `${row.shift_code} ${row.shift_name} ${formatNightShiftBreakSummary(row)}`.toLowerCase().includes(query));
+    const list = document.querySelector('#missingShiftTemplateOptions');
+    if (!list) return;
+    list.innerHTML = matches.slice(0, 6).map(row => `<button type="button" data-template-code="${escapeHtml(row.shift_code)}"><span><strong>${escapeHtml(row.shift_code)}</strong> ${escapeHtml(row.shift_name || '')}</span><small>${escapeHtml(formatNightShiftBreakSummary(row))}</small></button>`).join('') || '<p>没有匹配班次，请更换关键词。</p>';
+    setText(document.querySelector('#missingShiftTemplateCount'), matches.length > 6 ? `匹配 ${matches.length} 个班次，显示前 6 个；输入关键词缩小范围` : `${matches.length} 个匹配班次`);
+  };
+  search?.addEventListener('input', renderSearch);
+  search?.closest('details')?.addEventListener('toggle', event => { if (event.target.open) { renderSearch(); search.focus(); } });
+  search?.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown') { event.preventDefault(); document.querySelector('[data-template-code]')?.focus(); }
+  });
+  document.querySelector('#missingShiftTemplateOptions')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-template-code]');
+    if (!button) return;
+    templateSelect.value = button.dataset.templateCode;
+    document.querySelector('#missingShiftTemplateLabel').textContent = button.querySelector('span').textContent;
+    templateSelect.dispatchEvent(new Event('change'));
+    search.closest('details').open = false;
+    search.closest('details').querySelector('summary').focus();
+  });
+  document.querySelector('.dl-shift-calendar')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-effective-day]');
+    if (!button) return;
+    document.querySelector('#missingShiftEffectiveDate').value = button.dataset.effectiveDay;
+    document.querySelector('[data-effective-label]').textContent = button.dataset.effectiveDay;
+    button.closest('details').querySelectorAll('[data-effective-day]').forEach(day => day.setAttribute('aria-pressed', String(day === button)));
+    button.closest('details').open = false;
+    button.closest('details').querySelector('summary').focus();
+  });
+
+  const renumberBreakRows = () => {
+    if (!rowsRoot) return;
+    [...rowsRoot.querySelectorAll('[data-missing-break-segment]')].forEach((row, index) => {
+      row.querySelector('.dl-missing-shift-segment-label').textContent = `第${index + 1}段`;
+    });
+  };
+  rowsRoot?.addEventListener('click', event => {
+    const timeButton = event.target.closest('[data-time-value]');
+    if (timeButton) {
+      const row = timeButton.closest('[data-missing-break-segment]');
+      const input = row.querySelector(`[data-break-part="${timeButton.dataset.timeField}"]`);
+      const parts = (input.value || '00:00').split(':');
+      parts[timeButton.dataset.timeUnit === 'hour' ? 0 : 1] = timeButton.dataset.timeValue;
+      input.value = parts.join(':'); input.dispatchEvent(new Event('input', {bubbles: true}));
+      return;
+    }
+    const button = event.target.closest('[data-remove-missing-break]');
+    if (!button) return;
+    button.closest('[data-missing-break-segment]')?.remove();
+    renumberBreakRows();
+    updatePreview();
+  });
+  rowsRoot?.addEventListener('keydown', event => {
+    const button = event.target.closest('[data-time-value]');
+    if (!button || !['ArrowUp','ArrowDown','Home','End'].includes(event.key)) return;
+    event.preventDefault();
+    const options = [...button.parentElement.querySelectorAll('button')];
+    const index = options.indexOf(button);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)));
+    options[next].focus(); options[next].click();
+  });
+  addButton?.addEventListener('click', () => {
+    const count = rowsRoot?.querySelectorAll('[data-missing-break-segment]').length || 0;
+    if (count >= 3) return toast('一个班次最多填写3段休息时间。');
+    rowsRoot?.insertAdjacentHTML('beforeend', renderNightShiftMissingSegment({}, count));
+  });
+  templateSelect?.addEventListener('change', event => {
+    const config = getNightShiftConfigSource() || {};
+    const template = (config.effective_shift_breaks || config.shift_breaks || []).find(row => row.shift_code === event.target.value);
+    const segments = template ? getNightShiftBreakSegments(template).filter(segment => segment.period) : [];
+    if (rowsRoot) rowsRoot.innerHTML = segments.map(renderNightShiftMissingSegment).join('');
+    syncMode('template');
+  });
+
+  document.querySelector('#btnRecalculateNightShiftMissing')?.addEventListener('click', () => {
+    document.querySelector('#nightShiftGateDialog')?.close();
+    if (state.payrollFiles?.length || state.payrollFile) submitCanbuBatch();
+    else restartActiveBatchForRecalculation();
+  });
+  document.querySelector('#btnSaveMissingShift')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const status = document.querySelector('#missingShiftSaveStatus');
+    const mode = modeValue();
+    const active = allGroups.find(group => group.shiftCode === state.activeNightShiftMissingCode);
+    const month = nightShiftMonth();
+    const config = getNightShiftConfigSource();
+    if (!active || !month || !config) return toast('班次配置尚未加载，请刷新后重试。');
+    const effectiveStartDate = document.querySelector('#missingShiftEffectiveDate')?.value || '';
+    if (!effectiveStartDate || effectiveStartDate.slice(0, 7).replace('-', '') !== month) {
+      return toast(`生效日期必须在${formatMonthLabel(`${month.slice(0, 4)}-${month.slice(4, 6)}`)}内。`);
+    }
+    if (active.dates.some(date => date < effectiveStartDate)) return toast('生效日期必须覆盖该班次最早的待核算考勤日期。');
+    if (active.shiftCode === '班次编号缺失') return toast('考勤缺少班次编号，请返回修改数据后重新上传。');
+    try {
+      if (mode === 'template' && !document.querySelector('#missingShiftTemplateSelect')?.value) {
+        throw new Error('请选择一份已有班次的休息安排。');
+      }
+      const breakSegments = mode === 'none' ? [] : collectMissingShiftBreakSegments();
+      if (mode === 'custom' && !breakSegments.length) throw new Error('请至少填写一段休息时间，或选择“无休息安排”。');
+      button.disabled = true;
+      setText(status, `正在保存班次 ${active.shiftCode}…`);
+      const override = {
+        shift_category: active.shiftCategory,
+        shift_code: active.shiftCode,
+        shift_name: active.shiftName,
+        shift_time: active.shiftTime,
+        regular_hours: null,
+        effective_start_date: effectiveStartDate,
+        break_periods: breakSegments.map(segment => segment.period),
+        break_segments: breakSegments,
+        note: mode === 'none' ? '业务确认无休息安排' : '核算时补齐班次休息安排',
+      };
+      const overrides = (config.shift_break_overrides || []).filter(row => String(row.shift_code || '') !== active.shiftCode);
+      overrides.push(override);
+      state.nightShiftConfigs[month] = await requestJson(
+        `/api/domestic-labor/night-shift/config/${month}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shift_break_overrides: overrides,
+            jinjiang_exclusions: config.jinjiang_exclusions || [],
+            jinjiang_list_confirmed: Boolean(config.jinjiang_list_confirmed),
+          }),
+        }
+      );
+      const configuredCodes = new Set((state.nightShiftConfigs[month].effective_shift_breaks || []).map(row => String(row.shift_code || '')));
+      const remaining = allGroups.filter(group => !nightShiftGroupIsCovered(group, state.nightShiftConfigs[month]));
+      if (remaining.length) {
+        state.activeNightShiftMissingCode = remaining[0].shiftCode;
+        toast(`${active.shiftCode} 已保存，继续处理下一个班次。`);
+        refreshNightShiftMissingView(results);
+      } else {
+        toast(state.nightShiftGateRecords ? '班次已全部补齐，可以继续核算。' : '班次已保存，请重新核算更新结果。');
+        refreshNightShiftMissingView(results);
+      }
+    } catch (error) {
+      setText(status, error.message, true);
+      toast(error.message);
+      button.disabled = false;
+    }
+  });
+}
+
 function renderNightShiftResults(results = []) {
   const root = document.querySelector('#canbuStepContent');
   if (!root) return;
@@ -2586,6 +3373,7 @@ function renderNightShiftResults(results = []) {
     return summary;
   }, { calculated: 0, excluded: 0, manual: 0, pending: 0, reviewCalculated: 0, unpricedReview: 0 });
   root.innerHTML = `
+    ${renderNightShiftMissingPanel(rows)}
     <section class="dl-panel">
       <div class="dl-panel-head"><div><h2 class="dl-panel-title">夜班补贴核算</h2><p class="dl-panel-sub">结果按证据状态分层：自动核算可发放，明确排除不发放，异常与未确认口径进入复核。</p></div></div>
       <div class="dl-result-summary">
@@ -2610,6 +3398,7 @@ function renderNightShiftResults(results = []) {
   el.amountFilter = document.querySelector('#amountFilter');
   el.resultCountText = document.querySelector('#resultCountText');
   el.canbuPagination = document.querySelector('#canbuPagination');
+  bindNightShiftMissingPanel(rows);
   if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
   if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
   if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
@@ -3399,6 +4188,99 @@ async function submitTask() {
   }
 }
 
+function renderSheetConfirmation(sheets) {
+  const root = document.querySelector('#sheetConfirmation');
+  if (!root) return;
+  const previous = Object.fromEntries([...root.querySelectorAll('[data-sheet-key]')].map(input => [input.dataset.sheetKey, input.value]));
+  root.hidden = false;
+  root.innerHTML = `<span>有 ${sheets.length} 张工作表需要确认</span><button type="button" class="dl-btn" data-open-sheet-confirm>确认考勤表</button>
+    ${sheets.map(sheet => `<input type="hidden" data-sheet-key="${escapeHtml(sheet.key)}" value="${escapeHtml(previous[sheet.key] || '')}">`).join('')}`;
+  const open = () => {
+    if (document.querySelector('#sheetChoiceDialog')) return;
+    const labels = {monthly:['月考勤','员工信息与月度出勤汇总'],daily:['日考勤','逐日日期、班次和打卡记录'],housing:['住宿名单','员工入住与退宿记录'],temperature:['测温登记','日期、网点、班次与温度'],ignore:['跳过此表','本次核算不使用这张表']};
+    const dialog = document.createElement('dialog');
+    dialog.id = 'sheetChoiceDialog';
+    dialog.className = 'dl-sheet-dialog';
+    dialog.setAttribute('aria-labelledby','sheetChoiceTitle');
+    dialog.innerHTML = `<header><div><span class="dl-sheet-eyebrow">数据上传 · 工作表确认</span><h2 id="sheetChoiceTitle">确认这些表是什么数据</h2><p>以下 ${sheets.length} 张表同时符合多种用途，请根据内容选择。其他已识别的数据会自动使用，无关表会跳过。</p></div><button type="button" class="dl-btn" data-sheet-close aria-label="关闭确认弹窗">×</button></header>
+      <div class="dl-sheet-dialog-body">${sheets.map((sheet,index) => {
+        const fields = Object.keys(sheet.preview?.[0] || {});
+        const options = [...new Set([...(sheet.candidates || []),'ignore'])];
+        return `<section class="dl-sheet-card"><div class="dl-sheet-heading"><span class="dl-sheet-number">${index+1}</span><div><h3>${escapeHtml(sheet.sheet)}</h3><p>${escapeHtml(sheet.file_name)} · ${Number(sheet.row_count)} 条数据</p></div></div>
+          <fieldset><legend>选择这张表的用途</legend><div class="dl-sheet-options">${options.map(kind => `<label class="dl-sheet-option"><input type="radio" name="sheet-${index}" value="${kind}" ${previous[sheet.key]===kind?'checked':''}><span><strong>${labels[kind][0]}</strong><small>${labels[kind][1]}</small></span></label>`).join('')}</div></fieldset>
+          <details class="dl-sheet-preview" ${index===0?'open':''}><summary>查看表头与前 3 条数据</summary><p>${escapeHtml(sheet.headers.join(' · '))}</p>${fields.length ? `<div class="dl-sheet-preview-scroll"><table><thead><tr>${fields.map(h=>`<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${sheet.preview.map(row=>`<tr>${fields.map(h=>`<td>${escapeHtml(row[h] || '—')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`:'<p>暂无可展示的预览，请对照原文件确认。</p>'}</details></section>`;
+      }).join('')}</div><footer><span data-sheet-progress role="status"></span><div><button class="dl-btn" type="button" data-sheet-close>返回上传</button><button class="btn-primary" type="button" data-sheet-continue disabled>确认并继续检查 →</button></div></footer>`;
+    const update = () => {
+      const count = dialog.querySelectorAll('input:checked').length;
+      dialog.querySelector('[data-sheet-progress]').textContent = `已确认 ${count} / ${sheets.length} 张`;
+      dialog.querySelector('[data-sheet-continue]').disabled = count !== sheets.length;
+    };
+    dialog.addEventListener('change', update);
+    dialog.querySelectorAll('[data-sheet-close]').forEach(button=>button.onclick=()=>dialog.close());
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    dialog.querySelector('[data-sheet-continue]').onclick = () => {
+      const inputs = [...root.querySelectorAll('[data-sheet-key]')];
+      sheets.forEach((sheet,index)=>{
+        previous[sheet.key] = dialog.querySelector(`input[name="sheet-${index}"]:checked`).value;
+        inputs[index].value = previous[sheet.key];
+      });
+      dialog.close();
+      submitCanbuBatch();
+    };
+    document.body.append(dialog);
+    update();
+    dialog.showModal();
+  };
+  root.querySelector('[data-open-sheet-confirm]').onclick = open;
+  open();
+}
+
+function confirmJinjiangRoster(info) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dl-jinjiang-prompt';
+    dialog.setAttribute('aria-labelledby', 'jinjiangPromptTitle');
+    dialog.setAttribute('aria-describedby', 'jinjiangPromptDescription');
+    dialog.innerHTML = `<div class="dl-jinjiang-prompt-top"><span class="dl-jinjiang-prompt-tag">晋江 · 夜班补贴</span><button class="dl-jinjiang-prompt-close" aria-label="返回上传页面" type="button">×</button></div>
+      <h2 id="jinjiangPromptTitle">需要上传不享有人员名单吗？</h2>
+      <p id="jinjiangPromptDescription">本次考勤识别到 <strong>${Number(info.employee_count || 0)} 位晋江员工</strong>。请确认是否需要补充不享有夜班补贴的人员。</p>
+      <div class="dl-jinjiang-prompt-scope"><span>名单适用情况</span><div><b>计件岗</b><b>门禁</b><b>轻松岗位</b><b>其他特殊情况</b></div><p>考勤自动识别与名单共同生效，重复命中只排除一次。</p></div>
+      ${info.roster_count ? `<p class="dl-jinjiang-prompt-existing">当月已有 ${Number(info.roster_count)} 条名单记录。选择“否”将继续沿用已有名单。</p>` : '<p class="dl-jinjiang-prompt-existing">无需补充名单时，按考勤自动识别结果继续核算。</p>'}
+      <footer><button class="dl-btn" data-jinjiang-choice="continue" type="button">否，继续核算</button><button class="btn-primary" data-jinjiang-choice="upload" type="button">是，去上传名单 <span aria-hidden="true">→</span></button></footer>`;
+    dialog.addEventListener('close', () => { const choice=dialog.returnValue; dialog.remove(); resolve(choice || 'cancel'); }, {once:true});
+    dialog.querySelector('.dl-jinjiang-prompt-close').onclick = () => dialog.close('cancel');
+    dialog.querySelectorAll('[data-jinjiang-choice]').forEach(button=>button.onclick=()=>dialog.close(button.dataset.jinjiangChoice));
+    document.body.append(dialog);
+    dialog.showModal();
+    dialog.querySelector('[data-jinjiang-choice="upload"]').focus();
+  });
+}
+
+async function submitPayrollWithRosterConfirmation(form, batch) {
+  const key = JSON.stringify([batch.id, batch.month, (state.payrollFiles?.length ? state.payrollFiles : [state.payrollFile]).filter(Boolean).map(file=>[file.name,file.size,file.lastModified]), form.get('sheet_mapping')]);
+  if (state.jinjiangRosterConfirmedKey === key) form.set('jinjiang_roster_decision','confirmed');
+  try {
+    return await requestJson('/api/domestic-labor/runs', {method:'POST',body:form});
+  } catch (error) {
+    if (error.detail?.code !== 'jinjiang_roster_confirmation_required') throw error;
+    const choice = await confirmJinjiangRoster(error.detail);
+    if (choice === 'continue') {
+      state.jinjiangRosterConfirmedKey = key;
+      state.jinjiangRosterUploadKey = null;
+      form.set('jinjiang_roster_decision','confirmed');
+      return await requestJson('/api/domestic-labor/runs', {method:'POST',body:form});
+    }
+    if (choice === 'upload') {
+      state.jinjiangRosterUploadKey = key;
+      document.querySelector('[data-night-config-tab="roster"]')?.click();
+      document.querySelector('#nightConfigRoster')?.scrollIntoView({block:'center',behavior:'smooth'});
+      document.querySelector('#btnImportNightShiftConfig')?.focus({preventScroll:true});
+      setText(el.uploadStatus,'请上传晋江不享有名单，保存成功后点击“开始字段检查”继续。');
+    } else setText(el.uploadStatus,'尚未提交核算，可继续检查上传数据。');
+    return null;
+  }
+}
+
 async function submitCanbuBatch() {
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
@@ -3406,6 +4288,12 @@ async function submitCanbuBatch() {
   if (!batch) return toast(`暂无${config.name}批次。`);
   if (batch.subject === 'yeban_butie' && !isNightShiftConfigReady(batch)) {
     return toast('平台班次休息基线未加载，请刷新页面后重试。');
+  }
+
+  const sheetChoices = [...document.querySelectorAll('#sheetConfirmation [data-sheet-key]')];
+  if (sheetChoices.some(select => !select.value)) {
+    document.querySelector('[data-open-sheet-confirm]')?.click();
+    return;
   }
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
@@ -3421,6 +4309,7 @@ async function submitCanbuBatch() {
     const form = new FormData();
     const files = state.payrollFiles.length ? state.payrollFiles : [state.payrollFile];
     files.forEach(file => form.append('files', file));
+    form.append('sheet_mapping', JSON.stringify(Object.fromEntries(sheetChoices.map(select => [select.dataset.sheetKey, select.value]))));
     form.append('engines', batch.subject);
     form.append('attendance_month', String(batch.month || '').replace('-', ''));
     form.append('password', el.filePassword?.value || '');
@@ -3432,10 +4321,9 @@ async function submitCanbuBatch() {
         employee_name: item.employeeName,
       }))));
     }
-    const data = await requestJson('/api/domestic-labor/runs', {
-      method: 'POST',
-      body: form,
-    });
+    const data = await submitPayrollWithRosterConfirmation(form, batch);
+    if (!data) return;
+    state.jinjiangRosterConfirmedKey = null;
 
     state.currentRun = {
       id: data.run_id,
@@ -3451,6 +4339,16 @@ async function submitCanbuBatch() {
     renderCanbuWorkbench('fields');
     toast(`${config.name}批次已提交，正在后台处理。`);
   } catch (error) {
+    if (error.detail?.code === 'night_shift_configuration_required') {
+      state.nightShiftConfigs[nightShiftMonth()] = error.detail.config;
+      showNightShiftGate(error.detail.records || []);
+      return;
+    }
+    if (error.detail?.code === 'sheet_confirmation_required') {
+      renderSheetConfirmation(error.detail.sheets);
+      setText(el.uploadStatus, error.message);
+      return;
+    }
     updateCanbuBatch({ status: '失败' }, { batchId: batch.id });
     setText(el.uploadStatus, error.message, true);
     toast(error.message);
@@ -4125,7 +5023,11 @@ function setExportButtonState(button, status) {
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || '请求失败。');
+  if (!response.ok) {
+    const error = new Error(typeof data.detail === 'string' ? data.detail : data.detail?.message || '请求失败。');
+    error.detail = data.detail;
+    throw error;
+  }
   return data;
 }
 
