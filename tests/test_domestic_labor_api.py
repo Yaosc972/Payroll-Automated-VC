@@ -905,6 +905,25 @@ def test_direct_upload_enforces_new_confirmation_gates(monkeypatch, tmp_path, ki
     assert api.load_payroll_metadata(path.parent)["status"] == "待确认"
 
 
+def test_export_cache_is_written_only_after_persistence(monkeypatch, tmp_path):
+    import bonus_platform.app as api
+    from bonus_platform.engine.domestic_labor import runs
+    monkeypatch.setattr(runs, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
+    run = api.create_payroll_run({"status": "已完成", "engines": ["canbu"], "attendanceMonth": "202607",
+        "results": [{"employee_id": "QA", "employee_name": "合成测试", "canbu": 100}]})
+    def fail(*args): raise RuntimeError("synthetic storage failure")
+    monkeypatch.setattr(api, "persist_payroll_file", fail)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get(f"/api/domestic-labor/runs/{run['id']}/export").status_code == 500
+        assert not (tmp_path / run['id'] / api.DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST).exists()
+        saved = []
+        monkeypatch.setattr(api, "persist_payroll_file", lambda *args: saved.append(args))
+        result = client.get(f"/api/domestic-labor/runs/{run['id']}/export")
+        assert result.status_code == 200
+        assert result.json()["cached"] is False
+        assert len(saved) == 1
+
+
 def test_domestic_direct_upload_plan_returns_signed_url(monkeypatch):
     import bonus_platform.app as app_module
 

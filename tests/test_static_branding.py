@@ -1224,14 +1224,16 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     assert 'id="rulePackageView"' in html
     assert 'id="rulePackageCategoryTabs"' in html
     assert 'id="rulePackageVersionSelect"' in html
-    assert "DL-PAYROLL.v1.4.4" in html
+    from bonus_platform.engine.domestic_labor.rule_package import get_rule_package
+    current_version = get_rule_package()["version"]
+    assert f"DL-PAYROLL.v{current_version}" in html
     assert "已验证规则 4 项 · 验证中规则 3 项" in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js
     assert "data-rule-category" in js
     assert "data-rule-subject" in js
     assert "核算规则包" in html
-    assert "当前版本 1.4.4" in html
+    assert f"当前版本 {current_version}" in html
     assert "字段计算公式" in js
     assert "renderRuleFieldCalculations" in js
     assert "RULE PACKAGE · CURRENT" not in html

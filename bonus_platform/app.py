@@ -14414,7 +14414,7 @@ DOMESTIC_LABOR_SUBJECT_NAMES = {
     "gaowen_butie": "高温补贴",
     "yeban_butie": "夜班补贴",
 }
-DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260909.5"
+DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260909.6"
 DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST = ".export-cache.json"
 
 
@@ -15215,8 +15215,8 @@ def export_domestic_labor(run_id: str) -> dict:
         exporter.export(results, metadata.get("attendanceMonth", ""), summary,
                         night_shift_config=metadata.get("nightShiftConfigSnapshot"))
         temp_path.replace(out_path)
-        _save_domestic_labor_export_cache(run_dir, metadata, file_name)
         persist_payroll_file(run_id, out_path)
+        _save_domestic_labor_export_cache(run_dir, metadata, file_name)
     finally:
         temp_path.unlink(missing_ok=True)
     return {"file_path": str(out_path), "file_name": file_name, "cached": False}

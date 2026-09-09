@@ -20,7 +20,14 @@ DOMESTIC_LABOR_RUN_PREFIX = "domestic-labor-runs"
 
 class DomesticLaborStorageStatusError(RuntimeError):
     def __init__(self, status_code: int, text: str):
-        super().__init__(f"Supabase Storage returned HTTP {status_code}")
+        # Keep provider error codes actionable without logging payloads, URLs or credentials.
+        try:
+            payload = json.loads(text)
+            code = payload.get("error", "") if isinstance(payload, dict) else ""
+        except (ValueError, TypeError):
+            code = ""
+        suffix = f" ({code})" if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,80}", code) else ""
+        super().__init__(f"Supabase Storage returned HTTP {status_code}{suffix}")
         self.status_code = status_code
         self.text = text
 
