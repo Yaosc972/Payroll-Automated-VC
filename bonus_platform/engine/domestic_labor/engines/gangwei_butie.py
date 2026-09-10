@@ -11,6 +11,7 @@ from ..models import AuditExplanation, PayrollException
 SUBJECT = "gangwei_butie"
 ABSENCE_THRESHOLD_HOURS = 56.0
 HOURS_PER_DAY = 8.0
+DISCONTINUED_DONGGUAN_POSITIONS = {"HRBP专员", "高级HRBP专员", "高级招聘专员"}
 
 # 标准取自《7月岗位补贴.xlsx》18人线下结果；职级不参与判断。
 VERIFIED_POSITION_STANDARDS = {
@@ -44,7 +45,6 @@ SPECIAL_GROUP_LEADERS = {
         "employee_ids": set(),
         "areas": {"晋江"},
         "standard": 600.0,
-        "review_message": "晋江贾万当前按特殊安检组长600元标准暂算，需核对生产线下结果",
     },
 }
 
@@ -128,7 +128,15 @@ class GangWeiBuTieEngine(BaseEngine):
         eligibility = "不享有岗位补贴"
         qualification_basis = "未命中当前岗位补贴范围"
 
-        if special:
+        attendance_month = str(employee_data.get("考勤月份", "") or "").strip()
+        discontinued = (
+            work_area == "东莞" and position in DISCONTINUED_DONGGUAN_POSITIONS
+            and len(attendance_month) == 6 and attendance_month.isdigit()
+            and attendance_month >= "202609"
+        )
+        if discontinued:
+            qualification_basis = "自2026年9月起，东莞HRBP专员、高级HRBP专员、高级招聘专员不再享有岗位补贴"
+        elif special:
             standard = float(special["standard"])
             eligibility = "有资格"
             qualification_basis = "特殊安检组长名单"
@@ -167,6 +175,7 @@ class GangWeiBuTieEngine(BaseEngine):
             "排班天数": scheduled_days,
             "实际在职工作日天数": actual_work_days_raw if actual_work_days_provided else "未提供",
             "月考勤入离职缺勤时数": reported_entry_exit_hours_raw if reported_entry_exit_hours_provided else "未提供",
+            "考勤月份": attendance_month,
             "职级": employee_data.get("职级", ""),
         }
 
@@ -186,7 +195,7 @@ class GangWeiBuTieEngine(BaseEngine):
                 0.0,
                 inputs,
                 "岗位补贴资格判断",
-                [f"工作地区为{work_area or '未填写'}，岗位为{position or '未填写'}", "未命中岗位补贴范围，应发0元"],
+                [f"工作地区为{work_area or '未填写'}，岗位为{position or '未填写'}", f"{qualification_basis}，应发0元"],
             )
 
         if standard <= 0:
@@ -276,7 +285,7 @@ class GangWeiBuTieEngine(BaseEngine):
         womens_day_leave_hours = womens_day_leave_days * HOURS_PER_DAY
         absence_breakdown["女神假折算时数"] = womens_day_leave_hours
         absence_hours = sum(absence_breakdown.values())
-        deduction_hours = absence_hours if absence_hours >= ABSENCE_THRESHOLD_HOURS else 0.0
+        deduction_hours = absence_hours if absence_hours > ABSENCE_THRESHOLD_HOURS else 0.0
         deduction_days = deduction_hours / HOURS_PER_DAY
         payable_days = max(0.0, scheduled_days - deduction_days)
         amount = _excel_round(standard / scheduled_days * payable_days, 2)
@@ -296,9 +305,9 @@ class GangWeiBuTieEngine(BaseEngine):
             f"九类缺勤合计{absence_hours:g}小时",
         ]
         if deduction_hours:
-            steps.append(f"缺勤达到56小时，全部{deduction_hours:g}小时÷8，扣减{deduction_days:g}天")
+            steps.append(f"缺勤超过56小时，全部{deduction_hours:g}小时÷8，扣减{deduction_days:g}天")
         else:
-            steps.append("缺勤未达到56小时，不扣减岗位补贴天数")
+            steps.append("缺勤不超过56小时，不扣减岗位补贴天数")
         steps.append(
             f"{standard:g}÷{scheduled_days:g}×({scheduled_days:g}−{deduction_days:g})，四舍五入后应发{amount:.2f}元"
         )
@@ -343,7 +352,7 @@ class GangWeiBuTieEngine(BaseEngine):
     ) -> CalculationResult:
         womens_day_hours = absence_breakdown.get("女神假折算时数", 0.0)
         payable_days = max(0.0, scheduled_days - deduction_days)
-        formula = "岗位补贴标准÷排班天数×(排班天数−达到56小时后扣减的全部缺勤时数÷8)"
+        formula = "岗位补贴标准÷排班天数×(排班天数−超过56小时后扣减的全部缺勤时数÷8)"
         audit = AuditExplanation(
             subject=SUBJECT,
             amount=amount,

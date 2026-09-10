@@ -38,11 +38,13 @@ def workbook_bytes(headers):
 def test_confirmation_is_carried_into_background_calculation(monkeypatch, tmp_path):
     # 捕获后台实参，验证确认决定没有在校验后丢失。
     import importlib
+    import inspect
     app_module = importlib.import_module("bonus_platform.app")
     runs_module = importlib.import_module("bonus_platform.engine.domestic_labor.runs")
     monkeypatch.setattr(runs_module, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
     captured = []
+    worker_signature = inspect.signature(app_module._run_payroll_calculation)
     monkeypatch.setattr(app_module, "_run_payroll_calculation", lambda *args: captured.append(args))
     content = workbook_bytes(["工号", "考勤月份", "排班天数", "日期"])
     client = TestClient(app)
@@ -59,7 +61,9 @@ def test_confirmation_is_carried_into_background_calculation(monkeypatch, tmp_pa
     response = submit({"0:人员明细": "monthly"})
     assert response.status_code == 200
     assert response.json()["input_summary"]["monthly_rows"] == 1
-    assert captured and captured[0][-1] == {"0:人员明细": "monthly"}
+    assert captured
+    worker_arguments = worker_signature.bind(*captured[0]).arguments
+    assert worker_arguments["sheet_mapping"] == {"0:人员明细": "monthly"}
 
 
 def test_choice_cannot_bypass_missing_fields():

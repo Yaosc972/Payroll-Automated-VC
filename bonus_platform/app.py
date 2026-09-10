@@ -46,6 +46,7 @@ from .engine.domestic_labor.night_shift_config import (
     save_night_shift_config,
 )
 from .engine.domestic_labor.rule_package import get_rule_package
+from .engine.domestic_labor.abandonment_roster import parse_abandonment_roster, validate_abandonment_roster
 from .engine.domestic_labor.runs import (
     create_payroll_run, update_payroll_metadata, load_payroll_metadata,
     list_payroll_metadata, get_payroll_run_dir, attach_payroll_file, safe_payroll_filename,
@@ -1457,7 +1458,8 @@ def _domestic_labor_region_for_department(department: str) -> str:
 def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_month: str,
                               engines: list, password: str = None,
                               hrbp_list: list = None,
-                              night_shift_config: dict = None, sheet_mapping: dict = None):
+                              night_shift_config: dict = None, sheet_mapping: dict = None,
+                              abandoned_employee_ids=None):
     """Background worker: load Excel, run engines, save results."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     try:
@@ -1497,7 +1499,7 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
 
                 if "waisu_butie" in engines:
                     cr = WaiSuBuTieEngine().calculate(row, daily_by_emp.get(emp_id, []),
-                                                       housing_by_emp.get(emp_id, []))
+                                                       housing_by_emp.get(emp_id, []), abandoned_employee_ids)
                     _attach_domestic_engine_result(r, "waisu_butie", cr)
 
                 if "gonglingjiang" in engines:
@@ -1552,6 +1554,38 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
         update_payroll_metadata(run_id, {"status": "失败", "error": str(exc)})
 
 
+@app.get("/api/domestic-labor/waisu-abandonment-template")
+def download_waisu_abandonment_template():
+    from io import BytesIO
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+    from openpyxl.comments import Comment
+    from openpyxl.styles import Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "自离名单"
+    sheet.append(["工号", "姓名"])
+    sheet.freeze_panes = "A2"
+    sheet.column_dimensions["A"].width = 26
+    sheet.column_dimensions["B"].width = 20
+    sheet.row_dimensions[1].height = 26
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = PatternFill("solid", fgColor="1E3A8A")
+    sheet["A1"].comment = Comment("填写本月自离员工工号，须与月考勤一致；保留前导零。每人一行，无需填写正常离职人员。", "Sigma")
+    sheet["B1"].comment = Comment("填写员工姓名，须与月考勤一致。", "Sigma")
+    for row in sheet.iter_rows(min_row=2, max_row=1001, max_col=2):
+        for cell in row:
+            cell.number_format = "@"
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return Response(buffer.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote("外宿补贴自离名单模板.xlsx")})
+
+
 @app.get("/api/domestic-labor/runs")
 def list_domestic_labor_runs() -> dict:
     return {"runs": list_payroll_metadata()}
@@ -1563,7 +1597,9 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
                                      attendance_month: str = Body(""),
                                      password: str = Body(""), hrbp_list: str = Body(""),
                                      sheet_mapping: str = Body(""),
-                                     jinjiang_roster_decision: str = Body("")):
+                                     jinjiang_roster_decision: str = Body(""),
+                                     waisu_abandonment_decision: str = Body(""),
+                                     waisu_abandonment_file: UploadFile = File(None)):
     uploaded_files = [*(files or []), *([file] if file else [])]
     if not uploaded_files:
         raise HTTPException(400, "请至少上传一个 Excel 文件")
@@ -1589,6 +1625,22 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
     for e in engine_list:
         if e not in valid_engines:
             raise HTTPException(400, f"未知引擎: {e}")
+
+    abandonment_roster = []
+    abandonment_content = None
+    if waisu_abandonment_decision or waisu_abandonment_file:
+        if "waisu_butie" not in engine_list or waisu_abandonment_decision not in {"yes", "no"}:
+            raise HTTPException(400, "自离名单仅用于外宿补贴，请确认本月是否有自离员工")
+        if waisu_abandonment_decision == "yes":
+            if not waisu_abandonment_file or not waisu_abandonment_file.filename.lower().endswith((".xlsx", ".xlsm")):
+                raise HTTPException(400, "请选择并上传自离名单（.xlsx / .xlsm）")
+            abandonment_content = await waisu_abandonment_file.read()
+            try:
+                abandonment_roster = parse_abandonment_roster(abandonment_content)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        elif waisu_abandonment_file:
+            raise HTTPException(400, "已选择没有自离员工，请移除自离名单后再提交")
 
     night_shift_config = None
     if "yeban_butie" in engine_list:
@@ -1645,6 +1697,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
     try:
         with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None, sheet_mapping=mapping) as loader:
             input_summary = loader.validate_inputs(engine_list, attendance_month)
+            validate_abandonment_roster(abandonment_roster, loader.monthly.rows)
             jinjiang_ids = set()
             if "yeban_butie" in engine_list:
                 daily_by_employee = loader.group_daily_by_employee()
@@ -1697,6 +1750,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         raise HTTPException(400, "已识别到第四纵队，请维护包含工号和姓名的揽收线工龄奖名单")
 
     hrbp = [item["employee_id"] for item in collection_roster]
+    if abandonment_content is not None:
+        (run_dir / "waisu_abandonment_roster.xlsx").write_bytes(abandonment_content)
 
     update_payroll_metadata(run_id, {
         "status": "已上传",
@@ -1707,6 +1762,9 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "fileSize": sum(path.stat().st_size for path in saved_paths),
         "inputSummary": input_summary,
         "sheetMapping": mapping,
+        "waisuAbandonmentDecision": waisu_abandonment_decision,
+        "waisuAbandonmentRoster": abandonment_roster,
+        "waisuAbandonmentRosterCount": len(abandonment_roster),
         "collectionSeniorityRoster": collection_roster if "gonglingjiang" in engine_list else [],
         "collectionSeniorityRosterCount": len(collection_roster) if "gonglingjiang" in engine_list else 0,
         "nightShiftConfigSnapshot": night_shift_config if "yeban_butie" in engine_list else None,
@@ -1716,6 +1774,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
     asyncio.get_event_loop().run_in_executor(
         None, _run_payroll_calculation, run_id, [str(path) for path in saved_paths],
         attendance_month, engine_list, password or None, hrbp, night_shift_config, mapping,
+        {item["employee_id"] for item in abandonment_roster},
     )
 
     return {

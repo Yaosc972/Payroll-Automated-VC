@@ -396,6 +396,7 @@ const el = {
   rulePackageCategoryTabs: document.querySelector('#rulePackageCategoryTabs'),
   rulePackageSubjectTabs: document.querySelector('#rulePackageSubjectTabs'),
   rulePackageContent: document.querySelector('#rulePackageContent'),
+  rulePackageSearch: document.querySelector('#rulePackageSearch'),
   rulePackageHistory: document.querySelector('#rulePackageHistory'),
   canbuBatchModal: document.querySelector('#canbuBatchModal'),
   canbuBatchModalTitle: document.querySelector('#canbuBatchModalTitle'),
@@ -434,6 +435,7 @@ function init() {
   renderEmptyWorkbench();
   renderRecentBatchTable();
   showView('home');
+  if (window.location.hash === '#rulePackageView') openRulePackageView();
 }
 
 function setDefaultMonth() {
@@ -622,8 +624,33 @@ function bindEvents() {
     const tab = event.target.closest('[data-rule-subject]');
     if (!tab) return;
     state.activeRuleSubject = tab.dataset.ruleSubject;
+    if (el.rulePackageSearch) el.rulePackageSearch.value = '';
     renderRulePackageNavigation();
     renderRulePackageSubject();
+    window.scrollTo({ top: 0 });
+  });
+  el.rulePackageSearch?.addEventListener('input', () => {
+    const query = el.rulePackageSearch.value.trim();
+    if (query && state.rulePackage) {
+      window.DomesticLaborRulebook.search(el.rulePackageContent, state.rulePackage, query);
+    } else {
+      renderRulePackageSubject();
+    }
+  });
+  el.rulePackageSearch?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    el.rulePackageSearch.value = '';
+    renderRulePackageSubject();
+  });
+  el.rulePackageContent?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-rule-subject]');
+    if (!button) return;
+    state.activeRuleSubject = button.dataset.ruleSubject;
+    state.activeRuleCategory = 'all';
+    if (el.rulePackageSearch) el.rulePackageSearch.value = '';
+    renderRulePackageNavigation();
+    renderRulePackageSubject();
+    window.scrollTo({ top: 0 });
   });
   el.rulePackageVersionSelect?.addEventListener('change', () => {
     loadRulePackageVersion(el.rulePackageVersionSelect.value);
@@ -737,6 +764,7 @@ function showView(viewName) {
 
 async function openRulePackageView() {
   showView('rulePackage');
+  if (el.rulePackageSearch) el.rulePackageSearch.value = '';
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (state.rulePackage) {
     renderRulePackage();
@@ -754,6 +782,7 @@ async function loadRulePackageVersion(version = '') {
   try {
     const query = version ? `?version=${encodeURIComponent(version)}` : '';
     state.rulePackage = await requestJson(`/api/domestic-labor/rule-package${query}`);
+    if (el.rulePackageSearch) el.rulePackageSearch.value = '';
     const subjects = Array.isArray(state.rulePackage.subjects) ? state.rulePackage.subjects : [];
     state.activeRuleSubject = subjects.some(subject => subject.id === state.activeRuleSubject)
       ? state.activeRuleSubject
@@ -803,6 +832,13 @@ function getVisibleRuleSubjects() {
 function renderRulePackageNavigation() {
   const packageData = state.rulePackage;
   if (!packageData) return;
+  const useRulebook = window.DomesticLaborRulebook?.supports(packageData);
+  if (el.rulePackageCategoryTabs) el.rulePackageCategoryTabs.hidden = useRulebook;
+  if (useRulebook) {
+    state.activeRuleCategory = 'all';
+    el.rulePackageSubjectTabs.innerHTML = window.DomesticLaborRulebook.navigation(packageData, state.activeRuleSubject);
+    return;
+  }
   const categories = packageData.categories || [];
   if (el.rulePackageCategoryTabs) {
     const tabs = [{ id: 'all', name: '全部科目', subject_ids: packageData.subjects.map(subject => subject.id) }, ...categories];
@@ -841,7 +877,7 @@ const RULE_FORMULA_MEANINGS = {
   '符合资格时按通用规则；命中排除规则时0元': '判断当日夜班补贴是否计发，符合资格后按通用规则计算，命中排除条件则不发。',
   'min（max（8小时−迟到折算−早退折算，0）÷8小时×25元，25元）': '计算LB15班次的当日补贴，从8小时标准出勤中扣除迟到和早退折算时长，再按25元满额标准折算。',
   '按通用规则暂算': '按通用夜班规则计算暂算金额，供后续确认该地区的适用口径。',
-  '按通用56小时缺勤折算公式': '计算本月岗位补贴，缺勤不足56小时不扣减，达到56小时后将全部缺勤折算成天数扣减。',
+  '按通用56小时缺勤折算公式': '计算本月岗位补贴，缺勤不超过56小时不扣减，超过56小时后将全部缺勤折算成天数扣减。',
   'MIN(MAX(正班时数,刷卡加班)×1.725,13.8)，月度封顶300元': '计算符合条件的高温补贴，取正班与刷卡加班的较大时数按每小时1.725元计发，单日最多13.8元、每月最多300元。',
   'MIN(MAX(正班时数,刷卡加班)×1.15,9.2)，月度封顶200元': '计算符合条件的高温补贴，取正班与刷卡加班的较大时数按每小时1.15元计发，单日最多9.2元、每月最多200元。',
   'MIN(MAX(正班时数,刷卡加班)×1.5,12)，月度封顶260元': '计算符合条件的高温补贴，取正班与刷卡加班的较大时数按每小时1.5元计发，单日最多12元、每月最多260元。',
@@ -863,13 +899,17 @@ function renderRulePackageSubject() {
     el.rulePackageContent.innerHTML = '<div class="dl-rule-loading">当前分类暂无规则科目。</div>';
     return;
   }
+  if (window.DomesticLaborRulebook?.supports(state.rulePackage)) {
+    window.DomesticLaborRulebook.mount(el.rulePackageContent, state.rulePackage, subject);
+    return;
+  }
+  window.DomesticLaborRulebook?.dispose(el.rulePackageContent);
   const regions = subject.regions || [];
-  const pending = subject.pending_confirmations || [];
   const sections = [
     ['overview', '口径概览'], ['regions', '地区标准'], ['common', '通用口径'],
     ['formulas', '公式与示例'], ['sources', '数据与依据'],
     ...(subject.id === 'yeban_butie' ? [['shifts', '班次休息表']] : []),
-    ['pending', `待确认 · ${pending.length}`], ['history', '版本记录'], ['all', '全部明细'],
+    ['history', '版本记录'], ['all', '全部明细'],
   ];
   const disclosure = (title, items) => `<section class="dl-rule-evidence"><h4>${escapeHtml(title)} <span class="dl-rule-count">${items.length} 条</span></h4>${renderRuleList(items)}</section>`;
   el.rulePackageContent.innerHTML = `
@@ -881,7 +921,6 @@ function renderRulePackageSubject() {
       </div>
       <span class="dl-rule-version-tag">${escapeHtml(subject.version)}</span>
     </div>
-    ${pending.length ? `<button type="button" class="dl-rule-attention" data-rule-go="pending"><span>有 ${pending.length} 项口径待确认 · ${escapeHtml(subject.status)}不代表全部事项已闭环</span><strong>查看事项 →</strong></button>` : ''}
     <div class="dl-rule-tools"><label for="ruleContentSearch">搜索本科目规则</label><input id="ruleContentSearch" type="search" placeholder="例如：封顶、保洁、休息、入职" autocomplete="off"><span>规则原文全文搜索 · 班次表内另可筛选</span></div>
     <nav class="dl-rule-sections" aria-label="本科目规则分区">${sections.map(([key, label]) => `<button type="button" data-rule-section="${key}" aria-pressed="${key === 'all'}" ${key !== 'all' ? `aria-controls="rulePanel-${key}"` : ''}>${escapeHtml(label)}</button>`).join('')}</nav>
     <div data-rule-search-results hidden aria-live="polite"></div>
@@ -901,7 +940,6 @@ function renderRulePackageSubject() {
     <div id="rulePanel-formulas" data-rule-panel="formulas" hidden>${renderRuleFieldCalculations(subject.field_calculations, subject.name) || `<section class="dl-rule-block"><h3>计算公式</h3><p class="dl-rule-block-note">本科目未单独配置字段计算示例，请按地区查看现有公式；不额外推导未经确认的口径。</p>${regions.map(region => renderRuleFormulaBox(region.name, region.formula, getRegionFormulaMeaning(subject, region))).join('')}</section>`}</div>
     <div id="rulePanel-sources" data-rule-panel="sources" hidden><section class="dl-rule-block"><h3>数据与依据</h3>${disclosure('数据来源', subject.data_sources || [])}${disclosure('验证依据', subject.verification || [])}</section></div>
     ${subject.id === 'yeban_butie' ? '<div id="rulePanel-shifts" data-rule-panel="shifts" hidden><section class="dl-rule-block" id="ruleNightShiftTable"></section></div>' : ''}
-    <div id="rulePanel-pending" data-rule-panel="pending" hidden>${pending.length ? renderRulePackageBlock('待薪酬确认', pending) : '<section class="dl-rule-block"><h3>待薪酬确认</h3><p>当前规则版本未列出待确认事项。</p></section>'}</div>
     <div id="rulePanel-history" data-rule-panel="history" hidden>${renderRulePackageBlock('科目版本记录', (subject.change_log || []).map(item => `${item.version} · ${item.released_at} · ${item.changes}`))}</div>
   `;
   bindRuleReader(subject);
@@ -938,7 +976,6 @@ function bindRuleReader(subject) {
     ...(subject.field_calculations || []).map(item => ['公式与示例', [item.field, item.definition, item.formula, item.example].join(' · ')]),
     ...(subject.data_sources || []).map(text => ['数据来源', text]),
     ...(subject.verification || []).map(text => ['验证依据', text]),
-    ...(subject.pending_confirmations || []).map(text => ['待薪酬确认', text]),
     ...(subject.change_log || []).map(item => ['版本记录', `${item.version} · ${item.released_at} · ${item.changes}`]),
   ];
   search.addEventListener('input', () => {
@@ -3515,7 +3552,7 @@ function renderGangweiResults(results = []) {
   const warnings = countSubjectWarnings(rows, 'gangwei_butie');
   root.innerHTML = `
     <section class="dl-panel">
-      <div class="dl-panel-head"><div><h2 class="dl-panel-title">岗位补贴核算 <span class="dl-badge warn">验证中</span></h2><p class="dl-panel-sub">按岗位标准和排班天数核算；九类缺勤达到56小时后按全部小时折算，女神假1天按8小时。</p></div></div>
+      <div class="dl-panel-head"><div><h2 class="dl-panel-title">岗位补贴核算 <span class="dl-badge warn">验证中</span></h2><p class="dl-panel-sub">按岗位标准和排班天数核算；九类缺勤超过56小时后按全部小时折算，女神假1天按8小时。</p></div></div>
       <div class="dl-result-summary">
         <div class="dl-result-stat primary"><span>应发合计</span><strong>${formatMoney(total)}</strong></div>
         <div class="dl-result-stat"><span>员工数</span><strong>${rows.length}</strong></div>
@@ -3771,6 +3808,7 @@ function renderWaisuResults(results = []) {
   const total = sumField(rows, 'waisu_butie');
   const positiveCount = rows.filter(row => Number(row.waisu_butie || 0) > 0).length;
   const housedCount = rows.filter(row => Number(getWaisuDetails(row)['住宿扣除天数'] || 0) > 0).length;
+  const abandonedCount = rows.filter(row => getWaisuDetails(row)['本月自离'] === true).length;
   const warnings = rows.filter(hasWaisuReviewIssue).length;
   if (!getWaisuRegionTabs(rows).some(item => item.value === state.canbuRegionFilter)) state.canbuRegionFilter = 'all';
   root.innerHTML = `
@@ -3783,6 +3821,7 @@ function renderWaisuResults(results = []) {
         <div class="dl-result-stat"><span>有住宿扣除</span><strong>${housedCount}</strong></div>
         <div class="dl-result-stat warning"><span>需处理</span><strong>${warnings}</strong></div>
       </div>
+      ${abandonedCount ? `<p class="dl-panel-sub">本批次自离名单命中 ${abandonedCount} 人，外宿补贴均计为0；可在人员“计算过程”中查看排除说明。</p>` : ''}
       <div class="dl-result-tabs" id="canbuRegionTabs">${renderWaisuRegionTabs(rows)}</div>
       <div class="dl-toolbar dl-toolbar-compact"><div class="dl-table-tools">
         <input class="dl-search" id="resultSearchInput" type="search" placeholder="筛选工号、姓名、部门、岗位" aria-label="筛选外宿补贴结果">
@@ -4169,8 +4208,8 @@ async function submitTask() {
     setText(el.submitStatus, `任务已提交: ${data.run_id}`);
 
     // Update run badge
-    el.chromeRunBadge.hidden = false;
-    el.chromeRunLabel.textContent = `任务 #${data.run_id.slice(-8)}`;
+    if (el.chromeRunBadge) el.chromeRunBadge.hidden = false;
+    if (el.chromeRunLabel) el.chromeRunLabel.textContent = `任务 #${data.run_id.slice(-8)}`;
 
     // Close drawer and start polling
     setTimeout(() => {
@@ -4256,7 +4295,74 @@ function confirmJinjiangRoster(info) {
   });
 }
 
+function confirmWaisuAbandonment(batch) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dl-jinjiang-prompt dl-waisu-abandonment';
+    dialog.setAttribute('aria-labelledby', 'waisuAbandonmentTitle');
+    dialog.setAttribute('aria-describedby', 'waisuAbandonmentDescription');
+    dialog.innerHTML = `<div class="dl-jinjiang-prompt-top"><span class="dl-jinjiang-prompt-tag">${escapeHtml(batch.month)} · 外宿补贴</span><button class="dl-jinjiang-prompt-close" data-waisu-cancel aria-label="关闭自离人员确认" type="button">×</button></div>
+      <h2 id="waisuAbandonmentTitle">确认本月自离人员</h2>
+      <p id="waisuAbandonmentDescription">本月是否有自离员工？自离人员整月外宿补贴计为0。</p>
+      <div class="dl-waisu-choices" aria-label="本月自离人员情况">
+        <button type="button" data-waisu-choice="no" aria-pressed="false"><span class="dl-waisu-choice-dot" aria-hidden="true"></span><strong>本月没有</strong><small>按现有考勤继续核算</small></button>
+        <button type="button" data-waisu-choice="yes" aria-pressed="false"><span class="dl-waisu-choice-dot" aria-hidden="true"></span><strong>本月有自离员工</strong><small>上传名单后排除计发</small></button>
+      </div>
+      <div data-waisu-roster-upload hidden>
+        <div class="dl-waisu-upload-heading"><strong>本月自离名单</strong><a href="/api/domestic-labor/waisu-abandonment-template" download="外宿补贴自离名单模板.xlsx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4"/></svg>下载填写模板</a></div>
+        <input id="waisuAbandonmentFile" type="file" accept=".xlsx,.xlsm" hidden>
+        <button type="button" class="dl-waisu-dropzone" data-waisu-browse>
+          <span class="dl-waisu-upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/></svg></span>
+          <strong>拖拽 Excel 文件至此，或<span>点击上传</span></strong><small>支持 .xlsx、.xlsm · 单次上传一份名单</small>
+        </button>
+        <div class="dl-waisu-file-card" data-waisu-file-card hidden><span class="dl-waisu-file-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 3H6v18h12V7l-4-4Zm0 0v5h4M9 12h6m-6 4h6"/></svg></span><div><strong data-waisu-file-name></strong><span data-waisu-file-size></span></div><button type="button" data-waisu-replace>替换</button><button type="button" class="dl-waisu-file-remove" data-waisu-remove aria-label="移除自离名单">×</button></div>
+        <p class="dl-waisu-upload-help">首行须包含 <b>工号</b> 和 <b>姓名</b>，每人一行。含前导零的工号请设为文本格式。</p>
+        <p class="dl-waisu-upload-status" data-waisu-file-status role="status"></p>
+      </div>
+      <footer><span class="dl-waisu-footer-note">按工号匹配并核对姓名</span><button class="dl-btn" data-waisu-cancel type="button">返回</button><button class="btn-primary" data-waisu-submit type="button" disabled>继续核算</button></footer>`;
+    let selection=null, decision='', selectedFile=null;
+    const input=dialog.querySelector('input'), submit=dialog.querySelector('[data-waisu-submit]');
+    const dropzone=dialog.querySelector('.dl-waisu-dropzone'), fileCard=dialog.querySelector('[data-waisu-file-card]');
+    const status=dialog.querySelector('[data-waisu-file-status]');
+    const refresh=()=>{
+      dialog.querySelector('[data-waisu-roster-upload]').hidden=decision!=='yes';
+      dialog.querySelectorAll('[data-waisu-choice]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.waisuChoice===decision)));
+      dropzone.hidden=!!selectedFile; fileCard.hidden=!selectedFile;
+      submit.disabled=!decision||(decision==='yes'&&!selectedFile);
+      submit.textContent=decision==='yes'?'确认名单并核算':'继续核算';
+      if(selectedFile){
+        dialog.querySelector('[data-waisu-file-name]').textContent=selectedFile.name;
+        dialog.querySelector('[data-waisu-file-size]').textContent=`${Math.max(1,Math.ceil(selectedFile.size/1024))} KB · 已选择，提交时校验人员信息`;
+      }
+    };
+    const chooseFiles=files=>{
+      selectedFile=null; status.textContent='';
+      if(files.length!==1)status.textContent='请上传一份完整的本月自离名单。';
+      else if(!/\.xls[xm]$/i.test(files[0].name))status.textContent='文件格式不支持，请选择 .xlsx 或 .xlsm 文件。';
+      else selectedFile=files[0];
+      refresh();
+    };
+    dialog.querySelectorAll('[data-waisu-choice]').forEach(button=>button.onclick=()=>{decision=button.dataset.waisuChoice;refresh();});
+    dialog.querySelectorAll('[data-waisu-cancel]').forEach(button=>button.onclick=()=>dialog.close());
+    dialog.querySelectorAll('[data-waisu-browse],[data-waisu-replace]').forEach(button=>button.onclick=()=>input.click());
+    dialog.querySelector('[data-waisu-remove]').onclick=()=>{selectedFile=null;input.value='';status.textContent='';refresh();dropzone.focus();};
+    input.onchange=()=>{if(input.files.length)chooseFiles(input.files);};
+    dropzone.ondragover=event=>{event.preventDefault();dropzone.classList.add('is-dragging');};
+    dropzone.ondragleave=()=>dropzone.classList.remove('is-dragging');
+    dropzone.ondrop=event=>{event.preventDefault();dropzone.classList.remove('is-dragging');chooseFiles(event.dataTransfer.files);};
+    submit.onclick=()=>{if(!submit.disabled){selection=decision==='yes'?{decision,file:selectedFile}:{decision};dialog.close();}};
+    dialog.addEventListener('close',()=>{dialog.remove();resolve(selection);},{once:true});
+    document.body.append(dialog);dialog.showModal();dialog.querySelector('[data-waisu-choice]').focus();
+  });
+}
+
 async function submitPayrollWithRosterConfirmation(form, batch) {
+  if(batch.subject==='waisu_butie'){
+    const selection=await confirmWaisuAbandonment(batch);
+    if(!selection){ setText(el.uploadStatus,'尚未提交核算，可继续检查上传数据。'); return null; }
+    form.set('waisu_abandonment_decision',selection.decision);
+    if(selection.file)form.set('waisu_abandonment_file',selection.file);
+  }
   const key = JSON.stringify([batch.id, batch.month, (state.payrollFiles?.length ? state.payrollFiles : [state.payrollFile]).filter(Boolean).map(file=>[file.name,file.size,file.lastModified]), form.get('sheet_mapping')]);
   if (state.jinjiangRosterConfirmedKey === key) form.set('jinjiang_roster_decision','confirmed');
   try {
