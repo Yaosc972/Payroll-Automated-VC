@@ -47,6 +47,14 @@
       .domestic-labor-shell input,
       .domestic-labor-shell textarea { font: inherit; }
 
+      /* Keep feedback in the vacant header slot, clear of payroll action buttons. */
+      .domestic-labor-shell #feedbackLauncher {
+        top: 8px;
+        bottom: auto;
+        min-height: 40px;
+        padding: 0 12px 0 4px;
+      }
+
       /* ═══ 顶部导航栏：企业级纯净 framing，主色用于强调，面板基底保持冷灰白 ═══ */
       .dl-topbar {
         position: sticky;
@@ -57,7 +65,7 @@
         align-items: center;
         gap: 14px;
         min-height: 56px;
-        padding: 0 20px;
+        padding: 0 190px 0 20px;
         border-bottom: 1px solid var(--dl-line);
         background: #ffffff;
         box-shadow: 0 1px 0 rgba(16, 24, 40, 0.06);
