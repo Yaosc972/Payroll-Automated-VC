@@ -77,6 +77,7 @@ from .engine.domestic_labor.night_shift_config import (
     save_night_shift_config,
 )
 from .engine.domestic_labor.rule_package import get_rule_package
+from .engine.domestic_labor.abandonment_roster import parse_abandonment_roster, validate_abandonment_roster
 from .engine.domestic_labor.runs import (
     create_payroll_run, update_payroll_metadata, load_payroll_metadata, load_payroll_status,
     list_payroll_metadata, get_payroll_run_dir, attach_payroll_file, safe_payroll_filename,
@@ -14414,7 +14415,7 @@ DOMESTIC_LABOR_SUBJECT_NAMES = {
     "gaowen_butie": "高温补贴",
     "yeban_butie": "夜班补贴",
 }
-DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260909.6"
+DOMESTIC_LABOR_EXPORT_CACHE_VERSION = "20260910.1"
 DOMESTIC_LABOR_EXPORT_CACHE_MANIFEST = ".export-cache.json"
 
 
@@ -14539,7 +14540,8 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                               validate_inputs: bool = False,
                               initial_metadata: dict | None = None,
                               night_shift_config: dict | None = None,
-                              sheet_mapping: dict | None = None) -> dict:
+                              sheet_mapping: dict | None = None,
+                              abandoned_employee_ids=None) -> dict:
     """Load Excel, run engines, and persist the terminal task state."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     calculation_started = monotonic()
@@ -14567,6 +14569,9 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 validation_started = monotonic()
                 try:
                     input_summary = loader.validate_inputs(engines, attendance_month)
+                    abandonment_roster = (initial_metadata or {}).get("waisuAbandonmentRoster") or []
+                    validate_abandonment_roster(abandonment_roster, loader.monthly.rows)
+                    abandoned_employee_ids = {item["employee_id"] for item in abandonment_roster}
                     confirmation = _domestic_direct_confirmation(
                         loader, engines, night_shift_config,
                         (initial_metadata or {}).get("jinjiangRosterDecision"),
@@ -14653,7 +14658,7 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
 
                 if "waisu_butie" in engines:
                     cr = WaiSuBuTieEngine().calculate(row, daily_by_emp.get(emp_id, []),
-                                                       housing_by_emp.get(emp_id, []))
+                                                       housing_by_emp.get(emp_id, []), abandoned_employee_ids)
                     _attach_domestic_engine_result(r, "waisu_butie", cr)
 
                 if "gonglingjiang" in engines:
@@ -14729,6 +14734,38 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
         return update_payroll_metadata(run_id, {"status": "失败", "error": str(exc)})
 
 
+@app.get("/api/domestic-labor/waisu-abandonment-template")
+def download_waisu_abandonment_template():
+    from io import BytesIO
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+    from openpyxl.comments import Comment
+    from openpyxl.styles import Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "自离名单"
+    sheet.append(["工号", "姓名"])
+    sheet.freeze_panes = "A2"
+    sheet.column_dimensions["A"].width = 26
+    sheet.column_dimensions["B"].width = 20
+    sheet.row_dimensions[1].height = 26
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = PatternFill("solid", fgColor="1E3A8A")
+    sheet["A1"].comment = Comment("填写本月自离员工工号，须与月考勤一致；保留前导零。每人一行，无需填写正常离职人员。", "Sigma")
+    sheet["B1"].comment = Comment("填写员工姓名，须与月考勤一致。", "Sigma")
+    for row in sheet.iter_rows(min_row=2, max_row=1001, max_col=2):
+        for cell in row:
+            cell.number_format = "@"
+    buffer = BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+    return Response(buffer.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote("外宿补贴自离名单模板.xlsx")})
+
+
 @app.get("/api/domestic-labor/runs")
 def list_domestic_labor_runs() -> dict:
     return {
@@ -14772,7 +14809,9 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
                                      attendance_month: str = Body(""),
                                      password: str = Body(""), hrbp_list: str = Body(""),
                                      sheet_mapping: str = Body(""),
-                                     jinjiang_roster_decision: str = Body("")):
+                                     jinjiang_roster_decision: str = Body(""),
+                                     waisu_abandonment_decision: str = Body(""),
+                                     waisu_abandonment_file: UploadFile = File(None)):
     uploaded_files = [*(files or []), *([file] if file else [])]
     if not uploaded_files:
         raise HTTPException(400, "请至少上传一个 Excel 文件")
@@ -14800,6 +14839,22 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
             raise HTTPException(400, f"未知引擎: {e}")
 
     parsed_hrbp = []
+    abandonment_roster = []
+    abandonment_content = None
+    if waisu_abandonment_decision or waisu_abandonment_file:
+        if "waisu_butie" not in engine_list or waisu_abandonment_decision not in {"yes", "no"}:
+            raise HTTPException(400, "自离名单仅用于外宿补贴，请确认本月是否有自离员工")
+        if waisu_abandonment_decision == "yes":
+            if not waisu_abandonment_file or not waisu_abandonment_file.filename.lower().endswith((".xlsx", ".xlsm")):
+                raise HTTPException(400, "请选择并上传自离名单（.xlsx / .xlsm）")
+            abandonment_content = await waisu_abandonment_file.read()
+            try:
+                abandonment_roster = parse_abandonment_roster(abandonment_content)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        elif waisu_abandonment_file:
+            raise HTTPException(400, "已选择没有自离员工，请移除自离名单后再提交")
+
     night_shift_config = None
     if "yeban_butie" in engine_list:
         try:
@@ -14839,6 +14894,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
     try:
         with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None, sheet_mapping=mapping) as loader:
             input_summary = loader.validate_inputs(engine_list, attendance_month)
+            validate_abandonment_roster(abandonment_roster, loader.monthly.rows)
             jinjiang_ids = set()
             if "yeban_butie" in engine_list:
                 daily_by_employee = loader.group_daily_by_employee()
@@ -14891,6 +14947,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         raise HTTPException(400, "已识别到第四纵队，请维护包含工号和姓名的揽收线工龄奖名单")
 
     hrbp = [item["employee_id"] for item in collection_roster]
+    if abandonment_content is not None:
+        (run_dir / "waisu_abandonment_roster.xlsx").write_bytes(abandonment_content)
 
     update_payroll_metadata(run_id, {
         "status": "已上传",
@@ -14901,6 +14959,9 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         "fileSize": sum(path.stat().st_size for path in saved_paths),
         "inputSummary": input_summary,
         "sheetMapping": mapping,
+        "waisuAbandonmentDecision": waisu_abandonment_decision,
+        "waisuAbandonmentRoster": abandonment_roster,
+        "waisuAbandonmentRosterCount": len(abandonment_roster),
         "collectionSeniorityRoster": collection_roster if "gonglingjiang" in engine_list else [],
         "collectionSeniorityRosterCount": len(collection_roster) if "gonglingjiang" in engine_list else 0,
         "nightShiftConfigSnapshot": night_shift_config if "yeban_butie" in engine_list else None,
@@ -14908,6 +14969,8 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
     try:
         for file_path in saved_paths:
             await asyncio.to_thread(persist_payroll_file, run_id, file_path)
+        if abandonment_content is not None:
+            await asyncio.to_thread(persist_payroll_file, run_id, run_dir / "waisu_abandonment_roster.xlsx")
     except Exception as exc:
         payroll_logger.exception("Failed to persist payroll upload for %s", run_id)
         update_payroll_metadata(run_id, {"status": "失败", "error": f"文件持久化失败: {exc}"})
@@ -14919,6 +14982,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         attendance_month, engine_list, password or None, hrbp,
         night_shift_config=night_shift_config,
         sheet_mapping=mapping,
+        abandoned_employee_ids={item["employee_id"] for item in abandonment_roster},
     )
 
     status = metadata.get("status", "失败")
@@ -14959,14 +15023,17 @@ def _domestic_labor_direct_upload_specs(payload: dict) -> list[dict]:
         raw_files = [payload]
     if not isinstance(raw_files, list) or not raw_files:
         raise HTTPException(400, "请至少选择一个 Excel 文件。")
-    if len(raw_files) > 20:
-        raise HTTPException(400, "单次最多上传 20 个 Excel 文件。")
+    if len(raw_files) > 21:
+        raise HTTPException(400, "单次最多上传 20 个考勤文件和 1 份自离名单。")
 
     specs = []
     total_size = 0
     for raw in raw_files:
         if not isinstance(raw, dict):
             raise HTTPException(400, "上传文件信息格式不正确。")
+        purpose = raw.get("purpose", "attendance")
+        if purpose not in {"attendance", "waisuAbandonment"}:
+            raise HTTPException(400, "上传文件用途不正确。")
         original_name = Path(str(raw.get("fileName") or "")).name
         if not original_name.lower().endswith((".xlsx", ".xlsm", ".xls")):
             raise HTTPException(400, f"请上传 Excel 文件（.xlsx / .xlsm / .xls）：{original_name or '未知文件'}")
@@ -14978,13 +15045,19 @@ def _domestic_labor_direct_upload_specs(payload: dict) -> list[dict]:
             raise HTTPException(400, f"上传文件不能为空：{original_name}")
         total_size += file_size
         suffix = Path(original_name).suffix.lower()
+        if purpose == "waisuAbandonment" and suffix not in {".xlsx", ".xlsm"}:
+            raise HTTPException(400, "自离名单请上传 .xlsx 或 .xlsm 文件。")
         specs.append({
             "originalFilename": original_name,
             "filename": f"upload_{secrets.token_hex(12)}{suffix}",
             "size": file_size,
             "contentType": str(raw.get("contentType") or "application/octet-stream"),
+            "purpose": purpose,
         })
 
+    attendance_count = sum(spec["purpose"] == "attendance" for spec in specs)
+    if not 1 <= attendance_count <= 20 or len(specs) - attendance_count > 1:
+        raise HTTPException(400, "请上传 1 至 20 个考勤文件，最多附带 1 份自离名单。")
     max_bytes = _domestic_labor_direct_upload_max_bytes()
     if total_size > max_bytes:
         raise HTTPException(413, f"上传文件总大小超过当前上限 {max_bytes} 字节。")
@@ -14996,13 +15069,14 @@ def create_domestic_labor_direct_upload_plan(payload: dict = Body(...)) -> dict:
     if not domestic_labor_persistent_storage_enabled():
         raise HTTPException(409, "当前环境未启用 Supabase 直传。")
     specs = _domestic_labor_direct_upload_specs(payload)
-    first = specs[0]
+    attendance_specs = [spec for spec in specs if spec["purpose"] == "attendance"]
+    first = attendance_specs[0]
     run = create_payroll_run({
         "status": "等待上传",
         "fileName": first["originalFilename"],
-        "fileNames": [spec["originalFilename"] for spec in specs],
+        "fileNames": [spec["originalFilename"] for spec in attendance_specs],
         "savedFileName": first["filename"],
-        "savedFileNames": [spec["filename"] for spec in specs],
+        "savedFileNames": [spec["filename"] for spec in attendance_specs],
         "expectedFileSize": sum(spec["size"] for spec in specs),
         "expectedFiles": specs,
         "contentType": first["contentType"],
@@ -15091,6 +15165,24 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
 
     collection_roster = _normalize_domestic_collection_roster(payload.get("hrbpList"))
     hrbp = [item["employee_id"] for item in collection_roster]
+    abandonment_files = [path for spec, path in zip(expected_files, file_paths)
+                         if spec.get("purpose") == "waisuAbandonment"]
+    file_paths = [path for spec, path in zip(expected_files, file_paths)
+                  if spec.get("purpose") != "waisuAbandonment"]
+    abandonment_decision = str(payload.get("waisuAbandonmentDecision") or "")
+    abandonment_roster = []
+    if abandonment_decision or abandonment_files:
+        if "waisu_butie" not in engine_list or abandonment_decision not in {"yes", "no"}:
+            raise HTTPException(400, "自离名单仅用于外宿补贴，请确认本月是否有自离员工")
+        if abandonment_decision == "yes":
+            if len(abandonment_files) != 1:
+                raise HTTPException(400, "请选择并上传自离名单（.xlsx / .xlsm）")
+            try:
+                abandonment_roster = await asyncio.to_thread(parse_abandonment_roster, abandonment_files[0].read_bytes())
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+        elif abandonment_files:
+            raise HTTPException(400, "已选择没有自离员工，请移除自离名单后再提交")
     attendance_month = str(payload.get("attendanceMonth") or "")
     password = str(payload.get("password") or "") or None
     mapping = payload.get("sheetMapping") or {}
@@ -15110,6 +15202,9 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
     actual_size = sum(path.stat().st_size for path in file_paths)
     initial_metadata = {
         "sheetMapping": mapping,
+        "waisuAbandonmentDecision": abandonment_decision,
+        "waisuAbandonmentRoster": abandonment_roster,
+        "waisuAbandonmentRosterCount": len(abandonment_roster),
         "jinjiangRosterDecision": str(payload.get("jinjiangRosterDecision") or ""),
         "fileNames": metadata.get("fileNames", []),
         "errorCode": "", "confirmationDetail": None,

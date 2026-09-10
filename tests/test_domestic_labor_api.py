@@ -523,7 +523,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
     }
 
     assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.3"
-    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.2"
+    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.3"
     assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.8"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
         payload = str(subjects[subject_id])
@@ -690,7 +690,7 @@ def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
     current_waisu = next(subject for subject in current["subjects"] if subject["id"] == "waisu_butie")
     previous_waisu = next(subject for subject in previous["subjects"] if subject["id"] == "waisu_butie")
 
-    assert current_waisu["version"] == "DL-WAISU.v1.0.2"
+    assert current_waisu["version"] == "DL-WAISU.v1.0.3"
     assert "最后工作日在核算月月末或之后" in "".join(current_waisu["common_rules"])
     assert previous_waisu["version"] == "DL-WAISU.v1.0.0"
     assert "最后工作日在核算月月末或之后" not in "".join(previous_waisu["common_rules"])
@@ -1162,6 +1162,7 @@ def test_domestic_direct_upload_complete_materializes_multiple_files(monkeypatch
     assert len(calculated[0][1]) == 2
     assert calculated[0][6] == {
         "sheetMapping": {}, "jinjiangRosterDecision": "", "fileNames": list(file_payloads),
+        "waisuAbandonmentDecision": "", "waisuAbandonmentRoster": [], "waisuAbandonmentRosterCount": 0,
         "errorCode": "", "confirmationDetail": None,
         "engines": ["canbu"],
         "attendanceMonth": "202606",
@@ -3688,3 +3689,165 @@ def test_missing_night_shift_returns_409_before_worker_and_removes_unsubmitted_r
         assert response.json()["detail"]["employee_count"] == 1
     assert calls == []
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("area", ["嘉善", "义乌"])
+def test_waisu_inspector_eligible_with_housing_proration(area):
+    employee = {"工号": "TEST_INSPECTOR", "姓名": "测试", "工作地区": area,
+                "岗位名称": "查验员", "考勤月份": "202607", "入职日期": date(2025, 1, 1)}
+    engine = WaiSuBuTieEngine()
+    assert engine.calculate(employee).amount == 150
+    housing = [{"工号": "TEST_INSPECTOR", "入住时间": date(2026, 7, 1), "退宿时间": date(2026, 7, 11)}]
+    assert engine.calculate(employee, housing_records=housing).amount == 101.61
+    employee["工作地区"] = "晋江"
+    assert engine.calculate(employee).amount == 0
+
+
+@pytest.fixture
+def abandonment_client(monkeypatch, tmp_path):
+    import bonus_platform.app as api
+    from bonus_platform.engine.domestic_labor import runs
+    monkeypatch.setattr(api, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
+    monkeypatch.setattr(runs, "DOMESTIC_LABOR_RUNS_DIR", tmp_path)
+    with TestClient(app) as client:
+        yield client
+
+
+def test_waisu_abandonment_roster_is_batch_scoped_and_exported(abandonment_client):
+    import time
+    client = abandonment_client
+    roster = _create_test_excel({"自离名单": [["工号", "姓名"], ["OWHN001", "张三"], ["OWHN001", "张三"]]})
+    for decision, expected in [("yes", 0), ("no", 100)]:
+        files = {"file": ("attendance.xlsx", _waisu_butie_data())}
+        if decision == "yes":
+            files["waisu_abandonment_file"] = ("roster.xlsx", roster)
+        response = client.post("/api/domestic-labor/runs", files=files, data={
+            "engines": "waisu_butie", "attendance_month": "202606", "waisu_abandonment_decision": decision,
+        })
+        assert response.status_code == 200, response.text
+        run_id = response.json()["run_id"]
+        for _ in range(50):
+            metadata = client.get(f"/api/domestic-labor/runs/{run_id}").json()
+            if metadata["status"] in ["已完成", "失败"]:
+                break
+            time.sleep(.02)
+        assert metadata["status"] == "已完成", metadata
+        assert metadata["results"][0]["waisu_butie"] == expected
+        assert metadata["summary"]["total_waisu_butie"] == expected
+        assert metadata["waisuAbandonmentRosterCount"] == (1 if decision == "yes" else 0)
+        if decision == "yes":
+            detail = metadata["results"][0]["subject_details"]["waisu_butie"]
+            assert detail["details"]["本月自离"] is True
+            assert detail["audit_explanation"]["rule_name"] == "本月自离人员排除"
+            export = client.get(f"/api/domestic-labor/runs/{run_id}/export").json()
+            data = client.get(f'/api/domestic-labor/runs/{run_id}/download/{export["file_name"]}').content
+            wb = load_workbook(BytesIO(data))
+            assert wb["计算详情"]["L2"].value == 0
+            assert any("自离" in str(cell.value) for row in wb["计算详情"] for cell in row)
+            wb.close()
+
+
+@pytest.mark.parametrize("decision,rows,message", [
+    ("yes", None, "上传自离名单"),
+    ("yes", [["工号", "姓名"]], "名单为空"),
+    ("yes", [["姓名"], ["张三"]], "工号"),
+    ("yes", [["工号", "姓名"], ["UNKNOWN", "张三"]], "未匹配"),
+    ("yes", [["工号", "姓名"], ["OWHN001", "李四"]], "不一致"),
+    ("yes", [["工号", "姓名"], ["OWHN001", ""]], "实际值"),
+    ("no", [["工号", "姓名"], ["OWHN001", "张三"]], "移除自离名单"),
+])
+def test_waisu_abandonment_rejects_invalid_roster(abandonment_client, decision, rows, message):
+    files = {"file": ("attendance.xlsx", _waisu_butie_data())}
+    if rows is not None:
+        files["waisu_abandonment_file"] = ("roster.xlsx", _create_test_excel({"名单": rows}))
+    response = abandonment_client.post("/api/domestic-labor/runs", files=files, data={
+        "engines": "waisu_butie", "attendance_month": "202606", "waisu_abandonment_decision": decision,
+    })
+    assert response.status_code == 400
+    assert message in response.json()["detail"]
+    assert abandonment_client.get("/api/domestic-labor/runs").json()["runs"] == []
+
+
+@pytest.mark.parametrize("area", ["东莞", "嘉善", "义乌", "晋江"])
+def test_waisu_abandonment_overrides_regional_rules_only_for_listed_employee(area):
+    employee = {"工号": "001", "姓名": "张三", "考勤月份": "202606", "工作地区": area,
+                "岗位名称": "操作员", "入职日期": date(2023, 1, 1)}
+    engine = WaiSuBuTieEngine()
+    excluded = engine.calculate(employee, abandoned_employee_ids={"001"})
+    assert excluded.amount == 0
+    assert excluded.details["本月自离"] is True
+    normal = engine.calculate(employee)
+    other_list = engine.calculate(employee, abandoned_employee_ids={"002"})
+    assert normal.amount == other_list.amount
+    assert normal.details == other_list.details
+
+
+def test_waisu_abandonment_template_round_trip(abandonment_client):
+    from bonus_platform.engine.domestic_labor.abandonment_roster import parse_abandonment_roster
+    response = abandonment_client.get('/api/domestic-labor/waisu-abandonment-template')
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.content))
+    sheet = workbook['自离名单']
+    assert [cell.value for cell in sheet[1]] == ['工号', '姓名']
+    assert sheet['A2'].number_format == '@'
+    sheet['A2'] = '000123'
+    sheet['B2'] = '测试人员'
+    result = BytesIO()
+    workbook.save(result)
+    workbook.close()
+    assert parse_abandonment_roster(result.getvalue()) == [{'employee_id': '000123', 'employee_name': '测试人员'}]
+
+
+@pytest.mark.parametrize("decision,roster_name,expected", [
+    ("yes", "张三", 0), ("no", None, 100), ("yes", "姓名不符", None),
+    ("yes", None, None), ("no", "张三", None),
+])
+def test_direct_upload_abandonment_roster_reaches_real_calculation_and_export(
+    monkeypatch, abandonment_client, decision, roster_name, expected,
+):
+    import bonus_platform.app as api
+    client = abandonment_client
+    monkeypatch.setattr(api, "domestic_labor_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(api, "create_domestic_labor_signed_upload", lambda run_id, filename: {
+        "signedUrl": "https://example.invalid/upload", "relativePath": filename,
+    })
+    contents = {"attendance.xlsx": _waisu_butie_data()}
+    if roster_name:
+        contents["roster.xlsx"] = _create_test_excel({"自离名单": [["工号", "姓名"], ["OWHN001", roster_name]]})
+    plan_response = client.post("/api/domestic-labor/runs/direct-upload-plan", json={"files": [
+        {"fileName": name, "fileSize": len(content),
+         "purpose": "waisuAbandonment" if name == "roster.xlsx" else "attendance"}
+        for name, content in contents.items()
+    ]})
+    assert plan_response.status_code == 200, plan_response.text
+    plan = plan_response.json()
+    run_id = plan["runId"]
+    by_saved_name = {item["filename"]: contents[item["originalFilename"]] for item in plan["uploads"]}
+    def materialize(target_run_id, filename):
+        path = api.get_payroll_run_dir(target_run_id) / filename
+        path.write_bytes(by_saved_name[filename])
+        return path
+    monkeypatch.setattr(api, "materialize_payroll_file", materialize)
+    response = client.post(f"/api/domestic-labor/runs/{run_id}/direct-upload-complete", json={
+        "engines": ["waisu_butie"], "attendanceMonth": "202606", "waisuAbandonmentDecision": decision,
+    })
+    if expected is None:
+        assert response.status_code == 400, response.text
+        return
+    assert response.status_code == 200, response.text
+    metadata = api.load_payroll_metadata(api.get_payroll_run_dir(run_id))
+    assert metadata["status"] == "已完成"
+    assert metadata["results"][0]["waisu_butie"] == expected
+    assert metadata["inputSummary"]["file_count"] == 1
+    assert metadata["waisuAbandonmentRosterCount"] == (1 if decision == "yes" else 0)
+    assert metadata["fileNames"] == ["attendance.xlsx"]
+    export = client.get(f"/api/domestic-labor/runs/{run_id}/export")
+    assert export.status_code == 200, export.text
+    workbook = load_workbook(export.json()["file_path"])
+    detail = workbook["计算详情"]
+    assert detail["L2"].value == expected
+    assert detail.cell(1, detail.max_column).value == "计算过程"
+    assert detail.row_dimensions[2].height == 24
+    if decision == "yes":
+        assert "自离" in detail.cell(2, detail.max_column).value
+    workbook.close()

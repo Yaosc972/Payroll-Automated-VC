@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>劳务工薪酬核算 · 西格玛工作台</title>
+    <title>中国区外包工薪酬核算 · 西格玛工作台</title>
     <link rel="icon" type="image/png" sizes="512x512" href="assets/workbench-logo-2026.png?v=20260806" />
     <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png?v=20260806" />
     <link rel="stylesheet" href="styles.css?v=30" />
@@ -3448,6 +3448,43 @@
       .dl-jinjiang-prompt footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 26px; padding-top: 20px; border-top: 1px solid #edf0f5; }
       .dl-jinjiang-prompt footer button { font-size: 13px; padding: 11px 17px; border-radius: 8px; cursor: pointer; }
       .dl-jinjiang-prompt button:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+      .dl-waisu-abandonment { width: 620px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); overflow: auto; padding: 28px; }
+      .dl-waisu-abandonment [hidden] { display: none !important; }
+      .dl-waisu-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 22px; }
+      .dl-waisu-choices button { position: relative; padding: 17px 16px 17px 42px; text-align: left; color: #344054; border: 1px solid #dce3ed; border-radius: 10px; background: #fff; cursor: pointer; transition: border-color .15s, background .15s; }
+      .dl-waisu-choices button:hover { border-color: #93b4ee; background: #f8faff; }
+      .dl-waisu-choices button[aria-pressed=true] { border-color: #2563eb; background: #f1f6ff; box-shadow: inset 0 0 0 1px #2563eb; }
+      .dl-waisu-choices strong { display: block; font-size: 14px; font-weight: 650; }
+      .dl-waisu-choices small { display: block; margin-top: 5px; font-size: 12px; color: #667085; }
+      .dl-waisu-choice-dot { position: absolute; left: 16px; top: 20px; width: 16px; height: 16px; border: 1px solid #b5c1d0; border-radius: 50%; background: #fff; box-sizing: border-box; }
+      .dl-waisu-choices [aria-pressed=true] .dl-waisu-choice-dot { border: 5px solid #2563eb; }
+      .dl-waisu-abandonment [data-waisu-roster-upload] { margin-top: 24px; }
+      .dl-waisu-upload-heading { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+      .dl-waisu-upload-heading strong { font-size: 13px; font-weight: 650; }
+      .dl-waisu-upload-heading span { font-size: 11px; color: #667085; }
+      .dl-waisu-upload-heading a { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 550; color: #2563eb; text-decoration: none; }
+      .dl-waisu-upload-heading a:hover { text-decoration: underline; }
+      .dl-waisu-upload-heading a svg { width: 15px; height: 15px; }
+      .dl-waisu-dropzone { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px 16px; border: 1px dashed #aec3e4; border-radius: 12px; background: #f8faff; cursor: pointer; color: #344054; }
+      .dl-waisu-dropzone:hover, .dl-waisu-dropzone.is-dragging { border-color: #2563eb; background: #edf4ff; }
+      .dl-waisu-upload-icon { display: grid; place-items: center; width: 40px; height: 40px; border: 1px solid #dbe6f7; border-radius: 10px; background: #fff; color: #2563eb; margin-bottom: 4px; }
+      .dl-waisu-upload-icon svg, .dl-waisu-file-icon svg { width: 22px; height: 22px; }
+      .dl-waisu-dropzone strong { font-size: 13px; font-weight: 500; }
+      .dl-waisu-dropzone strong span { color: #2563eb; margin-left: 4px; font-weight: 600; }
+      .dl-waisu-dropzone small { font-size: 11px; color: #667085; }
+      .dl-waisu-file-card { display: flex; align-items: center; gap: 12px; padding: 16px; border: 1px solid #c8d8f1; border-radius: 10px; background: #f8faff; }
+      .dl-waisu-file-icon { display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 44px; border-radius: 8px; background: #eaf1ff; color: #2563eb; }
+      .dl-waisu-file-card > div { flex: 1; min-width: 0; }
+      .dl-waisu-file-card strong { display: block; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+      .dl-waisu-file-card > div > span { display: block; margin-top: 5px; font-size: 11px; color: #667085; }
+      .dl-waisu-file-card button { flex-shrink: 0; border: 0; background: transparent; color: #2563eb; padding: 6px; font-size: 12px; cursor: pointer; }
+      .dl-waisu-file-card .dl-waisu-file-remove { font-size: 20px; color: #667085; }
+      .dl-waisu-upload-help { margin: 10px 0 0; font-size: 11px; line-height: 1.9; color: #667085; }
+      .dl-waisu-upload-help b { font-weight: 550; color: #475467; }
+      .dl-waisu-upload-status { margin: 8px 0 0; color: #b42318; font-size: 12px; }
+      .dl-waisu-upload-status:empty { display: none; }
+      .dl-waisu-footer-note { margin-right: auto; align-self: center; font-size: 11px; color: #667085; }
+      .dl-waisu-abandonment footer button:disabled { cursor: not-allowed; }
 
 .dl-sheet-dialog { width: min(860px, calc(100vw - 32px)); max-height: 88vh; padding: 0; border: 1px solid #e2e8f0; border-radius: 20px; color: #101828; background: white; box-shadow: 0 24px 80px #14244733; }
 .dl-sheet-dialog[open] { display: flex; flex-direction: column; }
@@ -3513,7 +3550,8 @@
 .dl-night-upload-layout .dl-night-editor-layout:not(:has([data-night-shift-break-row])) { grid-template-columns:1fr; height:480px; }
 .dl-night-editor-layout:not(:has([data-night-shift-break-row])) .dl-night-shift-form { display:none; }
 @media(max-width:1150px) { .dl-night-upload-layout { grid-template-columns:1fr; } .dl-night-upload-layout > .dl-upload-primary { order:0; } }
-</style>
+    </style>
+    <link rel="stylesheet" href="domestic-labor-rulebook.css?v=7">
   </head>
   <body class="domestic-labor-shell">
 
@@ -3521,19 +3559,13 @@
       <div class="dl-topbar-left">
         <a class="dl-title-lockup" href="/" aria-label="返回西格玛工作台首页">
           <img src="assets/workbench-logo-2026.png" alt="" />
-          <strong>国内劳务薪酬中台</strong>
+          <strong>中国区外包工薪酬核算</strong>
         </a>
-        <nav class="dl-top-nav" aria-label="国内劳务模块">
+        <nav class="dl-top-nav" aria-label="中国区外包工薪酬核算模块">
           <a class="active" id="navSubjectHome" href="#subjectHomeView">薪酬科目</a>
           <a id="navBatchList" href="#canbuBatchListView">批次列表</a>
           <a id="navRulePackage" href="#rulePackageView">规则包</a>
         </nav>
-      </div>
-      <div class="dl-topbar-right">
-        <span class="dl-top-meta">批次 <strong id="batchNameText">2026年06月核算草稿</strong></span>
-        <span class="dl-top-meta">规则包 <strong>当前版 1.4.9</strong></span>
-        <span class="dl-top-meta is-warn" id="batchStatusText">草稿</span>
-        <span class="dl-top-meta" id="chromeRunBadge" hidden><span id="chromeRunLabel">任务 #—</span></span>
       </div>
     </header>
 
@@ -3553,7 +3585,7 @@
             <div class="dl-subject-hero-layout">
               <div class="dl-subject-copy">
                 <span class="dl-subject-eyebrow">DOMESTIC LABOR PAYROLL</span>
-                <h1 class="dl-subject-title">国内劳务薪酬核算</h1>
+                <h1 class="dl-subject-title">中国区外包工薪酬核算</h1>
                 <p class="dl-subject-desc">从薪酬科目进入对应核算工作台。当前开放全勤奖、餐费补贴、外宿补贴、工龄奖、岗位补贴、高温补贴与夜班补贴核算；验证中科目保留逐日依据和待确认口径。</p>
                 <div class="dl-subject-grid" id="subjectCardGrid">
                   <button class="dl-subject-card primary" data-subject-entry="canbu" type="button">
@@ -3627,14 +3659,12 @@
         <section class="dl-view" id="rulePackageView" data-view="rulePackage" hidden>
           <div class="dl-rule-package-shell">
             <section class="dl-panel dl-rule-package-head dl-rule-compact-head">
-                  <h1 class="dl-panel-title" id="rulePackageTitle">国内劳务薪酬核算规则包</h1>
+                  <h1 class="dl-panel-title" id="rulePackageTitle">中国区外包工薪酬核算规则包</h1>
                   <label class="dl-rule-version-control">
                     <select id="rulePackageVersionSelect" aria-label="选择规则包版本">
-                      <option>DL-PAYROLL.v1.4.9 · 当前</option>
-                      <option>DL-PAYROLL.v1.4.2 · 历史</option>
+                      <option value="">正在读取规则版本…</option>
                     </select>
                   </label>
-                  <div class="dl-rule-summary" id="rulePackageSummary"></div>
                   <button class="dl-btn" id="btnBackFromRules" type="button">返回科目首页</button>
             </section>
 
@@ -3642,7 +3672,7 @@
               <aside class="dl-panel dl-rule-sidebar" aria-label="规则分类与科目">
                 <div class="dl-rule-sidebar-head"><span>规则导航</span><button class="dl-rule-sidebar-toggle" id="btnToggleRuleSidebar" type="button" aria-expanded="true" aria-controls="ruleSidebarContents" aria-label="收起规则导航" title="收起规则导航">‹ 收起</button></div>
                 <div id="ruleSidebarContents">
-                <p class="dl-rule-section-label">规则分类</p>
+                <label class="rb-nav-search"><span>查找</span><input id="rulePackageSearch" type="search" placeholder="科目、岗位、规则" aria-label="查找核算规则" autocomplete="off"></label>
                 <div class="dl-rule-category-tabs" id="rulePackageCategoryTabs"></div>
                 <div class="dl-rule-subject-tabs" id="rulePackageSubjectTabs"></div>
                 </div>
@@ -3652,15 +3682,6 @@
               </section>
             </div>
 
-            <section class="dl-panel dl-rule-history">
-              <div class="dl-panel-head">
-                <div>
-                  <h2 class="dl-panel-title">版本历史</h2>
-                  <p class="dl-panel-sub">规则版本按发布记录留存，历史版本不覆盖。</p>
-                </div>
-              </div>
-              <div class="dl-table-wrap" id="rulePackageHistory"></div>
-            </section>
           </div>
         </section>
 
@@ -3737,7 +3758,8 @@
       </div>
     </div>
 
-    <script src="domestic-labor.js?v=15"></script>
+    <script src="domestic-labor-rulebook.js?v=6"></script>
+    <script src="domestic-labor.js?v=25"></script>
     <script src="feedback-widget.js?v=20260820-13"></script>
   </body>
 </html>

@@ -988,7 +988,7 @@ def test_domestic_labor_page_is_payroll_workbench():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
-    assert "劳务工薪酬核算" in html
+    assert "中国区外包工薪酬核算" in html
     assert 'data-module-id="domestic"' in html
     assert "permission-guard.js" in html
     assert "domestic-labor-shell" in html
@@ -1042,7 +1042,7 @@ def test_domestic_labor_meal_workbench_static_labels():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
-    assert "国内劳务薪酬中台" in html
+    assert "中国区外包工薪酬核算" in html
     assert "餐补核算批次" in html
     assert 'id="canbuBatchMonth"' in html
     assert 'id="canbuBatchModal"' in html
@@ -1226,7 +1226,8 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     assert 'id="rulePackageVersionSelect"' in html
     from bonus_platform.engine.domestic_labor.rule_package import get_rule_package
     current_version = get_rule_package()["version"]
-    assert f"DL-PAYROLL.v{current_version}" in html
+    assert '正在读取规则版本…' in html
+    assert 'packageData.available_versions' in js
     assert "已验证规则 4 项 · 验证中规则 3 项" in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js

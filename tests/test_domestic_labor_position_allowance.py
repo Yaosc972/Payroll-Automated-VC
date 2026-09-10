@@ -96,8 +96,8 @@ def test_womens_day_leave_is_converted_to_eight_hours_before_threshold():
 
     assert result.details["女神假折算时数"] == 56
     assert result.details["缺勤合计时数"] == 56
-    assert result.details["扣减天数"] == 7
-    assert result.amount == 208.70
+    assert result.details["扣减天数"] == 0
+    assert result.amount == 300
 
 
 def test_less_than_56_hours_does_not_reduce_position_allowance():
@@ -139,8 +139,8 @@ def test_special_group_leaders_are_recognized_by_person_not_grade():
     assert chen.details["资格依据"] == "特殊安检组长名单"
     assert jia.details["资格依据"] == "特殊安检组长名单"
     assert chen.warnings == []
-    assert jia.details["exceptions"][0]["code"] == "POSITION_ALLOWANCE_SPECIAL_STANDARD_PENDING"
-    assert "暂算" in jia.warnings[0]
+    assert jia.details["exceptions"] == []
+    assert jia.warnings == []
 
 
 @pytest.mark.parametrize("position", ["安检员", "民航高级安检员", "揽收充电司机"])
@@ -336,13 +336,35 @@ def test_position_allowance_api_and_export_reconcile_july_baseline():
         client.delete(f"/api/domestic-labor/runs/{run_id}")
 
 
-def test_current_rule_package_matches_jia_temporary_standard():
+def test_current_rule_package_matches_jia_confirmed_standard():
     from fastapi.testclient import TestClient
     from bonus_platform.app import app
     package = TestClient(app).get("/api/domestic-labor/rule-package").json()
     subject = next(item for item in package["subjects"] if item["id"] == "gangwei_butie")
     region = next(item for item in subject["regions"] if item["name"] == "晋江")
-    assert subject["version"] == "DL-GANGWEI.v0.9.2"
+    assert subject["version"] == "DL-GANGWEI.v0.9.5"
     assert "600元" in region["rule"]
     assert "800元" not in str(region)
-    assert any("贾万" in text and "600元" in text for text in subject["pending_confirmations"])
+    assert not any("贾万" in text for text in subject["pending_confirmations"])
+
+
+@pytest.mark.parametrize("position", ["HRBP专员", "高级HRBP专员", "高级招聘专员"])
+@pytest.mark.parametrize("month,expected", [("202607", 700), ("202608", 700), ("202609", 0), ("202610", 0), ("202701", 0)])
+def test_dongguan_hr_allowance_stops_from_september(position, month, expected):
+    result = GangWeiBuTieEngine().calculate(_row(position=position, 考勤月份=month))
+    assert result.amount == expected
+    if expected == 0:
+        assert "2026年9月" in str(result.details)
+        assert not result.warnings
+
+
+def test_september_keeps_forklift_and_security_allowances():
+    for position, amount in [("叉车司机", 800), ("内部初级安检员", 300)]:
+        assert GangWeiBuTieEngine().calculate(_row(position=position, 考勤月份="202609")).amount == amount
+
+
+@pytest.mark.parametrize("hours,days,amount", [(55.5, 0, 300), (56, 0, 300), (56.5, 7.0625, 207.88)])
+def test_position_absence_strictly_exceeds_56(hours, days, amount):
+    result = GangWeiBuTieEngine().calculate(_row(事假时数=hours))
+    assert result.details["扣减天数"] == days
+    assert result.amount == amount

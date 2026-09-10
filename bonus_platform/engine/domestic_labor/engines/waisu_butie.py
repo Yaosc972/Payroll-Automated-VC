@@ -36,6 +36,7 @@ DONGGUAN_INELIGIBLE_POSITIONS = {
 DONGGUAN_ELIGIBLE_NAME_OVERRIDES = {"陈西莎", "田盈"}
 
 JIASHAN_YIWU_ELIGIBLE_POSITIONS = {
+    "查验员",
     "安检员",
     "操作员",
     "门禁员",
@@ -134,6 +135,7 @@ class WaiSuBuTieEngine(BaseEngine):
         employee_data: Dict[str, Any],
         daily_attendance: List[Dict[str, Any]] = None,
         housing_records: List[Dict[str, Any]] = None,
+        abandoned_employee_ids=None,
     ) -> CalculationResult:
         """计算单个员工的外宿补贴
 
@@ -161,6 +163,20 @@ class WaiSuBuTieEngine(BaseEngine):
             "日考勤记录数": len(daily_attendance or []),
             "住宿记录数": len(housing_records or []),
         }
+
+        if employee_id.strip() in (abandoned_employee_ids or set()):
+            return CalculationResult(
+                employee_id=employee_id, employee_name=employee_name, amount=0,
+                details={
+                    "reason": "本月自离，不享有外宿补贴",
+                    "本月自离": True,
+                    "audit_explanation": _audit_explanation(
+                        0, "本月自离人员排除", "命中本月自离名单，整月外宿补贴 = 0",
+                        input_snapshot, {"自离名单匹配": True},
+                        ["工号与本批次自离名单匹配", "自离人员本月不享有外宿补贴", "外宿补贴金额为0"],
+                    ),
+                }, warnings=[],
+            )
 
         # 考勤月份
         attendance_month = str(employee_data.get("考勤月份", ""))

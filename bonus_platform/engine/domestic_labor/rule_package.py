@@ -2226,6 +2226,49 @@ _gangwei["change_log"].insert(0, {
     "changes": "晋江贾万暂算月度标准由800元调整为600元，保留线下核对提示。",
 })
 
+# 2026-09-09：业务确认嘉善、义乌查验员享有外宿补贴。
+_waisu_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "waisu_butie")
+_waisu_butie["version"] = "DL-WAISU.v1.0.3"
+for _region in _waisu_butie["regions"]:
+    if _region["name"] == "嘉善 / 义乌":
+        _region["rule"] = "按嘉善/义乌享有岗位名单判断，包含查验员、设备维养专员等已确认岗位，并结合住宿和缺勤核算。"
+        _region["details"].append("查验员享有外宿补贴，月标准150元；按现有在职、住宿和缺勤规则折算。")
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.3",
+    "released_at": "2026-09-09",
+    "changes": "嘉善、义乌外宿补贴享有岗位新增查验员，月标准150元，沿用现有折算规则。",
+})
+
+# 2026-09-09：东莞人力相关岗位补贴自2026年9月起停止。
+_gangwei = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gangwei_butie")
+_gangwei["version"] = "DL-GANGWEI.v0.9.3"
+_hr_stop_rule = "东莞HRBP专员、高级HRBP专员、高级招聘专员：2026年8月及以前按700元月标准折算，2026年9月起不再计发岗位补贴。"
+for _region in _gangwei["regions"]:
+    if _region["name"] == "东莞":
+        _region["rule"] = "已验证的安检等级岗位、叉车司机及陈晓龙按岗位或人员标准核算；HRBP相关岗位仅适用2026年8月及以前。"
+        _region["details"] = [text.replace("HRBP专员、高级HRBP专员、高级招聘专员700元；", _hr_stop_rule + "；") for text in _region["details"]]
+_gangwei["common_rules"].append(_hr_stop_rule)
+_gangwei["change_log"].insert(0, {"version": "DL-GANGWEI.v0.9.3", "released_at": "2026-09-09", "changes": _hr_stop_rule})
+
+# 2026-09-10：贾万600元月标准已确认，关闭标准待确认提示。
+_gangwei["version"] = "DL-GANGWEI.v0.9.4"
+for _region in _gangwei["regions"]:
+    if _region["name"] == "晋江":
+        _region["rule"] = "贾万按特殊安检组长名单识别，已确认月标准600元。"
+        _region["details"] = ["600元为已确认月标准，按通用排班和缺勤公式折算，不再标记标准暂算或待确认。"]
+_gangwei["pending_confirmations"] = [item for item in _gangwei["pending_confirmations"] if "贾万" not in item]
+_gangwei["change_log"].insert(0, {"version": "DL-GANGWEI.v0.9.4", "released_at": "2026-09-10", "changes": "晋江贾万600元月标准已确认，移除标准暂算及待确认提示，折算公式不变。"})
+
+# 2026-09-10：缺勤刚好56小时不扣减，仅超过56小时才折算。
+_gangwei["version"] = "DL-GANGWEI.v0.9.5"
+_gangwei["common_rules"] = [item.replace("缺勤合计未达到56小时时不扣减；达到56小时后", "缺勤合计不超过56小时时不扣减；超过56小时后") for item in _gangwei["common_rules"]]
+for _field in _gangwei["field_calculations"]:
+    if _field["field"] == "缺勤合计时数":
+        _field["definition"] = "九类缺勤按小时合计，用于判断是否超过56小时门槛。"
+    if _field["field"] == "扣减天数":
+        _field.update({"definition": "不超过56小时不扣减；超过后把全部缺勤小时折算为天数。", "formula": "IF(缺勤合计时数>56, 缺勤合计时数÷8, 0)", "example": "56小时扣0天；56.5小时扣7.0625天；81.5小时扣10.1875天。"})
+_gangwei["change_log"].insert(0, {"version": "DL-GANGWEI.v0.9.5", "released_at": "2026-09-10", "changes": "缺勤合计恰好56小时不扣减；仅超过56小时才按全部缺勤时数折算。"})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
