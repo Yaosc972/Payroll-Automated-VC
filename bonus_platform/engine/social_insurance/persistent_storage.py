@@ -517,6 +517,12 @@ def restore_run_document_with_decisions(
     return True, decisions
 
 
+def _portable_run_file(relative: str) -> str:
+    if storage_backend() == "supabase" and not relative.isascii():
+        return "file_" + hashlib.sha256(relative.encode("utf-8")).hexdigest()
+    return relative
+
+
 def persist_run_directory(run_id: str, run_dir: Path) -> None:
     require_persistent_storage()
     if not persistent_storage_enabled():
@@ -530,7 +536,8 @@ def persist_run_directory(run_id: str, run_dir: Path) -> None:
     if not isinstance(previous_manifest, dict):
         previous_manifest = {}
     next_manifest: dict[str, str] = {}
-    for path in sorted(run_dir.rglob("*")):
+    # Publish the document only after its referenced artifacts are durable.
+    for path in sorted(run_dir.rglob("*"), key=lambda p: (p == run_dir / "run.json", p)):
         if (
             not path.is_file()
             or path.name.endswith(".tmp")
@@ -546,7 +553,7 @@ def persist_run_directory(run_id: str, run_dir: Path) -> None:
         if previous_manifest.get(relative) == digest:
             continue
         _put_bytes(
-            f"{_run_prefix(run_id)}/{relative}",
+            f"{_run_prefix(run_id)}/{_portable_run_file(relative)}",
             content,
             content_type=content_type or "application/octet-stream",
         )
@@ -566,6 +573,19 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
     blobs = _list_prefix(prefix)
     if not blobs:
         return False
+    original_names: dict[str, str] = {}
+    if storage_backend() == "supabase":
+        manifest_content = _get_bytes(_fresh_storage_target(f"{prefix}{RUN_MANIFEST}"))
+        try:
+            manifest = json.loads(manifest_content.decode("utf-8")) if manifest_content else {}
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            manifest = {}
+        if isinstance(manifest, dict):
+            for relative in manifest:
+                # The manifest preserves display names, never filesystem traversal.
+                if not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
+                    continue
+                original_names[_portable_run_file(relative)] = relative
     latest: dict[str, dict[str, Any]] = {}
     for blob in blobs:
         pathname = str(blob.get("pathname") or "")
@@ -582,6 +602,7 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
         relative = pathname[len(prefix) :]
         if not relative or relative.endswith("/") or relative == RUN_MANIFEST:
             continue
+        relative = original_names.get(relative, relative)
         target = run_dir / relative
         if _decision_event_from_pathname(pathname) is not None:
             # Decision state is encoded in the immutable object name.  A local

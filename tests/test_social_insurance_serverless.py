@@ -3,6 +3,7 @@ from __future__ import annotations
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -314,9 +315,59 @@ def test_supabase_storage_restores_complete_run_on_another_instance(
     assert "social-insurance/test/runs/sir_20260826120000_abcd1234/ignored.tmp" not in remote
     assert set(remote) == {
         "social-insurance/test/runs/sir_20260826120000_abcd1234/.storage-manifest.json",
-        "social-insurance/test/runs/sir_20260826120000_abcd1234/reports/社保增员报盘.xlsx",
+        "social-insurance/test/runs/sir_20260826120000_abcd1234/file_"
+        + hashlib.sha256("reports/社保增员报盘.xlsx".encode("utf-8")).hexdigest(),
         "social-insurance/test/runs/sir_20260826120000_abcd1234/run.json",
     }
+
+
+def test_supabase_chinese_reports_use_portable_keys_and_restore_names(monkeypatch, tmp_path):
+    _enable_supabase(monkeypatch)
+    remote = {}
+
+    class StrictKeyClient(FakeSupabaseClient):
+        def post(self, url, **kwargs):
+            if "/object/list/" not in httpx.URL(url).path:
+                assert httpx.URL(url).path.isascii(), "Supabase rejects Unicode object keys"
+            return super().post(url, **kwargs)
+
+    monkeypatch.setattr(
+        "bonus_platform.engine.labor.persistent_storage.httpx.Client",
+        lambda **_kwargs: StrictKeyClient(remote),
+    )
+    run_id = "sir_20260911000000_abcd1234"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "run.json").write_text('{"status":"generated"}')
+    (source / "社保报盘.zip").write_bytes(b"real-generated-package")
+    (source / "government-template.xlsx").write_bytes(b"template")
+    storage.persist_run_directory(run_id, source)
+    assert all(key.isascii() for key in remote)
+    target = tmp_path / "another-instance"
+    assert storage.restore_run_directory(run_id, target)
+    assert (target / "社保报盘.zip").read_bytes() == b"real-generated-package"
+    assert (target / "government-template.xlsx").read_bytes() == b"template"
+    assert not list(target.glob("file_*"))
+
+
+def test_supabase_failed_artifact_upload_does_not_publish_generated_run(monkeypatch, tmp_path):
+    _enable_supabase(monkeypatch)
+    monkeypatch.setattr(storage, "_get_bytes", lambda _path: None)
+    uploaded = []
+
+    def put(path, content, **kwargs):
+        if not path.endswith("run.json"):
+            raise storage.SocialInsuranceStorageError("artifact upload failed")
+        uploaded.append(path)
+
+    monkeypatch.setattr(storage, "_put_bytes", put)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "run.json").write_text('{"status":"generated"}')
+    (source / "社保报盘.zip").write_bytes(b"package")
+    with pytest.raises(storage.SocialInsuranceStorageError):
+        storage.persist_run_directory("sir_20260911000000_abcd1234", source)
+    assert uploaded == []
 
 
 def test_supabase_permission_failure_keeps_storage_diagnostic_category(
