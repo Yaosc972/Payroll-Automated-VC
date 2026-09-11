@@ -6,6 +6,7 @@
   const METADATA_ENDPOINT = '/api/social-insurance/metadata';
   const SYNC_ENDPOINT = '/api/social-insurance/runs/sync';
   const SYNC_ALL_ENDPOINT = '/api/social-insurance/runs/sync-all';
+  const ALL_SUBJECTS = '__all_subjects__';
   const WIDE_FIELDS = new Set(['通讯地址', '国家职业资格或职业技能等级', '户口所在地行政区划代码']);
   const STATUS_LABELS = { ready: '可报盘', needs_review: '待人工确认', excluded: '已排除' };
   const STATUS_TEXT = { draft: '审核中', confirmed: '人员已确认', generated: '报盘已生成' };
@@ -423,9 +424,9 @@
   function renderSubjectPickerOptions(query = '') {
     const holder = byId('subjectPickerOptions');
     const options = visibleSubjectOptions(query);
-    const total = subjectOptions().length;
+    const total = subjectOptions().filter((option) => option.value !== ALL_SUBJECTS).length;
     holder.replaceChildren();
-    byId('subjectPickerSummary').textContent = query.trim() ? `${options.length} / ${total} 个主体` : `${total} 个主体`;
+    byId('subjectPickerSummary').textContent = query.trim() ? `匹配 ${options.length} 项` : `${total} 个主体 · 可汇总查看`;
     if (!options.length) {
       holder.append(textNode('div', 'subject-picker-empty', total ? '没有匹配的合同主体' : '当前周期暂无合同主体'));
       subjectPickerState.activeIndex = -1;
@@ -537,12 +538,18 @@
     };
   }
 
+  function selectionMatchesRelease() {
+    const context = selectedBatchContext();
+    return Boolean(state.release?.id) && ['periodStart', 'periodEnd', 'confirmationDate']
+      .every((field) => state.release[field] === context[field]);
+  }
+
   function batchContextKey(context) {
     return [context.periodStart, context.periodEnd, context.confirmationDate, context.subject].join('::');
   }
 
   function cacheBatchBundle(run, preflight = null) {
-    if (!run?.id) return;
+    if (!run?.id || run.isAggregate) return;
     state.batchCache.set(batchContextKey(run), { run, preflight });
   }
 
@@ -577,7 +584,7 @@
   async function loadSelectedSubjectRun({ silent = false } = {}) {
     const context = selectedBatchContext();
     if (!state.subjectsReady || !Object.values(context).every(Boolean)) return;
-    if (selectionMatchesRun()) return;
+    if (selectionMatchesRun() && !state.run?.isAggregate) return;
     const requestSequence = ++runRequestSequence;
     const contextKey = batchContextKey(context);
     const cached = state.batchCache.get(contextKey);
@@ -598,7 +605,12 @@
         && state.release.periodStart === context.periodStart
         && state.release.periodEnd === context.periodEnd
         && state.release.confirmationDate === context.confirmationDate;
-      const path = releaseMatches
+      if (context.subject === ALL_SUBJECTS && !releaseMatches) {
+        throw new Error('当前周期和确认日尚无全部主体名单，请先生成全部主体批次');
+      }
+      const path = context.subject === ALL_SUBJECTS
+        ? `${API_ROOT}/releases/${encodeURIComponent(state.release.id)}/runs/all`
+        : releaseMatches
         ? `${API_ROOT}/releases/${encodeURIComponent(state.release.id)}/runs/current?${new URLSearchParams({ subject: context.subject }).toString()}`
         : `${API_ROOT}/runs/current?${new URLSearchParams(context).toString()}`;
       const payload = await api(path);
@@ -669,7 +681,7 @@
       if (state.filter !== 'all' && employee.status !== state.filter) return false;
       if (!query) return true;
       const report = employee.report || {};
-      const haystack = `${report['姓名'] || ''} ${employee.source?.jobNumber || ''} ${employee.maskedId || ''} ${String(report['证件号码'] || '').slice(-4)}`.toLowerCase();
+      const haystack = `${employee.source?.subject || ''} ${report['姓名'] || ''} ${employee.source?.jobNumber || ''} ${employee.maskedId || ''} ${String(report['证件号码'] || '').slice(-4)}`.toLowerCase();
       return haystack.includes(query);
     });
   }
@@ -884,7 +896,8 @@
     }
     if (state.view === 'template') {
       const schema = schemaForRoute(state.templateRoute);
-      return (schema?.fields || []).map((field) => ({ label: field.name, field, type: 'template' }));
+      const columns = (schema?.fields || []).map((field) => ({ label: field.name, field, type: 'template' }));
+      return state.run?.isAggregate ? [BUSINESS_COLUMNS[2], ...columns] : columns;
     }
     return BUSINESS_COLUMNS;
   }
@@ -951,10 +964,17 @@
       ? textNode('span', 'status-pill pending', '处理中')
       : textNode('span', `status-pill ${employee.status}`, STATUS_LABELS[employee.status] || employee.status);
     if (isPending) status.setAttribute('role', 'status');
-    const edit = textNode('button', 'edit-button', isCurrentBatch ? '查看 / 修改' : '上一批次');
+    const aggregate = state.run?.isAggregate && selectionMatchesRun();
+    const edit = textNode('button', 'edit-button', aggregate ? '进入该主体' : (isCurrentBatch ? '查看 / 修改' : '上一批次'));
     edit.type = 'button';
-    edit.disabled = !isCurrentBatch || isPending;
-    edit.addEventListener('click', () => openDrawer(employee.id));
+    edit.disabled = (!isCurrentBatch && !aggregate) || isPending;
+    edit.addEventListener('click', () => {
+      if (aggregate) {
+        byId('subject').value = employee.source.subject;
+        syncSubjectPicker();
+        loadSelectedSubjectRun();
+      } else openDrawer(employee.id);
+    });
     actionCell.append(status, edit);
     row.append(actionCell);
   }
@@ -997,7 +1017,7 @@
       window.requestAnimationFrame(() => { syncTableHorizontalControl(); syncFloatingTableTools(true); });
       return;
     }
-    const isCurrentBatch = selectionMatchesRun();
+    const isCurrentBatch = selectionMatchesRun() && !state.run?.isAggregate;
     employees.forEach((employee) => {
       const report = employee.report || {};
       const row = document.createElement('tr');
@@ -1069,6 +1089,11 @@
     const list = byId('routePlanList');
     const plans = state.run?.processingPlan || [];
     list.replaceChildren();
+    if (state.run?.isAggregate) {
+      byId('routePlanCount').textContent = `${state.run.subjectCount} 个主体`;
+      list.append(textNode('p', '', '办理路径与模板按主体分别管理，请进入具体主体查看。'));
+      return;
+    }
     byId('routePlanCount').textContent = plans.length ? `${plans.length} 条办理路径` : '等待同步';
     if (!plans.length) {
       list.append(textNode('p', '', '同步后显示模板批次与线下办理任务'));
@@ -1110,6 +1135,12 @@
     const preflight = currentPreflight();
     holder.replaceChildren();
     card.classList.remove('ready', 'warning');
+    if (state.run?.isAggregate) {
+      label.textContent = '按主体分别校验';
+      holder.append(textNode('p', '', '全部主体可统一查看、搜索和导出。确认人员、补充资料和生成报盘，请点击人员行的“进入该主体”。'));
+      byId('templateMatchState').textContent = '进入具体主体后查看模板';
+      return;
+    }
     if (!state.run) {
       label.textContent = '等待名单';
       holder.append(textNode('p', '', '生成名单后，按办理路径检查必填资料和模板版本。'));
@@ -1175,7 +1206,7 @@
 
   async function ensurePreflight() {
     const run = state.run;
-    if (!run?.id) {
+    if (!run?.id || run.isAggregate) {
       state.preflight = null;
       state.preflightKey = '';
       renderPreflight();
@@ -1221,7 +1252,8 @@
 
   function renderActions() {
     const run = state.run;
-    const isCurrentBatch = selectionMatchesRun();
+    const aggregate = Boolean(run?.isAggregate);
+    const isCurrentBatch = selectionMatchesRun() && !aggregate;
     const confirmed = isCurrentBatch && (run?.status === 'confirmed' || run?.status === 'generated');
     const preflight = currentPreflight();
     const selectedRoute = byId('templateUploadRoute').value || state.templateRoute;
@@ -1229,13 +1261,14 @@
     const uploadedTemplate = uploadedTemplateForRoute(run, selectedRoute);
     const confirmButton = byId('confirmBatchButton');
     confirmButton.disabled = !isCurrentBatch || confirmed;
-    confirmButton.textContent = !isCurrentBatch && run ? '等待同步新周期' : (confirmed ? '人员已确认' : '确认本批人员');
-    byId('auditExportButton').disabled = !run || Boolean(state.operation);
-    byId('missingExportButton').disabled = !run || Boolean(state.operation);
+    confirmButton.textContent = aggregate ? '请进入具体主体确认' : (!isCurrentBatch && run ? '等待同步新周期' : (confirmed ? '人员已确认' : '确认本批人员'));
+    byId('auditExportButton').disabled = !run || aggregate || Boolean(state.operation);
+    byId('allSubjectsExportButton').disabled = !selectionMatchesRelease() || Boolean(state.operation);
+    byId('missingExportButton').disabled = !run || aggregate || Boolean(state.operation);
     byId('openSupplementButton').disabled = !isCurrentBatch || !run || Boolean(state.operation);
     const batchStatus = byId('batchStatus');
     batchStatus.className = `batch-status ${run?.status || ''}`;
-    batchStatus.querySelector('span').textContent = run
+    batchStatus.querySelector('span').textContent = aggregate ? `全部 ${run.subjectCount} 个主体 · 汇总查看` : run
       ? (isCurrentBatch ? (STATUS_TEXT[run.status] || run.status) : '上一批次，仅供查看')
       : '等待同步';
 
@@ -1282,12 +1315,17 @@
     } else {
       download.classList.add('hidden'); download.href = '#';
     }
+    if (aggregate) {
+      byId('templateState').textContent = '按主体分别上传';
+      byId('reportState').textContent = '按主体分别生成';
+    }
   }
 
   function renderRun() {
     syncTemplateRouteSelectors();
     renderMetrics(); renderTable(); renderProcessingPlan(); renderPreflight(); renderStages(); renderActions();
     syncSubjectPicker();
+    document.querySelectorAll('.filter-tabs button').forEach((node) => node.classList.toggle('active', node.dataset.filter === state.filter));
     const isCurrentBatch = selectionMatchesRun();
     const periodNotice = byId('periodContextNotice');
     periodNotice.hidden = !state.run || isCurrentBatch;
@@ -1383,8 +1421,16 @@
       if (subject.code) option.dataset.subjectCode = subject.code;
       select.append(option);
     });
+    if (subjects.length) {
+      const all = document.createElement('option');
+      all.value = ALL_SUBJECTS;
+      all.textContent = '全部主体';
+      all.dataset.subjectLabel = '全部主体';
+      all.dataset.candidateCount = String(subjects.reduce((sum, subject) => sum + Number(subject.candidateCount || 0), 0));
+      select.prepend(all);
+    }
     const desired = preferredValue || previousValue || state.run?.subject || '';
-    if (subjects.some((subject) => subject.value === desired)) select.value = desired;
+    if (desired === ALL_SUBJECTS || subjects.some((subject) => subject.value === desired)) select.value = desired;
     syncSubjectPicker();
   }
 
@@ -1696,6 +1742,7 @@
   }
 
   async function quickDecision(employee, decision) {
+    if (state.run?.isAggregate) return;
     const runId = state.run?.id;
     if (!runId || state.decisionUpdates.size > 0) return;
     const updateKey = decisionUpdateKey(runId, employee.id);
@@ -1802,6 +1849,7 @@
   }
 
   function openDrawer(employeeId) {
+    if (state.run?.isAggregate) return;
     const employee = state.run?.employees.find((item) => item.id === employeeId);
     if (!employee) return;
     if (!state.fieldDefinitions.length || !state.schemaDefinitions.length) {
@@ -2018,11 +2066,12 @@
       return;
     }
     state.operation = 'sync';
+    const keepAllSubjects = byId('subject').value === ALL_SUBJECTS;
     const button = byId('syncButton'); setBusy(button, true, '正在生成全部主体批次');
     try {
       const payload = await api(SYNC_ALL_ENDPOINT, {
         method: 'POST',
-        body: JSON.stringify(selectedBatchContext()),
+        body: JSON.stringify({ ...selectedBatchContext(), subject: keepAllSubjects ? '' : byId('subject').value }),
       });
       state.batchCache.clear();
       state.release = payload.release || null;
@@ -2037,12 +2086,16 @@
         ? '使用定时快照生成'
         : '实时同步北森并生成';
       renderRun(); showToast(`${generationSource} ${payload.batchCount} 个主体批次；当前批次 ${state.run.summary.total} 人`);
+      if (keepAllSubjects) {
+        byId('subject').value = ALL_SUBJECTS;
+        await loadSelectedSubjectRun();
+      }
     } catch (error) { showToast(error.message, 'error'); }
     finally { state.operation = null; setBusy(button, false); renderActions(); }
   }
 
   async function confirmBatch() {
-    if (!state.run || state.operation) return;
+    if (!state.run || state.run.isAggregate || state.operation) return;
     state.operation = 'confirm';
     const button = byId('confirmBatchButton'); button.disabled = true;
     try {
@@ -2054,7 +2107,7 @@
   }
 
   async function uploadTemplate(file) {
-    if (!file || !state.run || state.operation) return;
+    if (!file || !state.run || state.run.isAggregate || state.operation) return;
     const extension = file.name.toLowerCase().split('.').pop();
     if (!['xls', 'xlsx'].includes(extension)) {
       showToast('政务模板仅支持 .xls 或 .xlsx 文件', 'error');
@@ -2138,7 +2191,7 @@
   }
 
   async function generateReport() {
-    if (!state.run || state.operation) return;
+    if (!state.run || state.run.isAggregate || state.operation) return;
     state.operation = 'generate';
     const button = byId('generateButton'); setBusy(button, true, '正在生成政务报盘包');
     const syncButton = byId('syncButton'); syncButton.disabled = true;
@@ -2262,6 +2315,16 @@
     });
   }
 
+  function downloadAllSubjectsExport() {
+    if (!selectionMatchesRelease()) return;
+    downloadExportFile(`${API_ROOT}/releases/${encodeURIComponent(state.release.id)}/audit-export`, {
+      control: byId('allSubjectsExportButton'),
+      title: '全部主体名单',
+      detail: '正在汇总各主体最新的纳入、排除和人工确认结果',
+      fallbackFilename: '社保增员全部主体名单.xlsx',
+    });
+  }
+
   function downloadReportPackage(event) {
     event.preventDefault();
     if (!state.run?.reportPackage) return;
@@ -2298,6 +2361,7 @@
     byId('supplementNote').addEventListener('input', updateSupplementSubmitState);
     byId('supplementForm').addEventListener('submit', addSupplementEmployee);
     byId('auditExportButton').addEventListener('click', downloadAuditExport);
+    byId('allSubjectsExportButton').addEventListener('click', downloadAllSubjectsExport);
     byId('missingExportButton').addEventListener('click', downloadMissingExport);
     byId('downloadButton').addEventListener('click', downloadReportPackage);
     byId('confirmBatchButton').addEventListener('click', confirmBatch);

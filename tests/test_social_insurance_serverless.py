@@ -1143,6 +1143,10 @@ def test_cron_refresh_requires_secret_and_returns_refresh_result(monkeypatch: py
 def test_vercel_routes_reporting_cron_to_an_isolated_named_python_service() -> None:
     config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
 
+    # Vercel schedules use UTC: 00:00 UTC is 08:00 Asia/Shanghai.
+    assert config["crons"] == [
+        {"path": "/api/social-insurance/cron/refresh", "schedule": "0 0 * * *"}
+    ]
     assert "functions" not in config
     assert config["services"] == {
         "workbench": {

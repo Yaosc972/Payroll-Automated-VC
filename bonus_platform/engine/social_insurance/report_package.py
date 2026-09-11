@@ -41,7 +41,7 @@ def _route_employees(run: dict[str, Any], route: str) -> list[dict[str, Any]]:
     ]
 
 
-def _uploaded_template(run: dict[str, Any], route: str) -> dict[str, Any] | None:
+def _uploaded_template(run: dict[str, Any], route: str, *, require_local_file: bool = True) -> dict[str, Any] | None:
     templates = run.get("templates") if isinstance(run.get("templates"), dict) else {}
     metadata = templates.get(route) if isinstance(templates.get(route), dict) else None
     if metadata is None and route == "shenzhen-social-medical" and isinstance(run.get("template"), dict):
@@ -50,13 +50,13 @@ def _uploaded_template(run: dict[str, Any], route: str) -> dict[str, Any] | None
         return None
     filename = Path(str(metadata.get("filename") or "")).name
     path = get_run_dir(str(run.get("id") or "")) / filename
-    if not filename or not path.is_file():
+    if not filename or (require_local_file and not path.is_file()):
         return None
     return {
         "route": route,
         "filename": str(metadata.get("originalFilename") or filename),
         "period": str(run.get("periodEnd") or "")[:7].replace("-", ""),
-        "size": path.stat().st_size,
+        "size": path.stat().st_size if path.is_file() else int(metadata.get("size") or 0),
         "path": path,
         "source": "uploaded",
         "matchQuality": "uploaded",
@@ -75,7 +75,9 @@ def _template_reference(run: dict[str, Any], route: str) -> dict[str, Any] | Non
 
 
 def _public_template_reference(run: dict[str, Any], route: str) -> dict[str, Any] | None:
-    uploaded = _uploaded_template(run, route)
+    # Document-only reads retain durable upload metadata, not local artifacts.
+    # Generation still restores and checks the actual file.
+    uploaded = _uploaded_template(run, route, require_local_file=False)
     if uploaded:
         return {key: value for key, value in uploaded.items() if key != "path"}
     return public_template_match(route, str(run.get("subject") or ""))

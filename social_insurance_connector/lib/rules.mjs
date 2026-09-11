@@ -236,9 +236,13 @@ function shortCountyNameMatches(source, entry, index) {
 function matchOneAddress(rawSource, index, provinceHint = "") {
   const source = addressText(rawSource);
   if (!source) return null;
-  const provinceCode = identifyProvince(source, index) || provinceHint;
-  if (!provinceCode) return { status: "manual", value: "", reason: "地址未能识别有效省份" };
   const excludedNames = new Set(["市辖区", "市本级", "农垦", "农垦局"]);
+  const countyProvinces = new Set(index.counties
+    .filter((entry) => !excludedNames.has(entry.name) && contextScore(source, entry, index) >= 0)
+    .map((entry) => entry.code.slice(0, 2)));
+  const uniqueProvince = countyProvinces.size === 1 ? [...countyProvinces][0] : "";
+  const provinceCode = identifyProvince(source, index) || uniqueProvince || provinceHint;
+  if (!provinceCode) return { status: "manual", value: "", reason: "地址未能识别有效省份" };
 
   const scored = index.counties
     .filter((entry) => entry.code.startsWith(provinceCode) && !excludedNames.has(entry.name))
@@ -275,9 +279,20 @@ export function matchAdminDivision({ jobNumber, householdAddress, birthplace }, 
     };
   }
   const primary = matchOneAddress(householdAddress, index, identifyProvince(birthplace, index));
-  if (primary?.status === "matched") return { ...primary, source: "户口地址" };
   const fallback = matchOneAddress(birthplace, index);
-  if (fallback?.status === "matched") return { ...fallback, source: "户籍所在地" };
+  const primaryCode = text(primary?.value).split(".")[0];
+  const fallbackCode = text(fallback?.value).split(".")[0];
+  const primaryProvince = identifyProvince(householdAddress, index);
+  const primaryCities = index.cities.filter((entry) => addressText(householdAddress).includes(entry.name));
+  const compatible = (!primaryProvince || fallbackCode.startsWith(primaryProvince)) &&
+    primaryCities.every((entry) => fallbackCode.startsWith(entry.code));
+  const municipalOnly = primary?.reason === "仅到地级市，使用模板市辖区";
+  if (primary?.status === "matched" && !municipalOnly) return { ...primary, source: "户口地址" };
+  if (fallback?.status === "matched" && compatible &&
+      (!municipalOnly || fallbackCode.startsWith(primaryCode.slice(0, 4)))) {
+    return { ...fallback, source: "户籍所在地补齐" };
+  }
+  if (primary?.status === "matched") return { ...primary, source: "户口地址" };
   return {
     status: "manual",
     value: "",
@@ -286,7 +301,8 @@ export function matchAdminDivision({ jobNumber, householdAddress, birthplace }, 
   };
 }
 
-export function classifyHousehold(adminValue, householdAddress = "", index = null) {
+export function classifyHousehold(adminValue, householdAddress = "", index = null, birthplace = "") {
+  if ([householdAddress, birthplace].some((value) => addressText(value).includes("深圳"))) return "深圳户籍";
   const code = text(adminValue).split(".")[0];
   if (code.startsWith("4403")) return "深圳户籍";
   if (code.startsWith("44")) return "广东省内非深户";
@@ -297,6 +313,26 @@ export function classifyHousehold(adminValue, householdAddress = "", index = nul
   if (provinceCode === "44") return "广东省内非深户";
   if (/^\d{2}$/u.test(provinceCode)) return "广东省外户籍";
   return "";
+}
+
+function reportingHouseholdAddress(employee, admin, index) {
+  let address = text(employee.householdAddress) || text(employee.birthplace);
+  if (admin.status !== "matched" || admin.source === "业务核实修正") return address;
+  const code = text(admin.value).split(".")[0];
+  const parts = [code.slice(0, 2), code.slice(0, 4), code].map((key) => index.byCode.get(key));
+  let insertion = 0;
+  for (const part of parts) {
+    if (!part || ["市辖区", "市本级"].includes(part.name)) continue;
+    const aliases = [part.name, part.code.length === 2 ? provinceShortName(part.name) : part.shortName];
+    const found = aliases.map((alias) => ({ alias, offset: address.indexOf(alias, insertion) }))
+      .find(({ alias, offset }) => alias.length >= 2 && offset >= 0);
+    if (found) insertion = found.offset + found.alias.length;
+    else {
+      address = address.slice(0, insertion) + part.name + address.slice(insertion);
+      insertion += part.name.length;
+    }
+  }
+  return address;
 }
 
 export function normalizeEducation(value) {
@@ -346,7 +382,12 @@ export function evaluateEmployee(employee, adminIndex, options = {}) {
   const admin = matchAdminDivision(employee, adminIndex);
   if (admin.status !== "matched") issues.push(`行政区划：${admin.reason}`);
 
-  const household = classifyHousehold(admin.value, employee.householdAddress, adminIndex);
+  const household = classifyHousehold(admin.value, employee.householdAddress, adminIndex, employee.birthplace);
+  if (addressText(employee.birthplace).includes("深圳") && text(employee.householdAddress) &&
+      !addressText(employee.householdAddress).includes("深圳") &&
+      (identifyProvince(employee.householdAddress, adminIndex) || text(admin.value)) && !text(admin.value).startsWith("4403")) {
+    issues.push("地址冲突：户籍所在地为深圳，户口地址指向其他地区；已判深户，报盘地址请人工核对");
+  }
   const education = normalizeEducation(employee.education);
   const identity = deriveIdentity(education);
   const domicile = normalizeDomicileType(household, employee.domicileType);
@@ -389,6 +430,7 @@ export function evaluateEmployee(employee, adminIndex, options = {}) {
     "部门名称": "",
     "户籍地类别": domicile,
     "户口所在地行政区划代码": admin.value,
+    "户口具体地址": reportingHouseholdAddress(employee, admin, adminIndex),
     "就业形式": "雇佣就业",
     "就业前身份": "其他",
   };

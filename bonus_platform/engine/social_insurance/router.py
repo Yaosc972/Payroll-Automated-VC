@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from time import perf_counter_ns
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -25,7 +26,7 @@ from .baseline import (
     load_monthly_baseline,
 )
 from .field_metadata import FieldMetadataError
-from .report import build_audit_export, generate_report, resolve_download, rpa_status, store_template
+from .report import build_all_subject_view, build_all_subject_audit_export, build_audit_export, generate_report, resolve_download, rpa_status, store_template
 from .report_package import (
     build_export_preflight,
     build_missing_export,
@@ -693,6 +694,19 @@ def get_run(request: Request, run_id: str) -> dict[str, Any]:
         raise _http_error(exc) from exc
 
 
+@router.get("/releases/{release_id}/runs/all")
+def get_all_subject_runs(request: Request, release_id: str, response: Response) -> dict[str, Any]:
+    _require_access(request)
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        release = load_reporting_release(release_id)
+        if release is None:
+            raise RunNotFoundError("成功集成版本不存在")
+        return {"run": build_all_subject_view(release), "preflight": None}
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+
+
 @router.post("/runs/{run_id}/supplement-candidates/search")
 def search_supplement_candidates(
     request: Request,
@@ -831,6 +845,21 @@ def download_audit_export(request: Request, run_id: str) -> FileResponse:
         filename=path.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+@router.get("/releases/{release_id}/audit-export")
+def download_all_subject_audit_export(request: Request, release_id: str) -> Response:
+    _require_access(request)
+    try:
+        release = load_reporting_release(release_id)
+        if release is None:
+            raise RunNotFoundError("成功集成版本不存在")
+        content = build_all_subject_audit_export(release)
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+    filename = f"社保增员全部主体名单_{release['periodStart']}_{release['periodEnd']}.xlsx"
+    return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}", "Cache-Control": "no-store"})
 
 
 @router.get("/runs/{run_id}/missing-export")

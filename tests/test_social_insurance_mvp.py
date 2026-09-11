@@ -1233,7 +1233,7 @@ def test_fixture_sync_api_supports_page_review_flow(tmp_path: Path, monkeypatch:
     assert response.status_code == 200
     run = response.json()
     assert run["summary"]["total"] == 2
-    assert run["ruleVersion"] == "2026.08.27-07"
+    assert run["ruleVersion"] == "2026.09.10-01"
     assert run["sourceSummary"]["rawApiResponseSaved"] is False
     assert run["sourceSummary"]["monthlyBaseline"]["created"] is True
     assert run["confirmationDate"] == "2026-08-17"

@@ -25,7 +25,7 @@ function parseDateOnly(value, field) {
 }
 
 function validateRuleVersion(value) {
-  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.08.27-07").trim();
+  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.09.10-01").trim();
   if (!value || String(value) !== expected) {
     throw new ConnectorError("RULE_VERSION_MISMATCH", "连接器规则版本与工作台不一致", 409);
   }

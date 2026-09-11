@@ -125,7 +125,7 @@
             </header>
             <div class="review-toolbar">
               <div class="review-query-tools">
-                <label class="search-control"><span aria-hidden="true">⌕</span><input id="employeeSearch" type="search" placeholder="搜索姓名、工号或证件号后四位" /></label>
+                <label class="search-control"><span aria-hidden="true">⌕</span><input id="employeeSearch" type="search" placeholder="搜索主体、姓名、工号或证件号后四位" /></label>
                 <div class="filter-tabs" role="group" aria-label="状态筛选">
                   <button class="active" type="button" data-filter="all">全部 <b id="filterAll">0</b></button>
                   <button type="button" data-filter="needs_review">待确认 <b id="filterReview">0</b></button>
@@ -144,6 +144,7 @@
               <div class="review-actions">
                 <button class="secondary-button supplement-button" id="openSupplementButton" type="button" disabled>＋ 补充增员</button>
                 <button class="secondary-button" id="auditExportButton" type="button" disabled>导出审核清单</button>
+                <button class="secondary-button" id="allSubjectsExportButton" type="button" disabled>导出全部主体名单</button>
                 <button class="secondary-button" id="missingExportButton" type="button" disabled>导出待补资料</button>
                 <button class="secondary-button confirm-batch-button" id="confirmBatchButton" type="button" disabled>确认本批人员</button>
               </div>
@@ -281,6 +282,6 @@
       <span class="export-transition-progress" aria-hidden="true"><i></i></span>
     </div>
     <div class="toast-stack" id="toastRegion" aria-live="polite" aria-atomic="false" aria-label="操作通知"></div>
-  <script src="social-insurance.js?v=48"></script>
+  <script src="social-insurance.js?v=49"></script>
   </body>
 </html>

@@ -6,7 +6,7 @@ import subjectsHandler from "../api/subjects.mjs";
 import healthHandler from "../api/health.mjs";
 import { listSubjects, syncCandidates } from "../lib/service.mjs";
 
-const RULE_VERSION = "2026.08.27-07";
+const RULE_VERSION = "2026.09.10-01";
 
 function setConfiguration() {
   process.env.CONNECTOR_TOKEN = "test-connector-token";

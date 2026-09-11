@@ -1112,7 +1112,7 @@ def _blocking_reason(employee: dict[str, Any]) -> str | None:
 
 
 def confirm_run(run_id: str) -> dict[str, Any]:
-    run = load_run(run_id)
+    run = load_run(run_id, document_only=True)
     included = [item for item in run.get("employees") or [] if item.get("decision") == "include"]
     if not included:
         raise RunValidationError("当前批次没有纳入报盘的人员")
@@ -1121,4 +1121,5 @@ def confirm_run(run_id: str) -> dict[str, Any]:
         raise RunValidationError(f"仍有{len(unresolved)}人需要人工确认")
     run["status"] = "confirmed"
     run["confirmedAt"] = current_timestamp()
-    return save_run(run)
+    # Confirmation changes the document, not template/export artifacts or membership.
+    return save_run(run, decision_only=True)

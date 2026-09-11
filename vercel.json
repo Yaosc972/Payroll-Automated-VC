@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "crons": [
+    {
+      "path": "/api/social-insurance/cron/refresh",
+      "schedule": "0 0 * * *"
+    }
+  ],
   "services": {
     "workbench": {
       "root": ".",

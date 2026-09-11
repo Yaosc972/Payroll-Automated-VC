@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -117,7 +120,7 @@ def _audit_export_rows(run: dict[str, Any]) -> tuple[list[str], list[list[str | 
             "离职日期": source.get("lastWorkDate"),
             "在职状态": source.get("employeeStatus"),
             "雇佣关系": source.get("employType"),
-            "合同主体": source.get("subject"),
+            "合同主体": source.get("subject") or run.get("subject"),
             "工作地点": source.get("place"),
             "员工考勤地点": source.get("employmentPlace"),
             "社保缴纳地": (
@@ -184,8 +187,7 @@ def _audit_export_rows(run: dict[str, Any]) -> tuple[list[str], list[list[str | 
     return headers, rows
 
 
-def build_audit_export(run_id: str) -> Path:
-    run = load_run(run_id)
+def _audit_workbook(run: dict[str, Any]) -> Workbook:
     headers, rows = _audit_export_rows(run)
     workbook = Workbook()
     sheet = workbook.active
@@ -364,6 +366,12 @@ def build_audit_export(run_id: str) -> Path:
     sheet.page_margins.top = 0.35
     sheet.page_margins.bottom = 0.35
 
+    return workbook
+
+
+def build_audit_export(run_id: str) -> Path:
+    run = load_run(run_id, document_only=True)
+    workbook = _audit_workbook(run)
     run_dir = get_run_dir(run_id)
     filename = (
         f"社保增员审核清单_{str(run.get('periodStart') or '').replace('-', '')}"
@@ -371,11 +379,84 @@ def build_audit_export(run_id: str) -> Path:
     )
     output_path = run_dir / filename
     workbook.save(output_path)
+    workbook.close()
     try:
         output_path.chmod(0o600)
     except OSError:
         pass
     return output_path
+
+
+def load_release_subject_runs(release: dict[str, Any]) -> list[dict[str, Any]]:
+    subjects = release.get("subjects") or []
+    if not subjects or any(not item.get("runId") or not item.get("value") for item in subjects):
+        raise RunValidationError("全部主体名单尚未生成，请先生成全部主体批次")
+    if len({item["runId"] for item in subjects}) != len(subjects):
+        raise RunValidationError("全部主体批次存在重复引用，请重新生成")
+    def read_subject(item: dict[str, Any]) -> dict[str, Any]:
+        run = load_run(str(item["runId"]), document_only=True)
+        if any(run.get(field) != release.get(field) for field in ("periodStart", "periodEnd", "confirmationDate")):
+            raise RunValidationError("主体名单的周期或确认日不一致，请重新生成全部主体批次")
+        if run.get("subject") != item["value"]:
+            raise RunValidationError("主体名单引用不一致，请重新生成全部主体批次")
+        return run
+    with ThreadPoolExecutor(max_workers=min(8, len(subjects))) as executor:
+        return list(executor.map(read_subject, subjects))
+
+
+def build_all_subject_view(release: dict[str, Any]) -> dict[str, Any]:
+    subject_runs = load_release_subject_runs(release)
+    employees = []
+    for run in subject_runs:
+        for original in run.get("employees") or []:
+            employee = deepcopy(original)
+            employee["subjectRunId"] = run["id"]
+            employee.setdefault("source", {})["subject"] = run["subject"]
+            employees.append(employee)
+    return {
+        "id": f"all_{release['id']}", "isAggregate": True,
+        "subject": "__all_subjects__", "subjectCount": len(subject_runs),
+        "periodStart": release["periodStart"], "periodEnd": release["periodEnd"],
+        "confirmationDate": release["confirmationDate"], "status": "draft",
+        "updatedAt": max((str(run.get("updatedAt") or "") for run in subject_runs), default=""),
+        "employees": employees, "processingPlan": [],
+        "summary": {
+            "total": len(employees),
+            "ready": sum(item.get("status") == "ready" for item in employees),
+            "needsReview": sum(item.get("status") == "needs_review" for item in employees),
+            "included": sum(item.get("decision") == "include" for item in employees),
+            "excluded": sum(item.get("status") == "excluded" for item in employees),
+        },
+        "sourceSummary": {"warnings": ["全部主体仅供统一查看与导出；请进入具体主体确认人员、上传模板及生成报盘。"]},
+    }
+
+
+def build_all_subject_audit_export(release: dict[str, Any]) -> bytes:
+    subject_runs = load_release_subject_runs(release)
+    employees = []
+    for run in subject_runs:
+        for original in run.get("employees") or []:
+            employee = deepcopy(original)
+            employee.setdefault("source", {})["subject"] = run["subject"]
+            employees.append(employee)
+    workbook = _audit_workbook({**release, "subject": "全部主体", "source": "各主体最新审核结果", "employees": employees})
+    overview = workbook.create_sheet("主体汇总")
+    overview.append(["合同主体", "全部人数", "纳入人数", "排除人数", "名单状态"])
+    for run in subject_runs:
+        people = run.get("employees") or []
+        overview.append([_safe_excel_text(run["subject"]), len(people),
+                         sum(item.get("decision") == "include" for item in people),
+                         sum(item.get("decision") == "exclude" for item in people),
+                         "已确认" if run.get("status") in {"confirmed", "generated"} else "待确认"])
+    overview.freeze_panes = "A2"
+    overview.column_dimensions["A"].width = 40
+    for column in "BCDE":
+        overview.column_dimensions[column].width = 16
+    overview.auto_filter.ref = overview.dimensions
+    content = BytesIO()
+    workbook.save(content)
+    workbook.close()
+    return content.getvalue()
 
 
 def _engine_dir() -> Path:
