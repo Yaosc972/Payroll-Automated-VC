@@ -9,7 +9,7 @@ RULE_VERSION = "2026.09.10-01"
 
 RULE_CATALOG: dict[str, Any] = {
     "version": RULE_VERSION,
-    "updatedAt": "2026-08-27",
+    "updatedAt": "2026-09-10",
     "scope": "全国社保增员",
     "status": "业务验证中",
     "summary": "这份规则说明当前名单怎么产生、字段怎么填写、哪些情况必须由业务同事确认。",

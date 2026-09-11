@@ -1,6 +1,6 @@
 {
   "releaseChannel": "production-integration",
-  "releaseBranch": "codex/admin-module-release-consolidation",
+  "releaseBranch": "codex/domestic-production-20260909",
   "deployOwner": "integration-window-only",
   "policy": "Only deploy production from the integration branch. Module windows should deliver commits for integration, not deploy production directly.",
   "modules": [

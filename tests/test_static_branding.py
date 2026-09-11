@@ -1430,7 +1430,7 @@ def test_china_employee_payroll_can_calculate_large_files_without_server_upload(
 def test_release_info_marks_integration_branch_as_only_production_source():
     release_info = json.loads(RELEASE_INFO_JSON.read_text(encoding="utf-8"))
 
-    assert release_info["releaseBranch"] == "codex/admin-module-release-consolidation"
+    assert release_info["releaseBranch"] == "codex/domestic-production-20260909"
     assert release_info["deployOwner"] == "integration-window-only"
     assert "Only deploy production from the integration branch" in release_info["policy"]
     assert "admin.html" in release_info["requiredStaticFiles"]

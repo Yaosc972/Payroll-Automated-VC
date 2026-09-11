@@ -3209,7 +3209,7 @@ def test_business_rules_api_is_versioned_and_uses_business_language():
     assert response.status_code == 200
     payload = response.json()
     assert payload["version"]
-    assert payload["updatedAt"] == "2026-08-27"
+    assert payload["updatedAt"] == "2026-09-10"
     assert payload["scope"] == "全国社保增员"
     assert any(section["id"] == "candidate-list" for section in payload["sections"])
     serialized = response.text

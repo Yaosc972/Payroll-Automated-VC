@@ -15,20 +15,21 @@
 
 | 用途 | 分支 | 说明 |
 |---|---|---|
-| Vercel 生产整合 | `codex/admin-module-release-consolidation-vercel` | 当前 Vercel 生产整合基线。只从这里部署 Vercel。 |
+| Vercel 生产整合 | `codex/domestic-production-20260909` | 当前实际生产发布线；2026-09-11 发布前核实生产为 `63ac5eca`。沿此线选择性集成，不从旧模块分支覆盖生产。 |
+| 历史 Vercel 整合 | `codex/admin-module-release-consolidation-vercel` | 历史发布线，不再作为当前生产基线。 |
 | 历史整合基线 | `codex/admin-module-release-consolidation` | Vercel 专用分支创建前的整合基线。后续不要直接从这里部署生产，除非先同步到 Vercel 专用分支。 |
 | 公司服务器整合 | `codex/admin-module-release-consolidation-platform` | IT 已改造的公司服务器部署线。后续公司服务器改动应优先基于这条线。 |
 | 后台管理原型 | `codex/admin-management-console` | 后台管理早期原型来源，后续不应直接作为生产部署分支。 |
 | 招聘奖金核算 | `codex/recruitment-bonus-workbench` | 招聘模块开发分支。 |
 | 中国区正式工薪酬 | `codex/china-employee-payroll` | 正式工薪酬模块开发分支。 |
-| 中国区外包工薪酬 | `codex/domestic-labor-payroll` | 外包工薪酬模块开发分支。当前生产默认不开放。 |
-| FBU 美洲绩效奖金 | `codex/fbu-americas-performance-bonus` | FBU 模块开发分支。当前生产默认不开放。 |
+| 中国区外包工薪酬 | `codex/domestic-labor-payroll` | 外包工薪酬模块开发分支。生产已集成，入口遵循现有授权。 |
+| FBU 美洲绩效奖金 | `codex/fbu-americas-performance-bonus` | FBU 模块开发分支。生产已集成，入口遵循现有授权。 |
 | 海外劳务报账核对 | `codex/overseas-labor-worker-migration` / `codex/overseas-labor-async-storage` | 海外劳务模块历史开发线。集成时必须按具体 commit 选择，不要整分支硬合。 |
 
-当前已从 `codex/admin-module-release-consolidation` 创建 Vercel 专用分支：
+当前 Vercel 生产发布分支（以实际生产部署元数据复核）：
 
 ```bash
-codex/admin-module-release-consolidation-vercel
+codex/domestic-production-20260909
 ```
 
 后续 Vercel 生产发布以这条分支为准。
@@ -59,8 +60,9 @@ Vercel 生产线建议保持：
 - 招聘奖金核算：开放给有权限用户
 - 中国区正式工薪酬：按后台开关和角色开放
 - 海外劳务报账核对：首页可见，状态 `UAT试点`，只给有权限用户使用
-- 中国区外包工薪酬：不开放
-- FBU 美洲绩效奖金：不开放
+- 中国区外包工薪酬：按现有后台开关和角色开放
+- FBU 美洲绩效奖金：按现有后台开关和角色开放
+- 社保报盘：按现有授权试用；政府系统最终提交仍禁用
 
 ## 标准集成流程
 
@@ -87,7 +89,7 @@ commit：
 整合窗口执行：
 
 ```bash
-git switch codex/admin-module-release-consolidation-vercel
+git switch codex/domestic-production-20260909
 git status --short
 git fetch --all --prune
 ```
