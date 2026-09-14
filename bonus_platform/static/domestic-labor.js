@@ -551,18 +551,11 @@ function bindEvents() {
 
   el.subjectCardGrid?.addEventListener('click', (event) => {
     const card = event.target.closest('[data-subject-entry]');
-    if (!card) return;
-    if (card.disabled || card.getAttribute('aria-disabled') === 'true') return;
+    if (!card || card.disabled) return;
     const subject = card.dataset.subjectEntry;
-    if (subject === 'quanqinjiang' || subject === 'canbu' || subject === 'waisu_butie' || subject === 'gonglingjiang' || subject === 'gangwei_butie' || subject === 'gaowen_butie' || subject === 'yeban_butie') {
-      state.activeWorkbenchSubject = subject;
-      state.activeCanbuBatchId = '';
-      showView('canbuBatches');
-      updateSubjectWorkbenchLabels();
-      renderCanbuBatchList();
-      return;
-    }
-    toast('该科目将按餐补样板工作台后续改造。');
+    if (!SUBJECT_WORKBENCH[subject]) return;
+    state.activeWorkbenchSubject = subject;
+    openCanbuBatchModal();
   });
 
   el.navSubjectHome?.addEventListener('click', (event) => {
@@ -674,6 +667,12 @@ function bindEvents() {
   el.btnToggleAside?.addEventListener('click', toggleAside);
   el.btnCloseExplain?.addEventListener('click', closeExplainDrawer);
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab' && el.canbuBatchModal?.classList.contains('visible')) {
+      const controls = [...el.canbuBatchModal.querySelectorAll('button:not(:disabled), input:not([type="hidden"]), summary')].filter(item => item.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
     if (event.key === 'Escape') {
       closeCanbuBatchModal();
       closeCalcModal();
@@ -687,19 +686,48 @@ function openCanbuBatchModal() {
   subjectSelect.innerHTML = Object.entries(SUBJECT_WORKBENCH).map(([key, value]) => `<option value="${key}">${escapeHtml(value.name)}</option>`).join('');
   subjectSelect.value = state.activeWorkbenchSubject;
   document.querySelector('#newActivityName').value = '';
-  subjectSelect.onchange = () => { state.activeWorkbenchSubject = subjectSelect.value; updateSubjectWorkbenchLabels(); };
+  const picker = document.querySelector('#newActivityPicker');
+  const options = document.querySelector('#newActivityOptions');
+  picker.open = false;
+  state.batchModalReturnFocus = document.activeElement;
+  const renderOptions = () => {
+    document.querySelector('#newActivitySubjectValue').textContent = getWorkbenchConfig(subjectSelect.value).name;
+    options.innerHTML = Object.entries(SUBJECT_WORKBENCH).map(([key, value]) => `<button type="button" role="option" aria-selected="${key === subjectSelect.value}" data-new-subject="${key}">${escapeHtml(value.name)}</button>`).join('');
+  };
+  subjectSelect.onchange = () => { state.activeWorkbenchSubject = subjectSelect.value; updateSubjectWorkbenchLabels(); renderOptions(); };
+  renderOptions();
+  options.onclick = event => {
+    const button = event.target.closest('[data-new-subject]');
+    if (!button) return;
+    subjectSelect.value = button.dataset.newSubject;
+    subjectSelect.onchange();
+    picker.open = false;
+    picker.querySelector('summary').focus();
+  };
+  picker.onkeydown = event => {
+    if (event.key === 'Escape' && picker.open) {
+      event.stopPropagation(); event.preventDefault(); picker.open = false; picker.querySelector('summary').focus();
+    } else if (['ArrowDown', 'ArrowUp'].includes(event.key)) {
+      event.preventDefault(); picker.open = true;
+      const buttons = [...options.querySelectorAll('button')];
+      const index = buttons.indexOf(document.activeElement);
+      buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+    }
+  };
+  picker.onfocusout = event => { if (!picker.contains(event.relatedTarget)) picker.open = false; };
   updateSubjectWorkbenchLabels();
   setDefaultCanbuBatchMonth();
   renderCanbuBatchMonthPicker();
   el.canbuBatchModal?.classList.add('visible');
   document.body.style.overflow = 'hidden';
-  window.setTimeout(() => el.canbuBatchMonthGrid?.querySelector('.selected')?.focus(), 0);
+  window.setTimeout(() => picker.querySelector('summary').focus(), 0);
 }
 
 function closeCanbuBatchModal() {
   if (!el.canbuBatchModal?.classList.contains('visible')) return;
   el.canbuBatchModal.classList.remove('visible');
   document.body.style.overflow = '';
+  if (state.batchModalReturnFocus?.isConnected) state.batchModalReturnFocus.focus();
 }
 
 function closeCalcModal() {
@@ -732,12 +760,13 @@ function updateSubjectWorkbenchLabels() {
   if (el.subjectBatchListTitle) el.subjectBatchListTitle.textContent = '核算活动';
   if (el.subjectBatchListSub) el.subjectBatchListSub.textContent = '查看和继续核算活动。';
   if (el.btnNewCanbuBatch) el.btnNewCanbuBatch.textContent = '新建核算活动';
-  if (el.canbuBatchModalTitle) el.canbuBatchModalTitle.textContent = `新建${config.name}批次`;
-  if (el.subjectBatchModalSub) el.subjectBatchModalSub.textContent = `选择本次${config.name}核算月份，创建后进入数据上传流程。`;
+  if (el.canbuBatchModalTitle) el.canbuBatchModalTitle.textContent = '新建核算活动';
+  if (el.subjectBatchModalSub) el.subjectBatchModalSub.textContent = '选择科目和月份，填写活动名称。';
 }
 
 function showView(viewName) {
   document.body.classList.toggle('dl-activities-active', viewName === 'canbuBatches');
+  document.body.classList.toggle('dl-home-active', viewName === 'home');
   state.view = viewName;
   [
     ['home', el.subjectHomeView],
