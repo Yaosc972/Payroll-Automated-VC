@@ -3558,6 +3558,15 @@
 .dl-night-upload-layout .dl-night-editor-layout:not(:has([data-night-shift-break-row])) { grid-template-columns:1fr; height:480px; }
 .dl-night-editor-layout:not(:has([data-night-shift-break-row])) .dl-night-shift-form { display:none; }
 @media(max-width:1150px) { .dl-night-upload-layout { grid-template-columns:1fr; } .dl-night-upload-layout > .dl-upload-primary { order:0; } }
+
+    .dl-modal-body .dl-month-field + .dl-month-field { margin-top:12px; }
+    .dl-activity-toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; padding:18px 24px; background:#f8fafc; border-block:1px solid #e2e8f0; }
+    .dl-activity-scopes { display:flex; padding:4px; border:1px solid #e2e8f0; border-radius:12px; background:white; }
+    .dl-month-field select,.dl-activity-toolbar input,.dl-activity-toolbar select { min-height:40px; border:1px solid #d0d5dd; border-radius:10px; padding:8px 12px; color:#344054; background:white; font:inherit; }
+    .dl-activity-toolbar input:focus,.dl-activity-toolbar select:focus { outline:2px solid #2563eb; outline-offset:2px; }
+    .dl-activity-search { flex:1; min-width:200px; }.dl-activity-search input { width:100%; }
+    .dl-activity-footer { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; color:#667085; border-top:1px solid #e2e8f0; }
+    .dl-activity-meta { font-size:12px; font-weight:400; color:#667085; margin-top:4px; }.dl-activity-mine { color:#2563eb; background:#eff6ff; border-radius:6px; padding:2px 6px; margin-left:6px; font-size:11px; }
     </style>
     <link rel="stylesheet" href="domestic-labor-rulebook.css?v=7">
   </head>
@@ -3571,7 +3580,7 @@
         </a>
         <nav class="dl-top-nav" aria-label="中国区外包工薪酬核算模块">
           <a class="active" id="navSubjectHome" href="#subjectHomeView">薪酬科目</a>
-          <a id="navBatchList" href="#canbuBatchListView">批次列表</a>
+          <a id="navBatchList" href="#canbuBatchListView">活动列表</a>
           <a id="navRulePackage" href="#rulePackageView">规则包</a>
         </nav>
       </div>
@@ -3705,7 +3714,16 @@
                 <button class="btn-new-batch" id="btnNewCanbuBatch" type="button">新建餐补批次</button>
               </div>
             </div>
+            <div class="dl-activity-toolbar">
+              <div class="dl-activity-scopes" role="group" aria-label="活动范围"><button class="dl-segment active" data-activity-scope="mine" aria-pressed="true">我的活动</button><button class="dl-segment" data-activity-scope="all" aria-pressed="false">全部活动</button></div>
+              <label class="dl-activity-search"><input id="activitySearch" type="search" placeholder="搜索活动名称、创建人" aria-label="搜索活动名称、创建人"></label>
+              <select id="activitySubject" aria-label="核算科目"><option value="all">全部科目</option></select>
+              <input id="activityMonth" type="month" aria-label="核算月份">
+              <select id="activityStatus" aria-label="活动状态"><option value="all">全部状态</option><option>草稿</option><option>上传中</option><option>已提交</option><option>已核算</option><option>失败</option></select>
+              <button class="dl-btn" id="refreshActivities">刷新</button>
+            </div>
             <div id="canbuBatchTable" class="dl-table-wrap"></div>
+            <div class="dl-activity-footer"><span id="activityCount">正在读取活动…</span><div class="dl-actions-inline"><button class="dl-btn" id="activityPrev">上一页</button><button class="dl-btn" id="activityNext">下一页</button></div></div>
           </div>
         </section>
 
@@ -3724,6 +3742,8 @@
           <p class="dl-modal-sub" id="subjectBatchModalSub">选择本次餐补核算月份，创建后进入数据上传流程。</p>
         </div>
         <div class="dl-modal-body">
+          <label class="dl-month-field"><span>核算科目</span><select id="newActivitySubject" aria-label="核算科目"></select></label>
+          <label class="dl-month-field"><span>活动名称</span><input id="newActivityName" maxlength="120" placeholder="选填，例如：9月东莞操作线初算" autocomplete="off"></label>
           <label class="dl-month-field">
             <span>核算月份</span>
             <input id="canbuBatchMonth" type="text" autocomplete="off" readonly />
@@ -3739,7 +3759,7 @@
         </div>
         <div class="dl-modal-foot">
           <button class="dl-btn" id="btnCancelCanbuBatch" type="button">取消</button>
-          <button class="btn-primary" id="btnConfirmCanbuBatch" type="button">创建批次</button>
+          <button class="btn-primary" id="btnConfirmCanbuBatch" type="button">创建活动</button>
         </div>
       </div>
     </div>
@@ -3767,7 +3787,7 @@
     </div>
 
     <script src="domestic-labor-rulebook.js?v=6"></script>
-    <script src="domestic-labor.js?v=25"></script>
+    <script src="domestic-labor.js?v=27"></script>
     <script src="feedback-widget.js?v=20260916-01"></script>
   </body>
 </html>

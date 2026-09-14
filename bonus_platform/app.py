@@ -14766,12 +14766,121 @@ def download_waisu_abandonment_template():
                     headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote("外宿补贴自离名单模板.xlsx")})
 
 
+@app.middleware("http")
+async def domestic_configuration_scope(request: Request, call_next):
+    from .engine.domestic_labor.night_shift_config import CONFIG_OWNER
+    token = None
+    if request.url.path.startswith("/api/domestic-labor/"):
+        current = _labor_current_user_from_request(request)
+        user = (current or {}).get("user") or {}
+        token = CONFIG_OWNER.set(str(user.get("id") or "anonymous"))
+    try:
+        return await call_next(request)
+    finally:
+        if token is not None:
+            CONFIG_OWNER.reset(token)
+
+
+def _domestic_actor(request: Request) -> dict:
+    current = _labor_current_user_from_request(request)
+    user = (current or {}).get("user") or {}
+    user_id = str(user.get("id") or "")
+    if not user_id:
+        raise HTTPException(401, "请先登录薪酬核算工作台")
+    return {"ownerId": user_id, "ownerName": str(user.get("name") or user.get("email") or user_id)}
+
+
+def _domestic_owned_activity(activity_id: str, actor: dict) -> dict:
+    try:
+        activity = load_payroll_metadata(get_payroll_run_dir(activity_id))
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "活动不存在") from exc
+    if activity.get("kind") != "activity":
+        raise HTTPException(404, "活动不存在")
+    if activity.get("ownerId") != actor["ownerId"]:
+        raise HTTPException(403, "请新建自己的活动进行核算；其他人的活动可查看和下载")
+    return activity
+
+
+def _domestic_validate_activity_subject(activity_id: str, actor: dict, engines: list, month: str) -> None:
+    if not activity_id:
+        return
+    activity = _domestic_owned_activity(activity_id, actor)
+    if engines != [activity["subject"]] or str(month).replace("-", "") != activity["month"].replace("-", ""):
+        raise HTTPException(400, "上传核算的科目或月份与活动不一致，请重新选择活动")
+
+
+def _domestic_run_owner(request: Request, activity_id: str = "") -> dict:
+    actor = _domestic_actor(request)
+    if activity_id:
+        _domestic_owned_activity(activity_id, actor)
+    return {**actor, "activityId": activity_id}
+
+
+@app.get("/api/domestic-labor/activities")
+def list_domestic_labor_activities(request: Request) -> dict:
+    actor = _domestic_actor(request)
+    records = list_payroll_metadata(compact=True)
+    activities = {r["id"]: dict(r) for r in records if r.get("kind") == "activity"}
+    runs = [r for r in records if not r.get("kind")]
+    # Newest run wins; completed results remain available after the browser closes.
+    for run in sorted(runs, key=lambda row: row["id"]):
+        activity_id = run.get("activityId")
+        activity = activities.get(activity_id)
+        if not activity:
+            subject = (run.get("engines") or ["canbu"])[0]
+            month = str(run.get("attendanceMonth") or "")
+            activity = {"id": run["id"], "subject": subject,
+                        "month": f"{month[:4]}-{month[4:6]}" if len(month) == 6 else month,
+                        "name": run.get("fileName") or "历史核算活动", "legacy": True,
+                        "ownerId": run.get("ownerId", ""), "ownerName": run.get("ownerName") or "历史活动（未记录创建人）",
+                        "createdAt": run.get("createdAt")}
+            activities[run["id"]] = activity
+        summary = run.get("summary") or {}
+        activity.update({"runId": run["id"], "status": {"已完成": "已核算", "等待上传": "上传中", "计算中": "已提交", "已上传": "已提交"}.get(run.get("status"), run.get("status")),
+                         "updatedAt": run.get("updatedAt"), "employeeCount": summary.get("total_employees", 0),
+                         "payableTotal": summary.get("total_" + activity["subject"], 0),
+                         "exceptionCount": summary.get("warning_count", 0)})
+    rows = sorted(activities.values(), key=lambda row: row.get("updatedAt") or "", reverse=True)
+    for row in rows:
+        row["isMine"] = row.get("ownerId") == actor["ownerId"]
+    return {"activities": rows, "currentUser": actor}
+
+
+@app.post("/api/domestic-labor/activities")
+def create_domestic_labor_activity(request: Request, payload: dict = Body(...)) -> dict:
+    actor = _domestic_actor(request)
+    subject = str(payload.get("subject") or "")
+    month = str(payload.get("month") or "")
+    if subject not in ENGINE_TEMPLATES or not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(400, "请选择有效的科目和核算月份")
+    activity = create_payroll_run({"kind": "activity", **actor, "subject": subject, "month": month,
+                                  "name": str(payload.get("name") or f"{month} 核算活动").strip()[:120],
+                                  "status": "草稿", "runId": "", "collectionSeniorityRoster": _normalize_domestic_collection_roster(payload.get("collectionSeniorityRoster", []))})
+    return {**activity, "isMine": True}
+
+
+@app.patch("/api/domestic-labor/activities/{activity_id}")
+def update_domestic_labor_activity(activity_id: str, request: Request, payload: dict = Body(...)) -> dict:
+    actor = _domestic_actor(request)
+    _domestic_owned_activity(activity_id, actor)
+    # Ownership, run association and computed totals never come from browser state.
+    patch = {key: payload[key] for key in ("name", "collectionSeniorityRoster") if key in payload}
+    if "collectionSeniorityRoster" in patch:
+        patch["collectionSeniorityRoster"] = _normalize_domestic_collection_roster(patch["collectionSeniorityRoster"])
+    if "name" in patch:
+        patch["name"] = str(patch["name"]).strip()[:120]
+        if not patch["name"]:
+            raise HTTPException(400, "请输入活动名称")
+    return update_payroll_metadata(activity_id, patch)
+
+
 @app.get("/api/domestic-labor/runs")
 def list_domestic_labor_runs() -> dict:
     return {
         "runs": [
             _compact_domestic_labor_metadata(metadata)
-            for metadata in list_payroll_metadata(compact=True)
+            for metadata in list_payroll_metadata(compact=True) if not metadata.get("kind")
         ]
     }
 
@@ -14804,7 +14913,7 @@ def _normalize_domestic_collection_roster(raw_roster: Any) -> list[dict]:
 
 
 @app.post("/api/domestic-labor/runs")
-async def create_domestic_labor_run(files: list[UploadFile] = File(None),
+async def create_domestic_labor_run(request: Request, activity_id: str = Body(""), files: list[UploadFile] = File(None),
                                      file: UploadFile = File(None), engines: str = Body(""),
                                      attendance_month: str = Body(""),
                                      password: str = Body(""), hrbp_list: str = Body(""),
@@ -14838,6 +14947,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
         if e not in valid_engines:
             raise HTTPException(400, f"未知引擎: {e}")
 
+    _domestic_validate_activity_subject(activity_id, _domestic_actor(request), engine_list, attendance_month)
     parsed_hrbp = []
     abandonment_roster = []
     abandonment_content = None
@@ -14873,6 +14983,7 @@ async def create_domestic_labor_run(files: list[UploadFile] = File(None),
     # Save uploaded file
     DOMESTIC_LABOR_RUNS_DIR.mkdir(parents=True, exist_ok=True)
     run = create_payroll_run({
+        **_domestic_run_owner(request, activity_id),
         "engines": engine_list,
         "attendanceMonth": attendance_month,
         "fileName": uploaded_files[0].filename,
@@ -15065,13 +15176,14 @@ def _domestic_labor_direct_upload_specs(payload: dict) -> list[dict]:
 
 
 @app.post("/api/domestic-labor/runs/direct-upload-plan")
-def create_domestic_labor_direct_upload_plan(payload: dict = Body(...)) -> dict:
+def create_domestic_labor_direct_upload_plan(request: Request, payload: dict = Body(...)) -> dict:
     if not domestic_labor_persistent_storage_enabled():
         raise HTTPException(409, "当前环境未启用 Supabase 直传。")
     specs = _domestic_labor_direct_upload_specs(payload)
     attendance_specs = [spec for spec in specs if spec["purpose"] == "attendance"]
     first = attendance_specs[0]
     run = create_payroll_run({
+        **_domestic_run_owner(request, str(payload.get("activityId") or "")),
         "status": "等待上传",
         "fileName": first["originalFilename"],
         "fileNames": [spec["originalFilename"] for spec in attendance_specs],
@@ -15107,13 +15219,15 @@ def create_domestic_labor_direct_upload_plan(payload: dict = Body(...)) -> dict:
 
 
 @app.post("/api/domestic-labor/runs/{run_id}/direct-upload-complete")
-async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
+async def complete_domestic_labor_direct_upload(run_id: str, request: Request, payload: dict = Body(...)) -> dict:
     if not domestic_labor_persistent_storage_enabled():
         raise HTTPException(409, "当前环境未启用 Supabase 直传。")
     try:
         metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    if metadata.get("ownerId") != _domestic_actor(request)["ownerId"]:
+        raise HTTPException(403, "只能提交自己的核算活动")
     if metadata.get("uploadMode") != "direct":
         raise HTTPException(400, "该任务不是浏览器直传任务。")
     if metadata.get("status") == "已完成":
@@ -15122,6 +15236,7 @@ async def complete_domestic_labor_direct_upload(run_id: str, payload: dict = Bod
         raise HTTPException(409, "该任务正在计算，请勿重复提交。")
 
     engine_list = _validate_domestic_labor_engine_list(payload.get("engines"))
+    _domestic_validate_activity_subject(metadata.get("activityId", ""), _domestic_actor(request), engine_list, str(payload.get("attendanceMonth") or ""))
     expected_files = metadata.get("expectedFiles") or [{
         "filename": str(metadata.get("savedFileName") or ""),
         "originalFilename": str(metadata.get("fileName") or ""),
@@ -15323,21 +15438,21 @@ def download_domestic_labor_file(run_id: str, filename: str) -> FileResponse:
         run_dir = get_payroll_run_dir(run_id)
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
-    # Check run dir first, then output dir
     path = materialize_payroll_file(run_id, filename)
-    if path is None:
-        path = PAYROLL_OUTPUT_DIR / Path(filename).name
-    if not path.exists():
+    if path is None or not path.exists():
         raise HTTPException(404, "文件不存在或已被清理。")
     return FileResponse(path, filename=path.name)
 
 
 @app.delete("/api/domestic-labor/runs/{run_id}")
-def delete_domestic_labor_run(run_id: str) -> dict:
+def delete_domestic_labor_run(run_id: str, request: Request) -> dict:
     try:
         run_dir = get_payroll_run_dir(run_id)
+        metadata = load_payroll_metadata(run_dir)
     except FileNotFoundError as exc:
         raise HTTPException(404, "薪酬计算任务不存在。") from exc
+    if metadata.get("ownerId") != _domestic_actor(request)["ownerId"]:
+        raise HTTPException(403, "只能删除自己的核算活动")
     delete_payroll_run(run_id)
     shutil.rmtree(run_dir, ignore_errors=True)
     return {"message": f"已删除任务: {run_id}"}

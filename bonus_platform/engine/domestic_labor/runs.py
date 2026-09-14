@@ -66,11 +66,11 @@ def save_payroll_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, 
 
 def _save_local_payroll_metadata(run_dir: Path, payload: Dict[str, Any]) -> None:
     metadata_path = run_dir / METADATA_FILE
-    tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
+    tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.{uuid4().hex}.tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_path, metadata_path)
     status_path = run_dir / STATUS_FILE
-    status_tmp_path = status_path.with_suffix(f"{status_path.suffix}.tmp")
+    status_tmp_path = status_path.with_suffix(f"{status_path.suffix}.{uuid4().hex}.tmp")
     status_payload = _compact_metadata(payload)
     status_tmp_path.write_text(json.dumps(status_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(status_tmp_path, status_path)
@@ -88,28 +88,29 @@ def update_payroll_metadata(run_id: str, updates: Dict[str, Any]) -> Dict[str, A
 
 
 def load_payroll_metadata(run_dir: Path) -> Dict[str, Any]:
-    path = run_dir / METADATA_FILE
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+    # Remote state is authoritative: another worker may have completed or deleted the run.
     if domestic_labor_persistent_storage_enabled():
         payload = load_domestic_labor_metadata_from_persistent(run_dir.name)
         if payload:
             run_dir.mkdir(parents=True, exist_ok=True)
-            _save_local_payroll_metadata(run_dir, payload)
             return payload
+        raise FileNotFoundError("薪酬计算任务不存在。")
+    path = run_dir / METADATA_FILE
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
     raise FileNotFoundError("薪酬计算任务不存在。")
 
 
 def load_payroll_status(run_dir: Path) -> Dict[str, Any]:
-    path = run_dir / STATUS_FILE
-    if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
     if domestic_labor_persistent_storage_enabled():
         payload = load_domestic_labor_status_from_persistent(run_dir.name)
         if payload:
             return payload
-    metadata = load_payroll_metadata(run_dir)
-    return _compact_metadata(metadata)
+        raise FileNotFoundError("薪酬计算任务不存在。")
+    path = run_dir / STATUS_FILE
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return _compact_metadata(load_payroll_metadata(run_dir))
 
 
 def list_payroll_metadata(compact: bool = False) -> List[Dict[str, Any]]:

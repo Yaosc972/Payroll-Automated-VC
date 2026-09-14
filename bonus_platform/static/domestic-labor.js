@@ -39,7 +39,7 @@ const state = {
   exportInProgress: false,
 };
 
-const CANBU_BATCH_STORAGE_KEY = 'domesticLabor.canbuBatches.v1';
+const activityFilters = { scope: 'mine', subject: 'all', month: '', status: 'all', query: '', page: 1 };
 const CANBU_STEPS = [
   { key: 'upload', label: '数据上传' },
   { key: 'fields', label: '字段检查' },
@@ -205,55 +205,35 @@ function collectCollectionRosterTable() {
   })));
 }
 
-function loadCanbuBatches() {
-  try {
-    const raw = window.localStorage.getItem(CANBU_BATCH_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    state.canbuBatches = Array.isArray(parsed)
-      ? parsed.map(batch => ({
-          ...batch,
-          subject: batch.subject || 'canbu',
-          collectionSeniorityRoster: batch.subject === 'gonglingjiang'
-            ? normalizeCollectionRoster(
-                Array.isArray(batch.collectionSeniorityRoster)
-                  ? batch.collectionSeniorityRoster
-                  : (Array.isArray(batch.hrbpList) ? batch.hrbpList : DEFAULT_COLLECTION_SENIORITY_ROSTER)
-              )
-            : [],
-        }))
-      : [];
-  } catch {
-    state.canbuBatches = [];
+let activitySaveQueue = Promise.resolve();
+async function loadCanbuBatches() {
+  const result = await requestJson('/api/domestic-labor/activities');
+  if (state.activityUser && state.activityUser.ownerId !== result.currentUser?.ownerId) {
+    clearCurrentRunState({ clearFile: true });
+    state.nightShiftConfigs = {};
+    state.activeCanbuBatchId = '';
   }
+  state.canbuBatches = result.activities || [];
+  state.activityUser = result.currentUser;
 }
 
-function saveCanbuBatches() {
-  window.localStorage.setItem(CANBU_BATCH_STORAGE_KEY, JSON.stringify(state.canbuBatches));
+function saveCanbuBatches(batch = getActiveCanbuBatch()) {
+  if (!batch?.isMine || batch.legacy) return;
+  const payload = JSON.stringify({ name: batch.name, collectionSeniorityRoster: batch.collectionSeniorityRoster || [] });
+  const id = batch.id;
+  activitySaveQueue = activitySaveQueue.then(() => requestJson(`/api/domestic-labor/activities/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: payload,
+  })).catch(error => toast(`活动保存失败：${error.message}`));
 }
 
-function createCanbuBatch(month, name, subject = state.activeWorkbenchSubject) {
-  const now = new Date().toISOString();
-  const batch = {
-    id: `${subject}-${Date.now()}`,
-    subject,
-    month,
-    name: name || `${month} ${getWorkbenchConfig(subject).name}初算`,
-    status: '草稿',
-    employeeCount: 0,
-    payableTotal: 0,
-    exceptionCount: 0,
-    exportFileName: '',
-    exportedAt: '',
-    runId: '',
-    collectionSeniorityRoster: subject === 'gonglingjiang'
-      ? DEFAULT_COLLECTION_SENIORITY_ROSTER.map(item => ({ ...item }))
-      : [],
-    createdAt: now,
-    updatedAt: now,
-  };
+async function createCanbuBatch(month, name, subject = state.activeWorkbenchSubject) {
+  const batch = await requestJson('/api/domestic-labor/activities', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month, name, subject, collectionSeniorityRoster: subject === 'gonglingjiang'
+      ? DEFAULT_COLLECTION_SENIORITY_ROSTER.map(item => ({ ...item })) : [] }),
+  });
   state.canbuBatches.unshift(batch);
   state.activeCanbuBatchId = batch.id;
-  saveCanbuBatches();
   return batch;
 }
 
@@ -287,7 +267,7 @@ function updateCanbuBatch(patch, options = {}) {
   const batch = getCanbuBatch(options);
   if (!batch) return null;
   Object.assign(batch, patch, { updatedAt: new Date().toISOString() });
-  saveCanbuBatches();
+  saveCanbuBatches(batch);
   return batch;
 }
 
@@ -427,8 +407,7 @@ const el = {
 // ── Initialize ──
 init();
 
-function init() {
-  loadCanbuBatches();
+async function init() {
   loadEngineCards();
   loadTemplateLinks();
   bindEvents();
@@ -437,7 +416,10 @@ function init() {
   renderEmptyWorkbench();
   renderRecentBatchTable();
   showView('home');
+  setupActivityList();
+  await refreshActivities();
   if (window.location.hash === '#rulePackageView') openRulePackageView();
+  if (window.location.hash === '#canbuBatchListView') showView('canbuBatches');
 }
 
 function setDefaultMonth() {
@@ -590,8 +572,9 @@ function bindEvents() {
   });
   el.navBatchList?.addEventListener('click', (event) => {
     event.preventDefault();
+    activityFilters.subject = 'all';
     showView('canbuBatches');
-    renderCanbuBatchList();
+    refreshActivities();
   });
   el.navRulePackage?.addEventListener('click', (event) => {
     event.preventDefault();
@@ -700,6 +683,11 @@ function bindEvents() {
 }
 
 function openCanbuBatchModal() {
+  const subjectSelect = document.querySelector('#newActivitySubject');
+  subjectSelect.innerHTML = Object.entries(SUBJECT_WORKBENCH).map(([key, value]) => `<option value="${key}">${escapeHtml(value.name)}</option>`).join('');
+  subjectSelect.value = state.activeWorkbenchSubject;
+  document.querySelector('#newActivityName').value = '';
+  subjectSelect.onchange = () => { state.activeWorkbenchSubject = subjectSelect.value; updateSubjectWorkbenchLabels(); };
   updateSubjectWorkbenchLabels();
   setDefaultCanbuBatchMonth();
   renderCanbuBatchMonthPicker();
@@ -720,7 +708,7 @@ function closeCalcModal() {
   document.body.style.overflow = '';
 }
 
-function createCanbuBatchFromModal() {
+async function createCanbuBatchFromModal() {
   const config = getWorkbenchConfig();
   const month = el.canbuBatchMonth?.value || '';
   if (!month) {
@@ -730,7 +718,9 @@ function createCanbuBatchFromModal() {
   }
   clearCurrentRunState({ clearFile: true });
   resetCanbuFilters();
-  const batch = createCanbuBatch(month, `${formatMonthLabel(month)} ${config.name}初算`, state.activeWorkbenchSubject);
+  let batch;
+  el.btnConfirmCanbuBatch.disabled = true;
+  try { batch = await createCanbuBatch(month, document.querySelector('#newActivityName').value.trim() || `${formatMonthLabel(month)} ${config.name}初算`, state.activeWorkbenchSubject); } catch (error) { toast(error.message); return; } finally { el.btnConfirmCanbuBatch.disabled = false; }
   state.activeCanbuBatchId = batch.id;
   closeCanbuBatchModal();
   showView('canbuWorkbench');
@@ -739,9 +729,9 @@ function createCanbuBatchFromModal() {
 
 function updateSubjectWorkbenchLabels() {
   const config = getWorkbenchConfig();
-  if (el.subjectBatchListTitle) el.subjectBatchListTitle.textContent = `${config.name}核算批次`;
-  if (el.subjectBatchListSub) el.subjectBatchListSub.textContent = `一个批次对应一次可回看的${config.name}核算，同一月份可保留多次试算或复算。`;
-  if (el.btnNewCanbuBatch) el.btnNewCanbuBatch.textContent = `新建${config.name}批次`;
+  if (el.subjectBatchListTitle) el.subjectBatchListTitle.textContent = '核算活动';
+  if (el.subjectBatchListSub) el.subjectBatchListSub.textContent = '查看和继续核算活动。';
+  if (el.btnNewCanbuBatch) el.btnNewCanbuBatch.textContent = '新建核算活动';
   if (el.canbuBatchModalTitle) el.canbuBatchModalTitle.textContent = `新建${config.name}批次`;
   if (el.subjectBatchModalSub) el.subjectBatchModalSub.textContent = `选择本次${config.name}核算月份，创建后进入数据上传流程。`;
 }
@@ -1177,16 +1167,61 @@ function renderRecentBatchTable() {
   bindBatchTableActions(el.recentBatchTable);
 }
 
+async function refreshActivities() {
+  const button = document.querySelector('#refreshActivities');
+  if (button) button.disabled = true;
+  try {
+    await activitySaveQueue;
+    await loadCanbuBatches();
+    state.activityLoadError = '';
+  } catch (error) { state.activityLoadError = error.message; }
+  finally { if (button) button.disabled = false; }
+  renderCanbuBatchList();
+  renderRecentBatchTable();
+}
+
+function setupActivityList() {
+  const subject = document.querySelector('#activitySubject');
+  subject.innerHTML = '<option value="all">全部科目</option>' + Object.entries(SUBJECT_WORKBENCH).map(([key, value]) => `<option value="${key}">${escapeHtml(value.name)}</option>`).join('');
+  document.querySelectorAll('[data-activity-scope]').forEach(button => button.addEventListener('click', () => {
+    activityFilters.scope = button.dataset.activityScope; activityFilters.page = 1; renderCanbuBatchList();
+  }));
+  [['activitySubject', 'subject'], ['activityMonth', 'month'], ['activityStatus', 'status'], ['activitySearch', 'query']].forEach(([id, key]) => {
+    document.getElementById(id).addEventListener('input', event => {
+      activityFilters[key] = event.target.value; activityFilters.page = 1; renderCanbuBatchList();
+    });
+  });
+  document.querySelector('#refreshActivities').addEventListener('click', refreshActivities);
+  document.querySelector('#activityPrev').addEventListener('click', () => { activityFilters.page--; renderCanbuBatchList(); });
+  document.querySelector('#activityNext').addEventListener('click', () => { activityFilters.page++; renderCanbuBatchList(); });
+}
+
 function renderCanbuBatchList() {
   if (!el.canbuBatchTable) return;
   updateSubjectWorkbenchLabels();
-  const config = getWorkbenchConfig();
-  const batches = state.canbuBatches.filter(batch => (batch.subject || 'canbu') === state.activeWorkbenchSubject);
-  if (!batches.length) {
-    el.canbuBatchTable.innerHTML = `<div class="dl-empty compact"><p>暂无${escapeHtml(config.name)}核算批次，请先新建${escapeHtml(config.name)}批次。</p></div>`;
-    return;
-  }
-  el.canbuBatchTable.innerHTML = renderBatchTable(batches);
+  el.subjectBatchListTitle.textContent = '核算活动';
+  el.subjectBatchListSub.textContent = '查看和继续核算活动。';
+  document.querySelector('#activitySubject').value = activityFilters.subject;
+  document.querySelectorAll('[data-activity-scope]').forEach(button => {
+    const active = button.dataset.activityScope === activityFilters.scope;
+    button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active));
+  });
+  const query = activityFilters.query.trim().toLowerCase();
+  const rows = state.canbuBatches.filter(batch =>
+    (activityFilters.scope === 'all' || batch.isMine) &&
+    (activityFilters.subject === 'all' || batch.subject === activityFilters.subject) &&
+    (!activityFilters.month || batch.month === activityFilters.month) &&
+    (activityFilters.status === 'all' || batch.status === activityFilters.status) &&
+    (!query || `${batch.name} ${batch.ownerName} ${batch.id}`.toLowerCase().includes(query)));
+  const pages = Math.max(1, Math.ceil(rows.length / 20));
+  activityFilters.page = Math.max(1, Math.min(activityFilters.page, pages));
+  document.querySelector('#activityCount').textContent = `共 ${rows.length} 个活动 · 第 ${activityFilters.page} / ${pages} 页`;
+  document.querySelector('#activityPrev').disabled = activityFilters.page <= 1;
+  document.querySelector('#activityNext').disabled = activityFilters.page >= pages;
+  el.canbuBatchTable.innerHTML = state.activityLoadError
+    ? `<div class="dl-empty compact"><p>活动读取失败：${escapeHtml(state.activityLoadError)}</p><p>请点击刷新重试。</p></div>`
+    : rows.length ? renderBatchTable(rows.slice((activityFilters.page - 1) * 20, activityFilters.page * 20))
+    : '<div class="dl-empty compact"><p>没有符合条件的活动。</p><p>可调整筛选条件，或新建核算活动。</p></div>';
   bindBatchTableActions(el.canbuBatchTable);
 }
 
@@ -1196,11 +1231,8 @@ function renderBatchTable(rows) {
       <thead>
         <tr>
           <th>核算月份</th>
-          <th>批次名称</th>
+          <th>活动名称 / 科目</th><th>创建人</th>
           <th>状态</th>
-          <th class="dl-num">员工数</th>
-          <th class="dl-num">应发合计</th>
-          <th class="dl-num">异常</th>
           <th>最近更新</th>
           <th>操作</th>
         </tr>
@@ -1209,13 +1241,10 @@ function renderBatchTable(rows) {
         ${rows.map((batch) => `
           <tr>
             <td>${escapeHtml(formatMonthLabel(batch.month))}</td>
-            <td class="dl-strong">${escapeHtml(batch.name)}</td>
+            <td class="dl-strong">${escapeHtml(batch.name)}<div class="dl-activity-meta">${escapeHtml(getWorkbenchConfig(batch.subject).name)}</div></td><td>${escapeHtml(batch.ownerName || "历史活动")}${batch.isMine ? '<span class="dl-activity-mine">我</span>' : ''}</td>
             <td><span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></td>
-            <td class="dl-num">${Number(batch.employeeCount || 0)}</td>
-            <td class="dl-num">${formatMoney(batch.payableTotal || 0)}</td>
-            <td class="dl-num">${Number(batch.exceptionCount || 0)}</td>
             <td>${escapeHtml(formatDateTime(batch.updatedAt))}</td>
-            <td><button class="dl-segment" data-open-canbu-batch="${escapeHtml(batch.id)}" type="button">进入</button></td>
+            <td><button class="dl-segment" data-open-canbu-batch="${escapeHtml(batch.id)}" type="button">${batch.isMine && !batch.legacy ? '进入核算' : '查看活动'}</button></td>
           </tr>
         `).join('')}
       </tbody>
@@ -1226,6 +1255,7 @@ function renderBatchTable(rows) {
 function bindBatchTableActions(root) {
   root.querySelectorAll('[data-open-canbu-batch]').forEach((button) => {
     button.addEventListener('click', () => {
+      clearCurrentRunState({ clearFile: true });
       state.activeCanbuBatchId = button.dataset.openCanbuBatch;
       const batch = getActiveCanbuBatch();
       state.activeWorkbenchSubject = batch?.subject || 'canbu';
@@ -1246,6 +1276,14 @@ function bindBatchTableActions(root) {
 function renderCanbuWorkbench(step = 'upload') {
   const batch = getActiveCanbuBatch();
   if (!batch || !el.canbuWorkbenchRoot) return;
+  if (!batch.isMine || batch.legacy) {
+    if (batch.runId && ['已核算', '可导出', '已导出'].includes(batch.status)) step = 'results';
+    else {
+      el.canbuWorkbenchRoot.innerHTML = `<section class="dl-panel"><div class="dl-panel-head"><div><h2>${escapeHtml(batch.name)}</h2><p>${escapeHtml(batch.ownerName || '历史活动')} · ${escapeHtml(batch.month)} · ${escapeHtml(batch.status || '草稿')}</p></div><button class="dl-btn" id="activityOverviewBack">返回活动列表</button></div><div class="dl-panel-body"><p>此活动尚无可查看的核算结果。</p><p>新建自己的活动后，可独立上传数据并核算。</p></div></section>`;
+      document.querySelector('#activityOverviewBack').onclick = () => { showView('canbuBatches'); refreshActivities(); };
+      return;
+    }
+  }
   const batchIsComplete = ['已核算', '可导出', '已导出'].includes(batch.status);
   if (batchIsComplete && state.activeCanbuOperation?.batchId === batch.id) {
     state.activeCanbuOperation = null;
@@ -1321,6 +1359,10 @@ function renderCanbuWorkbench(step = 'upload') {
   refreshDynamicWorkbenchRefs();
   renderCanbuStepContent(step, canbuResults);
   bindCanbuWorkbenchEvents();
+  if (!batch.isMine || batch.legacy) {
+    document.querySelector('#btnRecalculateCanbu')?.remove();
+    document.querySelectorAll('[data-canbu-step]').forEach(button => { if (button.dataset.canbuStep !== 'results') button.disabled = true; });
+  }
 }
 
 function syncWorkbenchChrome(batch) {
@@ -1631,7 +1673,7 @@ function renderNightShiftConfigWorkspace(batch) {
   const count = Number(config.counts?.jinjiang_exclusion_count || 0);
   const updated = config.updated_at ? `更新于 ${formatDateTime(config.updated_at)}` : '使用平台班次基线';
   return `<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace">
-    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p class="dl-config-ready">已使用平台班次配置，可直接上传考勤；有调整时在下方修改。</p><p>配置按月份共用。保存后用于后续核算，已完成批次需重新核算才会更新。</p></div><span class="dl-badge neutral">当月配置 · 版本 ${Number(config.revision || 0)}</span></header>
+    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p class="dl-config-ready">已使用平台班次配置，可直接上传考勤；有调整时在下方修改。</p><p>配置按当前用户和月份独立保存。其他用户的修改不会影响你的核算；已完成活动保留核算时的配置。</p></div><span class="dl-badge neutral">当月配置 · 版本 ${Number(config.revision || 0)}</span></header>
     <nav class="dl-night-config-tabs" aria-label="夜班配置内容"><button type="button" data-night-config-tab="breaks" class="${editor.tab === 'breaks' ? 'active' : ''}" aria-pressed="${editor.tab === 'breaks'}">班次休息 <span>${Number(config.counts?.effective_shift_count || 0)}</span></button><button type="button" data-night-config-tab="roster" class="${editor.tab === 'roster' ? 'active' : ''}" aria-pressed="${editor.tab === 'roster'}">晋江不享有名单 <span class="${confirmed ? '' : 'needs-confirm'}">${confirmed ? `${count} 人` : '待确认'}</span></button></nav>
     <div id="nightConfigBreaks" ${editor.tab === 'breaks' ? '' : 'hidden'}>${renderNightShiftBreakEditor(config)}</div>
     <section class="dl-night-roster" id="nightConfigRoster" ${editor.tab === 'roster' ? '' : 'hidden'}>
@@ -4462,6 +4504,7 @@ function confirmWaisuAbandonment(batch) {
 }
 
 async function submitPayrollWithRosterConfirmation(options, batch) {
+  options.activityId = batch.id;
   if(batch.subject==='waisu_butie'){
     const selection=await confirmWaisuAbandonment(batch);
     if(!selection){ setText(el.uploadStatus,'尚未提交核算，可继续检查上传数据。'); return null; }
@@ -4495,6 +4538,7 @@ async function submitPayrollWithRosterConfirmation(options, batch) {
 }
 
 async function submitCanbuBatch() {
+  if (!getActiveCanbuBatch()?.isMine || getActiveCanbuBatch()?.legacy) return toast('请新建自己的活动进行核算。');
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
   if (!state.payrollFiles.length && !state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
@@ -4594,10 +4638,11 @@ async function submitCanbuBatch() {
   }
 }
 
-async function submitDomesticLaborRun({ file, files = [], engines, attendanceMonth, password, hrbpList, sheetMapping = {}, jinjiangRosterDecision = '', waisuAbandonmentDecision = '', waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
+async function submitDomesticLaborRun({ activityId = '', file, files = [], engines, attendanceMonth, password, hrbpList, sheetMapping = {}, jinjiangRosterDecision = '', waisuAbandonmentDecision = '', waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
   const selectedFiles = files.length ? files : [file].filter(Boolean);
   try {
     return await submitDomesticLaborRunDirect({
+      activityId,
       files: selectedFiles,
       engines,
       attendanceMonth,
@@ -4616,17 +4661,18 @@ async function submitDomesticLaborRun({ file, files = [], engines, attendanceMon
     const directUnavailable = /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
     if (!localHost || !directUnavailable) throw error;
     setText(statusElement, '本地未启用对象存储，改用本地上传并核算...');
-    return submitDomesticLaborRunMultipart({ files: selectedFiles, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile });
+    return submitDomesticLaborRunMultipart({ activityId, files: selectedFiles, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile });
   }
 }
 
-async function submitDomesticLaborRunDirect({ files, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
+async function submitDomesticLaborRunDirect({ activityId, files, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
   const uploadFiles = waisuAbandonmentFile ? [...files, waisuAbandonmentFile] : files;
   updateUploadProgress(statusElement, progressButton, '正在生成安全直传地址...');
   const plan = await requestJson('/api/domestic-labor/runs/direct-upload-plan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      activityId: activityId || '',
       files: uploadFiles.map((file, index) => ({
         fileName: file.name,
         fileSize: file.size,
@@ -4716,9 +4762,10 @@ function uploadDomesticFileToSignedUrl(upload, file, onProgress) {
   });
 }
 
-function submitDomesticLaborRunMultipart({ files, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile }) {
+function submitDomesticLaborRunMultipart({ activityId, files, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile }) {
   const form = new FormData();
   files.forEach(file => form.append('files', file));
+  form.append('activity_id', activityId || '');
   form.append('engines', engines.join(','));
   form.append('attendance_month', attendanceMonth);
   form.append('waisu_abandonment_decision', waisuAbandonmentDecision || '');
