@@ -154,3 +154,14 @@ def test_remote_completion_overrides_worker_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(runs,'load_domestic_labor_metadata_from_persistent',lambda _:None)
     with pytest.raises(FileNotFoundError):
         runs.load_payroll_metadata(run_dir)
+
+
+def test_activity_avatar_uses_current_feishu_profile_and_default(clients, monkeypatch):
+    alice, bob = clients
+    activity = create(alice)
+    create(bob)
+    monkeypatch.setattr(api, '_get_cached_current_user', lambda user_id: {'user': {'avatarUrl':'https://example.com/feishu-avatar.png'}} if user_id == 'Alice' else {'user':{}})
+    rows = bob.get('/api/domestic-labor/activities').json()['activities']
+    assert next(row for row in rows if row['id'] == activity['id'])['ownerAvatarUrl'] == 'https://example.com/feishu-avatar.png'
+    assert next(row for row in rows if row['ownerId'] == 'Bob')['ownerAvatarUrl'] == '/assets/domestic-default-avatar.png'
+    assert api._domestic_avatar_url({'avatarUrl':'javascript:alert(1)'}) == '/assets/domestic-default-avatar.png'

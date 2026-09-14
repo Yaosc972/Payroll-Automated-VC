@@ -737,6 +737,7 @@ function updateSubjectWorkbenchLabels() {
 }
 
 function showView(viewName) {
+  document.body.classList.toggle('dl-activities-active', viewName === 'canbuBatches');
   state.view = viewName;
   [
     ['home', el.subjectHomeView],
@@ -1225,6 +1226,13 @@ function renderCanbuBatchList() {
   bindBatchTableActions(el.canbuBatchTable);
 }
 
+const DEFAULT_ACTIVITY_AVATAR = '/assets/domestic-default-avatar.png';
+function renderActivityCreator(batch) {
+  const avatar = String(batch.ownerAvatarUrl || '');
+  const source = avatar.startsWith('https://') ? avatar : DEFAULT_ACTIVITY_AVATAR;
+  return `<div class="dl-activity-person"><img class="dl-activity-avatar${source === DEFAULT_ACTIVITY_AVATAR ? ' is-default' : ''}" src="${escapeHtml(source)}" alt="" width="32" height="32" loading="lazy" referrerpolicy="no-referrer"><span>${escapeHtml(batch.ownerName || '历史活动')}</span>${batch.isMine ? '<span class="dl-activity-mine">我</span>' : ''}</div>`;
+}
+
 function renderBatchTable(rows) {
   return `
     <table class="dl-table">
@@ -1241,7 +1249,7 @@ function renderBatchTable(rows) {
         ${rows.map((batch) => `
           <tr>
             <td>${escapeHtml(formatMonthLabel(batch.month))}</td>
-            <td class="dl-strong">${escapeHtml(batch.name)}<div class="dl-activity-meta">${escapeHtml(getWorkbenchConfig(batch.subject).name)}</div></td><td>${escapeHtml(batch.ownerName || "历史活动")}${batch.isMine ? '<span class="dl-activity-mine">我</span>' : ''}</td>
+            <td class="dl-strong">${escapeHtml(batch.name)}<div class="dl-activity-meta">${escapeHtml(getWorkbenchConfig(batch.subject).name)}</div></td><td>${renderActivityCreator(batch)}</td>
             <td><span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></td>
             <td>${escapeHtml(formatDateTime(batch.updatedAt))}</td>
             <td><button class="dl-segment" data-open-canbu-batch="${escapeHtml(batch.id)}" type="button">${batch.isMine && !batch.legacy ? '进入核算' : '查看活动'}</button></td>
@@ -1253,6 +1261,9 @@ function renderBatchTable(rows) {
 }
 
 function bindBatchTableActions(root) {
+  root.querySelectorAll('.dl-activity-avatar').forEach(img => {
+    img.onerror = () => { img.onerror = null; img.classList.add('is-default'); img.src = DEFAULT_ACTIVITY_AVATAR; };
+  });
   root.querySelectorAll('[data-open-canbu-batch]').forEach((button) => {
     button.addEventListener('click', () => {
       clearCurrentRunState({ clearFile: true });

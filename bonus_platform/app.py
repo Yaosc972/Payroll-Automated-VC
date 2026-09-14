@@ -14781,13 +14781,19 @@ async def domestic_configuration_scope(request: Request, call_next):
             CONFIG_OWNER.reset(token)
 
 
+def _domestic_avatar_url(user: dict) -> str:
+    url = str(user.get("avatarUrl") or user.get("avatar_url") or "").strip()
+    return url if url.startswith("https://") else "/assets/domestic-default-avatar.png"
+
+
 def _domestic_actor(request: Request) -> dict:
     current = _labor_current_user_from_request(request)
     user = (current or {}).get("user") or {}
     user_id = str(user.get("id") or "")
     if not user_id:
         raise HTTPException(401, "请先登录薪酬核算工作台")
-    return {"ownerId": user_id, "ownerName": str(user.get("name") or user.get("email") or user_id)}
+    return {"ownerId": user_id, "ownerName": str(user.get("name") or user.get("email") or user_id),
+            "ownerAvatarUrl": _domestic_avatar_url(user)}
 
 
 def _domestic_owned_activity(activity_id: str, actor: dict) -> dict:
@@ -14842,8 +14848,17 @@ def list_domestic_labor_activities(request: Request) -> dict:
                          "payableTotal": summary.get("total_" + activity["subject"], 0),
                          "exceptionCount": summary.get("warning_count", 0)})
     rows = sorted(activities.values(), key=lambda row: row.get("updatedAt") or "", reverse=True)
+    avatars = {actor["ownerId"]: actor["ownerAvatarUrl"]}
     for row in rows:
-        row["isMine"] = row.get("ownerId") == actor["ownerId"]
+        owner_id = str(row.get("ownerId") or "")
+        if owner_id not in avatars:
+            try:
+                owner = (_get_cached_current_user(owner_id) or {}).get("user") or {} if owner_id else {}
+            except KeyError:
+                owner = {}
+            avatars[owner_id] = _domestic_avatar_url(owner)
+        row["ownerAvatarUrl"] = avatars[owner_id]
+        row["isMine"] = owner_id == actor["ownerId"]
     return {"activities": rows, "currentUser": actor}
 
 

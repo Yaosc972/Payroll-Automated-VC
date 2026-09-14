@@ -3567,6 +3567,52 @@
     .dl-activity-search { flex:1; min-width:200px; }.dl-activity-search input { width:100%; }
     .dl-activity-footer { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; color:#667085; border-top:1px solid #e2e8f0; }
     .dl-activity-meta { font-size:12px; font-weight:400; color:#667085; margin-top:4px; }.dl-activity-mine { color:#2563eb; background:#eff6ff; border-radius:6px; padding:2px 6px; margin-left:6px; font-size:11px; }
+
+    /* Activity workspace: quiet surfaces, content hierarchy and grouped controls. */
+    body.dl-activities-active { background:#f5f5f7; }
+    body.dl-activities-active::before { display:none; }
+    #canbuBatchListView button:disabled { opacity:.35; cursor:default; }
+    body.dl-activities-active .dl-main { background:transparent; }
+    #canbuBatchListView { max-width:1480px; margin:12px auto 0; font-family:-apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Microsoft YaHei",sans-serif; color:#1d1d1f; }
+    #canbuBatchListView > .dl-panel { border:1px solid rgba(0,0,0,.07); border-radius:20px; overflow:hidden; background:#fff; box-shadow:0 8px 32px rgba(31,38,53,.035),0 1px 3px rgba(31,38,53,.025); }
+    #canbuBatchListView .dl-panel-head { padding:28px 28px 24px; background:#fff; border:0; align-items:center; }
+    #canbuBatchListView .dl-panel-title { font-size:24px; letter-spacing:-.6px; font-weight:650; line-height:1.3; }
+    #canbuBatchListView .dl-panel-sub { margin-top:6px; color:#737378; font-size:13px; }
+    #canbuBatchListView .dl-actions-inline { gap:10px; }
+    #canbuBatchListView .dl-btn, #canbuBatchListView .btn-new-batch { min-height:36px; border-radius:9px; padding:8px 14px; font-size:13px; font-weight:500; box-shadow:none; }
+    #canbuBatchListView .btn-new-batch { background:#007aff; border:1px solid transparent; color:#fff; }
+    #canbuBatchListView .btn-new-batch:hover { background:#006fe6; }
+    #canbuBatchListView #btnBackHome { background:transparent; border-color:transparent; color:#6e6e73; }
+    #canbuBatchListView .dl-activity-toolbar { padding:16px 28px; gap:12px; background:rgba(250,250,252,.85); border-top:1px solid #f0f0f2; border-bottom:1px solid #eaeaed; }
+    #canbuBatchListView .dl-activity-scopes { background:#eaeaee; padding:3px; border:0; border-radius:10px; gap:2px; flex-shrink:0; }
+    #canbuBatchListView .dl-activity-scopes .dl-segment { border:0; border-radius:7px; background:transparent; color:#6e6e73; min-height:32px; padding:6px 15px; font-size:13px; font-weight:500; box-shadow:none; }
+    #canbuBatchListView .dl-activity-scopes .active { background:white; color:#1d1d1f; box-shadow:0 1px 4px rgba(0,0,0,.1); }
+    #canbuBatchListView .dl-activity-search { position:relative; min-width:180px; }
+    #canbuBatchListView .dl-activity-search svg { position:absolute; left:11px; top:50%; transform:translateY(-50%); color:#85858b; pointer-events:none; }
+    #canbuBatchListView .dl-activity-search input { padding-left:35px; }
+    #canbuBatchListView .dl-activity-toolbar input, #canbuBatchListView .dl-activity-toolbar select { min-height:36px; height:36px; border-radius:9px; border:1px solid #e1e1e5; background:#fff; font-size:13px; color:#424247; padding-top:6px; padding-bottom:6px; }
+    #canbuBatchListView .dl-activity-toolbar input::placeholder { color:#8b8b91; }
+    #canbuBatchListView #refreshActivities { color:#007aff; border-color:transparent; background:transparent; padding-inline:8px; }
+    #canbuBatchListView .dl-table { width:100%; border-collapse:collapse; table-layout:auto; }
+    #canbuBatchListView .dl-table th { padding:14px 20px; background:#fff; color:#737378; font-weight:500; font-size:12px; border-bottom:1px solid #ededf0; }
+    #canbuBatchListView .dl-table td { padding:17px 20px; border-bottom:1px solid #f0f0f2; color:#424247; font-size:13px; vertical-align:middle; }
+    #canbuBatchListView .dl-table th:first-child, #canbuBatchListView .dl-table td:first-child { padding-left:28px; }
+    #canbuBatchListView .dl-table th:last-child, #canbuBatchListView .dl-table td:last-child { padding-right:28px; text-align:right; }
+    #canbuBatchListView .dl-table tbody tr:hover { background:#fafafc; }
+    #canbuBatchListView .dl-table .dl-strong { font-weight:600; color:#1d1d1f; }
+    .dl-activity-person { display:flex; align-items:center; gap:9px; min-width:110px; }
+    .dl-activity-avatar { width:32px; height:32px; flex:0 0 32px; border-radius:50%; object-fit:cover; background:#f2f2f5; border:1px solid rgba(0,0,0,.045); }
+    .dl-activity-avatar.is-default { object-fit:contain; padding:3px; background:#f5f3ef; box-sizing:border-box; }
+    #canbuBatchListView .dl-activity-mine { color:#737378; background:transparent; padding:0; margin:0; font-size:11px; }
+    #canbuBatchListView .dl-activity-meta { font-size:12px; color:#737378; margin-top:5px; }
+    #canbuBatchListView .dl-badge { font-size:12px; border:0; font-weight:400; background:transparent; padding:0; }
+    #canbuBatchListView .dl-badge.ok { color:#248050; } #canbuBatchListView .dl-badge.warn { color:#7a7164; } #canbuBatchListView .dl-badge.block { color:#b42318; }
+    #canbuBatchListView [data-open-canbu-batch] { border:0; background:transparent; color:#007aff; padding:6px 0 6px 10px; font-size:13px; font-weight:400; white-space:nowrap; }
+    #canbuBatchListView [data-open-canbu-batch]::after { content:'›'; font-size:18px; margin-left:8px; vertical-align:-1px; }
+    #canbuBatchListView .dl-activity-footer { padding:16px 28px; font-size:12px; border-top:0; color:#737378; background:#fff; }
+    #canbuBatchListView .dl-activity-footer .dl-btn { font-size:12px; background:#f5f5f7; border:0; }
+    #canbuBatchListView button:focus-visible { outline:3px solid rgba(0,122,255,.4); outline-offset:3px; }
+    @media (prefers-reduced-motion: no-preference) { #canbuBatchListView button, #canbuBatchListView tbody tr { transition:background-color .15s ease,color .15s ease; } }
     </style>
     <link rel="stylesheet" href="domestic-labor-rulebook.css?v=7">
   </head>
@@ -3716,7 +3762,7 @@
             </div>
             <div class="dl-activity-toolbar">
               <div class="dl-activity-scopes" role="group" aria-label="活动范围"><button class="dl-segment active" data-activity-scope="mine" aria-pressed="true">我的活动</button><button class="dl-segment" data-activity-scope="all" aria-pressed="false">全部活动</button></div>
-              <label class="dl-activity-search"><input id="activitySearch" type="search" placeholder="搜索活动名称、创建人" aria-label="搜索活动名称、创建人"></label>
+              <label class="dl-activity-search"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="activitySearch" type="search" placeholder="搜索活动名称、创建人" aria-label="搜索活动名称、创建人"></label>
               <select id="activitySubject" aria-label="核算科目"><option value="all">全部科目</option></select>
               <input id="activityMonth" type="month" aria-label="核算月份">
               <select id="activityStatus" aria-label="活动状态"><option value="all">全部状态</option><option>草稿</option><option>上传中</option><option>已提交</option><option>已核算</option><option>失败</option></select>
@@ -3787,7 +3833,7 @@
     </div>
 
     <script src="domestic-labor-rulebook.js?v=6"></script>
-    <script src="domestic-labor.js?v=27"></script>
+    <script src="domestic-labor.js?v=28"></script>
     <script src="feedback-widget.js?v=20260916-01"></script>
   </body>
 </html>
