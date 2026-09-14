@@ -19,6 +19,14 @@ def bypass_domestic_labor_access_gate(monkeypatch):
     import bonus_platform.app as app_module
 
     monkeypatch.setattr(app_module, "_domestic_labor_access_response", lambda request: None)
+    monkeypatch.setattr(app_module, "_labor_current_user_from_request", lambda request: {"user": {"id": "test-domestic-user", "name": "测试用户", "status": "active"}})
+    original_create = app_module.create_payroll_run
+    monkeypatch.setattr(app_module, "create_payroll_run", lambda metadata: original_create({"ownerId": "test-domestic-user", **metadata}))
+    from bonus_platform.engine.domestic_labor.night_shift_config import CONFIG_OWNER
+    token = CONFIG_OWNER.set("test-domestic-user")
+    yield
+    CONFIG_OWNER.reset(token)
+
 
 
 @pytest.fixture(autouse=True)

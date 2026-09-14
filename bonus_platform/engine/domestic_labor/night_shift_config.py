@@ -20,6 +20,23 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from ...config import DOMESTIC_LABOR_RUNS_DIR
 
 
+from contextvars import ContextVar
+from hashlib import sha256
+from .persistent_storage import (domestic_labor_persistent_storage_enabled,
+    load_domestic_labor_metadata_from_persistent, save_domestic_labor_metadata_to_persistent)
+
+CONFIG_OWNER = ContextVar("domestic_config_owner", default="")
+
+
+def _owner_root():
+    owner = CONFIG_OWNER.get()
+    return NIGHT_SHIFT_CONFIG_DIR / "users" / sha256(owner.encode()).hexdigest() if owner else NIGHT_SHIFT_CONFIG_DIR
+
+
+def _persistent_config_id(month):
+    return "_config_" + sha256(CONFIG_OWNER.get().encode()).hexdigest() + "_" + normalize_month(month)
+
+
 NIGHT_SHIFT_CONFIG_DIR = DOMESTIC_LABOR_RUNS_DIR.parent / "domestic_labor_configs" / "night_shift"
 BASELINE_SHIFT_BREAKS_PATH = Path(__file__).parent / "data" / "night_shift_breaks.json"
 MONTH_PATTERN = re.compile(r"^\d{6}$")
@@ -311,11 +328,11 @@ def _expand_payload(payload: Mapping[str, Any], exists: bool) -> Dict[str, Any]:
 
 
 def _config_path(month: Any) -> Path:
-    return NIGHT_SHIFT_CONFIG_DIR / f"{normalize_month(month)}.json"
+    return _owner_root() / f"{normalize_month(month)}.json"
 
 
 def _history_path(month: Any, revision: int) -> Path:
-    return NIGHT_SHIFT_CONFIG_DIR / "history" / normalize_month(month) / f"r{int(revision):04d}.json"
+    return _owner_root() / "history" / normalize_month(month) / f"r{int(revision):04d}.json"
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -330,6 +347,13 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def load_night_shift_config(month: Any, required: bool = True) -> Dict[str, Any]:
     month_text = normalize_month(month)
     path = _config_path(month_text)
+    if CONFIG_OWNER.get() and domestic_labor_persistent_storage_enabled():
+        stored = load_domestic_labor_metadata_from_persistent(_persistent_config_id(month_text))
+        if stored:
+            return _expand_payload(stored["config"], exists=True)
+        if required:
+            raise FileNotFoundError(f"{month_text} 夜班补贴配置不存在")
+        return _expand_payload(empty_night_shift_config(month_text), exists=False)
     if not path.exists():
         if required:
             raise FileNotFoundError(f"{month_text} 夜班补贴配置不存在")
@@ -361,12 +385,22 @@ def save_night_shift_config(
         "copied_from": normalize_month(copied_from) if copied_from else _text(current.get("copied_from")),
         **normalized,
     }
+    if CONFIG_OWNER.get() and domestic_labor_persistent_storage_enabled():
+        record = {"kind": "configuration", "config": saved}
+        config_id = _persistent_config_id(month_text)
+        save_domestic_labor_metadata_to_persistent(config_id + "_r" + str(saved["revision"]), record, record)
+        save_domestic_labor_metadata_to_persistent(config_id, record, record)
     _atomic_write_json(_history_path(month_text, saved["revision"]), saved)
     _atomic_write_json(_config_path(month_text), saved)
     return _expand_payload(saved, exists=True)
 
 
 def load_night_shift_config_revision(month: Any, revision: int) -> Dict[str, Any]:
+    if CONFIG_OWNER.get() and domestic_labor_persistent_storage_enabled():
+        record = load_domestic_labor_metadata_from_persistent(_persistent_config_id(month) + "_r" + str(int(revision)))
+        if not record:
+            raise FileNotFoundError(f"{normalize_month(month)} 夜班补贴配置版本 {revision} 不存在")
+        return _expand_payload(record["config"], exists=True)
     path = _history_path(month, revision)
     if not path.exists():
         raise FileNotFoundError(f"{normalize_month(month)} 夜班补贴配置版本 {revision} 不存在")
@@ -377,8 +411,12 @@ def load_night_shift_config_revision(month: Any, revision: int) -> Dict[str, Any
 def list_night_shift_config_revisions(month: Any) -> List[Dict[str, Any]]:
     history_dir = _history_path(month, 1).parent
     revisions = []
-    for path in sorted(history_dir.glob("r*.json"), reverse=True):
-        payload = json.loads(path.read_text(encoding="utf-8"))
+    if CONFIG_OWNER.get() and domestic_labor_persistent_storage_enabled():
+        current = load_night_shift_config(month, required=False)
+        payloads = [load_night_shift_config_revision(month, revision) for revision in range(int(current.get("revision") or 0), 0, -1)]
+    else:
+        payloads = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(history_dir.glob("r*.json"), reverse=True)]
+    for payload in payloads:
         revisions.append({
             "month": payload.get("month"),
             "revision": payload.get("revision"),
@@ -394,7 +432,7 @@ def copy_night_shift_config(source_month: Any, target_month: Any, updated_by: st
     source = load_night_shift_config(source_month)
     target_path = _config_path(target_month)
     target = load_night_shift_config(target_month, required=False)
-    if target_path.exists() and target.get("jinjiang_list_confirmed"):
+    if target.get("exists") and target.get("jinjiang_list_confirmed"):
         raise FileExistsError(f"{normalize_month(target_month)} 夜班补贴配置已存在，不能覆盖")
     return save_night_shift_config(
         target_month,
