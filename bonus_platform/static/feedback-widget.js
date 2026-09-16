@@ -9,7 +9,7 @@
         aria-controls="feedbackDrawer"
         aria-expanded="false"
       >
-        <span class="feedback-launcher-icon" aria-hidden="true"></span>
+        <span class="feedback-launcher-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8Z"/><path d="M7 9h8M7 13h5"/></svg></span>
         <span>反馈与更新</span>
         <i id="feedbackUnreadDot" aria-label="有新公告" hidden></i>
       </button>
@@ -138,6 +138,33 @@
   const widget = ensureFeedbackWidget();
 
   const launcher = document.getElementById("feedbackLauncher");
+  // Only the entry lives in the navigation. Keep overlays outside transformed
+  // or clipped page headers so opening the drawer never changes the work area.
+  const mountLauncher = () => {
+    const actions = document.querySelector(".app-chrome .chrome-right, .app-header .header-actions, .top-bar .top-bar-right");
+    if (actions) {
+      actions.classList.add("feedback-header-actions");
+      actions.append(launcher);
+      return;
+    }
+    const header = document.querySelector(".dl-topbar, .dashboard-topbar");
+    const slot = document.createElement("div");
+    slot.className = "feedback-header-actions";
+    if (header) {
+      // Dashboard headers have three grid columns; share the final action cell.
+      if (header.matches(".dashboard-topbar") && header.lastElementChild) {
+        header.classList.add("feedback-navigation-header");
+        slot.append(header.lastElementChild);
+      }
+      header.append(slot);
+    } else {
+      // New pages without a known header still get an in-flow entry, never a FAB.
+      slot.classList.add("feedback-header-fallback");
+      document.body.prepend(slot);
+    }
+    slot.append(launcher);
+  };
+  mountLauncher();
   const drawer = document.getElementById("feedbackDrawer");
   const scrim = document.getElementById("feedbackScrim");
   const closeButton = document.getElementById("feedbackDrawerClose");
@@ -217,6 +244,7 @@
   const setUnread = (visible) => {
     unreadDot.hidden = !visible;
     tabDot.hidden = !visible;
+    launcher.setAttribute("aria-label", visible ? "反馈与更新，有未读公告" : "反馈与更新");
   };
 
   const openDrawer = (tab = activeTab) => {
