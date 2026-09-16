@@ -75,7 +75,7 @@ def test_overseas_labor_page_exposes_release_contract_and_blocks_stale_runtime()
     assert "upload-intents" in script
     assert "intent.signedUrl" in script
     assert "upload-intents/batch-finalize" in script
-    assert 'overseas-labor.js?v=40' in html
+    assert 'overseas-labor.js?v=20260916-progress-1' in html
 
 
 def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
@@ -98,7 +98,7 @@ def test_overseas_labor_uses_one_editable_seven_day_period_range_picker():
     assert "overflow: visible" in toolbench_css
     assert "addDays(picked, 6)" in script
     assert "periodPickerState.selectingEnd" in script
-    assert 'overseas-labor.js?v=40' in html
+    assert 'overseas-labor.js?v=20260916-progress-1' in html
 
 
 def test_overseas_labor_async_actions_share_button_loading_transitions():
@@ -121,7 +121,7 @@ def test_overseas_labor_async_actions_share_button_loading_transitions():
     assert 'beginButtonLoading(labor.activateWorker, "正在连接")' in script
     assert 'beginButtonLoading(labor.deleteCurrentRun, "正在删除")' in script
     assert 'beginButtonLoading(button, "正在撤销")' in script
-    assert 'overseas-labor.js?v=40' in html
+    assert 'overseas-labor.js?v=20260916-progress-1' in html
 
 
 def test_overseas_labor_uses_server_formal_task_gate_instead_of_hostname_guessing():
@@ -1021,7 +1021,9 @@ def test_domestic_labor_uses_signed_storage_upload_before_calculation():
     assert "dl-button-spinner" in html
     assert "activeCanbuOperation" in js
     assert "renderCanbuOperationStatus" in js
-    assert "正在后台继续处理，可安全切换步骤" in js
+    assert "state.progressTask?.check()" in js
+    assert "state.progressTask?.update({abort:" in js
+    assert 'workbench-progress.js?v=1' in html
     assert "onPlanCreated" in js
     assert "uploadDomesticFilesConcurrently" in js
     assert "dl-operation-status" in html
@@ -1446,7 +1448,7 @@ def test_overseas_labor_upload_shows_and_prevalidates_configured_workbook_limit(
     js = OVERSEAS_LABOR_JS.read_text(encoding="utf-8")
 
     assert "workbookUploadHint(0)" in js
-    assert 'overseas-labor.js?v=40' in html
+    assert 'overseas-labor.js?v=20260916-progress-1' in html
     assert "access.uploadLimits?.maxWorkbookFiles" in js
     assert "existing.workbook + pendingWorkbookCount > maxWorkbookFiles" in js
     assert "最多选择 ${maxWorkbookFiles} 个 Excel 文件" in js

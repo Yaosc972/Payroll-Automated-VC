@@ -44,7 +44,7 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=44" in page
-    assert "social-insurance.js?v=49" in page
+    assert "social-insurance.js?v=20260916-progress-1" in page
 
 
 def test_review_decision_uses_vertical_include_and_exclude_buttons():
