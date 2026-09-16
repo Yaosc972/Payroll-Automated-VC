@@ -994,7 +994,7 @@ def test_domestic_labor_page_is_payroll_workbench():
     assert 'data-module-id="domestic"' in html
     assert "permission-guard.js" in html
     assert "domestic-labor-shell" in html
-    assert "kpi-6col" in html
+    assert 'id="homeCreateForm"' in html
     assert "domestic-labor.js" in html
     assert "/api/domestic-labor/runs" in js
     assert "/api/domestic-labor/templates" in js
@@ -1078,16 +1078,13 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
-    assert "当前开放全勤奖、餐费补贴、外宿补贴、工龄奖、岗位补贴、高温补贴与夜班补贴核算" in html
-    assert "外宿补贴核算" in html
-    assert '<span class="dl-subject-kicker">Housing Allowance</span>' in html
-    assert 'class="dl-subject-card primary" data-subject-entry="waisu_butie"' in html
-    assert "按实际入住、退宿日期和缺勤口径核算" in html
-    assert "subject === 'canbu' || subject === 'waisu_butie'" in js
+    assert 'data-subject-entry="waisu_butie"' in html
+    assert 'aria-label="新建外宿补贴核算活动"' in html
+    assert "按住宿记录与缺勤情况核算。" in html
+    assert "batch?.subject === 'waisu_butie') renderWaisuResults(results)" in js
     assert "engines: [batch.subject]" in js
     assert "el.batchNameText.textContent = batch.name" in js
-    assert "el.chromeRunBadge.hidden = !batch.runId" in js
-    assert "batch.runId.slice(-8)" in js
+    assert "if (el.chromeRunBadge) el.chromeRunBadge.hidden = !batch.runId" in js
     assert "if (subject === 'waisu_butie') return results.filter(hasWaisuReviewIssue).length" in js
     assert "住宿名单字段" in js
     assert "应发外宿补贴" in js
@@ -1096,10 +1093,11 @@ def test_domestic_labor_housing_allowance_workbench_is_available():
 def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
-    card_grid = html.split('id="subjectCardGrid"', 1)[1].split('</div>', 1)[0]
-
-    assert html.count('class="dl-subject-line-tag">操作线</span>') == 5
-    assert html.count('class="dl-subject-line-tag">全区域</span>') == 2
+    card_grid = html.split('id="subjectCardGrid"', 1)[1].split('id="homeEmpty"', 1)[0]
+    operations = card_grid.split('id="bonusSubjectsTitle"', 1)[0]
+    bonuses = card_grid.split('id="bonusSubjectsTitle"', 1)[1]
+    assert operations.count('data-subject-entry=') == 5
+    assert bonuses.count('data-subject-entry=') == 2
     assert "全勤奖核算" in html
     assert "餐费补贴核算" in html
     assert "岗位补贴核算" in html
@@ -1111,13 +1109,7 @@ def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     assert 'data-subject-entry="gangwei_butie"' in html
     assert 'data-subject-entry="gaowen_butie"' in html
     assert 'data-subject-entry="yeban_butie"' in html
-    assert 'class="dl-subject-card primary validating" data-subject-entry="gangwei_butie"' in html
-    assert 'class="dl-subject-card primary validating" data-subject-entry="gaowen_butie"' in html
-    assert 'class="dl-subject-card primary validating" data-subject-entry="yeban_butie"' in html
-    assert '<span class="dl-subject-status-tag">验证中</span>' in html
-    assert ".dl-subject-card.primary.validating" in html
-    assert "#FFF7E6" in html
-    assert "平台内置班次休息表，并固化嘉善/义乌岗位与东莞LB39排除规则" in html
+    assert "按有效夜班出勤时长核算。" in html
     assert "班次休息表、地区岗位、晋江特殊名单和连班登记" not in html
     assert "btnSaveNightShiftBreaks" in js
     assert "复制上月晋江名单" in js
@@ -1127,7 +1119,7 @@ def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     assert "晚上休息扣除" in js
     assert "早上休息扣除" in js
     assert "休息扣除合计" in js
-    assert 'data-shift-field="break_category_${number}"' in js
+    assert "collectMissingShiftBreakSegments(active)" in js
     assert "地区岗位范围" not in js
     assert "连班登记" not in js
     assert "核算合计（含暂算）" in js
@@ -1143,21 +1135,21 @@ def test_domestic_labor_subject_cards_expose_operations_and_all_region_scope():
     assert "只计算22:00至次日08:00内的有效时长" in js
     assert "Calculation explanation" not in html
     assert "review_calculated_days" in js
-    assert ".dl-subject-line-tag" in html
+    assert ".dl-home-group" in html
     assert "· 已开放" not in card_grid
     assert "· 待开发" not in card_grid
     assert "· 待确认规则" not in card_grid
 
     subject_order = [
         "canbu",
-        "quanqinjiang",
         "waisu_butie",
-        "gonglingjiang",
+        "yeban_butie",
         "gangwei_butie",
         "gaowen_butie",
-        "yeban_butie",
+        "quanqinjiang",
+        "gonglingjiang",
     ]
-    positions = [html.index(f'data-subject-entry="{subject}"') for subject in subject_order]
+    positions = [card_grid.index(f'data-subject-entry="{subject}"') for subject in subject_order]
     assert positions == sorted(positions)
 
 
@@ -1175,8 +1167,8 @@ def test_domestic_labor_attendance_bonus_workbench_is_available():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
-    assert 'class="dl-subject-card primary" data-subject-entry="quanqinjiang"' in html
-    assert '<span class="dl-subject-kicker">Attendance Bonus</span>' in html
+    assert 'class="dl-home-subject" data-subject-entry="quanqinjiang"' in html
+    assert 'aria-label="新建全勤奖核算活动"' in html
     assert "subject === 'quanqinjiang'" in js
     assert "全勤奖数据 Excel" in js
     assert "全勤判断字段" in js
@@ -1196,7 +1188,7 @@ def test_domestic_labor_position_allowance_explains_july_rule_source_without_blo
 def test_domestic_labor_attendance_bonus_card_uses_subject_level_summary():
     html = DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
 
-    assert "按入离职、缺勤、迟到早退和签卡等考勤口径核算，固定标准100元。" in html
+    assert "按入离职与考勤记录核算。" in html
     assert "迟到豁免二选一：6分钟内最多3次" not in html
 
 
@@ -1222,25 +1214,26 @@ def test_domestic_labor_home_exposes_versioned_verified_rule_package():
     js = DOMESTIC_LABOR_JS.read_text(encoding="utf-8")
 
     assert 'id="navRulePackage"' in html
-    assert 'id="rulePackageEntry"' in html
+    assert 'id="ruleVersionPicker"' in html
     assert 'id="rulePackageView"' in html
     assert 'id="rulePackageCategoryTabs"' in html
     assert 'id="rulePackageVersionSelect"' in html
     from bonus_platform.engine.domestic_labor.rule_package import get_rule_package
     current_version = get_rule_package()["version"]
-    assert '正在读取规则版本…' in html
+    assert '读取版本…' in html
     assert 'packageData.available_versions' in js
-    assert "已验证规则 4 项 · 验证中规则 3 项" in html
+    assert 'id="ruleVersionOptions" role="listbox"' in html
     assert "/api/domestic-labor/rule-package" in js
     assert "renderRulePackage" in js
     assert "data-rule-category" in js
     assert "data-rule-subject" in js
     assert "核算规则包" in html
-    assert f"当前版本 {current_version}" in html
+    assert current_version
+    assert "packageData.version" in js
     assert "字段计算公式" in js
     assert "renderRuleFieldCalculations" in js
     assert "RULE PACKAGE · CURRENT" not in html
-    assert "position: absolute" in html.split(".dl-rule-package-entry {", 1)[1].split("}", 1)[0]
+    assert 'id="ruleVersionSearch" type="search"' in html
 
 
 def test_night_shift_results_offer_guided_missing_shift_configuration():

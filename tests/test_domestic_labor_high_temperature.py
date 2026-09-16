@@ -472,9 +472,9 @@ def test_rule_package_and_subject_card_publish_high_temperature_as_validating():
 
     html = Path("bonus_platform/static/domestic-labor.html").read_text(encoding="utf-8")
     js = Path("bonus_platform/static/domestic-labor.js").read_text(encoding="utf-8")
-    assert 'class="dl-subject-card primary validating" data-subject-entry="gaowen_butie"' in html
+    assert 'class="dl-home-subject" data-subject-entry="gaowen_butie"' in html
     assert "高温补贴核算" in html
-    assert "验证中" in html
+    assert '高温补贴核算 <span class="dl-badge warn">验证中</span>' in js
     assert "gaowen_butie" in js
     assert "renderGaowenResults" in js
     assert "renderHighTemperatureExplanation" in js
