@@ -715,12 +715,14 @@ def test_portal_feedback_and_creative_updates_are_lightweight_and_available():
 
     assert '<html lang="zh-CN" data-module-id="home">' in html
     assert '<div class="feedback-widget" id="feedbackWidget">' not in html
-    assert 'src="feedback-widget.js?v=20260820-13"' in html
-    assert 'href="feedback-widget.css?v=20260820-13"' in html
+    assert 'src="feedback-widget.js?v=20260916-01"' in html
+    assert 'href="feedback-widget.css?v=20260916-01"' in html
 
     assert 'id="feedbackLauncher"' in widget_js
     assert 'class="feedback-launcher-icon"' in widget_js
-    assert 'background-image: url("assets/feedback-mailbox-original.png")' in widget_css
+    assert "mountLauncher" in widget_js
+    assert ".feedback-header-actions" in widget_css
+    assert '.feedback-launcher {\n  position: relative;' in widget_css
     assert 'data-feedback-tab="submit"' in widget_js
     assert 'data-feedback-tab="mine"' in widget_js
     assert 'data-feedback-tab="updates"' in widget_js
@@ -754,8 +756,8 @@ def test_portal_feedback_and_creative_updates_are_lightweight_and_available():
     for filename, module_id in module_pages.items():
         module_html = (STATIC_DIR / filename).read_text(encoding="utf-8")
         assert f'data-module-id="{module_id}"' in module_html
-        assert 'href="feedback-widget.css?v=20260820-13"' in module_html
-        assert 'src="feedback-widget.js?v=20260820-13"' in module_html
+        assert 'href="feedback-widget.css?v=20260916-01"' in module_html
+        assert 'src="feedback-widget.js?v=20260916-01"' in module_html
 
     assert 'drawer.addEventListener("paste"' in widget_js
     assert 'dropzone.addEventListener("drop"' in widget_js
