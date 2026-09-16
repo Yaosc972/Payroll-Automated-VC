@@ -47,14 +47,6 @@
       .domestic-labor-shell input,
       .domestic-labor-shell textarea { font: inherit; }
 
-      /* Keep feedback in the vacant header slot, clear of payroll action buttons. */
-      .domestic-labor-shell #feedbackLauncher {
-        top: 8px;
-        bottom: auto;
-        min-height: 40px;
-        padding: 0 12px 0 4px;
-      }
-
       /* ═══ 顶部导航栏：企业级纯净 framing，主色用于强调，面板基底保持冷灰白 ═══ */
       .dl-topbar {
         position: sticky;
@@ -65,7 +57,7 @@
         align-items: center;
         gap: 14px;
         min-height: 56px;
-        padding: 0 190px 0 20px;
+        padding: 0 20px;
         border-bottom: 1px solid var(--dl-line);
         background: #ffffff;
         box-shadow: 0 1px 0 rgba(16, 24, 40, 0.06);
@@ -3574,8 +3566,6 @@
     #canbuBatchListView button:disabled { opacity:.35; cursor:default; }
     body.dl-activities-active .dl-main { background:transparent; }
     #canbuBatchListView { max-width:1480px; margin:12px auto 0; font-family:-apple-system,BlinkMacSystemFont,"Inter","PingFang SC","Microsoft YaHei",sans-serif; color:#1d1d1f; }
-    #canbuBatchListView > .dl-panel { border:1px solid rgba(0,0,0,.07); border-radius:20px; overflow:hidden; background:#fff; box-shadow:0 8px 32px rgba(31,38,53,.035),0 1px 3px rgba(31,38,53,.025); }
-    #canbuBatchListView .dl-panel-head { padding:28px 28px 24px; background:#fff; border:0; align-items:center; }
     #canbuBatchListView .dl-panel-title { font-size:24px; letter-spacing:-.6px; font-weight:650; line-height:1.3; }
     #canbuBatchListView .dl-panel-sub { margin-top:6px; color:#737378; font-size:13px; }
     #canbuBatchListView .dl-actions-inline { gap:10px; }
@@ -3647,6 +3637,46 @@
     .dl-home-subject:active { background:#eef3fb; }
     .dl-home-subject:focus-visible { outline:3px solid rgba(0,122,255,.45); outline-offset:-4px; border-radius:9px; }
     @media (prefers-reduced-motion:no-preference) { .dl-home-subject { transition:background-color .15s ease; } }
+
+    .dl-home-workspace { display:grid; grid-template-columns:290px minmax(0,1fr); gap:28px; align-items:stretch; }
+    .dl-home-groups { display:flex; flex-direction:column; gap:24px; padding:12px 0; }
+    .dl-home-group { display:block; }
+    .dl-home-group-heading { padding:0 16px 10px; }
+    .dl-home-group-heading h2 { font-size:12px; color:#71717a; font-weight:500; margin:0; letter-spacing:0; }
+    .dl-home-group-mark,.dl-home-description { display:none; }
+    .dl-home-rows { border:0; background:transparent; box-shadow:none; border-radius:0; overflow:visible; }
+    .dl-home-subject { min-height:58px; padding:10px 14px; gap:13px; border-radius:12px; margin-bottom:3px; }
+    .dl-home-subject + .dl-home-subject::before { display:none; }
+    .dl-home-row-copy { display:block; }
+    .dl-home-subject[aria-pressed="true"] { background:#e7effd; box-shadow:inset 0 0 0 1px #d7e5fa; }
+    .dl-home-subject[aria-pressed="true"] strong,.dl-home-subject[aria-pressed="true"] .dl-home-forward { color:#0064d5; }
+    .dl-home-config { background:#fff; border:1px solid #e5e5ea; border-radius:22px; min-height:526px; box-shadow:0 8px 32px rgba(25,35,55,.035); padding:32px 36px; }
+    .dl-home-empty { min-height:460px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+    .dl-home-empty[hidden],#homeCreateForm[hidden] { display:none; }
+    .dl-home-empty-symbol { width:64px; height:64px; display:grid; place-items:center; background:#f3f6fb; color:#8a9bb3; border-radius:18px; font-size:32px; font-weight:300; margin-bottom:20px; }
+    .dl-home-empty h2 { font-size:22px; font-weight:600; margin:0; }
+    .dl-home-empty p { max-width:290px; font-size:14px; line-height:1.8; color:#77777f; }
+    .dl-home-config-head>span { color:#6e6e78; font-size:12px; }
+    .dl-home-config-head h2 { font-size:26px; font-weight:650; margin:8px 0; color:#1d1d1f; }
+    .dl-home-config-head p { font-size:14px; color:#737378; margin:0; }
+    .dl-home-fields { margin-top:28px; display:grid; gap:24px; }
+    .dl-home-label { display:block; font-size:13px; color:#34343b; font-weight:500; }
+    .dl-home-optional { color:#85858c; font-size:12px; font-weight:400; margin-left:8px; }
+    .dl-home-year { display:flex; align-items:center; gap:12px; margin:10px 0; }
+    .dl-home-year strong { font-size:14px; min-width:64px; text-align:center; font-weight:600; }
+    .dl-home-year button { width:28px; height:28px; border:0; border-radius:7px; background:#f5f5f7; color:#62626b; cursor:pointer; font-size:20px; }
+    .dl-home-months { display:grid; grid-template-columns:repeat(6,1fr); gap:8px; }
+    .dl-home-months button { height:36px; background:#f5f5f7; border:1px solid transparent; border-radius:8px; font:inherit; font-size:13px; color:#45454f; cursor:pointer; }
+    .dl-home-months button[aria-pressed="true"] { background:#eaf2ff; border-color:#007aff; color:#0064d5; font-weight:600; }
+    #homeActivityName { display:block; margin-top:10px; width:100%; box-sizing:border-box; height:42px; border:1px solid #dedee4; background:#fafafa; border-radius:9px; padding:10px 12px; font:inherit; font-size:14px; }
+    .dl-home-preparation { margin:24px 0; padding:16px 18px; background:#f6f8fb; border-radius:12px; }
+    .dl-home-preparation h3 { font-size:12px; font-weight:600; margin:0 0 6px; color:#515968; }
+    .dl-home-preparation p { font-size:13px; color:#646d7b; line-height:1.7; margin:0; }
+    .dl-home-config-footer { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+    .dl-home-config-footer>span { color:#85858c; font-size:12px; }
+    #homeStart { background:#007aff; color:white; border:0; border-radius:10px; padding:12px 22px; font:inherit; font-size:14px; font-weight:500; cursor:pointer; }
+    #homeStart:disabled { opacity:.5; cursor:wait; }
+    #homeCreateForm :focus-visible { outline:3px solid #9cc9ff; outline-offset:3px; }
     #canbuBatchModal { background:rgba(22,27,38,.22); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); }
     #canbuBatchModal .dl-modal { width:440px; max-height:calc(100vh - 48px); overflow:auto; border:1px solid rgba(255,255,255,.65); border-radius:20px; background:#fff; box-shadow:0 24px 80px rgba(20,25,40,.18); }
     #canbuBatchModal .dl-modal-head { padding:26px 26px 0; background:transparent; border:0; }
@@ -3686,12 +3716,9 @@
     body:is(.dl-home-active,.dl-activities-active) .dl-top-nav a.active { background:#ececf0; color:#1d1d1f; }
     body:is(.dl-home-active,.dl-activities-active) .dl-top-nav a:hover { background:#f1f1f4; }
     body:is(.dl-home-active,.dl-activities-active) .dl-top-nav a:focus-visible { outline:3px solid rgba(0,122,255,.4); outline-offset:2px; }
-    body.dl-home-active .feedback-widget .feedback-launcher { min-height:34px; padding:4px 10px; border:0; border-radius:8px; color:#6e6e73; background:transparent; box-shadow:none; font-size:12px; font-weight:400; backdrop-filter:none; }
-    body.dl-home-active .feedback-widget .feedback-launcher:hover { background:#f1f1f4; transform:none; box-shadow:none; }
-    body.dl-home-active .feedback-launcher-icon { width:24px; height:24px; background-size:94px 63px; }
-    body.dl-home-active .feedback-launcher i { width:6px; height:6px; top:3px; right:3px; border:0; box-shadow:none; }
     </style>
     <link rel="stylesheet" href="domestic-labor-rulebook.css?v=7">
+    <link rel="stylesheet" href="domestic-labor-design.css?v=17">
   </head>
   <body class="domestic-labor-shell">
 
@@ -3709,16 +3736,67 @@
       </div>
     </header>
 
+    <a class="dl-skip-link" href="#domesticMain">跳转到主要内容</a>
     <div class="dl-shell dl-shell-subject" id="payrollShell">
-      <main class="dl-main dl-main-full">
+      <main class="dl-main dl-main-full" id="domesticMain" tabindex="-1">
         <section class="dl-view active" id="subjectHomeView" data-view="home">
           <header class="dl-home-heading">
             <h1>开始核算</h1>
             <p>选择科目并设置核算月份。</p>
           </header>
+          <div class="dl-home-workspace">
           <div class="dl-home-groups" id="subjectCardGrid" aria-label="核算科目">
             <section class="dl-home-group" aria-labelledby="operationSubjectsTitle"><header class="dl-home-group-heading"><span class="dl-home-group-mark" aria-hidden="true"></span><h2 id="operationSubjectsTitle">操作线补贴</h2></header><div class="dl-home-rows"><button class="dl-home-subject" data-subject-entry="canbu" type="button" aria-label="新建餐费补贴核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3v6a3 3 0 0 0 6 0V3M8 3v18M19 21V3c-4 3-4 8 0 9"/></svg></span><span class="dl-home-row-copy"><strong>餐费补贴</strong><span class="dl-home-description">按出勤情况与地区标准核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button><button class="dl-home-subject" data-subject-entry="waisu_butie" type="button" aria-label="新建外宿补贴核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-8h6v8"/></svg></span><span class="dl-home-row-copy"><strong>外宿补贴</strong><span class="dl-home-description">按住宿记录与缺勤情况核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button><button class="dl-home-subject" data-subject-entry="yeban_butie" type="button" aria-label="新建夜班补贴核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 8.5 8.5 0 1 0 20 15.5Z"/></svg></span><span class="dl-home-row-copy"><strong>夜班补贴</strong><span class="dl-home-description">按有效夜班出勤时长核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button><button class="dl-home-subject" data-subject-entry="gangwei_butie" type="button" aria-label="新建岗位补贴核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V4h8v3M3 12c5 3 13 3 18 0M10 13v3h4v-3"/></svg></span><span class="dl-home-row-copy"><strong>岗位补贴</strong><span class="dl-home-description">按岗位标准与缺勤情况核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button><button class="dl-home-subject" data-subject-entry="gaowen_butie" type="button" aria-label="新建高温补贴核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14.5V5a3 3 0 0 1 6 0v9.5a5 5 0 1 1-6 0ZM12 8v9M18 5h3M18 9h2"/></svg></span><span class="dl-home-row-copy"><strong>高温补贴</strong><span class="dl-home-description">按测温记录与实际出勤核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button></div></section>
             <section class="dl-home-group dl-home-group-bonus" aria-labelledby="bonusSubjectsTitle"><header class="dl-home-group-heading"><span class="dl-home-group-mark" aria-hidden="true"></span><h2 id="bonusSubjectsTitle">全区域奖金</h2></header><div class="dl-home-rows"><button class="dl-home-subject" data-subject-entry="quanqinjiang" type="button" aria-label="新建全勤奖核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 10h18m-13 5 3 3 5-5"/></svg></span><span class="dl-home-row-copy"><strong>全勤奖</strong><span class="dl-home-description">按入离职与考勤记录核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button><button class="dl-home-subject" data-subject-entry="gonglingjiang" type="button" aria-label="新建工龄奖核算活动"><span class="dl-home-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2M5 4 3 6M19 4l2 2"/></svg></span><span class="dl-home-row-copy"><strong>工龄奖</strong><span class="dl-home-description">按工龄、岗位与地区标准核算。</span></span><svg class="dl-home-forward" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg></button></div></section>
+          </div>
+          <section class="dl-home-config" aria-label="核算设置">
+            <div id="homeEmpty" class="dl-home-empty">
+              <div class="dl-start-art" aria-hidden="true">
+                <svg viewBox="0 0 600 250" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <defs><linearGradient id="startPath" x1="65" y1="160" x2="525" y2="80" gradientUnits="userSpaceOnUse"><stop stop-color="#9cc4ff"/><stop offset=".52" stop-color="#007aff"/><stop offset="1" stop-color="#aec8e8"/></linearGradient></defs>
+                  <ellipse cx="299" cy="146" rx="229" ry="81" stroke="#eef1f6"/>
+                  <path d="M46 163C104 230 187 229 232 165S303 44 362 73 432 199 491 167 544 96 562 78" stroke="#e7eef8" stroke-width="12" stroke-linecap="round"/>
+                  <path class="dl-start-path" d="M46 163C104 230 187 229 232 165S303 44 362 73 432 199 491 167 544 96 562 78" stroke="url(#startPath)" stroke-width="1.7" stroke-linecap="round"/>
+                  <path d="m552 79 11-3 1 12" stroke="#91b5e5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  <g transform="translate(87 68) rotate(-8 46 50)">
+                    <rect x="5" y="7" width="96" height="110" rx="15" fill="#f0f4fa"/>
+                    <rect width="96" height="110" rx="15" fill="white" stroke="#ced8e5" stroke-width="1.5"/>
+                    <path d="M19 23h35" stroke="#aab8cc" stroke-width="3" stroke-linecap="round"/>
+                    <rect x="12" y="38" width="72" height="24" rx="7" fill="#eaf3ff"/>
+                    <circle cx="25" cy="50" r="4" fill="#007aff"/>
+                    <path d="M38 50h31M38 78h27" stroke="#8ca0ba" stroke-width="2" stroke-linecap="round"/>
+                    <circle cx="25" cy="78" r="4" stroke="#c8d3e1" stroke-width="1.5"/>
+                    <path d="m73 64 0 24 6-7 9-1Z" fill="white" stroke="#007aff" stroke-width="1.5" stroke-linejoin="round"/>
+                  </g>
+                  <g transform="translate(258 42) rotate(5 47 49)">
+                    <rect x="4" y="7" width="98" height="105" rx="16" fill="#edf2fa"/>
+                    <rect width="98" height="105" rx="16" fill="white" stroke="#cbd7e7" stroke-width="1.5"/>
+                    <path d="M1 32h96M25-5v15M73-5v15" stroke="#a7bad4" stroke-width="1.7" stroke-linecap="round"/>
+                    <g fill="#c8d5e5"><circle cx="24" cy="49" r="3"/><circle cx="49" cy="49" r="3"/><circle cx="74" cy="49" r="3"/><circle cx="24" cy="71" r="3"/><circle cx="74" cy="71" r="3"/></g>
+                    <rect x="38" y="60" width="22" height="22" rx="7" fill="#007aff"/>
+                    <path d="m44 71 4 4 7-8" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  </g>
+                  <g transform="translate(432 83) rotate(9 40 50)">
+                    <path d="M13 0h44l27 27v71a12 12 0 0 1-12 12H13A13 13 0 0 1 0 97V13A13 13 0 0 1 13 0Z" fill="white" stroke="#ccd8e6" stroke-width="1.5"/>
+                    <path d="M57 0v19a8 8 0 0 0 8 8h19M18 43h45M18 57h34M18 71h25" stroke="#b6c6da" stroke-width="1.7" stroke-linecap="round"/>
+                    <circle cx="71" cy="92" r="21" fill="#ecf4ff" stroke="#b9d6ff"/>
+                    <path d="m62 92 6 6 12-13" stroke="#007aff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </g>
+                  <g stroke="#adc7e8" stroke-width="1.4" stroke-linecap="round"><path d="M205 56v10m-5-5h10M387 192v8m-4-4h8"/><circle cx="552" cy="151" r="3"/><circle cx="57" cy="88" r="3"/></g>
+                </svg>
+              </div>
+              <h2>从一个科目开始</h2>
+              <p>选择左侧科目，创建本次核算活动。</p>
+              <ol class="dl-start-guide" aria-label="核算流程"><li><span>01</span>选择科目</li><li><span>02</span>设置月份</li><li><span>03</span>上传核算</li></ol>
+            </div>
+            <form id="homeCreateForm" hidden>
+              <header class="dl-home-config-head"><span id="homeScope"></span><h2 id="homeSubjectTitle"></h2><p id="homeSubjectDescription"></p></header>
+              <div class="dl-home-fields"><div><label class="dl-home-label">核算月份</label><div class="dl-home-year"><button type="button" id="homePrevYear" aria-label="上一年">‹</button><strong id="homeYear"></strong><button type="button" id="homeNextYear" aria-label="下一年">›</button></div><div id="homeMonths" class="dl-home-months" role="group" aria-label="核算月份"></div></div>
+              <label class="dl-home-label" for="homeActivityName">活动名称<span class="dl-home-optional">选填</span><input id="homeActivityName" maxlength="120" autocomplete="off" placeholder="默认按月份和科目命名"></label></div>
+              <aside class="dl-home-preparation"><h3>准备资料</h3><p id="homePreparation"></p></aside>
+              <footer class="dl-home-config-footer"><span>创建后上传数据，进行核算。</span><button id="homeStart" type="submit">开始核算 <span aria-hidden="true">→</span></button></footer>
+            </form>
+          </section>
           </div>
         </section>
 
@@ -3726,11 +3804,13 @@
           <div class="dl-rule-package-shell">
             <section class="dl-panel dl-rule-package-head dl-rule-compact-head">
                   <h1 class="dl-panel-title" id="rulePackageTitle">中国区外包工薪酬核算规则包</h1>
-                  <label class="dl-rule-version-control">
-                    <select id="rulePackageVersionSelect" aria-label="选择规则包版本">
-                      <option value="">正在读取规则版本…</option>
-                    </select>
-                  </label>
+                  <div class="dl-rule-version-control">
+                    <select id="rulePackageVersionSelect" hidden aria-hidden="true" tabindex="-1"></select>
+                    <details id="ruleVersionPicker" class="dl-version-picker">
+                      <summary aria-label="选择规则包版本"><span id="ruleVersionLabel">读取版本…</span><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 7 5 5 5-5"/></svg></summary>
+                      <div class="dl-version-popover"><label class="dl-version-search"><span>规则版本</span><input id="ruleVersionSearch" type="search" placeholder="查找版本号" aria-label="查找规则版本号" autocomplete="off"></label><div id="ruleVersionOptions" role="listbox" aria-label="规则版本"></div></div>
+                    </details>
+                  </div>
                   <button class="dl-btn" id="btnBackFromRules" type="button">返回科目首页</button>
             </section>
 
@@ -3752,8 +3832,7 @@
         </section>
 
         <section class="dl-view" id="canbuBatchListView" data-view="canbuBatches" hidden>
-          <div class="dl-panel">
-            <div class="dl-panel-head">
+          <header class="dl-activity-heading">
               <div>
                 <h2 class="dl-panel-title" id="subjectBatchListTitle">餐补核算批次</h2>
                 <p class="dl-panel-sub" id="subjectBatchListSub">一个批次对应一次可回看的餐补核算，同一月份可保留多次试算或复算。</p>
@@ -3762,7 +3841,8 @@
                 <button class="dl-btn" id="btnBackHome" type="button">返回科目首页</button>
                 <button class="btn-new-batch" id="btnNewCanbuBatch" type="button">新建餐补批次</button>
               </div>
-            </div>
+          </header>
+          <div class="dl-activity-frame">
             <div class="dl-activity-toolbar">
               <div class="dl-activity-scopes" role="group" aria-label="活动范围"><button class="dl-segment active" data-activity-scope="mine" aria-pressed="true">我的活动</button><button class="dl-segment" data-activity-scope="all" aria-pressed="false">全部活动</button></div>
               <label class="dl-activity-search"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input id="activitySearch" type="search" placeholder="搜索活动名称、创建人" aria-label="搜索活动名称、创建人"></label>
@@ -3837,8 +3917,8 @@
       </div>
     </div>
 
-    <script src="domestic-labor-rulebook.js?v=6"></script>
-    <script src="domestic-labor.js?v=31"></script>
+    <script src="domestic-labor-rulebook.js?v=7"></script>
+    <script src="domestic-labor.js?v=43"></script>
     <script src="feedback-widget.js?v=20260820-13"></script>
   </body>
 </html>

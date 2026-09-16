@@ -405,9 +405,62 @@ const el = {
 };
 
 // ── Initialize ──
+let restoringPayrollPage = true;
 init();
+function rememberPayrollPage(step) {
+  if (restoringPayrollPage) return;
+  const params = new URLSearchParams();
+  params.set('view', state.view);
+  if (state.view === 'canbuWorkbench' && getActiveCanbuBatch()) {
+    params.set('activity', state.activeCanbuBatchId);
+    params.set('step', step || state.workbenchStep || 'upload');
+  }
+  history.replaceState(null, '', `${location.pathname}${location.search}#${params}`);
+}
+function payrollDraftKey() {
+  return `${state.activityUser?.ownerId || ''}:${state.activeCanbuBatchId}`;
+}
+async function payrollFileDraft(mode, files) {
+  const key = payrollDraftKey();
+  if (!state.activityUser?.ownerId || !getActiveCanbuBatch()?.isMine) return [];
+  const db = await new Promise((resolve, reject) => {
+    const req = indexedDB.open('domestic-payroll-drafts', 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('files');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('files', mode === 'read' ? 'readonly' : 'readwrite');
+      const store = tx.objectStore('files');
+      const req = mode === 'read' ? store.get(key) : files.length ? store.put(files, key) : store.delete(key);
+      tx.oncomplete = () => resolve(req.result || []);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally { db.close(); }
+}
+function savePayrollFileDraft() {
+  payrollFileDraft('write', [...state.payrollFiles]).catch(() => toast('浏览器未能保留待上传文件，刷新后需要重新选择。'));
+}
+async function restorePayrollPage(hash) {
+  const params = new URLSearchParams(hash.replace(/^#/, ''));
+  const view = params.get('view');
+  const batch = state.canbuBatches.find(item => item.id === params.get('activity'));
+  if (view === 'canbuWorkbench' && batch) {
+    state.activeCanbuBatchId = batch.id;
+    state.activeWorkbenchSubject = batch.subject;
+    try { state.payrollFiles = await payrollFileDraft('read'); } catch (_) { state.payrollFiles = []; }
+    showView('canbuWorkbench');
+    const requested = params.get('step');
+    renderCanbuWorkbench(['upload', 'fields', 'results'].includes(requested) ? requested : 'upload');
+  } else if (view === 'rulePackage' || hash === '#rulePackageView') openRulePackageView();
+  else if (view === 'canbuBatches' || view === 'canbuWorkbench' || hash === '#canbuBatchListView') showView('canbuBatches');
+  else showView('home');
+}
 
 async function init() {
+  const initialHash = location.hash;
   loadEngineCards();
   loadTemplateLinks();
   bindEvents();
@@ -418,8 +471,9 @@ async function init() {
   showView('home');
   setupActivityList();
   await refreshActivities();
-  if (window.location.hash === '#rulePackageView') openRulePackageView();
-  if (window.location.hash === '#canbuBatchListView') showView('canbuBatches');
+  await restorePayrollPage(initialHash);
+  restoringPayrollPage = false;
+  rememberPayrollPage();
 }
 
 function setDefaultMonth() {
@@ -554,8 +608,7 @@ function bindEvents() {
     if (!card || card.disabled) return;
     const subject = card.dataset.subjectEntry;
     if (!SUBJECT_WORKBENCH[subject]) return;
-    state.activeWorkbenchSubject = subject;
-    openCanbuBatchModal();
+    selectHomeSubject(subject, card);
   });
 
   el.navSubjectHome?.addEventListener('click', (event) => {
@@ -639,7 +692,7 @@ function bindEvents() {
     renderRecentBatchTable();
   });
 
-  el.btnNewCanbuBatch?.addEventListener('click', openCanbuBatchModal);
+  el.btnNewCanbuBatch?.addEventListener('click', () => { showView('home'); document.querySelector('[data-subject-entry]')?.focus(); });
   el.btnCancelCanbuBatch?.addEventListener('click', closeCanbuBatchModal);
   el.canbuBatchModal?.addEventListener('click', (event) => {
     if (event.target === el.canbuBatchModal) closeCanbuBatchModal();
@@ -679,6 +732,72 @@ function bindEvents() {
       closeExplainDrawer();
     }
   });
+}
+
+const homeDraft = { subject: '', year: new Date().getFullYear(), month: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`, busy: false };
+
+function selectHomeSubject(subject, card) {
+  if (homeDraft.busy) return;
+  homeDraft.subject = subject;
+  document.querySelectorAll('[data-subject-entry]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.subjectEntry === subject)));
+  document.querySelector('#homeEmpty').hidden = true;
+  const form = document.querySelector('#homeCreateForm');
+  form.hidden = false;
+  document.querySelector('#homeSubjectTitle').textContent = card.querySelector('strong').textContent;
+  document.querySelector('#homeSubjectDescription').textContent = card.querySelector('.dl-home-description').textContent;
+  document.querySelector('#homeScope').textContent = card.closest('.dl-home-group').querySelector('h2').textContent;
+  const preparation = {
+    canbu: '准备日考勤、月考勤数据，可在同一文件内包含多张工作表。',
+    waisu_butie: '准备月考勤、日考勤和住宿名单；本月有自离员工时，还需上传自离名单。',
+    yeban_butie: '准备日考勤数据，并核对当月班次休息配置；涉及排除人员时补充相应名单。',
+    gangwei_butie: '准备月考勤数据，包含地区、岗位、排班天数及缺勤字段。',
+    gaowen_butie: '准备月考勤、日考勤和测温登记数据。',
+    quanqinjiang: '准备月考勤、日考勤数据，月考勤需包含三档迟到次数。',
+    gonglingjiang: '准备月考勤数据；涉及第四纵队时，需确认揽收线工龄奖名单。',
+  };
+  document.querySelector('#homePreparation').textContent = preparation[subject];
+  renderHomeMonths();
+  document.querySelector('#homePrevYear').onclick = () => { homeDraft.year--; renderHomeMonths(); };
+  document.querySelector('#homeNextYear').onclick = () => { homeDraft.year++; renderHomeMonths(); };
+  form.onsubmit = createHomeActivity;
+}
+
+function renderHomeMonths() {
+  document.querySelector('#homeYear').textContent = `${homeDraft.year} 年`;
+  const grid = document.querySelector('#homeMonths');
+  grid.innerHTML = Array.from({ length: 12 }, (_, i) => {
+    const value = `${homeDraft.year}-${String(i + 1).padStart(2, '0')}`;
+    return `<button type="button" data-home-month="${value}" aria-pressed="${homeDraft.month === value}">${i + 1} 月</button>`;
+  }).join('');
+  grid.onclick = event => {
+    const button = event.target.closest('[data-home-month]');
+    if (!button || homeDraft.busy) return;
+    homeDraft.month = button.dataset.homeMonth;
+    grid.querySelectorAll('button').forEach(node => node.setAttribute('aria-pressed', String(node === button)));
+  };
+}
+
+async function createHomeActivity(event) {
+  event.preventDefault();
+  if (!homeDraft.subject || homeDraft.busy) return;
+  const subject = homeDraft.subject;
+  const month = homeDraft.month;
+  const name = document.querySelector('#homeActivityName').value.trim() || `${formatMonthLabel(month)} ${getWorkbenchConfig(subject).name}初算`;
+  const button = document.querySelector('#homeStart');
+  homeDraft.busy = true;
+  button.disabled = true;
+  button.textContent = '正在创建…';
+  try {
+    const batch = await createCanbuBatch(month, name, subject);
+    clearCurrentRunState({ clearFile: true });
+    resetCanbuFilters();
+    state.activeWorkbenchSubject = subject;
+    state.activeCanbuBatchId = batch.id;
+    document.querySelector('#homeActivityName').value = '';
+    showView('canbuWorkbench');
+    renderCanbuWorkbench('upload');
+  } catch (error) { toast(error.message); }
+  finally { homeDraft.busy = false; button.disabled = false; button.textContent = '开始核算 →'; }
 }
 
 function openCanbuBatchModal() {
@@ -734,6 +853,7 @@ function closeCalcModal() {
   if (!el.calcModal?.classList.contains('visible')) return;
   el.calcModal.classList.remove('visible');
   document.body.style.overflow = '';
+  if (state.calcReturnFocus?.isConnected) state.calcReturnFocus.focus();
 }
 
 async function createCanbuBatchFromModal() {
@@ -765,9 +885,12 @@ function updateSubjectWorkbenchLabels() {
 }
 
 function showView(viewName) {
+  if (state.view != viewName) { closeExplainDrawer(); closeCalcModal(); window.scrollTo({ top: 0, behavior: 'instant' }); }
   document.body.classList.toggle('dl-activities-active', viewName === 'canbuBatches');
   document.body.classList.toggle('dl-home-active', viewName === 'home');
   state.view = viewName;
+  rememberPayrollPage();
+  [el.navSubjectHome, el.navBatchList, el.navRulePackage].forEach((node, index) => { if (node) { const selected = index === (viewName === 'home' ? 0 : viewName === 'rulePackage' ? 2 : 1); if (selected) node.setAttribute('aria-current', 'page'); else node.removeAttribute('aria-current'); } });
   [
     ['home', el.subjectHomeView],
     ['rulePackage', el.rulePackageView],
@@ -883,10 +1006,49 @@ async function loadRulePackageVersion(version = '') {
   }
 }
 
+function renderRuleVersionPicker(packageData) {
+  const picker = document.querySelector('#ruleVersionPicker');
+  const search = document.querySelector('#ruleVersionSearch');
+  const options = document.querySelector('#ruleVersionOptions');
+  if (!picker || !search || !options) return;
+  const versions = packageData.available_versions || packageData.version_history || [];
+  const shortName = version => String(version).replace(/^DL-PAYROLL[.\-]?/i, '').replace(/^v/i, '');
+  const selected = versions.find(item => item.version === packageData.version);
+  document.querySelector('#ruleVersionLabel').textContent = `${shortName(packageData.version)} · ${selected?.status || packageData.status || '规则版本'}`;
+  const render = () => {
+    const query = search.value.trim().toLowerCase();
+    const matches = versions.filter(item => `${item.version} ${item.status}`.toLowerCase().includes(query));
+    options.innerHTML = matches.length ? matches.map(item => `<button type="button" role="option" aria-selected="${item.version === packageData.version}" data-rule-version="${escapeHtml(item.version)}"><span class="dl-version-check" aria-hidden="true">${item.version === packageData.version ? '✓' : ''}</span><strong>${escapeHtml(shortName(item.version))}</strong><span class="dl-version-status">${escapeHtml(item.status)}</span></button>`).join('') : '<p class="dl-version-empty">没有匹配的版本</p>';
+  };
+  search.value = '';
+  render();
+  search.oninput = render;
+  picker.ontoggle = () => { if (picker.open) { search.value = ''; render(); search.focus(); } };
+  picker.onfocusout = event => { if (!picker.contains(event.relatedTarget)) picker.open = false; };
+  options.onclick = async event => {
+    const button = event.target.closest('[data-rule-version]');
+    if (!button || state.rulePackageLoading) return;
+    picker.open = false;
+    picker.querySelector('summary').focus();
+    if (button.dataset.ruleVersion !== packageData.version) await loadRulePackageVersion(button.dataset.ruleVersion);
+  };
+  picker.onkeydown = event => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); picker.open = false; picker.querySelector('summary').focus(); }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && picker.open) {
+      if (['Home','End'].includes(event.key) && document.activeElement === search) return;
+      event.preventDefault();
+      const buttons = [...options.querySelectorAll('button')];
+      const index = buttons.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : index < 0 ? (event.key === 'ArrowDown' ? 0 : buttons.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    }
+  };
+}
+
 function renderRulePackage() {
   const packageData = state.rulePackage;
   if (!packageData) return;
-  if (el.rulePackageTitle) el.rulePackageTitle.textContent = packageData.name;
+  if (el.rulePackageTitle) el.rulePackageTitle.textContent = '规则包';
   if (el.rulePackageScope) el.rulePackageScope.textContent = packageData.scope_note;
   if (el.rulePackageVersionSelect) {
     const availableVersions = packageData.available_versions || packageData.version_history || [];
@@ -894,6 +1056,7 @@ function renderRulePackage() {
       <option value="${escapeHtml(version.version)}" ${version.version === packageData.version ? 'selected' : ''}>${escapeHtml(version.display_version)} · ${escapeHtml(version.status)}</option>
     `).join('');
   }
+  renderRuleVersionPicker(packageData);
   if (el.rulePackageSummary) {
     const summary = [
       ['发布状态', packageData.status],
@@ -1314,6 +1477,8 @@ function bindBatchTableActions(root) {
 }
 
 function renderCanbuWorkbench(step = 'upload') {
+  state.workbenchStep = step;
+  rememberPayrollPage(step);
   const batch = getActiveCanbuBatch();
   if (!batch || !el.canbuWorkbenchRoot) return;
   if (!batch.isMine || batch.legacy) {
@@ -1362,8 +1527,15 @@ function renderCanbuWorkbench(step = 'upload') {
           <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · ${escapeHtml(config.name)}核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
         </div>
         <div class="dl-actions-inline">
-          <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回批次列表</button>
-          <button class="dl-btn" id="btnRecalculateCanbu" type="button">重新核算</button>
+          ${showAside ? `<button class="dl-btn dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="false" aria-label="展开异常队列">
+            <span class="dl-aside-toggle-main">
+              <span class="dl-aside-toggle-icon">‹</span>
+              <span class="dl-aside-toggle-text">展开异常</span>
+            </span>
+            ${canbuWarningCount ? `<span class="dl-aside-count" aria-label="${canbuWarningCount} 条异常">${canbuWarningCount}</span>` : ''}
+          </button>` : ''}
+          <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回活动列表</button>
+          <button class="dl-btn" id="btnRecalculateCanbu" type="button" ${batch.runId ? '' : 'hidden'}>重新核算</button>
           <button class="btn-primary btn-export" id="btnExportCanbu" type="button" ${canbuResults.length ? '' : 'disabled'}>导出结果</button>
         </div>
       </div>
@@ -1374,13 +1546,6 @@ function renderCanbuWorkbench(step = 'upload') {
       <div class="dl-grid dl-grid-workbench">
         <div class="dl-stack" id="canbuStepContent"></div>
         <aside class="dl-aside">
-          <button class="dl-aside-toggle" id="btnToggleAside" type="button" aria-expanded="false" aria-label="展开异常队列">
-            <span class="dl-aside-toggle-main">
-              <span class="dl-aside-toggle-icon">‹</span>
-              <span class="dl-aside-toggle-text">展开异常</span>
-            </span>
-            ${canbuWarningCount ? `<span class="dl-aside-count" aria-label="${canbuWarningCount} 条异常">${canbuWarningCount}</span>` : ''}
-          </button>
           <section class="dl-panel dl-aside-panel">
             <div class="dl-panel-head">
               <div>
@@ -1430,7 +1595,7 @@ function renderCanbuRunLoading(batch, step) {
           <p class="dl-panel-sub">${escapeHtml(formatMonthLabel(batch.month))} · ${escapeHtml(config.name)}核算 · <span class="dl-badge ${getBatchStatusClass(batch.status)}">${escapeHtml(batch.status)}</span></p>
         </div>
         <div class="dl-actions-inline">
-          <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回批次列表</button>
+          <button class="dl-btn" id="btnBackCanbuBatches" type="button">返回活动列表</button>
         </div>
       </div>
       ${renderCanbuStepper(step, batch)}
@@ -1495,11 +1660,9 @@ function renderCanbuStepper(activeStep, batch) {
         const available = stepItem.key === 'upload' || Boolean(batch?.runId);
         const index = CANBU_STEPS.indexOf(stepItem) + 1;
         const status = done ? '已完成' : active ? '进行中' : '未开始';
-        const icon = active
-          ? `<span class="dl-stepper-index active-pin">${renderStepperPin(index)}</span>`
-          : `<span class="dl-stepper-index">${done ? '✓' : index}</span>`;
+        const icon = `<span class="dl-stepper-index">${done && !active ? '✓' : index}</span>`;
         return `
-          <button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" type="button" ${available ? '' : 'disabled aria-disabled="true"'}>
+          <button class="dl-stepper-item ${active ? 'active' : ''} ${done ? 'done' : ''}" data-canbu-step="${stepItem.key}" aria-current="${active ? 'step' : 'false'}" type="button" ${available ? '' : 'disabled aria-disabled="true"'}>
             ${icon}
             <span class="dl-stepper-label">${stepItem.key === 'results' ? `${escapeHtml(config.name)}核算` : stepItem.label}</span>
             <span class="dl-stepper-status ${done ? 'success' : ''}">${status}</span>
@@ -1604,6 +1767,10 @@ function getNightShiftEditor(config) {
   if (!nightShiftEditor || nightShiftEditor.key !== key) {
     const rows = (config.effective_shift_breaks || config.shift_breaks || []).map(normalizeNightShiftEditorRow);
     nightShiftEditor = { key, rows, original: JSON.stringify(rows), selected: '', tab: 'breaks', search: '', category: '' };
+    try {
+      const draft = JSON.parse(sessionStorage.getItem(`night-shift-draft:${payrollDraftKey()}`) || 'null');
+      if (draft?.key === key && draft.original === nightShiftEditor.original) nightShiftEditor = draft;
+    } catch (_) { /* The server configuration remains available when local storage is unavailable. */ }
   }
   return nightShiftEditor;
 }
@@ -1672,7 +1839,7 @@ function renderNightShiftBreakForm(config) {
   const row = editor.rows.find(item => item.shift_code === editor.selected);
   if (!row) return '<p class="inline-status">选择一个班次查看和调整。</p>';
   const field = (key, label, type = 'text') => `<label class="dl-shift-form-field"><span>${label}</span><input data-shift-field="${key}" type="${type}" value="${escapeHtml(row[key] ?? '')}"></label>`;
-  return `<div class="dl-shift-form-head"><span>当前班次</span><h3>${escapeHtml(row.shift_code)} <small>${escapeHtml(row.shift_name)}</small></h3></div>
+  return `<div class="dl-shift-form-head"><button type="button" class="dl-shift-form-close" data-close-shift-editor aria-label="收起班次编辑">收起</button><span>当前班次</span><h3>${escapeHtml(row.shift_code)} <small>${escapeHtml(row.shift_name)}</small></h3></div>
     <div data-night-shift-break-row data-shift-code="${escapeHtml(row.shift_code)}" class="dl-shift-form-fields">
       ${renderEditorTimeField('shift_time', '班次时间', row.shift_time)}${field('regular_hours', '正班时数', 'number')}
       <p class="dl-shift-form-caption">休息类型按业务口径选择，跨零点时段不自动改判。</p>
@@ -1713,7 +1880,7 @@ function renderNightShiftConfigWorkspace(batch) {
   const count = Number(config.counts?.jinjiang_exclusion_count || 0);
   const updated = config.updated_at ? `更新于 ${formatDateTime(config.updated_at)}` : '使用平台班次基线';
   return `<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace">
-    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p class="dl-config-ready">已使用平台班次配置，可直接上传考勤；有调整时在下方修改。</p><p>配置按当前用户和月份独立保存。其他用户的修改不会影响你的核算；已完成活动保留核算时的配置。</p></div><span class="dl-badge neutral">当月配置 · 版本 ${Number(config.revision || 0)}</span></header>
+    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p>配置按当前用户和月份独立保存。其他用户的修改不会影响你的核算；已完成活动保留核算时的配置。</p></div><span class="dl-badge neutral">当月配置 · 版本 ${Number(config.revision || 0)}</span></header>
     <nav class="dl-night-config-tabs" aria-label="夜班配置内容"><button type="button" data-night-config-tab="breaks" class="${editor.tab === 'breaks' ? 'active' : ''}" aria-pressed="${editor.tab === 'breaks'}">班次休息 <span>${Number(config.counts?.effective_shift_count || 0)}</span></button><button type="button" data-night-config-tab="roster" class="${editor.tab === 'roster' ? 'active' : ''}" aria-pressed="${editor.tab === 'roster'}">晋江不享有名单 <span class="${confirmed ? '' : 'needs-confirm'}">${confirmed ? `${count} 人` : '待确认'}</span></button></nav>
     <div id="nightConfigBreaks" ${editor.tab === 'breaks' ? '' : 'hidden'}>${renderNightShiftBreakEditor(config)}</div>
     <section class="dl-night-roster" id="nightConfigRoster" ${editor.tab === 'roster' ? '' : 'hidden'}>
@@ -1759,6 +1926,7 @@ function bindNightShiftEditorEvents() {
   });
   const refreshList = () => { document.querySelector('#nightShiftBreakList').innerHTML = renderNightShiftBreakList(config); };
   const refreshDraft = () => {
+    try { sessionStorage.setItem(`night-shift-draft:${payrollDraftKey()}`, JSON.stringify(editor)); } catch (_) { toast('浏览器未能保留班次草稿，请保存当月调整后再刷新。'); }
     const count = nightShiftDraftCount();
     document.querySelector('#nightShiftDraftStatus').textContent = count ? `${count} 条修改未保存` : '暂无未保存的班次调整';
     document.querySelector('#btnSaveNightShiftBreaks').disabled = count === 0;
@@ -1786,6 +1954,7 @@ function bindNightShiftEditorEvents() {
     if (!button) return;
     editor.selected = button.dataset.editNightShift;
     document.querySelector('#nightShiftBreakForm').innerHTML = renderNightShiftBreakForm(config);
+    document.querySelector('#nightShiftBreakForm').scrollTop = 0;
     refreshList();
     document.querySelector('#nightShiftBreakForm summary')?.focus({preventScroll:true});
   });
@@ -1800,6 +1969,14 @@ function bindNightShiftEditorEvents() {
     });
   }, true);
   form.addEventListener('click', event => {
+    if (event.target.closest('[data-close-shift-editor]')) {
+      const previous = editor.selected;
+      editor.selected = '';
+      form.innerHTML = renderNightShiftBreakForm(config);
+      refreshList();
+      workspace.querySelectorAll('[data-edit-night-shift]').forEach(button => { if (button.dataset.editNightShift === previous) button.focus({preventScroll:true}); });
+      return;
+    }
     const category = event.target.closest('[data-rest-category]');
     if (category) {
       const section = category.closest('.dl-editor-rest');
@@ -1863,6 +2040,14 @@ function bindNightShiftEditorEvents() {
     refreshDraft();
   });
   form.addEventListener('click', event => {
+    if (event.target.closest('[data-close-shift-editor]')) {
+      const previous = editor.selected;
+      editor.selected = '';
+      form.innerHTML = renderNightShiftBreakForm(config);
+      refreshList();
+      workspace.querySelectorAll('[data-edit-night-shift]').forEach(button => { if (button.dataset.editNightShift === previous) button.focus({preventScroll:true}); });
+      return;
+    }
     if (!event.target.closest('#btnResetNightShiftRow')) return;
     const index = editor.rows.findIndex(row => row.shift_code === editor.selected);
     editor.rows[index] = JSON.parse(editor.original).find(row => row.shift_code === editor.selected);
@@ -1873,6 +2058,8 @@ function bindNightShiftEditorEvents() {
 }
 
 function renderCanbuStepContent(step, results = []) {
+  state.workbenchStep = step;
+  rememberPayrollPage(step);
   const root = document.querySelector('#canbuStepContent');
   if (!root) return;
   const batch = getActiveCanbuBatch();
@@ -1898,7 +2085,7 @@ function renderCanbuStepContent(step, results = []) {
         <div class="dl-panel-head">
           <div>
             <h2 class="dl-panel-title">数据上传</h2>
-            <p class="dl-panel-sub">${escapeHtml(config.uploadDescription)} 可上传一个含多张Sheet的文件，也可一次上传多个拆分文件。</p>
+            <p class="dl-panel-sub">${escapeHtml(config.uploadDescription.replace('文件内可包含多张工作表。', ''))} 支持多个文件或含多张工作表的文件。</p>
           </div>
         </div>
         <div class="dl-upload-list">
@@ -1954,22 +2141,20 @@ function renderCanbuStepContent(step, results = []) {
       </section>
       ${isNightShift ? `${renderNightShiftConfigPanel(batch)}</div>` : ''}
     `;
+    const upload = root.querySelector(isNightShift ? '.dl-night-upload-layout > .dl-panel' : '.dl-panel');
+    upload.classList.add('dl-upload-primary');
+    const heading = upload.querySelector('.dl-panel-head');
+    const zone = upload.querySelector('#fileUploadZone');
+    heading.after(zone);
+    zone.after(upload.querySelector('#selectedPayrollFileList'));
+    const requirements = upload.querySelector('.dl-upload-list');
+    requirements.insertAdjacentHTML('beforebegin', '<h3 class="dl-upload-requirements-title">资料要求</h3>');
     if (isNightShift) {
-      const upload = root.querySelector('.dl-night-upload-layout > .dl-panel');
-      upload.classList.add('dl-upload-primary');
-      const heading = upload.querySelector('.dl-panel-head');
-      const description = heading.querySelector('.dl-panel-sub');
-      heading.querySelector('.dl-panel-title').textContent = '上传考勤数据';
-      description.remove();
-      heading.querySelector('div').insertAdjacentHTML('afterbegin', '<span class="dl-upload-start">第 1 步 · 从这里开始</span>');
-      heading.querySelector('div').insertAdjacentHTML('beforeend', '<p class="dl-panel-sub">上传本月考勤，开始夜班补贴核算。</p>');
-      const zone = upload.querySelector('#fileUploadZone');
-      heading.after(zone);
-      zone.after(upload.querySelector('#selectedPayrollFileList'));
-      const requirements = upload.querySelector('.dl-upload-list');
-      requirements.insertAdjacentHTML('beforebegin', '<h3 class="dl-upload-requirements-title">需要哪些数据</h3>');
-      description.classList.add('dl-upload-full-description');
-      requirements.after(description);
+      const scroll = document.createElement('div');
+      scroll.className = 'dl-night-upload-scroll';
+      const footer = upload.querySelector('.drawer-footer');
+      [...upload.children].filter(node => node !== footer).forEach(node => scroll.append(node));
+      upload.prepend(scroll);
     }
     refreshUploadRefs();
     bindCanbuUploadEvents();
@@ -2052,6 +2237,7 @@ function renderSelectedPayrollFiles(message = '') {
     button.addEventListener('click', () => {
       const key = button.dataset.removePayrollFile;
       state.payrollFiles = state.payrollFiles.filter(file => payrollFileKey(file) !== key);
+      savePayrollFileDraft();
       document.querySelector('#sheetConfirmation')?.replaceChildren();
       renderSelectedPayrollFiles('已更新待上传文件清单。');
     });
@@ -2207,6 +2393,7 @@ function bindCanbuUploadEvents() {
     const existingKeys = new Set(state.payrollFiles.map(payrollFileKey));
     const addedFiles = selectedFiles.filter(file => !existingKeys.has(payrollFileKey(file)));
     state.payrollFiles = [...state.payrollFiles, ...addedFiles];
+    savePayrollFileDraft();
     if (addedFiles.length) document.querySelector('#sheetConfirmation')?.replaceChildren();
     el.payrollFile.value = '';
     const duplicateCount = selectedFiles.length - addedFiles.length;
@@ -2828,7 +3015,9 @@ function openCanbuExplainDrawer(row) {
       </dl>
     </div>
   `;
+  state.calcReturnFocus = document.activeElement;
   el.calcModal.classList.add('visible');
+  document.querySelector('#btnCloseCalcModal')?.focus();
   document.body.style.overflow = 'hidden';
 }
 
@@ -3146,17 +3335,10 @@ function refreshNightShiftMissingView(records) {
 
 function getMissingNightShiftGroups(results = []) {
   const groups = new Map();
-  const baseline = getNightShiftConfigSource()?.baseline_shift_breaks;
-  const baselineCodes = new Set((baseline || []).map(row => row.shift_code));
-  const snapshot = state.currentRun?.nightShiftConfigSnapshot || state.currentRun?.night_shift_config_snapshot || {};
-  const addedCodes = new Set([
-    ...(getNightShiftConfigSource()?.shift_break_overrides || []), ...(snapshot.shift_break_overrides || []),
-  ].map(row => row.shift_code).filter(code => baseline && !baselineCodes.has(code)));
   (results || []).forEach(row => {
     const dailyResults = getNightShiftDetails(row).daily_results || [];
     dailyResults.forEach(daily => {
-      if (daily?.reason_code !== 'shift_break_config_missing'
-          && !addedCodes.has(daily.shift_code)) return;
+      if (daily?.reason_code !== 'shift_break_config_missing') return;
       const shiftCode = String(daily.shift_code || '').trim() || '班次编号缺失';
       if (!groups.has(shiftCode)) {
         groups.set(shiftCode, {
@@ -3320,8 +3502,7 @@ function resolveMissingShiftPeriod(startTime, endTime, shiftTime = '') {
   return { period: `${format(start)}-${format(end)}`, category, label: `${display(start)} — ${display(end)}`, duration: end - start };
 }
 
-function collectMissingShiftBreakSegments() {
-  const active = getMissingNightShiftGroups(state.currentResults).find(group => group.shiftCode === state.activeNightShiftMissingCode);
+function collectMissingShiftBreakSegments(active) {
   return [...document.querySelectorAll('[data-missing-break-segment]')].map((row, index) => {
     const value = part => row.querySelector(`[data-break-part="${part}"]`)?.value || '';
     const startTime = value('startTime');
@@ -3335,6 +3516,7 @@ function collectMissingShiftBreakSegments() {
 function bindNightShiftMissingPanel(results) {
   const allGroups = getMissingNightShiftGroups(results);
   state.shiftPickerEvents?.abort();
+  if (!allGroups.length) return;
   state.shiftPickerEvents = new AbortController();
   const eventOptions = { signal: state.shiftPickerEvents.signal };
   document.querySelectorAll('[data-missing-shift-code]').forEach(button => button.addEventListener('click', () => {
@@ -3531,7 +3713,7 @@ function bindNightShiftMissingPanel(results) {
       if (mode === 'template' && !document.querySelector('#missingShiftTemplateSelect')?.value) {
         throw new Error('请选择一份已有班次的休息安排。');
       }
-      const breakSegments = mode === 'none' ? [] : collectMissingShiftBreakSegments();
+      const breakSegments = mode === 'none' ? [] : collectMissingShiftBreakSegments(active);
       if (mode === 'custom' && !breakSegments.length) throw new Error('请至少填写一段休息时间，或选择“无休息安排”。');
       button.disabled = true;
       setText(status, `正在保存班次 ${active.shiftCode}…`);
@@ -4176,7 +4358,9 @@ function openWaisuExplainDrawer(row) {
     <div class="dl-rule-card"><h3>规则命中</h3><dl><dt>规则状态</dt><dd>${escapeHtml(audit.rule_name || detail.reason || '外宿补贴规则')}</dd><dt>计算公式</dt><dd>${escapeHtml(audit.formula || '按地区岗位资格、在职区间、住宿区间和缺勤时数计算。')}</dd><dt>关键输入</dt><dd>${formatAuditMap(audit.inputs)}</dd><dt>中间值</dt><dd>${formatAuditMap(audit.intermediate_values)}</dd><dt>计算步骤</dt><dd>${formatAuditSteps(audit.steps) || '按外宿补贴规则计算应发金额。'}</dd></dl></div>
     <div class="dl-rule-card"><h3>异常与建议</h3><dl><dt>异常等级</dt><dd>${getWaisuWarningLevel(row).label}</dd><dt>异常说明</dt><dd>${formatExceptions(exceptions) || escapeHtml(getEffectiveWarningText(row) || '暂无异常')}</dd><dt>建议动作</dt><dd>${exceptions[0]?.suggested_action ? escapeHtml(exceptions[0].suggested_action) : '无需人工处理。'}</dd></dl></div>
   `;
+  state.calcReturnFocus = document.activeElement;
   el.calcModal.classList.add('visible');
+  document.querySelector('#btnCloseCalcModal')?.focus();
   document.body.style.overflow = 'hidden';
 }
 
@@ -4428,7 +4612,7 @@ function renderSheetConfirmation(sheets) {
     dialog.id = 'sheetChoiceDialog';
     dialog.className = 'dl-sheet-dialog';
     dialog.setAttribute('aria-labelledby','sheetChoiceTitle');
-    dialog.innerHTML = `<header><div><span class="dl-sheet-eyebrow">数据上传 · 工作表确认</span><h2 id="sheetChoiceTitle">确认这些表是什么数据</h2><p>以下 ${sheets.length} 张表同时符合多种用途，请根据内容选择。其他已识别的数据会自动使用，无关表会跳过。</p></div><button type="button" class="dl-btn" data-sheet-close aria-label="关闭确认弹窗">×</button></header>
+    dialog.innerHTML = `<header><div><span class="dl-sheet-eyebrow">数据上传 · 工作表确认</span><h2 id="sheetChoiceTitle">确认工作表用途</h2><p>以下 ${sheets.length} 张表同时符合多种用途，请根据内容选择。其他已识别的数据会自动使用，无关表会跳过。</p></div><button type="button" class="dl-btn" data-sheet-close aria-label="关闭确认弹窗">×</button></header>
       <div class="dl-sheet-dialog-body">${sheets.map((sheet,index) => {
         const fields = Object.keys(sheet.preview?.[0] || {});
         const options = [...new Set([...(sheet.candidates || []),'ignore'])];
@@ -5205,6 +5389,7 @@ function renderExceptionQueue(results) {
 
 function openExplainDrawer(row) {
   if (!row || !el.explainDrawer || !el.explainTitle || !el.explainBody) return;
+  state.explainReturnFocus = document.activeElement;
   const allSubjectKeys = ['quanqinjiang', 'canbu', 'waisu_butie', 'gonglingjiang', 'gangwei_butie', 'gaowen_butie', 'yeban_butie'];
   const activeSubject = state.view === 'canbuWorkbench' ? getActiveWorkbenchSubject() : '';
   const calculatedSubjectKeys = allSubjectKeys.filter(key => getSubjectDetail(row, key));
@@ -5216,11 +5401,13 @@ function openExplainDrawer(row) {
   if (singleSubject === 'yeban_butie') {
     renderNightShiftExplanation(row);
     el.explainDrawer.classList.add('open');
+    el.btnCloseExplain?.focus();
     return;
   }
   if (singleSubject === 'gaowen_butie') {
     renderHighTemperatureExplanation(row);
     el.explainDrawer.classList.add('open');
+    el.btnCloseExplain?.focus();
     return;
   }
   el.explainTitle.textContent = `${row.employee_id || ''} ${row.employee_name || ''}`;
@@ -5265,10 +5452,12 @@ function openExplainDrawer(row) {
     </div>
   `;
   el.explainDrawer.classList.add('open');
+    el.btnCloseExplain?.focus();
 }
 
 function closeExplainDrawer() {
   el.explainDrawer?.classList.remove('open');
+  if (state.explainReturnFocus?.isConnected) state.explainReturnFocus.focus();
 }
 
 function buildRuleExplanation(key, row) {
@@ -5385,7 +5574,7 @@ function isNormalHrbpListExclusionText(value) {
 function formatAuditMap(value) {
   if (!value || typeof value !== 'object' || !Object.keys(value).length) return '—';
   return Object.entries(value)
-    .map(([key, val]) => `<span class="dl-badge" style="margin:0 6px 6px 0;">${escapeHtml(key)}: ${escapeHtml(String(val ?? ''))}</span>`)
+    .map(([key, val]) => `<div class="dl-audit-pair"><span>${escapeHtml(key)}</span><strong>${escapeHtml(val == null || val === 'None' || val === '' ? '—' : typeof val === 'boolean' ? (val ? '是' : '否') : String(val))}</strong></div>`)
     .join('');
 }
 
@@ -5591,3 +5780,12 @@ function escapeHtml(value) {
       }[char])
   );
 }
+
+// Calculation dialogs use the same keyboard boundary as the creation dialog.
+document.querySelector('#calcModal')?.addEventListener('keydown', event => {
+  if (event.key !== 'Tab') return;
+  const nodes = [...event.currentTarget.querySelectorAll('button:not(:disabled),a[href],input:not([type="hidden"]),select,[tabindex="0"]')].filter(node => node.getClientRects().length);
+  const first = nodes[0], last = nodes[nodes.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+});
