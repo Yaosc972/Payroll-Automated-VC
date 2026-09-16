@@ -38,3 +38,29 @@ test('successfully recalculated supplementary shifts no longer appear as configu
   assert.equal(context.getMissingNightShiftGroups([row({...shift,reason_code:'calculated'})]).length,0);
   assert.equal(context.getMissingNightShiftGroups([row({...shift,reason_code:'shift_break_config_missing'})]).length,1);
 });
+
+test('configuration continuation reuses uploaded files and retains retry through another gate', async () => {
+  let uploads = 0, completions = 0, loaded = '';
+  const gate = () => Object.assign(new Error('configuration required'), {detail:{code:'night_shift_configuration_required',config:{},records:[]}});
+  const complete = async () => { if (++completions === 1) throw gate(); return {run_id:'existing-run',status:'已完成'}; };
+  const batch = {id:'activity-a',subject:'yeban_butie',month:'2026-08',isMine:true};
+  const state = {payrollFiles:[{name:'attendance.xlsx'}],nightShiftConfigs:{}};
+  const context = vm.createContext({state,el:{},document:{querySelectorAll:()=>[],querySelector:()=>null},
+    getActiveCanbuBatch:()=>batch,getWorkbenchConfig:()=>({name:'夜班补贴'}),isNightShiftConfigReady:()=>true,
+    submitPayrollWithRosterConfirmation:async()=>{uploads++; const error=gate();error.retryCompletion=complete;throw error;},
+    loadCompletedRun:async id=>{loaded=id;},nightShiftMonth:()=> '202608',showNightShiftGate:()=>{},
+    toast:()=>{},beginCanbuOperation:()=>{},updateCanbuBatch:()=>{},setButtonBusy:()=>{},setText:()=>{},resetReportLink:()=>{},stopPolling:()=>{},finishCanbuOperation:()=>{},syncCanbuBatchFromRun:()=>{},
+  });
+  const start=source.indexOf('async function submitCanbuBatch(');
+  vm.runInContext(source.slice(start,source.indexOf('async function submitDomesticLaborRun(',start)),context);
+  await context.submitCanbuBatch();
+  assert.equal(uploads,1);
+  state.payrollFiles=[];
+  await context.submitCanbuBatch({resumeNightShift:true});
+  assert.equal(state.nightShiftResume.batchId,batch.id);
+  await context.submitCanbuBatch({resumeNightShift:true});
+  assert.equal(uploads,1);
+  assert.equal(completions,2);
+  assert.equal(loaded,'existing-run');
+  assert.equal(state.nightShiftResume,null);
+});

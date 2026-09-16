@@ -670,7 +670,7 @@ function renderMaterialRow(material, activity) {
           <span class="material-file-name">${escapeHtml(uploadView.fileName || '未选择文件')}</span>
           <span class="material-file-state">${escapeHtml(uploadView.detailText)}</span>
         </div>
-        ${uploadView.showProgress ? `
+        ${uploadView.showProgress && !window.WorkbenchProgress ? `
           <div class="material-progress ${uploadView.indeterminate ? 'indeterminate' : ''}" role="progressbar" aria-valuemin="0" aria-valuemax="100" ${uploadView.indeterminate ? '' : `aria-valuenow="${Math.round(uploadView.progress)}"`}>
             <span style="width: ${Math.round(uploadView.progress)}%"></span>
           </div>
@@ -968,7 +968,7 @@ function getShiftHours(employee, shiftName) {
 }
 
 async function apiJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await WorkbenchProgress.fetch(url, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(data.detail || data.message || `请求失败 (${response.status})`);
@@ -3829,6 +3829,8 @@ async function flushPendingPreviousAttendanceUpload(runId) {
 }
 
 async function completeFbuUploadJob(metadata, job) {
+  const popup = state.uploadProgressPopups?.[metadata.jobId];
+  popup?.check(); popup?.finish();
   if (!state.activeFbuUploadJobs[metadata.jobId]) return job;
   const entries = metadata.entries || [];
   const coreUpdates = job.result?.coreUpdates;
@@ -3901,6 +3903,7 @@ async function pollFbuUploadJob(jobId) {
         return completeFbuUploadJob(metadata, job);
       }
       if (job.status === 'failed') {
+        state.uploadProgressPopups?.[jobId]?.fail(new Error(job.error || '资料处理失败'));
         updateFbuUploadJobMaterials(metadata, {
           status: 'failed',
           progress: 100,
@@ -3911,6 +3914,7 @@ async function pollFbuUploadJob(jobId) {
         return job;
       }
       if (job.recoverable) {
+        state.uploadProgressPopups?.[jobId]?.fail(new Error('资料处理已中断，可重试。'));
         updateFbuUploadJobMaterials(metadata, {
           status: 'failed',
           progress: 100,
@@ -3935,6 +3939,7 @@ async function pollFbuUploadJob(jobId) {
     }
     return null;
   } catch (error) {
+    state.uploadProgressPopups?.[jobId]?.fail(error);
     updateFbuUploadJobMaterials(metadata, {
       status: 'processing',
       progress: 100,
@@ -3970,6 +3975,7 @@ async function resumeFbuUploadJob(jobId) {
     }
     return pollingRequest;
   } catch (error) {
+    state.uploadProgressPopups?.[jobId]?.fail(error);
     updateFbuUploadJobMaterials(metadata, {
       status: 'failed',
       progress: 100,
@@ -4034,6 +4040,8 @@ function forgetFbuCalculationJob() {
 }
 
 async function completeFbuCalculationJob(metadata, job) {
+  state.calculationProgressPopup?.check();
+  state.calculationProgressPopup?.finish();
   if (state.activeCalculationJob?.jobId !== metadata.jobId) return job;
   const statusChanged = hasFbuJobUiStateChanged(state.calculationJobStatus, job);
   state.calculationJobStatus = job;
@@ -4059,6 +4067,7 @@ async function pollFbuCalculationJob(jobId) {
     return null;
   }
   fbuCalculationJobPollers.add(jobId);
+  state.calculationProgressPopup ||= WorkbenchProgress.begin({subject:'FBU 绩效',phase:'calculate',description:'正在恢复核算进度。'});
   try {
     while (state.activeCalculationJob?.jobId === jobId) {
       const data = await apiJson(
@@ -4066,6 +4075,7 @@ async function pollFbuCalculationJob(jobId) {
       );
       if (state.activeCalculationJob?.jobId !== jobId) return null;
       const job = data.job || {};
+      state.calculationProgressPopup?.update({phase:job.status === 'queued'?'queued':'calculate',description:job.status === 'queued'?'任务已提交，正在等待处理。':'正在核算绩效并整理结果。',percent:null});
       const statusChanged = hasFbuJobUiStateChanged(state.calculationJobStatus, job);
       state.calculationJobStatus = job;
       if (statusChanged && state.currentPage === 'workbench') renderWorkbench();
@@ -4074,12 +4084,15 @@ async function pollFbuCalculationJob(jobId) {
         return completeFbuCalculationJob(metadata, job);
       }
       if (job.status === 'failed' || job.recoverable) {
+        state.calculationProgressPopup?.fail(new Error(job.error || '核算中断，请查看页面提示。'));
         return job;
       }
       await waitForFbuUploadPoll(1500);
     }
     return null;
   } catch (error) {
+    state.calculationProgressPopup?.fail(error);
+    if (error.name === 'AbortError') { forgetFbuCalculationJob(); return null; }
     state.calculationJobStatus = {
       status: 'failed',
       canRetry: true,
@@ -4114,6 +4127,7 @@ async function resumeFbuCalculationJob() {
     }
     return pollingRequest;
   } catch (error) {
+    state.calculationProgressPopup?.fail(error);
     state.calculationJobStatus = {
       status: 'failed',
       canRetry: true,
@@ -4144,9 +4158,14 @@ function prioritizePendingSupplementalLeave() {
   getTablePagination('supplementalLeave').page = 1;
 }
 
-function uploadFbuFileToSignedUrl(upload, file, onProgress) {
+function uploadFbuFileToSignedUrl(upload, file, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
+    if (signal?.aborted) return reject(WorkbenchProgress.abortError());
+    const abort = () => request.abort();
+    signal?.addEventListener('abort', abort, {once:true});
+    request.onabort = () => reject(WorkbenchProgress.abortError());
+    request.onloadend = () => signal?.removeEventListener('abort', abort);
     request.open('PUT', upload.signedUrl);
     request.setRequestHeader('x-upsert', 'true');
     request.upload.onprogress = (event) => {
@@ -4174,6 +4193,9 @@ function uploadFbuFileToSignedUrl(upload, file, onProgress) {
 async function uploadWorkbenchFilesDirect(entries, options = {}) {
   if (!state.currentActivity || !entries?.length) return;
   const activityId = state.currentActivity.run_id;
+  const progressPopup = WorkbenchProgress.begin({subject:'FBU 资料上传',phase:'prepare',description:'正在准备核算资料。'});
+  const uploadController = new AbortController();
+  const percentages = new Map();
   entries.forEach(({ type, file }) => startWorkbenchUploadProgress(type, file));
   try {
     const plan = await apiJson(`${API_BASE}/runs/${activityId}/uploads/plan`, {
@@ -4188,6 +4210,8 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
         })),
       }),
     });
+    progressPopup.check();
+    progressPopup.update({phase:'upload',abort:()=>uploadController.abort()});
     const uploads = Array.isArray(plan.uploads) ? plan.uploads : [];
     if (uploads.length !== entries.length) {
       throw new Error('上传计划与所选文件数量不一致，请重新选择文件。');
@@ -4200,13 +4224,16 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
         throw new Error(`未生成${uploadTypeLabels[type] || '文件'}直传地址。`);
       }
       await uploadFbuFileToSignedUrl(upload, file, (progress) => {
+        percentages.set(type,progress);
+        const bytes = entries.reduce((sum,entry)=>sum+entry.file.size,0);
+        progressPopup.update({phase:'upload',description:'正在上传核算资料。',percent:bytes?entries.reduce((sum,entry)=>sum+entry.file.size*(percentages.get(entry.type)||0),0)/bytes:null});
         setWorkbenchUploadState(type, {
           status: 'uploading',
           progress,
           indeterminate: false,
           message: `直传中 ${progress}%`,
         });
-      });
+      }, uploadController.signal);
       setWorkbenchUploadState(type, {
         status: 'processing',
         progress: 100,
@@ -4214,6 +4241,8 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
         message: '已上传，正在排队',
       });
     }));
+    progressPopup.update({abort:null,phase:'check',percent:null,description:'资料已上传，正在检查数据。'});
+    progressPopup.check();
     const clientUploadMs = Math.max(0, Math.round(performance.now() - directUploadStartedAt));
     const jobId = plan.job?.jobId;
     if (!jobId) throw new Error('上传任务编号缺失，请重新上传。');
@@ -4227,6 +4256,8 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
         fileKey: getWorkbenchFileKey(file),
       })),
     };
+    state.uploadProgressPopups ||= {};
+    state.uploadProgressPopups[jobId] = progressPopup;
     rememberFbuUploadJob(jobId, metadata);
     updateFbuUploadJobMaterials(metadata, {
       status: 'processing',
@@ -4253,6 +4284,8 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
     }
     return pollingRequest;
   } catch (error) {
+    uploadController.abort();
+    progressPopup.fail(error);
     const directUnavailable = error.status === 409
       || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
     if (isLocalFbuHost() && directUnavailable && typeof options.fallback === 'function') {
@@ -6365,6 +6398,7 @@ async function executeCalculate() {
     if (!dialogResult.confirmed) return;
   }
 
+  state.calculationProgressPopup = WorkbenchProgress.begin({subject:'FBU 绩效',phase:'calculate',description:'正在按考勤与绩效规则核算。'});
   state.calculationPending = true;
   renderWorkbenchCurrentStep();
   try {
@@ -6396,6 +6430,7 @@ async function executeCalculate() {
     }
     return pollFbuCalculationJob(jobId);
   } catch (error) {
+    state.calculationProgressPopup?.fail(error);
     state.calculationJobStatus = {
       status: 'failed',
       canRetry: Boolean(state.activeCalculationJob?.jobId),

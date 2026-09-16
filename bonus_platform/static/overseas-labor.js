@@ -981,6 +981,7 @@ async function uploadLaborWorkerRelease() {
     });
     beginButtonLoading(labor.uploadWorkerRelease, "正在上传");
     const uploaded = await fetch(intent.signedUrl, {
+      signal: controller.signal,
       method: "PUT",
       headers: intent.headers || {
         "content-type": releasePlatform === "windows-x64" ? "application/x-msdownload" : "application/x-apple-diskimage",
@@ -1685,6 +1686,7 @@ async function uploadFiles() {
     return toast(message);
   }
 
+  laborState.uploadProgressPopup = WorkbenchProgress.begin({subject:"海外劳务资料",phase:"prepare",description:"正在准备发票和账单文件。"});
   setText(labor.uploadStatus, "正在上传文件...");
   beginButtonLoading(labor.uploadLaborFiles, "正在上传");
   const startedAt = performance.now();
@@ -1707,9 +1709,11 @@ async function uploadFiles() {
       laborState.selectedWorkbookFiles.forEach((file) => form.append("workbook_files", file));
       laborState.run = await requestJson(`/api/labor/runs/${laborState.run.id}/files`, {
         method: "POST",
-        body: form,
+        body: form, progressTask: laborState.uploadProgressPopup,
       });
     }
+    laborState.uploadProgressPopup?.check();
+    laborState.uploadProgressPopup?.finish();
     laborState.selectedPdfFiles = [];
     laborState.selectedWorkbookFiles = [];
     labor.pdfFiles.value = "";
@@ -1725,6 +1729,7 @@ async function uploadFiles() {
     toast("文件上传完成。");
     advanceWizardStep("3");
   } catch (error) {
+    laborState.uploadProgressPopup?.fail(error);
     if (error.uploadFinalized) {
       laborState.selectedPdfFiles = [];
       laborState.selectedWorkbookFiles = [];
@@ -1788,6 +1793,8 @@ async function sha256File(file) {
 }
 
 async function uploadFilesDirectlyToPrivateStorage() {
+  const controller = new AbortController();
+  const popup = laborState.uploadProgressPopup;
   const runId = laborState.run.id;
   const selected = [
     ...laborState.selectedPdfFiles.map((file) => ({ file, fileKind: "pdf_invoice" })),
@@ -1814,6 +1821,8 @@ async function uploadFilesDirectlyToPrivateStorage() {
   if (intents.length !== selected.length) {
     throw new Error("服务端返回的私有上传清单不完整，请重新上传本批文件。");
   }
+  popup?.check();
+  popup?.update({phase:"upload",description:"正在上传发票和账单。",abort:()=>controller.abort()});
   let completedCount = 0;
   const uploadOne = async (index) => {
     const intent = intents[index];
@@ -1829,6 +1838,7 @@ async function uploadFilesDirectlyToPrivateStorage() {
       `正在并发上传文件（已完成 ${completedCount}/${intents.length}）：${item.file.name}`,
     );
     const uploaded = await fetch(intent.signedUrl, {
+      signal: controller.signal,
       method: "PUT",
       headers: intent.headers || { "content-type": item.file.type || "application/octet-stream" },
       body: item.file,
@@ -1837,14 +1847,18 @@ async function uploadFilesDirectlyToPrivateStorage() {
       throw new Error(`私有存储未接收文件 ${item.file.name}（HTTP ${uploaded.status}）。`);
     }
     completedCount += 1;
+    popup?.update({detail:`已上传 ${completedCount}/${intents.length} 个文件`});
     setText(labor.uploadStatus, `文件直传完成 ${completedCount}/${intents.length}：${item.file.name}`);
   };
   const results = await Promise.allSettled(intents.map((_intent, index) => uploadOne(index)));
+  popup?.update({abort:null});
+  popup?.check();
   const failed = results.find((result) => result.status === "rejected");
   if (failed) {
     const message = failed.reason instanceof Error ? failed.reason.message : String(failed.reason || "");
     throw new Error(message || "上传文件中有文件失败，请检查网络后重试。");
   }
+  popup?.update({phase:"check",description:"文件已上传，正在确认资料完整性。"});
   setText(labor.uploadStatus, `正在一次确认 ${intents.length} 个文件，请稍候…`);
   await requestJson(`/api/labor/runs/${runId}/upload-intents/batch-finalize`, {
     method: "POST",
@@ -2804,6 +2818,7 @@ async function extractAndCompare() {
   }
   const requestedRunId = laborState.run?.id;
   if (!requestedRunId) return toast("请先创建批次。");
+  laborState.compareProgressPopup = WorkbenchProgress.begin({subject:"海外劳务核对",phase:"queued",description:"正在提交本次发票与账单核对。"});
   showLaborResultsView();
   stopComparePolling();
   clearResults();
@@ -2834,6 +2849,7 @@ async function extractAndCompare() {
     await pollCompareResult();
     laborState.comparePollTimer = window.setInterval(pollCompareResult, 3000);
   } catch (error) {
+    laborState.compareProgressPopup?.fail(error);
     if (laborState.run?.id !== requestedRunId) return;
     recordLaborTelemetry("labor.extract.failed", {
       step: "extract_compare",
@@ -2858,9 +2874,11 @@ async function pollCompareResult() {
     laborState.run = run;
     renderLaborProgress(run);
     if (run.status === "抽取失败") {
+      laborState.compareProgressPopup?.fail(new Error("核对未完成，请查看页面提示。"));
       stopComparePolling();
       endButtonLoading(labor.extractCompare, { disabled: false });
       const message = formatLaborFailureMessage(run);
+      laborState.compareProgressPopup?.fail(new Error(message));
       setText(labor.compareStatus, message, true);
       recordLaborTelemetry("labor.extract.failed", {
         run,
@@ -2876,6 +2894,9 @@ async function pollCompareResult() {
     }
     if (laborRunHasSettledResult(run)) {
       stopComparePolling();
+      const stopped = laborState.compareProgressPopup?.stopping;
+      laborState.compareProgressPopup?.finish({description:stopped?"当前步骤已完成，核对结果已保留，可稍后查看。":"核对完成，可查看差异明细。"});
+      if (stopped) { endButtonLoading(labor.extractCompare,{disabled:false}); return; }
       endButtonLoading(labor.extractCompare, { disabled: false });
       renderResult(run);
       setText(labor.compareStatus, "完成：核对报告已生成。识别不完整的明细已进入待确认清单。");
@@ -2895,6 +2916,7 @@ async function pollCompareResult() {
       stopComparePolling();
       endButtonLoading(labor.extractCompare, { disabled: false });
       const message = "后台超过10分钟没有更新进度，任务可能已中断。请检查服务后再重试。";
+      laborState.compareProgressPopup?.fail(new Error(message));
       setText(labor.compareStatus, message, true);
       recordLaborTelemetry("labor.extract.stalled", {
         run,
@@ -2911,6 +2933,7 @@ async function pollCompareResult() {
     const elapsed = laborState.pollRetryCount * 3;
     setText(labor.compareStatus, formatLaborTaskStatus(run, `处理中：${businessStageLabel(run.stage || "生成核对报告")}... (${elapsed}s)`));
   } catch (error) {
+    laborState.compareProgressPopup?.fail(error);
     if (laborState.run?.id !== requestedRunId) return;
     stopComparePolling();
     endButtonLoading(labor.extractCompare, { disabled: false });
@@ -2991,34 +3014,8 @@ function renderLaborProgress(run) {
     ? "后台超过 3 分钟没有更新进度，可能正在等待 AI 识别服务响应；如果长时间不变化，可以重新点击生成报告。"
     : "图片型发票需要逐页识别，页数多时会比较慢。页面可以保持打开，系统会自动刷新结果。";
 
-  labor.extractPreviewTable.innerHTML = `
-    <div class="labor-progress-card">
-      <div class="labor-progress-top">
-        <div>
-          <span class="labor-progress-eyebrow">${escapeHtml(progress.phaseLabel || "正在生成核对报告")}</span>
-          <h3 class="labor-progress-title">正在生成核对报告</h3>
-          <p class="labor-progress-message">${escapeHtml(message)}</p>
-        </div>
-        <div class="labor-progress-time">
-          已用时
-          <strong>${escapeHtml(elapsed)}</strong>
-        </div>
-      </div>
-      <div class="labor-progress-track" aria-label="核对进度"><span style="width:${percent}%"></span></div>
-      <div class="labor-progress-meta">
-        <div><span>PDF 识别页数</span><strong>${escapeHtml(pageText)}</strong></div>
-        <div><span>当前文件</span><strong>${escapeHtml(currentFile)}</strong></div>
-        <div><span>当前位置</span><strong>${escapeHtml(currentPage)}</strong></div>
-      </div>
-      <ol class="labor-progress-steps">
-        ${renderLaborProgressStep("excel", "读取账单", phase)}
-        ${renderLaborProgressStep("pdf_total", "核对总金额", phase)}
-        ${renderLaborProgressStep("pdf_detail", "识别发票明细", phase)}
-        ${renderLaborProgressStep("report", "生成报告", phase)}
-      </ol>
-      <p class="labor-progress-warning">${escapeHtml(warning)}</p>
-    </div>
-  `;
+  laborState.compareProgressPopup?.update({phase: phase === 'queued' ? 'queued' : phase === 'report' ? 'report' : 'check', description: phase === 'queued' ? '任务已提交，等待处理。' : phase === 'report' ? '核对已完成，正在整理报告。' : '正在读取账单并核对发票明细。', detail: totalPages > 0 ? `已识别 ${processedPages}/${totalPages} 页` : '', percent: totalPages > 0 ? percent : null});
+  labor.extractPreviewTable.textContent = '正在处理，可在进度窗口查看。';
 }
 
 function renderLaborProgressStep(step, label, phase) {
@@ -4420,8 +4417,9 @@ async function requestJson(url, options = {}) {
   }
   let response;
   try {
-    response = await fetch(url, options);
+    response = options.progressTask ? await WorkbenchProgress.uploadRequest(url, options, options.progressTask) : await fetch(url, options);
   } catch (error) {
+    if (error.name === "AbortError") throw error;
     const host = window.location.host || "当前环境";
     const connectionError = new Error(
       `无法连接当前服务（${host}）。请稍后重试；若持续失败，请联系管理员检查环境状态。`,

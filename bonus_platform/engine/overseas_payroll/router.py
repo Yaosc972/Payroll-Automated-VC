@@ -108,6 +108,7 @@ def overseas_payroll_page(request: Request) -> HTMLResponse:
     # These are the same runtime substitutions made by the original server.
     # The checked-in frontend resource remains byte-identical to the handover.
     html = html.replace("__PASSCODE_HINT__", "").replace("__NO_AUTH__", "false")
+    html = html.replace("</head>", '<link rel="stylesheet" href="/workbench-progress.css?v=1"><script src="/vendor/gsap-3.13.0.min.js"></script><script src="/workbench-progress.js?v=1"></script></head>')
     html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=4"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

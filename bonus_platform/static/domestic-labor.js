@@ -909,6 +909,9 @@ function showView(viewName) {
 
 function beginCanbuOperation(batch, message = '正在准备上传文件...') {
   if (!batch) return;
+  state.progressTask?.finish();
+  state.progressTask = null;
+  state.uploadStopped = false;
   state.activeCanbuOperation = {
     batchId: batch.id,
     runId: batch.runId || '',
@@ -938,37 +941,29 @@ function finishCanbuOperation(runId = '', errorMessage = '') {
 }
 
 function renderCanbuOperationStatus(batch) {
-  const operation = state.activeCanbuOperation;
-  const batchIsComplete = Boolean(batch && ['已核算', '可导出', '已导出'].includes(batch.status));
-  if (!batch || batchIsComplete || !operation || operation.batchId !== batch.id) return '';
-  const failed = operation.phase === 'failed';
-  return `
-    <section class="dl-operation-status ${failed ? 'failed' : ''}" id="canbuOperationStatus" role="status" aria-live="polite">
-      ${failed ? '<span class="dl-operation-error" aria-hidden="true">!</span>' : '<span class="dl-button-spinner" aria-hidden="true"></span>'}
-      <div>
-        <strong>${failed ? '本次处理未完成' : '批次正在处理'}</strong>
-        <p id="canbuOperationMessage">${escapeHtml(operation.message)}</p>
-        ${failed ? '' : '<small>正在后台继续处理，可安全切换步骤；请勿关闭或刷新当前页面。</small>'}
-      </div>
-    </section>
-  `;
+  refreshCanbuOperationStatus();
+  return '';
 }
 
 function refreshCanbuOperationStatus() {
-  const batch = getActiveCanbuBatch();
-  const current = document.querySelector('#canbuOperationStatus');
-  const markup = renderCanbuOperationStatus(batch);
-  if (!markup) {
-    current?.remove();
-    return;
+  document.querySelector('#canbuOperationStatus')?.remove();
+  const operation = state.activeCanbuOperation;
+  if (!operation) {
+    state.progressTask?.finish(); state.progressTask = null; return;
   }
-  if (current) {
-    current.outerHTML = markup;
-    return;
+  if (!window.WorkbenchProgress) return;
+  if (!state.progressTask || state.progressTaskBatch !== operation.batchId) {
+    state.progressTask = WorkbenchProgress.begin({subject: getWorkbenchConfig(getActiveWorkbenchSubject()).name});
+    state.progressTaskBatch = operation.batchId;
   }
-  if (state.view === 'canbuWorkbench') {
-    document.querySelector('#canbuWorkbenchRoot .dl-workbench-head')?.insertAdjacentHTML('afterend', markup);
-  }
+  if (operation.phase === 'failed') { state.progressTask.fail(new Error(operation.message)); return; }
+  const message = operation.message || '';
+  const percent = /(?:总进度|上传中)\s*(\d+)%/.exec(message);
+  const phase = /并行上传|正在上传文件|上传中/.test(message) ? 'upload' : /核算|校验|后台/.test(message) ? 'calculate' : 'prepare';
+  state.progressTask.update({phase, percent: percent ? Number(percent[1]) : null,
+    description: phase === 'upload' ? '正在上传考勤文件。上传完成后自动检查数据。' : phase === 'calculate' ? '正在检查考勤并按所选科目核算。' : '正在准备本次核算所需文件。',
+    detail: /已完成 (\d+\/\d+)/.exec(message)?.[1] ? `已上传 ${/已完成 (\d+\/\d+)/.exec(message)[1]} 个文件` : '',
+  });
 }
 
 async function openRulePackageView() {
@@ -3513,6 +3508,38 @@ function collectMissingShiftBreakSegments(active) {
   });
 }
 
+function positionMissingShiftPopup(details) {
+  const popup = details.querySelector('.dl-break-range-editor, .dl-shift-search-popup, .dl-shift-calendar-popup');
+  if (!popup || !details.open) return;
+  delete details.dataset.popupAbove;
+  Object.assign(popup.style, { top: '', bottom: '', left: '', right: '', maxHeight: '', overflowY: 'auto', boxSizing: 'border-box' });
+  const clip = { top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth };
+  for (let parent = details.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    const rect = parent.getBoundingClientRect();
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+      clip.top = Math.max(clip.top, rect.top + parent.clientTop);
+      clip.bottom = Math.min(clip.bottom, rect.top + parent.clientTop + parent.clientHeight);
+    }
+    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+      clip.left = Math.max(clip.left, rect.left + parent.clientLeft);
+      clip.right = Math.min(clip.right, rect.left + parent.clientLeft + parent.clientWidth);
+    }
+  }
+  const trigger = details.querySelector('summary').getBoundingClientRect();
+  const anchor = details.getBoundingClientRect();
+  const bounds = popup.getBoundingClientRect();
+  const below = Math.max(0, clip.bottom - trigger.bottom - 12);
+  const above = Math.max(0, trigger.top - clip.top - 12);
+  const upwards = bounds.height > below && above > below;
+  const height = Math.min(bounds.height, upwards ? above : below);
+  popup.style.maxHeight = `${height}px`;
+  popup.style.top = `${(upwards ? trigger.top - height - 6 : trigger.bottom + 6) - anchor.top - details.clientTop}px`;
+  popup.style.bottom = 'auto';
+  popup.style.left = `${Math.max(clip.left + 8, Math.min(bounds.left, clip.right - bounds.width - 8)) - anchor.left - details.clientLeft}px`;
+  popup.style.right = 'auto';
+}
+
 function bindNightShiftMissingPanel(results) {
   const allGroups = getMissingNightShiftGroups(results);
   state.shiftPickerEvents?.abort();
@@ -3593,10 +3620,7 @@ function bindNightShiftMissingPanel(results) {
     if (!(details instanceof HTMLDetailsElement) || !details.open || !details.closest('.dl-missing-shift-panel')) return;
     const popup = details.querySelector('.dl-break-range-editor, .dl-shift-search-popup, .dl-shift-calendar-popup');
     if (!popup) return;
-    delete details.dataset.popupAbove;
-    const bounds = popup.getBoundingClientRect();
-    const trigger = details.querySelector('summary').getBoundingClientRect();
-    if (bounds.bottom > window.innerHeight - 12 && trigger.top > window.innerHeight - trigger.bottom) details.dataset.popupAbove = 'true';
+    positionMissingShiftPopup(details);
     details.querySelectorAll('.dl-time-column').forEach(column => {
       const sample = column.querySelector('[data-time-value]');
       const input = details.querySelector(`[data-break-part="${sample.dataset.timeField}"]`);
@@ -3611,6 +3635,12 @@ function bindNightShiftMissingPanel(results) {
       if (selected) { selected.setAttribute('aria-pressed', 'true'); column.scrollTop = selected.offsetTop - column.offsetTop - 50; }
     });
   }, {...eventOptions, capture: true});
+  const reposition = event => {
+    if (event?.target instanceof Element && event.target.closest('.dl-break-range-editor, .dl-shift-search-popup, .dl-shift-calendar-popup')) return;
+    document.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(positionMissingShiftPopup);
+  };
+  window.addEventListener('resize', reposition, eventOptions);
+  document.addEventListener('scroll', reposition, {...eventOptions, capture: true});
   const search = document.querySelector('#missingShiftTemplateSearch');
   const templates = (getNightShiftConfigSource()?.effective_shift_breaks || [])
     .filter(row => row.shift_code !== state.activeNightShiftMissingCode);
@@ -3692,7 +3722,8 @@ function bindNightShiftMissingPanel(results) {
 
   document.querySelector('#btnRecalculateNightShiftMissing')?.addEventListener('click', () => {
     document.querySelector('#nightShiftGateDialog')?.close();
-    if (state.payrollFiles?.length || state.payrollFile) submitCanbuBatch();
+    if (state.nightShiftResume?.batchId === getActiveCanbuBatch()?.id) submitCanbuBatch({ resumeNightShift: true });
+    else if (state.payrollFiles?.length || state.payrollFile) submitCanbuBatch();
     else restartActiveBatchForRecalculation();
   });
   document.querySelector('#btnSaveMissingShift')?.addEventListener('click', async event => {
@@ -4761,11 +4792,13 @@ async function submitPayrollWithRosterConfirmation(options, batch) {
   }
 }
 
-async function submitCanbuBatch() {
+async function submitCanbuBatch({ resumeNightShift = false } = {}) {
   if (!getActiveCanbuBatch()?.isMine || getActiveCanbuBatch()?.legacy) return toast('请新建自己的活动进行核算。');
   const batch = getActiveCanbuBatch();
   const config = getWorkbenchConfig(batch?.subject);
-  if (!state.payrollFiles.length && !state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
+  const resume = resumeNightShift && state.nightShiftResume?.batchId === batch?.id ? state.nightShiftResume : null;
+  if (!resume) state.nightShiftResume = null;
+  if (!resume && !state.payrollFiles.length && !state.payrollFile) return toast(`请先上传${config.name}数据文件。`);
   if (!batch) return toast(`暂无${config.name}批次。`);
   if (batch.subject === 'yeban_butie' && !isNightShiftConfigReady(batch)) {
     return toast('平台班次休息基线未加载，请刷新页面后重试。');
@@ -4778,10 +4811,12 @@ async function submitCanbuBatch() {
   }
 
   const submit = document.querySelector('#btnSubmitCanbuBatch');
-  beginCanbuOperation(batch, '正在生成安全直传地址...');
-  updateCanbuBatch({ status: '上传中' }, { batchId: batch.id });
-  setButtonBusy(submit, true, '准备上传...');
-  setText(el.uploadStatus, `正在上传并完成${config.name}核算，请稍候...`);
+  if (state.payrollSubmissionPending) return;
+  state.payrollSubmissionPending = true;
+  beginCanbuOperation(batch, resume ? '正在沿用已上传考勤核算...' : '正在生成安全直传地址...');
+  updateCanbuBatch({ status: resume ? '计算中' : '上传中' }, { batchId: batch.id });
+  setButtonBusy(submit, true, resume ? '核算中...' : '准备上传...');
+  setText(el.uploadStatus, resume ? '班次配置已更新，正在使用已上传考勤继续核算。' : `正在上传并完成${config.name}核算，请稍候...`);
   resetReportLink();
   stopPolling();
   state.currentRun = null;
@@ -4800,7 +4835,7 @@ async function submitCanbuBatch() {
       }));
     }
 
-    const data = await submitPayrollWithRosterConfirmation({
+    const data = resume ? await resume.complete() : await submitPayrollWithRosterConfirmation({
       file: files[0],
       files,
       engines: [batch.subject],
@@ -4816,7 +4851,9 @@ async function submitCanbuBatch() {
         updateCanbuOperation('安全直传地址已生成，正在上传文件...', { runId: plan.runId });
       },
     }, batch);
-    if (!data) return;
+    state.progressTask?.check();
+    if (!data) { finishCanbuOperation(); return; }
+    state.nightShiftResume = null;
     state.jinjiangRosterConfirmedKey = null;
     if (data.status === '失败') {
       throw new Error(data.error || `${config.name}核算失败，请检查文件后重试。`);
@@ -4843,12 +4880,22 @@ async function submitCanbuBatch() {
       toast(`${config.name}批次已提交，正在处理。`);
     }
   } catch (error) {
+    if (error.name === 'AbortError') {
+      if (state.uploadStopped) updateCanbuBatch({status:'草稿',runId:''},{batchId:batch.id});
+      state.progressTask?.fail(error); state.progressTask = null; state.activeCanbuOperation = null;
+      setText(el.uploadStatus, error.message); toast(error.message); return;
+    }
     if (error.detail?.code === 'night_shift_configuration_required') {
+      const complete = error.retryCompletion || resume?.complete;
+      state.nightShiftResume = complete ? { batchId: batch.id, complete } : null;
+      finishCanbuOperation(state.activeCanbuOperation?.runId || '');
+      setText(el.uploadStatus, '考勤已读取，请补齐班次配置后继续核算。');
       state.nightShiftConfigs[nightShiftMonth()] = error.detail.config;
       showNightShiftGate(error.detail.records || []);
       return;
     }
     if (error.detail?.code === 'sheet_confirmation_required') {
+      finishCanbuOperation();
       renderSheetConfirmation(error.detail.sheets);
       setText(el.uploadStatus, error.message);
       return;
@@ -4858,6 +4905,7 @@ async function submitCanbuBatch() {
     setText(el.uploadStatus, error.message, true);
     toast(error.message);
   } finally {
+    state.payrollSubmissionPending = false;
     setButtonBusy(submit, false);
   }
 }
@@ -4905,6 +4953,7 @@ async function submitDomesticLaborRunDirect({ activityId, files, engines, attend
       })),
     }),
   });
+  state.progressTask?.check();
   onPlanCreated?.(plan);
   const uploads = plan.uploads || (plan.upload ? [plan.upload] : []);
   if (uploads.length !== uploadFiles.length) {
@@ -4924,6 +4973,7 @@ async function submitDomesticLaborRunDirect({ activityId, files, engines, attend
     await fetch(`/api/domestic-labor/runs/${plan.runId}`, { method: 'DELETE' }).catch(() => {});
     throw error;
   }
+  state.progressTask?.check();
   updateUploadProgress(statusElement, progressButton, '上传完成，正在校验并核算...');
   const completion = { engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision };
   const complete = updates => requestJson(`/api/domestic-labor/runs/${plan.runId}/direct-upload-complete`, {
@@ -4935,6 +4985,8 @@ async function submitDomesticLaborRunDirect({ activityId, files, engines, attend
 }
 
 async function uploadDomesticFilesConcurrently(uploads, files, onProgress) {
+  const controller = new AbortController();
+  state.progressTask?.update({abort: () => { state.uploadStopped = true; controller.abort(); }});
   const progressByFile = files.map(() => 0);
   const totalBytes = files.reduce((sum, file) => sum + Math.max(1, Number(file.size || 0)), 0);
   const report = () => {
@@ -4949,20 +5001,28 @@ async function uploadDomesticFilesConcurrently(uploads, files, onProgress) {
   const workerCount = Math.min(3, files.length);
   const uploadNext = async () => {
     while (nextIndex < files.length) {
+      if (controller.signal.aborted) throw WorkbenchProgress.abortError();
       const index = nextIndex;
       nextIndex += 1;
       await uploadDomesticFileToSignedUrl(uploads[index], files[index], (percent) => {
         progressByFile[index] = percent;
         report();
-      });
+      }, controller.signal);
     }
   };
-  await Promise.all(Array.from({ length: workerCount }, uploadNext));
+  try { await Promise.all(Array.from({ length: workerCount }, uploadNext)); }
+  catch (error) { controller.abort(); throw error; }
+  finally { state.progressTask?.update({abort: null}); }
 }
 
-function uploadDomesticFileToSignedUrl(upload, file, onProgress) {
+function uploadDomesticFileToSignedUrl(upload, file, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
+    if (signal?.aborted) return reject(WorkbenchProgress.abortError());
+    const abort = () => request.abort();
+    signal?.addEventListener('abort', abort, {once:true});
+    request.onabort = () => reject(WorkbenchProgress.abortError());
+    request.onloadend = () => signal?.removeEventListener('abort', abort);
     request.open('PUT', upload.signedUrl);
     request.setRequestHeader('x-upsert', 'true');
     request.upload.onprogress = (event) => {
@@ -4998,7 +5058,7 @@ function submitDomesticLaborRunMultipart({ activityId, files, engines, attendanc
   form.append('sheet_mapping', JSON.stringify(sheetMapping || {}));
   form.append('jinjiang_roster_decision', jinjiangRosterDecision || '');
   if (hrbpList) form.append('hrbp_list', JSON.stringify(hrbpList));
-  return requestJson('/api/domestic-labor/runs', { method: 'POST', body: form });
+  return requestJson('/api/domestic-labor/runs', { method: 'POST', body: form, progressTask: state.progressTask });
 }
 
 function showTaskSection() {
@@ -5691,7 +5751,7 @@ function setExportButtonState(button, status) {
 
 // ── Utility functions ──
 async function requestJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = options.progressTask ? await WorkbenchProgress.uploadRequest(url, options, options.progressTask) : await fetch(url, options);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = data.detail;

@@ -807,7 +807,7 @@ async function exportCurrentResult() {
       toast("导出结果已生成。");
       return;
     }
-    const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/${encodeURIComponent(latestResult.runId)}/export`));
+    const response = await (window.WorkbenchProgress?.fetch || window.fetch)(apiUrl(`/api/china-employee-payroll/meal-allowance/${encodeURIComponent(latestResult.runId)}/export`));
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.detail || "导出结果失败");
@@ -868,7 +868,7 @@ function toast(message) {
 async function loadRuns() {
   elements.batchList.innerHTML = '<article class="batch-item muted">正在加载历史批次...</article>';
   try {
-    const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance/runs"));
+    const response = await (window.WorkbenchProgress?.fetch || window.fetch)(apiUrl("/api/china-employee-payroll/meal-allowance/runs"));
     const data = await readJsonResponse(response, "批次加载失败");
     const runs = Array.isArray(data.runs) ? data.runs : [];
     elements.batchList.innerHTML = runs.length ? runs.slice(0, 8).map((run) => `
@@ -887,7 +887,7 @@ async function loadRuns() {
 async function loadRun(runId) {
   elements.status.textContent = "正在加载历史批次...";
   try {
-    const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/runs/${encodeURIComponent(runId)}`));
+    const response = await (window.WorkbenchProgress?.fetch || window.fetch)(apiUrl(`/api/china-employee-payroll/meal-allowance/runs/${encodeURIComponent(runId)}`));
     const data = await readJsonResponse(response, "批次加载失败");
     renderResult(data);
     markActiveRun();
@@ -1033,12 +1033,16 @@ elements.run.addEventListener("click", async () => {
   elements.status.textContent = "正在解析考勤记录并核算...";
   try {
     if (isProductionHost() && totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES) {
-      const data = await calculateClientSideMealAllowance(files, activeSourceType);
-      renderResult(data);
+      const localProgress = WorkbenchProgress.begin({subject:'正式工餐补',phase:'check',description:'正在本机读取考勤并核算，文件无需上传。'});
+      try {
+        await new Promise(resolve=>setTimeout(resolve,0));
+        const data = await calculateClientSideMealAllowance(files, activeSourceType);
+        localProgress.check(); renderResult(data); localProgress.finish();
+      } catch(error) {localProgress.fail(error);throw error;}
       toast("餐补核算完成。");
       return;
     }
-    const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance"), {
+    const response = await (window.WorkbenchProgress?.fetch || window.fetch)(apiUrl("/api/china-employee-payroll/meal-allowance"), {
       method: "POST",
       body: form,
     });
@@ -1049,7 +1053,7 @@ elements.run.addEventListener("click", async () => {
   } catch (error) {
     const message = friendlyFetchError(error, "餐补核算失败。");
     elements.status.textContent = message;
-    elements.issues.innerHTML = `<article class="issue-item"><strong>核算失败</strong><span>${escapeHtml(message)}</span></article>`;
+    elements.issues.innerHTML = `<article class="issue-item"><strong>${error.name === "AbortError" ? "操作已中止" : "核算失败"}</strong><span>${escapeHtml(message)}</span></article>`;
     toast(message);
   } finally {
     restoreButton(elements.run, !getSelectedFiles().length);

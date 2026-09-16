@@ -88,7 +88,7 @@
   async function api(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
-    const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', ...options, headers });
+    const response = await (window.WorkbenchProgress?.fetch || window.fetch)(path, { credentials: 'same-origin', cache: 'no-store', ...options, headers });
     if (response.status === 401) {
       window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname)}`;
       throw new Error('请先登录 HRAS 全球薪酬核算工作台');
@@ -2256,7 +2256,7 @@
     if (control?.tagName === 'A') control.setAttribute('aria-disabled', 'true');
     showExportTransition('loading', `正在准备${title}`, detail);
     try {
-      const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
+      const response = await (window.WorkbenchProgress?.fetch || window.fetch)(path, { credentials: 'same-origin', cache: 'no-store' });
       if (response.status === 401) {
         window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname)}`;
         throw new Error('请先登录 HRAS 全球薪酬核算工作台');

@@ -125,9 +125,13 @@
     tag.textContent = message;
   }
 
-  function uploadFile(intent, file, onProgress) {
+  function uploadFile(intent, file, onProgress, signal) {
     return new Promise((resolve, reject) => {
       const request = new XMLHttpRequest();
+      if(signal?.aborted)return reject(WorkbenchProgress.abortError());
+      const abort=()=>request.abort();signal?.addEventListener('abort',abort,{once:true});
+      request.onabort=()=>reject(WorkbenchProgress.abortError());
+      request.onloadend=()=>signal?.removeEventListener('abort',abort);
       request.open(intent.method || 'PUT', intent.signedUrl, true);
       request.withCredentials = String(intent.signedUrl || '').startsWith('/');
       Object.entries(intent.headers || {}).forEach(([name, value]) => request.setRequestHeader(name, value));
@@ -142,13 +146,14 @@
     });
   }
 
-  async function uploadFileWithRetry(intent, file, onProgress) {
+  async function uploadFileWithRetry(intent, file, onProgress, signal) {
     let lastError;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await uploadFile(intent, file, onProgress);
+        await uploadFile(intent, file, onProgress, signal);
         return;
       } catch (error) {
+        if(error.name === "AbortError")throw error;
         lastError = error;
         if (attempt < 3) await sleep(attempt * 800);
       }
@@ -319,6 +324,9 @@
     if (_processing.has(lockKey)) return;
     _processing.add(lockKey);
     const item = addItem(displayName);
+    const progressPopup = WorkbenchProgress.begin({subject:CURRENT_TOOL.name || "海外薪资",phase:"prepare",description:"正在准备核算文件。"});
+    item.progressPopup = progressPopup;
+    const uploadController = new AbortController();
     const key = historyKey();
     const toolId = CURRENT_TOOL.id;
     item.dataset.historyKey = key;
@@ -340,6 +348,8 @@
         body: JSON.stringify({ toolId, files: fileSpecs }),
       });
       rememberTask(created.task, key);
+      progressPopup.check();
+      progressPopup.update({phase:"upload",description:"正在上传核算文件。",abort:()=>uploadController.abort()});
       const uploadedBytes = new Array(files.length).fill(0);
       const totalBytes = files.reduce((total, file) => total + file.size, 0);
       let nextUpload = 0;
@@ -352,13 +362,16 @@
             uploadedBytes[index] = loaded;
             const current = uploadedBytes.reduce((total, value) => total + value, 0);
             const percent = totalBytes ? Math.round(current * 100 / totalBytes) : 0;
+            progressPopup.update({percent});
             setProgress(item, '上传文件 · ' + percent + '%');
-          });
+          }, uploadController.signal);
         }
       }
       const uploadResults = await Promise.allSettled(
         Array.from({ length: Math.min(3, created.intents.length) }, () => uploadWorker())
       );
+      progressPopup.update({abort:null});
+      progressPopup.check();
       for (let index = 0; index < created.intents.length; index += 1) {
         try {
           await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(created.task.id) + '/files/' + encodeURIComponent(created.intents[index].fileId) + '/finalize', { method: 'POST' });
@@ -367,13 +380,17 @@
           throw (uploadError && uploadError.reason) || finalizeError;
         }
       }
+      progressPopup.update({phase:'calculate',percent:null,description:'文件已上传，正在按所选工具处理。'});
       setProgress(item, '文件上传完成，正在云端处理…');
       await jsonRequest('/api/overseas-payroll/tasks/' + encodeURIComponent(created.task.id) + '/enqueue', { method: 'POST' });
       const task = await waitForTask(created.task.id, item);
+      progressPopup.check();
       await downloadTask(task, item, true);
+      progressPopup.finish();
     } catch (error) {
+      uploadController.abort();progressPopup.fail(error);
       const message = error && error.message ? error.message : String(error || '未知错误');
-      setItem(item, false, '失败: ' + message);
+      setItem(item, false, (error.name === 'AbortError' ? '已中止: ' : '失败: ') + message);
       showErrorDetail(item, message);
     } finally {
       _processing.delete(lockKey);
