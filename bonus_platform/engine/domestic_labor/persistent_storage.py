@@ -14,6 +14,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 
 DOMESTIC_LABOR_RUN_PREFIX = "domestic-labor-runs"
@@ -310,11 +311,15 @@ def _upload_bytes(object_path: str, content: bytes, *, content_type: str) -> Non
 
 
 def _download_bytes(object_path: str) -> bytes | None:
+    # Metadata/status are mutable, unlike uploaded files. An upsert may leave an
+    # older object in the storage edge cache; reading it can also discard fields
+    # on the next read-modify-write. Always fetch authoritative state.
+    url = _storage_url(f"object/{domestic_labor_supabase_bucket()}/{_quoted_path(object_path)}")
     try:
         return _request(
             "GET",
-            _storage_url(f"object/{domestic_labor_supabase_bucket()}/{_quoted_path(object_path)}"),
-            headers=_headers(),
+            f"{url}?cache_bust={uuid4().hex}",
+            headers=_headers({"cache-control": "no-cache, no-store", "pragma": "no-cache"}),
         )
     except DomesticLaborStorageStatusError as exc:
         if _storage_error_status(exc) == 404:

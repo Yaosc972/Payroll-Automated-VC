@@ -3,9 +3,43 @@ from __future__ import annotations
 import json
 import shutil
 import threading
+from urllib.parse import urlsplit
 import pytest
 
 from bonus_platform.engine.domestic_labor import persistent_storage, runs
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_state_reads_observe_overwrite_and_delete_despite_cached_object(monkeypatch, compact):
+    """Model a storage edge retaining a previously fetched URL after an upsert."""
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-token")
+    origin, cache = {}, {}
+
+    def request(method, url, *, headers, content=None):
+        path = urlsplit(url).path
+        if method == "POST":
+            origin[path] = content
+            return b"{}"
+        assert method == "GET"
+        if url not in cache:
+            if path not in origin:
+                raise persistent_storage.DomesticLaborStorageStatusError(404, '{}')
+            cache[url] = origin[path]
+        return cache[url]
+
+    monkeypatch.setattr(persistent_storage, "_request", request)
+    load = (persistent_storage.load_domestic_labor_status_from_persistent if compact
+            else persistent_storage.load_domestic_labor_metadata_from_persistent)
+    save = persistent_storage.save_domestic_labor_metadata_to_persistent
+    initial = {"id": "payroll_cache_qa", "status": "等待上传"}
+    save(initial["id"], initial, initial)
+    assert load(initial["id"])["status"] == "等待上传"
+    completed = {**initial, "status": "已完成", "summary": {"total_employees": 1}}
+    save(initial["id"], completed, completed)
+    assert load(initial["id"]) == completed
+    origin.clear()
+    assert load(initial["id"]) is None
 
 
 def test_domestic_labor_persists_metadata_and_status_in_parallel(monkeypatch):
