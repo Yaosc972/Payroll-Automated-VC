@@ -22,7 +22,21 @@ _MISSING = object()
 
 class FBUPostgresStateError(RuntimeError):
     def __init__(self, status_code: int, text: str):
-        super().__init__(f"Supabase Data API returned HTTP {status_code}")
+        # The HTTP status alone hides the difference between a timeout, a
+        # constraint error and a missing RPC. Keep the code, not row contents
+        # or raw database messages, in user-visible errors and tracebacks.
+        try:
+            payload = json.loads(text)
+        except (TypeError, ValueError):
+            payload = {}
+        code = str(payload.get("code") or "") if isinstance(payload, dict) else ""
+        self.code = code if re.fullmatch(r"(?:[0-9A-Z]{5}|PGRST[0-9]{3})", code) else ""
+        message = f"Supabase Data API returned HTTP {status_code}"
+        if self.code:
+            message += f" [{self.code}]"
+        if self.code == "57014":
+            message += "：数据库操作超时"
+        super().__init__(message)
         self.status_code = status_code
         self.text = text
 
@@ -169,7 +183,25 @@ def _call(path: str, *, method: str = "GET", payload: Any = None, headers=None) 
 
 
 def _rpc(name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
-    result = _call(f"rpc/{name}", method="POST", payload=payload)
+    if name == "sigma_fbu_commit_snapshot":
+        if not fbu_postgres_state_requested() or _known_available() is False:
+            return None
+        try:
+            # A single unnamed jsonb argument avoids PostgREST expanding the
+            # multi-megabyte snapshot through json_to_record for each field.
+            result = _request_json("POST", f"rpc/{name}_raw", payload=payload)
+        except FBUPostgresStateError as exc:
+            # Old deployments still expose the six-argument function. Only
+            # a missing endpoint is safe to retry through that function;
+            # never replay a write on a timeout or switch to Storage.
+            if exc.status_code == 404 and exc.code == "PGRST202":
+                result = _call(f"rpc/{name}", method="POST", payload=payload)
+            else:
+                raise
+        else:
+            _set_available(True, ttl_seconds=300.0)
+    else:
+        result = _call(f"rpc/{name}", method="POST", payload=payload)
     if isinstance(result, list) and len(result) == 1 and isinstance(result[0], dict):
         return result[0]
     return result if isinstance(result, dict) else None

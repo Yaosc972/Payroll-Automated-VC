@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import csv
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
@@ -17142,14 +17143,13 @@ async def import_fbu_attendance(
         try:
             phase_started = perf_counter()
             preview = _append_fbu_previous_attendance_context_to_preview(
-                dict(run.attendance_data),
+                copy.deepcopy(run.attendance_data),
                 pending_previous_path,
                 calc_month,
                 previous_attendance_filename,
             )
             timings["workbook_ms"] = (perf_counter() - phase_started) * 1000
             phase_started = perf_counter()
-            pending_previous_path.replace(previous_path)
             fbu_run_manager.save_attendance_import(
                 run.run_id,
                 preview,
@@ -17162,6 +17162,7 @@ async def import_fbu_attendance(
             )
             timings["state_ms"] = (perf_counter() - phase_started) * 1000
             phase_started = perf_counter()
+            pending_previous_path.replace(previous_path)
             _persist_fbu_uploaded_file(
                 run.run_id,
                 previous_attendance,

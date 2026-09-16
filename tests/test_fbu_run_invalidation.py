@@ -2,6 +2,42 @@ from bonus_platform.engine.fbu_performance.runs import (
     FBURunManager,
     build_attendance_view_data,
 )
+import copy
+
+import pytest
+
+
+def test_failed_attendance_import_restores_cached_and_local_state(monkeypatch, tmp_path):
+    from bonus_platform.engine.fbu_performance import runs as run_module
+
+    manager = FBURunManager(str(tmp_path))
+    run = manager.create_run(calc_month="2026-08")
+    original = {"employees": [{"employee_id": "E001", "attendance_daily_rows": [
+        {"date": "2026-08-01", "base_hours": 8},
+    ]}]}
+    manager.save_attendance_import(run.run_id, original, attendance_file="august.xlsx")
+    before = copy.deepcopy(vars(run))
+    changed = copy.deepcopy(original)
+    changed["employees"][0]["attendance_daily_rows"].append(
+        {"date": "2026-07-31", "base_hours": 8}
+    )
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("database save failed")
+
+    monkeypatch.setattr(run_module, "fbu_persistent_storage_enabled", lambda: True)
+    monkeypatch.setattr(run_module, "load_fbu_run_snapshot_from_persistent", lambda *a, **kw: None)
+    monkeypatch.setattr(run_module, "save_fbu_run_snapshot_to_persistent", fail)
+
+    with pytest.raises(RuntimeError, match="database save failed"):
+        manager.save_attendance_import(
+            run.run_id, changed, previous_attendance_file="july.xlsx"
+        )
+
+    assert vars(manager.get_run(run.run_id)) == before
+    restored = FBURunManager(str(tmp_path)).get_run(run.run_id)
+    assert restored.previous_attendance_file == ""
+    assert restored.attendance_data == original
 
 
 def test_saving_changed_input_invalidates_existing_results(tmp_path):

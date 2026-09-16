@@ -1129,9 +1129,36 @@ class FBURunManager:
 
     def save_attendance_import(self, run_id: str, data: dict, **metadata) -> None:
         """Persist attendance metadata and parsed sections in one durable snapshot."""
-        run = self.get_run(run_id, sections=set())
-        if not run:
-            return
+        with self._lock:
+            run = self.get_run(run_id, sections=set())
+            if not run:
+                return
+            before = copy.deepcopy(vars(run))
+            manifest = copy.deepcopy(self._manifests.get(run_id))
+            loaded = set(self._loaded_sections.get(run_id, set()))
+            try:
+                self._save_attendance_import(run, data, **metadata)
+            except Exception:
+                # A rejected database transaction must not leave the warm
+                # instance or its on-disk cache ahead of durable state.
+                vars(run).clear()
+                vars(run).update(before)
+                self.runs[run_id] = run
+                changed = set(metadata).union({
+                    "attendance_data", "attendance_view_data", "results",
+                    "results_view_data", "current_step", "status",
+                    "total_employees", "total_bonus", "match_rate",
+                })
+                self._save_local_run_snapshot(run_id, before, changed)
+                if manifest is not None:
+                    self._manifests[run_id] = manifest
+                    self._write_json_atomic(self.data_dir / run_id / "summary.json", manifest)
+                self._loaded_sections[run_id] = loaded
+                self._write_local_index()
+                raise
+
+    def _save_attendance_import(self, run: FBURun, data: dict, **metadata) -> None:
+        run_id = run.run_id
         self._invalidate_results(run)
         for key, value in metadata.items():
             setattr(run, key, value)

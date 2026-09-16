@@ -1113,6 +1113,42 @@ def test_fbu_attendance_upload_can_add_previous_context_after_current_file(monke
     assert run_detail["previous_attendance_file"] == "attendance-202603.xlsx"
 
 
+def test_previous_attendance_database_failure_keeps_existing_preview_and_file(monkeypatch, tmp_path):
+    import copy
+
+    monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
+    manager = FBURunManager(str(tmp_path))
+    monkeypatch.setattr(app_module, "fbu_run_manager", manager)
+    monkeypatch.setattr(app_module, "fbu_roster_store", FBURosterStore(str(tmp_path)))
+    client = TestClient(app_module.app)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]
+    response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={"file": ("april.xlsx", _attendance_bytes_for_rows([("2026-04-01", 8)]))},
+    )
+    assert response.status_code == 200
+    before = copy.deepcopy(manager.get_run(run_id).attendance_data)
+    previous_path = tmp_path / run_id / "previous_attendance.xlsx"
+    previous_bytes = _attendance_bytes_for_rows([("2026-03-31", 4)])
+    previous_path.write_bytes(previous_bytes)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("database save failed")
+
+    monkeypatch.setattr(manager, "_save_runs", fail)
+    response = client.post(
+        "/api/fbu-performance/import-attendance",
+        data={"calc_month": "2026-04", "run_id": run_id},
+        files={"previous_attendance": (
+            "march.xlsx", _attendance_bytes_for_rows([("2026-03-31", 8)])
+        )},
+    )
+    assert response.status_code == 500
+    assert manager.get_run(run_id).attendance_data == before
+    assert previous_path.read_bytes() == previous_bytes
+
+
 def test_fbu_attendance_upload_reports_missing_previous_context_dates(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, "FBU_PERFORMANCE_RUNS_DIR", tmp_path)
     monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
