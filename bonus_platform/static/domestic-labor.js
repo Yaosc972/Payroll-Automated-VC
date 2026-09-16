@@ -12,6 +12,8 @@ const state = {
   currentResults: [],
   currentResultsRunId: '',
   view: 'home',
+  navigationRevision: 0,
+  activityLoadRevision: 0,
   canbuBatches: [],
   activeCanbuBatchId: '',
   activeCanbuOperation: null,
@@ -207,13 +209,24 @@ function collectCollectionRosterTable() {
 
 let activitySaveQueue = Promise.resolve();
 async function loadCanbuBatches() {
+  const revision = state.activityLoadRevision = (state.activityLoadRevision || 0) + 1;
+  const before = new Map(state.canbuBatches.map(batch => [batch.id, JSON.stringify(batch)]));
   const result = await requestJson('/api/domestic-labor/activities');
+  if (revision !== state.activityLoadRevision) return;
+  const ownerChanged = state.activityUser && state.activityUser.ownerId !== result.currentUser?.ownerId;
   if (state.activityUser && state.activityUser.ownerId !== result.currentUser?.ownerId) {
     clearCurrentRunState({ clearFile: true });
     state.nightShiftConfigs = {};
     state.activeCanbuBatchId = '';
   }
-  state.canbuBatches = result.activities || [];
+  const rows = new Map((result.activities || []).map(batch => [batch.id, batch]));
+  // A response predating a creation/upload must not erase that activity or its run link.
+  if (!ownerChanged) {
+    for (const batch of state.canbuBatches) {
+      if (before.get(batch.id) !== JSON.stringify(batch)) rows.set(batch.id, batch);
+    }
+  }
+  state.canbuBatches = [...rows.values()];
   state.activityUser = result.currentUser;
 }
 
@@ -470,8 +483,9 @@ async function init() {
   renderRecentBatchTable();
   showView('home');
   setupActivityList();
+  const navigationRevision = state.navigationRevision;
   await refreshActivities();
-  await restorePayrollPage(initialHash);
+  if (navigationRevision === state.navigationRevision) await restorePayrollPage(initialHash);
   restoringPayrollPage = false;
   rememberPayrollPage();
 }
@@ -885,6 +899,7 @@ function updateSubjectWorkbenchLabels() {
 }
 
 function showView(viewName) {
+  state.navigationRevision++;
   if (state.view != viewName) { closeExplainDrawer(); closeCalcModal(); window.scrollTo({ top: 0, behavior: 'instant' }); }
   document.body.classList.toggle('dl-activities-active', viewName === 'canbuBatches');
   document.body.classList.toggle('dl-home-active', viewName === 'home');
@@ -4481,7 +4496,11 @@ function formatDateTime(value) {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
 function getCurrentMonthValue() {

@@ -6,7 +6,7 @@ Each calculation task is a directory under DOMESTIC_LABOR_RUNS_DIR containing:
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -31,6 +31,21 @@ METADATA_FILE = "metadata.json"
 STATUS_FILE = "status.json"
 
 
+def normalize_payroll_timestamps(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Legacy naive dates used the server's local clock; expose explicit offsets."""
+    result = dict(payload)
+    for key in ("createdAt", "updatedAt"):
+        value = result.get(key)
+        if not value:
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            result[key] = parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
+        except (ValueError, TypeError, AttributeError):
+            pass
+    return result
+
+
 def new_payroll_run_id() -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     return f"payroll_{timestamp}_{uuid4().hex[:8]}"
@@ -49,8 +64,8 @@ def create_payroll_run(metadata: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_payroll_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
-    now = datetime.now().isoformat(timespec="seconds")
-    payload = dict(metadata)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    payload = normalize_payroll_timestamps(metadata)
     payload.setdefault("createdAt", now)
     payload["updatedAt"] = now
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -115,7 +130,7 @@ def load_payroll_status(run_dir: Path) -> Dict[str, Any]:
 
 def list_payroll_metadata(compact: bool = False) -> List[Dict[str, Any]]:
     if domestic_labor_persistent_storage_enabled():
-        return list_domestic_labor_metadata_from_persistent(compact=compact)
+        return [normalize_payroll_timestamps(row) for row in list_domestic_labor_metadata_from_persistent(compact=compact)]
     if not DOMESTIC_LABOR_RUNS_DIR.exists():
         return []
     rows = []
@@ -124,7 +139,7 @@ def list_payroll_metadata(compact: bool = False) -> List[Dict[str, Any]]:
             rows.append(load_payroll_status(path.parent) if compact else json.loads(path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             continue
-    return sorted(rows, key=lambda row: row.get("updatedAt") or row.get("createdAt") or "", reverse=True)
+    return sorted((normalize_payroll_timestamps(row) for row in rows), key=lambda row: row.get("updatedAt") or row.get("createdAt") or "", reverse=True)
 
 
 def get_payroll_run_dir(run_id: str) -> Path:

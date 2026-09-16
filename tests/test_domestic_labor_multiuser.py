@@ -165,3 +165,30 @@ def test_activity_avatar_uses_current_feishu_profile_and_default(clients, monkey
     assert next(row for row in rows if row['id'] == activity['id'])['ownerAvatarUrl'] == 'https://example.com/feishu-avatar.png'
     assert next(row for row in rows if row['ownerId'] == 'Bob')['ownerAvatarUrl'] == '/assets/domestic-default-avatar.png'
     assert api._domestic_avatar_url({'avatarUrl':'javascript:alert(1)'}) == '/assets/domestic-default-avatar.png'
+
+
+def test_activity_timestamps_have_timezone(clients):
+    from datetime import datetime
+    alice, _ = clients
+    activity = create(alice)
+    assert datetime.fromisoformat(activity['updatedAt']).utcoffset() is not None
+    rows = alice.get('/api/domestic-labor/activities').json()['activities']
+    assert datetime.fromisoformat(rows[0]['updatedAt']).utcoffset() is not None
+
+
+def test_legacy_server_time_is_normalized(monkeypatch):
+    import os
+    import time
+    previous = os.environ.get('TZ')
+    try:
+        for zone, expected in [('UTC', '2026-09-16T10:23:00+00:00'), ('Asia/Shanghai', '2026-09-16T02:23:00+00:00')]:
+            os.environ['TZ'] = zone
+            time.tzset()
+            assert runs.normalize_payroll_timestamps({'updatedAt':'2026-09-16T10:23:00'})['updatedAt'] == expected
+        assert runs.normalize_payroll_timestamps({'updatedAt':'2026-09-16T10:23:00+00:00'})['updatedAt'] == '2026-09-16T10:23:00+00:00'
+    finally:
+        if previous is None:
+            os.environ.pop('TZ', None)
+        else:
+            os.environ['TZ'] = previous
+        time.tzset()
