@@ -392,8 +392,8 @@ function mount(root, packageData, subject, regionOverride) {
       <p class="rb-eyebrow">规则包 / ${subject.category_id==='bonus'?'奖金类':'补贴类'}</p>
       <div class="rb-title-row"><h2>${esc(subject.name)}</h2></div>
       <p class="rb-intro">${esc(c.intro)}</p>
-      <nav class="rb-sections" aria-label="本科目内容"><button type="button" data-rb-go="eligibility">适用范围</button><button type="button" data-rb-go="calculation">计算规则</button><button type="button" data-rb-go="boundaries">扣减与特殊口径</button></nav>
     </header>
+      <nav class="rb-sections" aria-label="本科目内容"><button type="button" data-rb-go="eligibility">适用范围</button><button type="button" data-rb-go="calculation">计算规则</button><button type="button" data-rb-go="boundaries">扣减与特殊口径</button></nav>
     <section class="rb-section" id="rb-eligibility">
       <div class="rb-section-head"><span>01</span><h3>适用条件</h3><small>按地区或适用范围查看</small></div>
       <div class="rb-regions" aria-label="选择适用范围">${subject.regions.map((item,i)=>`<button type="button" data-rb-region="${i}" aria-pressed="${i===region}">${esc(item.name)}</button>`).join('')}</div>
@@ -458,7 +458,7 @@ function mount(root, packageData, subject, regionOverride) {
       const scroll=window.scrollY; mount(root,packageData,subject,Number(button.dataset.rbRegion));window.scrollTo(0,scroll);
       root.querySelector(`[data-rb-region="${button.dataset.rbRegion}"]`)?.focus({preventScroll:true});
     }
-    if(button.dataset.rbGo)root.querySelector(`#rb-${button.dataset.rbGo}`)?.scrollIntoView({block:'start'});
+    if(button.dataset.rbGo) { root.querySelectorAll('[data-rb-go]').forEach(node => node.setAttribute('aria-current', String(node === button))); root.querySelector(`#rb-${button.dataset.rbGo}`)?.scrollIntoView({block:'start',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}); }
     if(button.hasAttribute('data-rb-reset'))update({},true);
     if(button.dataset.rbPreset!==undefined)update({...r.values,...r.model.presets[Number(button.dataset.rbPreset)].values});
   },{signal:abort.signal});
@@ -467,7 +467,8 @@ function mount(root, packageData, subject, regionOverride) {
 function navigation(packageData, selected) {
   return (packageData.categories||[]).map(category=>`<div class="rb-nav-group"><p>${esc(category.name)}</p>${ORDER.filter(id=>category.subject_ids.includes(id)).map(id=>{
     const subject=packageData.subjects.find(item=>item.id===id);
-    return `<button type="button" class="rb-subject" data-rule-subject="${id}" aria-current="${selected===id}"><span>${String(ORDER.indexOf(id)+1).padStart(2,'0')}</span><strong>${esc(subject.name)}</strong><b aria-hidden="true">↗</b></button>`;
+    const icon = global.document?.querySelector(`[data-subject-entry="${id}"] .dl-home-icon`)?.innerHTML || '';
+    return `<button type="button" class="rb-subject" data-rule-subject="${id}" aria-current="${selected===id}"><span class="rb-nav-icon" aria-hidden="true">${icon}</span><strong>${esc(subject.name)}</strong><b aria-hidden="true">›</b></button>`;
   }).join('')}</div>`).join('');
 }
 function search(root, packageData, query) {
