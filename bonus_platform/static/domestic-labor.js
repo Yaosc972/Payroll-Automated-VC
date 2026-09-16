@@ -208,6 +208,7 @@ function collectCollectionRosterTable() {
 }
 
 let activitySaveQueue = Promise.resolve();
+let activityRefreshPromise = null;
 async function loadCanbuBatches() {
   const revision = state.activityLoadRevision = (state.activityLoadRevision || 0) + 1;
   const before = new Map(state.canbuBatches.map(batch => [batch.id, JSON.stringify(batch)]));
@@ -1370,17 +1371,28 @@ function renderRecentBatchTable() {
   bindBatchTableActions(el.recentBatchTable);
 }
 
-async function refreshActivities() {
+function refreshActivities() {
+  // Navigation and the refresh button share the same in-flight read.
+  if (activityRefreshPromise) return activityRefreshPromise;
   const button = document.querySelector('#refreshActivities');
-  if (button) button.disabled = true;
-  try {
-    await activitySaveQueue;
-    await loadCanbuBatches();
-    state.activityLoadError = '';
-  } catch (error) { state.activityLoadError = error.message; }
-  finally { if (button) button.disabled = false; }
+  state.activityLoading = true;
+  state.activityLoadError = '';
+  if (button) { button.disabled = true; button.textContent = '正在读取…'; }
   renderCanbuBatchList();
-  renderRecentBatchTable();
+  activityRefreshPromise = (async () => {
+    try {
+      await activitySaveQueue;
+      await loadCanbuBatches();
+    } catch (error) { state.activityLoadError = error.message; }
+    finally {
+      state.activityLoading = false;
+      activityRefreshPromise = null;
+      if (button) { button.disabled = false; button.textContent = '刷新'; }
+      renderCanbuBatchList();
+      renderRecentBatchTable();
+    }
+  })();
+  return activityRefreshPromise;
 }
 
 function setupActivityList() {
@@ -1418,10 +1430,15 @@ function renderCanbuBatchList() {
     (!query || `${batch.name} ${batch.ownerName} ${batch.id}`.toLowerCase().includes(query)));
   const pages = Math.max(1, Math.ceil(rows.length / 20));
   activityFilters.page = Math.max(1, Math.min(activityFilters.page, pages));
-  document.querySelector('#activityCount').textContent = `共 ${rows.length} 个活动 · 第 ${activityFilters.page} / ${pages} 页`;
+  document.querySelector('#activityCount').textContent = state.activityLoading
+    ? (rows.length ? `已显示 ${rows.length} 个活动 · 正在更新…` : '正在读取活动…')
+    : `共 ${rows.length} 个活动 · 第 ${activityFilters.page} / ${pages} 页`;
   document.querySelector('#activityPrev').disabled = activityFilters.page <= 1;
   document.querySelector('#activityNext').disabled = activityFilters.page >= pages;
-  el.canbuBatchTable.innerHTML = state.activityLoadError
+  el.canbuBatchTable.setAttribute('aria-busy', String(Boolean(state.activityLoading)));
+  el.canbuBatchTable.innerHTML = state.activityLoading && !rows.length
+    ? '<div class="dl-empty compact" role="status"><p>正在读取核算活动…</p><p>无需新建或核算科目，读取完成后会自动显示。</p></div>'
+    : state.activityLoadError
     ? `<div class="dl-empty compact"><p>活动读取失败：${escapeHtml(state.activityLoadError)}</p><p>请点击刷新重试。</p></div>`
     : rows.length ? renderBatchTable(rows.slice((activityFilters.page - 1) * 20, activityFilters.page * 20))
     : '<div class="dl-empty compact"><p>没有符合条件的活动。</p><p>可调整筛选条件，或新建核算活动。</p></div>';

@@ -213,3 +213,34 @@ def test_missing_unicode_export_only_ignores_legacy_invalid_key(monkeypatch, tmp
     else:
         with pytest.raises(persistent_storage.DomesticLaborStorageStatusError):
             persistent_storage.load_domestic_labor_file_from_persistent("payroll_qa", tmp_path, "不存在.xlsx")
+
+
+def test_activity_history_reads_are_parallel_bounded_and_complete(monkeypatch):
+    barrier = threading.Barrier(8)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+    def load(run_id):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        barrier.wait(timeout=2)
+        with lock:
+            active -= 1
+        return {'id':run_id, 'updatedAt':run_id}
+    monkeypatch.setattr(persistent_storage, '_list_objects', lambda prefix: [{'name':f'run_{i:03}'} for i in range(24)] + [{'name':'_config'}, {'name':'../invalid'}])
+    monkeypatch.setattr(persistent_storage, 'load_domestic_labor_status_from_persistent', load)
+    rows = persistent_storage.list_domestic_labor_metadata_from_persistent(compact=True)
+    assert len(rows) == 24
+    assert peak == 8
+    assert rows[0]['id'] == 'run_023'
+
+
+def test_activity_history_read_failure_is_not_an_empty_success(monkeypatch):
+    monkeypatch.setattr(persistent_storage, '_list_objects', lambda prefix: [{'name':'run_1'}])
+    def fail(run_id):
+        raise TimeoutError('read timeout')
+    monkeypatch.setattr(persistent_storage, 'load_domestic_labor_status_from_persistent', fail)
+    with pytest.raises(TimeoutError):
+        persistent_storage.list_domestic_labor_metadata_from_persistent(compact=True)

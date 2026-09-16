@@ -117,18 +117,17 @@ def load_domestic_labor_status_from_persistent(run_id: str) -> dict[str, Any] | 
 
 
 def list_domestic_labor_metadata_from_persistent(*, compact: bool) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for entry in _list_objects(_environment_prefix()):
-        run_id = str(entry.get("name") or "").strip()
-        if not re.fullmatch(r"[0-9A-Za-z_-]+", run_id) or run_id.startswith("_"):
-            continue
-        payload = (
-            load_domestic_labor_status_from_persistent(run_id)
-            if compact
-            else load_domestic_labor_metadata_from_persistent(run_id)
-        )
-        if payload:
-            rows.append(payload)
+    run_ids = [
+        str(entry.get("name") or "").strip()
+        for entry in _list_objects(_environment_prefix())
+        if re.fullmatch(r"[0-9A-Za-z_-]+", str(entry.get("name") or "").strip())
+        and not str(entry.get("name") or "").strip().startswith("_")
+    ]
+    loader = load_domestic_labor_status_from_persistent if compact else load_domestic_labor_metadata_from_persistent
+    # Bound parallel reads: a long history must not incur one network round trip per row.
+    # Exceptions still propagate, so a failed read is never presented as an empty list.
+    with ThreadPoolExecutor(max_workers=8, thread_name_prefix="domestic-labor-list") as executor:
+        rows = [payload for payload in executor.map(loader, run_ids) if payload]
     return sorted(
         rows,
         key=lambda row: str(row.get("updatedAt") or row.get("createdAt") or ""),

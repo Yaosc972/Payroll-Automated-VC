@@ -55,3 +55,21 @@ test('out-of-order refreshes keep the latest response', async () => {
   resolve[0]({activities:[],currentUser:{ownerId:'alice'}});await old;
   assert.equal(state.canbuBatches[0].id,'new');
 });
+test('opening activity list during startup reuses the read and exposes loading until completion', async () => {
+  let resolve, reads=0, notifyStarted;
+  const started=new Promise(r=>{notifyStarted=r;});
+  const state={}; const button={}; const renders=[];
+  const context=vm.createContext({state,activityRefreshPromise:null,activitySaveQueue:Promise.resolve(),
+    document:{querySelector:()=>button},renderCanbuBatchList:()=>renders.push(state.activityLoading),renderRecentBatchTable(){},
+    loadCanbuBatches:()=>{reads++;notifyStarted();return new Promise(r=>{resolve=r;});},
+  });
+  vm.runInContext(section('function refreshActivities()', 'function setupActivityList('),context);
+  const startup=context.refreshActivities();
+  await started;
+  const navigation=context.refreshActivities();
+  assert.equal(reads,1);assert.equal(startup,navigation);
+  assert.equal(state.activityLoading,true);assert.equal(button.textContent,'正在读取…');
+  resolve();await startup;
+  assert.equal(state.activityLoading,false);assert.equal(button.disabled,false);
+  assert.deepEqual(renders,[true,false]);
+});
