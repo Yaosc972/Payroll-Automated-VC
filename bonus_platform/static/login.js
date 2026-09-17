@@ -146,7 +146,14 @@
   const searchParams = new URLSearchParams(window.location.search);
   const nextUrl = searchParams.get("next") || "/";
   const isLocalDev = ["localhost", "127.0.0.1", ""].includes(window.location.hostname);
-  const mockEnabled = isLocalDev || searchParams.get("mock") === "1";
+  const isEmbedded = (() => {
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true;
+    }
+  })();
+  const mockEnabled = isLocalDev && !isEmbedded;
 
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, char => ({
     "&": "&amp;",
@@ -160,6 +167,20 @@
     if (!mockLoginPanel) return;
     mockLoginPanel.hidden = false;
     mockLoginPanel.open = mockEnabled;
+  };
+
+  const waitForHras = async () => {
+    if (!window.__HRAS__ || typeof window.__HRAS__.ready !== "function") return;
+    const hasToken = Boolean(searchParams.get("token") || window.__hrasToken);
+    if (!isEmbedded && !hasToken) return;
+    try {
+      await Promise.race([
+        window.__HRAS__.ready(),
+        new Promise((resolve) => window.setTimeout(resolve, 2000)),
+      ]);
+    } catch {
+      // 独立运行或壳子未下发上下文时，继续走本地登录。
+    }
   };
 
   const redirectIfAlreadyLoggedIn = async () => {
@@ -219,13 +240,17 @@
         }
       } else {
         if (feishuLoginStatus) feishuLoginStatus.textContent = "飞书应用尚未配置，当前仅开放开发调试模拟登录。";
-        showMockLogin();
-        await loadUsers();
+        if (mockEnabled) {
+          showMockLogin();
+          await loadUsers();
+        }
       }
     } catch {
       if (feishuLoginStatus) feishuLoginStatus.textContent = "后端未连接，当前仅开放开发调试模拟登录。";
-      showMockLogin();
-      await loadUsers();
+      if (mockEnabled) {
+        showMockLogin();
+        await loadUsers();
+      }
     }
   };
 
@@ -260,7 +285,7 @@
     }
   });
 
-  redirectIfAlreadyLoggedIn().then((redirected) => {
+  waitForHras().then(() => redirectIfAlreadyLoggedIn()).then((redirected) => {
     if (!redirected) loadFeishuConfig();
   });
 })();

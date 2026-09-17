@@ -53,3 +53,5 @@ labor-worker-desktop/release-gate-materials/
 
 # Supabase CLI local metadata
 supabase/.temp/
+# aideploy CLI 的本地绑定（每人各自绑，不该提交）
+.aideploy/project.json

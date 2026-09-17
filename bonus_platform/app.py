@@ -53,6 +53,7 @@ from .auth import (
     user_can_enter_module,
     user_is_system_admin,
 )
+from . import hras_shell
 from .config import AI_CONFIG, AUTH_CONFIG, DEFAULT_IMPORT_TEMPLATE, DEFAULT_RULE_WORKBOOK, EXPORT_DIR, OUTPUT_DIR, MAX_PREVIEW_ROWS, DOMESTIC_LABOR_RUNS_DIR, FBU_PERFORMANCE_RUNS_DIR, LABOR_RUNS_DIR, PROJECT_ROOT, ensure_data_files
 from .engine.domestic_labor.parser import MultiFilePayrollDataLoader, SheetConfirmationRequired
 from .engine.domestic_labor.engines import (
@@ -304,6 +305,13 @@ def _labor_current_user_from_request(request: Request) -> dict[str, Any] | None:
         return current if isinstance(current, dict) else None
 
     request.state.labor_auth_resolved = True
+    bound = hras_shell.current_user_from_state(request)
+    if isinstance(bound, dict):
+        user = bound.get("user") if isinstance(bound.get("user"), dict) else {}
+        if user.get("status") in {"active", "pending"}:
+            request.state.labor_current_user = bound
+            request.state.labor_user_id = str(user.get("id") or "")
+            return bound
     session_token = str(request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
     if not session_token:
         return None
@@ -908,6 +916,7 @@ async def lifespan(app: FastAPI):
     social_insurance_scheduler_allowed = not _is_vercel_runtime()
     if social_insurance_scheduler_allowed:
         start_social_insurance_prefetch_scheduler()
+    await hras_shell.register_with_shell()
     try:
         yield
     finally:
@@ -1099,7 +1108,10 @@ def _validate_safe_id(value: str, field_name: str = "id") -> str:
     return value
 
 
-def _current_user_id(sigma_session: Optional[str] = Cookie(default=None)) -> str:
+def _current_user_id(request: Request, sigma_session: Optional[str] = Cookie(default=None)) -> str:
+    bound = hras_shell.request_user_id(request)
+    if bound:
+        return bound
     if not sigma_session:
         raise HTTPException(status_code=401, detail="未登录。")
     try:
@@ -1127,6 +1139,28 @@ def _user_can_enter_module(user_id: str, module_id: str) -> bool:
         module.get("id") == module_id and module.get("enabled") and module.get("canEnter")
         for module in current.get("modules", [])
     )
+
+
+def _access_user_id(request: Request) -> str | None:
+    return hras_shell.request_user_id(request)
+
+
+def _access_can_enter_module(request: Request, user_id: str, module_id: str) -> bool:
+    current = hras_shell.current_user_from_state(request)
+    if isinstance(current, dict):
+        return user_can_enter_module(current, module_id)
+    return _user_can_enter_module(user_id, module_id)
+
+
+def _access_is_system_admin(request: Request, user_id: str) -> bool:
+    current = hras_shell.current_user_from_state(request)
+    if isinstance(current, dict):
+        return user_is_system_admin(current)
+    try:
+        current = _get_cached_current_user(user_id)
+    except KeyError:
+        return False
+    return any(role.get("id") == "admin" for role in current.get("roles", []) if isinstance(role, dict))
 
 
 def _payload_bool(payload: dict, key: str) -> bool:
@@ -2034,13 +2068,7 @@ def _fbu_access_response(request: Request) -> Response | None:
     if not (is_fbu_api or is_fbu_page):
         return None
 
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    user_id = None
-    if session_token:
-        try:
-            user_id = get_session_user_id(session_token)
-        except KeyError:
-            user_id = None
+    user_id = _access_user_id(request)
     if not user_id:
         if is_fbu_api:
             return JSONResponse({"detail": "未登录。"}, status_code=401)
@@ -2059,7 +2087,7 @@ def _fbu_access_response(request: Request) -> Response | None:
             status_code=401,
         )
 
-    if not _user_can_enter_module(user_id, "fbu"):
+    if not _access_can_enter_module(request, user_id, "fbu"):
         if is_fbu_api:
             return JSONResponse({"detail": "当前用户没有FBU美洲绩效奖金核算权限，或模块尚未开放。"}, status_code=403)
         return HTMLResponse(
@@ -2086,13 +2114,7 @@ def _domestic_labor_access_response(request: Request) -> Response | None:
     if not (is_domestic_api or is_domestic_page):
         return None
 
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    user_id = None
-    if session_token:
-        try:
-            user_id = get_session_user_id(session_token)
-        except KeyError:
-            user_id = None
+    user_id = _access_user_id(request)
     if not user_id:
         if is_domestic_api:
             return JSONResponse({"detail": "未登录。"}, status_code=401)
@@ -2101,7 +2123,7 @@ def _domestic_labor_access_response(request: Request) -> Response | None:
             status_code=302,
         )
 
-    if not _user_can_enter_module(user_id, "domestic"):
+    if not _access_can_enter_module(request, user_id, "domestic"):
         if is_domestic_api:
             return JSONResponse({"detail": "当前用户没有中国区外包工薪酬核算权限，或模块尚未开放。"}, status_code=403)
         return HTMLResponse(
@@ -2133,13 +2155,7 @@ def _protected_static_page_access_response(request: Request) -> Response | None:
     if not page_config:
         return None
 
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    user_id = None
-    if session_token:
-        try:
-            user_id = get_session_user_id(session_token)
-        except KeyError:
-            user_id = None
+    user_id = _access_user_id(request)
     if not user_id:
         return RedirectResponse(
             url=f"/login.html?next={quote(path)}",
@@ -2147,15 +2163,11 @@ def _protected_static_page_access_response(request: Request) -> Response | None:
         )
 
     if page_config.get("admin_only"):
-        try:
-            current = _get_cached_current_user(user_id)
-        except KeyError:
-            current = {}
-        can_enter = any(role.get("id") == "admin" for role in current.get("roles", []))
+        can_enter = _access_is_system_admin(request, user_id)
     elif page_config.get("module_ids"):
-        can_enter = any(_user_can_enter_module(user_id, module_id) for module_id in page_config["module_ids"])
+        can_enter = any(_access_can_enter_module(request, user_id, module_id) for module_id in page_config["module_ids"])
     else:
-        can_enter = _user_can_enter_module(user_id, str(page_config["module_id"]))
+        can_enter = _access_can_enter_module(request, user_id, str(page_config["module_id"]))
     if can_enter:
         return None
 
@@ -2205,13 +2217,7 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
         )
     if isinstance(getattr(request.state, "labor_current_user", None), dict):
         return None
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    user_id = None
-    if session_token:
-        try:
-            user_id = get_session_user_id(session_token)
-        except KeyError:
-            user_id = None
+    user_id = _access_user_id(request)
     if not user_id:
         if not labor_auth_required():
             return None
@@ -2231,7 +2237,7 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
             """,
             status_code=401,
         )
-    if not _user_can_enter_module(user_id, "overseas"):
+    if not _access_can_enter_module(request, user_id, "overseas"):
         if is_labor_api:
             return JSONResponse({"detail": "当前用户没有海外劳务报账核对权限。", "access": access}, status_code=403)
         return HTMLResponse(
@@ -2759,13 +2765,7 @@ async def audit_authenticated_business_activity(request: Request, call_next):
     if candidate is None:
         return await call_next(request)
 
-    actor_user_id = ""
-    session_token = request.cookies.get(SESSION_COOKIE_NAME)
-    if session_token:
-        try:
-            actor_user_id = get_session_user_id(session_token)
-        except KeyError:
-            actor_user_id = ""
+    actor_user_id = hras_shell.request_user_id(request) or ""
 
     response = await call_next(request)
     event = _business_activity_audit_outcome_event(request.method, request.url.path, response.status_code)
@@ -2779,6 +2779,20 @@ async def audit_authenticated_business_activity(request: Request, call_next):
                 event["target_id"],
                 type(exc).__name__,
             )
+    return response
+
+
+@app.middleware("http")
+async def hras_shell_gateway(request: Request, call_next):
+    hras_shell.mark_request_start(request)
+    session_token = None
+    if not hras_shell.should_skip_identity(request.url.path):
+        session_token = hras_shell.bind_shell_identity(request)
+    response = await call_next(request)
+    if session_token:
+        hras_shell.set_session_cookie(response, session_token)
+    hras_shell.strip_frame_blocking_headers(response)
+    hras_shell.record_request_metrics(request, response)
     return response
 
 
@@ -2864,6 +2878,16 @@ def health() -> dict:
     return {"status": "ok", "rule_workbook": str(DEFAULT_RULE_WORKBOOK)}
 
 
+@app.get("/health")
+def hras_health() -> dict:
+    return {"status": "UP"}
+
+
+@app.get("/metrics")
+def hras_metrics() -> dict:
+    return hras_shell.metrics_payload()
+
+
 @app.get("/api/auth/mock-users")
 def api_auth_mock_users() -> dict:
     if not _mock_auth_enabled():
@@ -2926,6 +2950,7 @@ def api_auth_feishu_config() -> dict:
     return {
         "configured": configured,
         "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else "",
+        "mockLoginEnabled": _mock_auth_enabled(),
     }
 
 
@@ -3010,7 +3035,10 @@ def api_auth_feishu_callback(
 
 
 @app.get("/api/me")
-def api_me(actor_user_id: str = Depends(_current_user_id)) -> dict:
+def api_me(request: Request, actor_user_id: str = Depends(_current_user_id)) -> dict:
+    bound = hras_shell.current_user_from_state(request)
+    if isinstance(bound, dict):
+        return bound
     return _get_cached_current_user(actor_user_id)
 
 

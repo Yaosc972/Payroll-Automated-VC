@@ -933,7 +933,7 @@ def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     assert ".china-employee-payroll-shell" in css
     assert ".employee-payroll-table" in css
     assert 'url=china-employee-payroll.html' in legacy_html
-    assert 'window.location.replace("china-employee-payroll.html")' in legacy_html
+    assert 'window.location.replace("china-employee-payroll.html" + window.location.search + window.location.hash)' in legacy_html
 
 
 def test_recruitment_page_keeps_command_center_and_home_link():
@@ -1354,16 +1354,22 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "开发调试：模拟用户登录" in html
     assert "使用飞书登录" in html
     assert "login.js" in html
+    assert "hras-sdk.js" in html
+    assert "hras-boot.js" in html
     assert "fragmentSmokeySource" in js
     assert "initSmokeyBackground" in js
     assert "/api/auth/feishu/config" in js
     assert "/api/auth/feishu/login" in js
     assert "/api/me" in js
     assert "redirectIfAlreadyLoggedIn" in js
+    assert "waitForHras" in js
+    assert "Promise.race" in js
     assert "已登录，正在进入工作台" in js
     assert "/api/auth/mock-users" in js
     assert "/api/auth/mock-login" in js
     assert "mockEnabled" in js
+    assert "isLocalDev && !isEmbedded" in js
+    assert "searchParams.get(\"mock\")" not in js
     assert "mockLoginPanel.hidden = false" in js
     assert "sigma_session" not in js
     assert ".login-panel" in css
@@ -1378,6 +1384,7 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert "background: transparent" in css.split(".login-provider-icon", 1)[1].split("}", 1)[0]
     assert ".feishu-login-block" in css
     assert ".mock-login-panel" in css
+    assert "body.embedded" in css
     index_html = INDEX_HTML.read_text(encoding="utf-8")
     domestic_card = index_html.split('class="saas-module-card domestic-module"', 1)[1].split("</a>", 1)[0]
     overseas_compensation_html = (ROOT / "bonus_platform" / "static" / "overseas-compensation.html").read_text(encoding="utf-8")
@@ -1431,7 +1438,8 @@ def test_release_info_marks_integration_branch_as_only_production_source():
     assert release_info["deployOwner"] == "integration-window-only"
     assert "Only deploy production from the integration branch" in release_info["policy"]
     assert "admin.html" in release_info["requiredStaticFiles"]
-    assert "permission-guard.js" in release_info["requiredStaticFiles"]
+    assert "hras-sdk.js" in release_info["requiredStaticFiles"]
+    assert "hras-boot.js" in release_info["requiredStaticFiles"]
     assert "fbu-performance.html" in release_info["requiredStaticFiles"]
     assert "fbu-performance.js" in release_info["requiredStaticFiles"]
     assert {module["id"] for module in release_info["modules"]} >= {

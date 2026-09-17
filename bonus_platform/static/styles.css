@@ -7172,6 +7172,39 @@ body.filters-collapsed .filter-body {
   background: #f5f5f7;
 }
 
+/* HRAS iframe 嵌入：只压缩间距，不隐藏 header / logo，避免 Grid 缺列 */
+body.embedded {
+  min-width: 0;
+}
+
+body.embedded.portal-shell,
+body.embedded.dashboard-shell,
+body.embedded.login-shell {
+  min-width: 0;
+}
+
+body.embedded .header-inner {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+body.embedded .workbench {
+  padding-top: 14px;
+}
+
+body.embedded .dashboard-frame {
+  min-height: 100vh;
+}
+
+body.embedded .dashboard-topbar {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+body.embedded .mock-login-panel {
+  display: none;
+}
+
 /* Scoped HRAS homepage brand overrides stay stronger than legacy dashboard duplicates. */
 .dashboard-shell:not(.admin-console-shell) .dashboard-frame {
   grid-template-columns: 340px minmax(0, 1fr);

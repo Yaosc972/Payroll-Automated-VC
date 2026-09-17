@@ -1,37 +1,14 @@
-# Sigma Workbench Domestic Labor Agent Instructions
+---
+description: 让这个项目生而可部署：按 AIDeploy 接入契约写代码，交付前本地自检清零。
+globs: ["**/*"]
+alwaysApply: true
+---
 
-## Project Scope
-
-This worktree is for Sigma Workbench China domestic labor vendor payroll work. Keep domestic labor changes in `/Users/zt27532/Documents/New project 2-domestic` and do not use the main Sigma worktree for this module's implementation.
-
-## UI Work
-
-Before making UI changes, read `DESIGN.md` and follow its tokens, component rules, and Do's and Don'ts.
-
-Preserve the current workbench character: dense payroll operations screens, blue Sigma platform framing, compact controls, and exact business labels. Do not preserve or reintroduce the old ink-green/warm-gray domestic module theme unless explicitly requested.
-
-## Domestic Labor Boundaries
-
-Stay inside domestic-labor-related files by default, especially `bonus_platform/engine/domestic_labor/`, `bonus_platform/static/domestic-labor.html`, `bonus_platform/static/domestic-labor.js`, domestic labor tests, and module-specific tooling.
-
-Do not refactor shared platform files or change other module behavior unless the request explicitly opens that boundary.
-
-## Code Changes
-
-Inspect the relevant files before editing. Make the smallest safe change that solves the request, preserve existing naming and structure, and avoid broad refactors unless explicitly requested.
-
-Do not modify authentication, secrets, database schema, deployment config, payment logic, or production wiring without explicit approval.
-
-## Verification
-
-After domestic labor code changes, run the most relevant targeted domestic labor checks when practical. If a change is documentation-only, validate formatting or the relevant tool output when available.
-
-<!-- BEGIN AIDEPLOY DEVKIT -->
-## AIDeploy 接入规范
+# AIDeploy 接入规范
 
 让这个项目生而可部署：按 AIDeploy 接入契约写代码，交付前本地自检清零。
 
-### 1. 动手前先问清楚
+## 1. 动手前先问清楚
 
 这几件事决定了项目结构，写完再改代价大。用户说不清时给推荐值并标注假设。
 
@@ -40,7 +17,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - 要用哪些依赖：数据库、缓存、对象存储、外部 API？
 - 要不要登录？要不要初始数据（种子）？
 
-### 2. 黄金路径产物（开发中同步产出，不是完成后再补）
+## 2. 黄金路径产物（开发中同步产出，不是完成后再补）
 
 齐了这些，平台零追问直达预览环境；缺了就得靠平台猜，猜错要来回改。
 
@@ -50,7 +27,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - web/api 服务提供健康检查端点，并在 `health_check.path` 里声明它
 - 需要建表/改表就自带迁移脚本，命令写进 `migration_command`
 
-### 3. 环境变量纪律
+## 3. 环境变量纪律
 
 配置从代码里分离、按标准名读取——这样同一份代码在各环境不用改一行。
 
@@ -59,7 +36,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - 禁止自定义以 `AIDEPLOY_` 开头的变量：这是平台保留前缀，注入时会覆盖你的值
 - 变量名表达「资源类型 + 用途」，别用 `HOST`、`PASSWORD`、`TOKEN` 这种无上下文的名字
 
-### 4. Dockerfile 纪律
+## 4. Dockerfile 纪律
 
 下面每一条平台准入都会检查，标「必须」的不满足会直接拦下部署。
 
@@ -74,7 +51,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - 应当：生成 .dockerignore（devkit apply-fix 可一键写入）。（否则触发 `DOCKERFILE_NO_DOCKERIGNORE`）
 - 应当：加非 root 用户，例如 RUN useradd -m app && USER app。（否则触发 `DOCKERFILE_ROOT_USER`）
 
-### 5. 服务之间怎么互相调用
+## 5. 服务之间怎么互相调用
 
 同一应用的服务独占一个命名空间，服务名就是主机名——多数情况零改码。
 
@@ -84,7 +61,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - 应用自省信息平台也会注入：`AIDEPLOY_ENV`、`AIDEPLOY_APP`、`AIDEPLOY_SERVICE`、`AIDEPLOY_RELEASE_SEQ`、`AIDEPLOY_URL`
 - nginx 之类用变量指向兄弟服务时，**必须**在 aideploy.json 的 env 里声明该变量，否则容器起来就 `host not found in upstream`
 
-### 6. 数据库迁移纪律
+## 6. 数据库迁移纪律
 
 平台按 应用×环境 给你开库并注入连接串，但**不理解也不代管表结构**——迁移自带。
 
@@ -93,7 +70,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - **禁止运行时自动建表**（首次请求建表、手工进容器执行 SQL）——多副本与回滚下不可靠
 - 迁移要向后兼容：平台回滚只回退代码与镜像，**不回退表结构**
 
-### 7. 安全纪律
+## 7. 安全纪律
 
 密钥只出现名字，值永远在平台密钥中心——这条是硬底线，违反直接阻断。
 
@@ -102,7 +79,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 - `.env` 不提交；给 `.env.example` 只留变量名
 - 基础镜像用平台可信来源，`FROM` 写完整地址
 
-### 8. 交付前必做
+## 8. 交付前必做
 
 本地自检与平台准入用的是同一份规则——本地清零，平台基本就能过。
 
@@ -115,4 +92,3 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 
 > 本节由 aideploy devkit 依规则包 v3.0 生成，请勿手改；
 > 重跑 `aideploy init` 即可更新。
-<!-- END AIDEPLOY DEVKIT -->

@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "aideploy-devkit": {
+      "command": "aideploy-mcp",
+      "args": [],
+      "env": {
+        "AIDEPLOY_PLATFORM_URL": "https://hras-aideploy.ztn.cn"
+      }
+    },
+    "aideploy-platform": {
+      "command": "aideploy-mcp-platform",
+      "args": [],
+      "env": {
+        "AIDEPLOY_PLATFORM_URL": "https://hras-aideploy.ztn.cn"
+      }
+    }
+  }
+}

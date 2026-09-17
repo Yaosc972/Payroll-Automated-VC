@@ -1,0 +1,50 @@
+{
+  "$schema": "https://hras-aideploy.ztn.cn/api/v1/public/aideploy.schema.json",
+  "schema_version": "2.0",
+  "app": {
+    "name": "payroll-automated-vc",
+    "description": "HRAS 全球薪酬核算工作台"
+  },
+  "services": [
+    {
+      "name": "payroll-automated-vc",
+      "kind": "api",
+      "port": 8000,
+      "route": "/",
+      "health_check": {
+        "path": "/health"
+      },
+      "resources": {
+        "preset": "medium"
+      },
+      "env": {
+        "SIGMA_ENABLE_MOCK_LOGIN": "false",
+        "SESSION_COOKIE_SECURE": "true"
+      },
+      "secrets": [
+        "FEISHU_APP_SECRET",
+        "MIMO_API_KEY",
+        "HRAS_JWT_SECRET",
+        "HRAS_MODULE_API_KEY"
+      ]
+    }
+  ],
+  "build_environment": {
+    "dep_pypi_index": "https://nexus.eminxing.com/repository/pypi-group/",
+    "dep_pypi_trusted_host": "nexus.eminxing.com",
+    "dep_npm_registry": "https://nexus.eminxing.com/repository/npm-group/",
+    "dep_maven_url": "https://nexus.eminxing.com/repository/maven-public/"
+  },
+  "secret_scan": {
+    "ignore": [
+      {
+        "file": "tests/**",
+        "reason": "单测夹具里的假口令/假 token，不是可登录的真实密钥"
+      },
+      {
+        "file": "labor-worker-desktop/tests/**",
+        "reason": "桌面 Worker 单测夹具，不是可登录的真实密钥"
+      }
+    ]
+  }
+}

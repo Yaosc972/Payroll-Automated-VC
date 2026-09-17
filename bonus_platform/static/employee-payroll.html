@@ -7,10 +7,12 @@
     <title>正在进入中国区正式工薪酬核算 · 西格玛工作台</title>
     <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
     <script>
-      window.location.replace("china-employee-payroll.html");
+      window.location.replace("china-employee-payroll.html" + window.location.search + window.location.hash);
     </script>
   </head>
   <body>
+    <script src="/hras-sdk.js"></script>
+    <script src="/hras-boot.js"></script>
     <p>正在进入中国区正式工薪酬核算...</p>
     <p><a href="china-employee-payroll.html">如果没有自动跳转，请点击这里进入。</a></p>
   </body>

@@ -1,0 +1,13 @@
+[mcp_servers.aideploy-devkit]
+command = "aideploy-mcp"
+args = []
+
+[mcp_servers.aideploy-devkit.env]
+AIDEPLOY_PLATFORM_URL = "https://hras-aideploy.ztn.cn"
+
+[mcp_servers.aideploy-platform]
+command = "aideploy-mcp-platform"
+args = []
+
+[mcp_servers.aideploy-platform.env]
+AIDEPLOY_PLATFORM_URL = "https://hras-aideploy.ztn.cn"

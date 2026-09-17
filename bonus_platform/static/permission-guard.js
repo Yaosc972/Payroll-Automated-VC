@@ -217,6 +217,19 @@
       // Ignore storage limits; the network request path remains authoritative.
     }
   };
+  const shellAuthHeaders = () => {
+    const token = new URLSearchParams(window.location.search).get("token")
+      || window.__hrasToken
+      || (typeof window.__HRAS__?.getToken === "function" ? window.__HRAS__.getToken() : null)
+      || localStorage.getItem("token");
+    if (!token) return {};
+    try {
+      localStorage.setItem("token", token);
+    } catch {
+      // Ignore storage limits; the Authorization header still authenticates this request.
+    }
+    return { Authorization: `Bearer ${token}` };
+  };
   const fetchAuthContext = async () => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), authFetchTimeoutMs);
@@ -225,6 +238,7 @@
         credentials: "same-origin",
         cache: "no-store",
         signal: controller.signal,
+        headers: shellAuthHeaders(),
       });
     } finally {
       window.clearTimeout(timeout);

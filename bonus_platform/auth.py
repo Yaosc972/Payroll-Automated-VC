@@ -125,6 +125,9 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 
 def session_user_id(request: Request) -> str | None:
+    bound = getattr(request.state, "sigma_user_id", None)
+    if bound:
+        return str(bound)
     token = str(request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
     if not token:
         return None
@@ -136,6 +139,11 @@ def session_user_id(request: Request) -> str | None:
 
 
 def current_user_from_request(request: Request) -> dict[str, Any] | None:
+    bound = getattr(request.state, "sigma_current_user", None)
+    if isinstance(bound, dict):
+        user = bound.get("user") if isinstance(bound.get("user"), dict) else {}
+        if user.get("status") in {"active", "pending"}:
+            return bound
     user_id = session_user_id(request)
     if not user_id:
         return None
@@ -268,7 +276,11 @@ def api_auth_feishu_config() -> dict[str, Any]:
         and AUTH_CONFIG["feishu_app_secret"]
         and AUTH_CONFIG["feishu_redirect_uri"]
     )
-    return {"configured": configured, "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else ""}
+    return {
+        "configured": configured,
+        "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else "",
+        "mockLoginEnabled": mock_auth_enabled(),
+    }
 
 
 @router.get("/api/auth/feishu/login")
