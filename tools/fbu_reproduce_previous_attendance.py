@@ -9,6 +9,7 @@ from pathlib import Path
 
 from bonus_platform.app import _append_fbu_previous_attendance_context_to_preview
 from bonus_platform.engine.fbu_performance.parser import build_hourly_rate_policy_data
+from bonus_platform.engine.fbu_performance.postgres_state import _encode_section_for_storage
 from bonus_platform.engine.fbu_performance.runs import build_attendance_view_data
 
 
@@ -44,7 +45,8 @@ def main():
         "p_environment": "production", "p_run_id": core["run_id"],
         "p_expected_core_revision": snapshot["revision"], "p_seed_core": core,
         "p_core_data": desired,
-        "p_sections": {key: {"data": value, "expected_revision": saved.get(key, {}).get("revision", 0),
+        "p_sections": {key: {"data": _encode_section_for_storage(key, value),
+                              "expected_revision": saved.get(key, {}).get("revision", 0),
                               "replace": key in {"attendance_data", "attendance_view_data", "results", "results_view_data"}}
                        for key, value in updates.items()},
     }

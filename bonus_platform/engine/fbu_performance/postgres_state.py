@@ -18,6 +18,9 @@ FBU_POSTGRES_JOBS_TABLE = "sigma_fbu_upload_jobs"
 _AVAILABILITY_LOCK = threading.RLock()
 _AVAILABILITY: tuple[float, bool] | None = None
 _MISSING = object()
+_ATTENDANCE_STORAGE_FORMAT = "sigma_attendance_daily_rows_v1"
+_ATTENDANCE_STORAGE_FORMAT_KEY = "__sigma_storage_format"
+_ATTENDANCE_STORAGE_COLUMNS_KEY = "__sigma_attendance_daily_columns"
 
 
 class FBUPostgresStateError(RuntimeError):
@@ -321,6 +324,100 @@ def _normalize_section(section_name: str, data: Any) -> Any:
     return {**data, "summary": summary}
 
 
+def _encode_section_for_storage(section_name: str, data: Any) -> Any:
+    """Compact repeated attendance row keys without changing runtime data."""
+    normalized = _normalize_section(section_name, data)
+    if section_name != "attendance_data" or not isinstance(normalized, dict):
+        return normalized
+    if normalized.get(_ATTENDANCE_STORAGE_FORMAT_KEY):
+        return normalized
+    employees = normalized.get("employees")
+    if not isinstance(employees, list):
+        return normalized
+
+    columns: list[str] = []
+    seen: set[str] = set()
+    for employee in employees:
+        if not isinstance(employee, dict):
+            return normalized
+        rows = employee.get("attendance_daily_rows")
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                return normalized
+            for key in row:
+                if key not in seen:
+                    seen.add(key)
+                    columns.append(key)
+    if not columns:
+        return normalized
+
+    encoded = copy.deepcopy(normalized)
+    encoded[_ATTENDANCE_STORAGE_FORMAT_KEY] = _ATTENDANCE_STORAGE_FORMAT
+    encoded[_ATTENDANCE_STORAGE_COLUMNS_KEY] = columns
+    for employee in encoded["employees"]:
+        rows = employee.get("attendance_daily_rows")
+        if not isinstance(rows, list):
+            continue
+        packed_rows = []
+        for row in rows:
+            mask = sum(1 << index for index, key in enumerate(columns) if key in row)
+            packed_rows.append([format(mask, "x"), *(row.get(key) for key in columns)])
+        employee["attendance_daily_rows"] = packed_rows
+    return encoded
+
+
+def _decode_section_from_storage(section_name: str, data: Any) -> Any:
+    if section_name != "attendance_data" or not isinstance(data, dict):
+        return data
+    if data.get(_ATTENDANCE_STORAGE_FORMAT_KEY) != _ATTENDANCE_STORAGE_FORMAT:
+        return data
+    columns = data.get(_ATTENDANCE_STORAGE_COLUMNS_KEY)
+    employees = data.get("employees")
+    if not isinstance(columns, list) or not all(isinstance(key, str) for key in columns):
+        return data
+    if not isinstance(employees, list):
+        return data
+
+    decoded = copy.deepcopy(data)
+    decoded.pop(_ATTENDANCE_STORAGE_FORMAT_KEY, None)
+    decoded.pop(_ATTENDANCE_STORAGE_COLUMNS_KEY, None)
+    for employee in decoded["employees"]:
+        if not isinstance(employee, dict):
+            return data
+        rows = employee.get("attendance_daily_rows")
+        if not isinstance(rows, list):
+            continue
+        unpacked_rows = []
+        for packed in rows:
+            if not isinstance(packed, list) or len(packed) != len(columns) + 1:
+                return data
+            try:
+                mask = int(str(packed[0]), 16)
+            except ValueError:
+                return data
+            unpacked_rows.append({
+                key: packed[index + 1]
+                for index, key in enumerate(columns)
+                if mask & (1 << index)
+            })
+        employee["attendance_daily_rows"] = unpacked_rows
+    return decoded
+
+
+def _decode_section_result(
+    section_name: str,
+    result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if result is None or "data" not in result:
+        return result
+    return {
+        **result,
+        "data": _decode_section_from_storage(section_name, result.get("data")),
+    }
+
+
 def commit_core(run_id: str, *, seed: dict, patch: dict) -> dict[str, Any] | None:
     return _rpc("sigma_fbu_commit_core", {
         "p_environment": _environment(),
@@ -379,12 +476,13 @@ def save_core_with_retry(
 
 
 def replace_section(run_id: str, section_name: str, data: Any) -> dict[str, Any] | None:
-    return _rpc("sigma_fbu_replace_section", {
+    result = _rpc("sigma_fbu_replace_section", {
         "p_environment": _environment(),
         "p_run_id": run_id,
         "p_section_name": section_name,
-        "p_data": data,
+        "p_data": _encode_section_for_storage(section_name, data),
     })
+    return _decode_section_result(section_name, result)
 
 
 def save_section_with_retry(
@@ -405,10 +503,11 @@ def save_section_with_retry(
             "p_run_id": run_id,
             "p_section_name": section_name,
             "p_expected_revision": revision,
-            "p_data": _normalize_section(section_name, candidate),
+            "p_data": _encode_section_for_storage(section_name, candidate),
         })
         if result is None:
             return None
+        result = _decode_section_result(section_name, result)
         if result.get("applied"):
             return result
         latest = result.get("data")
@@ -446,7 +545,7 @@ def save_snapshot_with_retry(
             "p_core_data": candidate_core,
             "p_sections": {
                 field: {
-                    "data": _normalize_section(field, candidate_sections[field]),
+                    "data": _encode_section_for_storage(field, candidate_sections[field]),
                     "expected_revision": expected_sections[field],
                     "replace": bool(spec.get("replace")),
                 }
@@ -455,6 +554,13 @@ def save_snapshot_with_retry(
         })
         if result is None:
             return None
+        result = {
+            **result,
+            "sections": {
+                field: _decode_section_result(field, dict(section_result or {}))
+                for field, section_result in dict(result.get("sections") or {}).items()
+            },
+        }
         if result.get("applied"):
             return result
         latest_core = dict(result.get("data") or {})
@@ -509,7 +615,7 @@ def load_run_state(run_id: str, sections: set[str]) -> dict[str, Any] | None:
             name = str(row.get("section_name") or "")
             if not name:
                 continue
-            core[name] = row.get("data")
+            core[name] = _decode_section_from_storage(name, row.get("data"))
             revisions[name] = int(row.get("revision") or 0)
         for name in sections:
             core.setdefault(name, [] if name == "results" else {})

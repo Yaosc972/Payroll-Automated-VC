@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from bonus_platform.engine.fbu_performance import postgres_state
@@ -82,6 +84,98 @@ def test_snapshot_rpc_timeout_does_not_fall_back_or_repeat_write(monkeypatch):
     with pytest.raises(postgres_state.FBUPostgresStateError, match="57014"):
         postgres_state._rpc("sigma_fbu_commit_snapshot", {"p_run_id": "run"})
     assert len(calls) == 1
+
+
+def _attendance_with_daily_rows(row_count=3):
+    return {
+        "employees": [{
+            "employee_id": "E001",
+            "attendance_daily_rows": [
+                {
+                    "date": f"2026-08-{index + 1:02d}",
+                    "shift_type": "day",
+                    "work_hours": 8,
+                    **({"holiday_name": None} if index % 2 == 0 else {}),
+                }
+                for index in range(row_count)
+            ],
+        }],
+        "summary": {"employee_count": 1},
+    }
+
+
+def test_attendance_storage_encoding_is_lossless_and_compact():
+    attendance = _attendance_with_daily_rows(100)
+
+    encoded = postgres_state._encode_section_for_storage("attendance_data", attendance)
+    decoded = postgres_state._decode_section_from_storage("attendance_data", encoded)
+
+    assert decoded == attendance
+    assert attendance["employees"][0]["attendance_daily_rows"][0]["date"] == "2026-08-01"
+    assert encoded["__sigma_storage_format"] == "sigma_attendance_daily_rows_v1"
+    assert len(json.dumps(encoded, separators=(",", ":"))) < (
+        len(json.dumps(attendance, separators=(",", ":"))) * 0.6
+    )
+
+
+def test_existing_unencoded_attendance_remains_compatible():
+    attendance = _attendance_with_daily_rows(2)
+
+    assert postgres_state._decode_section_from_storage("attendance_data", attendance) is attendance
+
+
+def test_snapshot_storage_encoding_is_hidden_from_runtime(monkeypatch):
+    calls = []
+    attendance = _attendance_with_daily_rows(5)
+
+    def rpc(name, payload):
+        calls.append((name, payload))
+        return {
+            "applied": True,
+            "data": payload["p_core_data"],
+            "revision": 2,
+            "sections": {
+                "attendance_data": {
+                    "data": payload["p_sections"]["attendance_data"]["data"],
+                    "revision": 2,
+                }
+            },
+        }
+
+    monkeypatch.setattr(postgres_state, "_rpc", rpc)
+    result = postgres_state.save_snapshot_with_retry(
+        "run1",
+        base_core={"run_id": "run1"},
+        desired_core={"run_id": "run1"},
+        expected_core_revision=1,
+        sections={
+            "attendance_data": {
+                "base": attendance,
+                "desired": attendance,
+                "expected_revision": 1,
+                "replace": True,
+            }
+        },
+    )
+
+    stored = calls[0][1]["p_sections"]["attendance_data"]["data"]
+    assert stored["__sigma_storage_format"] == "sigma_attendance_daily_rows_v1"
+    assert result["sections"]["attendance_data"]["data"] == attendance
+
+
+def test_load_run_state_decodes_compact_attendance(monkeypatch):
+    attendance = _attendance_with_daily_rows(2)
+    encoded = postgres_state._encode_section_for_storage("attendance_data", attendance)
+    responses = iter([
+        [{"core": {"run_id": "run1"}, "revision": 3}],
+        [{"section_name": "attendance_data", "data": encoded, "revision": 4}],
+    ])
+    monkeypatch.setattr(postgres_state, "_call", lambda *args, **kwargs: next(responses))
+
+    result = postgres_state.load_run_state("run1", {"attendance_data"})
+
+    assert result["attendance_data"] == attendance
+    assert result["__section_revisions"] == {"attendance_data": 4}
 
 
 def test_three_way_merge_preserves_independent_row_updates():
