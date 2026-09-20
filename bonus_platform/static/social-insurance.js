@@ -2424,6 +2424,9 @@
         select.append(option);
         byId('subjectSourceState').textContent = payload.label || '尚无成功发布的北森集成版本';
         syncSubjectPicker();
+        // 首次打开时优先读取本地缓存的主体目录，避免必须手动点击“重新获取主体”。
+        // 不传 refresh，不触发北森实时读取；没有缓存时仍保持空状态并显示重试入口。
+        await loadContractSubjects('', undefined, false);
       }
       renderRun();
     } catch (error) { showToast(error.message, 'error'); }

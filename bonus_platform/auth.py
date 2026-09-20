@@ -268,7 +268,11 @@ def api_auth_feishu_config() -> dict[str, Any]:
         and AUTH_CONFIG["feishu_app_secret"]
         and AUTH_CONFIG["feishu_redirect_uri"]
     )
-    return {"configured": configured, "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else ""}
+    return {
+        "configured": configured,
+        "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else "",
+        "mockLoginEnabled": mock_auth_enabled(),
+    }
 
 
 @router.get("/api/auth/feishu/login")

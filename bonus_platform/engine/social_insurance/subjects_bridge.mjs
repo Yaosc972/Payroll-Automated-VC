@@ -2,6 +2,8 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { ensureLocalBeisenCredentials } from "./local_beisen_credentials.mjs";
+
 process.umask(0o077);
 
 async function main() {
@@ -9,6 +11,7 @@ async function main() {
   if (!engineDir || !modifiedStart || !modifiedStop || !entryStart || !entryEnd) {
     throw new Error("缺少合同主体枚举参数");
   }
+  ensureLocalBeisenCredentials();
   const clientModule = await import(pathToFileURL(path.join(engineDir, "lib", "beisen-client.mjs")).href);
   const rulesModule = await import(pathToFileURL(path.join(engineDir, "lib", "rules.mjs")).href);
   const { BeisenClient, BEISEN_FIELDS } = clientModule;

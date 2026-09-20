@@ -44,7 +44,7 @@ def test_social_insurance_assets_are_cache_busted_for_component_upgrade():
     page = _read("social-insurance.html")
 
     assert "social-insurance.css?v=44" in page
-    assert "social-insurance.js?v=20260916-progress-1" in page
+    assert "social-insurance.js?v=20260918-subject-cache-1" in page
 
 
 def test_review_decision_uses_vertical_include_and_exclude_buttons():
@@ -132,13 +132,14 @@ def test_subject_switch_uses_an_in_memory_bundle_and_a_loading_skeleton():
     assert "batch-loading-shimmer" in styles
 
 
-def test_initial_page_bootstraps_from_the_latest_published_integration_without_polling():
+def test_initial_page_bootstraps_from_published_or_cached_subjects_without_realtime_refresh():
     script = _read("social-insurance.js")
     initializer = script.split("async function initialize()", 1)[1].split("initialize();", 1)[0]
 
     assert "`${API_ROOT}/bootstrap`" in initializer
     assert "runs?limit=1" not in initializer
-    assert "loadContractSubjects" not in initializer
+    assert "await loadContractSubjects('', undefined, false);" in initializer
+    assert "refresh=true" not in initializer
     assert "recent-beisen-runs" not in script
     assert "scheduleContractSubjectCompletion" not in script
 

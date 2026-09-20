@@ -114,7 +114,7 @@
       task.check();
       let payload;
       try { payload = await response.clone().json(); } catch (_) {}
-      if(response.ok && payload?.ok !== false && !['failed','失败'].includes(payload?.status))task.finish();else task.fail(new Error('处理未完成，请查看页面中的具体提示。'));
+      if(response.ok && payload?.ok !== false && !['failed','失败'].includes(payload?.status))task.finish();else task.fail(await serverError(response));
       return response;
     } catch(error){task.fail(error);throw error;}
   }
@@ -137,6 +137,14 @@
     });
   }
   function parseHeaders(raw){const headers=new Headers();raw.trim().split(/[\r\n]+/).filter(Boolean).forEach(line=>{const i=line.indexOf(':');if(i>0)headers.append(line.slice(0,i),line.slice(i+1).trim());});return headers;}
+  async function serverError(response){
+    let message='处理未完成，请查看页面中的具体提示。';
+    try{
+      const payload=await response.clone().json();
+      message=typeof payload?.detail==='string'?payload.detail:(payload?.detail?.message||message);
+    }catch(_){/* keep the generic fallback for non-JSON responses */}
+    return new Error(message);
+  }
   reduced.addEventListener('change',()=>{motion?.kill();if(!reduced.matches&&panel?.open)animate();});
   window.WorkbenchProgress={begin,fetch:trackedFetch,uploadRequest,abortError};
 })();

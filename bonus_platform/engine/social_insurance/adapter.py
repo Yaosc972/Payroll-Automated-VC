@@ -222,6 +222,55 @@ def _node_binary() -> str:
     raise RunValidationError("未找到社保规则引擎所需的 Node.js 运行时")
 
 
+def _local_connector_call(
+    *,
+    engine_dir: Path,
+    operation: str,
+    payload: dict[str, Any],
+    timeout: float,
+) -> dict[str, Any]:
+    bridge = Path(__file__).with_name("connector_bridge.mjs")
+    try:
+        completed = subprocess.run(
+            [
+                _node_binary(),
+                str(bridge),
+                str(engine_dir),
+                operation,
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ, "NODE_TLS_REJECT_UNAUTHORIZED": "1"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RunValidationError("北森本地连接器响应超时，请稍后重试") from exc
+    if completed.returncode != 0:
+        detail = ""
+        for line in reversed((completed.stderr or "").splitlines()):
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and isinstance(candidate.get("error"), str):
+                detail = candidate["error"].strip()
+                break
+        raise RunValidationError(detail or "北森本地连接器调用失败，请检查授权与运行环境")
+    try:
+        payload_result = next(
+            json.loads(line)
+            for line in reversed(completed.stdout.splitlines())
+            if line.strip()
+        )
+    except (StopIteration, json.JSONDecodeError) as exc:
+        raise RunValidationError("北森本地连接器返回格式无效") from exc
+    if not isinstance(payload_result, dict):
+        raise RunValidationError("北森本地连接器返回格式无效")
+    return payload_result
+
+
 def _fixture_payload() -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
     configured = os.environ.get("SIGMA_SOCIAL_INSURANCE_SYNC_FIXTURE")
     if not configured:
@@ -517,6 +566,35 @@ def sync_beisen_candidates(
             "governmentSiteAccessed": False,
         }
     engine_dir = _engine_dir()
+    if (engine_dir / "lib" / "service.mjs").is_file():
+        result = _local_connector_call(
+            engine_dir=engine_dir,
+            operation="sync",
+            payload={
+                "periodStart": period_start,
+                "periodEnd": period_end,
+                "confirmationDate": confirmation_date,
+                "subject": subject,
+                "ruleVersion": RULE_VERSION,
+            },
+            timeout=300.0,
+        )
+        records = result.get("records")
+        if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+            raise RunValidationError("北森本地连接器返回的候选人员格式无效")
+        source_summary = result.get("sourceSummary")
+        if not isinstance(source_summary, dict):
+            source_summary = {}
+        return records, {
+            "provider": "beisen-local-connector",
+            **{
+                key: value
+                for key, value in source_summary.items()
+                if key not in {"rawApiResponse", "records", "employees"}
+            },
+            "rawApiResponseSaved": False,
+            "governmentSiteAccessed": False,
+        }
     entrypoint = engine_dir / "mvp.mjs"
     if not entrypoint.exists():
         raise RunValidationError("已验证的北森社保规则引擎未配置")

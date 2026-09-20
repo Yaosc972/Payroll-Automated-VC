@@ -2926,6 +2926,7 @@ def api_auth_feishu_config() -> dict:
     return {
         "configured": configured,
         "redirectUri": AUTH_CONFIG["feishu_redirect_uri"] if configured else "",
+        "mockLoginEnabled": _mock_auth_enabled(),
     }
 
 
@@ -4211,6 +4212,23 @@ def _labor_worker_release_manifest_path() -> str:
     )
 
 
+def _local_worker_release_path(name: str) -> Path:
+    root = (LABOR_RUNS_DIR.parent / "worker-releases").resolve()
+    path = (root / name).resolve()
+    if not path.is_relative_to(root) or path == root:
+        raise HTTPException(400, "安装包路径无效。")
+    return path
+
+
+def _local_worker_releases_enabled() -> bool:
+    return (
+        os.environ.get("SIGMA_LABOR_STATE_BACKEND", "").lower() == "local"
+        and not os.environ.get("VERCEL")
+        and not labor_persistent_storage_enabled()
+        and not labor_blob_signed_urls_enabled()
+    )
+
+
 def _load_persisted_labor_worker_release_manifest() -> dict:
     pathname = _labor_worker_release_manifest_path()
     try:
@@ -4218,6 +4236,9 @@ def _load_persisted_labor_worker_release_manifest() -> dict:
             content = blob_get_bytes(pathname)
         elif labor_persistent_storage_enabled():
             content = get_labor_supabase_private_object(pathname)
+        elif _local_worker_releases_enabled():
+            path = _local_worker_release_path("manifest.json")
+            content = path.read_bytes() if path.exists() else b""
         else:
             return {}
         parsed = json.loads(content.decode("utf-8")) if content else {}
@@ -4235,6 +4256,13 @@ def _persist_labor_worker_release_manifest(manifest: dict) -> None:
         return
     if labor_persistent_storage_enabled():
         put_labor_supabase_private_object(pathname, payload, content_type="application/json")
+        return
+    if _local_worker_releases_enabled():
+        path = _local_worker_release_path("manifest.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
+            temporary.write(payload)
+        Path(temporary.name).replace(path)
         return
     raise RuntimeError("未配置核对助手发布清单的持久化存储。")
 
@@ -4281,6 +4309,7 @@ def _labor_worker_release_config(platform: str = "macos-arm64") -> dict:
             "minimumVersion",
             "objectKey",
             "blobPathname",
+            "localFile",
             "filename",
             "sizeBytes",
         )
@@ -4307,6 +4336,8 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
     url = str(manifest.get("url") or "").strip()
     object_key = str(manifest.get("objectKey") or "").strip()
     blob_pathname = str(manifest.get("blobPathname") or "").strip()
+    local_file = str(manifest.get("localFile") or "")
+    local_available = bool(local_file and _local_worker_releases_enabled() and _local_worker_release_path(local_file).is_file())
     filename = str(manifest.get("filename") or _labor_worker_release_filename(platform, version)).strip()
     try:
         size_bytes = max(0, int(manifest.get("sizeBytes") or 0))
@@ -4316,7 +4347,7 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
         version
         and str(manifest.get("sha256") or "").strip()
         and str(manifest.get("signature") or "").strip()
-        and (object_key or blob_pathname or url.startswith("https://"))
+        and (local_available or object_key or blob_pathname or url.startswith("https://"))
     )
     return {
         "available": complete,
@@ -4335,7 +4366,7 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
                 if platform == "macos-arm64"
                 else f"/api/labor/worker/release/download?platform={platform}"
             )
-            if object_key or blob_pathname
+            if local_available or object_key or blob_pathname
             else url
         ),
     }
@@ -4387,6 +4418,8 @@ def download_personal_labor_worker_release(request: Request, platform: str = "ma
     release = _labor_public_worker_release(platform)
     if not release["available"]:
         raise HTTPException(status_code=503, detail="核对助手安装包尚未配置，请联系管理员。")
+    if manifest.get("localFile") and _local_worker_releases_enabled():
+        return FileResponse(_local_worker_release_path(manifest["localFile"]), filename=release["filename"], headers={"cache-control": "no-store"})
     object_key = str(manifest.get("objectKey") or "").strip()
     blob_pathname = str(manifest.get("blobPathname") or "").strip()
     if blob_pathname:
@@ -4444,6 +4477,13 @@ def create_personal_labor_worker_release_upload_intent(request: Request, payload
     object_key = f"labor-runs/{labor_persistent_environment()}/owners/system/worker-releases/{platform}/{filename}"
     content_types = _labor_worker_release_content_types(platform)
     content_type = content_types[0]
+    if _local_worker_releases_enabled():
+        return {
+            "signedUrl": f"/api/labor/worker/release/local-upload?platform={platform}&version={version}&sha256={sha256}&size={size_bytes}",
+            "method": "PUT", "headers": {"content-type": content_type},
+            "platform": platform, "version": version, "filename": filename,
+            "sizeBytes": size_bytes, "sha256": sha256, "private": True,
+        }
     if labor_blob_signed_urls_enabled():
         try:
             signed_url = create_labor_blob_presigned_url(
@@ -4493,6 +4533,42 @@ def create_personal_labor_worker_release_upload_intent(request: Request, payload
     }
 
 
+@app.put("/api/labor/worker/release/local-upload")
+async def upload_local_worker_release(request: Request, platform: str, version: str, sha256: str, size: int):
+    _, is_admin = _labor_request_actor(request)
+    if not is_admin or not _local_worker_releases_enabled():
+        raise HTTPException(403, "本地安装包上传不可用。")
+    platform = _labor_worker_release_platform(platform)
+    try:
+        parse_stable_worker_version(version)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not 0 < size <= 300 * 1024 * 1024 or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise HTTPException(400, "安装包大小或校验值无效。")
+    path = _local_worker_release_path(f"{platform}/{_labor_worker_release_filename(platform, version)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    observed = 0
+    with NamedTemporaryFile(dir=path.parent, delete=False) as temporary:
+        temp_path = Path(temporary.name)
+        try:
+            async for chunk in request.stream():
+                observed += len(chunk)
+                if observed > size:
+                    raise HTTPException(413, "安装包超过声明大小。")
+                digest.update(chunk)
+                temporary.write(chunk)
+            if observed != size or digest.hexdigest() != sha256:
+                raise HTTPException(409, "安装包大小或 SHA-256 校验失败。")
+            temporary.close()
+            if path.exists():
+                raise HTTPException(409, "该版本安装包已存在，请使用新版本号。")
+            temp_path.replace(path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+    return {"success": True}
+
+
 def _verify_labor_worker_release_artifact(
     *,
     platform: str,
@@ -4518,6 +4594,13 @@ def _verify_labor_worker_release_artifact(
         observed = labor_supabase_object_metadata(object_key)
         observed_size = int(observed.get("sizeBytes") or 0)
         location = {"objectKey": object_key}
+    elif _local_worker_releases_enabled():
+        local_file = f"{platform}/{filename}"
+        path = _local_worker_release_path(local_file)
+        if not path.is_file():
+            raise HTTPException(409, "本地未找到安装包，请先上传。")
+        observed_size = path.stat().st_size
+        location = {"localFile": local_file, "verifiedSha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     else:
         raise RuntimeError("未配置核对助手安装包的私有持久化存储。")
     if observed_size != size_bytes:
@@ -4568,6 +4651,8 @@ def finalize_personal_labor_worker_release(request: Request, payload: dict = Bod
         logger.warning("labor worker release verification failed: %s", type(exc).__name__)
         raise HTTPException(status_code=503, detail="暂时无法确认安装包上传结果，请稍后重试。") from exc
 
+    if artifact.get("verifiedSha256") and artifact["verifiedSha256"] != sha256:
+        raise HTTPException(409, "安装包 SHA-256 与发布声明不一致。")
     existing = _load_persisted_labor_worker_release_manifest()
     releases = {
         release_platform: dict(release)
@@ -4590,7 +4675,7 @@ def finalize_personal_labor_worker_release(request: Request, payload: dict = Bod
         "publishedAt": published_at,
         **{
             key: str(artifact[key])
-            for key in ("objectKey", "blobPathname")
+            for key in ("objectKey", "blobPathname", "localFile")
             if artifact.get(key)
         },
     }
@@ -16337,6 +16422,9 @@ def confirm_fbu_run_rule_lists(run_id: str, body: dict = Body(...)) -> dict:
         roster_lookup=parser.employee_roster,
         region_name=run.region_name,
     )
+    # This endpoint confirms both submitted lists, including explicit empty lists.
+    preview["summary"]["work_hour_rule_count_confirmed"] = True
+    preview["summary"]["fixed_base_count_confirmed"] = True
     fbu_run_manager.update_run(
         run_id,
         base_override_file="页面维护",

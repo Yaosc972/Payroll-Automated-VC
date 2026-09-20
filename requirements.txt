@@ -10,6 +10,7 @@ pymupdf4llm==0.0.27
 PyYAML
 httpx[socks]
 psycopg[binary]>=3.2,<4
+PyMySQL>=1.1,<2
 msoffcrypto-tool
 xlrd
 Pillow

@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from .. import config
 from ..time_utils import utcnow_naive
+from .mysql_db import mysql_connection
 
 
 SQLITE_SCHEMA = """
@@ -329,6 +330,167 @@ CREATE TABLE IF NOT EXISTS workbench_announcements (
 """
 
 
+# MySQL uses VARCHAR for identifiers that participate in foreign keys.  The
+# SQLite/Postgres schemas intentionally keep these fields flexible, but MySQL
+# cannot index or reference an unbounded TEXT column as a primary/foreign key.
+MYSQL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS admin_users (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(320),
+  avatar_url VARCHAR(2048),
+  feishu_user_id VARCHAR(255),
+  feishu_open_id VARCHAR(255),
+  feishu_union_id VARCHAR(255),
+  employee_number VARCHAR(255),
+  directory_scope VARCHAR(64) NOT NULL DEFAULT 'external',
+  directory_synced_at VARCHAR(64),
+  status VARCHAR(64) NOT NULL DEFAULT 'active',
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_departments (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  parent_id VARCHAR(255),
+  root_id VARCHAR(255) NOT NULL,
+  synced_at VARCHAR(64) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_user_departments (
+  user_id VARCHAR(255) NOT NULL,
+  department_id VARCHAR(255) NOT NULL,
+  is_primary TINYINT NOT NULL DEFAULT 0,
+  synced_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (user_id, department_id),
+  FOREIGN KEY (user_id) REFERENCES admin_users(id),
+  FOREIGN KEY (department_id) REFERENCES admin_departments(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_roles (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  module_id VARCHAR(255),
+  is_system TINYINT NOT NULL DEFAULT 0,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_user_roles (
+  user_id VARCHAR(255) NOT NULL,
+  role_id VARCHAR(255) NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (user_id, role_id),
+  FOREIGN KEY (user_id) REFERENCES admin_users(id),
+  FOREIGN KEY (role_id) REFERENCES admin_roles(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_modules (
+  id VARCHAR(255) PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  href VARCHAR(1024) NOT NULL,
+  owner_role_id VARCHAR(255),
+  enabled TINYINT NOT NULL DEFAULT 0,
+  development_status VARCHAR(64) NOT NULL DEFAULT 'developing',
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_role_module_permissions (
+  role_id VARCHAR(255) NOT NULL,
+  module_id VARCHAR(255) NOT NULL,
+  can_enter TINYINT NOT NULL DEFAULT 0,
+  updated_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (role_id, module_id),
+  FOREIGN KEY (role_id) REFERENCES admin_roles(id),
+  FOREIGN KEY (module_id) REFERENCES admin_modules(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_role_feature_permissions (
+  role_id VARCHAR(255) NOT NULL,
+  feature_id VARCHAR(255) NOT NULL,
+  enabled TINYINT NOT NULL DEFAULT 0,
+  updated_at VARCHAR(64) NOT NULL,
+  PRIMARY KEY (role_id, feature_id),
+  FOREIGN KEY (role_id) REFERENCES admin_roles(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_audit_logs (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  actor_user_id VARCHAR(255) NOT NULL,
+  action VARCHAR(255) NOT NULL,
+  target_type VARCHAR(255) NOT NULL,
+  target_id VARCHAR(255) NOT NULL,
+  detail TEXT,
+  created_at VARCHAR(64) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  expires_at VARCHAR(64) NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES admin_users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS admin_notification_outbox (
+  id VARCHAR(255) PRIMARY KEY,
+  event_key VARCHAR(255) NOT NULL UNIQUE,
+  kind VARCHAR(255) NOT NULL,
+  recipient_open_id VARCHAR(255) NOT NULL,
+  payload_json LONGTEXT NOT NULL,
+  status VARCHAR(64) NOT NULL DEFAULT 'pending',
+  attempt_count INT NOT NULL DEFAULT 0,
+  last_error TEXT,
+  message_id VARCHAR(255),
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  sent_at VARCHAR(64)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS workbench_feedback (
+  id VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(255) NOT NULL,
+  user_name VARCHAR(255) NOT NULL,
+  user_open_id VARCHAR(255),
+  category VARCHAR(255) NOT NULL,
+  module_id VARCHAR(255) NOT NULL,
+  module_name VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL,
+  page_path VARCHAR(2048),
+  user_agent VARCHAR(2048),
+  created_at VARCHAR(64) NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES admin_users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS workbench_feedback_attachments (
+  id VARCHAR(255) PRIMARY KEY,
+  feedback_id VARCHAR(255) NOT NULL,
+  filename VARCHAR(1024) NOT NULL,
+  content_type VARCHAR(255) NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  content LONGBLOB NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  FOREIGN KEY (feedback_id) REFERENCES workbench_feedback(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS workbench_announcements (
+  id VARCHAR(255) PRIMARY KEY,
+  kind VARCHAR(255) NOT NULL,
+  title VARCHAR(255) NOT NULL,
+  content TEXT NOT NULL,
+  module_id VARCHAR(255) NOT NULL,
+  module_name VARCHAR(255) NOT NULL,
+  visual_style VARCHAR(255) NOT NULL,
+  created_by VARCHAR(255) NOT NULL,
+  created_by_name VARCHAR(255) NOT NULL,
+  published_at VARCHAR(64) NOT NULL,
+  FOREIGN KEY (created_by) REFERENCES admin_users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+"""
+
+
 DEFAULT_ROLES = [
     {"id": "admin", "name": "系统管理员", "module_id": None, "is_system": 1},
     {"id": "recruitmentAdmin", "name": "招聘奖金核算管理员", "module_id": "recruitment", "is_system": 0},
@@ -484,6 +646,8 @@ def _database_backend(db_path: Path | None = None) -> str:
         return "sqlite"
     if database_url.startswith(("postgres://", "postgresql://")):
         return "postgres"
+    if database_url.startswith(("mysql://", "mysql+pymysql://")):
+        return "mysql"
     if database_url.startswith("sqlite://"):
         return "sqlite"
     scheme = database_url.split(":", 1)[0]
@@ -533,8 +697,12 @@ class _AdminConnection:
         return self.raw_connection.__exit__(exc_type, exc, traceback)
 
     def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> Any:
-        if self.backend == "postgres":
+        if self.backend in {"postgres", "mysql"}:
             sql = sql.replace("?", "%s")
+        if self.backend == "mysql":
+            cursor = self.raw_connection.cursor()
+            cursor.execute(sql, params)
+            return cursor
         return self.raw_connection.execute(sql, params)
 
     def executescript(self, script: str) -> None:
@@ -557,6 +725,8 @@ def _connect(db_path: Path | None = None) -> _AdminConnection:
     backend = _database_backend(db_path)
     if backend == "postgres":
         return _AdminConnection(_postgres_connection(get_admin_database_url()), "postgres")
+    if backend == "mysql":
+        return _AdminConnection(mysql_connection(get_admin_database_url()), "mysql")
     path = _sqlite_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -568,14 +738,19 @@ def _connect(db_path: Path | None = None) -> _AdminConnection:
 def init_admin_store(db_path: Path | None = None) -> Path | str:
     global _STORE_INITIALIZED, _STORE_INITIALIZED_TARGET
     backend = _database_backend(db_path)
-    target = get_admin_database_url() if backend == "postgres" else str(_sqlite_db_path(db_path))
+    target = get_admin_database_url() if backend in {"postgres", "mysql"} else str(_sqlite_db_path(db_path))
     if db_path is None and _STORE_INITIALIZED and _STORE_INITIALIZED_TARGET == target:
         return target
     with _connect(db_path) as connection:
         if backend == "postgres":
             connection.execute("SELECT pg_advisory_xact_lock(917137)")
         try:
-            connection.executescript(POSTGRES_SCHEMA if backend == "postgres" else SQLITE_SCHEMA)
+            schema = {
+                "postgres": POSTGRES_SCHEMA,
+                "mysql": MYSQL_SCHEMA,
+                "sqlite": SQLITE_SCHEMA,
+            }[backend]
+            connection.executescript(schema)
             _migrate_schema(connection)
             _seed_defaults(connection)
             _migrate_default_role_module_grants(connection)
@@ -586,34 +761,45 @@ def init_admin_store(db_path: Path | None = None) -> Path | str:
         except Exception:
             connection.rollback()
             raise
-    return get_admin_database_url() if backend == "postgres" else _sqlite_db_path(db_path)
+    return get_admin_database_url() if backend in {"postgres", "mysql"} else _sqlite_db_path(db_path)
 
 
 def admin_store_health() -> dict[str, Any]:
     backend = _database_backend()
-    configured = backend == "postgres" and bool(get_admin_database_url().strip())
+    configured = backend in {"postgres", "mysql"} and bool(get_admin_database_url().strip())
     if not configured:
         return {"backend": backend, "configured": False, "ready": False}
     try:
         with _connect() as connection:
-            row = connection.execute(
-                """
-                SELECT
-                  to_regclass('public.admin_users') IS NOT NULL AS users_ready,
-                  to_regclass('public.admin_roles') IS NOT NULL AS roles_ready,
-                  to_regclass('public.admin_user_roles') IS NOT NULL AS user_roles_ready,
-                  to_regclass('public.admin_sessions') IS NOT NULL AS sessions_ready
-                """
-            ).fetchone()
+            if backend == "postgres":
+                row = connection.execute(
+                    """
+                    SELECT
+                      to_regclass('public.admin_users') IS NOT NULL AS users_ready,
+                      to_regclass('public.admin_roles') IS NOT NULL AS roles_ready,
+                      to_regclass('public.admin_user_roles') IS NOT NULL AS user_roles_ready,
+                      to_regclass('public.admin_sessions') IS NOT NULL AS sessions_ready
+                    """
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    SELECT
+                      EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'admin_users') AS users_ready,
+                      EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'admin_roles') AS roles_ready,
+                      EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'admin_user_roles') AS user_roles_ready,
+                      EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'admin_sessions') AS sessions_ready
+                    """
+                ).fetchone()
         values = dict(row or {})
         ready = all(
             bool(values.get(key))
             for key in ("users_ready", "roles_ready", "user_roles_ready", "sessions_ready")
         )
-        return {"backend": "postgres", "configured": True, "ready": ready}
+        return {"backend": backend, "configured": True, "ready": ready}
     except Exception as exc:  # noqa: BLE001 - health output must stay sanitized.
         return {
-            "backend": "postgres",
+            "backend": backend,
             "configured": True,
             "ready": False,
             "error": str(exc).replace("\n", " ")[:240],
@@ -627,6 +813,17 @@ def _column_exists(connection: _AdminConnection, table: str, column: str) -> boo
             SELECT 1
             FROM information_schema.columns
             WHERE table_name = %s AND column_name = %s
+            LIMIT 1
+            """,
+            (table, column),
+        ).fetchone()
+        return bool(row)
+    if connection.backend == "mysql":
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s
             LIMIT 1
             """,
             (table, column),
@@ -648,10 +845,27 @@ def _migrate_schema(connection: _AdminConnection) -> None:
     for column, definition in migrations.items():
         if not _column_exists(connection, "admin_users", column):
             connection.execute(f"ALTER TABLE admin_users ADD COLUMN {column} {definition}")
-    connection.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_feishu_user_id "
-        "ON admin_users(feishu_user_id) WHERE feishu_user_id IS NOT NULL"
-    )
+    if connection.backend == "mysql":
+        index_exists = connection.execute(
+            """
+            SELECT 1
+            FROM information_schema.statistics
+            WHERE table_schema = DATABASE()
+              AND table_name = 'admin_users'
+              AND index_name = 'idx_admin_users_feishu_user_id'
+            LIMIT 1
+            """
+        ).fetchone()
+        if not index_exists:
+            connection.execute(
+                "CREATE UNIQUE INDEX idx_admin_users_feishu_user_id "
+                "ON admin_users(feishu_user_id)"
+            )
+    else:
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_feishu_user_id "
+            "ON admin_users(feishu_user_id) WHERE feishu_user_id IS NOT NULL"
+        )
 
 
 def _insert_seed(connection: _AdminConnection, table: str, columns: list[str], conflict_columns: list[str], values: dict[str, Any]) -> None:
@@ -661,6 +875,13 @@ def _insert_seed(connection: _AdminConnection, table: str, columns: list[str], c
         conflict_sql = ", ".join(conflict_columns)
         connection.execute(
             f"INSERT INTO {table} ({column_sql}) VALUES ({placeholder_sql}) ON CONFLICT ({conflict_sql}) DO NOTHING",
+            tuple(values[column] for column in columns),
+        )
+        return
+    if connection.backend == "mysql":
+        placeholder_sql = ", ".join("%s" for _ in columns)
+        connection.execute(
+            f"INSERT IGNORE INTO {table} ({column_sql}) VALUES ({placeholder_sql})",
             tuple(values[column] for column in columns),
         )
         return
@@ -682,7 +903,7 @@ def _seed_defaults(connection: _AdminConnection) -> None:
             {**role, "created_at": now, "updated_at": now},
         )
         parameters = (role["name"], role.get("module_id"), role["is_system"], now, role["id"])
-        if connection.backend == "postgres":
+        if connection.backend in {"postgres", "mysql"}:
             connection.execute(
                 """
                 UPDATE admin_roles
@@ -708,7 +929,7 @@ def _seed_defaults(connection: _AdminConnection) -> None:
             ["id"],
             {**module, "created_at": now, "updated_at": now},
         )
-        if connection.backend == "postgres":
+        if connection.backend in {"postgres", "mysql"}:
             connection.execute(
                 """
                 UPDATE admin_modules
@@ -1671,12 +1892,12 @@ def set_module_enabled(module_id: str, enabled: bool, actor_user_id: str = "payr
     now = _now()
     effective_enabled = module_id in OPEN_FOR_RELEASE_MODULE_IDS or (bool(enabled) and module_id not in CLOSED_UNTIL_RELEASE_MODULE_IDS)
     with _connect(db_path) as connection:
-        cursor = connection.execute(
+        if not connection.execute("SELECT 1 FROM admin_modules WHERE id = ?", (module_id,)).fetchone():
+            raise KeyError("module_not_found")
+        connection.execute(
             "UPDATE admin_modules SET enabled = ?, updated_at = ? WHERE id = ?",
             (1 if effective_enabled else 0, now, module_id),
         )
-        if cursor.rowcount == 0:
-            raise KeyError("module_not_found")
         _insert_audit(connection, actor_user_id, "set_module_enabled", "module", module_id, str(effective_enabled))
         connection.commit()
     return next(module for module in list_modules(db_path) if module["id"] == module_id)
@@ -1697,16 +1918,28 @@ def set_module_role_access(
             raise KeyError("module_not_found")
         if not connection.execute("SELECT 1 FROM admin_roles WHERE id = ?", (role_id,)).fetchone():
             raise KeyError("role_not_found")
-        connection.execute(
-            """
-            INSERT INTO admin_role_module_permissions (role_id, module_id, can_enter, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(role_id, module_id) DO UPDATE SET
-              can_enter = excluded.can_enter,
-              updated_at = excluded.updated_at
-            """,
-            (role_id, module_id, 1 if effective_can_enter else 0, now),
-        )
+        if connection.backend == "mysql":
+            connection.execute(
+                """
+                INSERT INTO admin_role_module_permissions (role_id, module_id, can_enter, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  can_enter = VALUES(can_enter),
+                  updated_at = VALUES(updated_at)
+                """,
+                (role_id, module_id, 1 if effective_can_enter else 0, now),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO admin_role_module_permissions (role_id, module_id, can_enter, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(role_id, module_id) DO UPDATE SET
+                  can_enter = excluded.can_enter,
+                  updated_at = excluded.updated_at
+                """,
+                (role_id, module_id, 1 if effective_can_enter else 0, now),
+            )
         _insert_audit(
             connection,
             actor_user_id,
@@ -1731,16 +1964,28 @@ def set_feature_permission(
     with _connect(db_path) as connection:
         if not connection.execute("SELECT 1 FROM admin_roles WHERE id = ?", (role_id,)).fetchone():
             raise KeyError("role_not_found")
-        connection.execute(
-            """
-            INSERT INTO admin_role_feature_permissions (role_id, feature_id, enabled, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(role_id, feature_id) DO UPDATE SET
-              enabled = excluded.enabled,
-              updated_at = excluded.updated_at
-            """,
-            (role_id, feature_id, 1 if enabled else 0, now),
-        )
+        if connection.backend == "mysql":
+            connection.execute(
+                """
+                INSERT INTO admin_role_feature_permissions (role_id, feature_id, enabled, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  enabled = VALUES(enabled),
+                  updated_at = VALUES(updated_at)
+                """,
+                (role_id, feature_id, 1 if enabled else 0, now),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO admin_role_feature_permissions (role_id, feature_id, enabled, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(role_id, feature_id) DO UPDATE SET
+                  enabled = excluded.enabled,
+                  updated_at = excluded.updated_at
+                """,
+                (role_id, feature_id, 1 if enabled else 0, now),
+            )
         _insert_audit(connection, actor_user_id, "set_feature_permission", "role_feature", f"{role_id}:{feature_id}", str(enabled))
         connection.commit()
     return get_permissions(db_path)["rolePermissions"].get(role_id, {})

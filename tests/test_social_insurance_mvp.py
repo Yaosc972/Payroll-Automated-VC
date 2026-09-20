@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from bonus_platform.app import app
 from bonus_platform.engine.social_insurance.adapter import sync_beisen_candidates
+from bonus_platform.engine.social_insurance import adapter as social_insurance_adapter
 from bonus_platform.engine.social_insurance.baseline import (
     capture_monthly_baseline,
     ensure_monthly_baseline_confirmation_date,
@@ -894,6 +895,47 @@ def test_live_sync_requires_current_departure_snapshot(tmp_path: Path, monkeypat
             subject="深圳市前海云途物流有限公司",
             output_dir=tmp_path / "output",
         )
+
+
+def test_local_connector_sync_uses_live_beisen_without_departure_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    engine_dir = tmp_path / "social_insurance_connector"
+    (engine_dir / "lib").mkdir(parents=True)
+    (engine_dir / "lib" / "service.mjs").write_text("// local connector entrypoint\n", encoding="utf-8")
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_SYNC_FIXTURE", raising=False)
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_DIMISSION_FILE", raising=False)
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_ENGINE_DIR", str(engine_dir))
+    monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_NODE", sys.executable)
+    captured: dict[str, object] = {}
+    connector_payload = {
+        "records": [{"status": "ready", "report": {}, "source": {}}],
+        "sourceSummary": {
+            "candidateCount": 1,
+            "departureRuleSource": "beisen-live-employee-records",
+            "departureSnapshotDate": "2026-09-18",
+        },
+    }
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(connector_payload) + "\n", stderr="")
+
+    monkeypatch.setattr(social_insurance_adapter.subprocess, "run", fake_run)
+    records, summary = sync_beisen_candidates(
+        period_start="2026-08-16",
+        period_end="2026-09-15",
+        confirmation_date="2026-09-16",
+        subject="*",
+        output_dir=tmp_path / "output",
+    )
+
+    assert len(records) == 1
+    assert summary["provider"] == "beisen-local-connector"
+    assert summary["departureRuleSource"] == "beisen-live-employee-records"
+    assert "--dimission" not in captured["command"]
+    assert str(social_insurance_adapter.Path(__file__).resolve().parents[1] / "bonus_platform" / "engine" / "social_insurance" / "connector_bridge.mjs") in captured["command"]
 
 
 def test_live_sync_uses_configured_monthly_source_as_historical_baseline(

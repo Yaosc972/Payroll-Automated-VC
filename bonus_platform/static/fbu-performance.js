@@ -1795,8 +1795,8 @@ function renderMaintainedRuleList(kind, activity) {
     ? '检测到旧版全局名单。为避免跨区串用，请按当前划分区域重新维护并保存。'
     : `${activity?.region_name || '当前划分区域'}独立维护，可在同一区域后续月份沿用。`;
   const confirmed = isWorkHour
-    ? (activity?.base_override_data?.employees || []).some(row => row.rule_type === '96工时制')
-    : (activity?.base_override_data?.employees || []).some(row => row.rule_type === '线下固定基数覆盖');
+    ? hasBaseOverrideRule(activity, '96工时制', 'work_hour_rule_count')
+    : hasBaseOverrideRule(activity, '线下固定基数覆盖', 'fixed_base_count');
   const confirmPending = state.maintainedRulePending === `confirm:${kind}`;
   const actionsDisabled = Boolean(state.maintainedRulePending);
   return `
@@ -3695,6 +3695,7 @@ async function uploadWorkbenchRosterFile(file) {
   formData.append('file', file);
   formData.append('calc_month', calcMonth);
   formData.append('run_id', state.currentActivity.run_id);
+  const uploadedRunId = state.currentActivity.run_id;
   startWorkbenchUploadProgress('roster', file);
   if (el.btnUploadRoster) {
     el.btnUploadRoster.disabled = true;
@@ -3705,11 +3706,18 @@ async function uploadWorkbenchRosterFile(file) {
       method: 'POST',
       body: formData,
     });
+    if (state.currentActivity?.run_id !== uploadedRunId) return;
     state.baseRoster = data.roster;
     state.currentActivity.roster_file = data.roster.filename;
     state.currentActivity.roster_source = 'base';
+    const activity = await apiJson(
+      `${API_BASE}/runs/${uploadedRunId}?include=core%2Croster_data`,
+    );
+    if (state.currentActivity?.run_id !== uploadedRunId) return;
+    mergeCurrentActivityPayload(activity);
     updateRosterButton();
     renderFoundationData();
+    if (state.currentPage === 'workbench') renderWorkbench();
     finishWorkbenchUploadProgress('roster', file.name, '已更新');
   } catch (error) {
     failWorkbenchUploadProgress('roster', file.name, error.message);
@@ -6862,6 +6870,9 @@ function hasHourlyRatePolicyRows(activity) {
 }
 
 function hasBaseOverrideRule(activity, ruleType, summaryKey) {
+  const summary = activity?.base_override_data?.summary
+    || getActivitySectionSummary(activity, 'base_override_data');
+  if (summary?.[`${summaryKey}_confirmed`] === true) return true;
   const employees = activity?.base_override_data?.employees;
   if (Array.isArray(employees)) {
     return employees.some(row => row.rule_type === ruleType);

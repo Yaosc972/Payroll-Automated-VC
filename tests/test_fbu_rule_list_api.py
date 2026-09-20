@@ -196,6 +196,22 @@ def test_rule_lists_keep_explicitly_saved_empty_lists(monkeypatch, tmp_path):
     assert payload["fixed_base_employees"] == []
 
 
+def test_empty_rule_list_confirmation_survives_reload(monkeypatch, tmp_path):
+    client = _client_with_tmp_store(monkeypatch, tmp_path)
+    run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-06", "region_code": "us_nj"}).json()["run_id"]
+    response = client.post(
+        f"/api/fbu-performance/runs/{run_id}/rule-lists/confirm",
+        json={"work_hour_employees": [], "fixed_base_employees": []},
+    )
+    assert response.status_code == 200
+    monkeypatch.setattr(app_module, "fbu_run_manager", FBURunManager(str(tmp_path)))
+    detail = client.get(f"/api/fbu-performance/runs/{run_id}").json()
+    assert detail["base_override_data"]["employees"] == []
+    summary = detail["base_override_data"]["summary"]
+    assert summary["work_hour_rule_count_confirmed"] is True
+    assert summary["fixed_base_count_confirmed"] is True
+
+
 def test_confirm_rule_lists_writes_base_override_data_to_run(monkeypatch, tmp_path):
     client = _client_with_tmp_store(monkeypatch, tmp_path)
     run_id = client.post("/api/fbu-performance/runs", json={"calc_month": "2026-04"}).json()["run_id"]

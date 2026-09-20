@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
+from .mysql_db import mysql_connection
 
 
 SCHEMA = """
@@ -26,7 +27,55 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 
-def init_store(db_path: Path | None = None) -> Path:
+MYSQL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runs (
+  id VARCHAR(255) PRIMARY KEY,
+  month INT NOT NULL,
+  status VARCHAR(128) NOT NULL,
+  source_filename VARCHAR(1024),
+  recruitment_total DECIMAL(20, 6) NOT NULL DEFAULT 0,
+  referral_total DECIMAL(20, 6) NOT NULL DEFAULT 0,
+  exception_count INT NOT NULL DEFAULT 0,
+  pending_count INT NOT NULL DEFAULT 0,
+  pending_total DECIMAL(20, 6) NOT NULL DEFAULT 0,
+  metadata_json LONGTEXT NOT NULL,
+  created_at VARCHAR(64) NOT NULL,
+  updated_at VARCHAR(64) NOT NULL,
+  INDEX idx_runs_updated_at (updated_at),
+  INDEX idx_runs_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+"""
+
+
+def _mysql_database_url() -> str:
+    database_url = str(getattr(config, "ADMIN_DATABASE_URL", "") or "").strip()
+    if database_url.startswith(("mysql://", "mysql+pymysql://")):
+        return database_url
+    return ""
+
+
+def _init_mysql_store(database_url: str) -> str:
+    connection = mysql_connection(database_url)
+    try:
+        with connection.cursor() as cursor:
+            for statement in MYSQL_SCHEMA.split(";"):
+                statement = statement.strip()
+                if statement:
+                    cursor.execute(statement)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return database_url
+
+
+def init_store(db_path: Path | None = None) -> Path | str:
+    if db_path is None:
+        database_url = _mysql_database_url()
+        if database_url:
+            return _init_mysql_store(database_url)
     path = db_path or config.DATABASE_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as connection:
@@ -38,6 +87,58 @@ def init_store(db_path: Path | None = None) -> Path:
 def upsert_run_metadata(metadata: dict[str, Any], db_path: Path | None = None) -> None:
     if not metadata.get("id"):
         return
+    if db_path is None:
+        database_url = _mysql_database_url()
+        if database_url:
+            _init_mysql_store(database_url)
+            values = {
+                "id": str(metadata["id"]),
+                "month": int(metadata.get("month") or 0),
+                "status": str(metadata.get("status") or ""),
+                "source_filename": metadata.get("sourceFilename"),
+                "recruitment_total": float(metadata.get("recruitmentTotal") or 0),
+                "referral_total": float(metadata.get("referralTotal") or 0),
+                "exception_count": int(metadata.get("exceptionCount") or 0),
+                "pending_count": int(metadata.get("pendingCount") or 0),
+                "pending_total": float(metadata.get("pendingTotal") or 0),
+                "metadata_json": json.dumps(metadata, ensure_ascii=False),
+                "created_at": str(metadata.get("createdAt") or metadata.get("updatedAt") or ""),
+                "updated_at": str(metadata.get("updatedAt") or metadata.get("createdAt") or ""),
+            }
+            connection = mysql_connection(database_url)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO runs (
+                          id, month, status, source_filename, recruitment_total, referral_total,
+                          exception_count, pending_count, pending_total, metadata_json, created_at, updated_at
+                        )
+                        VALUES (%(id)s, %(month)s, %(status)s, %(source_filename)s, %(recruitment_total)s,
+                                %(referral_total)s, %(exception_count)s, %(pending_count)s, %(pending_total)s,
+                                %(metadata_json)s, %(created_at)s, %(updated_at)s)
+                        ON DUPLICATE KEY UPDATE
+                          month = VALUES(month),
+                          status = VALUES(status),
+                          source_filename = VALUES(source_filename),
+                          recruitment_total = VALUES(recruitment_total),
+                          referral_total = VALUES(referral_total),
+                          exception_count = VALUES(exception_count),
+                          pending_count = VALUES(pending_count),
+                          pending_total = VALUES(pending_total),
+                          metadata_json = VALUES(metadata_json),
+                          created_at = VALUES(created_at),
+                          updated_at = VALUES(updated_at)
+                        """,
+                        values,
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                connection.close()
+            return
     path = init_store(db_path)
     payload = json.dumps(metadata, ensure_ascii=False)
     values = {
@@ -84,6 +185,25 @@ def upsert_run_metadata(metadata: dict[str, Any], db_path: Path | None = None) -
 
 
 def list_indexed_runs(db_path: Path | None = None) -> list[dict[str, Any]]:
+    if db_path is None:
+        database_url = _mysql_database_url()
+        if database_url:
+            _init_mysql_store(database_url)
+            connection = mysql_connection(database_url)
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT metadata_json FROM runs ORDER BY updated_at DESC, created_at DESC")
+                    payloads = cursor.fetchall()
+            finally:
+                connection.close()
+            rows: list[dict[str, Any]] = []
+            for row in payloads:
+                payload = row.get("metadata_json") if isinstance(row, dict) else row[0]
+                try:
+                    rows.append(json.loads(payload))
+                except (TypeError, json.JSONDecodeError):
+                    continue
+            return rows
     path = db_path or config.DATABASE_PATH
     if not path.exists():
         return []

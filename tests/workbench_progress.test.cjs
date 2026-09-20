@@ -49,6 +49,12 @@ test('server errors remain errors; unknown progress has no invented percentage',
   assert.equal(response.status,422);assert.equal(h.nodes.get('panel').dataset.phase,'failed');
   assert.equal(h.nodes.get('panel').querySelector('[role="progressbar"]').attributes['aria-valuenow'],undefined);
 });
+test('server error details are shown in the progress panel',async()=>{
+  const h=harness(async()=>new Response(JSON.stringify({detail:'请先配置当次最新离职快照'}),{status:409,headers:{'content-type':'application/json'}}));
+  await h.api.fetch('/api/social-insurance/runs/sync-all',{method:'POST',body:'{}'});
+  assert.equal(h.nodes.get('panel').dataset.phase,'failed');
+  assert.equal(h.nodes.get('panel').querySelector('[data-description]').textContent,'请先配置当次最新离职快照');
+});
 test('completion is idempotent and cannot turn a stopped operation into success',()=>{
   const h=harness();const task=h.api.begin({subject:'测试'});task.fail(h.api.abortError());task.finish();
   assert.equal(h.nodes.get('panel').dataset.phase,'stopped');

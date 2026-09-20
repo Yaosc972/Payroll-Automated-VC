@@ -1023,7 +1023,7 @@ def test_domestic_labor_uses_signed_storage_upload_before_calculation():
     assert "renderCanbuOperationStatus" in js
     assert "state.progressTask?.check()" in js
     assert "state.progressTask?.update({abort:" in js
-    assert 'workbench-progress.js?v=1' in html
+    assert 'workbench-progress.js?v=2' in html
     assert "onPlanCreated" in js
     assert "uploadDomesticFilesConcurrently" in js
     assert "dl-operation-status" in html
