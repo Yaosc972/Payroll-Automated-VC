@@ -220,21 +220,27 @@ class CanBuEngine(BaseEngine):
         is_eligible_dept = any(keyword in department_text for keyword in DONGGUAN_DEPARTMENT_KEYWORDS)
         is_explicitly_ineligible = position in DONGGUAN_INELIGIBLE_POSITIONS
         is_eligible_position = is_position_eligible(position, DONGGUAN_ELIGIBLE_POSITIONS)
-        if not is_eligible_dept or is_explicitly_ineligible or not is_eligible_position:
+        is_department_exempt = position == "实习生"
+        if (
+            (not is_eligible_dept and not is_department_exempt)
+            or is_explicitly_ineligible
+            or not is_eligible_position
+        ):
             return self._zero_result(
                 employee_id,
                 employee_name,
                 "东莞餐补资格不满足",
                 "东莞餐补资格判断",
-                "部门未命中或岗位不在享有名单 = 0",
+                "非实习生部门未命中，或岗位不在享有名单 = 0",
                 input_snapshot,
                 {
                     "部门是否命中寮步区/莞深操作": is_eligible_dept,
+                    "是否免部门限制": is_department_exempt,
                     "岗位名称": position,
                     "岗位是否明确不享有": is_explicitly_ineligible,
                     "岗位是否在享有名单": is_eligible_position,
                 },
-                ["工作地区为东莞", "检查部门、享有岗位和不享有岗位", "餐补金额为0"],
+                ["工作地区为东莞", "实习生免部门限制，其他岗位检查部门", "检查享有岗位和不享有岗位", "餐补金额为0"],
             )
 
         if not daily_attendance:
