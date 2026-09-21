@@ -23,6 +23,7 @@ DONGGUAN_ELIGIBLE_POSITIONS = {
     "文员",
     "物流专员",
     "操作文员",
+    "实习生",
 }
 DONGGUAN_INELIGIBLE_POSITIONS = {
     "保洁",
@@ -58,6 +59,7 @@ JIASHAN_YIWU_ELIGIBLE_POSITIONS = {
     "数据专员",
     "保洁",
     "操作文员",
+    "实习生",
 }
 
 JINJIANG_ELIGIBLE_POSITIONS = {
