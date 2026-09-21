@@ -16,10 +16,10 @@ from bonus_platform.engine.overseas_payroll import tasks
 from bonus_platform.engine.overseas_payroll.router import ASYNC_ADAPTER_PATH, FRONTEND_PATH, page_router, router
 
 
-def test_lists_eight_handover_tools() -> None:
+def test_lists_eighteen_handover_tools() -> None:
     tools = service.list_tools()
 
-    assert len(tools) == 8
+    assert len(tools) == 18
     assert {tool["id"] for tool in tools} == {
         "swedish_tax",
         "dutch_pension",
@@ -29,6 +29,16 @@ def test_lists_eight_handover_tools() -> None:
         "norway_payment",
         "italy_payslip",
         "dutch_payslip",
+        "pl_pesel",
+        "pl_payroll",
+        "pl_attendance",
+        "de_lohnjournal",
+        "ie_payslip",
+        "p45_process",
+        "pension_rename",
+        "pl_pdf_encrypt",
+        "pl_pdf_rename",
+        "pl_pdf_sanitize",
     }
 
 
@@ -58,7 +68,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
     assert page.status_code == 200
-    assert '<script src="/overseas-payroll-async.js?v=3"></script>' in page.text
+    assert '<script src="/overseas-payroll-async.js?v=4"></script>' in page.text
     assert adapter.status_code == 200
     assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
     assert b"getElementById('sidefoot')?.remove()" in adapter.content
@@ -66,6 +76,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     assert b"const moduleHomeUrl = '/overseas-labor.html'" in adapter.content
     assert b"user.avatarUrl" in adapter.content
     assert b"brand.setAttribute('role', 'link')" in adapter.content
+    assert b"applyToolDropHint(CURRENT_TOOL)" in adapter.content
 
 
 def test_single_file_tool_returns_decoded_content(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,6 +104,44 @@ def test_multi_file_tool_builds_legacy_payload(monkeypatch: pytest.MonkeyPatch) 
 
     assert result.content == b"zip-result"
     assert [item["filename"] for item in captured["files"]] == ["source.xlsx", "template.xlsx"]
+
+
+def test_new_toolbox_tool_receives_files_without_legacy_conversion(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def process(files, options):
+        captured["files"] = files
+        captured["options"] = options
+        return "PESEL.xlsx", base64.b64encode(b"new-tool-result").decode("ascii"), "1 条记录"
+
+    monkeypatch.setattr(service, "_poland_tools", lambda: {"pl_pesel": process})
+    monkeypatch.setattr(service, "_legacy_module", lambda: pytest.fail("legacy parser should not load"))
+
+    result = service.process_files("pl_pesel", [("person.pdf", b"pdf")])
+
+    assert captured == {"files": [("person.pdf", b"pdf")], "options": None}
+    assert result.content == b"new-tool-result"
+    assert result.media_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_new_toolbox_pdf_result_uses_pdf_media_type(monkeypatch: pytest.MonkeyPatch) -> None:
+    def process(_files, _options):
+        return "renamed.pdf", base64.b64encode(b"pdf-result").decode("ascii"), "处理完成"
+
+    monkeypatch.setattr(service, "_poland_tools", lambda: {"pension_rename": process})
+
+    result = service.process_files("pension_rename", [("letter.pdf", b"pdf")])
+
+    assert result.media_type == "application/pdf"
+
+
+def test_legacy_payload_includes_new_tool_category_and_drop_hint() -> None:
+    tools = {tool["id"]: tool for tool in payroll_router._legacy_tool_payload()}
+
+    assert tools["pl_attendance"]["category"] == "工资核算"
+    assert "考勤表" in tools["pl_attendance"]["drop_hint"]
+    assert tools["de_lohnjournal"]["multi"] is True
+    assert tools["pl_pdf_sanitize"]["accept"] == ".pdf,.txt"
 
 
 def test_rejects_wrong_extension_before_loading_parsers(monkeypatch: pytest.MonkeyPatch) -> None:

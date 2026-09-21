@@ -11,3 +11,6 @@ PyYAML
 httpx[socks]
 psycopg[binary]>=3.2,<4
 msoffcrypto-tool
+numpy
+Pillow
+xlrd

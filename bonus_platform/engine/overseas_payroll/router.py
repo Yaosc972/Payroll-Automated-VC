@@ -92,7 +92,9 @@ def _legacy_tool_payload() -> list[dict]:
             "last_batch": "2026-08",
             "last_result": "-",
             "btn_text": "",
-            "category": "工资核算" if tool["id"] == "import_paie" else "海外核算",
+            "category": tool["category"],
+            "source": tool["source"],
+            "drop_hint": tool["drop_hint"],
             "multi": tool["multiple"],
             "preview": tool["preview"],
             "country": tool["country"],
@@ -108,7 +110,7 @@ def overseas_payroll_page(request: Request) -> HTMLResponse:
     # These are the same runtime substitutions made by the original server.
     # The checked-in frontend resource remains byte-identical to the handover.
     html = html.replace("__PASSCODE_HINT__", "").replace("__NO_AUTH__", "false")
-    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=3"></script></body>')
+    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=4"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
