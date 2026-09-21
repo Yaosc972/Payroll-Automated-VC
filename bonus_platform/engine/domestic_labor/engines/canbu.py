@@ -57,6 +57,7 @@ JIASHAN_ELIGIBLE_POSITIONS = {
     "设备维修专员",
     "数据专员",
     "安全员",
+    "实习生",
 }
 JIASHAN_INELIGIBLE_POSITIONS = {
     "操作副主管",
