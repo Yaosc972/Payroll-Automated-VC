@@ -1,4 +1,4 @@
-import sys, re, os
+import sys, re, os, itertools
 try:
     sys.stdout.reconfigure(encoding='utf-8')
 except Exception:
@@ -325,6 +325,7 @@ CODE_ZH = {
     "Z02012": "无薪请假", "Z02014": "无薪缺勤", "Z02022": "无薪病假",
     "Z05006": "L.104/92照护假", "Z05031": "病假(INPS 50%)", "Z05078": "残疾假计提加成",
     "ZP8134": "年度TFR离职金", "ZP8138": "养老金基金扣缴", "ZP9960": "月度舍入",
+    "ZP5000": "工会会费(实发扣项)",
     "Z20020": "白班轮班加成20%", "Z30018": "补充工时18%", "Z40030": "加班30%",
     "Z40050": "加班50%", "Z40130": "加班30%(MP)", "Z41165": "加班65%(MP)",
     "Z50000": "第13个月工资", "Z50039": "EBILOG基金缴费", "Z50540": "未休法定假日补偿",
@@ -347,6 +348,119 @@ CODE_ZH = {
 CODE_RE = re.compile(r'((?:F|Z)\d{4,5}|Z\d[A-Z]\d{3,4}|ZP\d{3,4}|\d{6})\s*(.*)')
 NUM_RE = re.compile(r'(-?\(?[\d.]+\,\d+\)?)')
 
+# ---- 字体子集「同形字母」修复 + 禁止静默丢行（2026-09-10 新增，2026-09-15 加固）----
+# 现象：Zucchetti 导出的 Libro Unico PDF，部分字体子集（实测 EVMQRS+DejaVuSerif）
+# 在文本层把某些字形解成了同形字母——数字 5 被解成字母 S（"ZP5000" 读作 "ZPS000"），
+# 空格被解成字母 s（"TOTALEsTRATTENUTE"、"VOCIsVARIABILIsDELsMESE"）。
+# 后果：CODE_RE 的四个分支都要求编码位是数字，ZPS000 匹配不上，主循环走到
+# `if not m: continue` 就把整行丢掉了，而且**不留任何日志**——这正是用户反馈的
+# "取出来的 Excel 漏了字段"的根因。
+# 修复原则：
+#   1) 只对「列首的科目编码 token」做同形字母替换；
+#   2) 替换后必须恰好得到一种合法编码形态（唯一解）才接受，多解一律不动；
+#   3) 合法编码（Z4A065 / Z50039 / ZP9960 等）本就能匹配，绝不被改写。
+# 2026-09-15 加固（用户反馈 "ZP5000 trattenuta sindacale mese 没取出来"）：
+#   错解**不止一个字符**。ZP5000 里有 4 个数字，5→S 且 0→O 时读作 ZPSOOO，
+#   旧的单字符版本无论改哪一个都得不到合法编码，于是 split_code 返回 None；
+#   而 _drop() 的审计闸门 `^[A-Z]{1,2}\d[A-Z0-9]{2,5}` 又要求第 3 位是数字，
+#   错解后的编码第 3 位正是字母 S —— 审计被这道闸门挡掉，整行既没入表也没留痕，
+#   用户只能看到"字段没提取出来、也不知道为什么"。两处都要改：
+#   允许多个字符同时错解（唯一解才接受）+ 审计闸门改成「长得像编码就记账」。
+CODE_FIX_MAP = {
+    'S': '5', 's': '5', 'O': '0', 'o': '0', 'Q': '0', 'D': '0',
+    'I': '1', 'i': '1', 'L': '1', 'l': '1', 'B': '8', 'G': '6',
+    'Z': '2', 'A': '4', 'T': '7', 'E': '3', 'g': '9',
+}
+VALID_CODE_RE = re.compile(r'^(?:[FZ]\d{4,5}|Z\d[A-Z]\d{3,4}|ZP\d{3,4}|\d{6})$')
+
+# 允许同时被错解的最大字符数。ZP5000 -> ZPSOOO 需要 4 个（1 个 5→S + 3 个 0→O）。
+# 再多的组合（ZSOOOO 那种 5 个）修法太猜，宁可不修 —— 但必须进审计页，不能静默丢。
+MAX_CODE_FIX_SUBS = 4
+
+# 审计闸门用「像不像科目编码」，不是「能不能解析」。
+# 只认**大写字母/数字**构成的 token：真实编码在 PDF 里全是大写（ZP5000/ZPSOOO），
+# 而科目名的词是小写或首字母大写（Ferie / Trasferta / Zucchetti），据此区分，
+# 避免把科目名当编码记一堆噪声进审计页。
+CODEISH_RE = re.compile(r'^(?:[FZ][A-Z0-9]{3,6}|\d{6})$')
+
+
+def _codeish(txt):
+    """这行文本的列首 token「长得像不像科目编码」（不要求能解析出来）。
+
+    用于审计闸门：解析不出来的行才最需要留痕，所以闸门不能拿"能不能解析"当条件。
+    """
+    m = re.match(r'([A-Z0-9]+)', (txt or '').lstrip())
+    return bool(m and CODEISH_RE.match(m.group(1)[:8]))
+
+
+# 提取审计：编码修正 + 识别到但未写入明细的行。run() 开始时清空。
+AUDIT = []
+# 修正后编码 -> 原始(被错解的)编码，供按原文回查（如 fix_brackets）。run() 开始时清空。
+CODE_RAW = {}
+
+
+def _fix_code_token(tok):
+    """把编码里被错解出的同形字母还原成数字。返回 (修正后编码, 说明) 或 (None, '')。
+
+    允许 1~MAX_CODE_FIX_SUBS 个字符**同时**被错解（ZP5000 的 4 个数字全被解成
+    ZPSOOO 的情况，单字符版本救不回来）。仍然坚持"唯一解"原则：只要有两种以上
+    修法能得出**不同**的合法编码，就一律不动，宁可留给审计页让人来认。
+    """
+    if VALID_CODE_RE.match(tok):
+        return None, ''
+    idx = [i for i, ch in enumerate(tok) if CODE_FIX_MAP.get(ch, ch) != ch]
+    if not idx:
+        return None, ''
+    found = {}
+    for k in range(1, min(MAX_CODE_FIX_SUBS, len(idx)) + 1):
+        for combo in itertools.combinations(idx, k):
+            cand = list(tok)
+            notes = []
+            for i in combo:
+                cand[i] = CODE_FIX_MAP[tok[i]]
+                notes.append('%d位%s→%s' % (i + 1, tok[i], cand[i]))
+            cand = ''.join(cand)
+            if cand not in found and VALID_CODE_RE.match(cand):
+                note = '、'.join(notes)
+                if cand not in CODE_ZH:
+                    # 修出来的编码不在已知科目词典里：结果仍然采用，但审计页必须写明
+                    # "这是猜的"——2026-09-18 之前 FILIA→F1114 这类假修正没有标注，
+                    # 看审计页的人会当成真的科目编码去追。
+                    note += '（该编码不在已知科目词典，请核对）'
+                found[cand] = note
+        if len(found) > 1:
+            break          # 多解：不再往外扩，直接放弃
+    if len(found) == 1:
+        cand, note = next(iter(found.items()))
+        return cand, note
+    return None, ''
+
+
+def split_code(name_text):
+    """从列文本切出科目编码。返回 (codice, 剩余文本, 修正说明)。
+
+    先走原有 CODE_RE（行为完全不变）；只有匹配不到时才尝试同形字母修复，
+    且要求编码位于文本行首（避免把科目名里的字母当编码改坏）。
+    """
+    if not name_text:
+        return None, None, ''
+    m = CODE_RE.search(name_text)
+    if m:
+        return m.group(1), m.group(2), ''
+    s = name_text.lstrip()
+    run = re.match(r'([A-Z0-9]+)', s)
+    if not run:
+        return None, None, ''
+    token = run.group(1)
+    for ln in range(min(len(token), 8), 4, -1):
+        tok = token[:ln]
+        fixed, note = _fix_code_token(tok)
+        if fixed:
+            CODE_RAW[fixed] = tok
+            return fixed, s[ln:], '%s→%s (%s)' % (tok, fixed, note)
+    return None, None, ''
+
+
 def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
     """基于坐标精确提取费用条目"""
     with pdfplumber.open(PDF_PATH) as pdf:
@@ -364,53 +478,101 @@ def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
                 rows[y_key] = []
             rows[y_key].append(c)
         
+        def _drop(name_text, reason, chars=None, only_code=False, kind='未入表行'):
+            """记录「识别到但未写入明细」的行——禁止静默丢行。
+
+            判定口径：Libro Unico 里真正的费用行，其名称列开头**必定**是科目编码
+            （F12345 / Z12345 / Z4A065 / ZP9960 ...）。因此只有"列首具备编码形态"
+            的行才可能是被漏掉的费用行，才值得审计；页眉页脚、TFR/INAIL 附注、
+            "Retribuzione utile T.F.R."、"4-2027" 这类版式与续行文本本就不该进明细，
+            逐条记录只会把审计页淹掉（实测会产生上千行噪声）。
+
+            2026-09-15 起闸门改为 _codeish()（只看"像不像"，不看"能不能解析"）：
+            字体错解会让第 3 位从数字变成字母（ZPSOOO），拿旧闸门
+            `^[A-Z]{1,2}\\d[A-Z0-9]{2,5}` 过滤，恰恰把最需要留痕的那些行挡在门外。
+            kind='待核对行' 表示"识别不出来、需要人看原 PDF"，与"按业务规则不入表"区分开。
+            only_code 保留兼容签名，实际判定统一走 _codeish。
+
+            2026-09-18 补充：兜底扫描路径另加**带金额**要求（NUM_RE 命中才留痕）。
+            兜底扫的是整页自由文本而非表格行，公司抬头 "000221 CIRRO FULFILLMENT
+            ITALIA S.R.L."、分支名 "FILIALE ACCENTRATA" 的列首 token 恰好像编码，
+            但整行没有金额，本就没有数据可丢——放它们进审计页会把真正的漏行淹掉。
+            """
+            txt = (name_text or '').strip()
+            if not _codeish(txt):
+                return
+            amt = ''
+            if chars is not None:
+                amt = ' '.join(get_value_at_column(chars, lo, hi)
+                               for lo, hi in ((233, 319), (319, 431), (431, 499), (499, 9999))).strip()
+            AUDIT.append({'类型': kind, 'page': pi + 1, 'emp_name': emp_name,
+                          'emp_code': emp_code,
+                          '原始文本': txt[:110] + ((' ｜金额列:' + amt[:50]) if amt else ''),
+                          '修正后': '', '原因': reason})
+
+
         voci = []
         for y in sorted(rows.keys()):
             chars = rows[y]
             # 获取col1（名称列，跳过col0侧边栏旋转文字）
             name_text = get_value_at_column(chars, boundaries[1], boundaries[2])
             name_text = name_text.replace('*', '').strip()
-            
-            m = CODE_RE.search(name_text)
-            if not m:
+
+            codice, rest_raw, fix_note = split_code(name_text)
+            if not codice:
+                _drop(name_text, '列首无科目编码：CODE_RE 与同形字母修复均未命中（疑似字体错解超过可修范围）',
+                      chars, kind='待核对行')
                 continue
-            
-            codice = m.group(1)
+            if fix_note:
+                AUDIT.append({'类型': '编码修正', 'page': pi + 1, 'emp_name': emp_name,
+                              'emp_code': emp_code, '原始文本': name_text[:120],
+                              '修正后': codice, '原因': fix_note})
+
             # 过滤垃圾行
             if codice.isdigit() and len(codice) == 6 and not codice.startswith('0'):
+                _drop(name_text, '6位纯数字编码，非费用科目', chars)
                 continue
-            
+
             # 获取名称
-            rest = m.group(2).strip()
+            rest = (rest_raw or '').strip()
             nome = NUM_RE.sub('', rest).strip()
             nome = re.sub(r'\s+', ' ', nome).strip()
             if not nome or len(nome) < 2:
+                _drop(name_text, '科目名称为空或过短（编码在、名称列被吃）', chars,
+                      only_code=True, kind='待核对行')
                 continue
             # 过滤非费用条目
             # 过滤非费用条目(公司/地址行)，注意避开合法项目如"Trasferta Italia"
             if nome.upper().startswith('GOFO') or nome.upper().startswith('ZHANG') or nome.upper().startswith('GUO'):
+                _drop(name_text, '公司/姓名行，非费用科目', chars)
                 continue
             # 雇主承担部分(如 Contributo EBILOG C/Ditta)不计入员工本月应发
             if 'C/DIT' in nome.upper():
+                _drop(name_text, '雇主承担部分(C/Ditta)，不计入员工应发', chars)
                 continue
             if codice in ('000225',) or (codice == '000000'):
+                _drop(name_text, '编码 %s 为汇总/占位科目' % codice, chars)
                 continue
-            
+
             # 只在员工数据页提取 (跳过汇总页的重复数据)
             if any(k in nome.upper() for k in ['Ferie ', 'Perm.Ex-Fs', 'Permessi ',
                                                 'CONGUAGLIO', 'PROGRESSIVI',
                                                 'IMPIONIBILE T.F.R.', 'REDDITO DI RIFERIMENTO',
                                                 'COMUNICAZIONI']):
+                _drop(name_text, '假期/年度累计/报表行，按业务规则不计入月度应发', chars)
                 continue
             # 离职清算(Liquidazione/TFR)专项科目：非月度应发，不计入总应发，跳过
             if codice not in ('F09586',) and any(k in nome.upper() for k in ['CN. LIC', 'ALIQUOTA T.F.R',
                                                 'LIQUIDAZ', 'RIVALUTAZ', ' LIC.', 'DETR. D',
                                                 'DETR.D', 'REDD.RIF', 'IRPEF NETTA LIC']):
+                _drop(name_text, '离职清算/TFR 专项科目，不计入月度应发', chars)
                 continue
             if any(k in name_text for k in ['COGNOME', 'PERIODO', 'VOCI', 'ALLESTIMENTO',
                                             'RETRIBUZIONE', 'TOTALE', 'Zucchetti']):
+                _drop(name_text, '表头/合计/公司抬头行', chars, only_code=True)
                 continue
             if name_text in ['P', 'F', 'Giorni', 'Detrazioni', 'Nr.']:
+                _drop(name_text, '表头字样', chars, only_code=True)
                 continue
             
             # 从各列提取数值
@@ -445,6 +607,7 @@ def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
                 # 雇主承担部分(C/Ditta 标记常落在基数/说明列)不计入员工本月应发
                 _cdit = (entry['nome'] + ' ' + (entry.get('riferimento_raw') or '') + ' ' + (entry.get('importo_base_raw') or '')).upper()
                 if 'C/DIT' in _cdit:
+                    _drop(name_text, '雇主承担部分(C/Ditta)，不计入员工应发', chars)
                     continue
                 # DETRAZ类项目强制放competenze(即使列位置在imp_base范围)
                 nu_name = entry['nome'].upper()
@@ -461,7 +624,9 @@ def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
                     entry['competenze'] = ''
                     entry['competenze_raw'] = ''
                 voci.append(entry)
-        
+            else:
+                _drop(name_text, '各金额列均为空(无 IB/RIF/TR/CP 值)，科目行在但金额没落进任何列',
+                      chars, only_code=True, kind='待核对行')
         # 兜底：仅在本员工自身的"明细页"(非汇总页)内补全遗漏，严禁扫描汇总页，
         # 避免汇总页重印值(如 F09110/F09130/F09150 在汇总页落在另一列)污染应发导致翻倍
         col_codes = {v['codice'] for v in voci if any(v[f+'_raw'] for f in ['importo_base','riferimento','trattenute','competenze'])}
@@ -482,15 +647,23 @@ def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
             if not line or len(line) < 5:
                 continue
             content = line.replace('*', '').strip()
-            m = CODE_RE.search(content)
-            if not m:
+            cod, rest_raw2, fix_note2 = split_code(content)
+            # 2026-09-18 增「带金额」闸门：兜底扫的是**整页自由文本**（不是表格行），
+            # 里面混着公司抬头 "000221 CIRRO FULFILLMENT ITALIA S.R.L." 与分支名
+            # "FILIALE ACCENTRATA"——列首 token 恰好长得像编码（6 位数字 / F+字母），
+            # 但整行没有任何金额，本就无数据可丢。闸门放开后这类行会灌满审计页
+            # （实测 64 条），把"可能真丢了数据"的信号淹掉。没金额的一律不记。
+            if not cod:
+                if NUM_RE.search(content):
+                    _drop(content, '兜底扫描：列首疑似科目编码但无法识别（疑似字体错解超出可修范围）',
+                          kind='待核对行')
                 continue
-            cod = m.group(1)
             if cod.isdigit() and len(cod) == 6 and not cod.startswith('0'):
                 continue
             if cod in col_codes:
+                _drop(content, '同页重印：该编码已在明细中，未重复计入', only_code=True)
                 continue
-            rest2 = m.group(2).strip()
+            rest2 = (rest_raw2 or '').strip()
             nome2 = NUM_RE.sub('', rest2).strip()
             nome2 = re.sub(r'\s+', ' ', nome2).strip()
             if not nome2 or len(nome2) < 2:
@@ -516,7 +689,23 @@ def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
                 continue
             nums = re.findall(r'(%?\(?[\d.]+\,\d+\)?)', rest2)
             if not nums:
+                if NUM_RE.search(content):
+                    _drop(content, '兜底扫描：科目行读到但金额没跟科目名在同一文本行',
+                          kind='待核对行')
                 continue
+            # 多字符修复在**自由文本**里不可信：这里没有表格列位置兜底，
+            # "FILIALE MONETICA" 能被一路修复成合法形态的 F1114（4 处同形替换）。
+            # 只有能对上已知科目（词典 CODE_ZH，或有金额的同页科目 col_codes）才敢并入明细，
+            # 否则留成待核对行让人认——宁可少一行自动结果，也不能让假编码进工资表。
+            # 单字符修复维持原行为（2026-09-15 之前就有的能力，不动）。
+            if fix_note2 and fix_note2.count('→') >= 2 and cod not in CODE_ZH and cod not in col_codes:
+                _drop(content, '兜底扫描：多字符修复结果无法确认（%s→%s），未并入明细'
+                      % (CODE_RAW.get(cod, '?'), cod), kind='待核对行')
+                continue
+            if fix_note2:
+                AUDIT.append({'类型': '编码修正', 'page': pi + 1, 'emp_name': emp_name,
+                              'emp_code': emp_code, '原始文本': content[:120],
+                              '修正后': cod, '原因': fix_note2 + '（兜底扫描命中）'})
             
             entry = {'codice': cod, 'nome': nome2, 'emp_name': emp_name, 'emp_code': emp_code,
                      'page': pi + 1,
@@ -574,8 +763,12 @@ def extract_voci_by_coords(pi, emp_name, emp_code, emp_pages=None):
 # ============ 后处理：括号补充 ============
 def fix_brackets(voci):
     for v in voci:
+        # 编码若经过同形字母修复，正文里出现的是"错解形态"(如 ZPS000)，两种都要查
+        codes = {v['codice']}
+        if v['codice'] in CODE_RAW:
+            codes.add(CODE_RAW[v['codice']])
         for pn, text in pages_text.items():
-            if v['emp_code'] not in text or v['codice'] not in text:
+            if v['emp_code'] not in text or not any(c in text for c in codes):
                 continue
             for line in text.split('\n'):
                 if v['codice'] not in line:
@@ -679,6 +872,9 @@ def extract_summary(text, emp_name, page_num=None):
 
 def run(pdf_path):
     _load(pdf_path)
+    # 每次运行清空审计（web 服务常驻进程，避免上一次的文件污染本次结果）
+    del AUDIT[:]
+    CODE_RAW.clear()
     # ============ 主流程 ============
     employees = extract_employees()
     print("=== 员工信息 ===")
@@ -903,6 +1099,7 @@ def run(pdf_path):
         cp = parse_num(v['competenze_raw']) if v['competenze_raw'] and '(' not in v['competenze_raw'] else 0.0
         sheet1_total_by_code[v['emp_code']] = sheet1_total_by_code.get(v['emp_code'], 0.0) + cp
     red_font = Font(size=10, name='Arial', color='FF0000', bold=True)
+    recon_issues = []
     r = 2
     for emp in sorted(employees, key=lambda e: e['code']):
         s = sum_by_code.get(emp['code'], {})
@@ -938,6 +1135,9 @@ def run(pdf_path):
         else:
             dcell.value = "%.2f" % diff
             dcell.font = red_font
+            recon_issues.append((emp['name'], emp['code'], diff,
+                                 sheet1_total_by_code.get(emp['code'], 0.0), comp,
+                                 '/'.join(str(p) for p in emp['pages'])))
         r += 1
     widths2 = [20, 10, 16, 12, 12, 20, 12, 12, 12, 12, 12, 12, 12, 10, 12, 14]
     for i, w in enumerate(widths2, 1):
@@ -945,6 +1145,73 @@ def run(pdf_path):
     ws2.freeze_panes = 'A2'
     if r > 2:
         ws2.auto_filter.ref = "A1:P%d" % (r - 1)
+
+    # ---- Sheet 3: 提取审计（禁止静默丢行） ----
+    # 原则：凡是"识别到但没写进工资科目明细"的行，都必须在这里给出条数和理由。
+    # 同原因的行按「原因 + 修正后编码」聚合计数，避免审计页被上千条重复行淹没。
+    ws3 = wb.create_sheet("提取审计")
+    headers3 = ["类型", "原因/说明", "条数", "涉及页码", "示例原始文本", "修正后编码"]
+    for j, h in enumerate(headers3, 1):
+        cell = ws3.cell(row=1, column=j, value=h)
+        cell.font = hdr_font; cell.fill = hdr_fill
+        cell.alignment = center; cell.border = thin_border
+    agg = {}
+    for a in AUDIT:
+        key = (a['类型'], a['原因'], a.get('修正后') or '')
+        g = agg.get(key)
+        if not g:
+            g = agg[key] = {'n': 0, 'pages': set(), 'sample': a.get('原始文本') or ''}
+        g['n'] += 1
+        g['pages'].add(a.get('page') or 0)
+        if not g['sample'] and a.get('原始文本'):
+            g['sample'] = a['原始文本']
+    n_fix = sum(1 for a in AUDIT if a['类型'] == '编码修正')
+    n_drop = sum(1 for a in AUDIT if a['类型'] == '未入表行')
+    n_unres = sum(1 for a in AUDIT if a['类型'] == '待核对行')
+    _rank = {'待核对行': 0, '编码修正': 1, '未入表行': 2}
+    r3 = 2
+    # 对账提示：明细应发合计与 PDF 权威总应发对不上的员工，必须点名，不能只留一个红字。
+    # 已知成因：工资单跨页/双期间时，含"总应发"的那一页上仍可能有**本页独有**的费用行
+    # （如 Una tantum / Premio / Ticket / Ctr. Sanilog），主循环为避免重印翻倍而不计入，
+    # 于是应发合计小于 PDF 总应发。属需人工确认项，非静默丢弃。
+    for nm, code, diff, s1, comp, pages in recon_issues:
+        vals = ['对账提示',
+                '明细应发 %s ≠ PDF 总应发 %s（差 %s）：请核对原 PDF 第 %s 页，'
+                '常见于工资单跨页/双期间，该页独有费用行未计入应发'
+                % ('%.2f' % s1, '%.2f' % comp, '%.2f' % diff, pages),
+                1, pages, '%s（编号 %s）' % (nm, code), '']
+        for j, val in enumerate(vals, 1):
+            cell = ws3.cell(row=r3, column=j, value=val)
+            cell.font = sub_font; cell.border = thin_border
+            cell.alignment = left_al if j in (2, 5) else center
+        r3 += 1
+    if not agg and not recon_issues:
+        cell = ws3.cell(row=r3, column=1, value="无：本次未发现编码修正，也没有识别到但未入表的行")
+        cell.font = sub_font; cell.border = thin_border
+        cell.alignment = left_al
+        r3 += 1
+    else:
+        # 「待核对行」排最前——这是"可能真丢了数据"的信号；其次是抢救回来的编码修正；
+        # 最后是按业务规则不入表的行（同页重印等，条数多但无需处理）。
+        for (typ, reason, fixed), g in sorted(agg.items(), key=lambda kv: (_rank.get(kv[0][0], 3), -kv[1]['n'])):
+            pages = sorted(p for p in g['pages'] if p)
+            pages_txt = ', '.join(str(p) for p in pages[:8]) + ('...' if len(pages) > 8 else '')
+            vals = [typ, reason, g['n'], pages_txt, g['sample'], fixed]
+            for j, val in enumerate(vals, 1):
+                cell = ws3.cell(row=r3, column=j, value=val)
+                cell.font = sub_font; cell.border = thin_border
+                cell.alignment = left_al if j in (2, 5) else center
+            r3 += 1
+    widths3 = [12, 46, 8, 26, 60, 12]
+    for i, w in enumerate(widths3, 1):
+        ws3.column_dimensions[get_column_letter(i)].width = w
+    ws3.freeze_panes = 'A2'
+    if r3 > 2:
+        ws3.auto_filter.ref = "A1:F%d" % (r3 - 1)
+    print(f"[ITALY] 审计：编码修正 {n_fix} 条 / 待核对行 {n_unres} 条 / 按业务规则未入表 {n_drop} 条 / 对账待核 {len(recon_issues)} 人")
+    if n_unres:
+        print(f"[ITALY][WARN] 有 {n_unres} 行科目无法识别（多为字体子集错解超出可修范围），"
+              f"已全部列出在「提取审计」页，请对照原 PDF 核对后手工补录——未静默丢弃。")
 
     # 保存到内存（不落盘），返回字节与统计
     buf = io.BytesIO()
@@ -955,4 +1222,8 @@ def run(pdf_path):
         "num_employees": len(employees),
         "num_voci": len(all_voci),
         "num_codes": len(seen_keys),
+        "num_repaired": n_fix,
+        "num_dropped": n_drop,
+        "num_unresolved": n_unres,
+        "num_recon": len(recon_issues),
     }

@@ -12,6 +12,7 @@ httpx[socks]
 psycopg[binary]>=3.2,<4
 PyMySQL>=1.1,<2
 msoffcrypto-tool
-xlrd
+numpy
 Pillow
+xlrd
 APScheduler==3.11.3
