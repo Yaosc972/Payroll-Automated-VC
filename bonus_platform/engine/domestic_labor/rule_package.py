@@ -2416,6 +2416,74 @@ _canbu["change_log"].insert(0, {
     "changes": _jiashan_yiwu_intern_rule,
 })
 
+# 2026-09-21：嘉善、义乌外宿补贴取消岗位限制。
+_waisu_butie["version"] = "DL-WAISU.v1.0.6"
+_jiashan_yiwu_waisu = next(
+    region for region in _waisu_butie["regions"] if region["name"] == "嘉善 / 义乌"
+)
+_jiashan_yiwu_waisu["rule"] = "嘉善、义乌外宿补贴不限制岗位，结合在职、住宿和缺勤情况核算。"
+_jiashan_yiwu_waisu["details"] = [
+    detail for detail in _jiashan_yiwu_waisu["details"]
+    if "享有外宿补贴" not in detail
+]
+_jiashan_yiwu_waisu["details"].append(
+    "嘉善、义乌所有岗位均具备外宿补贴资格，月标准150元；沿用现有在职、住宿和缺勤折算规则。"
+)
+_waisu_butie["verification"].append(
+    "按2026年8月数据复核，取消岗位限制仅新增义乌张扬（OWHD8161，人事行政专员）38.71元；"
+    "嘉善无人受影响。"
+)
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.6",
+    "released_at": "2026-09-21",
+    "changes": "嘉善、义乌外宿补贴取消岗位限制；地区内所有岗位均按现有住宿、在职和缺勤规则核算。",
+})
+
+# 2026-09-21：普通夜班从取整后的实际上班打卡起算，不再受排班开始时间限制。
+_yeban_butie["version"] = "DL-YEBAN.v0.9.14"
+_actual_punch_start_rule = (
+    "普通夜班计薪起点取取整后的实际上班时间与22:00中的较晚时间，"
+    "不再受排班开始时间限制。"
+)
+_yeban_butie["common_rules"] = [
+    _actual_punch_start_rule if "普通夜班计薪起点取取整后实际上班时间、排班开始时间" in item else item
+    for item in _yeban_butie["common_rules"]
+]
+_start_field = next(
+    item for item in _yeban_butie["field_calculations"] if item["field"] == "计薪上班"
+)
+_start_field["definition"] = "用于核算的起始时间，按实际上班打卡向后取整。"
+_start_field["formula"] = "上班打卡向后取整到最近的半小时；普通夜班不再与排班开始时间取较晚值。"
+_night_hours_field = next(
+    item for item in _yeban_butie["field_calculations"] if item["field"] == "夜班时长（小时）"
+)
+_night_hours_field["formula"] = (
+    "夜班窗口交集分钟 ÷ 60；交集起点取计薪上班与22:00中的较晚值，"
+    "终点取计薪下班与次日08:00中的较早值。"
+)
+_yeban_butie["pending_confirmations"] = [
+    item.replace(
+        "在排班时间内覆盖22:00至次日08:00时是否享有夜班补贴；排班开始前不计发已确认，排班结束后的夜间打卡边界仍需另行确认。",
+        "实际出勤覆盖22:00至次日08:00时是否享有夜班补贴；排班结束后的夜间打卡边界仍需另行确认。",
+    )
+    for item in _yeban_butie["pending_confirmations"]
+    if not item.startswith("HD007在2026年7月12日")
+]
+_yeban_butie["verification"] = [
+    item for item in _yeban_butie["verification"]
+    if not item.startswith("按2026年7月华南、华东31,148条全量数据复核排班开始边界")
+]
+_yeban_butie["verification"].insert(0, (
+    "业务确认普通夜班补贴从向后取整后的实际上班打卡起算，不再用排班开始时间抬高计薪起点；"
+    "22:00至次日08:00窗口、实际重合休息扣除、满1小时门槛和单日25元封顶不变。"
+    "按2026年8月全量数据回归，影响11人、63条日考勤，夜班补贴合计增加71.50元。"
+))
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.14",
+    "released_at": "2026-09-21",
+    "changes": "普通夜班补贴起点改为实际上班打卡向后取整，不再按排班开始时间限制；其他夜班窗口及扣休规则不变。",
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
