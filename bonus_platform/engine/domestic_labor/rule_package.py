@@ -2269,6 +2269,20 @@ for _field in _gangwei["field_calculations"]:
         _field.update({"definition": "不超过56小时不扣减；超过后把全部缺勤小时折算为天数。", "formula": "IF(缺勤合计时数>56, 缺勤合计时数÷8, 0)", "example": "56小时扣0天；56.5小时扣7.0625天；81.5小时扣10.1875天。"})
 _gangwei["change_log"].insert(0, {"version": "DL-GANGWEI.v0.9.5", "released_at": "2026-09-10", "changes": "缺勤合计恰好56小时不扣减；仅超过56小时才按全部缺勤时数折算。"})
 
+# 2026-09-21：补齐2026-08-10已确认的东莞理货员排除规则。
+_yeban_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "yeban_butie")
+_yeban_butie["version"] = "DL-YEBAN.v0.9.12"
+_tally_rule = "东莞岗位名称为理货员时不享有夜班补贴，不依赖班次；不得仅因部门含理货而排除操作员。"
+_yeban_butie["common_rules"].append(_tally_rule)
+_dongguan = next(region for region in _yeban_butie["regions"] if region["name"] == "东莞")
+_dongguan["rule"] = _dongguan["rule"].replace("东莞保洁", "东莞保洁、理货员")
+_dongguan["formula"] = _dongguan["formula"].replace("岗位为保洁", "岗位为保洁、理货员")
+_dongguan["details"].append(_tally_rule + "按当日考勤岗位判断，缺失时采用月考勤岗位；历史月份不能用当前岗位倒推。")
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.12", "released_at": "2026-09-21",
+    "changes": "修复东莞理货员资格排除遗漏；依据2026-08-10已确认口径，其他地区及理货部门操作员不扩大排除。",
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
