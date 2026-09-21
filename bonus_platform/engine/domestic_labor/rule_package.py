@@ -2371,6 +2371,19 @@ _canbu["change_log"].insert(0, {
     "changes": _intern_meal_rule,
 })
 
+# 2026-09-21：嘉善、义乌实习生加入餐补享有岗位。
+_canbu["version"] = "DL-CANBU.v1.0.8"
+_jiashan_yiwu_intern_rule = "嘉善、义乌实习生享有餐补，沿用300元月标准及现有月考勤折算规则。"
+_jiashan_yiwu_canbu["details"].append(_jiashan_yiwu_intern_rule)
+_canbu["verification"].append(
+    "2026年8月嘉善、义乌月考勤中无实习生，本次资格扩展不改变8月现有人员金额。"
+)
+_canbu["change_log"].insert(0, {
+    "version": "DL-CANBU.v1.0.8",
+    "released_at": "2026-09-21",
+    "changes": _jiashan_yiwu_intern_rule,
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
