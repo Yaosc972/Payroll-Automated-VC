@@ -2255,6 +2255,22 @@ _waisu_butie["change_log"].insert(0, {
     "changes": _intern_housing_rule,
 })
 
+# 2026-09-21：按8月逐行反馈修复实际出勤、入住前外宿和退宿后请假的交叉折算。
+_waisu_butie["version"] = "DL-WAISU.v1.0.5"
+_housing_overlap_rule = (
+    "低正班出勤人员按完整上下班打卡复核实际出勤；入住前外宿天数不因后续在宿缺勤清零；"
+    "退宿后的外宿期间按日扣除请假天数。"
+)
+_waisu_butie["common_rules"].append(_housing_overlap_rule)
+_waisu_butie["verification"].append(
+    "2026年8月逐行回归修复4人：植里海62.90元、叶小玉9.68元、袁连升14.52元、王堂庆4.84元。"
+)
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.5",
+    "released_at": "2026-09-21",
+    "changes": _housing_overlap_rule,
+})
+
 # 2026-09-09：东莞人力相关岗位补贴自2026年9月起停止。
 _gangwei = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gangwei_butie")
 _gangwei["version"] = "DL-GANGWEI.v0.9.3"

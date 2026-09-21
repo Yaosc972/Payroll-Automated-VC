@@ -235,29 +235,36 @@ class WaiSuBuTieEngine(BaseEngine):
         attendance_days_value = employee_data.get("正班出勤天数")
         attendance_days = safe_float(attendance_days_value)
         absent_days = safe_float(employee_data.get("旷工天数", 0))
+        low_attendance_effective_days = None
         if (
             attendance_days_value not in (None, "")
             and attendance_days <= 1
             and absent_days >= 1
         ):
-            return self._zero_result(
-                employee_id,
-                employee_name,
-                "正班出勤不超过1天且旷工至少1天",
-                "外宿补贴出勤与旷工判断",
-                "正班出勤天数<=1且旷工天数>=1 = 0",
-                input_snapshot,
-                {
-                    "正班出勤天数": attendance_days,
-                    "旷工天数": absent_days,
-                },
-                [
-                    f"工作地区为{work_area}",
-                    f"正班出勤天数为{attendance_days}",
-                    f"旷工天数为{absent_days}",
-                    "外宿补贴金额为0",
-                ],
-            )
+            complete_attendance_days = self._complete_attendance_days(employee_id, daily_attendance)
+            if work_area in {"嘉善", "义乌"} and complete_attendance_days > 1:
+                low_attendance_effective_days = complete_attendance_days
+            else:
+                return self._zero_result(
+                    employee_id,
+                    employee_name,
+                    "正班出勤不超过1天且旷工至少1天",
+                    "外宿补贴出勤与旷工判断",
+                    "正班出勤天数<=1且旷工天数>=1，且完整打卡出勤不超过1天 = 0",
+                    input_snapshot,
+                    {
+                        "正班出勤天数": attendance_days,
+                        "完整打卡出勤天数": complete_attendance_days,
+                        "旷工天数": absent_days,
+                    },
+                    [
+                        f"工作地区为{work_area}",
+                        f"正班出勤天数为{attendance_days}",
+                        f"完整打卡出勤天数为{complete_attendance_days}",
+                        f"旷工天数为{absent_days}",
+                        "外宿补贴金额为0",
+                    ],
+                )
 
         if work_area == "晋江":
             return self._calculate_jinjiang(
@@ -365,40 +372,36 @@ class WaiSuBuTieEngine(BaseEngine):
 
         # F6: 外宿补贴天数
         subsidy_days = max(0, days_employed - housing_deduction_days)
+        if low_attendance_effective_days is not None:
+            subsidy_days = min(subsidy_days, low_attendance_effective_days)
 
         # F7: 缺勤时数合计。嘉善/义乌线下公式对当月入离职人员也执行缺勤扣减。
-        applies_absence_proration = is_full_month or work_area in {"嘉善", "义乌"}
+        applies_absence_proration = (
+            low_attendance_effective_days is None
+            and (is_full_month or work_area in {"嘉善", "义乌"})
+        )
         absence_hours = 0
         if applies_absence_proration:
             absence_hours = self._absence_hours(employee_data, work_area)
 
+        # F8: 外宿补贴
+        external_absence_days = 0.0
         if (
             applies_absence_proration
             and absence_hours >= 56
-            and self._has_active_housing(employee_id, housing_records, month_start, month_end)
+            and housing_deduction_days > 0
+            and self._has_checkout(employee_id, housing_records, month_start, month_end)
         ):
-            return self._zero_result(
+            external_absence_days = self._external_absence_days_after_checkout(
                 employee_id,
-                employee_name,
-                "在宿且缺勤满56小时",
-                f"{work_area}外宿补贴住宿与缺勤折算" if work_area else "外宿补贴住宿与缺勤折算",
-                "在宿未退且缺勤>=56小时 = 0",
-                input_snapshot,
-                {
-                    "月份天数": days_in_month,
-                    "在职天数": days_employed,
-                    "住宿扣除天数": housing_deduction_days,
-                    "缺勤时数": absence_hours,
-                    "休年假小时": safe_float(employee_data.get("休年假小时", 0)),
-                    "补贴标准": standard,
-                },
-                ["住宿名单显示当月已入住且无退宿", "缺勤时数达到56小时", "外宿补贴金额为0"],
+                daily_attendance,
+                housing_records,
+                employment_start,
+                employment_end,
             )
-
-        # F8: 外宿补贴
-        # 缺勤≥56小时的有效天数公式仅适用于无住宿扣除的全月在职员工；
-        # 有住宿扣除的员工已通过subsidy_days扣减，不再重复扣减缺勤
-        if applies_absence_proration and absence_hours >= 56 and housing_deduction_days == 0:
+            effective_days = max(subsidy_days - external_absence_days, 0)
+            subsidy_amount = round(standard / days_in_month * effective_days, 2)
+        elif applies_absence_proration and absence_hours >= 56 and housing_deduction_days == 0:
             effective_days = days_in_month - absence_hours / 8
             if work_area in {"嘉善", "义乌"}:
                 effective_days = subsidy_days - absence_hours / 8
@@ -419,6 +422,8 @@ class WaiSuBuTieEngine(BaseEngine):
                 "住宿扣除天数": housing_deduction_days,
                 "外宿补贴天数": subsidy_days,
                 "缺勤时数": absence_hours,
+                "退宿后外宿期间缺勤天数": external_absence_days,
+                "完整打卡出勤天数": low_attendance_effective_days,
                 "全月在职": is_full_month,
                 "补贴标准": standard,
                 "audit_explanation": _audit_explanation(
@@ -432,6 +437,8 @@ class WaiSuBuTieEngine(BaseEngine):
                         "住宿扣除天数": housing_deduction_days,
                         "外宿补贴天数": subsidy_days,
                         "缺勤时数": absence_hours,
+                        "退宿后外宿期间缺勤天数": external_absence_days,
+                        "完整打卡出勤天数": low_attendance_effective_days,
                         "休年假小时": safe_float(employee_data.get("休年假小时", 0)),
                         "全月在职": is_full_month,
                         "补贴标准": standard,
@@ -441,7 +448,8 @@ class WaiSuBuTieEngine(BaseEngine):
                         f"当月在职区间为{employment_start.isoformat()}至{employment_end.isoformat()}，在职{days_employed}天",
                         f"住宿名单扣除{housing_deduction_days}天",
                         f"外宿补贴天数=max(在职天数-住宿扣除天数, 0)={subsidy_days}",
-                        "全月在职且缺勤达到56小时、且无住宿扣除时，按缺勤折算有效天数",
+                        "低正班出勤时，以完整上下班打卡天数复核实际出勤",
+                        "退宿后外宿期间的请假日从外宿补贴天数中扣除；入住前外宿天数不因后续在宿缺勤清零",
                         f"最终外宿补贴为{subsidy_amount}",
                     ],
                 ),
@@ -536,7 +544,7 @@ class WaiSuBuTieEngine(BaseEngine):
                 deduction_days += (overlap_end - overlap_start).days + 1
         return deduction_days
 
-    def _has_active_housing(
+    def _has_checkout(
         self,
         employee_id: str,
         housing_records: List[Dict[str, Any]],
@@ -546,15 +554,69 @@ class WaiSuBuTieEngine(BaseEngine):
         for record in housing_records or []:
             if str(record.get("工号", "")) != employee_id:
                 continue
-            check_in = record.get("入住时间")
             check_out = record.get("退宿时间")
-            if not isinstance(check_in, (date, datetime)):
-                continue
-            check_in_date = _to_date(check_in)
-            if check_in_date > month_end:
-                continue
-            return check_out is None or check_out == "" or not isinstance(check_out, (date, datetime))
+            if isinstance(check_out, (date, datetime)) and month_start <= _to_date(check_out) <= month_end:
+                return True
         return False
+
+    def _complete_attendance_days(
+        self,
+        employee_id: str,
+        daily_attendance: List[Dict[str, Any]],
+    ) -> int:
+        attendance_dates = {
+            _to_date(day.get("出勤日期"))
+            for day in daily_attendance or []
+            if str(day.get("工号", "")) == employee_id
+            and isinstance(day.get("出勤日期"), (date, datetime))
+            and day.get("上班一")
+            and day.get("下班一")
+        }
+        return len(attendance_dates)
+
+    def _external_absence_days_after_checkout(
+        self,
+        employee_id: str,
+        daily_attendance: List[Dict[str, Any]],
+        housing_records: List[Dict[str, Any]],
+        employment_start: date,
+        employment_end: date,
+    ) -> float:
+        checkout_dates = [
+            _to_date(record.get("退宿时间"))
+            for record in housing_records or []
+            if str(record.get("工号", "")) == employee_id
+            and isinstance(record.get("退宿时间"), (date, datetime))
+        ]
+        if not checkout_dates:
+            return 0.0
+        first_checkout = max(min(checkout_dates), employment_start)
+        absence_days = 0.0
+        for day in daily_attendance or []:
+            attendance_date = day.get("出勤日期")
+            if not isinstance(attendance_date, (date, datetime)):
+                continue
+            attendance_date = _to_date(attendance_date)
+            if not (first_checkout <= attendance_date <= employment_end):
+                continue
+            if day.get("上班一") and day.get("下班一"):
+                continue
+            absence_hours = max(
+                safe_float(day.get("无薪请假", 0)),
+                safe_float(day.get("无薪休假", 0)),
+                safe_float(day.get("事假", 0)),
+                safe_float(day.get("有薪请假", 0)),
+                safe_float(day.get("有薪休假", 0)),
+                safe_float(day.get("补休时数", 0)),
+                safe_float(day.get("年休假", 0)),
+                safe_float(day.get("婚假", 0)),
+                safe_float(day.get("陪产假", 0)),
+                safe_float(day.get("工伤假", 0)),
+                safe_float(day.get("正班旷职", 0)),
+                safe_float(day.get("病假时数", 0)) * 0.6,
+            )
+            absence_days += min(absence_hours / 8, 1)
+        return round(absence_days, 4)
 
     def _has_mid_month_entry_or_exit(self, employee_data: Dict[str, Any], month_start: date, month_end: date) -> bool:
         hire_date = employee_data.get("入职日期")
