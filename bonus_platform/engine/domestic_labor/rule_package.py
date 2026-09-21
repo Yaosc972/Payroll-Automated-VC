@@ -2239,6 +2239,22 @@ _waisu_butie["change_log"].insert(0, {
     "changes": "嘉善、义乌外宿补贴享有岗位新增查验员，月标准150元，沿用现有折算规则。",
 })
 
+# 2026-09-21：东莞、嘉善、义乌实习生加入外宿补贴享有岗位。
+_waisu_butie["version"] = "DL-WAISU.v1.0.4"
+_intern_housing_rule = "东莞、嘉善、义乌实习生享有外宿补贴，月标准150元，沿用各地区现有在职、住宿和缺勤折算规则。"
+for _region in _waisu_butie["regions"]:
+    if _region["name"] in {"东莞", "嘉善 / 义乌"}:
+        _region["details"].append(_intern_housing_rule)
+_waisu_butie["verification"].append(
+    "2026年8月东莞仅有邓林斌1名实习生，按8月12日入职、8月17日入住折算5个外宿日，补贴为24.19元；"
+    "嘉善、义乌无实习生，其他人员金额不变。"
+)
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.4",
+    "released_at": "2026-09-21",
+    "changes": _intern_housing_rule,
+})
+
 # 2026-09-09：东莞人力相关岗位补贴自2026年9月起停止。
 _gangwei = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gangwei_butie")
 _gangwei["version"] = "DL-GANGWEI.v0.9.3"
