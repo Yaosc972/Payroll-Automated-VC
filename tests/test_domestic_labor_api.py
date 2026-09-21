@@ -523,7 +523,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
         "内部高级安检员",
     }
 
-    assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.3"
+    assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.4"
     assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.3"
     assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.8"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
@@ -537,7 +537,7 @@ def test_rule_package_publishes_dongguan_month_end_rounding():
     canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
     dongguan = next(region for region in canbu["regions"] if region["name"] == "东莞")
 
-    assert canbu["version"] == "DL-CANBU.v1.0.3"
+    assert canbu["version"] == "DL-CANBU.v1.0.4"
     assert "单日未舍入餐补" in dongguan["formula"]
     assert "月底汇总后统一舍入" in " ".join(dongguan["details"])
     assert any(item["version"] == "DL-CANBU.v1.0.2" for item in canbu["change_log"])
@@ -548,9 +548,10 @@ def test_rule_package_publishes_jiashan_yiwu_inspector_meal_eligibility():
     canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
     jiashan_yiwu = next(region for region in canbu["regions"] if region["name"] == "嘉善 / 义乌")
 
-    assert canbu["version"] == "DL-CANBU.v1.0.3"
+    assert canbu["version"] == "DL-CANBU.v1.0.4"
     assert "查验员" in str(jiashan_yiwu)
-    assert canbu["change_log"][0]["version"] == "DL-CANBU.v1.0.3"
+    assert "设备维养专员享有餐补，设备维护员不享有" in str(jiashan_yiwu)
+    assert canbu["change_log"][0]["version"] == "DL-CANBU.v1.0.4"
 
 
 def test_rule_package_supports_immutable_version_lookup():
@@ -2376,8 +2377,8 @@ def test_canbu_yiwu_uses_jiashan_monthly_attendance_formula():
     assert explanation["intermediate_values"]["有效餐补天数"] == 21
 
 
-def test_canbu_jiashan_yiwu_include_cleaner_and_maintenance_alias():
-    """嘉善/义乌保洁享有餐补，设备维护与设备维修岗位名称均兼容。"""
+def test_canbu_jiashan_yiwu_distinguishes_maintenance_positions():
+    """嘉善/义乌设备维养专员享有餐补，设备维护员不享有。"""
     base_employee = {
         "工号": "OWHN001",
         "姓名": "张三",
@@ -2389,17 +2390,20 @@ def test_canbu_jiashan_yiwu_include_cleaner_and_maintenance_alias():
     }
 
     cleaner = {**base_employee, "工作地区": "嘉善", "岗位名称": "保洁"}
-    maintenance = {**base_employee, "工作地区": "义乌", "岗位名称": "设备维护员"}
+    maintenance_worker = {**base_employee, "工作地区": "义乌", "岗位名称": "设备维护员"}
+    maintenance_specialist = {**base_employee, "工作地区": "嘉善", "岗位名称": "设备维养专员"}
     repair_specialist = {**base_employee, "工作地区": "嘉善", "岗位名称": "设备维修专员"}
 
     cleaner_result = CanBuEngine().calculate(cleaner, daily_attendance=[])
-    maintenance_result = CanBuEngine().calculate(maintenance, daily_attendance=[])
+    maintenance_worker_result = CanBuEngine().calculate(maintenance_worker, daily_attendance=[])
+    maintenance_specialist_result = CanBuEngine().calculate(maintenance_specialist, daily_attendance=[])
     repair_specialist_result = CanBuEngine().calculate(repair_specialist, daily_attendance=[])
 
     assert cleaner_result.amount == 300
     assert cleaner_result.details["地区规则"] == "嘉善"
-    assert maintenance_result.amount == 300
-    assert maintenance_result.details["地区规则"] == "义乌"
+    assert maintenance_worker_result.amount == 0
+    assert maintenance_specialist_result.amount == 300
+    assert maintenance_specialist_result.details["地区规则"] == "嘉善"
     assert repair_specialist_result.amount == 300
     assert repair_specialist_result.details["地区规则"] == "嘉善"
 

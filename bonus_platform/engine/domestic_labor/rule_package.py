@@ -2306,6 +2306,26 @@ _yeban_butie["change_log"].insert(0, {
     "changes": "删除HD048次日06:00至06:30早休，仅保留23:00至24:00；依据2026年8月线下明细回归确认。",
 })
 
+# 2026-09-21：按8月线下反馈区分嘉善/义乌设备维护员与设备维养专员的餐补资格。
+_canbu = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "canbu")
+_canbu["version"] = "DL-CANBU.v1.0.4"
+_jiashan_yiwu_canbu = next(
+    region for region in _canbu["regions"] if region["name"] == "嘉善 / 义乌"
+)
+_maintenance_meal_rule = (
+    "设备维养专员享有餐补，设备维护员不享有；按岗位名称精确区分，不将两者作为别名合并。"
+)
+_jiashan_yiwu_canbu["details"].append(_maintenance_meal_rule)
+_canbu["verification"].append(
+    "2026年8月全量回归仅影响嘉善后勤保障组2人：向沩由300元改为0元，周月明由0元改为300元；"
+    "其他员工金额不变，餐补合计净变化0元。"
+)
+_canbu["change_log"].insert(0, {
+    "version": "DL-CANBU.v1.0.4",
+    "released_at": "2026-09-21",
+    "changes": _maintenance_meal_rule,
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
