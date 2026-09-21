@@ -71,6 +71,8 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
 
     assert page.status_code == 200
     assert '<script src="/overseas-payroll-async.js?v=4"></script>' in page.text
+    assert "workbench-progress.js" not in page.text
+    assert "workbench-progress.css" not in page.text
     assert adapter.status_code == 200
     assert adapter.content == ASYNC_ADAPTER_PATH.read_bytes()
     assert b"getElementById('sidefoot')?.remove()" in adapter.content
@@ -79,6 +81,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     assert b"user.avatarUrl" in adapter.content
     assert b"brand.setAttribute('role', 'link')" in adapter.content
     assert b"applyToolDropHint(CURRENT_TOOL)" in adapter.content
+    assert b"WorkbenchProgress" not in adapter.content
 
 
 def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
