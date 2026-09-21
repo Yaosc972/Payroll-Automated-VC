@@ -2326,6 +2326,20 @@ _canbu["change_log"].insert(0, {
     "changes": _maintenance_meal_rule,
 })
 
+# 2026-09-21：按8月线下反馈将东莞实习生加入餐补资格。
+_canbu["version"] = "DL-CANBU.v1.0.5"
+_dongguan_canbu = next(region for region in _canbu["regions"] if region["name"] == "东莞")
+_intern_meal_rule = "东莞实习生在部门命中寮步区或莞深操作时享有餐补，按通用逐日折算及500元月封顶核算。"
+_dongguan_canbu["details"].append(_intern_meal_rule)
+_canbu["verification"].append(
+    "2026年8月全量回归仅新增邓林斌1人餐补，由0元改为361元，与线下一致；其他员工金额不变。"
+)
+_canbu["change_log"].insert(0, {
+    "version": "DL-CANBU.v1.0.5",
+    "released_at": "2026-09-21",
+    "changes": _intern_meal_rule,
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
