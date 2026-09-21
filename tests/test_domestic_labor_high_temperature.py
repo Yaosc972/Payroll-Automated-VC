@@ -528,6 +528,11 @@ def test_explicit_site_without_night_temperature_does_not_borrow_other_site_or_d
     ])
     assert result.amount == 0
     assert result.details["daily_results"][0]["reason_code"] == "no_matching_temperature"
+    assert any("2026-07-01" in warning and "夜班" in warning for warning in result.warnings)
+    assert any(
+        item["code"] == "HIGH_TEMPERATURE_DAILY_MEASUREMENTS_MISSING"
+        for item in result.details["exceptions"]
+    )
 
 
 def test_explicit_daily_site_works_without_resolvable_organization():
@@ -571,6 +576,70 @@ def test_air_conditioning_roster_is_joined_by_id_even_without_temperature_on_sam
     finally:
         for parser in loader.parsers:
             parser.close()
+
+
+def test_combined_high_temperature_sheet_recognizes_separate_office_roster(tmp_path):
+    book = Workbook()
+    monthly = book.active
+    monthly.title = "月考勤"
+    monthly.append(["工号", "姓名", "工作地区", "岗位名称", "考勤月份", "排班天数"])
+    monthly.append(["OWHD8143", "肖青青", "嘉善", "操作员", "202608", 23])
+    monthly.append(["OWHD9000", "仓内员工", "嘉善", "操作员", "202608", 23])
+    daily = book.create_sheet("日考勤")
+    daily.append(["工号", "出勤日期", "测温网点", "测温班次", "正班时数"])
+    for eid in ("OWHD8143", "OWHD9000"):
+        daily.append([eid, date(2026, 8, 1), "华东枢纽-嘉善仓", "白班", 8])
+    temperature = book.create_sheet("高温补贴")
+    temperature.append([
+        "测温人员名字", "班次日期", "测温班次", "测温网点", "测温温度",
+        "工号", "姓名",
+    ])
+    temperature.append([
+        "测温员", date(2026, 8, 1), "白班", "华东枢纽-嘉善仓", 35,
+        "OWHD8143", "肖青青",
+    ])
+    path = tmp_path / "attendance.xlsx"
+    book.save(path)
+
+    with MultiFilePayrollDataLoader([str(path)]) as loader:
+        loader.load()
+        employees = {row["工号"]: row for row in loader.monthly.rows}
+        days = loader.group_daily_by_employee()
+        engine = GaoWenBuTieEngine(loader.temperature.rows)
+
+        excluded = engine.calculate(employees["OWHD8143"], days["OWHD8143"])
+        eligible = engine.calculate(employees["OWHD9000"], days["OWHD9000"])
+
+    assert excluded.amount == 0
+    assert excluded.details["资格判断"] == "办公地点有空调，不享有高温补贴"
+    assert eligible.amount == 9.2
+
+
+def test_temperature_employee_columns_are_not_an_office_roster_without_template_marker(tmp_path):
+    book = Workbook()
+    monthly = book.active
+    monthly.title = "月考勤"
+    monthly.append(["工号", "姓名", "工作地区", "岗位名称", "考勤月份", "排班天数"])
+    monthly.append(["OWHD9000", "仓内员工", "嘉善", "操作员", "202608", 23])
+    daily = book.create_sheet("日考勤")
+    daily.append(["工号", "出勤日期", "测温网点", "测温班次", "正班时数"])
+    daily.append(["OWHD9000", date(2026, 8, 1), "华东枢纽-嘉善仓", "白班", 8])
+    temperature = book.create_sheet("测温登记")
+    temperature.append(["班次日期", "测温班次", "测温网点", "测温温度", "工号", "姓名"])
+    temperature.append([date(2026, 8, 1), "白班", "华东枢纽-嘉善仓", 35, "OWHD9000", "仓内员工"])
+    path = tmp_path / "attendance.xlsx"
+    book.save(path)
+
+    with MultiFilePayrollDataLoader([str(path)]) as loader:
+        loader.load()
+        employee = loader.monthly.rows[0]
+        result = GaoWenBuTieEngine(loader.temperature.rows).calculate(
+            employee,
+            loader.group_daily_by_employee()["OWHD9000"],
+        )
+
+    assert result.amount == 9.2
+    assert employee.get("办公地点是否有空调") != "是"
 
 
 def test_air_conditioning_qualification_requires_explicit_yes():

@@ -334,6 +334,27 @@ class GaoWenBuTieEngine(BaseEngine):
         for row in daily_results:
             status_counts[row["reason_code"]] = status_counts.get(row["reason_code"], 0) + 1
 
+        missing_measurements = [
+            row for row in daily_results if row["reason_code"] == "no_matching_temperature"
+        ]
+        if missing_measurements and self.temperature_records:
+            missing_keys = list(dict.fromkeys(
+                f"{row['attendance_date']}（{row['site']}/{row['shift']}）"
+                for row in missing_measurements
+            ))
+            message = (
+                f"{len(missing_measurements)}个有出勤日期缺少同网点、同日期、同班次测温："
+                + "、".join(missing_keys)
+            )
+            warnings.append(message)
+            exceptions.append(_exception(
+                "HIGH_TEMPERATURE_DAILY_MEASUREMENTS_MISSING",
+                employee_id,
+                employee_name,
+                message,
+                "补充上述日期的对应班次测温或确认固定计发依据后重新核算；当前0元不能作为最终发放结论。",
+            ))
+
         if status_counts.get("invalid_attendance_date") or status_counts.get("attendance_shift_unresolved"):
             message = "部分日考勤无法识别日期或白/夜班"
             warnings.append(message)

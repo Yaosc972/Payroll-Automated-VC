@@ -803,12 +803,29 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         ])
         # 测温登记右侧是独立的办公人员名单，按工号关联，不能与左侧测温逐行关联。
         # 在过滤无测温值的行之前提取，避免丢掉名单中没有同排测温记录的员工。
-        air_conditioned_ids = {
-            str(row.get("工号", "") or "").strip()
-            for part in parts["temperature"] for row in part.rows
-            if str(row.get("办公地点是否有空调", "") or "").strip() == "是"
-            and self._has_valid_employee_id(row)
-        }
+        air_conditioned_ids = set()
+        for part in parts["temperature"]:
+            normalized_headers = [_normalized_header_name(header) for header in part.headers]
+            header_set = set(normalized_headers)
+            # 华东模板左侧是测温记录，右侧是独立的办公室人员名单。
+            # 只在同时存在独立“测温人员名字”列、且工号/姓名位于测温字段之后时识别，
+            # 避免把普通测温表中记录测温员工的工号/姓名误当排除名单。
+            separate_office_roster = (
+                "高温补贴" in str(part.name or "")
+                and "测温人员名字" in header_set
+                and {"工号", "姓名"}.issubset(header_set)
+                and "办公地点是否有空调" not in header_set
+                and normalized_headers.index("工号") > normalized_headers.index("测温温度")
+                and normalized_headers.index("姓名") > normalized_headers.index("测温温度")
+            )
+            for row in part.rows:
+                explicitly_air_conditioned = (
+                    str(row.get("办公地点是否有空调", "") or "").strip() == "是"
+                )
+                if self._has_valid_employee_id(row) and (
+                    explicitly_air_conditioned or separate_office_roster
+                ):
+                    air_conditioned_ids.add(str(row.get("工号", "") or "").strip())
         for row in monthly_rows:
             if str(row.get("工号", "") or "").strip() in air_conditioned_ids:
                 row["办公地点是否有空调"] = "是"
