@@ -54,7 +54,7 @@ def test_platform_baseline_contains_unique_existing_shift_table():
     assert by_code["HD023"]["break_periods"] == ["30:00-30:30"]
     assert by_code["HD042"]["break_periods"] == ["23:00-24:00", "06:00-06:30"]
     assert by_code["HD046"]["break_periods"] == ["23:00-24:00", "06:00-06:30"]
-    assert by_code["HD048"]["break_periods"] == ["23:00-24:00", "06:00-06:30"]
+    assert by_code["HD048"]["break_periods"] == ["23:00-24:00"]
     assert by_code["HD052"]["break_periods"] == ["24:00-25:00", "30:00-30:30"]
     assert by_code["HD059"]["break_periods"] == ["24:00-25:00", "30:30-31:00"]
     assert by_code["DN06"]["break_segments"] == [
@@ -68,7 +68,6 @@ def test_platform_baseline_contains_unique_existing_shift_table():
     ]
     assert by_code["HD048"]["break_segments"] == [
         {"period": "23:00-24:00", "category": "晚上休息"},
-        {"period": "06:00-06:30", "category": "早上休息"},
     ]
     assert {category: sum(row["shift_category"] == category for row in shifts) for category in {
         "寮步班次", "华东班次", "东南班次",

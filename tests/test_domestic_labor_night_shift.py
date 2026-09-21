@@ -4,6 +4,7 @@ import json
 import pytest
 
 from bonus_platform.engine.domestic_labor.engines.yeban_butie import YeBanBuTieEngine
+from bonus_platform.engine.domestic_labor.night_shift_config import load_baseline_shift_breaks
 
 
 def _day(start, end, shift="DN06", **extra):
@@ -108,6 +109,22 @@ def test_night_shift_keeps_evening_and_morning_breaks_separate():
             "deducted_minutes": 30,
         },
     ]
+
+
+def test_hd048_only_deducts_evening_break_after_morning_break_removal():
+    shift = next(
+        row for row in load_baseline_shift_breaks() if row["shift_code"] == "HD048"
+    )
+
+    result = YeBanBuTieEngine().calculate_day(
+        _day("22:00", "07:00", shift="HD048"),
+        break_periods=shift["break_segments"],
+    )
+
+    assert result.status == "calculated"
+    assert result.evening_break_minutes == 60
+    assert result.morning_break_minutes == 0
+    assert result.amount == 24.0
 
 
 def test_night_shift_daily_audit_with_excel_time_is_json_serializable():
@@ -647,6 +664,6 @@ def test_current_night_rules_include_tally_clerk_without_rewriting_history():
     dongguan = next(r for r in current["regions"] if r["name"] == "东莞")
     assert "理货员" in dongguan["rule"]
     assert "理货员" in dongguan["formula"]
-    assert current["version"] == "DL-YEBAN.v0.9.12"
+    assert current["version"] == "DL-YEBAN.v0.9.13"
     historical = next(s for s in get_rule_package("1.4.8")["subjects"] if s["id"] == "yeban_butie")
     assert historical["version"] != current["version"]

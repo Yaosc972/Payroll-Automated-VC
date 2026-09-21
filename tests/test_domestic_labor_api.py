@@ -378,7 +378,7 @@ def test_rule_package_marks_night_shift_allowance_as_validating():
     payload = str(yeban)
 
     assert yeban["status"] == "验证中"
-    assert yeban["version"] == "DL-YEBAN.v0.9.11"
+    assert yeban["version"] == "DL-YEBAN.v0.9.13"
     assert not any('封顶归属' in item for item in yeban['pending_confirmations'])
     assert '共同适用单日25元封顶' in str(yeban['common_rules'])
     assert "不因下班达到22:00而遗漏早晨时段" in payload
@@ -393,7 +393,8 @@ def test_rule_package_marks_night_shift_allowance_as_validating():
     assert "晋江计件岗位和门禁岗位" in payload
     assert "嘉善、义乌的保洁、HRBP专员、数据专员" in payload
     assert "东莞LB39" in payload
-    assert "HD048理货入库18点班固定休息为晚上23:00至24:00、次日06:00至06:30" in payload
+    assert "HD048理货入库18点班固定休息仅保留晚上23:00至24:00" in payload
+    assert "HD048理货入库18点班固定休息为晚上23:00至24:00、次日06:00至06:30" not in payload
     assert "当前内置143个班次" in payload
     assert "夜班窗口外的休息不扣除" in payload
     assert "暂算金额已计入" in payload
