@@ -33,7 +33,7 @@ def test_generic_night_shift_rounds_clips_deducts_break_and_caps_at_25():
     assert result.break_minutes == 60
 
 
-def test_night_shift_does_not_pay_before_the_scheduled_shift_start():
+def test_night_shift_starts_from_rounded_actual_punch_before_schedule():
     result = YeBanBuTieEngine().calculate_day(
         _day(
             "22:10",
@@ -45,9 +45,9 @@ def test_night_shift_does_not_pay_before_the_scheduled_shift_start():
     )
 
     assert result.status == "calculated"
-    assert result.night_minutes == 9 * 60
+    assert result.night_minutes == 9.5 * 60
     assert result.break_minutes == 60
-    assert result.amount == 24.0
+    assert result.amount == 25.0
 
 
 def test_confirmed_start_boundary_does_not_assume_an_end_boundary():
@@ -664,6 +664,6 @@ def test_current_night_rules_include_tally_clerk_without_rewriting_history():
     dongguan = next(r for r in current["regions"] if r["name"] == "东莞")
     assert "理货员" in dongguan["rule"]
     assert "理货员" in dongguan["formula"]
-    assert current["version"] == "DL-YEBAN.v0.9.13"
+    assert current["version"] == "DL-YEBAN.v0.9.14"
     historical = next(s for s in get_rule_package("1.4.8")["subjects"] if s["id"] == "yeban_butie")
     assert historical["version"] != current["version"]

@@ -138,18 +138,6 @@ def _parse_schedule_period(value: Any) -> Optional[Tuple[float, float]]:
     return start, end
 
 
-def _align_schedule_to_attendance(
-    period: Tuple[float, float],
-    attendance_start: float,
-) -> Tuple[float, float]:
-    """Align early-morning schedules with normalized post-midnight punches."""
-    start, end = period
-    if attendance_start >= 24 * 60 and end <= 24 * 60:
-        start += 24 * 60
-        end += 24 * 60
-    return start, end
-
-
 def _align_break_to_attendance(
     period: Tuple[float, float],
     attendance_start: float,
@@ -420,15 +408,7 @@ class YeBanBuTieEngine(BaseEngine):
                 break_details=break_details,
             )
 
-        scheduled_period = _parse_schedule_period(attendance.get("班次时间段"))
-        scheduled_start = rounded_start
-        if scheduled_period is not None:
-            scheduled_start, _ = _align_schedule_to_attendance(
-                scheduled_period,
-                rounded_start,
-            )
-
-        night_start = max(rounded_start, scheduled_start, NIGHT_START_MINUTES)
+        night_start = max(rounded_start, NIGHT_START_MINUTES)
         night_end = min(rounded_end, NIGHT_END_MINUTES)
         night_minutes = max(0.0, night_end - night_start)
         if night_minutes <= 0:
@@ -717,8 +697,8 @@ class YeBanBuTieEngine(BaseEngine):
                 steps=[
                     "先应用嘉善/义乌固定岗位、东莞LB39及晋江固定资格排除规则",
                     "上班向后、下班向前取整到半小时",
-                    "普通班次从排班开始时间与取整后上班时间的较晚值起算",
-                    "截取22:00至次日08:00夜班窗口；排班开始前不计发",
+                    "普通班次从取整后的实际上班时间起算",
+                    "截取22:00至次日08:00夜班窗口",
                     "按班次配置分别扣除与实际出勤及夜班窗口都重叠的休息时间",
                     "扣休息后不足1小时不计发；达到1小时后按完整30分钟计发，不足30分钟舍去，单日封顶25元",
                     "LB15以8小时正班为基准扣减取整后的迟到、早退，满8小时发25元，不足8小时折算",
