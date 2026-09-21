@@ -523,7 +523,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
         "内部高级安检员",
     }
 
-    assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.4"
+    assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.5"
     assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.3"
     assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.8"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
@@ -537,7 +537,7 @@ def test_rule_package_publishes_dongguan_month_end_rounding():
     canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
     dongguan = next(region for region in canbu["regions"] if region["name"] == "东莞")
 
-    assert canbu["version"] == "DL-CANBU.v1.0.4"
+    assert canbu["version"] == "DL-CANBU.v1.0.5"
     assert "单日未舍入餐补" in dongguan["formula"]
     assert "月底汇总后统一舍入" in " ".join(dongguan["details"])
     assert any(item["version"] == "DL-CANBU.v1.0.2" for item in canbu["change_log"])
@@ -548,10 +548,20 @@ def test_rule_package_publishes_jiashan_yiwu_inspector_meal_eligibility():
     canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
     jiashan_yiwu = next(region for region in canbu["regions"] if region["name"] == "嘉善 / 义乌")
 
-    assert canbu["version"] == "DL-CANBU.v1.0.4"
+    assert canbu["version"] == "DL-CANBU.v1.0.5"
     assert "查验员" in str(jiashan_yiwu)
     assert "设备维养专员享有餐补，设备维护员不享有" in str(jiashan_yiwu)
-    assert canbu["change_log"][0]["version"] == "DL-CANBU.v1.0.4"
+    assert any(item["version"] == "DL-CANBU.v1.0.4" for item in canbu["change_log"])
+
+
+def test_rule_package_publishes_dongguan_intern_meal_eligibility():
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    canbu = next(subject for subject in package["subjects"] if subject["id"] == "canbu")
+    dongguan = next(region for region in canbu["regions"] if region["name"] == "东莞")
+
+    assert canbu["version"] == "DL-CANBU.v1.0.5"
+    assert "东莞实习生" in str(dongguan)
+    assert canbu["change_log"][0]["version"] == "DL-CANBU.v1.0.5"
 
 
 def test_rule_package_supports_immutable_version_lookup():
@@ -2260,6 +2270,25 @@ def test_canbu_dongguan_operation_clerk_is_eligible():
 
     assert result.amount == 19
     assert explanation["rule_name"] == "东莞餐补逐日折算与封顶"
+
+
+def test_canbu_dongguan_intern_is_eligible():
+    """东莞实习生按通用逐日规则享有餐补。"""
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": "东莞",
+        "一级部门名称": "莞深操作",
+        "岗位名称": "实习生",
+    }
+    daily_attendance = [
+        {"工号": "OWHN001", "工作地区": "东莞", "工作状态": "工作日", "正班时数": 8, "刷卡加班": 0},
+    ]
+
+    result = CanBuEngine().calculate(employee, daily_attendance)
+
+    assert result.amount == 19
+    assert result.details["日餐补明细"] == [19]
 
 
 def test_canbu_dongguan_explicit_ineligible_position_is_not_eligible():
