@@ -272,7 +272,14 @@ def extract_from_folder(input_dir):
 
 
 def extract_from_path(input_path):
-    """input_path 可以是文件夹(处理其中所有 PDF) 或单个 .pdf 文件。"""
+    """input_path 可以是文件夹(处理其中所有 PDF) 或单个 .pdf 文件。
+
+    注意：这两个 sys.exit() 是 CLI 用法，SystemExit 不是 Exception 的子类。
+    命令行下就是打一行原因并退出，没问题；但网页端调用时若没人兜住它，
+    整条 HTTP 连接会被掐断，用户只看到「网络错误」、一个字都读不到。
+    web_extractor.serve_tool_process 已按 BaseException 兜底并翻成中文诊断
+    （避坑清单 §16），改动这里时别把兜底去掉。
+    """
     if os.path.isfile(input_path):
         if not input_path.lower().endswith(".pdf"):
             sys.exit(f"输入不是 PDF 文件: {input_path}")

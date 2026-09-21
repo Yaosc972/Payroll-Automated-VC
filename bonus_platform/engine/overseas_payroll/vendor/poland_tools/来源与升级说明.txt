@@ -1,0 +1,50 @@
+poland_tools —— 波兰工资考勤工具箱（Windows 便携版 v1.0）源码并入目录
+
+来源: 波兰工资考勤工具箱_Windows版_v1.0_2026-09-11.zip  ->  tools\NN_xxx\*.py
+说明: 除下面【本工作台内的改动】列出的文件外，本目录为【原样复制】，未做任何代码改动，
+      以便后续按原工具箱方式升级。
+
+升级方法（与工具箱使用说明一致）:
+  把新的 .py 文件覆盖到对应子目录下同名文件即可，工作台重启后生效。
+  例: 升级 [5] 波兰工资单提取 -> 覆盖 poland_tools\05_payroll\pdf_payroll_extractor.py
+
+【本工作台内的改动】(2026-09-14)
+  10_german\lohnjournal_extractor.py
+     原因: 用户反馈「德国工具在提取时失败了」。原版在表格锚线对不上（PDF 被缩放/
+           裁剪/另存/打印过）时会【静默】输出「有姓名、金额列全空」的表；解析出错
+           也只在页面上报一句空话，日志里查不到传的是什么文件。
+     改动: 只加「兜底链 + 显式失败」，表格竖线严格路径与 Excel 列序【一字未动】，
+           同一份正常 PDF 的输出与改动前逐格一致（6600 格 + 13200 格两轮断言）。
+     风险: 若用工具箱原版覆盖本文件，这两处加固会丢失（表格正常时不影响，
+           版式异常时又会静默出空表）。工具箱日后发新版，请先比对本文件再覆盖。
+  其余 10 个 .py 仍未改过（可按下述 sha256 清单逐一核对）。
+
+重要: 本目录只保留 10 个工具的 .py 源码；未复制原包的 _参考样例\ 目录
+      （内含真实员工工资单截图与数据快照，仅供格式参考，禁止外传）。
+
+目录对应关系:
+  01_pesel\              <- 01_PESEL信息提取\  (pesel_tool.py)
+  02_encrypt\            <- 02_PDF批量加密\  (pdf_encryptor.py)
+  03_rename\             <- 03_PDF重命名\  (pdf_renamer.py)
+  04_sanitize\           <- 04_PDF隐私脱敏\  (pdf_sanitizer.py)
+  05_payroll\            <- 05_波兰工资单提取\  (pdf_payroll_extractor.py)
+  06_attendance\         <- 06_波兰考勤合并\  (merge_all.py, report_summary.py)
+  07_p45\                <- 07_P45处理工具\  (p45_tool.py)
+  08_pension_rename\     <- 08_养老金信函重命名\  (pdf_renamer.py)
+  09_irish\              <- 09_爱尔兰工资单处理\  (irish_payslip_tool.py)
+  10_german\             <- 10_德国工资单提取\  (lohnjournal_extractor.py)
+
+sha256 清单:
+  （10_german 为 2026-09-14 加固后的本地版本；原工具箱版本为 16760 /
+    2b0f063834d59d9f7ccf50b2902c0b6b2f42a74bec9e3f60677955516eeafa3a）
+  01_pesel\pesel_tool.py  21011  d2d1677516a398047d5f04f53252a65b1af5fdd72daae542c8e145353f6b818d
+  02_encrypt\pdf_encryptor.py  25153  193959d6a4e461a76588d61abd9aedd9ca7d54ed2b1f3fff1291dcc68308a7c2
+  03_rename\pdf_renamer.py  25238  909f0bd1c8415a109dcc3c03d03a1843d13986ccd942866acf6c59f45abf2acf
+  04_sanitize\pdf_sanitizer.py  22122  5d0c40d6f49700c2f67f9ddbf76dcf74740f9390f1d42b5511698e7cb151efb9
+  05_payroll\pdf_payroll_extractor.py  26684  a9148c6255bf36d8298e936dd0c706e1fd79f1aa6f755f822886d3c34addb5b3
+  06_attendance\merge_all.py  43801  e0ec7d9874484fbbd8f61579b305b31bce4ebcf1a40a0341e6e31cf004e12a3e
+  06_attendance\report_summary.py  7531  c6f6f8c1e15cd14884f1e8c6baa5e715069af7d75472ff9a06db91724f20e39e
+  07_p45\p45_tool.py  13111  c0212b5dd479d08a70aae8b3ee2b1474f124fba0db598d5dd95c525356339b54
+  08_pension_rename\pdf_renamer.py  18232  c3c5617b1856d32cc98568101c41c12a9f451f43bbe4abf88f553e9998e6059c
+  09_irish\irish_payslip_tool.py  24952  6ddabab96c2226f1a8fc0f31b2e5670a883c195cefec84dabe62b7e50b71471b
+  10_german\lohnjournal_extractor.py  29882  5f20de9223cbabe153716f9d42849fc536f43279c7fbe841d1100ad5d9f1f4c8
