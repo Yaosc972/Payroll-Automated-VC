@@ -407,14 +407,22 @@
     return runAsyncTask(list, displayName, displayName + '|batch');
   };
 
+  function applyToolDropHint(tool) {
+    if (tool && tool.drop_hint && typeof dropsub !== 'undefined') {
+      setText(dropsub, tool.drop_hint);
+    }
+  }
+
   if (typeof showTool === 'function') {
     const originalShowTool = showTool;
     showTool = function (id) {
       originalShowTool(id);
+      applyToolDropHint(CURRENT_TOOL);
       restoreTaskHistory(id);
     };
   }
   if (typeof CURRENT_TOOL !== 'undefined' && CURRENT_TOOL) {
+    applyToolDropHint(CURRENT_TOOL);
     restoreTaskHistory(CURRENT_TOOL.id);
   }
 })();

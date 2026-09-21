@@ -1854,6 +1854,15 @@ def process_italy_payslip(filename, raw):
         out_name = os.path.splitext(os.path.basename(filename))[0] + "_italy.xlsx"
         extra = "%d名员工 / %d条费用 / %d个编码" % (
             info.get("num_employees", 0), info.get("num_voci", 0), info.get("num_codes", 0))
+        repaired = info.get("num_repaired", 0)
+        unresolved = info.get("num_unresolved", 0)
+        reconcile = info.get("num_recon", 0)
+        if repaired:
+            extra += " / 已修复%d处字体错码" % repaired
+        if unresolved:
+            extra += " / %d行科目未识别，需对照原PDF补录(见「提取审计」页)" % unresolved
+        if reconcile:
+            extra += " / %d人待核对(见「提取审计」页)" % reconcile
         return (out_name, xlsx_b64, extra)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
