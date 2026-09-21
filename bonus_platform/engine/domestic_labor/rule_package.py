@@ -2283,6 +2283,29 @@ _yeban_butie["change_log"].insert(0, {
     "changes": "修复东莞理货员资格排除遗漏；依据2026-08-10已确认口径，其他地区及理货部门操作员不扩大排除。",
 })
 
+# 2026-09-21：业务确认删除HD048次日06:00至06:30早休，仅保留23:00至24:00。
+_yeban_butie["version"] = "DL-YEBAN.v0.9.13"
+_hd048_rule_before = "HD048理货入库18点班固定休息为晚上23:00至24:00、次日06:00至06:30。"
+_hd048_rule_after = "HD048理货入库18点班固定休息仅保留晚上23:00至24:00；不再扣除次日06:00至06:30。"
+for _region in _yeban_butie["regions"]:
+    _region["details"] = [
+        _hd048_rule_after if item == _hd048_rule_before else item
+        for item in _region["details"]
+    ]
+_yeban_butie["verification"] = [
+    (
+        "2026年8月HD048共60名员工：删除次日06:00至06:30早休后，60人全部与线下月度金额一致；"
+        "修复56人、未新增冲突，平台合计增加732.50元。1,021条有夜班补贴的HD048日明细"
+        "早上休息扣除均为0。"
+    ) if item.startswith("HD048共1,374条可匹配日明细") else item
+    for item in _yeban_butie["verification"]
+]
+_yeban_butie["change_log"].insert(0, {
+    "version": "DL-YEBAN.v0.9.13",
+    "released_at": "2026-09-21",
+    "changes": "删除HD048次日06:00至06:30早休，仅保留23:00至24:00；依据2026年8月线下明细回归确认。",
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
