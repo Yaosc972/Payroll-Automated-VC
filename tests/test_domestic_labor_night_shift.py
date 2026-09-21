@@ -609,3 +609,44 @@ def test_jinjiang_roster_does_not_exclude_outside_effective_dates():
     assert result.amount == 50
     assert result.details['excluded_days'] == 1
     assert result.warnings == []
+
+
+@pytest.mark.parametrize("area,monthly_position,daily_position,shift,expected", [
+    ("东莞", "理货员", "", "LB05", 0),
+    ("东莞", "理货员", "", "NEW", 0),
+    ("东莞", "操作员", "理货员", "LB05", 0),
+    ("东莞", "理货员", "操作员", "LB05", 25),
+    ("东莞", "操作员", "", "LB05", 25),
+    ("嘉善", "理货员", "", "LB05", 25),
+    ("义乌", "理货员", "", "LB05", 25),
+    ("晋江", "理货员", "", "LB05", 25),
+])
+def test_dongguan_tally_clerk_exclusion_respects_area_and_attendance_position(
+    area, monthly_position, daily_position, shift, expected,
+):
+    result = YeBanBuTieEngine().calculate(
+        {"工号": "OWHN9655", "工作地区": area, "岗位名称": monthly_position, "部门": "理货组"},
+        [_day("22:00", "08:00", shift=shift, 岗位名称=daily_position, 部门="理货组")],
+        config={"shift_breaks": [{"shift_code": "LB05", "break_periods": []}],
+                "jinjiang_list_confirmed": True},
+    )
+    assert result.amount == expected
+    day = result.details["daily_results"][0]
+    if expected == 0:
+        assert day["status"] == "excluded"
+        assert day["reason_code"] == "dongguan_tally_clerk_excluded"
+        assert result.details["excluded_days"] == 1
+        assert result.details["pending_rule_days"] == 0
+    else:
+        assert day["status"] == "calculated"
+
+
+def test_current_night_rules_include_tally_clerk_without_rewriting_history():
+    from bonus_platform.engine.domestic_labor.rule_package import get_rule_package
+    current = next(s for s in get_rule_package()["subjects"] if s["id"] == "yeban_butie")
+    dongguan = next(r for r in current["regions"] if r["name"] == "东莞")
+    assert "理货员" in dongguan["rule"]
+    assert "理货员" in dongguan["formula"]
+    assert current["version"] == "DL-YEBAN.v0.9.12"
+    historical = next(s for s in get_rule_package("1.4.8")["subjects"] if s["id"] == "yeban_butie")
+    assert historical["version"] != current["version"]
