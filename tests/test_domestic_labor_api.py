@@ -524,7 +524,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
     }
 
     assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.8"
-    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.3"
+    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.4"
     assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.8"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
         payload = str(subjects[subject_id])
@@ -566,6 +566,19 @@ def test_rule_package_publishes_dongguan_intern_meal_eligibility():
     assert any(item["version"] == "DL-CANBU.v1.0.7" for item in canbu["change_log"])
     assert any(item["version"] == "DL-CANBU.v1.0.6" for item in canbu["change_log"])
     assert any(item["version"] == "DL-CANBU.v1.0.5" for item in canbu["change_log"])
+
+
+def test_rule_package_publishes_intern_housing_allowance_eligibility():
+    package = TestClient(app).get("/api/domestic-labor/rule-package").json()
+    waisu = next(subject for subject in package["subjects"] if subject["id"] == "waisu_butie")
+    dongguan = next(region for region in waisu["regions"] if region["name"] == "东莞")
+    jiashan_yiwu = next(region for region in waisu["regions"] if region["name"] == "嘉善 / 义乌")
+
+    assert waisu["version"] == "DL-WAISU.v1.0.4"
+    assert "东莞、嘉善、义乌实习生享有外宿补贴" in str(dongguan)
+    assert "东莞、嘉善、义乌实习生享有外宿补贴" in str(jiashan_yiwu)
+    assert waisu["change_log"][0]["version"] == "DL-WAISU.v1.0.4"
+    assert any(item["version"] == "DL-WAISU.v1.0.3" for item in waisu["change_log"])
 
 
 def test_rule_package_supports_immutable_version_lookup():
@@ -706,7 +719,7 @@ def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
     current_waisu = next(subject for subject in current["subjects"] if subject["id"] == "waisu_butie")
     previous_waisu = next(subject for subject in previous["subjects"] if subject["id"] == "waisu_butie")
 
-    assert current_waisu["version"] == "DL-WAISU.v1.0.3"
+    assert current_waisu["version"] == "DL-WAISU.v1.0.4"
     assert "最后工作日在核算月月末或之后" in "".join(current_waisu["common_rules"])
     assert previous_waisu["version"] == "DL-WAISU.v1.0.0"
     assert "最后工作日在核算月月末或之后" not in "".join(previous_waisu["common_rules"])
@@ -2870,6 +2883,25 @@ def test_waisu_all_confirmed_security_inspector_positions_are_eligible(work_area
     result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
 
     assert result.amount == 150
+
+
+@pytest.mark.parametrize("work_area", ["东莞", "嘉善", "义乌"])
+def test_waisu_intern_is_eligible(work_area):
+    employee = {
+        "工号": "OWHN001",
+        "姓名": "张三",
+        "工作地区": work_area,
+        "岗位名称": "实习生",
+        "考勤月份": "202606",
+        "入职日期": date(2023, 1, 1),
+        "最后工作日": None,
+    }
+    daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
+
+    result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records=[])
+
+    assert result.amount == 150
+    assert result.details["补贴标准"] == 150
 
 
 def test_waisu_unconfirmed_security_inspector_like_position_stays_ineligible():
