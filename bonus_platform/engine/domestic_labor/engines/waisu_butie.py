@@ -36,32 +36,6 @@ DONGGUAN_INELIGIBLE_POSITIONS = {
 }
 DONGGUAN_ELIGIBLE_NAME_OVERRIDES = {"陈西莎", "田盈"}
 
-JIASHAN_YIWU_ELIGIBLE_POSITIONS = {
-    "查验员",
-    "安检员",
-    "操作员",
-    "门禁员",
-    "巡场员",
-    "仓库文员",
-    "操作副主管",
-    "操作主管",
-    "操作组长",
-    "见习组长",
-    "设备维养专员",
-    "设备维护专员",
-    "设备维护员",
-    "安检组长",
-    "安全员",
-    "HRBP专员",
-    "高级HRBP专员",
-    "高级招聘专员",
-    "招聘专员",
-    "数据专员",
-    "保洁",
-    "操作文员",
-    "实习生",
-}
-
 JINJIANG_ELIGIBLE_POSITIONS = {
     "操作员",
     "门禁员",
@@ -472,13 +446,12 @@ class WaiSuBuTieEngine(BaseEngine):
                 "eligible": eligible_position and not explicitly_ineligible,
             }
         if work_area in {"嘉善", "义乌"}:
-            eligible_position = is_position_eligible(position, JIASHAN_YIWU_ELIGIBLE_POSITIONS)
             return {
                 "工作地区": work_area,
                 "岗位名称": position,
                 "岗位是否明确不享有": False,
-                "岗位是否在享有名单": eligible_position,
-                "eligible": eligible_position,
+                "是否限制岗位": False,
+                "eligible": True,
             }
         return {"工作地区": work_area, "岗位名称": position, "eligible": True}
 
