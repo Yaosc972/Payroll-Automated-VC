@@ -2340,6 +2340,22 @@ _canbu["change_log"].insert(0, {
     "changes": _intern_meal_rule,
 })
 
+# 2026-09-21：东莞实习生餐补只限制工作地区，不限制部门。
+_canbu["version"] = "DL-CANBU.v1.0.6"
+_intern_area_rule = "东莞实习生仅按工作地区判断餐补资格，不要求部门命中寮步区或莞深操作；按通用逐日折算及500元月封顶核算。"
+_dongguan_canbu["details"] = [
+    _intern_area_rule if detail == _intern_meal_rule else detail
+    for detail in _dongguan_canbu["details"]
+]
+_canbu["verification"].append(
+    "2026年8月仅有邓林斌1名实习生，取消部门限制后仍为361元；其他岗位继续执行东莞部门限制。"
+)
+_canbu["change_log"].insert(0, {
+    "version": "DL-CANBU.v1.0.6",
+    "released_at": "2026-09-21",
+    "changes": _intern_area_rule,
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
