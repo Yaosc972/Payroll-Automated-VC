@@ -1,199 +1,151 @@
 # 列位置对照表
 
-## 每周工资计算表 — 周出勤Sheet
+> **重要：模板列位置一律用表头文本动态检测，禁止硬编码列号。**
+> 不同月份 / 不同主体的模板列数并不一致（例如 202605 空白 Gonesse 模板比 202608 多出
+> 2 列 `Heures complémentaires à 10%/25%`）。早期版本用过的 `COLUMN_MAP` 硬编码字典
+> **已被删除**，下文的「实测列号」只作为人工核对时的参考，脚本不依赖它们。
 
-5个周出勤Sheet的列结构一致，名称格式为 `DD.MM-DD.MM出勤情况` 或 `DD.MM-DD.MM周出勤情况`。
+---
+
+## 1. 每周工资计算表 — 周出勤Sheet
+
+Sheet 名包含 `出勤情况`，一个月有 4~5 个（202608 是 4 个：`27.07-02.08出勤情况`、
+`03.08-09.08周出勤情况`、`10.08-16.08周出勤情况`、`17.08-23.08出勤情况`）。
+每张 Sheet = 一周，列结构一致。
 
 ### 行结构
 
 | 行 | 内容 |
 |----|------|
-| 行1 | 日期（B-H列为当周每天的日期，datetime对象） |
-| 行2 | 星期几（Lundi/Mardi/Mercredi/Jeudi/Vendredi/Samedi/Dimanche） |
-| 行3+ | 员工数据，A列=姓名 |
+| 行1 | 日期（B–H 列 = 本周 7 天的公历日期） |
+| 行2 | 星期几（Lundi…Dimanche） |
+| 行3+ | 员工数据，**A 列 = 姓名** |
 
-### 列位置
+### 脚本使用的列（其余列为周内汇总/校验列，脚本不读）
 
 | 列 | 列号 | 内容 |
 |----|------|------|
 | A | 1 | 员工姓名 |
-| B | 2 | 周一出勤/请假标记 |
-| C | 3 | 周二出勤/请假标记 |
-| D | 4 | 周三出勤/请假标记 |
-| E | 5 | 周四出勤/请假标记 |
-| F | 6 | 周五出勤/请假标记 |
-| G | 7 | 周六出勤/请假标记 |
-| H | 8 | 周日出勤/请假标记 |
-| N | 14 | HS FINAL（加班最终值） |
-| O | 15 | HS OEHR |
-| P | 16 | HS 1.25（加班25%原始值） |
-| Q | 17 | HS 1.5 Payfit输入（加班50%原始值） |
-| S | 19 | CP天数 |
-| T | 20 | DIMANCHE（周日加班天数） |
-| AA | 27 | 地点（部分Sheet） |
-| AB | 28 | 地点（第一个Sheet 22.06-28.06） |
+| B–H | 2–8 | 周一~周日的逐日单元格：`CP` / `CSS` / `HEURES REPOS` / `rtt` / `JF` / 数字工时 / `0` |
+| P | 16 | `HS 1.25` —— HS 25% 原始值 |
+| Q | 17 | `HS 1.5 Payfit输入` —— HS 50% 原始值 |
 
-### 每日列中的请假代码
+> 列 11 的周汇总列 `HEURE REPOS` **不参与**请假段识别 —— 请假日只从 B–H 逐日单元格读，
+> 因为需要日期来归并区间。
+> 周出勤Sheet **不提供地点**，地点一律取月工资合计 A 列。
 
-| 代码 | 含义 |
-|------|------|
-| CP | 年假（Congé Payé） |
-| CSS | 事假（Congé Sans Solde） |
-| HEURES REPOS | 调休 |
-| rtt | 补工作时间假（仅凡哥和Cathy） |
-| AM | 病假（Arrêt Maladie） |
-| AT | 病假（Accident de Travail） |
-| JF | 公假（Jour Férié，国庆节等） |
-| ABS | 缺勤 |
-| 数字 | 正常出勤工时（如7、7.0等） |
+### 逐日列里的文本与处理
+
+| 文本 | 归类 | 处理 |
+|------|------|------|
+| `CP` | 年假 | 归并成段 → CP 区块 |
+| 含 `css` | 事假 | 归并成段 → CSS 区块 |
+| 含 `repos` | 调休 | 归并成段 → Repos 区块 |
+| 含 `rtt` | RTT | 归并成段 → RTT 区块 |
+| `JF` | 公假 | 不填 Fériés（当天放假） |
+| `AM` / `AT` / `ABS` | 病假/缺勤 | **不逐日登记**，由月表 H 列整月汇总体现 |
+| 数字（`7`、`6.68`…） | 出勤工时 | 仅当该日是法定节假日时用于 Fériés |
+
+匹配为**不区分大小写的子串**匹配（`CP` 例外，要求严格相等），详见 `business_rules.md` §1。
 
 ---
 
-## 每周工资计算表 — 月工资合计Sheet
+## 2. 每周工资计算表 — 月工资合计Sheet
 
-Sheet名称格式为 `MM月工资合计`（如 `06月工资合计`）。
+Sheet 名包含 `工资合计`（如 `08月工资合计`）。
 
-### 列位置
+| 列 | 列号 | 内容 | 用途 |
+|----|------|------|------|
+| A | 1 | 地点 | 判定员工归属 Gonesse / Nanteuil / SAINT-MARD；**为空的行直接跳过** |
+| B | 2 | 员工姓名 | 员工主键（配合 P 列全名匹配） |
+| D | 4 | 加班工时 1.25 | 周表无此人时回退；与周表 P 累加值交叉验证 |
+| E | 5 | 加班工时 1.5 Payfit输入 | 同上 |
+| H | 8 | RD/ABS总计 | **负值**取绝对值 → `Heures d'absence` |
+| J | 10 | 周日天数 | 校验用（周日奖金有金额但无天数时提示） |
+| K | 11 | 周日奖金 | → Prime 区块 `Montant` |
+| L | 12 | 补餐票 | 仅读取，当前不写入（餐票区块由模板维护） |
+| P | 16 | 全名 | 姓名匹配辅助（周表用简称时兜底） |
+| Q | 17 | 人员类型 | `实习生` → 不填 HS 与 Type de rémunération |
 
-| 列 | 列号 | 内容 |
-|----|------|------|
-| A | 1 | 地点 |
-| B | 2 | 员工姓名 |
-| H | 8 | RD/ABS总计（需取负数的绝对值填入import的Heures d'absence） |
+垃圾行过滤（`_is_junk_name`）：姓名为空、含 `/`、或不含任何拉丁字母的备注行一律跳过。
 
 ---
 
-## import模板 — Gonesse
+## 3. import 模板 — 行结构
 
-Sheet名：`Page 1`
-
-### 行结构
+Sheet 名 `Page 1`。
 
 | 行 | 内容 |
 |----|------|
-| 行1 | 大类标题（可为空） |
-| 行2 | 字段名 |
-| 行3+ | 员工数据（D列=姓名，可能有多行） |
+| 行1 | 分组带（如 `Ajout de congés payés`、`Ajout d'heures supplémentaires`） |
+| 行2 | **字段名表头 —— 列检测的唯一依据** |
+| 行3+ | 员工数据：**A 列 = 24 位十六进制 ObjectId**，**D 列 = 姓名** |
 
-### 列位置
+同一员工的多行在 A 列重复出现该 ObjectId，连续排列。员工区 = 从第 3 行起的连续 ObjectId 段。
 
-| 列 | 列号 | 字段名 | 填写规则 |
-|----|------|--------|---------|
-| A | 1 | Identifiant | 模板预填，不修改 |
-| B | 2 | Compte analytique | 模板预填，不修改 |
-| C | 3 | Matricule | 模板预填，不修改 |
-| D | 4 | Collaborateur（姓名） | 模板预填，不修改 |
-| E | 5 | CP — Date de début | CP开始日期 |
-| F | 6 | CP — Choix | 固定"Journée entière" |
-| G | 7 | CP — Date de fin | CP结束日期 |
-| H-I | 8-9 | CP —相关 | 不填写 |
-| J | 10 | CSS — Date de début | CSS开始日期 |
-| K | 11 | CSS — Choix | 固定"Journée entière" |
-| L | 12 | CSS — Date de fin | CSS结束日期 |
-| M | 13 | CSS — Absence injustifiée | 固定"Non" |
-| N-O | 14-15 | RTT | RTT开始/结束日期（仅凡哥和Cathy） |
-| P-Q | 16-17 | RTT — Choix/Solde | RTT相关 |
-| R | 18 | HEURES REPOS — Date de début | 调休开始日期 |
-| S | 19 | HEURES REPOS — Choix | 固定"Journée entière" |
-| T | 20 | HEURES REPOS — Date de fin | 调休结束日期 |
-| U | 21 | HEURES REPOS — Solde à débiter | 固定"Contrepartie des heures supplémentaires" |
-| V | 22 | HEURES REPOS — Heures à décompter | 调休小时数（天数×7） |
-| W | 23 | HEURES REPOS — Taux de majoration | 不填写 |
-| X-AC | 24-29 | 其他调休字段 | 不填写 |
-| AD | 30 | Heures supplémentaires à 25% (h) | HS 25%加班（P列5周累加） |
-| AE | 31 | Taux de majoration 25% | 不填写 |
-| AF | 32 | Heures à 25% — Heures à payer | 不填写 |
-| AG | 33 | Heures à 50% (h) | HS 50%加班（Q列5周总和，封顶25） |
-| AH | 34 | Taux de majoration 50% | 不填写 |
-| AI | 35 | Heures à 50% — Heures à payer | 不填写 |
-| AJ | 36 | Heures à 50% — majoration | 不填写 |
-| AK | 37 | Travail du dimanche habituel (h) | 不填写 |
-| AL | 38 | Taux de majoration dimanche habituel | 不填写 |
-| AM | 39 | Travail du dimanche exceptionnel (h) | 不填写 |
-| AN | 40 | Taux de majoration dimanche exceptionnel | 不填写 |
-| AO | 41 | Nombre de dimanches travaillés | 不填写 |
-| AP | 42 | Heures à ajouter | 不填写 |
-| AQ | 43 | Heures de nuit | 不填写 |
-| AR | 44 | École | 不填写 |
-| AS | 45 | 1er mai | 不填写 |
-| AT | 46 | Fériés habituelles (h) | 7/14公假日（有出勤填实际工时，JF不填） |
-| AU | 47 | Taux de majoration fériés | 不填写 |
-| AV | 48 | Heures fériés à payer | 不填写 |
-| AW | 49 | Heures fériés à payer majoration | 不填写 |
-| AX | 50 | Congés exceptionnels | 不填写 |
-| AY | 51 | Heures d'absence (injustifiées) | 不填写 |
-| AZ | 52 | Primes — fixed | 不填写 |
-| BA | 53 | Heures d'absence | 月工资合计H列负数绝对值 |
-| BB | 54 | Taux de majoration absence | 不填写 |
-| BC-BD | 55-56 | Absence相关 | 不填写 |
-| BE | 57 | Transport — montant | 不填写 |
-| BF | 60 | Transport — Frequence | 不填写 |
-| BG | 59 | Titres restaurant — Gérer | 不填写 |
-| BH | 60 | Titres restaurant — Frequence | 不填写 |
-| BI | 61 | Titres restaurant — Nombre | 不填写 |
-| BJ | 62 | Titres restaurant — Montant | 不填写 |
-| BK-BM | 63-65 | Titres restaurant相关 | 不填写 |
-| BN-BQ | 66-69 | 其他餐票字段 | 不填写 |
+### 列检测规则（`detect_columns`）
+
+| 逻辑列 | 检测方式 |
+|--------|---------|
+| `cp_start` / `cp_end` | 表头同时含 `cp` + `début` / `cp` + `fin` |
+| `cp_start_choix` / `cp_end_choix` | 再叠加 `choix` |
+| `css_*` | 同 CP，关键词换成 `css` |
+| `css_injustifiee` | **不含 `css`**！用 `absence` + `injustifiée` 检测 |
+| `repos_*` | 同类，关键词 `repos` |
+| `repos_solde` | **表头不含 `repos`**！用 `solde à débiter` 检测（v2 曾因此完全填不进这一列） |
+| `hs_25` | 含 `25%` 且**不含** `50%` |
+| `hs_50` | 含 `50%` |
+| `type_remu` | `type de rémunération` |
+| `feries` | `fériés` + `habituelles` |
+| `heures_absence` | **精确**匹配 `heures d'absence`（否则会误命中 `Début CSS/Absence In.`） |
+| `dim_hab` / `dim_exc` / `dim_nb` | `dimanche` + `habituel` / `exceptionnel` / `nombre` |
+| `prime_type` | `type de prime` |
+| `prime_name` / `prime_amount` / `prime_date` / `prime_freq` / `prime_end` | 以 `prime_type` 为锚点向右扫描同组列：`nom de la prime` / 以 `montant` 开头 / `date de début de versement` / 以 `fréquence` 开头 / 以 `date de fin` 开头 |
+| `titre_*` | `gérer les titres` / `valeur du titre` / `gestion du nombre` / `nombre de titres` / `part payée par l'` —— **只统计不修改** |
+
+若 `required` 里的列（CP/CSS/Repos 的起止、HS25%、HS50%、Fériés、Heures d'absence、
+Type de rémunération、Solde à débiter）检测不到，会在日志打印
+`WARNING: 以下列未检测到: [...]`，请先核对模板是否换了表头写法。
 
 ---
 
-## import模板 — Nanteuil / SM
+## 4. 202608 实测列号（仅供人工核对，脚本不依赖）
 
-Sheet名：`Page 1`
-
-Nanteuil和SM模板结构完全一致，但与Gonesse不同。
-
-### 列位置
-
-| 列 | 列号 | 字段名 | 填写规则 |
-|----|------|--------|---------|
-| A | 1 | Identifiant | 模板预填，不修改 |
-| B | 2 | Compte analytique | 模板预填，不修改 |
-| C | 3 | Matricule | 模板预填，不修改 |
-| D | 4 | Collaborateur（姓名） | 模板预填，不修改 |
-| E | 5 | CP — Date de début | CP开始日期 |
-| F | 6 | CP — Choix | 固定"Journée entière" |
-| G | 7 | CP — Date de fin | CP结束日期 |
-| H | 8 | CSS — Date de début | CSS开始日期 |
-| I | 9 | CSS — Choix | 固定"Journée entière" |
-| J | 10 | CSS — Date de fin | CSS结束日期 |
-| K | 11 | CSS — Absence injustifiée | 固定"Non" |
-| L | 12 | HEURES REPOS — Date de début | 调休开始日期 |
-| M | 13 | HEURES REPOS — Choix | 固定"Journée entière" |
-| N | 14 | HEURES REPOS — Date de fin | 调休结束日期 |
-| O | 15 | HEURES REPOS — Solde à débiter | 固定"Contrepartie des heures supplémentaires" |
-| P | 16 | HEURES REPOS — Heures à décompter | 调休小时数（天数×7） |
-| Q | 17 | HEURES REPOS — Taux de majoration | 不填写 |
-| R-X | 18-24 | 其他调休字段 | 不填写 |
-| Y | 25 | Heures supplémentaires à 25% (h) | HS 25%加班（P列5周累加） |
-| Z | 26 | Taux de majoration 25% | 不填写 |
-| AA | 27 | Heures à 25% — Heures à payer | 不填写 |
-| AB | 28 | Heures à 25% — majoration | 不填写 |
-| ... | | | |
-| Y | 25 | Heures à 50% (h) | 注意：Nanteuil/SM中HS50%在Y列(25)而非AG列 |
-
-> **重要差异**：Gonesse和Nanteuil/SM模板的列位置不同！
-> - Gonesse: HS 25%=AD(30), HS 50%=AG(33), Fériés=AT(46), Heures d'absence=BA(53)
-> - Nanteuil/SM: HS 25%=Y(25), HS 50%=Y(25), Fériés=AJ(36), Heures d'absence=AQ(43)
->
-> 编写脚本时必须根据模板类型使用不同的列位置映射。脚本 `auto_fill_import.py` 中已通过 `COLUMN_MAP` 字典处理此差异。
-
-### Nanteuil/SM 关键列速查
+### Gonesse
 
 | 字段 | 列号 | 列字母 |
 |------|------|--------|
-| CP开始 | 5 | E |
-| CP结束 | 7 | G |
-| CSS开始 | 8 | H |
-| CSS结束 | 10 | J |
-| CSS Absence injustifiée | 11 | K |
-| Repos开始 | 12 | L |
-| Repos结束 | 14 | N |
-| Repos Solde à débiter | 15 | O |
-| Repos Heures à décompter | 16 | P |
-| HS 25% | 25 | Y |
+| CP 起 / 起choix / 止 / 止choix | 5 / 6 / 7 / 8 | E / F / G / H |
+| CSS `Absence injustifiée` | 17 | Q |
+| CSS 起 / 起choix / 止 / 止choix | 18 / 19 / 20 / 21 | R / S / T / U |
+| Repos 起 / 起choix / 止 / 止choix / `Solde à débiter` | 22 / 23 / 24 / 25 / 26 | V / W / X / Y / Z |
+| HS 25% | 32 | AF |
+| HS 50% | 33 | AG |
+| Type de rémunération | 34 | AH |
+| Fériés habituelles | 44 | AR |
+| Heures d'absence | 51 | AY |
+| Prime — `Type de prime` / `Montant` | 52 / 57 | AZ / BE |
+
+### Nanteuil / SM（两者结构一致）
+
+| 字段 | 列号 | 列字母 |
+|------|------|--------|
+| CP 起 / 起choix / 止 / 止choix | 5 / 6 / 7 / 8 | E / F / G / H |
+| CSS `Absence injustifiée` | 13 | M |
+| CSS 起 / 起choix / 止 / 止choix | 14 / 15 / 16 / 17 | N / O / P / Q |
+| Repos 起 / 起choix / 止 / 止choix / `Solde à débiter` | 18 / 19 / 20 / 21 / 22 | R / S / T / U / V |
+| HS 25% | 24 | X |
 | HS 50% | 25 | Y |
+| Type de rémunération | 26 | Z |
 | Fériés habituelles | 36 | AJ |
 | Heures d'absence | 43 | AQ |
+| Prime — `Type de prime` / `Montant` | 44 / 49 | AR / AV |
 
-> 注意：Nanteuil/SM模板中HS 25%和HS 50%可能共用同一列区域，需确认实际表头。以脚本中的COLUMN_MAP为准。
+> **Gonesse 与 Nanteuil/SM 的列位置完全不同**（列数、区块顺序都不一样），
+> 这正是必须按表头文本检测的原因。
+>
+> ⚠️ **已作废的错误记载**（旧版本本文档写过，特此更正）：
+> - ❌「Nanteuil/SM 的 HS 25% 和 HS 50% 共用 Y 列(25)」—— 实测 HS25%=24(X)、HS50%=25(Y)，两列不同。
+> - ❌「Gonesse HS 25%=AD(30)、HS 50%=AG(33)、Fériés=AT(46)、Heures d'absence=BA(53)」——
+>   这些是老月份模板的列号，202608 已不同；**不要沿用**。
+> - ❌「模板列位置通过 `COLUMN_MAP` 字典映射」—— 该字典不存在，用表头文本检测。

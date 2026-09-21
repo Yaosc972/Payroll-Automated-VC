@@ -11,6 +11,7 @@ PyYAML
 httpx[socks]
 psycopg[binary]>=3.2,<4
 msoffcrypto-tool
-xlrd
+numpy
 Pillow
+xlrd
 APScheduler==3.11.3
