@@ -2356,6 +2356,21 @@ _canbu["change_log"].insert(0, {
     "changes": _intern_area_rule,
 })
 
+# 2026-09-21：恢复东莞实习生餐补的部门限制。
+_canbu["version"] = "DL-CANBU.v1.0.7"
+_dongguan_canbu["details"] = [
+    _intern_meal_rule if detail == _intern_area_rule else detail
+    for detail in _dongguan_canbu["details"]
+]
+_canbu["verification"].append(
+    "恢复东莞实习生部门限制；2026年8月邓林斌的部门命中莞深操作，餐补仍为361元。"
+)
+_canbu["change_log"].insert(0, {
+    "version": "DL-CANBU.v1.0.7",
+    "released_at": "2026-09-21",
+    "changes": _intern_meal_rule,
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
