@@ -585,6 +585,8 @@ class YeBanBuTieEngine(BaseEngine):
                     result = _direct_day_result(attendance, "excluded", "dongguan_lb39_excluded")
                 elif work_area == "东莞" and position == "保洁":
                     result = _direct_day_result(attendance, "excluded", "dongguan_cleaner_excluded")
+                elif work_area == "东莞" and position == "理货员":
+                    result = _direct_day_result(attendance, "excluded", "dongguan_tally_clerk_excluded")
                 elif "晋江" in work_area and ("计件" in position or "计件" in work_type):
                     result = _direct_day_result(attendance, "excluded", "jinjiang_piecework_excluded")
                 elif "晋江" in work_area and "门禁" in position:
@@ -664,6 +666,7 @@ class YeBanBuTieEngine(BaseEngine):
             "jinjiang_special_list_unconfirmed": "当月晋江特殊名单尚未上传确认",
             "jiashan_yiwu_position_excluded": "嘉善/义乌固定排除岗位不享有夜班补贴",
             "dongguan_lb39_excluded": "东莞LB39保洁班次不享有夜班补贴",
+            "dongguan_tally_clerk_excluded": "东莞理货员不论班次均不享有夜班补贴",
             "dongguan_cleaner_excluded": "东莞保洁不论班次均不享有夜班补贴",
             "shift_break_config_missing": "班次休息表未维护该班次",
         }
@@ -698,7 +701,7 @@ class YeBanBuTieEngine(BaseEngine):
                 amount=amount,
                 rule_name="夜班补贴地区资格及通用计算规则",
                 formula=(
-                    "命中嘉善/义乌固定排除岗位或东莞LB39班次时为0元；东莞保洁不论班次均为0元；其他记录按"
+                    "命中嘉善/义乌固定排除岗位或东莞LB39班次时为0元；东莞保洁、理货员不论班次均为0元；其他记录按"
                     "扣休息后的有效夜班分钟满60分钟起算，不足60分钟为0元；满60分钟后按"
                     "min(floor(有效夜班分钟/30)*1.5, 25)计算；LB15按"
                     "max(8小时-迟到折算-早退折算,0)/8小时*25元计算；月度汇总后保留2位"
