@@ -55,7 +55,7 @@ mkdir -p "$MYSQL80_DATA"
 
 ```sql
 CREATE DATABASE sigma_workbench_local
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 CREATE USER 'sigma_app'@'127.0.0.1'
   IDENTIFIED BY 'replace-with-a-random-local-password';

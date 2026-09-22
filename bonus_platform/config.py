@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +57,42 @@ FBU_PERFORMANCE_RUNS_DIR = OUTPUT_DIR / "fbu_performance_runs"
 SOCIAL_INSURANCE_RUNS_DIR = OUTPUT_DIR / "social_insurance_runs"
 SOCIAL_INSURANCE_BASELINES_DIR = OUTPUT_DIR / "social_insurance_baselines"
 DATABASE_PATH = OUTPUT_DIR / "sigma_workbench.db"
-ADMIN_DATABASE_URL = os.environ.get("ADMIN_DATABASE_URL", "") or os.environ.get("DATABASE_URL", "")
+
+
+def _database_url_from_environment() -> str:
+    """Resolve the admin database URL from platform-standard variables.
+
+    AIDeploy injects external MySQL connections as split ``MYSQL_*`` values.
+    Keep the legacy URL variables as explicit overrides so local and existing
+    company-server profiles remain compatible.
+    """
+
+    explicit = (
+        os.environ.get("ADMIN_DATABASE_URL", "")
+        or os.environ.get("MYSQL_URL", "")
+        or os.environ.get("DATABASE_URL", "")
+    ).strip()
+    if explicit:
+        return explicit
+
+    host = os.environ.get("MYSQL_HOST", "").strip()
+    user = (
+        os.environ.get("MYSQL_USERNAME", "")
+        or os.environ.get("MYSQL_USER", "")
+    ).strip()
+    database = os.environ.get("MYSQL_DATABASE", "").strip()
+    if not host or not user or not database:
+        return ""
+    port = os.environ.get("MYSQL_PORT", "3306").strip() or "3306"
+    password = os.environ.get("MYSQL_PASSWORD", "")
+    return (
+        "mysql+pymysql://"
+        f"{quote(user, safe='')}:{quote(password, safe='')}@"
+        f"{host}:{quote(port, safe='')}/{quote(database, safe='')}"
+    )
+
+
+ADMIN_DATABASE_URL = _database_url_from_environment()
 ADMIN_BOOTSTRAP_IDENTIFIERS = [
     item.strip()
     for item in os.environ.get("ADMIN_BOOTSTRAP_IDENTIFIERS", "").split(",")

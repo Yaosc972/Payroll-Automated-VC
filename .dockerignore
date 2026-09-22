@@ -1,0 +1,22 @@
+# 由 aideploy devkit 生成——构建上下文越小，构建越快、镜像越干净
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+node_modules
+dist
+build
+target
+.next
+.nuxt
+.env
+.env.*
+!.env.example
+.idea
+.vscode
+*.log

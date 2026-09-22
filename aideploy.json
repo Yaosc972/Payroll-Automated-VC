@@ -1,0 +1,55 @@
+{
+  "$schema": "https://hras-aideploy.ztn.cn/api/v1/public/aideploy.schema.json",
+  "schema_version": "2.0",
+  "components": [
+    {
+      "id": "api",
+      "build_context": ".",
+      "dockerfile": "Dockerfile"
+    }
+  ],
+  "services": [
+    {
+      "name": "payroll-automated-vc",
+      "kind": "api",
+      "port": 8000,
+      "route": "/",
+      "component": "api",
+      "health_check": {
+        "path": "/api/health"
+      },
+      "required_env": [
+        "MYSQL_HOST",
+        "MYSQL_PORT",
+        "MYSQL_USERNAME",
+        "MYSQL_DATABASE"
+      ],
+      "secrets": [
+        "MYSQL_PASSWORD",
+        "FEISHU_APP_SECRET",
+        "MIMO_API_KEY"
+      ]
+    }
+  ],
+  "dependencies": [],
+  "secret_scan": {
+    "ignore": [
+      {
+        "file": "tests/test_labor_worker_jobs_postgres.py",
+        "reason": "测试专门验证数据库连接字符串不会出现在健康检查错误中，值为无效域名合成凭据。"
+      },
+      {
+        "file": "tests/test_labor_p1_worker_identity.py",
+        "reason": "Worker 身份测试使用合成 token/secret，专门验证过期、撤销和错误响应，不是真实凭据。"
+      },
+      {
+        "file": "tests/test_personal_labor_worker.py",
+        "reason": "个人 Worker 测试使用合成 token/secret，专门验证本地 Worker 协议，不是真实凭据。"
+      },
+      {
+        "file": "labor-worker-desktop/tests/shell.test.js",
+        "reason": "桌面 Worker shell 测试使用合成 token，专门验证启动参数和命令行行为，不是真实凭据。"
+      }
+    ]
+  }
+}

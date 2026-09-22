@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS admin_users (
   status VARCHAR(64) NOT NULL DEFAULT 'active',
   created_at VARCHAR(64) NOT NULL,
   updated_at VARCHAR(64) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_departments (
   id VARCHAR(255) PRIMARY KEY,
@@ -356,7 +356,7 @@ CREATE TABLE IF NOT EXISTS admin_departments (
   parent_id VARCHAR(255),
   root_id VARCHAR(255) NOT NULL,
   synced_at VARCHAR(64) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_user_departments (
   user_id VARCHAR(255) NOT NULL,
@@ -366,7 +366,7 @@ CREATE TABLE IF NOT EXISTS admin_user_departments (
   PRIMARY KEY (user_id, department_id),
   FOREIGN KEY (user_id) REFERENCES admin_users(id),
   FOREIGN KEY (department_id) REFERENCES admin_departments(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_roles (
   id VARCHAR(255) PRIMARY KEY,
@@ -375,7 +375,7 @@ CREATE TABLE IF NOT EXISTS admin_roles (
   is_system TINYINT NOT NULL DEFAULT 0,
   created_at VARCHAR(64) NOT NULL,
   updated_at VARCHAR(64) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_user_roles (
   user_id VARCHAR(255) NOT NULL,
@@ -384,7 +384,7 @@ CREATE TABLE IF NOT EXISTS admin_user_roles (
   PRIMARY KEY (user_id, role_id),
   FOREIGN KEY (user_id) REFERENCES admin_users(id),
   FOREIGN KEY (role_id) REFERENCES admin_roles(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_modules (
   id VARCHAR(255) PRIMARY KEY,
@@ -395,7 +395,7 @@ CREATE TABLE IF NOT EXISTS admin_modules (
   development_status VARCHAR(64) NOT NULL DEFAULT 'developing',
   created_at VARCHAR(64) NOT NULL,
   updated_at VARCHAR(64) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_role_module_permissions (
   role_id VARCHAR(255) NOT NULL,
@@ -405,7 +405,7 @@ CREATE TABLE IF NOT EXISTS admin_role_module_permissions (
   PRIMARY KEY (role_id, module_id),
   FOREIGN KEY (role_id) REFERENCES admin_roles(id),
   FOREIGN KEY (module_id) REFERENCES admin_modules(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_role_feature_permissions (
   role_id VARCHAR(255) NOT NULL,
@@ -414,7 +414,7 @@ CREATE TABLE IF NOT EXISTS admin_role_feature_permissions (
   updated_at VARCHAR(64) NOT NULL,
   PRIMARY KEY (role_id, feature_id),
   FOREIGN KEY (role_id) REFERENCES admin_roles(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_audit_logs (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -424,7 +424,7 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
   target_id VARCHAR(255) NOT NULL,
   detail TEXT,
   created_at VARCHAR(64) NOT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_sessions (
   token_hash VARCHAR(255) PRIMARY KEY,
@@ -432,7 +432,7 @@ CREATE TABLE IF NOT EXISTS admin_sessions (
   created_at VARCHAR(64) NOT NULL,
   expires_at VARCHAR(64) NOT NULL,
   FOREIGN KEY (user_id) REFERENCES admin_users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS admin_notification_outbox (
   id VARCHAR(255) PRIMARY KEY,
@@ -447,7 +447,7 @@ CREATE TABLE IF NOT EXISTS admin_notification_outbox (
   created_at VARCHAR(64) NOT NULL,
   updated_at VARCHAR(64) NOT NULL,
   sent_at VARCHAR(64)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS workbench_feedback (
   id VARCHAR(255) PRIMARY KEY,
@@ -462,7 +462,7 @@ CREATE TABLE IF NOT EXISTS workbench_feedback (
   user_agent VARCHAR(2048),
   created_at VARCHAR(64) NOT NULL,
   FOREIGN KEY (user_id) REFERENCES admin_users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS workbench_feedback_attachments (
   id VARCHAR(255) PRIMARY KEY,
@@ -473,7 +473,7 @@ CREATE TABLE IF NOT EXISTS workbench_feedback_attachments (
   content LONGBLOB NOT NULL,
   created_at VARCHAR(64) NOT NULL,
   FOREIGN KEY (feedback_id) REFERENCES workbench_feedback(id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS workbench_announcements (
   id VARCHAR(255) PRIMARY KEY,
@@ -487,7 +487,7 @@ CREATE TABLE IF NOT EXISTS workbench_announcements (
   created_by_name VARCHAR(255) NOT NULL,
   published_at VARCHAR(64) NOT NULL,
   FOREIGN KEY (created_by) REFERENCES admin_users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 """
 
 
