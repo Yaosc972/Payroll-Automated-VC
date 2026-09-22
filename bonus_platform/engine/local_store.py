@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS runs (
   updated_at VARCHAR(64) NOT NULL,
   INDEX idx_runs_updated_at (updated_at),
   INDEX idx_runs_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 """
 
 
