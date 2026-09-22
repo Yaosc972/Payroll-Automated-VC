@@ -1030,7 +1030,7 @@ def test_domestic_labor_uses_signed_storage_upload_before_calculation():
 
 
 def test_shared_progress_dialog_is_limited_to_domestic_labor():
-    assert 'workbench-progress.js?v=1' in DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
+    assert 'workbench-progress.js?v=2' in DOMESTIC_LABOR_HTML.read_text(encoding="utf-8")
     for page_name in (
         "china-employee-payroll.html",
         "fbu-performance.html",
