@@ -20,6 +20,14 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from . import postgres_state
+from ..labor.obs_storage import (
+    obs_delete_objects,
+    obs_get_bytes,
+    obs_list_objects,
+    obs_put_bytes,
+    obs_signed_upload_for_key,
+    obs_storage_configured,
+)
 
 
 FBU_RUN_PREFIX = "fbu-performance-runs"
@@ -80,6 +88,8 @@ def fbu_storage_backend() -> str:
 
 
 def fbu_persistent_storage_enabled() -> bool:
+    if fbu_storage_backend() in {"s3", "obs"}:
+        return obs_storage_configured()
     return bool(
         fbu_storage_backend() == "supabase"
         and _supabase_url()
@@ -996,6 +1006,9 @@ def load_fbu_file_from_persistent(run_id: str, run_dir: Path, relative_path: str
 def create_fbu_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:
     normalized = _normalize_relative_path(relative_path)
     object_path = _object_path(run_id, normalized)
+    if fbu_storage_backend() in {"s3", "obs"}:
+        return {"signedUrl": obs_signed_upload_for_key(object_path), "objectPath": object_path,
+                "relativePath": normalized, "headers": {}}
     body = _request(
         "POST",
         _storage_url(
@@ -1033,6 +1046,11 @@ def delete_fbu_files_from_persistent(run_id: str, relative_paths: Iterable[str])
     ]
     if not object_paths:
         return
+    if fbu_storage_backend() in {"s3", "obs"}:
+        obs_delete_objects(object_paths)
+        for object_path in object_paths:
+            _invalidate_fbu_json_cache_prefix(object_path)
+        return
     _request(
         "DELETE",
         _storage_url(f"object/{fbu_supabase_bucket()}"),
@@ -1046,6 +1064,11 @@ def delete_fbu_files_from_persistent(run_id: str, relative_paths: Iterable[str])
 def delete_fbu_run_from_persistent(run_id: str) -> None:
     postgres_state.delete_run(run_id)
     prefix = f"{_environment_prefix()}/{_safe_run_id(run_id)}"
+    if fbu_storage_backend() in {"s3", "obs"}:
+        obs_delete_objects([str(row["key"]) for row in obs_list_objects(f"{prefix}/") if row.get("key")])
+        _invalidate_fbu_json_cache_prefix(f"{prefix}/")
+        _remove_fbu_run_from_index(run_id)
+        return
     object_paths = [f"{prefix}/{entry['name']}" for entry in _list_objects(prefix) if entry.get("name")]
     if object_paths:
         url = _storage_url(f"object/{fbu_supabase_bucket()}")
@@ -1135,6 +1158,9 @@ def _request(method: str, url: str, *, headers: dict[str, str], content: bytes |
 
 
 def _upload_bytes(object_path: str, content: bytes, *, content_type: str) -> None:
+    if fbu_storage_backend() in {"s3", "obs"}:
+        obs_put_bytes(object_path, content, content_type=content_type)
+        return
     url = _storage_url(f"object/{fbu_supabase_bucket()}/{_quoted_path(object_path)}")
     _request(
         "POST",
@@ -1145,6 +1171,8 @@ def _upload_bytes(object_path: str, content: bytes, *, content_type: str) -> Non
 
 
 def _download_bytes(object_path: str) -> bytes | None:
+    if fbu_storage_backend() in {"s3", "obs"}:
+        return obs_get_bytes(object_path)
     url = _storage_url(f"object/{fbu_supabase_bucket()}/{_quoted_path(object_path)}")
     try:
         return _request("GET", url, headers=_headers())
@@ -1168,6 +1196,12 @@ def _storage_error_status(exc: FBUStorageStatusError) -> int:
 
 
 def _list_objects(prefix: str) -> list[dict[str, Any]]:
+    if fbu_storage_backend() in {"s3", "obs"}:
+        normalized = f"{prefix.rstrip('/')}/"
+        names = {str(row.get("key") or "").removeprefix(normalized).split("/", 1)[0]
+                 for row in obs_list_objects(normalized)
+                 if str(row.get("key") or "").startswith(normalized)}
+        return [{"name": name} for name in sorted(names) if name]
     url = _storage_url(f"object/list/{fbu_supabase_bucket()}")
     payload = {"prefix": prefix.rstrip("/"), "limit": 1000, "offset": 0}
     body = _request(

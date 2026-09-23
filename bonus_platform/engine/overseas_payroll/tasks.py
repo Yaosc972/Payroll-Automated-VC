@@ -19,7 +19,7 @@ from ..labor.persistent_storage import (
     get_labor_supabase_private_object,
     labor_p1_object_key,
     labor_supabase_object_metadata,
-    labor_supabase_storage_enabled,
+    labor_private_object_storage_enabled,
     put_labor_supabase_private_object,
 )
 from .service import list_tools
@@ -95,7 +95,7 @@ def _write_task(task: dict[str, Any]) -> dict[str, Any]:
     task_id = str(task["id"])
     task["updatedAt"] = _now()
     payload = json.dumps(task, ensure_ascii=False, indent=2).encode("utf-8")
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         put_labor_supabase_private_object(
             _manifest_object_key(str(task["ownerUserId"]), task_id),
             payload,
@@ -112,7 +112,7 @@ def _write_task(task: dict[str, Any]) -> dict[str, Any]:
 
 def load_task(task_id: str, *, owner_user_id: str = "") -> dict[str, Any]:
     normalized = _safe_id(task_id, "payroll_task")
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         if not owner_user_id:
             raise PermissionError("读取生产任务必须提供任务归属用户。")
         # Task manifests are mutable and finalize/enqueue can run in separate
@@ -208,7 +208,7 @@ def create_task(owner_user_id: str, tool_id: str, raw_files: list[dict[str, Any]
     _write_task(task)
     intents = []
     for spec in specs:
-        if labor_supabase_storage_enabled():
+        if labor_private_object_storage_enabled():
             signed = create_labor_supabase_signed_upload_for_object(
                 spec["objectKey"],
                 file_kind="overseas_payroll_input",
@@ -245,7 +245,7 @@ def load_task_inputs(task: dict[str, Any]) -> list[tuple[str, bytes]]:
     for file in task.get("files", []):
         if file.get("status") != "uploaded":
             raise ValueError("任务输入文件尚未完成上传。")
-        if labor_supabase_storage_enabled():
+        if labor_private_object_storage_enabled():
             content = get_labor_supabase_private_object(str(file["objectKey"]))
             if content is None:
                 raise FileNotFoundError(f"{file['filename']} 在私有存储中不存在。")
@@ -272,7 +272,7 @@ def store_task_output(task_id: str, *, owner_user_id: str, output_id: str, conte
         raise ValueError("处理结果大小与任务清单不一致。")
     if hashlib.sha256(content).hexdigest() != str(output["sha256"]).lower():
         raise ValueError("处理结果 SHA-256 与任务清单不一致。")
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         put_labor_supabase_private_object(
             str(output["objectKey"]),
             content,
@@ -287,7 +287,7 @@ def _input_probe_client() -> httpx.Client:
 
 
 def _observed_input(task: dict[str, Any], file: dict[str, Any]) -> dict[str, Any]:
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         key = str(file["objectKey"])
         try:
             return labor_supabase_object_metadata(key)
@@ -361,7 +361,7 @@ def task_input_downloads(task: dict[str, Any]) -> list[dict[str, Any]]:
     for file in task.get("files", []):
         if file.get("status") != "uploaded":
             raise ValueError("任务输入文件尚未完成上传。")
-        if labor_supabase_storage_enabled():
+        if labor_private_object_storage_enabled():
             signed = create_labor_supabase_signed_download(file["objectKey"], filename=file["filename"], expires_in=600)
             url = signed["signedUrl"]
         else:
@@ -395,7 +395,7 @@ def prepare_output(task_id: str, *, owner_user_id: str, filename: str, size_byte
 
     task = update_task(task_id, owner_user_id=owner_user_id, updater=apply)
     output = task["output"]
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         intent = create_labor_supabase_signed_upload_for_object(
             output["objectKey"],
             file_kind="overseas_payroll_output",
@@ -417,7 +417,7 @@ def finalize_output(task_id: str, *, owner_user_id: str, summary: str) -> dict[s
         output = task.get("output") if isinstance(task.get("output"), dict) else None
         if not output:
             raise ValueError("任务没有待确认的输出文件。")
-        if labor_supabase_storage_enabled():
+        if labor_private_object_storage_enabled():
             observed = labor_supabase_object_metadata(output["objectKey"])
             observed_size = int(observed.get("sizeBytes") or 0)
             observed_sha = str(observed.get("sha256") or "").lower()
@@ -446,7 +446,7 @@ def output_download(task: dict[str, Any]) -> dict[str, Any]:
     output = task.get("output") if isinstance(task.get("output"), dict) else None
     if task.get("status") != "succeeded" or not output or output.get("status") != "ready":
         raise ValueError("处理结果尚未生成。")
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         return create_labor_supabase_signed_download(output["objectKey"], filename=output["filename"], expires_in=300)
     return {
         "signedUrl": f"/api/overseas-payroll/tasks/{task['id']}/output/content",

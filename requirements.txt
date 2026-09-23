@@ -11,6 +11,7 @@ PyYAML
 httpx[socks]
 psycopg[binary]>=3.2,<4
 PyMySQL>=1.1,<2
+esdk-obs-python==3.26.2
 msoffcrypto-tool
 numpy
 Pillow

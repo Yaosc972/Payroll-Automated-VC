@@ -16,6 +16,15 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from ..labor.obs_storage import (
+    obs_delete_objects,
+    obs_get_bytes,
+    obs_list_objects,
+    obs_put_bytes,
+    obs_signed_upload_for_key,
+    obs_storage_configured,
+)
+
 
 DOMESTIC_LABOR_RUN_PREFIX = "domestic-labor-runs"
 
@@ -45,6 +54,8 @@ def domestic_labor_storage_backend() -> str:
 
 
 def domestic_labor_persistent_storage_enabled() -> bool:
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        return obs_storage_configured()
     return bool(
         domestic_labor_storage_backend() == "supabase"
         and _supabase_url()
@@ -171,6 +182,9 @@ def load_domestic_labor_file_from_persistent(
 def create_domestic_labor_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:
     normalized = _normalize_relative_path(relative_path)
     object_path = _object_path(run_id, normalized)
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        return {"signedUrl": obs_signed_upload_for_key(object_path), "objectPath": object_path,
+                "relativePath": normalized, "headers": {}}
     body = _request(
         "POST",
         _storage_url(
@@ -203,6 +217,9 @@ def create_domestic_labor_signed_upload(run_id: str, relative_path: str) -> dict
 
 def delete_domestic_labor_run_from_persistent(run_id: str) -> None:
     prefix = f"{_environment_prefix()}/{_safe_run_id(run_id)}"
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        obs_delete_objects([str(row["key"]) for row in obs_list_objects(f"{prefix}/") if row.get("key")])
+        return
     object_paths = [f"{prefix}/{entry['name']}" for entry in _list_objects(prefix) if entry.get("name")]
     if not object_paths:
         return
@@ -301,6 +318,9 @@ def _request(method: str, url: str, *, headers: dict[str, str], content: bytes |
 
 
 def _upload_bytes(object_path: str, content: bytes, *, content_type: str) -> None:
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        obs_put_bytes(object_path, content, content_type=content_type)
+        return
     _request(
         "POST",
         _storage_url(f"object/{domestic_labor_supabase_bucket()}/{_quoted_path(object_path)}"),
@@ -310,6 +330,8 @@ def _upload_bytes(object_path: str, content: bytes, *, content_type: str) -> Non
 
 
 def _download_bytes(object_path: str) -> bytes | None:
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        return obs_get_bytes(object_path)
     # Metadata/status are mutable, unlike uploaded files. An upsert may leave an
     # older object in the storage edge cache; reading it can also discard fields
     # on the next read-modify-write. Always fetch authoritative state.
@@ -327,6 +349,13 @@ def _download_bytes(object_path: str) -> bytes | None:
 
 
 def _download_to_path(object_path: str, target: Path) -> bool:
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        content = obs_get_bytes(object_path)
+        if content is None:
+            target.unlink(missing_ok=True)
+            return False
+        target.write_bytes(content)
+        return True
     url = _storage_url(f"object/{domestic_labor_supabase_bucket()}/{_quoted_path(object_path)}")
     for attempt in range(3):
         request = Request(url, headers=_headers(), method="GET")
@@ -367,6 +396,12 @@ def _storage_error_status(exc: DomesticLaborStorageStatusError) -> int:
 
 
 def _list_objects(prefix: str) -> list[dict[str, Any]]:
+    if domestic_labor_storage_backend() in {"s3", "obs"}:
+        normalized = f"{prefix.rstrip('/')}/"
+        names = {str(row.get("key") or "").removeprefix(normalized).split("/", 1)[0]
+                 for row in obs_list_objects(normalized)
+                 if str(row.get("key") or "").startswith(normalized)}
+        return [{"name": name} for name in sorted(names) if name]
     body = _request(
         "POST",
         _storage_url(f"object/list/{domestic_labor_supabase_bucket()}"),

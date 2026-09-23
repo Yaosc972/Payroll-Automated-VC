@@ -18,16 +18,28 @@
       "health_check": {
         "path": "/api/health"
       },
+      "migration_command": "python -m bonus_platform.engine.fbu_performance.migrate_mysql",
       "required_env": [
         "MYSQL_HOST",
         "MYSQL_PORT",
         "MYSQL_USERNAME",
-        "MYSQL_DATABASE"
+        "MYSQL_DATABASE",
+        "OBS_ENDPOINT",
+        "OBS_BUCKET",
+        "SIGMA_LABOR_STORAGE_BACKEND",
+        "SIGMA_DOMESTIC_LABOR_STORAGE_BACKEND",
+        "SIGMA_FBU_STORAGE_BACKEND",
+        "SIGMA_FBU_STATE_BACKEND",
+        "SIGMA_SOCIAL_INSURANCE_STORAGE_BACKEND",
+        "SIGMA_RECRUITMENT_STORAGE_BACKEND",
+        "SIGMA_CHINA_EMPLOYEE_STORAGE_BACKEND"
       ],
       "secrets": [
         "MYSQL_PASSWORD",
         "FEISHU_APP_SECRET",
-        "MIMO_API_KEY"
+        "MIMO_API_KEY",
+        "OBS_ACCESS_KEY",
+        "OBS_SECRET_KEY"
       ]
     }
   ],
