@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import pytest
 import sqlite3
 import threading
 
@@ -170,6 +171,59 @@ def test_directory_sync_endpoint_is_production_only(tmp_path, monkeypatch):
 
     assert response.status_code == 409
     assert response.json()["detail"] == "飞书组织同步仅允许在生产环境执行。"
+    assert called is False
+
+
+def test_aideploy_production_host_allows_sync_without_vercel_env(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin.sqlite"
+    _reset_store(monkeypatch, db_path)
+    monkeypatch.setenv("SIGMA_ENABLE_MOCK_LOGIN", "1")
+    monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_SYNC_ENABLED", "1")
+    monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID", "od_hras")
+    monkeypatch.setenv("SIGMA_WORKBENCH_PUBLIC_URL", "https://hras-ai-vc.ztn.cn")
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    monkeypatch.setattr(app_module, "_fetch_feishu_directory_snapshot", lambda: (
+        [{"departmentId": "od_hras", "name": "HRAS 人力综合条线", "parentDepartmentId": "0"}],
+        [],
+    ))
+
+    with TestClient(app, base_url="https://hras-ai-vc.ztn.cn") as client:
+        assert client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"}).status_code == 200
+        state = client.get("/api/admin/state").json()["directory"]
+        response = client.post("/api/admin/directory/sync")
+
+    assert state["environment"] == "production"
+    assert state["canSync"] is True
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("inherited_vercel_env", [None, "production"])
+def test_aideploy_preview_host_cannot_sync_with_production_base_vars(tmp_path, monkeypatch, inherited_vercel_env):
+    db_path = tmp_path / "admin.sqlite"
+    _reset_store(monkeypatch, db_path)
+    monkeypatch.setenv("SIGMA_ENABLE_MOCK_LOGIN", "1")
+    monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_SYNC_ENABLED", "1")
+    monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID", "od_hras")
+    monkeypatch.setenv("SIGMA_WORKBENCH_PUBLIC_URL", "https://hras-ai-vc.ztn.cn")
+    monkeypatch.delenv("VERCEL_ENV", raising=False)
+    called = False
+
+    def unexpected_fetch():
+        nonlocal called
+        called = True
+        return [], []
+
+    monkeypatch.setattr(app_module, "_fetch_feishu_directory_snapshot", unexpected_fetch)
+    with TestClient(app, base_url="https://42141ddcae8f.pre-hras-aideploy.ztn.cn") as client:
+        assert client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"}).status_code == 200
+        if inherited_vercel_env:
+            monkeypatch.setenv("VERCEL_ENV", inherited_vercel_env)
+        state = client.get("/api/admin/state").json()["directory"]
+        response = client.post("/api/admin/directory/sync")
+
+    assert state["environment"] != "production"
+    assert state["canSync"] is False
+    assert response.status_code == 409
     assert called is False
 
 
