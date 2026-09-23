@@ -32,4 +32,5 @@ def test_admin_database_url_is_built_from_standard_mysql_environment(monkeypatch
             "mysql+pymysql://payroll_app:test-password@mysql.company.internal:3306/payroll"
         )
     finally:
+        monkeypatch.undo()
         importlib.reload(config)
