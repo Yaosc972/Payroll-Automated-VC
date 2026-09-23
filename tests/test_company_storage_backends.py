@@ -30,6 +30,7 @@ def test_domestic_s3_uses_obs_for_direct_and_persisted_files(monkeypatch, tmp_pa
     assert domestic.domestic_labor_persistent_storage_enabled()
     intent = domestic.create_domestic_labor_signed_upload("run_1", "data.xlsx")
     assert intent["headers"] == {}
+    assert intent["bodyFormat"] == "raw"
     assert intent["objectPath"].startswith("domestic-labor-runs/production/run_1/")
     domestic._upload_bytes(intent["objectPath"], b"content", content_type="application/octet-stream")
     assert domestic._download_bytes(intent["objectPath"]) == b"content"
@@ -54,6 +55,7 @@ def test_fbu_s3_uses_obs_and_mysql_dispatch(monkeypatch):
     assert postgres_state.fbu_postgres_state_requested()
     intent = fbu.create_fbu_signed_upload("run_1", "salary.xlsx")
     assert intent["headers"] == {}
+    assert intent["bodyFormat"] == "raw"
     fbu._upload_bytes(intent["objectPath"], b"content", content_type="application/octet-stream")
     assert fbu._download_bytes(intent["objectPath"]) == b"content"
     assert fbu._list_objects("fbu-performance-runs/production") == [{"name": "run_1"}]

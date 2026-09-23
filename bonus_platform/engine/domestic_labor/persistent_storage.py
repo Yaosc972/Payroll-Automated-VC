@@ -184,7 +184,7 @@ def create_domestic_labor_signed_upload(run_id: str, relative_path: str) -> dict
     object_path = _object_path(run_id, normalized)
     if domestic_labor_storage_backend() in {"s3", "obs"}:
         return {"signedUrl": obs_signed_upload_for_key(object_path), "objectPath": object_path,
-                "relativePath": normalized, "headers": {}}
+                "relativePath": normalized, "headers": {}, "bodyFormat": "raw"}
     body = _request(
         "POST",
         _storage_url(
