@@ -87,6 +87,7 @@ from .engine.domestic_labor.runs import (
 from .engine.domestic_labor.persistent_storage import (
     create_domestic_labor_signed_upload,
     domestic_labor_persistent_storage_enabled,
+    domestic_labor_storage_backend,
 )
 from .engine.china_employee_payroll import calculate_meal_allowance, parse_attendance_workbooks, parse_wx_attendance_workbooks
 from .engine.company_run_storage import (
@@ -15045,6 +15046,11 @@ def _normalize_domestic_collection_roster(raw_roster: Any) -> list[dict]:
         seen_ids.add(employee_id)
         collection_roster.append({"employee_id": employee_id, "employee_name": employee_name})
     return collection_roster
+
+
+@app.get("/api/domestic-labor/upload-mode")
+def get_domestic_labor_upload_mode() -> dict:
+    return {"mode": "server" if domestic_labor_storage_backend() in {"s3", "obs"} else "direct"}
 
 
 @app.post("/api/domestic-labor/runs")

@@ -4946,8 +4946,30 @@ async function submitCanbuBatch({ resumeNightShift = false } = {}) {
   }
 }
 
+async function getDomesticUploadMode() {
+  if (!getDomesticUploadMode.request) {
+    getDomesticUploadMode.request = requestJson('/api/domestic-labor/upload-mode')
+      .then((payload) => {
+        if (payload?.mode !== 'server' && payload?.mode !== 'direct') {
+          throw new Error('上传模式配置异常，请稍后重试。');
+        }
+        return payload.mode;
+      })
+      .catch((error) => {
+        getDomesticUploadMode.request = null;
+        throw error;
+      });
+  }
+  return getDomesticUploadMode.request;
+}
+
 async function submitDomesticLaborRun({ activityId = '', file, files = [], engines, attendanceMonth, password, hrbpList, sheetMapping = {}, jinjiangRosterDecision = '', waisuAbandonmentDecision = '', waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
   const selectedFiles = files.length ? files : [file].filter(Boolean);
+  const payload = { activityId, files: selectedFiles, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile };
+  if (await getDomesticUploadMode() === 'server') {
+    updateUploadProgress(statusElement, progressButton, '正在经后端上传并核算...');
+    return submitDomesticLaborRunMultipart(payload);
+  }
   try {
     return await submitDomesticLaborRunDirect({
       activityId,
