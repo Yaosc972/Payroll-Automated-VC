@@ -4172,18 +4172,43 @@ function uploadFbuFileToSignedUrl(upload, file, onProgress) {
     };
     request.onerror = () => reject(new Error('直传文件失败，请检查网络后重试。'));
     request.ontimeout = () => reject(new Error('直传文件超时，请检查网络后重试。'));
-    const body = new FormData();
-    body.append('cacheControl', '3600');
-    body.append('', file);
-    request.send(body);
+    if (upload.bodyFormat === 'raw') {
+      request.send(file);
+    } else {
+      const body = new FormData();
+      body.append('cacheControl', '3600');
+      body.append('', file);
+      request.send(body);
+    }
   });
+}
+
+async function getFbuUploadMode() {
+  if (!getFbuUploadMode.request) {
+    getFbuUploadMode.request = apiJson(`${API_BASE}/upload-mode`)
+      .then((payload) => {
+        if (payload?.mode !== 'server' && payload?.mode !== 'direct') {
+          throw new Error('上传模式配置异常，请稍后重试。');
+        }
+        return payload.mode;
+      })
+      .catch((error) => {
+        getFbuUploadMode.request = null;
+        throw error;
+      });
+  }
+  return getFbuUploadMode.request;
 }
 
 async function uploadWorkbenchFilesDirect(entries, options = {}) {
   if (!state.currentActivity || !entries?.length) return;
   const activityId = state.currentActivity.run_id;
-  entries.forEach(({ type, file }) => startWorkbenchUploadProgress(type, file));
   try {
+    if (await getFbuUploadMode() === 'server') {
+      if (typeof options.fallback !== 'function') throw new Error('当前上传入口不可用，请刷新页面重试。');
+      return options.fallback();
+    }
+    entries.forEach(({ type, file }) => startWorkbenchUploadProgress(type, file));
     const plan = await apiJson(`${API_BASE}/runs/${activityId}/uploads/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

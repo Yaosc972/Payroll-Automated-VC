@@ -5075,10 +5075,14 @@ function uploadDomesticFileToSignedUrl(upload, file, onProgress, signal) {
     };
     request.onerror = () => reject(new Error('直传文件失败，请检查网络后重试。'));
     request.ontimeout = () => reject(new Error('直传文件超时，请检查网络后重试。'));
-    const body = new FormData();
-    body.append('cacheControl', '3600');
-    body.append('', file);
-    request.send(body);
+    if (upload.bodyFormat === 'raw') {
+      request.send(file);
+    } else {
+      const body = new FormData();
+      body.append('cacheControl', '3600');
+      body.append('', file);
+      request.send(body);
+    }
   });
 }
 

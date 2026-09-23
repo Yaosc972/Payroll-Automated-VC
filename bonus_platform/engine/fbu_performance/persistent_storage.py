@@ -1008,7 +1008,7 @@ def create_fbu_signed_upload(run_id: str, relative_path: str) -> dict[str, Any]:
     object_path = _object_path(run_id, normalized)
     if fbu_storage_backend() in {"s3", "obs"}:
         return {"signedUrl": obs_signed_upload_for_key(object_path), "objectPath": object_path,
-                "relativePath": normalized, "headers": {}}
+                "relativePath": normalized, "headers": {}, "bodyFormat": "raw"}
     body = _request(
         "POST",
         _storage_url(

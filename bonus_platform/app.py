@@ -253,6 +253,7 @@ from .engine.fbu_performance.persistent_storage import (
     FBU_RUN_SECTION_FIELDS,
     create_fbu_signed_upload,
     fbu_persistent_storage_enabled,
+    fbu_storage_backend,
 )
 from .engine.fbu_performance.upload_jobs import FBUUploadJobStore
 from .engine.social_insurance.router import router as social_insurance_router
@@ -16358,6 +16359,11 @@ def _fbu_roster_preview_for_run(run_id: str) -> dict | None:
     if run:
         fbu_run_manager.update_run(run_id, roster_data=preview)
     return preview
+
+
+@app.get("/api/fbu-performance/upload-mode")
+def get_fbu_upload_mode() -> dict:
+    return {"mode": "server" if fbu_storage_backend() in {"s3", "obs"} else "direct"}
 
 
 @app.get("/api/fbu-performance/roster")
