@@ -245,8 +245,8 @@ def test_repeated_finalize_does_not_reset_task(status, monkeypatch: pytest.Monke
 @pytest.mark.parametrize("suffix", ["", "/download", "/output/content"])
 def test_foreign_task_is_not_exposed(suffix, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tasks, "TASK_ROOT", tmp_path)
-    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: False)
-    monkeypatch.setattr(payroll_router, "labor_supabase_storage_enabled", lambda: False)
+    monkeypatch.setattr(tasks, "labor_private_object_storage_enabled", lambda: False)
+    monkeypatch.setattr(payroll_router, "labor_private_object_storage_enabled", lambda: False)
     task, _ = tasks.create_task("owner-a", "norway_payment", [{
         "filename": "synthetic.pdf", "sizeBytes": 1, "sha256": "0" * 64,
         "contentType": "application/pdf",
@@ -261,7 +261,7 @@ def test_foreign_task_is_not_exposed(suffix, tmp_path, monkeypatch: pytest.Monke
 
 def test_download_link_is_signed_again_on_each_request(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
-    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(tasks, "labor_private_object_storage_enabled", lambda: True)
     def sign(key, *, filename, expires_in):
         calls.append((key, filename, expires_in))
         return {"signedUrl": f"https://storage.invalid/result?signature={len(calls)}"}
@@ -281,7 +281,7 @@ def test_download_link_is_signed_again_on_each_request(monkeypatch: pytest.Monke
     (503, {}, httpx.HTTPStatusError),
 ])
 def test_cloud_interrupted_upload_reports_missing_file(status, detail, expected, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(tasks, "labor_private_object_storage_enabled", lambda: True)
     request = httpx.Request("HEAD", "https://storage.invalid/object/synthetic.pdf")
     def metadata(_):
         httpx.Response(400, request=request).raise_for_status()
@@ -358,7 +358,7 @@ def test_private_storage_enqueue_runs_in_vercel_function(monkeypatch: pytest.Mon
     }
     statuses = []
 
-    monkeypatch.setattr(payroll_router, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(payroll_router, "labor_private_object_storage_enabled", lambda: True)
     monkeypatch.setattr(payroll_router, "load_task", lambda *_args, **_kwargs: dict(task))
 
     def update(_task_id, *, owner_user_id, updater):
@@ -400,7 +400,7 @@ def test_private_task_manifest_reads_bypass_storage_cache(monkeypatch: pytest.Mo
         observed.update(kwargs)
         return json.dumps(task).encode("utf-8")
 
-    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(tasks, "labor_private_object_storage_enabled", lambda: True)
     monkeypatch.setattr(tasks, "get_labor_supabase_private_object", get_manifest)
 
     assert tasks.load_task("payroll_task_cloud", owner_user_id="user-1")["status"] == "ready"
@@ -422,7 +422,7 @@ def test_private_task_inputs_are_downloaded_and_hash_verified(monkeypatch: pytes
             }
         ],
     }
-    monkeypatch.setattr(tasks, "labor_supabase_storage_enabled", lambda: True)
+    monkeypatch.setattr(tasks, "labor_private_object_storage_enabled", lambda: True)
     monkeypatch.setattr(tasks, "get_labor_supabase_private_object", lambda key: content if key == "private/input.pdf" else None)
 
     assert tasks.load_task_inputs(task) == [("tax.pdf", content)]

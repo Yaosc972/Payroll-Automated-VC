@@ -89,6 +89,13 @@ from .engine.domestic_labor.persistent_storage import (
     domestic_labor_persistent_storage_enabled,
 )
 from .engine.china_employee_payroll import calculate_meal_allowance, parse_attendance_workbooks, parse_wx_attendance_workbooks
+from .engine.company_run_storage import (
+    enabled as company_run_storage_enabled,
+    list_run_ids as list_company_run_ids,
+    load_file as load_company_run_file,
+    restore_run_dir as restore_company_run_dir,
+    upload_run_dir as upload_company_run_dir,
+)
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import amount_within_tolerance, compare_labor_items, compare_by_warehouse
@@ -851,6 +858,7 @@ from .engine.labor.persistent_storage import (
     sync_labor_run_from_persistent,
     sync_labor_run_to_persistent,
 )
+from .engine.labor.obs_storage import labor_obs_storage_enabled, obs_object_key, obs_signed_upload_for_key
 from .engine.labor.persistent_storage import (
     create_labor_supabase_signed_download,
     create_labor_supabase_signed_upload_for_object,
@@ -6929,13 +6937,13 @@ def get_labor_mapping_preflight_status(run_id: str) -> dict:
 
 @app.post("/api/labor/runs/{run_id}/direct-upload-plan")
 def create_labor_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> dict:
-    if not labor_supabase_storage_enabled():
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
         raise HTTPException(
             status_code=409,
             detail=_labor_request_error(
-                message="当前环境未启用 Supabase 直传。",
+                message="当前环境未启用对象存储直传。",
                 error_code="LABOR_DIRECT_UPLOAD_UNAVAILABLE",
-                next_action="请使用普通上传，或联系管理员检查 Supabase Storage 配置。",
+                next_action="请使用普通上传，或联系管理员检查对象存储配置。",
                 retryable=False,
             ),
         )
@@ -6966,10 +6974,10 @@ def create_labor_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> d
         raise HTTPException(
             status_code=503,
             detail=_labor_request_error(
-                message="生成 Supabase 直传地址失败。",
+                message="生成对象存储直传地址失败。",
                 error_code="LABOR_DIRECT_UPLOAD_PLAN_FAILED",
                 retryable=True,
-                next_action="请稍后重试；若连续失败，请联系管理员检查 Supabase Storage 配置。",
+                next_action="请稍后重试；若连续失败，请联系管理员检查对象存储配置。",
             ),
         ) from exc
     return {"runId": run_id, "uploads": uploads}
@@ -6977,8 +6985,8 @@ def create_labor_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> d
 
 @app.post("/api/labor/runs/{run_id}/direct-upload-complete")
 def complete_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
-    if not labor_supabase_storage_enabled():
-        raise HTTPException(status_code=409, detail="当前环境未启用 Supabase 直传。")
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
+        raise HTTPException(status_code=409, detail="当前环境未启用对象存储直传。")
     try:
         run_dir = get_labor_run_dir(run_id)
         metadata = load_labor_metadata(run_dir)
@@ -6997,7 +7005,7 @@ def complete_labor_direct_upload(run_id: str, payload: dict = Body(...)) -> dict
                 message="文件已直传，但服务器同步文件失败。",
                 error_code="LABOR_DIRECT_UPLOAD_SYNC_FAILED",
                 retryable=True,
-                next_action="请稍后重试“上传文件”；若连续失败，请联系管理员检查 Supabase Storage。",
+                next_action="请稍后重试“上传文件”；若连续失败，请联系管理员检查对象存储。",
             ),
         ) from exc
 
@@ -13573,7 +13581,7 @@ async def finalize_run(
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="批次不存在。") from exc
 
-    initial_path = Path(metadata["files"]["initialResult"]["path"])
+    initial_path = run_dir / Path(metadata["files"]["initialResult"]["path"]).name
     if not initial_path.exists():
         raise HTTPException(status_code=404, detail="批次初算结果不存在，无法生成最终结果。")
 
@@ -13629,7 +13637,8 @@ async def compare_run(
     offline_path = await _save_upload_to(offline_file, run_dir / _recruitment_output_name(month, run_sequence, "线下复核表"))
     diff_path = run_dir / _recruitment_output_name(month, run_sequence, "差异报告")
     try:
-        metrics = build_difference_report(Path(source_record["path"]), offline_path, diff_path)
+        source_path = run_dir / Path(source_record["path"]).name
+        metrics = build_difference_report(source_path, offline_path, diff_path)
         merge_diff_rows(run_dir, metrics)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"生成差异报告失败：{exc}") from exc
@@ -13765,7 +13774,11 @@ def _build_labor_direct_upload_item(run_id: str, item: Any, *, group: str) -> di
         raise ValueError(f"线下账单请上传 Excel 文件（.xlsx / .xlsm / .xls）。收到：{original_name}")
     filename = safe_labor_storage_filename(original_name, "direct")
     relative_path = filename
-    signed_upload = create_labor_supabase_signed_upload(run_id, relative_path)
+    if labor_obs_storage_enabled():
+        object_path = obs_object_key(run_id, relative_path)
+        signed_upload = {"objectPath": object_path, "signedUrl": obs_signed_upload_for_key(object_path)}
+    else:
+        signed_upload = create_labor_supabase_signed_upload(run_id, relative_path)
     return {
         "group": group,
         "filename": filename,
@@ -14276,6 +14289,11 @@ async def calculate_china_employee_meal_allowance(
     }
     (run_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     (run_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    if company_run_storage_enabled("SIGMA_CHINA_EMPLOYEE_STORAGE_BACKEND"):
+        try:
+            upload_company_run_dir("china-employee-meal", run_dir)
+        except Exception as exc:
+            raise HTTPException(503, "餐补批次保存到持久化存储失败，请联系管理员。") from exc
     return {
         "runId": run_id,
         "summary": result["summary"],
@@ -14422,18 +14440,26 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
 @app.get("/api/china-employee-payroll/meal-allowance/runs")
 def list_china_employee_meal_allowance_runs() -> dict:
     runs = []
-    for run_dir in sorted(CHINA_EMPLOYEE_PAYROLL_RUNS_DIR.glob("china_employee_payroll_*"), reverse=True):
-        metadata_path = run_dir / "metadata.json"
-        if not run_dir.is_dir() or not metadata_path.exists():
-            continue
+    use_obs = company_run_storage_enabled("SIGMA_CHINA_EMPLOYEE_STORAGE_BACKEND")
+    run_ids = (
+        list_company_run_ids("china-employee-meal")
+        if use_obs
+        else [path.name for path in sorted(CHINA_EMPLOYEE_PAYROLL_RUNS_DIR.glob("china_employee_payroll_*"), reverse=True)]
+    )
+    for run_id in run_ids:
         try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
+            content = (
+                load_company_run_file("china-employee-meal", run_id, "metadata.json")
+                if use_obs
+                else (CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / run_id / "metadata.json").read_bytes()
+            )
+            metadata = json.loads(content) if content else {}
+        except (OSError, ValueError, json.JSONDecodeError):
             continue
         summary = metadata.get("summary", {})
         runs.append(
             {
-                "runId": metadata.get("runId") or run_dir.name,
+                "runId": metadata.get("runId") or run_id,
                 "createdAt": metadata.get("createdAt", ""),
                 "sourceFiles": metadata.get("sourceFiles", []),
                 "sourceType": metadata.get("sourceType", summary.get("sourceType", "hr")),
@@ -14449,16 +14475,24 @@ def list_china_employee_meal_allowance_runs() -> dict:
     return {"runs": runs[:50]}
 
 
+def _china_employee_meal_run_dir(run_id: str) -> Path:
+    if not re.fullmatch(r"china_employee_payroll_[0-9_]+", str(run_id or "")):
+        raise HTTPException(status_code=404, detail="核算批次不存在。")
+    run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / run_id
+    if company_run_storage_enabled("SIGMA_CHINA_EMPLOYEE_STORAGE_BACKEND") and not (run_dir / "metadata.json").exists():
+        restore_company_run_dir("china-employee-meal", run_id, CHINA_EMPLOYEE_PAYROLL_RUNS_DIR)
+    return run_dir
+
+
 @app.get("/api/china-employee-payroll/meal-allowance/runs/{run_id}")
 def get_china_employee_meal_allowance_run(run_id: str) -> dict:
-    safe_run_id = Path(run_id).name
-    run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / safe_run_id
+    run_dir = _china_employee_meal_run_dir(run_id)
     result_path = run_dir / "result.json"
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="核算批次不存在，请重新上传并核算。")
     result = json.loads(result_path.read_text(encoding="utf-8"))
     return {
-        "runId": safe_run_id,
+        "runId": run_id,
         "summary": result["summary"],
         "results": _compact_china_employee_payroll_result(result),
         "files": result.get("files", []),
@@ -14470,11 +14504,10 @@ def get_china_employee_meal_allowance_run(run_id: str) -> dict:
 
 @app.get("/api/china-employee-payroll/meal-allowance/{run_id}/export")
 def export_china_employee_meal_allowance(run_id: str) -> FileResponse:
-    safe_run_id = Path(run_id).name
-    run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / safe_run_id
+    run_dir = _china_employee_meal_run_dir(run_id)
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="核算批次不存在，请重新上传并核算。")
-    output_path = _build_china_employee_meal_allowance_export(run_dir, safe_run_id)
+    output_path = _build_china_employee_meal_allowance_export(run_dir, run_id)
     return FileResponse(
         output_path,
         filename=output_path.name,
@@ -15279,7 +15312,7 @@ def _domestic_labor_direct_upload_specs(payload: dict) -> list[dict]:
 @app.post("/api/domestic-labor/runs/direct-upload-plan")
 def create_domestic_labor_direct_upload_plan(request: Request, payload: dict = Body(...)) -> dict:
     if not domestic_labor_persistent_storage_enabled():
-        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+        raise HTTPException(409, "当前环境未启用对象存储直传。")
     specs = _domestic_labor_direct_upload_specs(payload)
     attendance_specs = [spec for spec in specs if spec["purpose"] == "attendance"]
     first = attendance_specs[0]
@@ -15311,7 +15344,7 @@ def create_domestic_labor_direct_upload_plan(request: Request, payload: dict = B
             shutil.rmtree(get_payroll_run_dir(run_id), ignore_errors=True)
         except Exception:
             payroll_logger.exception("Failed to clean domestic labor upload plan %s", run_id)
-        raise HTTPException(503, "生成 Supabase 直传地址失败，请稍后重试。") from exc
+        raise HTTPException(503, "生成对象存储直传地址失败，请稍后重试。") from exc
     return {
         "runId": run_id,
         "upload": uploads[0],
@@ -15322,7 +15355,7 @@ def create_domestic_labor_direct_upload_plan(request: Request, payload: dict = B
 @app.post("/api/domestic-labor/runs/{run_id}/direct-upload-complete")
 async def complete_domestic_labor_direct_upload(run_id: str, request: Request, payload: dict = Body(...)) -> dict:
     if not domestic_labor_persistent_storage_enabled():
-        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+        raise HTTPException(409, "当前环境未启用对象存储直传。")
     try:
         metadata = load_payroll_metadata(get_payroll_run_dir(run_id))
     except FileNotFoundError as exc:
@@ -16515,7 +16548,7 @@ def _fbu_upload_job_specs(payload: dict, job_id: str) -> list[dict]:
 @app.post("/api/fbu-performance/runs/{run_id}/uploads/plan")
 def create_fbu_upload_job_plan(run_id: str, payload: dict = Body(...)) -> dict:
     if not fbu_persistent_storage_enabled():
-        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+        raise HTTPException(409, "当前环境未启用对象存储直传。")
     run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
@@ -16960,7 +16993,7 @@ def _fbu_attendance_direct_result(run: FBURun) -> dict:
 @app.post("/api/fbu-performance/runs/{run_id}/attendance-direct-upload-plan")
 def create_fbu_attendance_direct_upload_plan(run_id: str, payload: dict = Body(...)) -> dict:
     if not fbu_persistent_storage_enabled():
-        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+        raise HTTPException(409, "当前环境未启用对象存储直传。")
     run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")
@@ -17003,7 +17036,7 @@ def create_fbu_attendance_direct_upload_plan(run_id: str, payload: dict = Body(.
 @app.post("/api/fbu-performance/runs/{run_id}/attendance-direct-upload-complete")
 async def complete_fbu_attendance_direct_upload(run_id: str, payload: dict = Body(...)) -> dict:
     if not fbu_persistent_storage_enabled():
-        raise HTTPException(409, "当前环境未启用 Supabase 直传。")
+        raise HTTPException(409, "当前环境未启用对象存储直传。")
     run = fbu_run_manager.get_run(run_id, sections=set())
     if not run:
         raise HTTPException(404, "任务不存在")

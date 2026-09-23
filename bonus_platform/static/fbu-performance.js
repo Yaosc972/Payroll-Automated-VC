@@ -4156,7 +4156,7 @@ function uploadFbuFileToSignedUrl(upload, file, onProgress) {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open('PUT', upload.signedUrl);
-    request.setRequestHeader('x-upsert', 'true');
+    for (const [name, value] of Object.entries(upload.headers ?? {'x-upsert': 'true'})) request.setRequestHeader(name, value);
     request.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
       onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
@@ -4262,7 +4262,7 @@ async function uploadWorkbenchFilesDirect(entries, options = {}) {
     return pollingRequest;
   } catch (error) {
     const directUnavailable = error.status === 409
-      || /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
+      || /未启用\s*(?:Supabase|对象存储)\s*直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
     if (isLocalFbuHost() && directUnavailable && typeof options.fallback === 'function') {
       return options.fallback();
     }

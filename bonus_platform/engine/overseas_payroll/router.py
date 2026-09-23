@@ -14,7 +14,7 @@ from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
-from ..labor.persistent_storage import labor_supabase_storage_enabled
+from ..labor.persistent_storage import labor_private_object_storage_enabled
 from .service import _legacy_module, list_tools, process_files
 from .tasks import (
     create_task,
@@ -273,7 +273,7 @@ def create_overseas_payroll_task(request: Request, payload: dict = Body(...)) ->
 @router.put("/tasks/{task_id}/files/{file_id}/content")
 async def upload_local_overseas_payroll_file(task_id: str, file_id: str, request: Request) -> dict:
     owner_user_id = _require_access(request)
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         raise HTTPException(status_code=404, detail="生产文件必须使用签名地址直传私有存储。")
     task = load_task(task_id, owner_user_id=owner_user_id)
     file = next((item for item in task.get("files", []) if item.get("id") == file_id), None)
@@ -304,7 +304,7 @@ def enqueue_overseas_payroll_task(task_id: str, request: Request) -> dict:
     task = load_task(task_id, owner_user_id=owner_user_id)
     if task.get("status") not in {"ready", "queued"}:
         raise HTTPException(status_code=409, detail="任务文件尚未全部上传，不能开始处理。")
-    if not labor_supabase_storage_enabled():
+    if not labor_private_object_storage_enabled():
         if task.get("status") != "queued":
             task = update_task(
                 task_id,
@@ -320,7 +320,7 @@ def enqueue_overseas_payroll_task(task_id: str, request: Request) -> dict:
             updater=lambda current: {
                 **current,
                 "status": "queued",
-                "statusLabel": "已进入 Vercel 云端处理",
+                "statusLabel": "已进入云端处理",
                 "jobId": "",
             },
         )
@@ -352,7 +352,7 @@ def get_overseas_payroll_download(task_id: str, request: Request) -> dict:
 @router.get("/tasks/{task_id}/output/content")
 def download_local_overseas_payroll_output(task_id: str, request: Request) -> FileResponse:
     owner_user_id = _require_access(request)
-    if labor_supabase_storage_enabled():
+    if labor_private_object_storage_enabled():
         raise HTTPException(status_code=404, detail="生产结果必须通过签名地址下载。")
     try:
         task = load_task(task_id, owner_user_id=owner_user_id)

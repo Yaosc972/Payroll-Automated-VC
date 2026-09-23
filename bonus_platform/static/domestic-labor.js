@@ -4966,7 +4966,7 @@ async function submitDomesticLaborRun({ activityId = '', file, files = [], engin
     });
   } catch (error) {
     const localHost = ['', 'localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-    const directUnavailable = /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
+    const directUnavailable = /未启用\s*(?:Supabase|对象存储)\s*直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
     if (!localHost || !directUnavailable) throw error;
     setText(statusElement, '本地未启用对象存储，改用本地上传并核算...');
     return submitDomesticLaborRunMultipart({ activityId, files: selectedFiles, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile });
@@ -5060,7 +5060,7 @@ function uploadDomesticFileToSignedUrl(upload, file, onProgress, signal) {
     request.onabort = () => reject(WorkbenchProgress.abortError());
     request.onloadend = () => signal?.removeEventListener('abort', abort);
     request.open('PUT', upload.signedUrl);
-    request.setRequestHeader('x-upsert', 'true');
+    for (const [name, value] of Object.entries(upload.headers ?? {'x-upsert': 'true'})) request.setRequestHeader(name, value);
     request.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
       onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));

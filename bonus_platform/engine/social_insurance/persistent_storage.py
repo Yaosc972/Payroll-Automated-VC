@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 import httpx
 
 from ..labor.blob_storage import blob_get_bytes, blob_list_prefix, blob_put_bytes
+from ..labor.obs_storage import obs_get_bytes, obs_list_objects, obs_put_bytes, obs_storage_configured
 from ..labor.persistent_storage import (
     _supabase_download_bytes as supabase_download_bytes,
     _supabase_entry_path as supabase_entry_path,
@@ -71,6 +72,8 @@ def storage_environment() -> str:
 
 def persistent_storage_enabled() -> bool:
     backend = storage_backend()
+    if backend in {"s3", "obs"}:
+        return obs_storage_configured()
     if backend == "blob":
         return bool(os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip())
     if backend == "supabase":
@@ -83,7 +86,7 @@ def serverless_runtime() -> bool:
 
 
 def require_persistent_storage() -> None:
-    if serverless_runtime() and not persistent_storage_enabled():
+    if (serverless_runtime() or storage_backend() in {"s3", "obs"}) and not persistent_storage_enabled():
         raise SocialInsuranceStorageError(
             "社保报盘在云端运行必须配置私有持久化存储；已拒绝写入临时目录。"
         )
@@ -167,6 +170,8 @@ def _fresh_storage_target(pathname_or_url: str, *, version: str = "") -> str:
 
 
 def _put_bytes(pathname: str, content: bytes, *, content_type: str) -> dict[str, Any]:
+    if storage_backend() in {"s3", "obs"}:
+        return obs_put_bytes(pathname, content, content_type=content_type)
     if storage_backend() == "supabase":
         try:
             return supabase_upload_bytes(pathname, content, content_type=content_type)
@@ -176,6 +181,8 @@ def _put_bytes(pathname: str, content: bytes, *, content_type: str) -> dict[str,
 
 
 def _get_bytes(pathname_or_url: str) -> bytes | None:
+    if storage_backend() in {"s3", "obs"}:
+        return obs_get_bytes(pathname_or_url.split("?", 1)[0])
     if storage_backend() == "supabase":
         try:
             return supabase_download_bytes(pathname_or_url)
@@ -210,6 +217,12 @@ def _supabase_object_missing(response: httpx.Response) -> bool:
 
 
 def _list_prefix(prefix: str) -> list[dict[str, Any]]:
+    if storage_backend() in {"s3", "obs"}:
+        return [
+            {"pathname": str(row["key"]), "uploadedAt": str(row.get("lastModified") or "")}
+            for row in obs_list_objects(prefix)
+            if row.get("key")
+        ]
     if storage_backend() != "supabase":
         return blob_list_prefix(prefix)
     rows: list[dict[str, Any]] = []
@@ -248,6 +261,9 @@ def _list_prefix(prefix: str) -> list[dict[str, Any]]:
 def _list_direct_prefix(prefix: str) -> list[dict[str, Any]]:
     """List only immediate objects so decision reads do not scan report folders."""
     normalized_prefix = prefix.rstrip("/")
+    if storage_backend() in {"s3", "obs"}:
+        return [row for row in _list_prefix(f"{normalized_prefix}/")
+                if "/" not in str(row["pathname"]).removeprefix(f"{normalized_prefix}/")]
     if storage_backend() != "supabase":
         rows: list[dict[str, Any]] = []
         for entry in blob_list_prefix(f"{normalized_prefix}/"):

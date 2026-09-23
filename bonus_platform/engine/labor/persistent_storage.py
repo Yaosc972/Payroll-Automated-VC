@@ -26,6 +26,20 @@ from .blob_storage import (
     list_labor_metadata_from_blob,
     delete_labor_run_from_blob,
 )
+from .obs_storage import (
+    labor_obs_storage_enabled,
+    obs_bucket_name,
+    obs_delete_objects,
+    obs_environment,
+    obs_get_bytes,
+    obs_list_objects,
+    obs_put_bytes,
+    obs_signed_download_for_key,
+    obs_signed_upload_for_key,
+    sync_labor_run_from_obs,
+    sync_labor_run_to_obs,
+    list_labor_metadata_from_obs,
+)
 
 
 _RUN_LOCKS_GUARD = threading.Lock()
@@ -62,11 +76,22 @@ def labor_supabase_storage_enabled() -> bool:
     return bool(_supabase_url() and _supabase_token() and labor_supabase_bucket())
 
 
+def labor_private_object_storage_enabled() -> bool:
+    return labor_obs_storage_enabled() or labor_supabase_storage_enabled()
+
+
 def labor_persistent_storage_enabled() -> bool:
-    return labor_blob_storage_enabled() or labor_supabase_storage_enabled()
+    return labor_obs_storage_enabled() or labor_blob_storage_enabled() or labor_supabase_storage_enabled()
 
 
 def labor_persistent_storage_info() -> dict[str, Any]:
+    if labor_obs_storage_enabled():
+        return {
+            "enabled": True,
+            "backend": "obs",
+            "bucket": obs_bucket_name(),
+            "environment": obs_environment(),
+        }
     if labor_supabase_storage_enabled():
         return {
             "enabled": True,
@@ -96,6 +121,11 @@ def labor_persistent_storage_health(*, probe: bool = False, cache_seconds: int =
         "writeReadDelete": False,
         "probe": bool(probe),
     }
+    if backend == "obs":
+        health.update({"bucket": obs_bucket_name(), "ready": labor_obs_storage_enabled()})
+        if not labor_obs_storage_enabled():
+            health["errorType"] = "missing_configuration"
+        return health
     if backend != "supabase":
         if backend == "blob":
             health["errorType"] = "direct_signed_flow_not_supported"
@@ -179,6 +209,9 @@ def labor_persistent_environment() -> str:
 
 def sync_labor_run_to_persistent(run_id: str, run_dir: Path) -> None:
     with _run_storage_lock(run_id):
+        if labor_obs_storage_enabled():
+            _persistent_retry(lambda: sync_labor_run_to_obs(run_id, run_dir))
+            return
         if labor_supabase_storage_enabled():
             _persistent_retry(lambda: sync_labor_run_to_supabase(run_id, run_dir))
             return
@@ -188,6 +221,8 @@ def sync_labor_run_to_persistent(run_id: str, run_dir: Path) -> None:
 
 def sync_labor_run_from_persistent(run_id: str, run_dir: Path) -> bool:
     with _run_storage_lock(run_id):
+        if labor_obs_storage_enabled():
+            return bool(_persistent_retry(lambda: sync_labor_run_from_obs(run_id, run_dir)))
         if labor_supabase_storage_enabled():
             return bool(_persistent_retry(lambda: sync_labor_run_from_supabase(run_id, run_dir)))
         if labor_blob_storage_enabled():
@@ -196,6 +231,8 @@ def sync_labor_run_from_persistent(run_id: str, run_dir: Path) -> bool:
 
 
 def list_labor_metadata_from_persistent() -> list[dict[str, Any]]:
+    if labor_obs_storage_enabled():
+        return list_labor_metadata_from_obs()
     if labor_supabase_storage_enabled():
         return list_labor_metadata_from_supabase()
     if labor_blob_storage_enabled():
@@ -205,6 +242,10 @@ def list_labor_metadata_from_persistent() -> list[dict[str, Any]]:
 
 def delete_labor_run_from_persistent(run_id: str, owner_user_id: str = "") -> None:
     with _run_storage_lock(run_id):
+        if labor_obs_storage_enabled():
+            prefix = f"vc_payroll_file/{obs_environment()}/{run_id}/"
+            obs_delete_objects([str(row.get("key")) for row in obs_list_objects(prefix) if row.get("key")])
+            return
         if labor_supabase_storage_enabled():
             _persistent_retry(
                 lambda: delete_labor_run_from_supabase(
@@ -290,8 +331,8 @@ def persist_labor_private_output(
 ) -> dict[str, Any]:
     """Upload one verified Worker output into the owner-scoped private namespace."""
 
-    if not labor_supabase_storage_enabled():
-        raise RuntimeError("P1 Worker 输出持久化要求配置 Supabase 私有对象存储。")
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
+        raise RuntimeError("P1 Worker 输出持久化要求配置私有对象存储。")
     source = Path(path)
     if not source.is_file():
         raise FileNotFoundError("Worker 输出文件不存在。")
@@ -320,7 +361,7 @@ def persist_labor_private_output(
         category="outputs",
     )
     content_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
-    _supabase_upload_bytes(
+    put_labor_supabase_private_object(
         object_key,
         source.read_bytes(),
         content_type=content_type,
@@ -330,7 +371,7 @@ def persist_labor_private_output(
         raise RuntimeError("私有存储中的 Worker 输出大小与本地结果不一致。")
     return {
         "objectKey": object_key,
-        "storageBackend": "supabase",
+        "storageBackend": "obs" if labor_obs_storage_enabled() else "supabase",
         "storagePrivate": True,
         "storageVerified": True,
         "storageVerifiedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -347,9 +388,16 @@ def create_labor_supabase_signed_upload_for_object(
     file_kind: str,
     content_type: str = "application/octet-stream",
 ) -> dict[str, Any]:
-    if not labor_supabase_storage_enabled():
-        raise RuntimeError("P1 签名直传要求配置 Supabase 私有对象存储。")
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
+        raise RuntimeError("P1 签名直传要求配置私有对象存储。")
     normalized_key = _normalize_labor_p1_object_key(object_key)
+    if labor_obs_storage_enabled():
+        return {
+            "signedUrl": obs_signed_upload_for_key(normalized_key, expiration=7200),
+            "token": "", "method": "PUT", "headers": {},
+            "objectKey": normalized_key, "fileKind": _safe_object_segment(file_kind, "other"),
+            "expiresIn": 7200, "private": True,
+        }
     path = f"object/upload/sign/{quote(labor_supabase_bucket(), safe='')}/{quote(normalized_key, safe='/')}"
     data = _supabase_json_request(
         "POST",
@@ -380,11 +428,14 @@ def create_labor_supabase_signed_download(
     filename: str = "",
     expires_in: int = 120,
 ) -> dict[str, Any]:
-    if not labor_supabase_storage_enabled():
-        raise RuntimeError("P1 签名下载要求配置 Supabase 私有对象存储。")
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
+        raise RuntimeError("P1 签名下载要求配置私有对象存储。")
     normalized_key = _normalize_labor_p1_object_key(object_key)
     ttl = max(30, min(int(expires_in or 120), 600))
     safe_filename = _safe_storage_filename(filename) if filename else ""
+    if labor_obs_storage_enabled():
+        return {"signedUrl": obs_signed_download_for_key(normalized_key, expiration=ttl),
+                "expiresIn": ttl, "private": True, "filename": safe_filename}
     data = _supabase_json_request(
         "POST",
         f"object/sign/{quote(labor_supabase_bucket(), safe='')}/{quote(normalized_key, safe='/')}",
@@ -412,11 +463,15 @@ def put_labor_supabase_private_object(
     content_type: str = "application/octet-stream",
 ) -> dict[str, Any]:
     normalized_key = _normalize_labor_p1_object_key(object_key)
+    if labor_obs_storage_enabled():
+        return obs_put_bytes(normalized_key, content, content_type=content_type)
     return _supabase_upload_bytes(normalized_key, content, content_type=content_type)
 
 
 def get_labor_supabase_private_object(object_key: str, *, bypass_cache: bool = False) -> bytes | None:
     normalized_key = _normalize_labor_p1_object_key(object_key)
+    if labor_obs_storage_enabled():
+        return obs_get_bytes(normalized_key)
     if bypass_cache:
         return _supabase_download_bytes(normalized_key, bypass_cache=True)
     return _supabase_download_bytes(normalized_key)
@@ -424,9 +479,18 @@ def get_labor_supabase_private_object(object_key: str, *, bypass_cache: bool = F
 
 def labor_supabase_object_metadata(object_key: str) -> dict[str, Any]:
     """Read object metadata with service credentials without proxying the file body."""
-    if not labor_supabase_storage_enabled():
-        raise RuntimeError("P1 文件确认要求配置 Supabase 私有对象存储。")
+    if not (labor_supabase_storage_enabled() or labor_obs_storage_enabled()):
+        raise RuntimeError("P1 文件确认要求配置私有对象存储。")
     normalized_key = _normalize_labor_p1_object_key(object_key)
+    if labor_obs_storage_enabled():
+        matching = [row for row in obs_list_objects(normalized_key) if row.get("key") == normalized_key]
+        if not matching:
+            raise FileNotFoundError("OBS 对象不存在")
+        content = obs_get_bytes(normalized_key)
+        if content is None:
+            raise FileNotFoundError("OBS 对象不存在")
+        return {"sizeBytes": len(content), "sha256": hashlib.sha256(content).hexdigest(),
+                "contentType": mimetypes.guess_type(normalized_key)[0] or "application/octet-stream"}
     url = _supabase_storage_url(
         f"object/{quote(labor_supabase_bucket(), safe='')}/{quote(normalized_key, safe='/')}"
     )
@@ -568,8 +632,11 @@ def _absolute_supabase_signed_url(path: str, *, token: str = "") -> str:
 
 def _normalize_labor_p1_object_key(object_key: str) -> str:
     normalized_key = str(object_key or "").replace("\\", "/").lstrip("/")
-    expected_prefix = f"{RUN_PREFIX}/{labor_persistent_environment()}/owners/"
-    if not normalized_key.startswith(expected_prefix) or ".." in normalized_key.split("/"):
+    prefixes = (
+        f"{RUN_PREFIX}/{labor_persistent_environment()}/owners/",
+        f"labor-runs/{labor_persistent_environment()}/owners/system/worker-releases/",
+    )
+    if not normalized_key.startswith(prefixes) or ".." in normalized_key.split("/"):
         raise ValueError("对象路径不属于当前 P1 私有存储命名空间。")
     return normalized_key
 

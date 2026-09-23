@@ -9,10 +9,12 @@ from uuid import uuid4
 from typing import Any, Dict, List
 
 from ..config import DEFAULT_RULE_WORKBOOK, RUNS_DIR
+from .company_run_storage import enabled as company_storage_enabled, restore_run_dir, upload_run_dir
 from .local_store import list_indexed_runs, upsert_run_metadata
 
 
 METADATA_FILE = "metadata.json"
+_RECRUITMENT_STORAGE_BACKEND = "SIGMA_RECRUITMENT_STORAGE_BACKEND"
 
 
 def new_run_id(month: int) -> str:
@@ -35,6 +37,8 @@ def save_metadata(run_dir: Path, metadata: Dict[str, Any]) -> Dict[str, Any]:
     tmp_path = metadata_path.with_suffix(f"{metadata_path.suffix}.tmp")
     tmp_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp_path, metadata_path)
+    if company_storage_enabled(_RECRUITMENT_STORAGE_BACKEND):
+        upload_run_dir("recruitment-bonus", run_dir)
     upsert_run_metadata(metadata)
     return metadata
 
@@ -73,7 +77,10 @@ def list_run_metadata() -> List[Dict[str, Any]]:
 def get_run_dir(run_id: str) -> Path:
     if not re.fullmatch(r"[0-9A-Za-z_\-]+", run_id):
         raise FileNotFoundError("批次不存在。")
-    return RUNS_DIR / run_id
+    run_dir = RUNS_DIR / run_id
+    if company_storage_enabled(_RECRUITMENT_STORAGE_BACKEND) and not (run_dir / METADATA_FILE).exists():
+        restore_run_dir("recruitment-bonus", run_id, RUNS_DIR)
+    return run_dir
 
 
 def run_file_url(run_id: str, path: str | Path | None) -> str:

@@ -11,6 +11,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from . import mysql_state
+
 
 FBU_POSTGRES_RUNS_TABLE = "sigma_fbu_runs"
 FBU_POSTGRES_SECTIONS_TABLE = "sigma_fbu_run_sections"
@@ -61,6 +63,8 @@ def _supabase_token() -> str:
 
 
 def fbu_postgres_state_requested() -> bool:
+    if mysql_state.requested():
+        return True
     backend = str(os.environ.get("SIGMA_FBU_STATE_BACKEND") or "auto").strip().lower()
     if backend in {"storage", "json", "off", "disabled"}:
         return False
@@ -186,6 +190,8 @@ def _call(path: str, *, method: str = "GET", payload: Any = None, headers=None) 
 
 
 def _rpc(name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if mysql_state.requested():
+        return mysql_state.rpc(name, payload)
     if name == "sigma_fbu_commit_snapshot":
         if not fbu_postgres_state_requested() or _known_available() is False:
             return None
@@ -586,6 +592,12 @@ def save_snapshot_with_retry(
 
 
 def load_run_state(run_id: str, sections: set[str]) -> dict[str, Any] | None:
+    if mysql_state.requested():
+        result = mysql_state.load_run_state(run_id, sections)
+        for name in sections:
+            if name in result:
+                result[name] = _decode_section_from_storage(name, result[name])
+        return result
     query = urlencode({
         "environment": f"eq.{_environment()}",
         "run_id": f"eq.{run_id}",
@@ -625,6 +637,8 @@ def load_run_state(run_id: str, sections: set[str]) -> dict[str, Any] | None:
 
 
 def list_run_states() -> list[dict[str, Any]] | None:
+    if mysql_state.requested():
+        return mysql_state.list_run_states()
     query = urlencode({
         "environment": f"eq.{_environment()}",
         "select": "core,revision",
@@ -644,6 +658,8 @@ def list_run_states() -> list[dict[str, Any]] | None:
 
 
 def load_job(run_id: str, job_id: str) -> dict[str, Any] | None:
+    if mysql_state.requested():
+        return mysql_state.load_job(run_id, job_id)
     query = urlencode({
         "environment": f"eq.{_environment()}",
         "run_id": f"eq.{run_id}",
@@ -681,6 +697,8 @@ def patch_job(
 
 
 def delete_run(run_id: str) -> bool | None:
+    if mysql_state.requested():
+        return mysql_state.delete_run(run_id)
     query = urlencode({
         "environment": f"eq.{_environment()}",
         "run_id": f"eq.{run_id}",
