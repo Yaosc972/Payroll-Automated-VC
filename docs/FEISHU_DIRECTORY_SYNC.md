@@ -9,7 +9,7 @@
 - `SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_NAME=HRAS 人力综合条线`（可选，仅用于展示和根部门名称兜底）
 - 复用平台 Production 已有的 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
 
-真实同步同时要求 `VERCEL_ENV=production`。Local 和 Preview 即使误配启用变量，接口也会拒绝执行，并且不会请求飞书通讯录。
+真实同步要求生产环境：Vercel 使用 `VERCEL_ENV=production`；AIDeploy 可通过请求域名与 `SIGMA_WORKBENCH_PUBLIC_URL` 的域名完全一致识别生产。预览域名即使继承 Base 的同步开关，也不会执行真实同步。Local 和 Preview 不会请求飞书通讯录。
 
 ## 飞书应用权限与数据范围
 

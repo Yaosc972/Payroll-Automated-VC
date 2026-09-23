@@ -1505,8 +1505,17 @@ def _feishu_identity_from_payloads(token_data: dict[str, Any], user_info: dict[s
     }
 
 
-def _directory_sync_config() -> dict[str, Any]:
+def _directory_sync_config(request: Request | None = None) -> dict[str, Any]:
     environment = str(os.environ.get("VERCEL_ENV") or "local").strip().lower() or "local"
+    public_host = urlparse(str(os.environ.get("SIGMA_WORKBENCH_PUBLIC_URL") or "").strip()).hostname
+    request_host = request.url.hostname if request is not None else None
+    if public_host and request_host:
+        if request_host.lower().rstrip(".") == public_host.lower().rstrip("."):
+            if environment == "local":
+                environment = "production"
+        elif environment == "production":
+            # AIDeploy preview can inherit Base variables; never sync from another host.
+            environment = "preview"
     enabled = _env_flag("SIGMA_FEISHU_DIRECTORY_SYNC_ENABLED", False)
     root_department_id = str(os.environ.get("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID") or "").strip()
     return {
@@ -2966,6 +2975,7 @@ def api_auth_feishu_login() -> RedirectResponse:
 @app.get("/api/auth/feishu/callback")
 @app.get("/api/auth/lark/callback")
 def api_auth_feishu_callback(
+    request: Request,
     background_tasks: BackgroundTasks,
     response: Response,
     code: str = "",
@@ -2983,8 +2993,8 @@ def api_auth_feishu_callback(
     identity = _feishu_identity_from_payloads(token_data, user_info)
     should_enrich_directory_identity = (
         not identity.get("feishu_user_id")
-        and _directory_sync_config()["environment"] == "production"
-        and _directory_sync_config()["enabled"]
+        and _directory_sync_config(request)["environment"] == "production"
+        and _directory_sync_config(request)["enabled"]
     )
     if not identity.get("avatar_url") or should_enrich_directory_identity:
         try:
@@ -3274,8 +3284,8 @@ def api_publish_workbench_announcement(
 
 
 @app.get("/api/admin/state")
-def api_admin_state(actor_user_id: str = Depends(_require_admin_user)) -> dict:
-    return {**get_admin_state(), "directory": _directory_sync_config()}
+def api_admin_state(request: Request, actor_user_id: str = Depends(_require_admin_user)) -> dict:
+    return {**get_admin_state(), "directory": _directory_sync_config(request)}
 
 
 @app.get("/api/admin/users")
@@ -3284,8 +3294,8 @@ def api_admin_users(actor_user_id: str = Depends(_require_admin_user)) -> dict:
 
 
 @app.post("/api/admin/directory/sync")
-def api_admin_directory_sync(actor_user_id: str = Depends(_require_admin_user)) -> dict:
-    sync_config = _directory_sync_config()
+def api_admin_directory_sync(request: Request, actor_user_id: str = Depends(_require_admin_user)) -> dict:
+    sync_config = _directory_sync_config(request)
     if sync_config["environment"] != "production":
         raise HTTPException(status_code=409, detail="飞书组织同步仅允许在生产环境执行。")
     if not sync_config["enabled"]:
