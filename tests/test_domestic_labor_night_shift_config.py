@@ -103,7 +103,7 @@ def test_save_load_and_copy_only_monthly_jinjiang_list(monkeypatch, tmp_path):
     assert copied["month"] == "202609"
     assert copied["copied_from"] == "202608"
     assert copied["revision"] == 1
-    assert copied["shift_break_overrides"] == []
+    assert copied["shift_break_overrides"][0]["shift_code"] == "DN06"
     assert copied["jinjiang_exclusions"] == saved["jinjiang_exclusions"]
     assert copied["jinjiang_list_confirmed"] is True
     assert second["revision"] == 2
@@ -116,6 +116,29 @@ def test_save_load_and_copy_only_monthly_jinjiang_list(monkeypatch, tmp_path):
         config_module.copy_night_shift_config("202608", "202609", updated_by="test")
 
 
+def test_shift_break_overrides_are_shared_across_users_and_future_months(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_module, "NIGHT_SHIFT_CONFIG_DIR", tmp_path)
+    alice_token = config_module.CONFIG_OWNER.set("alice")
+    try:
+        config_module.save_night_shift_config("202608", _config(), updated_by="Alice")
+    finally:
+        config_module.CONFIG_OWNER.reset(alice_token)
+
+    bob_token = config_module.CONFIG_OWNER.set("bob")
+    try:
+        same_month = config_module.load_night_shift_config("202608", required=False)
+        future_month = config_module.load_night_shift_config("202609", required=False)
+        earlier_month = config_module.load_night_shift_config("202607", required=False)
+    finally:
+        config_module.CONFIG_OWNER.reset(bob_token)
+
+    assert same_month["shift_break_overrides"][0]["shift_code"] == "DN06"
+    assert future_month["shift_break_overrides"][0]["shift_code"] == "DN06"
+    assert earlier_month["shift_break_overrides"] == []
+    assert same_month["jinjiang_exclusions"] == []
+    assert future_month["jinjiang_exclusions"] == []
+
+
 def test_duplicate_business_keys_are_rejected(monkeypatch, tmp_path):
     monkeypatch.setattr(config_module, "NIGHT_SHIFT_CONFIG_DIR", tmp_path)
     payload = _config()
@@ -125,12 +148,12 @@ def test_duplicate_business_keys_are_rejected(monkeypatch, tmp_path):
         config_module.save_night_shift_config("202608", payload)
 
 
-def test_shift_effective_date_must_be_inside_payroll_month(monkeypatch, tmp_path):
+def test_shift_effective_date_cannot_be_after_payroll_month(monkeypatch, tmp_path):
     monkeypatch.setattr(config_module, "NIGHT_SHIFT_CONFIG_DIR", tmp_path)
     payload = _config()
     payload["shift_break_overrides"][0]["effective_start_date"] = "2026-09-01"
 
-    with pytest.raises(ValueError, match="必须在核算月份 202608 内"):
+    with pytest.raises(ValueError, match="不能晚于核算月份 202608"):
         config_module.save_night_shift_config("202608", payload)
 
 
@@ -254,7 +277,7 @@ def test_night_shift_config_api_import_copy_and_download(monkeypatch, tmp_path):
     assert load_workbook(BytesIO(downloaded.content)).sheetnames == ["晋江不享有名单"]
     assert copied.status_code == 200
     assert copied.json()["copied_from"] == "202608"
-    assert copied.json()["shift_break_overrides"] == []
+    assert copied.json()["shift_break_overrides"][0]["shift_code"] == "DN06"
     assert imported.status_code == 200
     assert imported.json()["month"] == "202610"
     assert imported.json()["jinjiang_list_confirmed"] is True

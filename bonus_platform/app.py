@@ -15504,9 +15504,13 @@ def get_domestic_labor_night_shift_config(month: str) -> dict:
 
 
 @app.put("/api/domestic-labor/night-shift/config/{month}")
-def put_domestic_labor_night_shift_config(month: str, payload: dict = Body(...)) -> dict:
+def put_domestic_labor_night_shift_config(
+    month: str, request: Request, payload: dict = Body(...)
+) -> dict:
     try:
-        saved = save_night_shift_config(month, payload)
+        saved = save_night_shift_config(
+            month, payload, updated_by=_domestic_actor(request)["ownerName"]
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {**saved, "counts": config_counts(saved)}
