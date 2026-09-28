@@ -32,7 +32,7 @@ from time import monotonic, perf_counter
 from typing import Any, Callable, Optional
 from urllib.parse import quote, urlencode, urlparse
 from uuid import uuid4
-from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Body, Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from bonus_platform.time_utils import utcnow_naive
@@ -3033,6 +3033,31 @@ def api_auth_feishu_callback(
 @app.get("/api/me")
 def api_me(actor_user_id: str = Depends(_current_user_id)) -> dict:
     return _get_cached_current_user(actor_user_id)
+
+
+@app.get("/api/workbench/policies")
+def api_policy_feed(q: str = Query("", max_length=100), offset: int = Query(0, ge=0, le=10000), category: str = Query("", pattern="^(社保|医保|公积金)?$"), actor_user_id: str = Depends(_current_user_id)) -> dict:
+    from bonus_platform.engine.policy.feed import query
+    try:
+        return query(q.strip(), offset, category=category)
+    except Exception:
+        raise HTTPException(status_code=503, detail="政策资讯暂不可用，请稍后重试。") from None
+
+
+@app.get("/api/policies/cron/refresh")
+def api_policy_refresh(request: Request) -> dict:
+    import secrets
+    from bonus_platform.engine.policy.feed import refresh
+    expected = os.environ.get("CRON_SECRET", "").strip()
+    if not expected or not secrets.compare_digest(request.headers.get("authorization", ""), f"Bearer {expected}"):
+        raise HTTPException(status_code=401, detail="定时同步授权失败")
+    try:
+        results = refresh()
+    except Exception:
+        raise HTTPException(status_code=503, detail="政策采集存储暂不可用。") from None
+    if not any(item["state"] == "ok" for item in results):
+        return JSONResponse({"sources": results, "state": "error"}, status_code=503)
+    return {"sources": results, "state": "ok" if all(item["state"] == "ok" for item in results) else "partial"}
 
 
 @app.post("/api/workbench/feedback", status_code=201)

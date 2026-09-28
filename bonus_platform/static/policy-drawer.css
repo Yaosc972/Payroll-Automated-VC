@@ -1,0 +1,35 @@
+.policy-drawer {
+  position: fixed; inset: 18px 18px 18px auto; margin: 0; padding: 0;
+  width: min(520px, calc(100vw - 36px)); max-width: none;
+  height: calc(100dvh - 36px); max-height: none; overflow: hidden;
+  border: 1px solid rgba(255,255,255,.72); border-radius: 24px;
+  color: #17233f; background: linear-gradient(135deg, #fff, #f3f7ff);
+  box-shadow: -28px 20px 86px rgba(14,29,73,.24), inset 0 1px 0 #fff;
+  font-size: 12px;
+}
+.policy-drawer[open] { display: flex; flex-direction: column; animation: policy-enter 260ms cubic-bezier(.2,.8,.2,1); }
+.policy-drawer::backdrop { background: rgba(9,18,42,.18); backdrop-filter: blur(3px); }
+.policy-header { display: flex; align-items: center; gap: 14px; flex-shrink: 0; padding: 16px 18px; border-bottom: 1px solid #dfe6ef; background: #eaf1fc66; }
+.policy-header h2 { flex-shrink: 0; margin: 0; color: #0e1d49; font-size: 17px; letter-spacing: -.02em; }
+.policy-header form { display: flex; gap: 8px; flex: 1; min-width: 0; }
+.policy-header select { flex: 0 0 82px; width: 82px; min-width: 0; height: 32px; padding: 4px 6px; border: 1px solid #d5deeb; border-radius: 9px; color: #344767; background: #ffffffb3; font: inherit; font-size: 12px; cursor: pointer; }
+.policy-header input { box-sizing: border-box; width: 100%; flex: 1; min-width: 0; height: 32px; padding: 6px 10px; border: 1px solid #d5deeb; border-radius: 9px; color: #17233f; background: #ffffffb3; font: inherit; font-size: 12px; }
+.policy-close { flex-shrink: 0; border: 1px solid #dbe4f0; border-radius: 50%; width: 30px; height: 30px; padding: 0; color: #475569; background: #ffffffb3; font-size: 21px; cursor: pointer; }
+.policy-status { padding: 10px 18px; color: #64748b; border-bottom: 1px solid #e5ebf3; font-size: 11px; line-height: 1.5; }
+.policy-body { flex: 1; min-height: 0; overflow: auto; padding: 0 18px; }
+.policy-article { padding: 12px 0; border-bottom: 1px solid #e1e8f1; }
+.policy-meta { display: flex; align-items: center; gap: 7px; min-width: 0; color: #64748b; font-size: 11px; line-height: 1.5; }
+.policy-tag { flex: 0 0 auto; padding: 2px 6px; border-radius: 5px; color: #315b92; background: #e8f0fc; white-space: nowrap; }
+.policy-tag-category { color: #52637c; background: #edf1f6; }
+.policy-date { flex: 0 0 auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.policy-article h3 { margin: 7px 0 0; font-size: 14px; font-weight: 600; line-height: 1.55; }
+.policy-article a { color: #17233f; text-decoration: none; overflow-wrap: anywhere; }
+.policy-article a:hover { color: #2563eb; text-decoration: underline; text-underline-offset: 3px; }
+.policy-origin { min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 11px; }
+.policy-empty { padding: 32px 8px; text-align: center; color: #64748b; font-size: 12px; line-height: 1.7; }
+.policy-more, .policy-retry { margin: 16px 0; padding: 8px 12px; border: 1px solid #d5deeb; border-radius: 8px; color: #1e3a8a; background: #fff; font: inherit; cursor: pointer; }
+.policy-status[hidden], .policy-more[hidden] { display: none; }
+.policy-drawer :is(button,input,select,a,summary):focus-visible { outline: 3px solid #2563eb70; outline-offset: 2px; }
+@keyframes policy-enter { from { transform: translateX(calc(100% + 40px)); } to { transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .policy-drawer[open] { animation: none; } }
+@media (max-width: 420px) { .policy-header { gap: 8px; padding-inline: 12px; } .policy-header h2 { font-size: 15px; } }

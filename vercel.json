@@ -2,6 +2,10 @@
   "version": 2,
   "crons": [
     {
+      "path": "/api/policies/cron/refresh",
+      "schedule": "30 0 * * *"
+    },
+    {
       "path": "/api/social-insurance/cron/refresh",
       "schedule": "0 0 * * *"
     }
