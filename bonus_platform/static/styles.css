@@ -7241,6 +7241,12 @@ body.filters-collapsed .filter-body {
 }
 
 /* Scoped HRAS homepage brand overrides stay stronger than legacy dashboard duplicates. */
+/* Let the homepage grid size both columns to its content, not the viewport. */
+html[data-module-id="home"] .dashboard-frame,
+html[data-module-id="home"] .dashboard-sidebar {
+  min-height: 0;
+}
+
 .dashboard-shell:not(.admin-console-shell) .dashboard-frame {
   grid-template-columns: 340px minmax(0, 1fr);
 }
