@@ -52,7 +52,8 @@
     subjectLoading: false,
     fieldDefinitions: [],
     schemaDefinitions: [],
-    view: 'business',
+    view: ['business', 'source', 'template'].includes(new URLSearchParams(location.hash.slice(1)).get('view'))
+      ? new URLSearchParams(location.hash.slice(1)).get('view') : 'business',
     templateRoute: '',
     editingRoute: '',
     preflight: null,
@@ -2372,6 +2373,7 @@
     }));
     document.querySelectorAll('.review-view-switch button').forEach((button) => button.addEventListener('click', () => {
       state.view = button.dataset.view || 'business';
+      history.replaceState(null, '', `${location.pathname}${location.search}#${new URLSearchParams({ view: state.view })}`);
       document.querySelectorAll('.review-view-switch button').forEach((node) => node.classList.toggle('active', node === button));
       syncTemplateRouteSelectors();
       renderTable();
@@ -2396,6 +2398,7 @@
 
   async function initialize() {
     bindEvents();
+    document.querySelectorAll('.review-view-switch button').forEach((node) => node.classList.toggle('active', node.dataset.view === state.view));
     const metadataPromise = loadFieldMetadata();
     try {
       const payload = await api(`${API_ROOT}/bootstrap`);

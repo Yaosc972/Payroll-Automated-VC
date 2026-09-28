@@ -7,7 +7,7 @@ const section = (start, end) => source.slice(source.indexOf(start), source.index
 test('slow startup does not navigate away after the user opens an activity', async () => {
   let resolve, restored = false;
   const state = {view:'home', navigationRevision:0};
-  const context = vm.createContext({state, location:{hash:'#view=home'}, restoringPayrollPage:true,
+  const context = vm.createContext({state, URLSearchParams, el:{}, location:{hash:'#view=home'}, restoringPayrollPage:true,
     loadEngineCards(){},loadTemplateLinks(){},bindEvents(){},setDefaultMonth(){},setDefaultCanbuBatchMonth(){},renderEmptyWorkbench(){},renderRecentBatchTable(){},setupActivityList(){},rememberPayrollPage(){},
     showView(view){state.view=view;state.navigationRevision++;},
     refreshActivities:()=>new Promise(r=>{resolve=r;}),restorePayrollPage:()=>{restored=true;state.view='home';},

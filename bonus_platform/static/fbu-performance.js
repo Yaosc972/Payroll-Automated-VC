@@ -5,6 +5,7 @@
 // ═══ State ═══
 
 const state = {
+  navigationRevision: 0,
   currentPage: 'activities',
   activityStep: 'people',
   currentActivity: null,
@@ -1553,6 +1554,7 @@ function setSidebarCollapsed(collapsed) {
 function setActivityStep(stepKey) {
   if (!ACTIVITY_STEPS.some(step => step.key === stepKey)) return;
   state.activityStep = stepKey;
+  rememberFbuPage();
   rememberOwnedActivity(state.currentActivity, stepKey);
   renderWorkbenchCurrentStep();
   ensureActivityStepData(stepKey);
@@ -1585,12 +1587,23 @@ function getActivityStepFromActivity(activity = state.currentActivity) {
   return 'check';
 }
 
+function rememberFbuPage() {
+  const route = new URLSearchParams({ view: state.currentPage });
+  if (state.currentPage === 'workbench' && state.currentActivity?.run_id) {
+    route.set('activity', state.currentActivity.run_id);
+    route.set('step', state.activityStep);
+  }
+  history.replaceState(null, '', `${location.pathname}${location.search}#${route}`);
+}
+
 function navigateTo(page) {
+  state.navigationRevision++;
   let targetPage = page in el.pages ? page : 'activities';
   if (targetPage === 'workbench' && !state.currentActivity) {
     targetPage = 'activities';
   }
   state.currentPage = targetPage;
+  rememberFbuPage();
 
   // Update nav items
   el.navItems.forEach(item => {
@@ -3374,6 +3387,7 @@ async function enterActivity(activityId, options = {}) {
   try {
     const isDifferentActivity = state.currentActivity?.run_id !== activityId;
     let activity = await apiJson(`${API_BASE}/runs/${activityId}?include=core`);
+    if (options.navigationRevision !== undefined && options.navigationRevision !== state.navigationRevision) return null;
 
     if (isDifferentActivity) {
       resetTableControls();
@@ -3400,6 +3414,7 @@ async function enterActivity(activityId, options = {}) {
       loadBaseRoster(activity.calc_month),
     ]);
     if (state.currentActivity?.run_id !== activity.run_id) return null;
+    if (options.navigationRevision !== undefined && options.navigationRevision !== state.navigationRevision) return null;
     state.ruleLists = ruleLists;
     const ownedPreference = readLastOwnedActivityPreference();
     const preferredOwnedStep = isMyActivity(activity)
@@ -3421,6 +3436,7 @@ async function enterActivity(activityId, options = {}) {
     activity = state.currentActivity;
     restoreFbuUploadJobs(activity.run_id);
     restoreFbuCalculationJob(activity.run_id);
+    if (options.navigationRevision !== undefined && options.navigationRevision !== state.navigationRevision) return null;
 
     if (preservePage && state.currentPage === 'activities') {
       // Keep list interactions stable while background activity details are loading.
@@ -8873,7 +8889,21 @@ function showNotification(message, type = 'info', options = {}) {
 
 // ═══ Init ═══
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   setSidebarCollapsed(false);
-  navigateTo('activities');
+  const route = new URLSearchParams(location.hash.slice(1));
+  const activityId = route.get('activity');
+  if (route.get('view') !== 'workbench' || !activityId || !/^[0-9A-Za-z_-]+$/.test(activityId)) {
+    navigateTo('activities');
+    return;
+  }
+  const revision = state.navigationRevision;
+  Object.keys(el.pages).forEach(key => { el.pages[key].hidden = key !== 'workbench'; });
+  el.workbenchContent.innerHTML = '<p role="status">正在恢复核算活动…</p>';
+  await loadActivities();
+  if (revision !== state.navigationRevision) return;
+  const restored = await enterActivity(activityId, { initialStep: route.get('step') || '', navigationRevision: revision });
+  if (!restored && revision === state.navigationRevision) {
+    el.workbenchContent.innerHTML = '<p role="alert">核算活动暂时未能恢复，请刷新重试，或返回活动列表。</p><button type="button" class="btn btn-secondary" onclick="navigateTo(\'activities\')">返回活动列表</button>';
+  }
 });
