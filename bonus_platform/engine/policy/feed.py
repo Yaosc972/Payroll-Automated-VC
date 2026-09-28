@@ -35,6 +35,10 @@ def migrate(db_path=None):
     """Explicit deployment migration; never called from a web request."""
     with _connect(db_path) as db:
         db.executescript(SCHEMA)
+        if db.backend == 'postgres':
+            # Server-owned tables: browser Data API roles have no row policies.
+            db.execute('ALTER TABLE policy_articles ENABLE ROW LEVEL SECURITY')
+            db.execute('ALTER TABLE policy_source_checks ENABLE ROW LEVEL SECURITY')
         db.commit()
 
 
