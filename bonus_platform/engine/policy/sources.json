@@ -1,0 +1,122 @@
+[
+  {
+    "id": "nhsa",
+    "name": "国家医疗保障局",
+    "region": "全国",
+    "category": "医保",
+    "url": "https://www.nhsa.gov.cn/col/col104/index.html",
+    "articlePattern": "/art/\\d{4}/\\d+/\\d+/art_104_\\d+\\.html"
+  },
+  {
+    "id": "beijing-gjj",
+    "name": "北京住房公积金管理中心",
+    "region": "北京",
+    "category": "公积金",
+    "url": "https://gjj.beijing.gov.cn/",
+    "articlePattern": "/web/zwgk61/2024zc(?:wj|jd)/.*/index\\.html"
+  },
+  {
+    "id": "shanghai-rsj",
+    "name": "上海市人力资源和社会保障局",
+    "region": "上海",
+    "category": "社保",
+    "url": "https://rsj.sh.gov.cn/tshbx_17282/index.html",
+    "articlePattern": "/.*\\.html"
+  },
+  {
+    "id": "guangzhou-gjj",
+    "name": "广州住房公积金管理中心",
+    "region": "广州",
+    "category": "公积金",
+    "url": "https://gjj.gz.gov.cn/gg/tzgg/index.html",
+    "articlePattern": "/gg/tzgg/content/post_\\d+\\.html"
+  },
+  {
+    "id": "shenzhen-gjj",
+    "name": "深圳市住房和建设局",
+    "region": "深圳",
+    "category": "公积金",
+    "url": "https://zjj.sz.gov.cn/ztfw/zfgjj/zcfg/",
+    "articlePattern": "/ztfw/zfgjj/zcfg/content/post_\\d+\\.html"
+  },
+  {
+    "id": "guangzhou-rsj",
+    "name": "广州市人力资源和社会保障局",
+    "region": "广州",
+    "category": "社保",
+    "url": "https://rsj.gz.gov.cn/ywzt/shbz/tzgg/",
+    "articlePattern": "/(?:ywzt/shbz/tzgg|gkmlpt)/content/.*post_\\d+\\.html"
+  },
+  {
+    "id": "beijing-rsj",
+    "name": "北京市人力资源和社会保障局",
+    "region": "北京",
+    "category": "社保",
+    "url": "https://rsj.beijing.gov.cn/zzcwj/",
+    "articlePattern": "/xxgk/2024zcwj/\\d+/t\\d+_\\d+\\.html"
+  },
+  {
+    "id": "shenzhen-rsj",
+    "name": "深圳市社会保险基金管理局",
+    "region": "深圳",
+    "category": "社保",
+    "url": "https://hrss.sz.gov.cn/szsi/sbjxxgk/zcfggfxwj/zcfg/",
+    "articlePattern": "/szsi/sbjxxgk/zcfggfxwj/zcfg/.*/content/post_\\d+\\.html"
+  },
+  {
+    "id": "shanxi-ybj",
+    "name": "山西省医疗保障局",
+    "region": "山西",
+    "category": "医保",
+    "url": "https://ybj.shanxi.gov.cn/xxfb/fdzdgknr/gfxwj/",
+    "articlePattern": "/xxfb/xxgkml/\\d{6}/t\\d+_\\d+\\.html"
+  },
+  {
+    "id": "heilongjiang-ybj",
+    "name": "黑龙江省医疗保障局",
+    "region": "黑龙江",
+    "category": "医保",
+    "url": "https://ybj.hlj.gov.cn/ybj/c105387/list.shtml",
+    "articlePattern": "/ybj/c105387/\\d{6}/c\\d+_\\d+\\.shtml"
+  },
+  {
+    "id": "jiangsu-ybj",
+    "name": "江苏省医疗保障局",
+    "region": "江苏",
+    "category": "医保",
+    "url": "https://ybj.jiangsu.gov.cn/col/col73935/index.html",
+    "articlePattern": "/art/\\d{4}/\\d+/\\d+/art_73935_\\d+\\.html"
+  },
+  {
+    "id": "henan-ybj",
+    "name": "河南省医疗保障局",
+    "region": "河南",
+    "category": "医保",
+    "url": "https://ylbz.henan.gov.cn/zcfg/",
+    "articlePattern": "/\\d{4}/\\d{2}-\\d{2}/\\d+\\.html"
+  },
+  {
+    "id": "hunan-ybj",
+    "name": "湖南省医疗保障局",
+    "region": "湖南",
+    "category": "医保",
+    "url": "https://ybj.hunan.gov.cn/ybj/first113541/firstF/f2113606/index.html",
+    "articlePattern": "/ybj/first113541/firstF/f2113606/\\d{6}/t\\d+_\\d+\\.html"
+  },
+  {
+    "id": "guangdong-ybj",
+    "name": "广东省医疗保障局",
+    "region": "广东",
+    "category": "医保",
+    "url": "https://hsa.gd.gov.cn/zwgk/zcfg/",
+    "articlePattern": "/zwgk/zcfg/ylbz/content/post_\\d+\\.html"
+  },
+  {
+    "id": "shaanxi-ybj",
+    "name": "陕西省医疗保障局",
+    "region": "陕西",
+    "category": "医保",
+    "url": "https://ybj.shaanxi.gov.cn/zfxxgk/fdzdgknr/zcwj/",
+    "articlePattern": "/zfxxgk/fdzdgknr/zcwj/\\d{6}/t\\d+_\\d+\\.html"
+  }
+]

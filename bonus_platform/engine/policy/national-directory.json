@@ -1,0 +1,524 @@
+{
+  "scope": "国家医保局目录中的31个省级医保部门及新疆生产建设兵团；不代表全国市县或社保、公积金来源已接通。",
+  "sources": [
+    {
+      "name": "北京市医疗保障局",
+      "url": "https://ybj.beijing.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ybj.beijing.gov.cn/tzgg2022/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "天津市医疗保障局",
+      "url": "https://ylbz.tj.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "河北省医疗保障局",
+      "url": "https://ylbzj.hebei.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ylbzj.hebei.gov.cn/category/31"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "山西省医疗保障局",
+      "url": "https://ybj.shanxi.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ybj.shanxi.gov.cn/xxfb/fdzdgknr/tzgg/"
+        },
+        {
+          "title": "政策法规",
+          "url": "https://ybj.shanxi.gov.cn/xxfb/fdzdgknr/zcfg_2/"
+        },
+        {
+          "title": "规范性文件",
+          "url": "https://ybj.shanxi.gov.cn/xxfb/fdzdgknr/gfxwj/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "shanxi-ybj",
+      "collectionCheck": {
+        "id": "shanxi-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "内蒙古自治区医疗保障局",
+      "url": "https://ylbzj.nmg.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "规范性文件",
+          "url": "https://ylbzj.nmg.gov.cn/zwgk/zfxxgk/fdzdgknr/?gk=0&cid=26945"
+        },
+        {
+          "title": "部门文件",
+          "url": "http://ylbzj.nmg.gov.cn/zwgk/zfxxgk/fdzdgknr/?gk=3&cid=14115"
+        },
+        {
+          "title": "通知公告",
+          "url": "https://ylbzj.nmg.gov.cn/xwzx/tzgg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "辽宁省医疗保障局",
+      "url": "https://ybj.ln.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ybj.ln.gov.cn/ybj/zxzx/tzgg/index.shtml"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "吉林省医疗保障局",
+      "url": "https://ybj.jl.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ybj.jl.gov.cn/ybxw/gsgg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "黑龙江省医疗保障局",
+      "url": "https://ybj.hlj.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ybj.hlj.gov.cn/ybj/c105387/list.shtml"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "heilongjiang-ybj",
+      "collectionCheck": {
+        "id": "heilongjiang-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "上海市医疗保障局",
+      "url": "https://ybj.sh.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "江苏省医疗保障局",
+      "url": "https://ybj.jiangsu.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ybj.jiangsu.gov.cn/col/col73935/index.html?number="
+        },
+        {
+          "title": "政策法规",
+          "url": "https://ybj.jiangsu.gov.cn/col/col71878/index.html?number=02"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "jiangsu-ybj",
+      "collectionCheck": {
+        "id": "jiangsu-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "浙江省医疗保障局",
+      "url": "https://ybj.zj.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "安徽省医疗保障局",
+      "url": "https://ybj.ah.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "部门文件",
+          "url": "https://ybj.ah.gov.cn/public/column/7071?type=4&catId=49948391&action=list"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "福建省医疗保障局",
+      "url": "https://ybj.fujian.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策文件",
+          "url": "https://ybj.fujian.gov.cn/zwgk/zcwjzw/"
+        },
+        {
+          "title": "通知公告",
+          "url": "https://ybj.fujian.gov.cn/zwgk/gsgg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "江西省医疗保障局",
+      "url": "https://ybj.jiangxi.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "山东省医疗保障局",
+      "url": "https://ybj.shandong.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "unreachable",
+      "error": "HTTPStatusError",
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "policyColumns": []
+    },
+    {
+      "name": "河南省医疗保障局",
+      "url": "https://ylbz.henan.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "政策法规",
+          "url": "https://ylbz.henan.gov.cn/zcfg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "henan-ybj",
+      "collectionCheck": {
+        "id": "henan-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "湖北省医疗保障局",
+      "url": "https://ybj.hubei.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "unreachable",
+      "error": "HTTPStatusError",
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "policyColumns": []
+    },
+    {
+      "name": "湖南省医疗保障局",
+      "url": "https://ybj.hunan.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "政策文件",
+          "url": "https://ybj.hunan.gov.cn/ybj/first113541/firstF/f2113606/index.html"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "hunan-ybj",
+      "collectionCheck": {
+        "id": "hunan-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "广东省医疗保障局",
+      "url": "https://hsa.gd.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://hsa.gd.gov.cn/zwdt/snkb/"
+        },
+        {
+          "title": "政策法规",
+          "url": "https://hsa.gd.gov.cn/zwgk/zcfg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "guangdong-ybj",
+      "collectionCheck": {
+        "id": "guangdong-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "广西壮族自治区医疗保障局",
+      "url": "https://ybj.gxzf.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "unreachable",
+      "error": "ConnectError",
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "policyColumns": []
+    },
+    {
+      "name": "海南省医疗保障局",
+      "url": "https://ybj.hainan.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策文件",
+          "url": "https://ybj.hainan.gov.cn/xxgk/zcwj/"
+        },
+        {
+          "title": "通知公告",
+          "url": "https://ybj.hainan.gov.cn/xxgk/tzgg/"
+        },
+        {
+          "title": "政策法规",
+          "url": "https://ybj.hainan.gov.cn/xxgk/zcfg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "重庆市医疗保障局",
+      "url": "https://ylbzj.cq.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策文件",
+          "url": "https://ylbzj.cq.gov.cn/zwgk_535/zfxxgkml/zcwj_291934/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "四川省医疗保障局",
+      "url": "https://ylbzj.sc.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ylbzj.sc.gov.cn/scsybj/nc010416/yy_zfxxgklist_fdgk1648106681498.shtml"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "贵州省医疗保障局",
+      "url": "https://ylbzj.guizhou.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策法规",
+          "url": "https://ylbzj.guizhou.gov.cn/zcfg/"
+        },
+        {
+          "title": "通知公告",
+          "url": "https://ylbzj.guizhou.gov.cn/xwdt/tzgg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "云南省医疗保障局",
+      "url": "https://ylbz.yn.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "https://ylbz.yn.gov.cn/index.php?c=category&id=14"
+        },
+        {
+          "title": "政策文件",
+          "url": "https://ylbz.yn.gov.cn/index.php?c=category&id=3"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "西藏自治区医保局",
+      "url": "https://ylbzj.xizang.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策文件",
+          "url": "https://ylbzj.xizang.gov.cn/zwgk/zcwj/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "陕西省医疗保障局",
+      "url": "https://ybj.shaanxi.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "adapter_verified",
+      "policyColumns": [
+        {
+          "title": "政策文件",
+          "url": "https://ybj.shaanxi.gov.cn/zfxxgk/fdzdgknr/zcwj/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "feedId": "shaanxi-ybj",
+      "collectionCheck": {
+        "id": "shaanxi-ybj",
+        "checked_at": "2026-09-28T08:48:20+00:00",
+        "success_at": "2026-09-28T08:48:20+00:00",
+        "state": "ok",
+        "error": ""
+      }
+    },
+    {
+      "name": "甘肃省医疗保障局",
+      "url": "https://ylbz.gansu.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "unreachable",
+      "error": "HTTPStatusError",
+      "checkedAt": "2026-09-28T08:48:18+00:00",
+      "policyColumns": []
+    },
+    {
+      "name": "青海省医疗保障局",
+      "url": "https://ybj.qinghai.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "通知公告",
+          "url": "http://ybj.qinghai.gov.cn/tzgg.htm"
+        },
+        {
+          "title": "政策法规",
+          "url": "http://ybj.qinghai.gov.cn/zcfg/ybflfg.htm"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "宁夏回族自治区医疗保障局",
+      "url": "https://ylbz.nx.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "新疆维吾尔自治区医疗保障局",
+      "url": "https://ylbzj.xinjiang.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策法规",
+          "url": "http://ylbzj.xinjiang.gov.cn/ylbzj/tzgg/list.shtml"
+        },
+        {
+          "title": "规范性文件",
+          "url": "http://ylbzj.xinjiang.gov.cn/ylbzj/gfxwj/list.shtml"
+        },
+        {
+          "title": "医保政策",
+          "url": "http://ylbzj.xinjiang.gov.cn/ylbzj/ghc/zfxxgk_gknrz.shtml"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    },
+    {
+      "name": "新疆生产建设兵团医疗保障局",
+      "url": "https://btybj.xjbt.gov.cn/",
+      "directoryUrl": "https://www.nhsa.gov.cn/col/col28/index.html",
+      "category": "医保",
+      "state": "needs_adapter",
+      "policyColumns": [
+        {
+          "title": "政策法规",
+          "url": "https://btybj.xjbt.gov.cn/zcfg/"
+        }
+      ],
+      "checkedAt": "2026-09-28T08:48:18+00:00"
+    }
+  ]
+}

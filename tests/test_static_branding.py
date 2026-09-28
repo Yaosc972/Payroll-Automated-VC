@@ -659,18 +659,16 @@ def test_story_gallery_uses_large_single_row_demo_images():
 def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     html = INDEX_HTML.read_text(encoding="utf-8")
 
-    assert "Welcome to HRAS Global Payroll Workbench" in html
     assert "HRAS 全球薪酬核算工作台" in html
-    assert "HRAS Global Payroll Workbench" in html
     assert 'class="dashboard-hras-watermark"' in html
-    assert 'class="welcome-title-brand">HRAS</span>' in html
+    assert 'id="dashboardGreeting"' in html
+    assert 'id="dashboardWelcomeName"' in html
+    assert "欢迎回到工作台" not in html
+    assert all(greeting in html for greeting in ("夜深了", "早上好", "中午好", "下午好", "晚上好"))
     assert 'class="today-stack"' not in html
-    assert "Recruitment Bonus Reconciliation" in html
     assert "招聘奖金核算" in html
-    assert "Domestic Labor Vendor Payroll" in html
-    assert "劳务工薪酬核算" in html
-    assert "Overseas Labor Invoice Audit" in html
-    assert "海外劳务工报账核对" in html
+    assert "中国区外包工薪酬核算" in html
+    assert "海外劳务报账核对" in html
     assert 'href="recruitment.html"' in html
     assert 'href="domestic-labor.html"' in html
     assert 'href="overseas-labor.html"' in html
@@ -678,13 +676,17 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "支持集团、WX考勤、月度规则计算与结果导出。" in html
     assert "支持微信考勤" not in html
     assert 'href="admin.html"' in html
-    assert "V0.5-UAT" in html
+    assert all(version not in html for version in ("V1.0", "V0.2", "V0.7", "V0.5-UAT", "V0.1-MVP"))
+    assert 'data-child-module-count' in html
+    assert "`${moduleCount} 个子模块`" in html
     assert "本机 OCR" in html
     assert "AI 抽取、差异报告" not in html
-    assert "Available · 已上线" in html
-    assert "UAT Trial · 试用版" in html
-    assert "UAT试点" in html
-    assert "{ id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true }" in html
+    assert ">已上线</span>" in html
+    assert ">试用版</span>" in html
+    assert "moduleStatusPresentation" in html
+    assert "applyModuleStatus" in html
+    assert "<dl>" not in html
+    assert "{ id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true, developmentStatus: 'uat' }" in html
     assert "app.js" not in html
     assert "tabulator-tables" not in html
     assert "sigma-admin-console-draft-v3" in html
@@ -1398,8 +1400,9 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     overseas_compensation_card = index_html.split('class="saas-module-card overseas-compensation-module"', 1)[1].split("</a>", 1)[0]
     fbu_card = overseas_compensation_html.split('class="saas-module-card fbu-module"', 1)[1].split("</a>", 1)[0]
     assert "试运行 · 已开放" in domestic_card
-    assert "V0.7" in domestic_card
+    assert "module-version" not in domestic_card
     assert "海外薪酬核算" in overseas_compensation_card
+    assert "data-child-module-count" in overseas_compensation_card
     assert 'data-module-any="fbu overseas_payroll"' in index_html
     assert "海外薪资工作台" in overseas_compensation_html
     assert 'data-child-module="overseas_payroll"' in overseas_compensation_html
