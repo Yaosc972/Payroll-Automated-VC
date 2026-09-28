@@ -64,3 +64,40 @@ test('configuration continuation reuses uploaded files and retains retry through
   assert.equal(loaded,'existing-run');
   assert.equal(state.nightShiftResume,null);
 });
+
+test('missing-shift actions bind to the visible panel instead of a stale duplicate', () => {
+  const start = source.indexOf('function bindNightShiftMissingPanel(');
+  const end = source.indexOf('function renderNightShiftResults(', start);
+  const listeners = { stale: [], visible: [] };
+  const button = key => ({
+    addEventListener: (type, handler) => listeners[key].push({type, handler}),
+  });
+  const staleSave = button('stale');
+  const visibleSave = button('visible');
+  const emptyRoot = saveButton => ({
+    querySelectorAll: () => [],
+    querySelector: selector => selector === '#btnSaveMissingShift' ? saveButton : null,
+    addEventListener: () => {},
+  });
+  const documentRoot = emptyRoot(staleSave);
+  const visibleRoot = emptyRoot(visibleSave);
+  const context = vm.createContext({
+    state: { activeNightShiftMissingCode: 'HD061' },
+    document: documentRoot,
+    window: { addEventListener: () => {} },
+    AbortController,
+    getMissingNightShiftGroups: () => [{
+      shiftCode: 'HD061', shiftCategory: '华东班次', shiftName: '管理13:00-21:30',
+      shiftTime: '13:00-21:30;', dates: ['2026-08-01'],
+    }],
+    getNightShiftConfigSource: () => ({ effective_shift_breaks: [] }),
+    formatNightShiftBreakSummary: () => '',
+    setText: () => {},
+    toast: () => {},
+  });
+  vm.runInContext(source.slice(start, end), context);
+  context.bindNightShiftMissingPanel([], visibleRoot);
+
+  assert.equal(listeners.stale.filter(item => item.type === 'click').length, 0);
+  assert.equal(listeners.visible.filter(item => item.type === 'click').length, 1);
+});

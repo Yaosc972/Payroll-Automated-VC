@@ -3351,7 +3351,7 @@ function showNightShiftGate(records) {
   dialog.querySelector('#btnCloseNightShiftGate').onclick = () => dialog.close();
   const proceed = dialog.querySelector('#btnRecalculateNightShiftMissing');
   if (proceed) proceed.textContent = '配置已齐全，继续核算';
-  bindNightShiftMissingPanel(records);
+  bindNightShiftMissingPanel(records, dialog);
   if (!dialog.open) dialog.showModal();
 }
 
@@ -3572,23 +3572,24 @@ function positionMissingShiftPopup(details) {
   popup.style.right = 'auto';
 }
 
-function bindNightShiftMissingPanel(results) {
+function bindNightShiftMissingPanel(results, root = document) {
   const allGroups = getMissingNightShiftGroups(results);
+  const queryRoot = root || document;
   state.shiftPickerEvents?.abort();
   if (!allGroups.length) return;
   state.shiftPickerEvents = new AbortController();
   const eventOptions = { signal: state.shiftPickerEvents.signal };
-  document.querySelectorAll('[data-missing-shift-code]').forEach(button => button.addEventListener('click', () => {
+  queryRoot.querySelectorAll('[data-missing-shift-code]').forEach(button => button.addEventListener('click', () => {
     state.activeNightShiftMissingCode = button.dataset.missingShiftCode || '';
     refreshNightShiftMissingView(results);
   }));
-  const rowsRoot = document.querySelector('#missingShiftBreakRows');
-  const templateArea = document.querySelector('#missingShiftTemplateArea');
-  const templateSelect = document.querySelector('#missingShiftTemplateSelect');
-  const addButton = document.querySelector('#btnAddMissingShiftBreak');
-  const modeValue = () => document.querySelector('input[name="missingShiftMode"]:checked')?.value || 'custom';
+  const rowsRoot = queryRoot.querySelector('#missingShiftBreakRows');
+  const templateArea = queryRoot.querySelector('#missingShiftTemplateArea');
+  const templateSelect = queryRoot.querySelector('#missingShiftTemplateSelect');
+  const addButton = queryRoot.querySelector('#btnAddMissingShiftBreak');
+  const modeValue = () => queryRoot.querySelector('input[name="missingShiftMode"]:checked')?.value || 'custom';
   const updatePreview = () => {
-    const preview = document.querySelector('#missingShiftArrangementPreview');
+    const preview = queryRoot.querySelector('#missingShiftArrangementPreview');
     if (!preview) return;
     if (modeValue() === 'template' && !templateSelect?.value) {
       preview.textContent = '搜索并选择班次后，预览对应的休息安排。'; return;
@@ -3601,11 +3602,11 @@ function bindNightShiftMissingPanel(results) {
     if (templateArea) templateArea.hidden = mode !== 'template';
     if (rowsRoot) rowsRoot.hidden = mode === 'none' || waitingForTemplate;
     if (addButton) addButton.hidden = mode === 'none' || waitingForTemplate;
-    const noneHint = document.querySelector('#missingShiftNoBreakHint');
+    const noneHint = queryRoot.querySelector('#missingShiftNoBreakHint');
     if (noneHint) noneHint.hidden = mode !== 'none';
     updatePreview();
   };
-  document.querySelectorAll('input[name="missingShiftMode"]').forEach(input => input.addEventListener('change', event => {
+  queryRoot.querySelectorAll('input[name="missingShiftMode"]').forEach(input => input.addEventListener('change', event => {
     syncMode(event.target.value);
     if (event.target.value === 'custom' && rowsRoot && !rowsRoot.querySelector('[data-missing-break-segment]')) {
       rowsRoot.innerHTML = renderNightShiftMissingSegment({}, 0);
@@ -3637,13 +3638,13 @@ function bindNightShiftMissingPanel(results) {
     }
   });
   document.addEventListener('click', event => {
-    document.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(details => {
+    queryRoot.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(details => {
       if (!details.contains(event.target)) details.open = false;
     });
   }, eventOptions);
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    document.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(details => {
+    queryRoot.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(details => {
       details.open = false; details.querySelector('summary')?.focus();
     });
   }, eventOptions);
@@ -3669,40 +3670,40 @@ function bindNightShiftMissingPanel(results) {
   }, {...eventOptions, capture: true});
   const reposition = event => {
     if (event?.target instanceof Element && event.target.closest('.dl-break-range-editor, .dl-shift-search-popup, .dl-shift-calendar-popup')) return;
-    document.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(positionMissingShiftPopup);
+    queryRoot.querySelectorAll('.dl-missing-shift-panel details[open]').forEach(positionMissingShiftPopup);
   };
   window.addEventListener('resize', reposition, eventOptions);
   document.addEventListener('scroll', reposition, {...eventOptions, capture: true});
-  const search = document.querySelector('#missingShiftTemplateSearch');
+  const search = queryRoot.querySelector('#missingShiftTemplateSearch');
   const templates = (getNightShiftConfigSource()?.effective_shift_breaks || [])
     .filter(row => row.shift_code !== state.activeNightShiftMissingCode);
   const renderSearch = () => {
     const query = (search?.value || '').trim().toLowerCase();
     const matches = templates.filter(row => `${row.shift_code} ${row.shift_name} ${formatNightShiftBreakSummary(row)}`.toLowerCase().includes(query));
-    const list = document.querySelector('#missingShiftTemplateOptions');
+    const list = queryRoot.querySelector('#missingShiftTemplateOptions');
     if (!list) return;
     list.innerHTML = matches.slice(0, 6).map(row => `<button type="button" data-template-code="${escapeHtml(row.shift_code)}"><span><strong>${escapeHtml(row.shift_code)}</strong> ${escapeHtml(row.shift_name || '')}</span><small>${escapeHtml(formatNightShiftBreakSummary(row))}</small></button>`).join('') || '<p>没有匹配班次，请更换关键词。</p>';
-    setText(document.querySelector('#missingShiftTemplateCount'), matches.length > 6 ? `匹配 ${matches.length} 个班次，显示前 6 个；输入关键词缩小范围` : `${matches.length} 个匹配班次`);
+    setText(queryRoot.querySelector('#missingShiftTemplateCount'), matches.length > 6 ? `匹配 ${matches.length} 个班次，显示前 6 个；输入关键词缩小范围` : `${matches.length} 个匹配班次`);
   };
   search?.addEventListener('input', renderSearch);
   search?.closest('details')?.addEventListener('toggle', event => { if (event.target.open) { renderSearch(); search.focus(); } });
   search?.addEventListener('keydown', event => {
-    if (event.key === 'ArrowDown') { event.preventDefault(); document.querySelector('[data-template-code]')?.focus(); }
+    if (event.key === 'ArrowDown') { event.preventDefault(); queryRoot.querySelector('[data-template-code]')?.focus(); }
   });
-  document.querySelector('#missingShiftTemplateOptions')?.addEventListener('click', event => {
+  queryRoot.querySelector('#missingShiftTemplateOptions')?.addEventListener('click', event => {
     const button = event.target.closest('[data-template-code]');
     if (!button) return;
     templateSelect.value = button.dataset.templateCode;
-    document.querySelector('#missingShiftTemplateLabel').textContent = button.querySelector('span').textContent;
+    queryRoot.querySelector('#missingShiftTemplateLabel').textContent = button.querySelector('span').textContent;
     templateSelect.dispatchEvent(new Event('change'));
     search.closest('details').open = false;
     search.closest('details').querySelector('summary').focus();
   });
-  document.querySelector('.dl-shift-calendar')?.addEventListener('click', event => {
+  queryRoot.querySelector('.dl-shift-calendar')?.addEventListener('click', event => {
     const button = event.target.closest('[data-effective-day]');
     if (!button) return;
-    document.querySelector('#missingShiftEffectiveDate').value = button.dataset.effectiveDay;
-    document.querySelector('[data-effective-label]').textContent = button.dataset.effectiveDay;
+    queryRoot.querySelector('#missingShiftEffectiveDate').value = button.dataset.effectiveDay;
+    queryRoot.querySelector('[data-effective-label]').textContent = button.dataset.effectiveDay;
     button.closest('details').querySelectorAll('[data-effective-day]').forEach(day => day.setAttribute('aria-pressed', String(day === button)));
     button.closest('details').open = false;
     button.closest('details').querySelector('summary').focus();
@@ -3752,28 +3753,29 @@ function bindNightShiftMissingPanel(results) {
     syncMode('template');
   });
 
-  document.querySelector('#btnRecalculateNightShiftMissing')?.addEventListener('click', () => {
-    document.querySelector('#nightShiftGateDialog')?.close();
+  queryRoot.querySelector('#btnRecalculateNightShiftMissing')?.addEventListener('click', () => {
+    const gateDialog = queryRoot.matches?.('#nightShiftGateDialog') ? queryRoot : queryRoot.closest?.('#nightShiftGateDialog');
+    gateDialog?.close();
     if (state.nightShiftResume?.batchId === getActiveCanbuBatch()?.id) submitCanbuBatch({ resumeNightShift: true });
     else if (state.payrollFiles?.length || state.payrollFile) submitCanbuBatch();
     else restartActiveBatchForRecalculation();
   });
-  document.querySelector('#btnSaveMissingShift')?.addEventListener('click', async event => {
+  queryRoot.querySelector('#btnSaveMissingShift')?.addEventListener('click', async event => {
     const button = event.currentTarget;
-    const status = document.querySelector('#missingShiftSaveStatus');
+    const status = queryRoot.querySelector('#missingShiftSaveStatus');
     const mode = modeValue();
     const active = allGroups.find(group => group.shiftCode === state.activeNightShiftMissingCode);
     const month = nightShiftMonth();
     const config = getNightShiftConfigSource();
     if (!active || !month || !config) return toast('班次配置尚未加载，请刷新后重试。');
-    const effectiveStartDate = document.querySelector('#missingShiftEffectiveDate')?.value || '';
+    const effectiveStartDate = queryRoot.querySelector('#missingShiftEffectiveDate')?.value || '';
     if (!effectiveStartDate || effectiveStartDate.slice(0, 7).replace('-', '') !== month) {
       return toast(`生效日期必须在${formatMonthLabel(`${month.slice(0, 4)}-${month.slice(4, 6)}`)}内。`);
     }
     if (active.dates.some(date => date < effectiveStartDate)) return toast('生效日期必须覆盖该班次最早的待核算考勤日期。');
     if (active.shiftCode === '班次编号缺失') return toast('考勤缺少班次编号，请返回修改数据后重新上传。');
     try {
-      if (mode === 'template' && !document.querySelector('#missingShiftTemplateSelect')?.value) {
+      if (mode === 'template' && !queryRoot.querySelector('#missingShiftTemplateSelect')?.value) {
         throw new Error('请选择一份已有班次的休息安排。');
       }
       const breakSegments = mode === 'none' ? [] : collectMissingShiftBreakSegments(active);
@@ -3863,7 +3865,7 @@ function renderNightShiftResults(results = []) {
   el.amountFilter = document.querySelector('#amountFilter');
   el.resultCountText = document.querySelector('#resultCountText');
   el.canbuPagination = document.querySelector('#canbuPagination');
-  bindNightShiftMissingPanel(rows);
+  bindNightShiftMissingPanel(rows, root);
   if (el.resultSearchInput) el.resultSearchInput.value = state.resultSearch || '';
   if (el.reviewStatusFilter) el.reviewStatusFilter.value = ['all', 'review', 'pass'].includes(state.reviewStatusFilter) ? state.reviewStatusFilter : 'all';
   if (el.amountFilter) el.amountFilter.value = ['all', 'positive', 'zero'].includes(state.amountFilter) ? state.amountFilter : 'all';
