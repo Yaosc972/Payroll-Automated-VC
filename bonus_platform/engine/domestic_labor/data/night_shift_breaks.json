@@ -1,6 +1,6 @@
 {
-  "source": "线下规则.xlsx/各班次休息时间；基础班次资料(2).xls/Sheet（华东班次）",
-  "source_updated_at": "2026-09-03T18:40:00+08:00",
+  "source": "线下规则.xlsx/各班次休息时间；基础班次资料(2).xls/Sheet（华东班次）；飞书《AI算薪东宝班次梳理》/待上传班次数据",
+  "source_updated_at": "2026-09-28T14:30:00+08:00",
   "shifts": [
     {
       "shift_category": "寮步班次",
@@ -633,6 +633,59 @@
       "break_periods": [
         "23:00-24:00",
         "06:00-06:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步12:00-20:30(晚上连班)",
+      "shift_code": "LB68",
+      "shift_time": "12:00-20:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步13:00-21:30(晚上连班)",
+      "shift_code": "LB69",
+      "shift_time": "13:00-21:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步22:00-06:00(无休息)",
+      "shift_code": "LB70",
+      "shift_time": "22:00-30:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": "无休息时间段"
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步16:00-00:30(晚上连班)",
+      "shift_code": "LB71",
+      "shift_time": "16:00-24:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "寮步班次",
+      "shift_name": "寮步17:00-02:00(早上连班)",
+      "shift_code": "LB35",
+      "shift_time": "17:00-26:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "23:00-24:00"
       ],
       "note": ""
     },
@@ -1352,6 +1405,29 @@
       "note": ""
     },
     {
+      "shift_category": "华东班次",
+      "shift_name": "管理 07:00—16:00",
+      "shift_code": "HD060",
+      "shift_time": "07:00-16:00;",
+      "regular_hours": 9,
+      "break_periods": [
+        "12:00-13:00",
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "华东班次",
+      "shift_name": "管理13:00-21:30",
+      "shift_code": "HD061",
+      "shift_time": "13:00-21:30;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
       "shift_category": "东南班次",
       "shift_name": "处理中心21:00班次",
       "shift_code": "DN01",
@@ -1644,6 +1720,26 @@
       "regular_hours": 8.5,
       "break_periods": [
         "18:00-18:30"
+      ],
+      "note": ""
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "晋江揽收21:00班次",
+      "shift_code": "DN29",
+      "shift_time": "21:00-29:00;",
+      "regular_hours": 8,
+      "break_periods": [],
+      "note": "无休息时间段"
+    },
+    {
+      "shift_category": "东南班次",
+      "shift_name": "处理中心23:30-32:00",
+      "shift_code": "DN30",
+      "shift_time": "23:30-32:00;",
+      "regular_hours": 8.5,
+      "break_periods": [
+        "29:00-29:30"
       ],
       "note": ""
     }
