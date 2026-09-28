@@ -103,7 +103,7 @@ const SUBJECT_WORKBENCH = {
     resultField: 'yeban_butie',
     totalField: 'total_yeban_butie',
     uploadTitle: '夜班补贴月考勤与日考勤 Excel',
-    uploadDescription: '夜班补贴核算需要月考勤和日考勤。班次休息使用平台基线并支持当月修改；晋江额外排除人员按月确认。',
+    uploadDescription: '夜班补贴核算需要月考勤和日考勤。班次休息使用全员共享配置并从生效日期起持续沿用；晋江额外排除人员按月确认。',
   },
 };
 
@@ -764,7 +764,7 @@ function selectHomeSubject(subject, card) {
   const preparation = {
     canbu: '准备日考勤、月考勤数据，可在同一文件内包含多张工作表。',
     waisu_butie: '准备月考勤、日考勤和住宿名单；本月有自离员工时，还需上传自离名单。',
-    yeban_butie: '准备日考勤数据，并核对当月班次休息配置；涉及排除人员时补充相应名单。',
+    yeban_butie: '准备日考勤数据，并核对共享班次休息配置；涉及排除人员时补充相应名单。',
     gangwei_butie: '准备月考勤数据，包含地区、岗位、排班天数及缺勤字段。',
     gaowen_butie: '准备月考勤、日考勤和测温登记数据。',
     quanqinjiang: '准备月考勤、日考勤数据，月考勤需包含三档迟到次数。',
@@ -1905,9 +1905,11 @@ function renderNightShiftConfigWorkspace(batch) {
   const month = nightShiftMonth(batch);
   const confirmed = Boolean(config.jinjiang_list_confirmed);
   const count = Number(config.counts?.jinjiang_exclusion_count || 0);
-  const updated = config.updated_at ? `更新于 ${formatDateTime(config.updated_at)}` : '使用平台班次基线';
+  const updated = config.updated_at
+    ? `更新于 ${formatDateTime(config.updated_at)}`
+    : ((config.shift_break_overrides || []).length ? '已加载共享班次配置' : '使用平台班次基线');
   return `<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace">
-    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p>配置按当前用户和月份独立保存。其他用户的修改不会影响你的核算；已完成活动保留核算时的配置。</p></div><span class="dl-badge neutral">当月配置 · 版本 ${Number(config.revision || 0)}</span></header>
+    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p>班次休息由所有用户共享，并从生效日期起自动沿用到后续月份；晋江不享有名单仍按当前用户和月份保存。已完成活动保留核算时的配置。</p></div><span class="dl-badge neutral">共享班次</span></header>
     <nav class="dl-night-config-tabs" aria-label="夜班配置内容"><button type="button" data-night-config-tab="breaks" class="${editor.tab === 'breaks' ? 'active' : ''}" aria-pressed="${editor.tab === 'breaks'}">班次休息 <span>${Number(config.counts?.effective_shift_count || 0)}</span></button><button type="button" data-night-config-tab="roster" class="${editor.tab === 'roster' ? 'active' : ''}" aria-pressed="${editor.tab === 'roster'}">晋江不享有名单 <span class="${confirmed ? '' : 'needs-confirm'}">${confirmed ? `${count} 人` : '待确认'}</span></button></nav>
     <div id="nightConfigBreaks" ${editor.tab === 'breaks' ? '' : 'hidden'}>${renderNightShiftBreakEditor(config)}</div>
     <section class="dl-night-roster" id="nightConfigRoster" ${editor.tab === 'roster' ? '' : 'hidden'}>
@@ -1916,7 +1918,7 @@ function renderNightShiftConfigWorkspace(batch) {
       <div class="dl-night-roster-actions">${!confirmed ? '<button class="btn-primary" id="btnConfirmNoJinjiangExclusions" type="button">确认本月无额外排除人员</button>' : ''}<button class="${confirmed ? 'btn-primary' : 'dl-btn'}" id="btnImportNightShiftConfig" type="button">${confirmed ? '更新不享有名单' : '上传不享有名单'}</button><button class="dl-btn" id="btnCopyNightShiftConfig" type="button" ${confirmed ? 'disabled' : ''}>复制上月晋江名单</button><span class="dl-night-roster-downloads"><a href="/api/domestic-labor/night-shift/config-template/download" download>下载填写模板</a>${confirmed ? `<a href="/api/domestic-labor/night-shift/config/${month}/download" download>下载当前名单</a>` : ''}</span><input id="nightShiftConfigFile" type="file" accept=".xlsx,.xlsm" hidden></div>
       ${renderNightShiftConfigRows(config.jinjiang_exclusions, [{label:'工号',value:row=>row.employee_id||''},{label:'姓名',value:row=>row.employee_name||''},{label:'排除原因',value:row=>row.reason||''},{label:'有效期',value:row=>`${row.start_date||''} 至 ${row.end_date||'持续有效'}`}], confirmed ? '本月无额外不享有人员。' : '本月名单待确认：无人时直接确认，有人时上传填写完成的名单。')}
     </section>
-    <footer class="dl-night-workspace-footer"><div><span id="nightShiftDraftStatus">${nightShiftDraftCount() ? `${nightShiftDraftCount()} 条修改未保存` : '暂无未保存的班次调整'}</span><p class="inline-status" id="nightShiftConfigStatus" role="status">${escapeHtml(updated)}</p></div><button class="btn-primary" id="btnSaveNightShiftBreaks" type="button" ${nightShiftDraftCount() ? '' : 'disabled'}>保存当月班次调整</button></footer>
+    <footer class="dl-night-workspace-footer"><div><span id="nightShiftDraftStatus">${nightShiftDraftCount() ? `${nightShiftDraftCount()} 条修改未保存` : '暂无未保存的班次调整'}</span><p class="inline-status" id="nightShiftConfigStatus" role="status">${escapeHtml(updated)}</p></div><button class="btn-primary" id="btnSaveNightShiftBreaks" type="button" ${nightShiftDraftCount() ? '' : 'disabled'}>保存共享班次调整</button></footer>
   </section>`;
 }
 
@@ -2359,7 +2361,7 @@ function bindNightShiftConfigEvents() {
     if (overrides.some(row => row.regular_hours !== null && !Number.isFinite(row.regular_hours))) {
       return toast('正班时数必须填写数字。');
     }
-    setText(status, `正在保存 ${overrides.length} 条当月班次调整…`);
+    setText(status, `正在保存 ${overrides.length} 条共享班次调整…`);
     try {
       state.nightShiftConfigs[month] = await requestJson(
         `/api/domestic-labor/night-shift/config/${month}`,
@@ -2373,7 +2375,7 @@ function bindNightShiftConfigEvents() {
           }),
         }
       );
-      toast(overrides.length ? `已保存 ${overrides.length} 条当月班次调整。` : '已恢复使用完整平台班次基线。');
+      toast(overrides.length ? `已保存 ${overrides.length} 条共享班次调整，所有用户后续月份均可沿用。` : '已恢复使用完整平台班次基线。');
       refreshNightShiftConfiguration(true);
     } catch (error) {
       setText(status, error.message, true);
@@ -2478,7 +2480,7 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
             `月份 ${snapshot.month || nightShiftMonth()}`,
             `版本 ${snapshot.revision || '—'}`,
             `平台有效班次 ${(snapshot.shift_breaks || []).length} 条`,
-            `当月班次调整 ${(snapshot.shift_break_overrides || []).length} 条`,
+            `共享班次调整 ${(snapshot.shift_break_overrides || []).length} 条`,
             '适用地区规则 固定内置',
             `晋江额外排除 ${(snapshot.jinjiang_exclusions || []).length} 人`,
             `晋江名单 ${snapshot.jinjiang_list_confirmed ? '已确认' : '未确认'}`,

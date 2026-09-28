@@ -39,6 +39,7 @@ def _persistent_config_id(month):
 
 NIGHT_SHIFT_CONFIG_DIR = DOMESTIC_LABOR_RUNS_DIR.parent / "domestic_labor_configs" / "night_shift"
 BASELINE_SHIFT_BREAKS_PATH = Path(__file__).parent / "data" / "night_shift_breaks.json"
+SHARED_SHIFT_CONFIG_ID = "_config_shared_night_shift_breaks_v1"
 MONTH_PATTERN = re.compile(r"^\d{6}$")
 
 # 晋江自动识别与上传名单共同排除；日考勤信息不足时允许名单补充计件岗、门禁。
@@ -302,8 +303,17 @@ def merge_shift_breaks(overrides: Iterable[Mapping[str, Any]]) -> List[Dict[str,
     return [deepcopy(by_code[code]) for code in order]
 
 
-def _expand_payload(payload: Mapping[str, Any], exists: bool) -> Dict[str, Any]:
+def _expand_payload(
+    payload: Mapping[str, Any],
+    exists: bool,
+    shared_overrides: Optional[Iterable[Mapping[str, Any]]] = None,
+) -> Dict[str, Any]:
     normalized = _normalize_payload(payload)
+    if shared_overrides is not None:
+        # 班次休息配置是组织级共享数据；旧版按账号保存的月度班次不再参与计算。
+        normalized["shift_break_overrides"] = [
+            _normalize_shift_row(raw) for raw in shared_overrides
+        ]
     baseline = load_baseline_shift_breaks()
     effective = merge_shift_breaks(normalized["shift_break_overrides"])
     expanded = {
@@ -312,6 +322,7 @@ def _expand_payload(payload: Mapping[str, Any], exists: bool) -> Dict[str, Any]:
         if key not in {
             "shift_breaks", "baseline_shift_breaks", "effective_shift_breaks",
             "regional_positions", "continuous_shift_overrides", "counts", "exists",
+            "shared_shift_break_overrides_snapshot",
         }
     }
     expanded.update(normalized)
@@ -331,6 +342,64 @@ def _config_path(month: Any) -> Path:
     return _owner_root() / f"{normalize_month(month)}.json"
 
 
+def _shared_shift_config_path() -> Path:
+    return NIGHT_SHIFT_CONFIG_DIR / "shared_shift_breaks.json"
+
+
+def _load_shared_shift_config() -> Dict[str, Any]:
+    stored = None
+    if domestic_labor_persistent_storage_enabled():
+        record = load_domestic_labor_metadata_from_persistent(SHARED_SHIFT_CONFIG_ID)
+        stored = record.get("config") if isinstance(record, Mapping) else None
+    if stored is None:
+        path = _shared_shift_config_path()
+        stored = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    rows = [_normalize_shift_row(row) for row in stored.get("shift_break_overrides", [])]
+    _raise_on_duplicates("重复班次", rows, ("shift_code",))
+    return {
+        "revision": int(stored.get("revision") or 0),
+        "updated_at": _text(stored.get("updated_at")),
+        "updated_by": _text(stored.get("updated_by")),
+        "shift_break_overrides": rows,
+    }
+
+
+def _shared_shift_overrides_for_month(month: Any) -> List[Dict[str, Any]]:
+    month_text = normalize_month(month)
+    return [
+        deepcopy(row)
+        for row in _load_shared_shift_config()["shift_break_overrides"]
+        if not row.get("effective_start_date")
+        or row["effective_start_date"][:7].replace("-", "") <= month_text
+    ]
+
+
+def _save_shared_shift_config(
+    rows: Iterable[Mapping[str, Any]], updated_by: str = ""
+) -> Dict[str, Any]:
+    normalized = [_normalize_shift_row(row) for row in rows]
+    _raise_on_duplicates("重复班次", normalized, ("shift_code",))
+    current = _load_shared_shift_config()
+    if normalized == current["shift_break_overrides"]:
+        return current
+    saved = {
+        "revision": int(current.get("revision") or 0) + 1,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "updated_by": _text(updated_by),
+        "shift_break_overrides": normalized,
+    }
+    if domestic_labor_persistent_storage_enabled():
+        record = {"kind": "configuration", "config": saved}
+        save_domestic_labor_metadata_to_persistent(
+            SHARED_SHIFT_CONFIG_ID + "_r" + str(saved["revision"]), record, record
+        )
+        save_domestic_labor_metadata_to_persistent(
+            SHARED_SHIFT_CONFIG_ID, record, record
+        )
+    _atomic_write_json(_shared_shift_config_path(), saved)
+    return saved
+
+
 def _history_path(month: Any, revision: int) -> Path:
     return _owner_root() / "history" / normalize_month(month) / f"r{int(revision):04d}.json"
 
@@ -347,19 +416,28 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def load_night_shift_config(month: Any, required: bool = True) -> Dict[str, Any]:
     month_text = normalize_month(month)
     path = _config_path(month_text)
+    shared_overrides = _shared_shift_overrides_for_month(month_text)
     if CONFIG_OWNER.get() and domestic_labor_persistent_storage_enabled():
         stored = load_domestic_labor_metadata_from_persistent(_persistent_config_id(month_text))
         if stored:
-            return _expand_payload(stored["config"], exists=True)
+            return _expand_payload(
+                stored["config"], exists=True, shared_overrides=shared_overrides
+            )
         if required:
             raise FileNotFoundError(f"{month_text} 夜班补贴配置不存在")
-        return _expand_payload(empty_night_shift_config(month_text), exists=False)
+        return _expand_payload(
+            empty_night_shift_config(month_text), exists=False,
+            shared_overrides=shared_overrides,
+        )
     if not path.exists():
         if required:
             raise FileNotFoundError(f"{month_text} 夜班补贴配置不存在")
-        return _expand_payload(empty_night_shift_config(month_text), exists=False)
+        return _expand_payload(
+            empty_night_shift_config(month_text), exists=False,
+            shared_overrides=shared_overrides,
+        )
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return _expand_payload(payload, exists=True)
+    return _expand_payload(payload, exists=True, shared_overrides=shared_overrides)
 
 
 def save_night_shift_config(
@@ -372,10 +450,15 @@ def save_night_shift_config(
     normalized = _normalize_payload(payload)
     for row in normalized["shift_break_overrides"]:
         effective_start_date = row.get("effective_start_date", "")
-        if effective_start_date and effective_start_date[:7].replace("-", "") != month_text:
+        if effective_start_date and effective_start_date[:7].replace("-", "") > month_text:
             raise ValueError(
-                f"{row['shift_code']} 的班次生效日期必须在核算月份 {month_text} 内"
+                f"{row['shift_code']} 的班次生效日期不能晚于核算月份 {month_text}"
             )
+    shared = _save_shared_shift_config(
+        normalized["shift_break_overrides"], updated_by=updated_by
+    )
+    shared_snapshot = deepcopy(shared["shift_break_overrides"])
+    normalized["shift_break_overrides"] = []
     current = load_night_shift_config(month_text, required=False)
     saved = {
         "month": month_text,
@@ -384,6 +467,7 @@ def save_night_shift_config(
         "updated_by": _text(updated_by),
         "copied_from": normalize_month(copied_from) if copied_from else _text(current.get("copied_from")),
         **normalized,
+        "shared_shift_break_overrides_snapshot": shared_snapshot,
     }
     if CONFIG_OWNER.get() and domestic_labor_persistent_storage_enabled():
         record = {"kind": "configuration", "config": saved}
@@ -392,7 +476,7 @@ def save_night_shift_config(
         save_domestic_labor_metadata_to_persistent(config_id, record, record)
     _atomic_write_json(_history_path(month_text, saved["revision"]), saved)
     _atomic_write_json(_config_path(month_text), saved)
-    return _expand_payload(saved, exists=True)
+    return _expand_payload(saved, exists=True, shared_overrides=shared_snapshot)
 
 
 def load_night_shift_config_revision(month: Any, revision: int) -> Dict[str, Any]:
@@ -400,12 +484,19 @@ def load_night_shift_config_revision(month: Any, revision: int) -> Dict[str, Any
         record = load_domestic_labor_metadata_from_persistent(_persistent_config_id(month) + "_r" + str(int(revision)))
         if not record:
             raise FileNotFoundError(f"{normalize_month(month)} 夜班补贴配置版本 {revision} 不存在")
-        return _expand_payload(record["config"], exists=True)
+        payload = record["config"]
+        return _expand_payload(
+            payload, exists=True,
+            shared_overrides=payload.get("shared_shift_break_overrides_snapshot", []),
+        )
     path = _history_path(month, revision)
     if not path.exists():
         raise FileNotFoundError(f"{normalize_month(month)} 夜班补贴配置版本 {revision} 不存在")
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return _expand_payload(payload, exists=True)
+    return _expand_payload(
+        payload, exists=True,
+        shared_overrides=payload.get("shared_shift_break_overrides_snapshot", []),
+    )
 
 
 def list_night_shift_config_revisions(month: Any) -> List[Dict[str, Any]]:
@@ -423,7 +514,10 @@ def list_night_shift_config_revisions(month: Any) -> List[Dict[str, Any]]:
             "updated_at": payload.get("updated_at"),
             "updated_by": payload.get("updated_by", ""),
             "copied_from": payload.get("copied_from", ""),
-            "counts": config_counts(payload),
+            "counts": config_counts(_expand_payload(
+                payload, exists=True,
+                shared_overrides=payload.get("shared_shift_break_overrides_snapshot", []),
+            )),
         })
     return revisions
 
