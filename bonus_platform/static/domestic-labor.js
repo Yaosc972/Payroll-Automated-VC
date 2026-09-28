@@ -420,7 +420,7 @@ const el = {
 
 // ── Initialize ──
 let restoringPayrollPage = true;
-init();
+queueMicrotask(init);
 function rememberPayrollPage(step) {
   if (restoringPayrollPage) return;
   const params = new URLSearchParams();
@@ -461,6 +461,10 @@ async function restorePayrollPage(hash) {
   const params = new URLSearchParams(hash.replace(/^#/, ''));
   const view = params.get('view');
   const batch = state.canbuBatches.find(item => item.id === params.get('activity'));
+  if (view === 'canbuWorkbench' && !batch && state.activityLoadError) {
+    el.canbuWorkbenchRoot.innerHTML = '<div class="dl-empty" role="alert">核算活动暂时未能加载，请刷新重试。也可以通过顶部导航返回活动列表。</div>';
+    return;
+  }
   if (view === 'canbuWorkbench' && batch) {
     state.activeCanbuBatchId = batch.id;
     state.activeWorkbenchSubject = batch.subject;
@@ -482,13 +486,19 @@ async function init() {
   setDefaultCanbuBatchMonth();
   renderEmptyWorkbench();
   renderRecentBatchTable();
-  showView('home');
+  const requestedView = new URLSearchParams(initialHash.replace(/^#/, '')).get('view');
+  const legacyView = { '#canbuBatchListView': 'canbuBatches', '#rulePackageView': 'rulePackage' }[initialHash];
+  const initialView = ['canbuBatches', 'canbuWorkbench', 'rulePackage'].includes(requestedView) ? requestedView : legacyView || 'home';
+  showView(initialView);
+  if (initialView === 'canbuWorkbench' && el.canbuWorkbenchRoot) {
+    el.canbuWorkbenchRoot.innerHTML = '<div class="dl-empty" role="status">正在恢复核算活动…</div>';
+  }
   setupActivityList();
   const navigationRevision = state.navigationRevision;
   await refreshActivities();
   if (navigationRevision === state.navigationRevision) await restorePayrollPage(initialHash);
   restoringPayrollPage = false;
-  rememberPayrollPage();
+  if (!(state.activityLoadError && state.view === 'canbuWorkbench')) rememberPayrollPage();
 }
 
 function setDefaultMonth() {

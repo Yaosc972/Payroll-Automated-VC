@@ -1312,6 +1312,7 @@ function renderLaborUploadLimits(access) {
 }
 
 function showLaborToolbench() {
+  if (laborState.run) history.replaceState(null, '', `${location.pathname}${location.search}#view=toolbench`);
   if (labor.toolbench) labor.toolbench.hidden = false;
   if (labor.resultsView) labor.resultsView.hidden = true;
   document.body.style.overflow = "";
@@ -1319,6 +1320,7 @@ function showLaborToolbench() {
 }
 
 function showLaborResultsView() {
+  if (laborState.run) history.replaceState(null, '', `${location.pathname}${location.search}#view=results`);
   if (labor.toolbench) labor.toolbench.hidden = true;
   if (labor.resultsView) labor.resultsView.hidden = false;
   document.body.style.overflow = "";
@@ -1326,6 +1328,7 @@ function showLaborResultsView() {
 }
 
 async function restoreLaborRunFromUrl() {
+  const requestedView = new URLSearchParams(location.hash.slice(1)).get('view');
   const restoreGeneration = ++laborRunRestoreGeneration;
   const runId = new URLSearchParams(window.location.search).get("run");
   if (!runId || !laborState.releaseCompatible) {
@@ -1358,7 +1361,8 @@ async function restoreLaborRunFromUrl() {
       && Array.isArray(files.workbooks) && files.workbooks.length > 0;
     const restoredOutput = restoreLaborRunOutput(run);
     if (restoredOutput) {
-      showLaborResultsView();
+      if (requestedView === 'toolbench') showLaborToolbench();
+      else showLaborResultsView();
       advanceWizardStep("3");
       toast(restoredOutput === "completed" ? `已恢复批次 ${run.id} 的核对结果。` : `已恢复批次 ${run.id} 的处理进度。`);
       return;

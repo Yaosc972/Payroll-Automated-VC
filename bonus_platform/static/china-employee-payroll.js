@@ -1,4 +1,5 @@
 let latestResult = null;
+let restoredEmployeeRunId = '';
 let currentPage = 1;
 let filteredRows = [];
 let activeSourceType = "";
@@ -827,6 +828,12 @@ async function exportCurrentResult() {
 
 function renderResult(data) {
   latestResult = data;
+  if (data?.runId) {
+    const url = new URL(location.href);
+    url.searchParams.set('run', data.runId);
+    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    restoredEmployeeRunId = data.runId;
+  }
   const summary = data?.summary || {};
   const rows = Array.isArray(data?.results) ? data.results : [];
   const missingColumnCount = data?.warnings?.missingColumns?.length || 0;
@@ -950,6 +957,11 @@ function setView(view) {
     document.body.dataset.view = "workbench";
     if (!latestResult) renderEmpty();
     loadRuns();
+    const runId = new URLSearchParams(location.search).get('run');
+    if (runId && restoredEmployeeRunId !== runId) {
+      restoredEmployeeRunId = runId;
+      loadRun(runId);
+    }
     return;
   }
 

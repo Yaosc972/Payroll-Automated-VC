@@ -61,7 +61,7 @@ function init() {
   bindEvents();
   syncRunsPanelState();
   renderIcons();
-  loadRuns();
+  loadRuns(new URLSearchParams(location.hash.slice(1)).get('run') || '');
 }
 
 function bindEvents() {
@@ -171,6 +171,9 @@ async function loadRuns(preferredId = "") {
 
 async function selectRun(run) {
   state.currentRun = run;
+  const route = new URLSearchParams();
+  route.set('run', run.id);
+  history.replaceState(null, '', `${location.pathname}${location.search}#${route}`);
   renderRunList();
   renderRun(run);
   await loadTableData(run.id);

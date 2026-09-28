@@ -1,0 +1,45 @@
+/* Official, unmodified TTF files. See assets/fonts/harmonyos/LICENSE.txt. */
+@font-face {
+  font-family: "HRAS HarmonyOS Sans";
+  src: url("assets/fonts/harmonyos/HarmonyOS_Sans_SC_Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "HRAS HarmonyOS Sans";
+  src: url("assets/fonts/harmonyos/HarmonyOS_Sans_SC_Medium.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 401 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "HRAS HarmonyOS Sans";
+  src: url("assets/fonts/harmonyos/HarmonyOS_Sans_SC_Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 601 900;
+  font-display: swap;
+}
+
+/* Module styles include inline font stacks; scope the override to Windows.
+   Keep the greeting's serif design, code, numeric monospace and icons intact. */
+html[data-platform-font="harmonyos"] :where(
+  body, button, input, textarea, select, option, a, p, span, div, section,
+  article, header, footer, nav, aside, main, label, legend, fieldset,
+  h1, h2, h3, h4, h5, h6, table, thead, tbody, tfoot, tr, td, th,
+  ul, ol, li, dl, dt, dd, strong, b, small, summary, details, dialog, form, output
+):not(pre *, code *, kbd *, samp *, .mono, .mono *, .mono-cell, .mono-cell *,
+  [class*="icon"], .welcome-panel h1, .welcome-panel h1 *) {
+  font-family: "HRAS HarmonyOS Sans", "Microsoft YaHei UI", sans-serif !important;
+}
+
+#platformFontNotice {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 12px 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #475467;
+}
+#platformFontNotice a { color: inherit; text-underline-offset: 3px; }

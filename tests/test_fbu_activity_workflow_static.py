@@ -829,7 +829,9 @@ def test_fbu_entry_never_auto_opens_another_users_activity():
     assert "getWorkbenchDefaultActivity" not in js
     assert "await enterActivity(defaultActivity.run_id" not in load_section
     assert "navigateTo('activities');" in init_section
-    assert "loadActivities();" not in init_section
+    assert "route.get('view') !== 'workbench'" in init_section
+    assert "route.get('activity')" in init_section
+    assert "enterActivity(activityId," in init_section
     assert "sigma:fbu:last-owned-activity:" in js
     assert "if (!activity?.run_id || !isMyActivity(activity)) return;" in js
 
