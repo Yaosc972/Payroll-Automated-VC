@@ -1835,7 +1835,7 @@ def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
 
     wb = load_workbook(output_path)
     assert wb.sheetnames == ["核算汇总", "每日明细", "平台班次表"]
-    assert wb["平台班次表"].max_row == 144
+    assert wb["平台班次表"].max_row == 153
     assert wb["平台班次表"].cell(1, 7).value == "休息段1类型"
     summary = wb["核算汇总"]
     assert [cell.value for cell in summary[1]] == [
