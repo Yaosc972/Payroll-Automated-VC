@@ -2484,6 +2484,26 @@ _yeban_butie["change_log"].insert(0, {
     "changes": "普通夜班补贴起点改为实际上班打卡向后取整，不再按排班开始时间限制；其他夜班窗口及扣休规则不变。",
 })
 
+# 2026-09-29：东南B2B枢纽组工龄奖沿用东南枢纽规则。
+_gonglingjiang = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gonglingjiang")
+_gonglingjiang["version"] = "DL-GONGLING.v1.0.9"
+_southeast_seniority = next(
+    region for region in _gonglingjiang["regions"] if region["name"] == "东南 / 闽赣兼容区域"
+)
+_southeast_seniority["rule"] = (
+    "东南枢纽、东南B2B枢纽组、闽赣揽收组按部门及岗位名单判断；"
+    "东南B2B枢纽组与东南枢纽规则一致。"
+)
+_southeast_seniority["details"] = [
+    detail.replace("东南枢纽享有岗位", "东南枢纽、东南B2B枢纽组享有岗位")
+    for detail in _southeast_seniority["details"]
+]
+_gonglingjiang["change_log"].insert(0, {
+    "version": "DL-GONGLING.v1.0.9",
+    "released_at": "2026-09-29",
+    "changes": "工龄奖新增二级部门东南B2B枢纽组，岗位范围、每年50元标准及150元封顶均与东南枢纽一致。",
+})
+
 _RULE_PACKAGE_VERSIONS = {
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
