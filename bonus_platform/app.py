@@ -14528,7 +14528,7 @@ def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> N
 def _domestic_labor_region_for_department(department: str) -> str:
     """按员工自己的二级部门选择工龄奖兼容区域。"""
     if any(keyword in department for keyword in (
-        "华东枢纽", "华东揽收组", "东南枢纽", "华西区操作部",
+        "华东枢纽", "华东揽收组", "东南枢纽", "东南B2B枢纽组", "华西区操作部",
         "华西枢纽", "华西揽收组", "闽赣揽收组", "华东B2B枢纽",
     )):
         return "wes"

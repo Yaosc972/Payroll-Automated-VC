@@ -9,7 +9,11 @@ import pytest
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
-from bonus_platform.app import app, _domestic_labor_export_filename
+from bonus_platform.app import (
+    app,
+    _domestic_labor_export_filename,
+    _domestic_labor_region_for_department,
+)
 from bonus_platform.engine.domestic_labor.engines.canbu import CanBuEngine
 from bonus_platform.engine.domestic_labor.engines.gonglingjiang import GongLingJiangEngine
 from bonus_platform.engine.domestic_labor.engines.quanqinjiang import QuanQinJiangEngine
@@ -492,7 +496,7 @@ def test_rule_package_publishes_verified_attendance_bonus_and_seniority():
     assert "OWHX0190" in str(quanqin)
     gongling = next(subject for subject in package["subjects"] if subject["id"] == "gonglingjiang")
     assert gongling["status"] == "已验证"
-    assert gongling["version"] == "DL-GONGLING.v1.0.8"
+    assert gongling["version"] == "DL-GONGLING.v1.0.9"
     assert "B操作部" in str(gongling)
     assert "民航中级安检员" in str(gongling)
     assert "内部高级安检员" in str(gongling)
@@ -505,6 +509,7 @@ def test_rule_package_publishes_verified_attendance_bonus_and_seniority():
     assert "FBU不使用正班出勤为0的通用归零特例" in str(gongling)
     assert "工龄奖标准/排班天数" in str(gongling)
     assert "东南 / 闽赣兼容区域" in str(gongling)
+    assert "东南B2B枢纽组" in str(gongling)
     assert "华东 / 华西不发放部门" in str(gongling)
     assert gongling["pending_confirmations"]
     assert "OWHN2187" in gongling["pending_confirmations"][0]
@@ -525,7 +530,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
 
     assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.8"
     assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.6"
-    assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.8"
+    assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.9"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
         payload = str(subjects[subject_id])
         assert all(position in payload for position in confirmed_positions)
@@ -3452,6 +3457,7 @@ def test_gonglingjiang_east_west_departments_return_zero(department, position):
     ("department", "position"),
     [
         ("东南枢纽", "操作员"),
+        ("东南B2B枢纽组", "操作员"),
         ("闽赣揽收组", "内勤专员"),
     ],
 )
@@ -3468,6 +3474,10 @@ def test_gonglingjiang_keeps_southeast_compatibility_route(department, position)
     assert result.amount == 150
     assert result.details["标准"] == 50
     assert result.details["上限"] == 150
+
+
+def test_gonglingjiang_routes_southeast_b2b_department_to_wes_rules():
+    assert _domestic_labor_region_for_department("东南B2B枢纽组") == "wes"
 
 
 def test_gonglingjiang_uses_raw_absence_fields_instead_of_leave_hours():

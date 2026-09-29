@@ -24,7 +24,7 @@ OPERATION_POSITIONS_GSDG = {
 
 # 操作归属部门按月考勤字段逐行判断，工作地区明确时优先套用地区规则。
 OPERATION_DEPARTMENTS = {
-    "东南枢纽", "华东B2B枢纽", "华东枢纽", "中国操作部", "B操作部",
+    "东南枢纽", "东南B2B枢纽组", "华东B2B枢纽", "华东枢纽", "中国操作部", "B操作部",
 }
 
 DONGGUAN_OPERATION_POSITIONS = {
@@ -50,6 +50,7 @@ FBU_SENIORITY_RATE = 100
 
 DEPARTMENT_MAP_WES = {
     "东南枢纽": "操作",
+    "东南B2B枢纽组": "操作",
     "闽赣揽收组": "揽收",
 }
 
