@@ -1363,3 +1363,29 @@ def test_dedicated_reporting_cron_returns_safe_dispatch_diagnostics(
     assert payload["elapsedMs"] >= sum(payload["runtimeTimingsMs"].values())
     assert sensitive_marker not in payload_text
     assert sensitive_marker not in caplog.text
+
+
+def test_concurrent_run_restore_uses_independent_temporary_files(monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    _enable_supabase(monkeypatch)
+    run_id = "sir_concurrent_restore"
+    prefix = storage._run_prefix(run_id) + "/"
+    monkeypatch.setattr(storage, "_list_prefix", lambda _: [{"pathname": prefix + "run.json"}])
+    monkeypatch.setattr(storage, "_get_bytes", lambda url: None if storage.RUN_MANIFEST in url else b'{"employees":[]}')
+    barrier = Barrier(2)
+    original_replace = Path.replace
+
+    def simultaneous_replace(path, target):
+        if path.name.endswith(".restore.tmp"):
+            barrier.wait(timeout=5)
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", simultaneous_replace)
+    target = tmp_path / run_id
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(storage.restore_run_directory, run_id, target) for _ in range(2)]
+        assert all(future.result() for future in futures)
+    assert json.loads((target / "run.json").read_text()) == {"employees": []}
+    assert not list(target.glob("*.tmp"))

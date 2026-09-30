@@ -618,9 +618,12 @@ def restore_run_directory(run_id: str, run_dir: Path) -> bool:
         if content is None:
             continue
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temporary = target.with_name(f".{target.name}.restore.tmp")
-        temporary.write_bytes(content)
-        temporary.replace(target)
+        temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.restore.tmp")
+        try:
+            temporary.write_bytes(content)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
         restored = True
     return restored
 
