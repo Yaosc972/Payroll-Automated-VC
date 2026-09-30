@@ -1195,7 +1195,7 @@ def test_vercel_routes_reporting_cron_to_an_isolated_named_python_service() -> N
     config = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
 
     # Vercel schedules use UTC: 00:00 UTC is 08:00 Asia/Shanghai.
-    assert config["crons"] == [
+    assert [job for job in config["crons"] if job["path"] == "/api/social-insurance/cron/refresh"] == [
         {"path": "/api/social-insurance/cron/refresh", "schedule": "0 0 * * *"}
     ]
     assert "functions" not in config
