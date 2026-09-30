@@ -157,11 +157,53 @@ def _confirmation_decision(
     cutoff = datetime.fromisoformat(f"{confirmation_date}T23:59:59.999999+08:00")
     known: list[tuple[datetime, dict[str, Any]]] = []
     invalid_process_time = False
+    current_entry = _parse_rule_datetime(context.get("currentEntryDate"))
+    current_records = []
+    for record in context.get("dimissionRecords") or []:
+        if not isinstance(record, dict):
+            continue
+        last = _parse_rule_datetime(record.get("lastWorkDate"))
+        if last and current_entry and last.date() < current_entry.date():
+            continue
+        current_records.append((record, last))
+    if any(record.get("source") == "beisen-employment-type-unknown" for record, _ in current_records):
+        return "review", "北森任职记录缺少业务类型，无法完成离职核对，请人工确认"
+
+    def same_month(last):
+        return last is not None and current_entry is not None and (last.year, last.month) == (current_entry.year, current_entry.month)
+
+    if any(same_month(last) and last.day in (15, 16) for _, last in current_records):
+        return "review", "当月入职且在15/16日离职，需单独确认本月是否购买"
+    if current_records and all(
+        same_month(last) and last.day < 15 and last <= cutoff and not (
+            record.get("processTimeReliable") is not False
+            and (process := _parse_rule_datetime(record.get("processCreatedTime"))) is not None
+            and process > cutoff
+        ) for record, last in current_records
+    ):
+        flags = {str(record.get("voluntaryStopFlag") or "").strip() for record, _ in current_records}
+        if len({last.date() for _, last in current_records}) != 1 or len(flags) != 1:
+            return "review", "离职日期或停保属性存在冲突，请人工确认"
+        flag = next(iter(flags))
+        if flag == "非自愿停保":
+            return "include", "当月入职、15日前离职，但非自愿停保，当月继续购买"
+        if flag == "自愿停保":
+            return "exclude", "当月入职、15日前离职且自愿停保，当月不购买"
+        return "review", "当月入职、15日前离职，但停保属性缺失或不明确"
+    relevant_count = 0
     for entry in context.get("dimissionRecords") or []:
         if not isinstance(entry, dict):
             continue
+        last_work = _parse_rule_datetime(entry.get("lastWorkDate"))
+        if last_work is not None and current_entry is not None and last_work.date() < current_entry.date():
+            continue
+        relevant_count += 1
+        if entry.get("source") == "beisen-employment-type-unknown":
+            return "review", "北森任职记录缺少业务类型，无法完成离职核对，请人工确认"
         process_date = _parse_rule_datetime(entry.get("processCreatedTime"))
         if entry.get("processTimeReliable") is False:
+            if entry.get("source") == "beisen-dimission-record":
+                return "review", "北森存在离职记录，缺少可靠申请时间，请人工确认本月是否购买"
             return "review", "北森实时离职记录缺少可靠审批时间或停保属性，请人工确认"
         if process_date is None:
             invalid_process_time = True
@@ -169,6 +211,8 @@ def _confirmation_decision(
             known.append((process_date, entry))
     if invalid_process_time:
         return "review", "离职任职记录缺少流程时间或停保属性，请人工确认"
+    if context.get("dimissionRecords") and not relevant_count:
+        return "include", "旧任职最后工作日早于当前任职入职日，按转正式工或重新入职保留增员"
     if not known:
         reason = (
             "确认时点前无已知离职流程"
