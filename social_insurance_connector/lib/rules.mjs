@@ -447,12 +447,41 @@ export function evaluateEmployee(employee, adminIndex, options = {}) {
 export function decideDimission(records, cutoff, currentEntryDate = "") {
   const cutoffDate = parseDate(cutoff);
   if (!cutoffDate || !records?.length) return { decision: "增员", reason: "确认时点前无已知离职流程" };
-  const parsedRecords = records
+  const entry = dateOnly(currentEntryDate);
+  const currentRecords = records.filter((record) => {
+    const lastWork = dateOnly(record.lastWorkDate);
+    return !(entry && lastWork && lastWork < entry);
+  });
+  if (!currentRecords.length) return { decision: "增员", reason: "旧任职最后工作日早于当前任职入职日，按转正式工或重新入职保留增员" };
+  const parsedRecords = currentRecords
     .map((record) => ({ ...record, processDate: parseDate(record.processCreatedTime) }));
+  if (parsedRecords.some((record) => record.source === "beisen-employment-type-unknown")) {
+    return { decision: "待人工确认", reason: "北森任职记录缺少业务类型，无法完成离职核对，请人工确认" };
+  }
+  // A completed last-work date can establish this narrow rule without an
+  // application timestamp. Never use a future date or resolve conflicting rows.
+  const dated = parsedRecords.map((record) => ({...record, last: dateOnly(record.lastWorkDate)}));
+  const sameMonth = (record) => entry && record.last && record.last.slice(0, 7) === entry.slice(0, 7);
+  if (dated.some((record) => sameMonth(record) && [15, 16].includes(Number(record.last.slice(8))))) {
+    return {decision: "待人工确认", reason: "当月入职且在15/16日离职，需单独确认本月是否购买"};
+  }
+  if (dated.every((record) => sameMonth(record) && Number(record.last.slice(8)) < 15 &&
+      parseDate(record.last) <= cutoffDate &&
+      !(record.processTimeReliable !== false && record.processDate && record.processDate > cutoffDate))) {
+    const flags = dated.map((record) => text(record.voluntaryStopFlag));
+    if (new Set(dated.map((record) => record.last)).size !== 1 || new Set(flags).size !== 1) {
+      return {decision: "待人工确认", reason: "离职日期或停保属性存在冲突，请人工确认"};
+    }
+    if (flags[0] === "非自愿停保") return {decision: "增员", reason: "当月入职、15日前离职，但非自愿停保，当月继续购买"};
+    if (flags[0] === "自愿停保") return {decision: "排除", reason: "当月入职、15日前离职且自愿停保，当月不购买"};
+    return {decision: "待人工确认", reason: "当月入职、15日前离职，但停保属性缺失或不明确"};
+  }
   if (parsedRecords.some((record) => record.processTimeReliable === false)) {
     return {
       decision: "待人工确认",
-      reason: "北森实时离职记录缺少可靠审批时间或停保属性，请人工确认",
+      reason: parsedRecords.some((record) => record.source === "beisen-dimission-record")
+        ? "北森存在离职记录，缺少可靠申请时间，请人工确认本月是否购买"
+        : "北森实时离职记录缺少可靠审批时间或停保属性，请人工确认",
     };
   }
   if (parsedRecords.some((record) => !record.processDate)) {

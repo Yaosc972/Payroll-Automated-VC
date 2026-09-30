@@ -1,0 +1,13 @@
+[
+  {"name":"same-month voluntary before 15", "entry":"2026-09-03", "last":"2026-09-14", "flag":"自愿停保", "expected":"exclude"},
+  {"name":"same-month involuntary before 15", "entry":"2026-09-03", "last":"2026-09-14", "flag":"非自愿停保", "expected":"include"},
+  {"name":"missing stop flag", "entry":"2026-09-03", "last":"2026-09-14", "flag":"", "expected":"review"},
+  {"name":"15 boundary", "entry":"2026-09-03", "last":"2026-09-15", "flag":"自愿停保", "expected":"review"},
+  {"name":"16 boundary", "entry":"2026-09-03", "last":"2026-09-16", "flag":"自愿停保", "expected":"review"},
+  {"name":"different months", "entry":"2026-08-27", "last":"2026-09-14", "flag":"自愿停保", "expected":"review"},
+  {"name":"old employment", "entry":"2026-09-03", "last":"2026-08-14", "flag":"自愿停保", "expected":"include"},
+  {"name":"after 16 without reliable time", "entry":"2026-09-03", "last":"2026-09-20", "flag":"自愿停保", "expected":"review"},
+  {"name":"missing last date", "entry":"2026-09-03", "last":"", "flag":"自愿停保", "expected":"review"},
+  {"name":"future last date", "entry":"2026-09-03", "last":"2026-09-14", "flag":"自愿停保", "cutoff":"2026-09-10", "expected":"review"},
+  {"name":"conflicting records", "entry":"2026-09-03", "last":"2026-09-14", "flag":"自愿停保", "extraFlag":"非自愿停保", "expected":"review"}
+]

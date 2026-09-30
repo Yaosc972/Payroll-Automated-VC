@@ -25,7 +25,7 @@ function parseDateOnly(value, field) {
 }
 
 function validateRuleVersion(value) {
-  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.09.10-01").trim();
+  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.09.30-01").trim();
   if (!value || String(value) !== expected) {
     throw new ConnectorError("RULE_VERSION_MISMATCH", "连接器规则版本与工作台不一致", 409);
   }
@@ -133,7 +133,7 @@ function mergeByIdentity(rows) {
   return [...merged.values()];
 }
 
-function dimissionIndexForEmployees(employees) {
+function dimissionIndexForEmployees(employees, resignationRows = []) {
   const compatibilityConfigured = Boolean(
     String(process.env.SOCIAL_INSURANCE_DIMISSION_SNAPSHOT_GZIP_BASE64 || "").trim(),
   );
@@ -180,6 +180,32 @@ function dimissionIndexForEmployees(employees) {
       if (!index.has(identity)) index.set(identity, [...records]);
     }
   }
+  const identities = new Map(employees.map((employee) => [Number(employee.userId), text(employee.idNumber).replace(/\s+/gu, "")]));
+  const workflowIndex = new Map();
+  for (const row of resignationRows) {
+    const identity = identities.get(Number(row.userID));
+    if (!identity || row.stdIsDeleted === true) continue;
+    const approvalStatus = fieldValue(row, "approvalStatus");
+    if (!workflowIndex.has(identity)) workflowIndex.set(identity, []);
+    if (["草稿", "撤回", "撤销", "已撤销", "已撤回", "作废", "已作废", "驳回", "已驳回", "不通过", "审批不通过"].includes(approvalStatus)) continue;
+    const records = workflowIndex.get(identity) ?? [];
+    records.push({
+      lastWorkDate: dateOnly(row.lastWorkDate),
+      voluntaryStopFlag: fieldValue(row, BEISEN_FIELDS.SERVICE_CUSTOM.voluntaryStopFlag),
+      // CreatedTime is the employment row creation time, not necessarily the
+      // original application time (the September cases were recreated later).
+      processCreatedTime: "",
+      processTimeReliable: false,
+      source: text(row.businessTypeOID) ? "beisen-dimission-record" : "beisen-employment-type-unknown",
+      approvalStatus,
+    });
+    workflowIndex.set(identity, records);
+  }
+  // Authoritative current query supersedes stale compatibility snapshots.
+  for (const [identity, records] of workflowIndex) {
+    const employmentRecords = (index.get(identity) ?? []).filter((record) => record.source !== "configured-snapshot");
+    index.set(identity, [...employmentRecords, ...records]);
+  }
   return {
     index,
     liveRecordCount,
@@ -187,6 +213,7 @@ function dimissionIndexForEmployees(employees) {
     compatibilitySnapshotUsable,
     compatibilitySnapshotDate: compatibilitySnapshotUsable ? compatibilitySnapshotDate : null,
     compatibilityWarning,
+    workflowRecordCount: [...workflowIndex.values()].reduce((count, records) => count + records.length, 0),
   };
 }
 
@@ -279,6 +306,7 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         employee,
       ])).values()]
       : mergeByIdentity(filteredRaw);
+    const resignationRows = await client.getDimissionRecords(filtered.map((employee) => employee.userId));
     const idCounts = new Map();
     for (const employee of filtered) {
       const id = text(employee.idNumber).replace(/\s+/gu, "");
@@ -291,7 +319,8 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
       compatibilitySnapshotUsable,
       compatibilitySnapshotDate,
       compatibilityWarning,
-    } = dimissionIndexForEmployees(employees);
+      workflowRecordCount,
+    } = dimissionIndexForEmployees(employees, resignationRows);
     const adminIndex = createAdminIndex(getAdminDictionary());
     const cutoff = `${payload.confirmationDate}T23:59:59+08:00`;
     const records = filtered.map((employee) => {
@@ -335,7 +364,7 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         },
       };
     });
-    const departureRuleSource = liveDimissionRecordCount
+    const departureRuleSource = workflowRecordCount ? "beisen-all-approval-employment-records" : liveDimissionRecordCount
       ? (compatibilitySnapshotUsable ? "beisen-live-with-configured-fallback" : "beisen-live-employee-records")
       : (compatibilitySnapshotUsable ? "configured-snapshot-fallback" : "beisen-live-employee-records");
     const warnings = [];
@@ -352,12 +381,13 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         manualCount: records.filter((record) => record.status === "needs_review").length,
         excludedCount: records.filter((record) => record.status === "excluded").length,
         departureRuleSource,
-        departureSnapshotDate: liveDimissionRecordCount || !compatibilitySnapshotUsable
+        departureSnapshotDate: workflowRecordCount || liveDimissionRecordCount || !compatibilitySnapshotUsable
           ? shanghaiDate()
           : compatibilitySnapshotDate,
         departureCompatibilitySnapshotDate: compatibilitySnapshotDate,
         departureLiveRecordCount: liveDimissionRecordCount,
         departureLiveStopFlagCount: liveDimissionStopFlagCount,
+        departureWorkflowRecordCount: workflowRecordCount,
         confirmationDate: payload.confirmationDate,
         rawApiResponseSaved: false,
         governmentSiteAccessed: false,

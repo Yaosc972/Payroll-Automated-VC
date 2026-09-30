@@ -1233,7 +1233,7 @@ def test_fixture_sync_api_supports_page_review_flow(tmp_path: Path, monkeypatch:
     assert response.status_code == 200
     run = response.json()
     assert run["summary"]["total"] == 2
-    assert run["ruleVersion"] == "2026.09.10-01"
+    assert run["ruleVersion"] == RULE_VERSION
     assert run["sourceSummary"]["rawApiResponseSaved"] is False
     assert run["sourceSummary"]["monthlyBaseline"]["created"] is True
     assert run["confirmationDate"] == "2026-08-17"
@@ -3209,7 +3209,7 @@ def test_business_rules_api_is_versioned_and_uses_business_language():
     assert response.status_code == 200
     payload = response.json()
     assert payload["version"]
-    assert payload["updatedAt"] == "2026-09-10"
+    assert payload["updatedAt"] == "2026-09-30"
     assert payload["scope"] == "全国社保增员"
     assert any(section["id"] == "candidate-list" for section in payload["sections"])
     serialized = response.text

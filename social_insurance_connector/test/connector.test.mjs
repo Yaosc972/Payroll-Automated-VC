@@ -6,7 +6,7 @@ import subjectsHandler from "../api/subjects.mjs";
 import healthHandler from "../api/health.mjs";
 import { listSubjects, syncCandidates } from "../lib/service.mjs";
 
-const RULE_VERSION = "2026.09.10-01";
+const RULE_VERSION = "2026.09.30-01";
 
 function setConfiguration() {
   process.env.CONNECTOR_TOKEN = "test-connector-token";
@@ -52,9 +52,72 @@ function fakeClient() {
       return new Map([[1001, [{ userID: 1001, firstParty: "深圳测试主体", firstPartyCode: "SZ001" }]]]);
     },
     async getChangedOffers() { return []; },
+    async getDimissionRecords() { return []; },
     clear() {},
   };
 }
+
+test("pending resignation is reviewed even when current employee has no last work date", async () => {
+  setConfiguration();
+  const client = fakeClient();
+  client.getDimissionRecords = async (ids) => {
+    assert.deepEqual(ids, [1001]);
+    return [{ userID: 1001, businessTypeOID: "5", lastWorkDate: "2026-08-10",
+      approvalStatus: 1, createdTime: "2026-08-25T12:00:00",
+      translateProperties: { ApprovalStatusText: "审批中" } }];
+  };
+  const result = await syncCandidates({periodStart:"2026-07-16", periodEnd:"2026-08-15",
+    confirmationDate:"2026-08-24", subject:"SZ001", ruleVersion:RULE_VERSION}, {client});
+  assert.equal(result.records[0].status, "needs_review");
+  assert.equal(result.records[0].confirmationRuleContext.dimissionRecords[0].source, "beisen-dimission-record");
+});
+
+test("missing employment business type requires review for that candidate", async () => {
+  setConfiguration();
+  const client = fakeClient();
+  client.getDimissionRecords = async () => [{ userID: 1001, businessTypeOID: null,
+    approvalStatus: 4, translateProperties: { ApprovalStatusText: "生效" } }];
+  const result = await syncCandidates({periodStart:"2026-07-16", periodEnd:"2026-08-15",
+    confirmationDate:"2026-08-24", subject:"SZ001", ruleVersion:RULE_VERSION}, {client});
+  assert.equal(result.records[0].status, "needs_review");
+  assert.match(result.records[0].dimissionReason, /缺少业务类型/);
+  assert.equal(result.records[0].confirmationRuleContext.dimissionRecords[0].source, "beisen-employment-type-unknown");
+});
+
+test("resignation query failure cannot become an empty resignation list", async () => {
+  setConfiguration();
+  const client = fakeClient();
+  client.getDimissionRecords = async () => { throw new Error("upstream unavailable"); };
+  await assert.rejects(syncCandidates({periodStart:"2026-07-16", periodEnd:"2026-08-15",
+    confirmationDate:"2026-08-24", subject:"SZ001", ruleVersion:RULE_VERSION}, {client}), /upstream unavailable/);
+});
+
+test("withdrawn resignation supersedes stale compatibility exclusion", async () => {
+  setConfiguration();
+  process.env.SOCIAL_INSURANCE_DIMISSION_SNAPSHOT_GZIP_BASE64 = gzipSync(Buffer.from(JSON.stringify([{
+    parent_IDNumber:"TEST-ID-001", LastWorkDate:"2026-08-10",
+    extshifouziyuantingbao_109025_28464420:"自愿停保",
+    LookupPrefix_ApprovalObjectID_CreatedTime:"2026-08-09T12:00:00+08:00",
+  }]))).toString("base64");
+  const client = fakeClient();
+  client.getDimissionRecords = async () => [{userID:1001, businessTypeOID:"5",
+    translateProperties:{ApprovalStatusText:"已撤回"}}];
+  const result = await syncCandidates({periodStart:"2026-07-16",periodEnd:"2026-08-15",
+    confirmationDate:"2026-08-24",subject:"SZ001",ruleVersion:RULE_VERSION},{client});
+  assert.equal(result.records[0].status,"ready");
+});
+
+test("old resignation query cannot erase a current employment departure signal", async () => {
+  setConfiguration();
+  const client = fakeClient();
+  const rows = await client.getChangedEmployees();
+  rows[0].recordInfoList[0].lastWorkDate = "2026-08-10";
+  client.getChangedEmployees = async () => rows;
+  client.getDimissionRecords = async () => [{userID:1001,businessTypeOID:"5",lastWorkDate:"2026-01-01"}];
+  const result = await syncCandidates({periodStart:"2026-07-16",periodEnd:"2026-08-15",
+    confirmationDate:"2026-08-24",subject:"SZ001",ruleVersion:RULE_VERSION},{client});
+  assert.equal(result.records[0].status,"needs_review");
+});
 
 function responseRecorder() {
   return {

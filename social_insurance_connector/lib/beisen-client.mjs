@@ -208,6 +208,36 @@ export class BeisenClient {
     return allRows;
   }
 
+  async getDimissionRecords(userIds) {
+    const rows = [];
+    for (const batch of chunks([...new Set(userIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))], 300)) {
+      // Unlike the employee time-window API, this documented query supports
+      // all approval states. Do not use option 1/2: they ignore these filters.
+      const payload = await this.request("/TenantBaseExternal/api/v5/Employee/GetServiceInfoByIds", {
+        option: "None", oIds: batch,
+        approvalStatus: ["Draft", "Approving", "Success", "Refused", "Effective", "Invalid", "Rejected", "Temporary"],
+        serviceType: [], employType: [],
+        isWithDeleted: false, enableTranslate: true,
+        columns: ["UserID", "BusinessTypeOID", "ApprovalStatus", "LastWorkDate",
+          "EntryDate", "CreatedTime", "WorkFlowProcessId", "StdIsDeleted",
+          SERVICE_CUSTOM.voluntaryStopFlag],
+      }, "离职审批记录查询");
+      if (!Array.isArray(payload.data)) {
+        throw new ConnectorError("BEISEN_DIMISSION_INVALID", "北森离职审批记录返回格式异常，本次同步未完成", 502);
+      }
+      for (const row of payload.data) {
+        if (!row || !batch.includes(Number(row.userID))) {
+          throw new ConnectorError("BEISEN_DIMISSION_INVALID", "北森离职审批记录缺少有效人员标识，本次同步未完成", 502);
+        }
+        // BusinessTypeOID 5 = 离职, verified against tenant responses.
+        // Missing type occurs in real historical rows. Retain uncertainty for
+        // that employee; neither silently drop it nor fail unrelated people.
+        if ((String(row.businessTypeOID) === "5" || !String(row.businessTypeOID ?? "").trim()) && row.stdIsDeleted !== true) rows.push(row);
+      }
+    }
+    return rows;
+  }
+
   clear() {
     this.appKey = "";
     this.appSecret = "";
