@@ -336,6 +336,7 @@ def test_labor_p1_supplier_history_is_scoped_to_owner(p1_identity_env):
 def test_labor_p1_material_run_owner_comes_from_session(p1_identity_env, monkeypatch):
     root = p1_identity_env / "materials"
     root.mkdir()
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(root))
     monkeypatch.setattr(
         app_module,
         "build_material_replay_plan",

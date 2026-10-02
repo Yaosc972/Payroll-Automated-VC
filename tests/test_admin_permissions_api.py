@@ -669,7 +669,7 @@ def test_mock_login_sets_session_cookie_and_logout_clears_it(tmp_path, monkeypat
     assert logout.status_code == 200
     assert after_logout.status_code == 401
     assert logout_redirect.status_code == 302
-    assert logout_redirect.headers["location"] == "login.html?next=%2F"
+    assert logout_redirect.headers["location"] == "/login.html?next=%2F"
 
 
 def test_feishu_oauth_skeleton_config_and_state_validation(tmp_path, monkeypatch):

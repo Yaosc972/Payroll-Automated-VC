@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
 from ..labor.persistent_storage import labor_private_object_storage_enabled
 from .service import _legacy_module, list_tools, process_files
+from .platform_page import render_platform_page
 from .tasks import (
     create_task,
     finalize_input,
@@ -107,9 +108,12 @@ def _legacy_tool_payload() -> list[dict]:
 def overseas_payroll_page(request: Request) -> HTMLResponse:
     _require_access(request)
     html = FRONTEND_PATH.read_text(encoding="utf-8")
-    # These are the same runtime substitutions made by the original server.
-    # The checked-in frontend resource remains byte-identical to the handover.
-    html = html.replace("__PASSCODE_HINT__", "").replace("__NO_AUTH__", "false")
+    # Preserve the handover checksum while serving only the platform's session login.
+    try:
+        html = render_platform_page(html)
+    except ValueError:
+        logger.exception("Overseas payroll login adapter does not match the handover page")
+        raise HTTPException(status_code=503, detail="海外薪资页面暂不可用，请联系维护人员。") from None
     html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=4"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

@@ -67,7 +67,11 @@ def _run_preflight(target: str, *, operations_token: str, client: Any) -> dict[s
         checks.append(_failed_check("feishu_auth", auth))
         block("feishu_auth_probe_failed", "feishu_auth")
 
-    access = _get(client, f"{target}/api/labor/access")
+    access = _get(
+        client,
+        f"{target}/api/labor/access",
+        headers={"x-admin-token": operations_token.strip()} if operations_token.strip() else None,
+    )
     access_payload = access["payload"]
     if access["statusCode"] != 200:
         checks.append(_failed_check("p1_contract", access))

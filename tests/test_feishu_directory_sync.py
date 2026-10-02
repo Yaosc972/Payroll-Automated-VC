@@ -14,6 +14,16 @@ def _reset_store(monkeypatch, db_path):
     admin_store._STORE_INITIALIZED_TARGET = ""
 
 
+@pytest.fixture
+def real_admin_session(tmp_path, monkeypatch):
+    _reset_store(monkeypatch, tmp_path / "admin.sqlite")
+    monkeypatch.setattr(admin_store, "get_admin_database_url", lambda: "")
+    app_module._clear_current_user_cache()
+    token = admin_store.create_session("payrollAdmin")
+    yield token
+    app_module._clear_current_user_cache()
+
+
 def test_feishu_user_id_is_canonical_and_existing_account_is_not_duplicated(tmp_path, monkeypatch):
     db_path = tmp_path / "admin.sqlite"
     _reset_store(monkeypatch, db_path)
@@ -174,10 +184,7 @@ def test_directory_sync_endpoint_is_production_only(tmp_path, monkeypatch):
     assert called is False
 
 
-def test_aideploy_production_host_allows_sync_without_vercel_env(tmp_path, monkeypatch):
-    db_path = tmp_path / "admin.sqlite"
-    _reset_store(monkeypatch, db_path)
-    monkeypatch.setenv("SIGMA_ENABLE_MOCK_LOGIN", "1")
+def test_aideploy_production_host_allows_sync_without_vercel_env(monkeypatch, real_admin_session):
     monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_SYNC_ENABLED", "1")
     monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID", "od_hras")
     monkeypatch.setenv("SIGMA_WORKBENCH_PUBLIC_URL", "https://hras-ai-vc.ztn.cn")
@@ -188,7 +195,7 @@ def test_aideploy_production_host_allows_sync_without_vercel_env(tmp_path, monke
     ))
 
     with TestClient(app, base_url="https://hras-ai-vc.ztn.cn") as client:
-        assert client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"}).status_code == 200
+        client.cookies.set(app_module.SESSION_COOKIE_NAME, real_admin_session)
         state = client.get("/api/admin/state").json()["directory"]
         response = client.post("/api/admin/directory/sync")
 
@@ -198,10 +205,7 @@ def test_aideploy_production_host_allows_sync_without_vercel_env(tmp_path, monke
 
 
 @pytest.mark.parametrize("inherited_vercel_env", [None, "production"])
-def test_aideploy_preview_host_cannot_sync_with_production_base_vars(tmp_path, monkeypatch, inherited_vercel_env):
-    db_path = tmp_path / "admin.sqlite"
-    _reset_store(monkeypatch, db_path)
-    monkeypatch.setenv("SIGMA_ENABLE_MOCK_LOGIN", "1")
+def test_aideploy_preview_host_cannot_sync_with_production_base_vars(monkeypatch, real_admin_session, inherited_vercel_env):
     monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_SYNC_ENABLED", "1")
     monkeypatch.setenv("SIGMA_FEISHU_DIRECTORY_ROOT_DEPARTMENT_ID", "od_hras")
     monkeypatch.setenv("SIGMA_WORKBENCH_PUBLIC_URL", "https://hras-ai-vc.ztn.cn")
@@ -215,7 +219,7 @@ def test_aideploy_preview_host_cannot_sync_with_production_base_vars(tmp_path, m
 
     monkeypatch.setattr(app_module, "_fetch_feishu_directory_snapshot", unexpected_fetch)
     with TestClient(app, base_url="https://42141ddcae8f.pre-hras-aideploy.ztn.cn") as client:
-        assert client.post("/api/auth/mock-login", json={"userId": "payrollAdmin"}).status_code == 200
+        client.cookies.set(app_module.SESSION_COOKIE_NAME, real_admin_session)
         if inherited_vercel_env:
             monkeypatch.setenv("VERCEL_ENV", inherited_vercel_env)
         state = client.get("/api/admin/state").json()["directory"]

@@ -4,7 +4,7 @@ import os
 import re
 import secrets
 from typing import Any, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, unquote, urlsplit
 
 import httpx
 from fastapi import APIRouter, Body, Cookie, HTTPException, Request, Response
@@ -43,7 +43,29 @@ def _is_vercel_runtime() -> bool:
     return bool(os.environ.get("VERCEL") or os.environ.get("VERCEL_ENV") or os.environ.get("VERCEL_URL"))
 
 
+def production_runtime(env: Optional[dict[str, str]] = None) -> bool:
+    """Hosted services require real authentication, including company containers."""
+    source = env if env is not None else os.environ
+    if str(source.get("SIGMA_RUNTIME_MODE") or "").strip().lower() in {"server", "production"}:
+        return True
+    if any(source.get(key) for key in (
+        "VERCEL", "VERCEL_ENV", "VERCEL_URL", "AIDEPLOY_ENV", "AIDEPLOY_APP",
+        "AIDEPLOY_SERVICE", "AIDEPLOY_RELEASE_SEQ", "AIDEPLOY_URL",
+    )):
+        return True
+    public_url = str(source.get("SIGMA_WORKBENCH_PUBLIC_URL") or "").strip()
+    if not public_url:
+        return False
+    try:
+        host = urlsplit(public_url).hostname
+    except ValueError:
+        return True  # Invalid deployment configuration must not disable authentication.
+    return host not in {"localhost", "127.0.0.1", "::1"}
+
+
 def labor_auth_required() -> bool:
+    if production_runtime():
+        return True
     configured = os.environ.get("SIGMA_LABOR_AUTH_REQUIRED")
     if configured is not None:
         return _env_flag("SIGMA_LABOR_AUTH_REQUIRED")
@@ -51,7 +73,53 @@ def labor_auth_required() -> bool:
 
 
 def mock_auth_enabled() -> bool:
-    return not _is_vercel_runtime() and _env_flag("SIGMA_ENABLE_MOCK_LOGIN", False)
+    return not production_runtime() and _env_flag("SIGMA_ENABLE_MOCK_LOGIN", False)
+
+
+def session_cookie_secure() -> bool:
+    return production_runtime() or bool(AUTH_CONFIG["session_cookie_secure"])
+
+
+def cors_settings(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
+    source = env if env is not None else os.environ
+    hosted = production_runtime(source)
+    configured = str(source.get("SIGMA_CORS_ALLOWED_ORIGINS") or "").strip()
+    origins: list[str] = []
+    candidates = configured.split(",") if configured else (
+        [source.get("SIGMA_WORKBENCH_PUBLIC_URL", ""), source.get("FEISHU_REDIRECT_URI", "")]
+        if hosted else ["null", "http://127.0.0.1:8006", "http://localhost:8006"]
+    )
+    for candidate in candidates:
+        candidate = str(candidate or "").strip()
+        if candidate == "null" and not hosted:
+            origins.append(candidate)
+            continue
+        try:
+            parsed = urlsplit(candidate)
+            if (
+                parsed.scheme not in ({"https"} if hosted else {"http", "https"})
+                or not parsed.hostname or parsed.username or parsed.password
+                or "\\" in candidate or any(ord(char) < 33 for char in candidate)
+                or "*" in candidate
+                or (hosted and parsed.hostname in {"localhost", "127.0.0.1", "::1"})
+            ):
+                continue
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+        except ValueError:
+            continue
+        if origin not in origins:
+            origins.append(origin)
+    return {
+        "allow_origins": origins,
+        "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        "allow_headers": [
+            "Content-Type", "Authorization", "X-Sigma-Labor-API-Contract",
+            "X-Sigma-Labor-UI-Version", "X-Sigma-Labor-UI-Build", "X-Sigma-Request-ID",
+            "X-Requested-With",
+        ],
+        "allow_credentials": hosted and bool(origins),
+        "expose_headers": ["Content-Disposition"],
+    }
 
 
 def labor_auth_health(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
@@ -63,7 +131,8 @@ def labor_auth_health(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
             return default
         return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-    required = truthy(
+    hosted = production_runtime(source)
+    required = hosted or truthy(
         "SIGMA_LABOR_AUTH_REQUIRED",
         bool(source.get("VERCEL") or source.get("VERCEL_ENV") or source.get("VERCEL_URL")),
     )
@@ -71,10 +140,8 @@ def labor_auth_health(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
         str(source.get(key) or "").strip()
         for key in ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_REDIRECT_URI")
     )
-    secure_cookie = truthy("SESSION_COOKIE_SECURE", False)
-    mock_enabled = not bool(
-        source.get("VERCEL") or source.get("VERCEL_ENV") or source.get("VERCEL_URL")
-    ) and truthy("SIGMA_ENABLE_MOCK_LOGIN", False)
+    secure_cookie = hosted or truthy("SESSION_COOKIE_SECURE", False)
+    mock_enabled = not hosted and truthy("SIGMA_ENABLE_MOCK_LOGIN", False)
     database = admin_store_health()
     database_backend = str(database.get("backend") or "")
     database_ready = bool(database.get("ready"))
@@ -83,7 +150,7 @@ def labor_auth_health(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
         and provider_configured
         and secure_cookie
         and not mock_enabled
-        and database_backend == "postgres"
+        and database_backend in {"postgres", "mysql"}
         and database_ready
     )
     return {
@@ -99,10 +166,30 @@ def labor_auth_health(env: Optional[dict[str, str]] = None) -> dict[str, Any]:
 
 
 def _safe_next_url(value: str | None, fallback: str = "/") -> str:
-    candidate = str(value or "").strip()
-    if not candidate.startswith("/") or candidate.startswith("//") or "\r" in candidate or "\n" in candidate:
+    candidate = str(value or "").strip(" ")
+    if candidate == "login.html" or candidate.startswith(("login.html?", "login.html#")):
+        candidate = "/" + candidate
+    if not candidate or len(candidate) > 2048:
         return fallback
-    return candidate
+    decoded = candidate
+    for _ in range(8):
+        if (
+            not decoded.startswith("/") or decoded.startswith("//") or "\\" in decoded
+            or any(ord(char) < 32 or ord(char) == 127 for char in decoded)
+        ):
+            return fallback
+        try:
+            parsed = urlsplit(decoded)
+        except ValueError:
+            return fallback
+        if parsed.scheme or parsed.netloc:
+            return fallback
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            return candidate
+        decoded = next_decoded
+    # Deeply nested escaping is unnecessary for a workbench return path.
+    return fallback
 
 
 def _safe_id(value: object, field_name: str = "id") -> str:
@@ -118,7 +205,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         token,
         httponly=True,
         samesite="lax",
-        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        secure=session_cookie_secure(),
         max_age=7 * 24 * 60 * 60,
         path="/",
     )
@@ -293,7 +380,7 @@ def api_auth_feishu_login(next: str = "/") -> RedirectResponse:
         state,
         httponly=True,
         samesite="lax",
-        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        secure=session_cookie_secure(),
         max_age=10 * 60,
         path="/",
     )
@@ -302,7 +389,7 @@ def api_auth_feishu_login(next: str = "/") -> RedirectResponse:
         _safe_next_url(next),
         httponly=True,
         samesite="lax",
-        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        secure=session_cookie_secure(),
         max_age=10 * 60,
         path="/",
     )

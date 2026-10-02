@@ -12,7 +12,23 @@ import bonus_platform.app as app_module
 import bonus_platform.engine.labor.runs as labor_runs
 import bonus_platform.engine.labor.structure as labor_structure
 from bonus_platform.app import app
+import bonus_platform.engine.admin_store as admin_store
 from bonus_platform.engine.labor.models import LaborLineItem
+
+
+@pytest.fixture
+def authenticated_labor_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: tmp_path / "runtime_admin.sqlite")
+    monkeypatch.setattr(admin_store, "get_admin_database_url", lambda: "")
+    app_module._clear_current_user_cache()
+    token = admin_store.create_session("payrollAdmin")
+    original_init = TestClient.__init__
+
+    def initialize(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.cookies.set(app_module.SESSION_COOKIE_NAME, token)
+
+    monkeypatch.setattr(TestClient, "__init__", initialize)
 
 
 def test_runtime_suppresses_full_http_client_request_urls():
@@ -960,7 +976,7 @@ def test_labor_access_endpoint_exposes_release_contract(monkeypatch):
     assert body["directPaymentAllowed"] is False
 
 
-def test_labor_access_allows_formal_uat_queue_only_through_personal_worker(monkeypatch):
+def test_labor_access_allows_formal_uat_queue_only_through_personal_worker(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_EXECUTION_MODE", "personal-worker")
     client = TestClient(app)
@@ -974,7 +990,7 @@ def test_labor_access_allows_formal_uat_queue_only_through_personal_worker(monke
     assert gate["reasonCode"] == ""
 
 
-def test_labor_access_blocks_request_scoped_formal_task_without_personal_worker(monkeypatch):
+def test_labor_access_blocks_request_scoped_formal_task_without_personal_worker(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.delenv("SIGMA_LABOR_EXECUTION_MODE", raising=False)
     client = TestClient(app)
@@ -1083,7 +1099,7 @@ def test_labor_access_gate_can_disable_uat_module(monkeypatch):
     assert blocked.json()["access"]["access"] == "disabled"
 
 
-def test_labor_extract_is_blocked_in_vercel_uat_light_mode(monkeypatch):
+def test_labor_extract_is_blocked_in_vercel_uat_light_mode(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat")
@@ -1106,7 +1122,7 @@ def test_labor_extract_is_blocked_in_vercel_uat_light_mode(monkeypatch):
     assert "测试材料验证" in response.json()["detail"]["message"]
 
 
-def test_labor_extract_vercel_uat_light_mode_returns_structured_next_action(monkeypatch):
+def test_labor_extract_vercel_uat_light_mode_returns_structured_next_action(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat")
@@ -1124,7 +1140,7 @@ def test_labor_extract_vercel_uat_light_mode_returns_structured_next_action(monk
     assert "测试材料验证" in detail["nextAction"]
 
 
-def test_labor_extract_never_runs_synchronously_on_vercel_full_uat(monkeypatch):
+def test_labor_extract_never_runs_synchronously_on_vercel_full_uat(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_OVERSEAS_LABOR_ACCESS", "uat_full")
@@ -1164,7 +1180,7 @@ def test_labor_extract_never_runs_synchronously_on_vercel_full_uat(monkeypatch):
     assert called == []
 
 
-def test_labor_extract_never_runs_synchronously_when_only_vercel_env_is_present(monkeypatch):
+def test_labor_extract_never_runs_synchronously_when_only_vercel_env_is_present(monkeypatch, authenticated_labor_runtime):
     monkeypatch.delenv("VERCEL", raising=False)
     monkeypatch.setenv("VERCEL_ENV", "production")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
@@ -1583,7 +1599,8 @@ def test_labor_extract_after_upload_without_mapping_tells_user_to_confirm_mappin
     assert "字段映射" in detail["nextAction"]
 
 
-def test_labor_material_index_api_lists_replay_ready_batches(tmp_path):
+def test_labor_material_index_api_lists_replay_ready_batches(tmp_path, monkeypatch):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     batch = tmp_path / "oss 2"
     batch.mkdir()
     (batch / "US Elogis Service #7 Invoice W.E 05.24.26.pdf").write_bytes(b"%PDF-1.4\n")
@@ -1605,7 +1622,8 @@ def test_labor_material_index_api_lists_replay_ready_batches(tmp_path):
     assert body["candidateBatches"][0]["pdfFiles"] == body["candidateBatches"][0]["invoiceFiles"]
 
 
-def test_labor_material_replay_plan_api_returns_mapping_candidates(tmp_path):
+def test_labor_material_replay_plan_api_returns_mapping_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     batch = tmp_path / "workforce已报账"
     batch.mkdir()
     (batch / "Invoice-5058871.pdf").write_bytes(b"%PDF-1.4\n")
@@ -1630,6 +1648,7 @@ def test_labor_material_replay_plan_api_returns_mapping_candidates(tmp_path):
 
 
 def test_labor_material_dry_run_api_does_not_create_labor_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     import bonus_platform.app as app_module
 
     before_count = len(app_module.list_labor_metadata())
@@ -1661,7 +1680,8 @@ def test_labor_material_dry_run_api_does_not_create_labor_run(monkeypatch, tmp_p
     assert len(app_module.list_labor_metadata()) == before_count
 
 
-def test_labor_material_run_api_copies_reference_files_and_prefills_mapping(tmp_path):
+def test_labor_material_run_api_copies_reference_files_and_prefills_mapping(tmp_path, monkeypatch):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     batch = tmp_path / "workforce已报账"
     batch.mkdir()
     pdf_path = batch / "Invoice-5058871.pdf"
@@ -1703,8 +1723,11 @@ def test_labor_material_run_api_copies_reference_files_and_prefills_mapping(tmp_
     assert body["materialReplaySource"]["uploadPlan"]["pdfFiles"] == ["workforce已报账/Invoice-5058871.pdf"]
     assert body["files"]["pdfInvoices"][0]["filename"].endswith(".pdf")
     assert body["files"]["workbooks"][0]["filename"].endswith(".xlsx")
-    copied_pdf = Path(body["files"]["pdfInvoices"][0]["path"])
-    copied_workbook = Path(body["files"]["workbooks"][0]["path"])
+    # Absolute paths stay in server metadata, never in browser payloads.
+    stored = app_module.load_labor_metadata(app_module.get_labor_run_dir(body["id"]))
+    copied_pdf = Path(stored["files"]["pdfInvoices"][0]["path"])
+    copied_workbook = Path(stored["files"]["workbooks"][0]["path"])
+    assert not Path(body["files"]["pdfInvoices"][0]["path"]).is_absolute()
     assert copied_pdf.exists()
     assert copied_workbook.exists()
     assert copied_pdf != pdf_path
@@ -1716,7 +1739,8 @@ def test_labor_material_run_api_copies_reference_files_and_prefills_mapping(tmp_
     assert "Alice Worker" in copied_cache.read_text(encoding="utf-8")
 
 
-def test_labor_material_run_preserves_mapping_for_each_workbook(tmp_path):
+def test_labor_material_run_preserves_mapping_for_each_workbook(tmp_path, monkeypatch):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     batch = tmp_path / "Sovitrat groupe"
     batch.mkdir()
     (batch / "invoice.pdf").write_bytes(b"%PDF-1.4\n")
@@ -1750,7 +1774,8 @@ def test_labor_material_run_preserves_mapping_for_each_workbook(tmp_path):
     assert response.status_code == 200
     body = response.json()
     assert len(body["workbookMappings"]) == 2
-    rows = app_module._labor_excel_rows_from_metadata(body)
+    stored = app_module.load_labor_metadata(app_module.get_labor_run_dir(body["id"]))
+    rows = app_module._labor_excel_rows_from_metadata(stored)
     assert {row.employee_name_raw: row.amount for row in rows} == {
         "Alice One": 110.0,
         "Alice Two": 115.0,
@@ -1758,6 +1783,7 @@ def test_labor_material_run_preserves_mapping_for_each_workbook(tmp_path):
 
 
 def test_labor_material_run_extracts_and_replays_name_mapping_candidate(monkeypatch, tmp_path):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     import bonus_platform.app as app_module
 
     batch = tmp_path / "29仓"
@@ -1847,6 +1873,7 @@ def test_labor_material_run_extracts_and_replays_name_mapping_candidate(monkeypa
 
 
 def test_labor_material_run_name_mapping_candidate_with_amount_gap_requires_review(monkeypatch, tmp_path):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     import bonus_platform.app as app_module
 
     batch = tmp_path / "29仓"
@@ -1925,6 +1952,7 @@ def test_labor_material_run_name_mapping_candidate_with_amount_gap_requires_revi
 
 
 def test_labor_material_run_keeps_employee_detail_when_totals_pass(monkeypatch, tmp_path):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     import bonus_platform.app as app_module
 
     batch = tmp_path / "oss 2"
@@ -1995,6 +2023,7 @@ def test_labor_material_run_keeps_employee_detail_when_totals_pass(monkeypatch, 
 
 
 def test_labor_material_run_surfaces_amount_rate_review_queue(monkeypatch, tmp_path):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     import bonus_platform.app as app_module
 
     batch = tmp_path / "Grande"
@@ -2071,6 +2100,7 @@ def test_labor_material_run_surfaces_amount_rate_review_queue(monkeypatch, tmp_p
 
 
 def test_labor_material_run_blocks_when_employee_detail_recognition_is_incomplete(monkeypatch, tmp_path):
+    monkeypatch.setenv("LABOR_REFERENCE_MATERIALS_DIR", str(tmp_path))
     import bonus_platform.app as app_module
 
     batch = tmp_path / "oss"

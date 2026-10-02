@@ -20,7 +20,7 @@ WORKBOOK_EXTENSIONS = {".xlsx", ".xls", ".xlsm", ".csv"}
 
 
 def build_material_index(root: str | Path, *, max_depth: int = 6) -> Dict[str, Any]:
-    root_path = Path(root).expanduser()
+    root_path = Path(root).expanduser().resolve()
     if not root_path.exists():
         raise FileNotFoundError(f"参考材料目录不存在: {root_path}")
     if not root_path.is_dir():
@@ -1536,6 +1536,11 @@ def _build_reocr_impact_summary(
 def _iter_material_files(root: Path, *, max_depth: int) -> Iterable[Path]:
     for path in root.rglob("*"):
         if not path.is_file():
+            continue
+        try:
+            path.resolve(strict=True).relative_to(root.resolve())
+        except (OSError, ValueError, RuntimeError):
+            # Symlink files must not disclose or parse material outside the root.
             continue
         if _is_ignored_path(path):
             continue

@@ -11,10 +11,26 @@ import pytest
 
 import bonus_platform.app as app_module
 from bonus_platform.app import app
+import bonus_platform.engine.admin_store as admin_store
 from bonus_platform.engine.labor import runs as labor_runs
 from bonus_platform.engine.labor.models import LaborLineItem
 from bonus_platform.engine.labor.production_readiness import evaluate_labor_production_readiness
 from bonus_platform.engine.labor.structure import evaluate_batch_guards
+
+
+@pytest.fixture
+def authenticated_labor_runtime(monkeypatch, tmp_path):
+    monkeypatch.setattr(admin_store, "get_admin_db_path", lambda: tmp_path / "runtime_admin.sqlite")
+    monkeypatch.setattr(admin_store, "get_admin_database_url", lambda: "")
+    app_module._clear_current_user_cache()
+    token = admin_store.create_session("payrollAdmin")
+    original_init = TestClient.__init__
+
+    def initialize(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.cookies.set(app_module.SESSION_COOKIE_NAME, token)
+
+    monkeypatch.setattr(TestClient, "__init__", initialize)
 
 
 def _row(name: str, *, source_file: str, amount: float = 100.0) -> LaborLineItem:
@@ -707,7 +723,7 @@ def test_metadata_load_and_update_share_the_same_run_lock(monkeypatch, tmp_path:
     assert json.loads((run_dir / labor_runs.METADATA_FILE).read_text(encoding="utf-8"))["concurrentMarker"] == "preserved"
 
 
-def test_vercel_request_runtime_never_starts_long_extract_without_personal_worker(monkeypatch):
+def test_vercel_request_runtime_never_starts_long_extract_without_personal_worker(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_WORKBENCH_HOME", "/tmp/sigma-workbench")
@@ -726,7 +742,7 @@ def test_vercel_request_runtime_never_starts_long_extract_without_personal_worke
     assert response.json()["detail"]["errorCode"] == "LABOR_UAT_EXTRACT_DISABLED"
 
 
-def test_vercel_supabase_runtime_never_starts_long_extract_without_personal_worker(monkeypatch):
+def test_vercel_supabase_runtime_never_starts_long_extract_without_personal_worker(monkeypatch, authenticated_labor_runtime):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_WORKBENCH_HOME", "/tmp/sigma-workbench")
@@ -754,7 +770,7 @@ def test_vercel_supabase_runtime_never_starts_long_extract_without_personal_work
         ("POST", "/api/labor/material-runs", {"batchKey": "synthetic"}),
     ],
 )
-def test_vercel_request_runtime_blocks_local_material_tools(monkeypatch, method: str, path: str, payload: dict | None):
+def test_vercel_request_runtime_blocks_local_material_tools(monkeypatch, authenticated_labor_runtime, method: str, path: str, payload: dict | None):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("SIGMA_LABOR_AUTH_REQUIRED", "0")
     monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "supabase")

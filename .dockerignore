@@ -20,3 +20,27 @@ target
 .idea
 .vscode
 *.log
+
+# Keep credentials, local diagnostics and employee runtime data out of images.
+.vercel
+.aideploy
+.mcp.json
+.DS_Store
+.playwright-cli
+.superpowers
+output
+tmp
+outputs/*
+!outputs/招聘奖金核算_规则库.xlsx
+!outputs/招聘奖金核算_月度导入模板.xlsx
+
+# Preserve Worker source sentinels, but omit generated installers and archives.
+desktop/backend-build
+desktop/backend-dist
+desktop/release
+desktop/dist
+labor-worker-desktop/worker-build
+labor-worker-desktop/worker-dist
+labor-worker-desktop/release
+labor-worker-desktop/dist
+labor-worker-desktop/release-gate-materials

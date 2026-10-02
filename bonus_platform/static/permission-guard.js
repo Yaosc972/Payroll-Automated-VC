@@ -193,14 +193,17 @@
   };
 
   let state = readPermissionState();
-  const mergeAuthContext = (me) => ({
-    ...state,
-    users: [{ ...me.user, roleIds: me.user.roleIds || [] }],
-    modules: me.modules || state.modules,
-    rolePermissions: me.permissions?.rolePermissions || state.rolePermissions,
-    moduleAccess: me.permissions?.moduleAccess || state.moduleAccess,
-    selectedUserId: me.user?.id || state.selectedUserId,
-  });
+  const mergeAuthContext = (me) => {
+    if (!me?.user?.id || !Array.isArray(me.modules)) throw new Error("账号权限响应无效。");
+    return {
+      ...state,
+      users: [{ ...me.user, roleIds: me.user.roleIds || [] }],
+      modules: me.modules,
+      rolePermissions: me.permissions?.rolePermissions || {},
+      moduleAccess: me.permissions?.moduleAccess || {},
+      selectedUserId: me.user.id,
+    };
+  };
   const readCachedAuthContext = () => {
     try {
       const cached = JSON.parse(sessionStorage.getItem(authCacheKey) || "{}");
@@ -217,17 +220,26 @@
       // Ignore storage limits; the network request path remains authoritative.
     }
   };
-  const fetchAuthContext = async () => {
+  const fetchAuthContext = async (url = "/api/me") => {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), authFetchTimeoutMs);
     try {
-      return await fetch("/api/me", {
+      return await fetch(url, {
         credentials: "same-origin",
         cache: "no-store",
         signal: controller.signal,
       });
     } finally {
       window.clearTimeout(timeout);
+    }
+  };
+  const canUseLocalMockPreview = async () => {
+    if (!isLocalPreview) return false;
+    try {
+      const response = await fetchAuthContext("/api/auth/feishu/config");
+      return response.ok && (await response.json()).mockLoginEnabled === true;
+    } catch {
+      return false;
     }
   };
   const escapeHtml = (value) => String(value).replace(/[&<>"']/g, char => ({
@@ -335,22 +347,21 @@
         window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname || "/")}`;
         return;
       }
-      if (response.ok) {
-        const me = await response.json();
-        writeCachedAuthContext(me);
-        state = mergeAuthContext(me);
-      }
+      if (!response.ok) throw new Error(`权限服务响应失败 (${response.status})。`);
+      const me = await response.json();
+      state = mergeAuthContext(me);
+      writeCachedAuthContext(me);
     }
   } catch (error) {
     sessionStorage.removeItem(authCacheKey);
-    if (!isLocalPreview) {
+    if (!(await canUseLocalMockPreview())) {
       const detail = error?.name === "AbortError"
         ? "读取账号角色与模块开放状态超时。请刷新页面，或重新登录后再进入模块。"
         : "读取账号角色与模块开放状态失败。请刷新页面，或重新登录后再进入模块。";
       renderGuardError("权限校验失败", detail);
       return;
     }
-    // Static file fallback keeps direct local previews usable before the API server is running.
+    // Only explicitly enabled local mock login may use the preview role draft.
   }
   const module = state.modules.find(item => item.id === moduleId);
   const currentUser = state.users.find(user => user.id === state.selectedUserId) || state.users[0];

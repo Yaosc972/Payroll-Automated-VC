@@ -144,7 +144,26 @@
   const feishuLoginStatus = document.getElementById("feishuLoginStatus");
   const mockLoginPanel = document.getElementById("mockLoginPanel");
   const searchParams = new URLSearchParams(window.location.search);
-  const nextUrl = searchParams.get("next") || "/";
+  const safeNextUrl = (value) => {
+    const candidate = String(value || "");
+    let decoded = candidate;
+    for (let depth = 0; depth < 5; depth += 1) {
+      if (!decoded.startsWith("/") || decoded.startsWith("//") || /[\\\u0000-\u001f\u007f]/.test(decoded)) return "/";
+      try {
+        const nextDecoded = decodeURIComponent(decoded);
+        if (nextDecoded === decoded) {
+          const resolved = new URL(candidate, window.location.origin);
+          return resolved.origin === window.location.origin && !resolved.pathname.startsWith("//") ? candidate : "/";
+        }
+        decoded = nextDecoded;
+      } catch {
+        return "/";
+      }
+    }
+    return "/";
+  };
+  const nextUrl = safeNextUrl(searchParams.get("next"));
+  const isLocalPreview = window.location.protocol === "file:" || ["localhost", "127.0.0.1", ""].includes(window.location.hostname);
   let mockEnabled = false;
 
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, char => ({
@@ -206,7 +225,7 @@
       const response = await fetch("/api/auth/feishu/config");
       if (!response.ok) throw new Error(`API ${response.status}`);
       const data = await response.json();
-      mockEnabled = Boolean(data.mockLoginEnabled);
+      mockEnabled = isLocalPreview && data.mockLoginEnabled === true;
       if (data.configured) {
         feishuLoginLink.setAttribute("aria-disabled", "false");
         feishuLoginLink.href = `/api/auth/feishu/login?next=${encodeURIComponent(nextUrl)}`;
@@ -244,6 +263,7 @@
   userList.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-user-id]");
     if (!button) return;
+    if (!mockEnabled) return;
     if (status) status.textContent = "正在登录...";
     try {
       const response = await fetch("/api/auth/mock-login", {
@@ -258,6 +278,10 @@
     } catch {
       sessionStorage.removeItem("sigma-auth-context-v1");
       sessionStorage.removeItem("sigma-auth-context-v2");
+      if (!isLocalPreview || !mockEnabled) {
+        if (status) status.textContent = "登录失败，请稍后重试。";
+        return;
+      }
       localStorage.setItem("sigma-admin-console-draft-v3", JSON.stringify({
         selectedUserId: button.dataset.userId,
       }));

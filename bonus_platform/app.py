@@ -47,9 +47,14 @@ from starlette.datastructures import MutableHeaders
 from starlette.middleware.gzip import GZipMiddleware
 
 from .auth import (
+    _safe_next_url,
+    cors_settings,
     current_user_from_request,
     labor_auth_health,
     labor_auth_required,
+    mock_auth_enabled,
+    production_runtime,
+    session_cookie_secure,
     user_can_enter_module,
     user_is_system_admin,
 )
@@ -929,17 +934,7 @@ app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan
 app.include_router(social_insurance_router)
 app.include_router(overseas_payroll_router)
 app.include_router(overseas_payroll_page_router)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "null",
-        "http://127.0.0.1:8006",
-        "http://localhost:8006",
-    ],
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
-)
+app.add_middleware(CORSMiddleware, **cors_settings())
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -1886,7 +1881,7 @@ def _workbench_access_config() -> dict:
     return {
         "hideDevelopingModules": _hide_developing_modules(),
         "blockedModules": [],
-        "authRequired": labor_auth_required(),
+        "authRequired": _browser_security_required(),
     }
 
 
@@ -1895,7 +1890,7 @@ def _is_vercel_runtime() -> bool:
 
 
 def _mock_auth_enabled() -> bool:
-    return not _is_vercel_runtime() and _env_flag("SIGMA_ENABLE_MOCK_LOGIN", False)
+    return mock_auth_enabled()
 
 
 def _uses_request_scoped_labor_runtime() -> bool:
@@ -2202,7 +2197,7 @@ def _overseas_labor_access_response(request: Request) -> Response | None:
     is_labor_page = path.rstrip("/") == "/overseas-labor.html"
     if not (is_labor_api or is_labor_page):
         return None
-    if is_labor_api and not _labor_browser_auth_path(path):
+    if is_labor_api and not _labor_browser_auth_path(path, request.method):
         return None
     access = _overseas_labor_access_config()
     if not access["canUse"]:
@@ -2493,10 +2488,80 @@ def _labor_p1_device_auth_response(request: Request) -> Response | None:
     )
 
 
-def _labor_browser_auth_path(path: str) -> bool:
+def _browser_security_required() -> bool:
+    return production_runtime() or labor_auth_required()
+
+
+_LABOR_OPERATIONS_ROUTES = {
+    ("GET", "/api/labor/operations"),
+    ("GET", "/api/labor/worker/health"),
+    ("GET", "/api/labor/production-readiness"),
+    ("POST", "/api/labor/maintenance/cleanup"),
+}
+_LABOR_ADMIN_ROUTES = {
+    ("GET", "/api/labor/storage-health"),
+    ("GET", "/api/labor/worker-health"),
+    ("GET", "/api/labor/telemetry/export"),
+    ("POST", "/api/labor/worker/release/upload-intent"),
+    ("PUT", "/api/labor/worker/release/local-upload"),
+    ("POST", "/api/labor/worker/release/finalize"),
+}
+
+
+def _labor_service_route(path: str, method: str) -> str:
+    """Precisely distinguish service identities from browser sessions."""
+    method = method.upper()
+    if (method, path) in _LABOR_OPERATIONS_ROUTES:
+        return "operations"
+    if method == "POST" and path == "/api/labor/worker/activate":
+        return "activation"
+    if (method, path) in {
+        ("GET", "/api/labor/worker/version"),
+        ("POST", "/api/labor/worker/jobs/claim"),
+    }:
+        return "worker"
+    match = re.fullmatch(
+        r"/api/labor/worker/jobs/[^/]+/(input|input-manifest|input-file|heartbeat|mapping-preflight-result|result|events|complete|fail)",
+        path,
+    )
+    if match and method == ("GET" if match.group(1) in {"input", "input-manifest", "input-file"} else "POST"):
+        return "worker"
+    payroll_routes = {
+        "GET": r"/api/overseas-payroll/worker/(?:jobs/[^/]+/manifest|tasks/[^/]+/files/[^/]+)",
+        "POST": r"/api/overseas-payroll/worker/jobs/[^/]+/(?:output-intent|output-finalize)",
+        "PUT": r"/api/overseas-payroll/worker/tasks/[^/]+/output/[^/]+/content",
+    }
+    if method in payroll_routes and re.fullmatch(payroll_routes[method], path):
+        return "worker"
+    return ""
+
+
+def _labor_service_auth_response(request: Request) -> Response | None:
+    route = _labor_service_route(request.url.path, request.method)
+    if request.method == "GET" and request.url.path == "/api/labor/access" and request.headers.get("x-admin-token"):
+        route = "operations"
+    if route == "operations":
+        expected = os.environ.get("SIGMA_LABOR_OPERATIONS_TOKEN", "").strip()
+        supplied = request.headers.get("x-admin-token", "")
+        if not expected or not secrets.compare_digest(supplied, expected):
+            return JSONResponse({"detail": "缺少有效的海外劳务运维访问令牌。"}, status_code=401)
+        request.state.labor_service_authenticated = True
+    elif route == "worker" and _browser_security_required():
+        try:
+            _labor_worker_identity(
+                request.headers.get("authorization", ""),
+                worker_version=request.headers.get("x-worker-version", "") or request.query_params.get("currentVersion", ""),
+            )
+        except HTTPException as exc:
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        request.state.labor_service_authenticated = True
+    return None
+
+
+def _labor_browser_auth_path(path: str, method: str = "GET") -> bool:
     if path.rstrip("/") in {"/overseas-labor.html", "/overseas-payroll.html"}:
         return True
-    if path.startswith("/api/overseas-payroll/worker/"):
+    if _labor_service_route(path, method):
         return False
     if path.startswith("/api/overseas-payroll/"):
         return True
@@ -2504,26 +2569,50 @@ def _labor_browser_auth_path(path: str) -> bool:
         return True
     if not path.startswith("/api/labor/"):
         return False
-    if path == "/api/labor/worker/devices" or path.startswith("/api/labor/worker/devices/"):
-        return True
-    if path in {
-        "/api/labor/worker/release",
-        "/api/labor/worker/release/download",
-        "/api/labor/worker/release/upload-intent",
-    }:
-        return True
-    public_or_service_prefixes = (
-        "/api/labor/access",
-        "/api/labor/production-readiness",
-        "/api/labor/operations",
-        "/api/labor/maintenance/",
-        "/api/labor/worker/",
-    )
-    return not any(path == prefix or path.startswith(prefix) for prefix in public_or_service_prefixes)
+    return True
+
+
+def _payroll_business_api_auth_response(request: Request) -> Response | None:
+    if not _browser_security_required() or request.method == "OPTIONS":
+        return None
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return None
+    public_routes = {
+        ("GET", "/api/health"),
+        ("GET", "/api/auth/feishu/config"),
+        ("GET", "/api/auth/feishu/login"),
+        ("GET", "/api/auth/feishu/callback"),
+        ("GET", "/api/auth/lark/callback"),
+        ("GET", "/api/auth/logout"),
+        ("POST", "/api/auth/logout"),
+        ("GET", "/api/auth/mock-users"),
+        ("POST", "/api/auth/mock-login"),
+        ("GET", "/api/workbench/access"),
+    }
+    if (request.method, path) in public_routes or _labor_service_route(path, request.method):
+        return None
+    if (request.method, path) == ("GET", "/api/social-insurance/cron/refresh"):
+        # The dedicated Cron endpoint checks CRON_SECRET, never a browser session.
+        return None
+    if getattr(request.state, "labor_service_authenticated", False):
+        return None
+    if path.startswith("/api/labor/") or path.startswith("/api/overseas-payroll/") or path == "/api/tools" or path.startswith("/api/tool/"):
+        return None  # Covered by the browser module gate below, including unknown paths.
+    module = "employee" if path.startswith("/api/china-employee-payroll/") else "recruitment" if (
+        path in {"/api/calculate", "/api/finalize", "/api/template", "/api/runs"}
+        or path.startswith(("/api/runs/", "/api/download/"))
+    ) else ""
+    current = _labor_current_user_from_request(request)
+    if current is None:
+        return JSONResponse({"detail": "未登录或登录已失效。"}, status_code=401)
+    if module and not user_can_enter_module(current, module):
+        return JSONResponse({"detail": "当前用户没有该薪酬模块权限。"}, status_code=403)
+    return None
 
 
 def _workbench_home_auth_response(request: Request) -> Response | None:
-    if not labor_auth_required() or request.url.path not in {"/", "/index.html"}:
+    if not _browser_security_required() or request.url.path not in {"/", "/index.html"}:
         return None
     current = current_user_from_request(request)
     if current is not None:
@@ -2536,7 +2625,9 @@ def _workbench_home_auth_response(request: Request) -> Response | None:
 
 
 def _labor_auth_access_response(request: Request) -> Response | None:
-    if not labor_auth_required() or not _labor_browser_auth_path(request.url.path):
+    if not _browser_security_required() or not _labor_browser_auth_path(request.url.path, request.method):
+        return None
+    if getattr(request.state, "labor_service_authenticated", False):
         return None
     is_overseas_payroll = request.url.path.rstrip("/") == "/overseas-payroll.html" or (
         request.url.path.startswith("/api/overseas-payroll/")
@@ -2580,13 +2671,15 @@ def _labor_auth_access_response(request: Request) -> Response | None:
             status_code=403,
         )
     request.state.labor_current_user = current
+    if (request.method, request.url.path) in _LABOR_ADMIN_ROUTES and not user_is_system_admin(current):
+        return JSONResponse({"detail": "仅系统管理员可以访问此运维功能。"}, status_code=403)
     return None
 
 
 def _labor_request_actor(request: Request) -> tuple[str, bool]:
     current = getattr(request.state, "labor_current_user", None)
     if not isinstance(current, dict):
-        current = _labor_current_user_from_request(request) if labor_auth_required() else None
+        current = _labor_current_user_from_request(request) if _browser_security_required() else None
     if not isinstance(current, dict):
         return "local-default", False
     user = current.get("user") if isinstance(current.get("user"), dict) else {}
@@ -2597,7 +2690,7 @@ def _labor_request_actor(request: Request) -> tuple[str, bool]:
 
 
 def _labor_action_actor(request: Request | None, payload: dict, *legacy_fields: str) -> str:
-    if labor_auth_required() and request is not None:
+    if _browser_security_required() and request is not None:
         actor_user_id, _ = _labor_request_actor(request)
         return actor_user_id
     for field in legacy_fields:
@@ -2608,7 +2701,7 @@ def _labor_action_actor(request: Request | None, payload: dict, *legacy_fields: 
 
 
 def _labor_run_owner_access_response(request: Request) -> Response | None:
-    if not labor_auth_required():
+    if not _browser_security_required():
         return None
     match = re.match(r"^/api/labor/runs/([0-9A-Za-z_-]+)(?:/|$)", request.url.path)
     if not match:
@@ -2660,6 +2753,16 @@ def _labor_assert_runtime_current() -> dict:
 @app.middleware("http")
 async def overseas_labor_access_gate(request: Request, call_next):
     path = request.url.path
+    if production_runtime() and path.rstrip("/") in {"/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"}:
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    service_response = _labor_service_auth_response(request)
+    if service_response is not None:
+        return service_response
+    business_response = _payroll_business_api_auth_response(request)
+    if business_response is not None:
+        return business_response
     protected_page_response = _protected_static_page_access_response(request)
     if protected_page_response is not None:
         return protected_page_response
@@ -2879,8 +2982,7 @@ async def add_fbu_request_timing(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> dict:
-    ensure_data_files()
-    return {"status": "ok", "rule_workbook": str(DEFAULT_RULE_WORKBOOK)}
+    return {"status": "ok"}
 
 
 @app.get("/api/auth/mock-users")
@@ -2912,7 +3014,7 @@ def api_auth_mock_login(response: Response, payload: dict = Body(...)) -> dict:
         token,
         httponly=True,
         samesite="lax",
-        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        secure=session_cookie_secure(),
         max_age=7 * 24 * 60 * 60,
         path="/",
     )
@@ -2933,7 +3035,7 @@ def api_auth_logout_redirect(next: str = "login.html?next=%2F", sigma_session: O
     if sigma_session:
         delete_session(sigma_session)
         _clear_current_user_cache()
-    redirect_target = next if next.startswith("/") or next.startswith("login.html") else "login.html?next=%2F"
+    redirect_target = _safe_next_url(next, "/login.html?next=%2F")
     response = RedirectResponse(redirect_target, status_code=302)
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return response
@@ -2965,7 +3067,7 @@ def api_auth_feishu_login() -> RedirectResponse:
         state,
         httponly=True,
         samesite="lax",
-        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        secure=session_cookie_secure(),
         max_age=10 * 60,
         path="/",
     )
@@ -3023,7 +3125,7 @@ def api_auth_feishu_callback(
         session_token,
         httponly=True,
         samesite="lax",
-        secure=bool(AUTH_CONFIG["session_cookie_secure"]),
+        secure=session_cookie_secure(),
         max_age=7 * 24 * 60 * 60,
         path="/",
     )
@@ -3443,8 +3545,8 @@ def labor_worker_health(probe: bool = False) -> dict:
 
 
 @app.get("/api/labor/storage-info")
-def get_labor_storage_info() -> dict:
-    return labor_storage_info(
+def get_labor_storage_info(request: Request) -> dict:
+    result = labor_storage_info(
         _labor_hardening_policy(),
         run_dir=LABOR_RUNS_DIR,
         cache_dir=labor_ocr_cache_dir(),
@@ -3453,13 +3555,18 @@ def get_labor_storage_info() -> dict:
         storage_environment=labor_persistent_environment(),
         persistent_enabled=labor_persistent_storage_enabled(),
     )
+    if _browser_security_required():
+        _, is_admin = _labor_request_actor(request)
+        if not is_admin:
+            return {key: result[key] for key in ("storageBackend", "storageEnvironment", "persistentStorageEnabled", "retention", "limits") if key in result}
+    return result
 
 
 @app.get("/api/labor/audit")
 def get_labor_audit_events(request: Request, run_id: str = "", limit: int = 50) -> dict:
     safe_limit = min(max(int(limit), 1), 200)
     owner_filter = ""
-    if labor_auth_required():
+    if _browser_security_required():
         actor_user_id, is_admin = _labor_request_actor(request)
         if not is_admin:
             owner_filter = actor_user_id
@@ -3469,7 +3576,13 @@ def get_labor_audit_events(request: Request, run_id: str = "", limit: int = 50) 
         owner_user_id=owner_filter,
         run_id=run_id.strip(),
     )
-    return {"events": list(reversed(events[-safe_limit:])), "limit": safe_limit}
+    visible_events = list(reversed(events[-safe_limit:]))
+    if _browser_security_required():
+        _, is_admin = _labor_request_actor(request)
+        if not is_admin:
+            fields = {"id", "timestamp", "runId", "action", "outcome", "reasonCode"}
+            visible_events = [{key: event[key] for key in fields if key in event} for event in visible_events]
+    return {"events": visible_events, "limit": safe_limit}
 
 
 def _labor_upload_limit_http_error(exc: LaborResourceLimitError) -> HTTPException:
@@ -3646,7 +3759,7 @@ def get_run_table_data(run_id: str) -> dict:
 @app.get("/api/labor/runs")
 def list_labor_runs(request: Request, limit: int = 50) -> dict:
     bounded_limit = max(1, min(int(limit or 50), 200))
-    if labor_auth_required():
+    if _browser_security_required():
         actor_user_id, is_admin = _labor_request_actor(request)
         rows = list_labor_metadata(
             limit=bounded_limit,
@@ -3754,7 +3867,7 @@ def list_labor_suppliers(request: Request) -> dict:
                 record["aliases"].append(alias_value)
 
     history_owner = ""
-    if labor_auth_required():
+    if _browser_security_required():
         actor_user_id, is_admin = _labor_request_actor(request)
         history_owner = "" if is_admin else actor_user_id
     history_runs = list_labor_metadata(owner_user_id=history_owner)
@@ -4395,7 +4508,7 @@ def _labor_public_worker_release(platform: str = "macos-arm64") -> dict:
 @app.get("/api/labor/worker/release")
 def get_personal_labor_worker_release(request: Request, platform: str = "macos-arm64") -> dict:
     is_admin = False
-    if labor_auth_required():
+    if _browser_security_required():
         _, is_admin = _labor_request_actor(request)
     platform = _labor_worker_release_platform(platform)
     release = _labor_public_worker_release(platform)
@@ -4431,7 +4544,7 @@ def get_personal_labor_worker_release(request: Request, platform: str = "macos-a
 
 @app.get("/api/labor/worker/release/download")
 def download_personal_labor_worker_release(request: Request, platform: str = "macos-arm64") -> Response:
-    if labor_auth_required():
+    if _browser_security_required():
         _labor_request_actor(request)
     platform = _labor_worker_release_platform(platform)
     manifest = _labor_worker_release_config(platform)
@@ -5866,39 +5979,75 @@ def fail_personal_labor_worker_job(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _approved_labor_material_root(client_root: str = "") -> Path:
+    configured = os.environ.get("LABOR_REFERENCE_MATERIALS_DIR", "").strip()
+    if not configured:
+        raise HTTPException(409, "参考材料目录尚未配置，请联系管理员。")
+    try:
+        root = Path(configured).expanduser().resolve(strict=True)
+        if not root.is_dir():
+            raise ValueError("not a directory")
+    except (OSError, ValueError, RuntimeError):
+        raise HTTPException(409, "参考材料目录暂不可用，请联系管理员。") from None
+    # Legacy clients may echo the approved root, but cannot choose a directory.
+    if client_root:
+        try:
+            requested = Path(client_root).expanduser()
+            allowed = requested.is_absolute() and requested.resolve() == root
+        except (OSError, ValueError, RuntimeError):
+            allowed = False
+        if not allowed:
+            raise HTTPException(400, "参考材料目录参数无效。")
+    return root
+
+
+def _public_labor_material_payload(payload: object, root: Path, *, field: str = "") -> object:
+    """Keep absolute paths internal to parsing/copying, never in browser payloads."""
+    if isinstance(payload, dict):
+        return {key: _public_labor_material_payload(value, root, field=key) for key, value in payload.items()}
+    if isinstance(payload, list):
+        return [_public_labor_material_payload(value, root, field=field) for value in payload]
+    if isinstance(payload, str):
+        value = payload.replace(str(root) + os.sep, "").replace(str(root), ".")
+        if field.lower().endswith("path") and Path(value).is_absolute():
+            return Path(value).name
+        return value
+    return payload
+
+
 @app.get("/api/labor/material-index")
 def labor_material_index(root: str = "") -> dict:
     _assert_local_labor_material_tool_available()
-    material_root = root or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具"
+    material_root = _approved_labor_material_root(root)
     try:
-        return build_material_index(material_root)
+        return _public_labor_material_payload(build_material_index(material_root), material_root)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="参考材料不存在。") from exc
     except NotADirectoryError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="参考材料目录无效。") from exc
 
 
 @app.get("/api/labor/material-replay-plan")
 def labor_material_replay_plan(root: str = "", batchKey: str = "") -> dict:
     _assert_local_labor_material_tool_available()
-    material_root = root or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具"
+    material_root = _approved_labor_material_root(root)
     try:
-        return build_material_replay_plan(material_root, batch_key=batchKey)
+        return _public_labor_material_payload(build_material_replay_plan(material_root, batch_key=batchKey), material_root)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="参考材料不存在。") from exc
     except NotADirectoryError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="参考材料目录无效。") from exc
 
 
 @app.post("/api/labor/material-dry-run")
 def labor_material_dry_run(payload: dict = Body(...)) -> dict:
     _assert_local_labor_material_tool_available()
-    material_root = str(payload.get("root") or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具")
+    material_root = _approved_labor_material_root(str(payload.get("root") or ""))
     batch_key = str(payload.get("batchKey") or payload.get("batch_key") or "").strip()
     if not batch_key:
         raise HTTPException(status_code=400, detail="请提供 batchKey。")
     try:
-        return build_material_dry_run(
+        result = build_material_dry_run(
             material_root,
             batch_key,
             amount_tolerance=float(payload.get("amountTolerance") or payload.get("amount_tolerance") or AI_CONFIG["amount_tolerance"]),
@@ -5906,32 +6055,33 @@ def labor_material_dry_run(payload: dict = Body(...)) -> dict:
             confidence_threshold=float(payload.get("confidenceThreshold") or payload.get("confidence_threshold") or AI_CONFIG["confidence_threshold"]),
             currency=str(payload.get("currency") or "USD"),
         )
+        return _public_labor_material_payload(result, material_root)
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="参考材料无法验证，请检查所选批次。") from exc
     except NotADirectoryError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="参考材料目录无效。") from exc
 
 
 @app.post("/api/labor/material-runs")
 def create_labor_run_from_material(request: Request, payload: dict = Body(...)) -> dict:
     _assert_local_labor_material_tool_available()
-    material_root = str(payload.get("root") or os.environ.get("LABOR_REFERENCE_MATERIALS_DIR") or "/Users/zt27532/Documents/报账核对工具")
+    material_root = _approved_labor_material_root(str(payload.get("root") or ""))
     batch_key = str(payload.get("batchKey") or payload.get("batch_key") or "").strip()
     if not batch_key:
         raise HTTPException(status_code=400, detail="请提供 batchKey。")
     try:
         plan_payload = build_material_replay_plan(material_root, batch_key=batch_key)
     except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="参考材料无法用于创建批次，请检查所选批次。") from exc
     plans = plan_payload.get("plans") or []
     if not plans:
-        raise HTTPException(status_code=400, detail=f"未找到可创建批次的材料批次: {batch_key}")
+        raise HTTPException(status_code=400, detail="未找到可创建批次的参考材料。")
     plan = plans[0]
     root_path = Path(plan_payload["root"]).resolve()
     supplier = str(payload.get("supplierName") or payload.get("supplier_name") or plan.get("supplier") or "").strip()
     if not supplier or supplier == "unknown":
         supplier = str(plan.get("directory") or plan.get("batchKey") or "unknown").strip()
-    if labor_auth_required():
+    if _browser_security_required():
         owner_user_id, _ = _labor_request_actor(request)
     else:
         owner_user_id = str(payload.get("ownerUserId") or payload.get("owner_user_id") or "local-default")
@@ -5958,7 +6108,7 @@ def create_labor_run_from_material(request: Request, payload: dict = Body(...)) 
     try:
         files, copied_sources = _copy_material_plan_files(run["id"], run_dir, root_path, plan)
     except (FileNotFoundError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="参考材料无法复制，请检查所选批次。") from exc
 
     mapping_candidate = next(
         (
@@ -6017,7 +6167,7 @@ def create_labor_run_from_material(request: Request, payload: dict = Body(...)) 
     if mapping_candidate:
         updates["workbookSheet"] = mapping_candidate["sheetName"]
         updates["excelMapping"] = mapping_candidate["suggestedMapping"]
-    return update_labor_metadata(run["id"], updates)
+    return _public_labor_material_payload(update_labor_metadata(run["id"], updates), material_root)
 
 
 @app.post("/api/labor/runs")
@@ -6029,7 +6179,7 @@ def create_labor_run_endpoint(request: Request, payload: dict = Body(...)) -> di
         raise HTTPException(status_code=400, detail="请填写供应商名称。")
     if not period_start or not period_end:
         raise HTTPException(status_code=400, detail="请填写账期开始和结束日期。")
-    if labor_auth_required():
+    if _browser_security_required():
         owner_user_id, _ = _labor_request_actor(request)
     else:
         owner_user_id = str(payload.get("ownerUserId") or payload.get("owner_user_id") or "local-default")
@@ -6074,9 +6224,13 @@ def get_labor_run(run_id: str) -> dict:
         metadata = load_labor_metadata(get_labor_run_dir(run_id))
     except FileNotFoundError as exc:
         _raise_labor_run_missing(exc)
-    return _with_labor_readiness(
+    result = _with_labor_readiness(
         _with_personal_worker_status(_check_stale_extracting(_normalize_labor_total_decision(metadata)))
     )
+    source = metadata.get("materialReplaySource")
+    if isinstance(source, dict) and source.get("root"):
+        return _public_labor_material_payload(result, Path(str(source["root"])))
+    return result
 
 
 @app.post("/api/labor/runs/{run_id}/business-review")
@@ -7281,7 +7435,7 @@ async def extract_and_compare_labor_run(run_id: str, request: Request = None) ->
     owner_user_id = str(metadata.get("ownerUserId") or "local-default")
     actor_user_id = (
         _labor_request_actor(request)[0]
-        if request is not None and labor_auth_required()
+        if request is not None and _browser_security_required()
         else owner_user_id
     )
     reservation_token = ""
@@ -13563,10 +13717,15 @@ def download_labor_file(run_id: str, filename: str) -> Response:
 
 
 def _resolve_labor_download_path(run_dir: Path, filename: str) -> Path:
-    requested = Path(filename).name
+    run_root = run_dir.resolve()
+    requested = Path(filename.replace("\\", "/")).name
     direct = run_dir / requested
     if direct.exists():
-        return direct
+        try:
+            direct.resolve().relative_to(run_root)
+            return direct
+        except ValueError:
+            raise HTTPException(400, "报告文件路径无效。") from None
     try:
         metadata = load_labor_metadata(run_dir)
     except FileNotFoundError:
@@ -13574,9 +13733,16 @@ def _resolve_labor_download_path(run_dir: Path, filename: str) -> Path:
     for record in (metadata.get("files") or {}).values():
         if isinstance(record, dict):
             candidate_name = Path(str(record.get("filename") or "")).name
-            candidate_path = Path(str(record.get("path") or ""))
+            stored_path = str(record.get("path") or "")
+            if not stored_path:
+                continue
+            candidate_path = Path(stored_path)
             if candidate_name == requested and candidate_path.exists():
-                return candidate_path
+                try:
+                    candidate_path.resolve().relative_to(run_root)
+                    return candidate_path
+                except ValueError:
+                    raise HTTPException(400, "报告文件路径无效。") from None
     return direct
 
 
@@ -13860,10 +14026,18 @@ def _copy_material_ai_cache(source: Path, target: Path) -> None:
     cache_dir = source.parent / ".ai_extract_cache"
     if not cache_dir.exists() or not cache_dir.is_dir():
         return
+    try:
+        cache_dir.resolve().relative_to(source.parent.resolve())
+    except ValueError:
+        return
     target_cache_dir = target.parent / ".ai_extract_cache"
     copied = 0
     for cache_path in cache_dir.glob(f"{source.stem}_*.json"):
         if not cache_path.is_file():
+            continue
+        try:
+            cache_path.resolve().relative_to(source.parent.resolve())
+        except ValueError:
             continue
         target_name = f"{target.stem}{cache_path.name[len(source.stem):]}"
         target_cache_dir.mkdir(parents=True, exist_ok=True)

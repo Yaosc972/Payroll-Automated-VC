@@ -471,6 +471,7 @@ def test_admin_can_finalize_uploaded_worker_release_as_pending_manifest(monkeypa
 
 def test_admin_worker_release_waits_for_matching_platform_before_atomic_publish(monkeypatch, tmp_path):
     client = _configure(monkeypatch, tmp_path)
+    client.cookies.set(app_module.SESSION_COOKIE_NAME, "admin-session")
     monkeypatch.setattr(app_module, "labor_auth_required", lambda: True)
     monkeypatch.setattr(
         app_module,
