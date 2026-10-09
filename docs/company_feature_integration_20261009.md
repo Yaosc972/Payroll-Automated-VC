@@ -1,6 +1,6 @@
 # 公司功能集成交接 — 2026-10-09
 
-状态：六组功能已选择性集成并提交；本地验证完成。尚未执行公司环境迁移、绑定新增密钥、部署预览或生产发布。Vercel 正式工发布仍暂停。
+状态：六组功能已选择性集成并在本地提交；本地验证完成。远端推送因公司 DNS 不可用尚未完成。尚未执行公司环境迁移、绑定新增密钥、部署预览或生产发布。Vercel 正式工发布仍暂停。
 
 ## 代码来源与范围
 
@@ -88,3 +88,7 @@ API 与 Worker 的数据库、私有 OBS bucket 和 `SIGMA_LABOR_STORAGE_ENV` �
 4. 生产有权限账号复核后再正常合并公司 `master`；禁止强推。发生问题按保存的实际发布镜像回滚，新增表保留，不删除活动及文件。
 
 本次没有发布链接、线上业务验证或已核实的生产回滚版本。不存在 Vercel 部署或 main 同步动作。
+
+## 远端交付状态
+
+提交前远端 `master` 核实为 `0d1411ce`；最终 `git push gitlab HEAD:refs/heads/codex/company-feature-integration-20261009` 失败：`Could not resolve host: git.eminxing.com`。后续解析及只读查询复核确认 `git.eminxing.com` 与 `hras-aideploy.ztn.cn` 均返回 `gaierror`。没有切换目的仓库或修改系统 DNS；公司网络恢复后只推送候选分支，先核对远端 `master` 是否有新修复，不直接推生产分支。
