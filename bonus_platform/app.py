@@ -102,6 +102,8 @@ from .engine.company_run_storage import (
     restore_run_dir as restore_company_run_dir,
     upload_run_dir as upload_company_run_dir,
 )
+from .engine.china_employee_payroll.relocation_router import router as relocation_allowance_router
+from .engine.china_employee_payroll.activities import router as china_payroll_activities_router
 from .engine.calculator import calculate
 from .engine.compare import build_difference_report
 from .engine.labor.compare import amount_within_tolerance, compare_labor_items, compare_by_warehouse
@@ -932,6 +934,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
 app.include_router(social_insurance_router)
+app.include_router(relocation_allowance_router)
+app.include_router(china_payroll_activities_router)
 app.include_router(overseas_payroll_router)
 app.include_router(overseas_payroll_page_router)
 app.add_middleware(CORSMiddleware, **cors_settings())
@@ -14450,6 +14454,9 @@ def _resolve_china_employee_payroll_runs_dir() -> Path:
 CHINA_EMPLOYEE_PAYROLL_RUNS_DIR = _resolve_china_employee_payroll_runs_dir()
 CHINA_EMPLOYEE_PAYROLL_RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
+from .engine.china_employee_payroll import meal_runs as china_employee_meal_runs
+from .engine.china_employee_payroll.relocation import RelocationError as MealSourceError
+
 
 def _compact_china_employee_payroll_result(result: dict) -> list[dict]:
     return [
@@ -14462,6 +14469,7 @@ def _compact_china_employee_payroll_result(result: dict) -> list[dict]:
 async def calculate_china_employee_meal_allowance(
     attendance_files: list[UploadFile] = File(...),
     source_type: str = Form("hr"),
+    month: Optional[str] = Form(None),
 ) -> dict:
     source_type = (source_type or "hr").strip().lower()
     if source_type not in {"hr", "wx"}:
@@ -14472,9 +14480,14 @@ async def calculate_china_employee_meal_allowance(
         if not file.filename.lower().endswith((".xlsx", ".xlsm")):
             raise HTTPException(400, "请上传 Excel 文件（.xlsx / .xlsm）。")
 
-    run_id = f"china_employee_payroll_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    if month:
+        try:
+            month = china_employee_meal_runs.validate_month(month)
+        except MealSourceError as exc:
+            raise HTTPException(400, str(exc)) from None
+    run_id = china_employee_meal_runs.new_run_id()
     run_dir = CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / run_id
-    run_dir.mkdir(parents=True, exist_ok=False)
+    run_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
     paths = []
     for file in attendance_files:
         saved_name = safe_payroll_filename(file.filename)
@@ -14484,14 +14497,24 @@ async def calculate_china_employee_meal_allowance(
 
     try:
         parsed = parse_wx_attendance_workbooks(paths) if source_type == "wx" else parse_attendance_workbooks(paths)
+        attendance_month = china_employee_meal_runs.validate_attendance(parsed, month)
         result = calculate_meal_allowance(parsed)
+        china_employee_meal_runs.save_source(run_dir, parsed)
+    except MealSourceError as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(400, str(exc)) from None
     except Exception as exc:
         shutil.rmtree(run_dir, ignore_errors=True)
-        raise HTTPException(400, f"考勤记录解析或核算失败：{exc}") from exc
+        raise HTTPException(400, "考勤文件解析或核算失败，请检查文件格式、必需字段和考勤日期后重试。") from exc
 
     metadata = {
         "runId": run_id,
-        "createdAt": datetime.now().isoformat(timespec="seconds"),
+        "createdAt": china_employee_meal_runs.now(),
+        "calculatedAt": china_employee_meal_runs.now(),
+        "status": "completed",
+        "month": attendance_month,
+        "sourceOrigin": "upload",
+        "normalizedExport": bool(month),
         "sourceFiles": [path.name for path in paths],
         "sourceType": source_type,
         "sourceLabel": result["summary"].get("sourceLabel", ""),
@@ -14507,11 +14530,22 @@ async def calculate_china_employee_meal_allowance(
             raise HTTPException(503, "餐补批次保存到持久化存储失败，请联系管理员。") from exc
     return {
         "runId": run_id,
+        "status": "completed",
+        "month": attendance_month,
+        "sourceType": source_type,
+        "sourceLabel": metadata["sourceLabel"],
         "summary": result["summary"],
         "results": _compact_china_employee_payroll_result(result),
         "files": result["files"],
         "warnings": result["warnings"],
     }
+
+
+@app.post("/api/china-employee-payroll/meal-allowance/beisen/runs", status_code=202)
+def start_china_employee_meal_allowance_beisen_run(
+    background_tasks: BackgroundTasks, payload: dict = Body(...),
+) -> dict:
+    return china_employee_meal_runs.start_run(CHINA_EMPLOYEE_PAYROLL_RUNS_DIR, payload.get("month"), background_tasks)
 
 
 def _china_employee_payroll_month_label(summary: dict) -> str:
@@ -14530,10 +14564,14 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
 
     metadata_path = run_dir / "metadata.json"
     result_path = run_dir / "result.json"
-    if not metadata_path.exists() or not result_path.exists():
+    if not metadata_path.exists():
         raise HTTPException(status_code=404, detail="核算结果不存在，请重新上传并核算。")
 
-    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata = china_employee_meal_runs.read_metadata(run_dir)
+    if metadata["status"] != "completed":
+        raise HTTPException(409, "核算尚未完成，无法导出。")
+    if not result_path.exists():
+        raise HTTPException(status_code=404, detail="核算结果不存在，请重新核算。")
     result = json.loads(result_path.read_text(encoding="utf-8"))
     summary = result.get("summary", {})
     source_type = metadata.get("sourceType") or summary.get("sourceType") or "hr"
@@ -14543,15 +14581,21 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
     workbook = Workbook()
     result_sheet = workbook.active
     result_sheet.title = "餐补核算结果"
-    source_sheet_name = "WX技术部考勤源" if source_type == "wx" else "人事系统考勤源"
+    source_sheet_name = "WX技术部考勤源" if source_type == "wx" else ("北森考勤源数据" if metadata.get("sourceOrigin") == "beisen" else "人事系统考勤源")
     source_sheet = workbook.create_sheet(source_sheet_name)
 
-    green_fill = PatternFill("solid", fgColor="EAF8F0")
+    green_fill = PatternFill("solid", fgColor="F0F6FC")
     total_fill = PatternFill("solid", fgColor="FFF4D6")
-    header_fill = PatternFill("solid", fgColor="D8E8FF")
+    header_fill = PatternFill("solid", fgColor="173E80")
     border = Border(bottom=Side(style="thin", color="D7E3F4"))
-    header_font = Font(color="17324D", bold=True)
-    body_font = Font(color="24364B")
+    header_font = Font(name="微软雅黑", color="FFFFFF", bold=True)
+    body_font = Font(name="微软雅黑", color="24364B")
+
+    def set_value(cell, value):
+        cell.value = value
+        # Names, notes and punches are data, including strings starting with '='.
+        if isinstance(value, str):
+            cell.data_type = "s"
 
     headers = ["核算月份", "工号", "姓名", "人员状态", "二级组织", "三级组织", "四级组织", "补贴天数", "餐补金额"]
     header_row = 1
@@ -14575,51 +14619,90 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
             row.get("amount", 0),
         ]
         for column, value in enumerate(values, start=1):
-            cell = result_sheet.cell(row_index, column, value)
+            cell = result_sheet.cell(row_index, column)
+            set_value(cell, value)
             cell.font = body_font
             cell.fill = green_fill if row_index % 2 else PatternFill("solid", fgColor="FFFFFF")
             cell.border = border
             if column in (8, 9):
                 cell.alignment = Alignment(horizontal="right")
+                cell.number_format = "0" if column == 8 else "#,##0.00"
+            if column == 9:
+                cell.fill = PatternFill("solid", fgColor="E3EEFF")
+                cell.font = Font(name="微软雅黑", color="173E80", bold=True)
 
     total_row = header_row + len(payable_rows) + 1
     total_values = ["合计", "", "", "", "", "", "", summary.get("payableDayCount", 0), summary.get("totalAmount", 0)]
     for column, value in enumerate(total_values, start=1):
         cell = result_sheet.cell(total_row, column, value)
         cell.fill = total_fill
-        cell.font = header_font
+        cell.font = Font(name="微软雅黑", color="17324D", bold=True)
         cell.border = border
         if column in (8, 9):
             cell.alignment = Alignment(horizontal="right")
+            cell.number_format = "0" if column == 8 else "#,##0.00"
 
     result_sheet.freeze_panes = "A2"
+    result_sheet.sheet_view.showGridLines = False
+    result_sheet.row_dimensions[1].height = 30
     result_sheet.auto_filter.ref = f"A1:I{max(header_row + len(payable_rows), header_row)}"
     widths = [14, 14, 14, 12, 22, 22, 22, 12, 12]
     for index, width in enumerate(widths, start=1):
         result_sheet.column_dimensions[get_column_letter(index)].width = width
 
-    next_source_row = 1
-    source_files = metadata.get("sourceFiles", [])
-    for file_index, filename in enumerate(source_files):
-        path = run_dir / Path(filename).name
-        if not path.exists():
-            continue
-        source_workbook = load_workbook(path, read_only=False, data_only=False)
-        try:
-            source_ws = source_workbook[source_workbook.sheetnames[0]]
-            start_row = 1 if file_index == 0 else 3
-            for row in source_ws.iter_rows(min_row=start_row, values_only=True):
-                for column, value in enumerate(row, start=1):
-                    source_sheet.cell(next_source_row, column, value)
-                next_source_row += 1
-        finally:
-            source_workbook.close()
+    if metadata.get("sourceOrigin") == "beisen" or metadata.get("normalizedExport"):
+        snapshot_path = run_dir / "data-source.json"
+        if not snapshot_path.is_file():
+            raise HTTPException(409, "该批次未保存考勤源数据，请重新核算后导出。")
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        if len(snapshot.get("rows", [])) != result.get("summary", {}).get("rowCount"):
+            raise HTTPException(409, "该批次考勤源数据不完整，请重新核算后导出。")
+        columns = snapshot["columns"]
+        source_sheet.append(columns)
+        for row_index, row in enumerate(snapshot["rows"], start=2):
+            for column, name in enumerate(columns, start=1):
+                cell = source_sheet.cell(row_index, column)
+                set_value(cell, row.get(name, ""))
+                cell.font = body_font
+                cell.fill = green_fill if row_index % 2 else PatternFill("solid", fgColor="FFFFFF")
+                cell.border = border
+                cell.alignment = Alignment(vertical="center")
+                if isinstance(cell.value, (int, float)):
+                    cell.number_format = "0" if float(cell.value).is_integer() else "0.########"
+        for cell in source_sheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        source_sheet.row_dimensions[1].height = 30
+        source_sheet.sheet_view.showGridLines = False
+        source_sheet.freeze_panes = "C2"
+        source_sheet.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{max(1, source_sheet.max_row)}"
+        for index, name in enumerate(columns, start=1):
+            source_sheet.column_dimensions[get_column_letter(index)].width = 42 if name in {"备注", "当前班次"} else 24 if "组织" in name or "打卡" in name else 16
+    else:
+        # Existing upload batches retain their original source sheet layout.
+        next_source_row = 1
+        source_files = metadata.get("sourceFiles", [])
+        for file_index, filename in enumerate(source_files):
+            path = run_dir / Path(filename).name
+            if not path.exists():
+                raise HTTPException(409, "该批次原始考勤文件缺失，请重新核算后导出。")
+            source_workbook = load_workbook(path, read_only=False, data_only=False)
+            try:
+                source_ws = source_workbook[source_workbook.sheetnames[0]]
+                start_row = 1 if file_index == 0 else 3
+                for row in source_ws.iter_rows(min_row=start_row, values_only=True):
+                    for column, value in enumerate(row, start=1):
+                        set_value(source_sheet.cell(next_source_row, column), value)
+                    next_source_row += 1
+            finally:
+                source_workbook.close()
 
-    source_sheet.freeze_panes = "A3"
-    if source_sheet.max_row >= 2 and source_sheet.max_column >= 1:
-        source_sheet.auto_filter.ref = f"A2:{get_column_letter(source_sheet.max_column)}{source_sheet.max_row}"
-    for column in range(1, min(source_sheet.max_column, 24) + 1):
-        source_sheet.column_dimensions[get_column_letter(column)].width = 16
+        source_sheet.freeze_panes = "A3"
+        if source_sheet.max_row >= 2 and source_sheet.max_column >= 1:
+            source_sheet.auto_filter.ref = f"A2:{get_column_letter(source_sheet.max_column)}{source_sheet.max_row}"
+        for column in range(1, min(source_sheet.max_column, 24) + 1):
+            source_sheet.column_dimensions[get_column_letter(column)].width = 16
 
     punch_datetime_headers = {
         "首打卡(含补签)",
@@ -14642,9 +14725,16 @@ def _build_china_employee_meal_allowance_export(run_dir: Path, run_id: str) -> P
                 cell.number_format = "yyyy/m/d h:mm:ss"
 
     filename_month = month_label or datetime.now().strftime("%Y%m")
-    export_prefix = "WX技术部餐补核算结果" if source_type == "wx" else "技术部餐补核算结果"
-    output_path = run_dir / f"{export_prefix}_{filename_month}_{run_id}.xlsx"
-    workbook.save(output_path)
+    export_prefix = "WX技术部餐补" if source_type == "wx" else "集团技术部餐补"
+    calculation_time = metadata.get("calculatedAt") or metadata.get("createdAt") or china_employee_meal_runs.now()
+    timestamp = datetime.fromisoformat(calculation_time).strftime("%Y%m%d%H%M")
+    output_path = run_dir / f"{filename_month} {export_prefix}{timestamp}.xlsx"
+    temporary_path = run_dir / f".export-{uuid4().hex}.xlsx"
+    try:
+        workbook.save(temporary_path)
+        temporary_path.replace(output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
     return output_path
 
 
@@ -14672,11 +14762,16 @@ def list_china_employee_meal_allowance_runs() -> dict:
             {
                 "runId": metadata.get("runId") or run_id,
                 "createdAt": metadata.get("createdAt", ""),
+                "status": metadata["status"],
+                "month": metadata["month"],
+                "progress": metadata.get("progress", ""),
+                "progressDetail": metadata.get("progressDetail"),
+                "sourceOrigin": metadata.get("sourceOrigin", "upload"),
                 "sourceFiles": metadata.get("sourceFiles", []),
                 "sourceType": metadata.get("sourceType", summary.get("sourceType", "hr")),
                 "sourceLabel": metadata.get("sourceLabel", summary.get("sourceLabel", "")),
                 "period": f"{summary.get('dateStart', '')} 至 {summary.get('dateEnd', '')}",
-                "monthLabel": _china_employee_payroll_month_label(summary),
+                "monthLabel": _china_employee_payroll_month_label({"dateStart": metadata["month"] + "-01"}) if metadata["month"] else _china_employee_payroll_month_label(summary),
                 "rowCount": summary.get("rowCount", 0),
                 "payableEmployeeCount": summary.get("payableEmployeeCount", 0),
                 "payableDayCount": summary.get("payableDayCount", 0),

@@ -1,4 +1,5 @@
 from io import BytesIO
+import pytest
 from datetime import datetime
 from openpyxl import Workbook, load_workbook
 from fastapi.testclient import TestClient
@@ -11,6 +12,13 @@ from bonus_platform.engine.china_employee_payroll import (
     parse_attendance_workbooks,
     parse_wx_attendance_workbooks,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_meal_runs(tmp_path, monkeypatch):
+    folder = tmp_path / "meal-runs"
+    folder.mkdir()
+    monkeypatch.setattr(app_module, "CHINA_EMPLOYEE_PAYROLL_RUNS_DIR", folder)
 
 
 HEADERS = [

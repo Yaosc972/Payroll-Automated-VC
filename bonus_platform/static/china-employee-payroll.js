@@ -1,1083 +1,295 @@
-let latestResult = null;
-let restoredEmployeeRunId = '';
-let currentPage = 1;
-let filteredRows = [];
-let activeSourceType = "";
-const API_ORIGIN = window.location.protocol === "file:" ? "http://127.0.0.1:8006" : "";
-const VERCEL_DIRECT_UPLOAD_WARNING_BYTES = 4 * 1024 * 1024;
-const SOURCE_PUNCH_DATETIME_HEADERS = new Set([
-  "首打卡(含补签)",
-  "末打卡(含补签)",
-  "上班 1 打卡时间",
-  "下班 1 打卡时间",
-]);
-
-const elements = {
-  periodLabel: document.querySelector("#calcPeriodLabel"),
-  rows: document.querySelector("#resultRows"),
-  issues: document.querySelector("#issueList"),
-  status: document.querySelector("#resultStatus"),
-  employees: document.querySelector("#summaryEmployees"),
-  amount: document.querySelector("#summaryAmount"),
-  issueCount: document.querySelector("#summaryIssues"),
-  toast: document.querySelector("#payrollToast"),
-  run: document.querySelector("#btnRunCalc"),
-  resetSource: document.querySelector("#btnResetSource"),
-  export: document.querySelector("#btnExport"),
-  runHint: document.querySelector("#runHint"),
-  attendanceFiles: document.querySelector("#attendanceFiles"),
-  attendanceFileName: document.querySelector("#attendanceFileName"),
-  wxAttendanceFiles: document.querySelector("#wxAttendanceFiles"),
-  wxAttendanceFileName: document.querySelector("#wxAttendanceFileName"),
-  sourceCards: document.querySelectorAll("[data-source-card]"),
-  moduleHub: document.querySelector("#moduleHub"),
-  workbench: document.querySelector("#mealAllowanceWorkbench"),
-  openMealAllowance: document.querySelector("#openMealAllowance"),
-  dockCards: document.querySelectorAll("[data-dock-card]"),
-  backToModuleHub: document.querySelector("#backToModuleHub"),
-  workbenchActions: document.querySelectorAll(".workbench-action"),
-  toggleSubnav: document.querySelector("#toggleSubnav"),
-  refreshRuns: document.querySelector("#btnRefreshRuns"),
-  batchList: document.querySelector("#batchList"),
-  resultSearch: document.querySelector("#resultSearch"),
-  resultStatusFilter: document.querySelector("#resultStatusFilter"),
-  pageSize: document.querySelector("#pageSize"),
-  pageInfo: document.querySelector("#resultPageInfo"),
-  paginationList: document.querySelector("#paginationList"),
-  resultTotal: document.querySelector("#resultTotal"),
-  prevPage: document.querySelector("#prevPage"),
-  nextPage: document.querySelector("#nextPage"),
-};
-
-function money(value) {
-  return new Intl.NumberFormat("zh-CN", {
-    style: "currency",
-    currency: "CNY",
-    maximumFractionDigits: 0,
-  }).format(value || 0);
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function downloadBlob(filename, blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
-function apiUrl(path) {
-  return `${API_ORIGIN}${path}`;
-}
-
-function isProductionHost() {
-  return window.location.hostname.endsWith(".vercel.app");
-}
-
-function normalizeApiError(text, fallback) {
-  const raw = String(text || "").trim();
-  if (!raw) return fallback;
-  if (/Request Entity Too Large/i.test(raw)) {
-    return "上传文件过大，生产环境已被 Vercel 拦截。请减少文件体积或使用浏览器本地核算。";
+(() => {
+  "use strict";
+  const base = "/api/china-employee-payroll/meal-allowance", el = name => document.getElementById(`meal${name}`);
+  const titles = { hr: "集团技术部餐补", wx: "WX 技术部餐补" };
+  const current = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).format(new Date());
+  const previous = new Date(`${current}-01T00:00:00Z`); previous.setUTCMonth(previous.getUTCMonth() - 1);
+  const initialMonth = previous.toISOString().slice(0, 7);
+  const createState = source => ({ source, month: initialMonth, version: 0, busy: false, status: "idle", runId: "", result: null, files: [], runs: [], historyVersion: 0, page: 1, query: "", filter: "all", pageSize: 25, progress: "", detail: null, startedAt: 0, exporting: false, exportState: "idle", exportMessage: "", interrupted: false, uncertain: false });
+  const activityStates = new Map();
+  const states = { hr: createState("hr"), wx: createState("wx") };
+  let active = "hr", clock = null;
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const number = value => Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 3 });
+  const money = value => Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const monthLabel = value => /^\d{4}-\d{2}$/.test(value || "") ? `${value.slice(0, 4)}年${Number(value.slice(5))}月` : value || "历史批次";
+  const isMealView = () => ["#meal-allowance", "#wx-meal-allowance"].includes(location.hash);
+  function isCurrent(s, version) { return s.version === version; }
+  async function request(path, options = {}, timeout = 30000) {
+    const response = await fetch(path, { ...options, signal: AbortSignal.timeout(timeout) });
+    const data = await response.json().catch(() => { throw new Error("核算服务返回异常，请稍后重试。"); });
+    if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "核算请求失败，请重试。");
+    return data;
   }
-  if (/FUNCTION_INVOCATION_TIMEOUT|timed out|timeout/i.test(raw)) {
-    return "生产环境核算超时。请减少单次上传数据量后重试，或使用浏览器本地核算。";
+  function validateSource(data, s) {
+    const source = data.sourceType || data.summary?.sourceType;
+    if (source && source !== s.source) throw new Error("返回批次的考勤来源不匹配，请刷新历史批次重试。");
   }
-  if (/Request En/i.test(raw)) {
-    return "生产环境拒绝了本次上传请求，通常是文件过大。请使用浏览器本地核算或拆分文件后再试。";
+  function tick() {
+    const s = states[active], seconds = s.startedAt ? Math.max(0, Math.floor(((s.finishedAt || Date.now()) - s.startedAt) / 1000)) : 0;
+    el("Elapsed").textContent = `已用时 ${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   }
-  return raw.length > 180 ? `${raw.slice(0, 180)}...` : raw;
-}
-
-async function readJsonResponse(response, fallback) {
-  const text = await response.text();
-  let data = {};
-  if (text) {
+  function syncClock() {
+    clearInterval(clock); clock = null; tick();
+    if (isMealView() && states[active].busy) clock = setInterval(tick, 1000);
+  }
+  function renderProgress(s) {
+    const running = s.busy, stage = Math.max(0, Math.min(2, Number(s.detail?.stage) || 0));
+    const uploaded = s.source === "wx", final = stage === 2 || uploaded;
+    const completed = s.detail?.completed, total = s.detail?.total;
+    const known = running && !final && Number.isFinite(completed) && Number.isFinite(total) && total > 0;
+    const fraction = known ? Math.max(0, Math.min(1, completed / total)) : null;
+    const percentage = known ? `${(fraction * 100).toFixed(1).replace(/\.0$/, "")}%` : "";
+    el("Processing").dataset.state = s.status;
+    el("Processing").dataset.finishing = String(final);
+    el("ProcessingKicker").textContent = running ? "正在核算" : s.status === "error" ? "核算未完成" : "准备就绪";
+    el("StageIndex").textContent = uploaded ? "WX 考勤 · 文件核算" : running ? `步骤 0${stage + 1} / 03` : "北森考勤 · 自动核算";
+    el("ProcessingTitle").textContent = s.status === "error" ? (s.interrupted ? "进度连接已中断" : "本次核算未完成") : running ? uploaded ? "正在读取考勤并核算" : ["正在匹配核算人员", "正在读取日考勤", "正在核对并生成结果"][stage] : "选择月份后开始核算";
+    el("Progress").textContent = s.progress || "自动读取日考勤，按集团技术部餐补规则生成明细。";
+    el("NumericProgress").hidden = !known;
+    el("Percent").textContent = percentage;
+    el("Count").textContent = known ? `已处理 ${number(completed)} / ${number(total)} ${s.detail.unit || "条"}` : "";
+    if (known) el("Meter").setAttribute("aria-valuenow", String(fraction * 100)); else el("Meter").removeAttribute("aria-valuenow");
+    el("TransitionStatus").hidden = !running || known;
+    el("TransitionLabel").textContent = uploaded ? "正在读取文件、校验并计算餐补" : final ? "正在校验考勤与补贴明细" : stage === 1 ? "等待北森返回考勤数据" : "正在核对当月组织与核算人员";
+    el("ChooseMonth").hidden = s.status !== "idle" || !!s.activityId;
+    el("ActivityStart").hidden = s.status !== "idle" || !s.activityId || s.source !== "hr";
+    el("Retry").hidden = s.status !== "error" || s.interrupted || s.uncertain;
+    el("Reconnect").hidden = !s.interrupted || !s.runId;
+    el("Processing").querySelector(".meal-steps").hidden = uploaded || s.status === "idle";
+    el("Processing").querySelectorAll("[data-meal-step]").forEach((step, index) => {
+      step.dataset.state = index < stage ? "done" : index === stage ? "active" : "pending";
+      step.querySelector("b").textContent = index < stage ? "✓" : `0${index + 1}`;
+      step.querySelector("small").textContent = index < stage ? "已完成" : index === stage ? s.status === "error" ? "已中断" : known ? percentage : "处理中" : "待开始";
+      if (index === stage) step.setAttribute("aria-current", "step"); else step.removeAttribute("aria-current");
+    });
+    window.MealAllowanceMotion?.update(uploaded ? 2 : stage, fraction, running);
+  }
+  function warningMessages(data) {
+    const warnings = data.warnings || {}, messages = Array.isArray(warnings) ? [...warnings] : [];
+    if (warnings.missingColumns?.length) messages.push(`缺少必要字段：${warnings.missingColumns.join("、")}`);
+    if (warnings.duplicateKeys?.length) messages.push(`发现 ${number(data.summary?.duplicateCount || warnings.duplicateKeys.length)} 条重复考勤记录，请核对源数据。`);
+    if (Array.isArray(warnings.messages)) messages.push(...warnings.messages);
+    return messages;
+  }
+  function renderRows(s) {
+    const query = s.query.toLowerCase();
+    const rows = (s.result?.results || []).filter(row => (s.filter === "all" || (s.filter === "payable" ? row.amount > 0 : !(row.amount > 0))) && (!query || [row.employeeId, row.employeeName, row.secondOrg, row.thirdOrg, row.fourthOrg].some(value => String(value ?? "").toLowerCase().includes(query))));
+    const pages = Math.max(1, Math.ceil(rows.length / s.pageSize)); s.page = Math.max(1, Math.min(s.page, pages));
+    el("Rows").innerHTML = rows.slice((s.page - 1) * s.pageSize, s.page * s.pageSize).map(row => `<tr><td>${esc(row.employeeId)}</td><td>${esc(row.employeeName)}</td><td>${esc(row.thirdOrg || row.secondOrg)}${row.fourthOrg ? `<small>${esc(row.fourthOrg)}</small>` : ""}</td><td>${number(row.payableDays)}</td><td class="meal-amount">${money(row.amount)}</td><td>${row.amount > 0 ? "已核算" : "无餐补"}${row.warnings?.length ? `<small>${esc(row.warnings.join("；"))}</small>` : ""}</td></tr>`).join("") || '<tr><td colspan="6">没有符合筛选条件的记录。</td></tr>';
+    el("PageInfo").textContent = `共 ${rows.length} 人 · 第 ${s.page} / ${pages} 页`;
+    el("Prev").disabled = s.page <= 1; el("Next").disabled = s.page >= pages;
+  }
+  function renderResult(s) {
+    const summary = s.result.summary || {}, warnings = warningMessages(s.result);
+    el("Summary").innerHTML = [["应发餐补", `¥ ${money(summary.totalAmount)}`], ["核算员工", `${number(summary.employeeCount)} 人`], ["有餐补员工", `${number(summary.payableEmployeeCount)} 人`], ["补贴天数", `${number(summary.payableDayCount)} 天`]].map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+    el("Warnings").hidden = !warnings.length; el("Warnings").open = !!warnings.length;
+    el("WarningCount").textContent = warnings.length ? `${warnings.length} 项` : "";
+    el("WarningList").innerHTML = warnings.map(message => `<li>${esc(message)}</li>`).join("");
+    el("ResultMeta").textContent = `${monthLabel(s.month)} · ${number(summary.rowCount)} 条考勤`;
+    el("Search").value = s.query; el("Status").value = s.filter; el("PageSize").value = String(s.pageSize); renderRows(s);
+  }
+  function renderExport(s) {
+    el("Export").hidden = !s.result; el("Export").disabled = s.busy || s.exporting;
+    el("Export").dataset.state = s.exportState;
+    el("Export").textContent = ({ idle: "导出明细", loading: "正在生成 Excel…", success: "已开始下载", error: "重试导出" })[s.exportState];
+    el("Export").setAttribute("aria-busy", String(s.exporting)); el("ExportStatus").textContent = s.exportMessage;
+  }
+  function render(s) {
+    if (states[active] !== s) return;
+    el("Title").textContent = titles[s.source]; el("NavTitle").textContent = titles[s.source];
+    document.getElementById("mealActivityName").textContent = s.activityName || "月度餐补核算";
+    el("NavSource").textContent = s.source === "hr" ? "北森考勤 · 自动读取" : "WX 考勤 · Excel 导入";
+    el("MonthLabel").textContent = monthLabel(s.month);
+    el("Upload").hidden = s.source !== "wx" || s.busy || !!s.result;
+    el("Processing").hidden = !!s.result || (s.source === "wx" && s.status === "idle");
+    el("Result").hidden = !s.result; el("Result").setAttribute("aria-busy", String(s.busy));
+    el("Files").disabled = s.busy; el("UploadStart").disabled = s.busy || !s.files.length;
+    el("FileLabel").textContent = s.files.length ? s.files.length === 1 ? s.files[0].name : `已选择 ${s.files.length} 个文件` : "选择考勤文件";
+    el("UploadHint").textContent = s.files.length ? `为 ${monthLabel(s.month)} 核算 ${s.files.length} 个考勤文件。` : "仅核算 WX 技术部，与集团技术部分开保存。";
+    renderExport(s); syncClock();
+    if (s.result) { renderResult(s); window.MealAllowanceMotion?.stop(); }
+    else renderProgress(s);
+  }
+  function renderHistory(s) {
+    if (states[active] !== s) return;
+    el("Runs").innerHTML = s.historyError ? `<p>${esc(s.historyError)}</p>` : s.runs.length ? s.runs.slice(0, 20).map(run => `<button type="button" class="meal-run" data-run-id="${esc(run.runId)}" ${s.busy ? "disabled" : ""} aria-current="${run.runId === s.runId}"><strong>${esc(monthLabel(run.month || run.monthLabel))}</strong><span>${({ running: "核算中", completed: "已核算", failed: "核算失败" })[run.status] || "已核算"}</span><small>${esc((run.createdAt || "").slice(0, 16).replace("T", " "))}</small></button>`).join("") : "<p>暂无核算批次。</p>";
+  }
+  async function loadRuns(s = states[active]) {
+    if (s.activityId) { window.dispatchEvent(new Event("payroll-activities-updated")); return; }
+    const version = ++s.historyVersion;
     try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(normalizeApiError(text, fallback));
+      const data = await request(`${base}/runs`);
+      if (version !== s.historyVersion) return;
+      s.runs = (data.runs || []).filter(run => run.sourceType === s.source); s.historyError = "";
+    } catch { if (version !== s.historyVersion) return; s.historyError = "历史批次读取失败，可点击刷新重试。"; }
+    renderHistory(s);
+  }
+  function begin(s, message) {
+    s.busy = true; s.status = "running"; s.result = null; s.progress = message; s.detail = { stage: 0, completed: 0, total: null };
+    s.startedAt = Date.now(); s.finishedAt = 0; s.interrupted = false; s.uncertain = false; s.page = 1; s.query = ""; s.filter = "all";
+    s.exportState = "idle"; s.exportMessage = ""; render(s);
+  }
+  function complete(s, data) {
+    validateSource(data, s);
+    s.busy = false; s.status = "completed"; s.result = data; s.runId = data.runId || s.runId; s.month = data.month || data.summary?.dateStart?.slice(0, 7) || s.month;
+    s.finishedAt = Date.now(); render(s);
+    if (states[active] === s && isMealView()) window.MealAllowanceMotion?.reveal();
+  }
+  function fail(s, error) {
+    s.busy = false; s.status = "error"; s.finishedAt = Date.now();
+    s.progress = error.name === "TimeoutError" ? "请求超时，请重试。" : error.message || "核算未完成，请重试。";
+    render(s);
+  }
+  async function follow(s, id, version) {
+    let failures = 0;
+    while (isCurrent(s, version)) {
+      let data;
+      try { data = await request(`${base}/runs/${encodeURIComponent(id)}`); failures = 0; }
+      catch (error) {
+        if (!isCurrent(s, version)) return;
+        if (++failures >= 3) { s.interrupted = true; throw new Error("后台可能仍在核算，可重新连接进度或刷新历史批次查看结果。"); }
+        s.progress = "进度连接暂时中断，正在重试…"; render(s);
+        await new Promise(resolve => setTimeout(resolve, 1800)); continue;
+      }
+      if (!isCurrent(s, version)) return;
+      validateSource(data, s);
+      if (data.month && data.month !== s.month) throw new Error("返回批次的核算月份不匹配，请刷新历史批次重试。");
+      if (data.createdAt && Number.isFinite(Date.parse(data.createdAt))) s.startedAt = Date.parse(data.createdAt);
+      s.progress = data.progress || "正在读取核算批次…"; if (data.progressDetail) s.detail = data.progressDetail;
+      if (data.status === "failed") throw new Error(data.progress || "本次核算失败，请重试。");
+      if (data.status === "completed" || (!data.status && data.summary)) { complete(s, data); return; }
+      render(s); await new Promise(resolve => setTimeout(resolve, 1500));
     }
   }
-  if (!response.ok) {
-    const detail = typeof data.detail === "string" ? data.detail : data.detail?.message;
-    throw new Error(detail || normalizeApiError(text, fallback));
+  async function followActivity(s, version) {
+    while (isCurrent(s, version)) {
+      const activity = await request(`/api/china-employee-payroll/activities/${s.activityId}`);
+      if (!isCurrent(s, version)) return;
+      if (activity.runId) { s.runId = activity.runId; await follow(s, s.runId, version); return; }
+      if (activity.status === "failed") throw new Error(activity.progress || "本次核算未完成，请重试。");
+      s.progress = activity.progress || "正在读取上传的考勤文件…"; render(s);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
   }
-  return data;
-}
-
-function friendlyFetchError(error, fallback) {
-  if (error instanceof TypeError && /fetch/i.test(error.message || "")) {
-    return "无法连接核算服务，请通过 http://127.0.0.1:8006/china-employee-payroll.html 打开页面，并确认 8006 服务已启动。";
-  }
-  return error.message || fallback;
-}
-
-const HR_REQUIRED_COLUMNS = [
-  "员工",
-  "工号",
-  "人员状态",
-  "二级组织",
-  "三级组织",
-  "四级组织",
-  "五级组织",
-  "考勤日期",
-  "首打卡(含补签)",
-  "末打卡(含补签)",
-  "当前班次",
-  "日期类型",
-  "备注",
-];
-
-const WX_REQUIRED_COLUMNS = [
-  "姓名",
-  "工号",
-  "部门",
-  "组织架构",
-  "人员类型",
-  "员工状态",
-  "日期",
-  "班次",
-  "上班 1 打卡时间",
-  "下班 1 打卡时间",
-];
-
-const MEAL_RULE = {
-  eligibleSecondOrgs: new Set(["ABU航空事业部", "FBU仓储事业部", "FES财经条线", "HRAS人力综合条线", "LBU速运事业部", "PBU口岸事业部"]),
-  eligibleWholeSecondOrgs: new Set(["HQU技术部"]),
-  eligibleThirdOrgs: new Set(["ABU技术部", "FBU技术部", "FES技术部", "技术部", "B技术部", "PBU技术部"]),
-  specialThirdOrgs: new Set(["HSSC人力共享中心", "战略运营部"]),
-  specialFourthOrgs: new Set(["HRAS技术组", "BI组"]),
-  additionalOrgPaths: new Set(["LBU速运事业部|战略运营部|BI组"]),
-  eligibleShifts: ["9:30-18:30", "集团深圳10:00-19:00", "深圳正常班", "深圳灵活打卡8:30-9:10", "深圳南山灵活打卡8:30-9:30"],
-  excludedEmployeeNames: new Set(["潘江浩", "李显荣"]),
-  dailyAmount: 20,
-};
-
-function cleanCell(value) {
-  return String(value ?? "").trim();
-}
-
-function excelDateFromSerial(serial) {
-  if (!window.XLSX?.SSF?.parse_date_code) return null;
-  const parsed = window.XLSX.SSF.parse_date_code(serial);
-  if (!parsed) return null;
-  return new Date(parsed.y, parsed.m - 1, parsed.d, parsed.H || 0, parsed.M || 0, Math.floor(parsed.S || 0));
-}
-
-function parseLocalDate(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-  if (typeof value === "number") return excelDateFromSerial(value);
-  const text = cleanCell(value);
-  if (!text || text === "-") return null;
-  const normalized = text.replace(/\//g, "-");
-  const match = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
-  if (match) {
-    return new Date(
-      Number(match[1]),
-      Number(match[2]) - 1,
-      Number(match[3]),
-      Number(match[4] || 0),
-      Number(match[5] || 0),
-      Number(match[6] || 0),
-    );
-  }
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function parseLocalTime(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return roundedTime(value);
-  }
-  if (typeof value === "number") {
-    const parsed = excelDateFromSerial(value);
-    if (parsed) return roundedTime(parsed);
-  }
-  const text = cleanCell(value);
-  if (!text || text === "-") return null;
-  const dateValue = parseLocalDate(text);
-  if (dateValue) return roundedTime(dateValue);
-  const match = text.match(/(\d{1,2}):(\d{2})/);
-  return match ? { hour: Number(match[1]), minute: Number(match[2]) } : null;
-}
-
-function roundedTime(date) {
-  const roundedMinutes = date.getHours() * 60 + date.getMinutes() + (date.getSeconds() > 0 ? 1 : 0);
-  const normalized = roundedMinutes % (24 * 60);
-  return {
-    hour: Math.floor(normalized / 60),
-    minute: normalized % 60,
-  };
-}
-
-function toIsoDate(value) {
-  const date = parseLocalDate(value);
-  if (!date) return "";
-  if (date.getHours() >= 23 && date.getMinutes() >= 30) {
-    date.setDate(date.getDate() + 1);
-  }
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function monthLabelFromIso(isoDate) {
-  if (!isoDate) return "";
-  const [year, month] = isoDate.split("-");
-  return year && month ? `${year}年${Number(month)}月` : "";
-}
-
-function readWorkbook(file) {
-  return file.arrayBuffer().then((buffer) => window.XLSX.read(buffer, { type: "array", cellDates: true, raw: true }));
-}
-
-function sheetRows(workbook) {
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return window.XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" });
-}
-
-async function parseLocalHrWorkbooks(files) {
-  const allRows = [];
-  const fileInfos = [];
-  const missingColumns = new Set();
-  const duplicateKeys = [];
-  const seen = new Map();
-  let headers = [];
-  const sourceAoA = [];
-
-  for (const [fileIndex, file] of files.entries()) {
-    const workbook = await readWorkbook(file);
-    const aoa = sheetRows(workbook);
-    if (fileIndex === 0) sourceAoA.push(...aoa);
-    else sourceAoA.push(...aoa.slice(2));
-    const fileHeaders = (aoa[1] || []).map(cleanCell);
-    if (!headers.length) headers = fileHeaders;
-    HR_REQUIRED_COLUMNS.forEach((column) => {
-      if (!fileHeaders.includes(column)) missingColumns.add(column);
-    });
-
-    let rowCount = 0;
-    aoa.slice(2).forEach((values, rowOffset) => {
-      if (!values.some((value) => cleanCell(value))) return;
-      const row = {};
-      fileHeaders.forEach((header, index) => {
-        if (header) row[header] = values[index] ?? "";
-      });
-      row._sourceFile = file.name;
-      row._sourceRow = rowOffset + 3;
-      row["考勤日期"] = toIsoDate(row["考勤日期"]);
-      rowCount += 1;
-      const key = `${cleanCell(row["工号"])}|${row["考勤日期"]}`;
-      if (cleanCell(row["工号"]) && row["考勤日期"]) {
-        if (seen.has(key)) {
-          duplicateKeys.push({
-            employeeId: cleanCell(row["工号"]),
-            attendanceDate: row["考勤日期"],
-            firstFile: seen.get(key)._sourceFile,
-            duplicateFile: file.name,
-          });
-        } else {
-          seen.set(key, row);
+  async function start(s) {
+    if (s.busy || !/^\d{4}-\d{2}$/.test(s.month)) return;
+    if (s.source === "wx" && !s.files.length) return;
+    const version = ++s.version, month = s.month; s.runId = "";
+    begin(s, s.source === "hr" ? "正在连接北森，读取所选月份的核算人员与日考勤。" : "正在上传 WX 考勤文件并按餐补规则核算。");
+    let creating = true;
+    try {
+      if (s.source === "hr") {
+        const data = s.activityId ? await request(`/api/china-employee-payroll/activities/${s.activityId}/start`, { method: "POST" }) : await request(`${base}/beisen/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ month }) });
+        if (!isCurrent(s, version)) return;
+        validateSource(data, s); s.runId = data.runId; creating = false; loadRuns(s);
+        if (s.runId) await follow(s, s.runId, version);
+        else await followActivity(s, version);
+      } else {
+        const form = new FormData(); s.files.forEach(file => form.append("attendance_files", file)); form.append("source_type", "wx"); form.append("month", month);
+        const data = await request(s.activityId ? `/api/china-employee-payroll/activities/${s.activityId}/start` : base, { method: "POST", body: form }, 180000);
+        if (isCurrent(s, version)) {
+          if (s.activityId) { creating = false; s.runId = data.runId; if (s.runId) await follow(s, s.runId, version); else await followActivity(s, version); }
+          else complete(s, data);
         }
       }
-      allRows.push(row);
-    });
-    fileInfos.push({ filename: file.name, rowCount, sheetName: workbook.SheetNames[0] });
+    } catch (error) {
+      if (!isCurrent(s, version)) return;
+      if (creating && ["TypeError", "TimeoutError"].includes(error.name)) { s.uncertain = true; error = new Error("开始请求尚未确认，后台可能已开始核算。请从活动列表重新打开此活动查看状态。"); }
+      fail(s, error);
+    } finally { if (isCurrent(s, version)) loadRuns(s); }
   }
-
-  return {
-    rows: allRows,
-    files: fileInfos,
-    headers,
-    missingColumns: [...missingColumns].sort(),
-    duplicateKeys,
-    sourceType: "hr",
-    sourceLabel: "人事系统考勤",
-    sourceAoA,
-  };
-}
-
-async function parseLocalWxWorkbooks(files) {
-  const allRows = [];
-  const fileInfos = [];
-  const missingColumns = new Set();
-  const duplicateKeys = [];
-  const seen = new Map();
-  let headers = [];
-  const sourceAoA = [];
-
-  for (const [fileIndex, file] of files.entries()) {
-    const workbook = await readWorkbook(file);
-    const aoa = sheetRows(workbook);
-    if (fileIndex === 0) sourceAoA.push(...aoa);
-    else sourceAoA.push(...aoa.slice(2));
-    const maxColumn = Math.max(aoa[0]?.length || 0, aoa[1]?.length || 0);
-    const firstHeader = Array.from({ length: maxColumn }, (_, index) => cleanCell(aoa[0]?.[index]));
-    const secondHeader = Array.from({ length: maxColumn }, (_, index) => cleanCell(aoa[1]?.[index]));
-    const fileHeaders = Array.from({ length: maxColumn }, (_, index) => secondHeader[index] || firstHeader[index] || `列${index + 1}`);
-    if (!headers.length) headers = fileHeaders;
-    WX_REQUIRED_COLUMNS.forEach((column) => {
-      if (!fileHeaders.includes(column)) missingColumns.add(column);
-    });
-
-    let rowCount = 0;
-    aoa.slice(2).forEach((values, rowOffset) => {
-      if (!values.some((value) => cleanCell(value))) return;
-      const raw = {};
-      fileHeaders.forEach((header, index) => {
-        if (header) raw[header] = values[index] ?? "";
-      });
-      const orgPath = cleanCell(raw["组织架构"]);
-      const department = cleanCell(raw["部门"]);
-      const shift = cleanCell(raw["班次"]);
-      const row = {
-        ...raw,
-        "员工": cleanCell(raw["姓名"]),
-        "人员状态": cleanCell(raw["员工状态"]),
-        "二级组织": "WX技术部",
-        "三级组织": "WX-PBU技术部",
-        "四级组织": orgPath === "WX-PBU技术部" ? department : orgPath.replace("WX-PBU技术部-", ""),
-        "五级组织": "",
-        "考勤日期": toIsoDate(raw["日期"]),
-        "首打卡(含补签)": raw["上班 1 打卡时间"],
-        "末打卡(含补签)": raw["下班 1 打卡时间"],
-        "当前班次": raw["班次"],
-        "日期类型": shift && !shift.includes("休息") ? "工作日" : "休息",
-        "备注": "",
-        "_sourceFile": file.name,
-        "_sourceRow": rowOffset + 3,
-        "_sourceOrgPath": orgPath,
-      };
-      rowCount += 1;
-      const key = `${cleanCell(row["工号"])}|${row["考勤日期"]}`;
-      if (cleanCell(row["工号"]) && row["考勤日期"]) {
-        if (seen.has(key)) {
-          duplicateKeys.push({
-            employeeId: cleanCell(row["工号"]),
-            attendanceDate: row["考勤日期"],
-            firstFile: seen.get(key)._sourceFile,
-            duplicateFile: file.name,
-          });
-        } else {
-          seen.set(key, row);
-        }
+  async function loadRun(id, reconnect = false) {
+    const s = states[active]; if (s.busy) return;
+    const run = s.runs.find(item => item.runId === id);
+    if (run?.month) s.month = run.month;
+    const version = ++s.version; s.runId = id;
+    begin(s, reconnect ? "正在重新连接核算进度…" : "正在读取历史核算结果…");
+    try {
+      if (!run?.month && !reconnect) {
+        const data = await request(`${base}/runs/${encodeURIComponent(id)}`); if (!isCurrent(s, version)) return;
+        validateSource(data, s); s.month = data.month || data.summary?.dateStart?.slice(0, 7) || s.month;
+        if (data.summary && data.status !== "running" && data.status !== "failed") { complete(s, data); return; }
       }
-      allRows.push(row);
-    });
-    fileInfos.push({ filename: file.name, rowCount, sheetName: workbook.SheetNames[0] });
+      await follow(s, id, version);
+    } catch (error) { if (isCurrent(s, version)) fail(s, error); }
+    finally { if (isCurrent(s, version)) loadRuns(s); }
   }
-
-  return {
-    rows: allRows,
-    files: fileInfos,
-    headers,
-    missingColumns: [...missingColumns].sort(),
-    duplicateKeys,
-    sourceType: "wx",
-    sourceLabel: "WX技术部考勤",
-    sourceAoA,
+  async function exportResult() {
+    const s = states[active]; if (!s.result || s.busy || s.exporting) return;
+    const version = s.version, id = s.runId;
+    s.exporting = true; s.exportState = "loading"; s.exportMessage = ""; renderExport(s);
+    try {
+      const response = await fetch(`${base}/${encodeURIComponent(id)}/export`, { signal: AbortSignal.timeout(120000) });
+      if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(typeof data.detail === "string" ? data.detail : "导出失败，请重试。"); }
+      const blob = await response.blob();
+      if (!isCurrent(s, version) || s.runId !== id) return;
+      const header = response.headers.get("content-disposition") || "", match = header.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      let filename = `${monthLabel(s.month)}${titles[s.source]}.xlsx`; if (match) { try { filename = decodeURIComponent(match[1] || match[2]); } catch { /* Keep the source-specific fallback. */ } }
+      const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+      s.exportState = "success"; s.exportMessage = "Excel 已生成，已开始下载。";
+      setTimeout(() => { if (isCurrent(s, version) && s.runId === id && s.exportState === "success") { s.exportState = "idle"; s.exportMessage = ""; if (states[active] === s) renderExport(s); } }, 2400);
+    } catch (error) {
+      if (isCurrent(s, version)) { s.exportState = "error"; s.exportMessage = error.name === "TimeoutError" ? "导出超时，请重试。" : error.message || "导出失败，请重试。"; }
+    } finally { s.exporting = false; if (states[active] === s) renderExport(s); }
+  }
+  function selectSource(source, month) {
+    const s = states[source]; active = source;
+    if (!s.busy) {
+      ++s.version; Object.assign(s, { month, status: "idle", result: null, runId: "", progress: "", detail: null, files: [], startedAt: 0, finishedAt: 0, exportState: "idle", exportMessage: "" });
+      el("Files").value = "";
+    }
+    render(s); loadRuns(s); return s;
+  }
+  function syncView() {
+    const view = location.hash.slice(1), meal = ["meal-allowance", "wx-meal-allowance"].includes(view), relocation = view === "relocation-allowance";
+    const activities = view === "activities";
+    document.getElementById("moduleHub").hidden = meal || relocation || activities;
+    document.getElementById("payrollActivitiesView").hidden = !activities;
+    document.getElementById("mealAllowanceWorkbench").hidden = !meal;
+    document.getElementById("relocationWorkbench").hidden = !relocation;
+    document.body.dataset.view = meal || relocation ? "workbench" : "hub";
+    if (meal) { active = view === "wx-meal-allowance" ? "wx" : "hr"; render(states[active]); }
+    else { clearInterval(clock); clock = null; window.MealAllowanceMotion?.stop(); }
+  }
+  window.MealAllowance = {
+    canStart: () => true,
+    openActivity(activity, autoStart = false) {
+      const source = activity.subject === "wx-meal-allowance" ? "wx" : "hr";
+      active = source;
+      let s = activityStates.get(activity.activityId);
+      if (!s) { s = createState(source); s.activityId = activity.activityId; activityStates.set(activity.activityId, s); }
+      states[source] = s; s.activityName = activity.name; s.month = activity.month; el("Files").value = "";
+      render(s);
+      if (s.busy) return;
+      if (activity.runId) loadRun(activity.runId);
+      else if (activity.status === "running") {
+        const version = ++s.version; begin(s, "正在重新连接活动进度…");
+        followActivity(s, version).catch(error => { if (isCurrent(s, version)) fail(s, error); });
+      }
+      else if (autoStart && source === "hr") start(s);
+      else { s.status = activity.status === "failed" ? "error" : "idle"; s.progress = activity.progress; render(s); }
+    }
   };
-}
-
-function localSummary(parsed) {
-  const employees = new Set(parsed.rows.map((row) => cleanCell(row["工号"])).filter(Boolean));
-  const dates = parsed.rows.map((row) => row["考勤日期"]).filter(Boolean).sort();
-  return {
-    fileCount: parsed.files.length,
-    rowCount: parsed.rows.length,
-    employeeCount: employees.size,
-    dateStart: dates[0] || "",
-    dateEnd: dates[dates.length - 1] || "",
-    distinctDateCount: new Set(dates).size,
-    missingColumns: parsed.missingColumns,
-    duplicateCount: parsed.duplicateKeys.length,
-    sourceType: parsed.sourceType,
-    sourceLabel: parsed.sourceLabel,
-  };
-}
-
-function localIsEligibleOrg(row) {
-  if (cleanCell(row._sourceType) === "wx") {
-    const orgPath = cleanCell(row._sourceOrgPath) || cleanCell(row["组织架构"]);
-    return orgPath === "WX-PBU技术部" || orgPath.startsWith("WX-PBU技术部-");
-  }
-  const second = cleanCell(row["二级组织"]);
-  const third = cleanCell(row["三级组织"]);
-  const fourth = cleanCell(row["四级组织"]);
-  if (MEAL_RULE.eligibleWholeSecondOrgs.has(second)) return true;
-  if (MEAL_RULE.additionalOrgPaths.has(`${second}|${third}|${fourth}`)) return true;
-  return (
-    MEAL_RULE.eligibleSecondOrgs.has(second) && MEAL_RULE.eligibleThirdOrgs.has(third)
-  ) || (
-    second === "HRAS人力综合条线" && MEAL_RULE.specialThirdOrgs.has(third) && MEAL_RULE.specialFourthOrgs.has(fourth)
-  );
-}
-
-function localIsWorkday(row) {
-  if (cleanCell(row._sourceType) === "wx") {
-    const shift = cleanCell(row["当前班次"]);
-    return Boolean(shift) && !shift.includes("休息");
-  }
-  return cleanCell(row["日期类型"]) === "工作日";
-}
-
-function localIsEligibleShift(row) {
-  const shift = cleanCell(row["当前班次"]);
-  return MEAL_RULE.eligibleShifts.some((allowed) => shift.includes(allowed));
-}
-
-function localLastPunchQualifies(row) {
-  const punchTime = parseLocalTime(row["末打卡(含补签)"]);
-  if (!punchTime) return false;
-  return punchTime.hour >= 21 || punchTime.hour < 8 || (punchTime.hour === 8 && punchTime.minute === 0);
-}
-
-function localRemarkHasApprovedTrip(row) {
-  const remark = cleanCell(row["备注"]);
-  if (!remark.includes("公出") && !remark.includes("出差")) return false;
-  const matches = [...remark.matchAll(/(\d{1,2}):(\d{2})/g)];
-  return matches.some((match) => Number(match[1]) >= 21);
-}
-
-function localIneligibleReason(row) {
-  if (cleanCell(row._sourceType) !== "wx" && !cleanCell(row["工号"]).toLowerCase().startsWith("zt")) return "工号不是zt开头";
-  if (MEAL_RULE.excludedEmployeeNames.has(cleanCell(row["员工"]))) return "员工在不计算补贴名单";
-  if (!localIsEligibleOrg(row)) return "组织不在核算对象范围";
-  return "";
-}
-
-function localNonPayableReason(row) {
-  if (!localIsWorkday(row)) return cleanCell(row._sourceType) === "wx" ? "班次为休息或非工作日" : "日期类型不是工作日";
-  if (cleanCell(row._sourceType) !== "wx" && !localIsEligibleShift(row)) return "当前班次不在餐补班次范围";
-  if (localLastPunchQualifies(row)) {
-    if (!parseLocalTime(row["首打卡(含补签)"])) return "首打卡(含补签)缺失，属于考勤异常";
-    return "";
-  }
-  if (localRemarkHasApprovedTrip(row)) return "";
-  return "末打卡(含补签)不在21:00-次日08:00范围";
-}
-
-function calculateLocalMealAllowance(parsed) {
-  const employeeResults = new Map();
-  const dailyRows = [];
-  parsed.rows.forEach((row) => {
-    row._sourceType = parsed.sourceType;
-    const empId = cleanCell(row["工号"]);
-    if (!empId) return;
-    if (!employeeResults.has(empId)) {
-      employeeResults.set(empId, {
-        employeeId: empId,
-        employeeName: cleanCell(row["员工"]),
-        status: cleanCell(row["人员状态"]),
-        secondOrg: cleanCell(row["二级组织"]),
-        thirdOrg: cleanCell(row["三级组织"]),
-        fourthOrg: cleanCell(row["四级组织"]),
-        fifthOrg: cleanCell(row["五级组织"]),
-        payableDays: 0,
-        amount: 0,
-        daily: [],
-        warnings: new Set(),
-        sourceType: parsed.sourceType,
-        sourceLabel: parsed.sourceLabel,
-      });
-    }
-    const result = employeeResults.get(empId);
-    const ineligible = localIneligibleReason(row);
-    const nonPayable = ineligible ? "" : localNonPayableReason(row);
-    const payable = !ineligible && !nonPayable;
-    const amount = payable ? MEAL_RULE.dailyAmount : 0;
-    if (payable) {
-      result.payableDays += 1;
-      result.amount += amount;
-    } else {
-      result.warnings.add(ineligible || nonPayable);
-    }
-    const daily = {
-      employeeId: empId,
-      employeeName: cleanCell(row["员工"]),
-      attendanceDate: row["考勤日期"] || "",
-      dateType: cleanCell(row["日期类型"]),
-      shift: cleanCell(row["当前班次"]),
-      firstPunch: cleanCell(row["首打卡(含补签)"]),
-      lastPunch: cleanCell(row["末打卡(含补签)"]),
-      remark: cleanCell(row["备注"]),
-      payable,
-      amount,
-      reason: payable ? "符合餐补规则" : (ineligible || nonPayable),
-      sourceType: parsed.sourceType,
-      sourceLabel: parsed.sourceLabel,
-    };
-    result.daily.push(daily);
-    dailyRows.push(daily);
+  window.addEventListener("payroll-month-selected", event => {
+    const { subject, month, autoStart } = event.detail;
+    if (!["meal-allowance", "wx-meal-allowance"].includes(subject)) return;
+    const source = subject === "wx-meal-allowance" ? "wx" : "hr";
+    if (states[source].busy) return;
+    const s = selectSource(source, month); if (autoStart && source === "hr") start(s);
   });
-
-  const results = [...employeeResults.values()].map((row) => ({
-    ...row,
-    warnings: [...row.warnings].sort(),
-  })).sort((a, b) => b.amount - a.amount || a.employeeId.localeCompare(b.employeeId));
-  const payableResults = results.filter((row) => row.amount > 0);
-  const summary = {
-    ...localSummary(parsed),
-    eligibleEmployeeCount: results.filter((row) => row.payableDays || !row.warnings.includes("组织不在核算对象范围")).length,
-    payableEmployeeCount: payableResults.length,
-    payableDayCount: results.reduce((sum, row) => sum + row.payableDays, 0),
-    totalAmount: results.reduce((sum, row) => sum + row.amount, 0),
-    dailyAmount: MEAL_RULE.dailyAmount,
-    sourceType: parsed.sourceType,
-    sourceLabel: parsed.sourceLabel,
-  };
-  return {
-    runId: `client_china_employee_payroll_${Date.now()}`,
-    clientGenerated: true,
-    summary,
-    results: results.map(({ daily, ...row }) => row),
-    dailyRows,
-    files: parsed.files,
-    warnings: {
-      missingColumns: parsed.missingColumns,
-      duplicateKeys: parsed.duplicateKeys.slice(0, 50),
-    },
-    sourceAoA: parsed.sourceAoA,
-  };
-}
-
-async function calculateClientSideMealAllowance(files, sourceType) {
-  if (!window.XLSX?.read) {
-    throw new Error("浏览器 Excel 解析组件未加载，请刷新页面后重试。");
-  }
-  const parsed = sourceType === "wx" ? await parseLocalWxWorkbooks(files) : await parseLocalHrWorkbooks(files);
-  return calculateLocalMealAllowance(parsed);
-}
-
-function exportClientSideResult(result) {
-  if (!window.XLSX?.utils) {
-    throw new Error("浏览器 Excel 导出组件未加载，请刷新页面后重试。");
-  }
-  const summary = result.summary || {};
-  const monthLabel = monthLabelFromIso(summary.dateStart) || "餐补核算";
-  const rows = (result.results || []).filter((row) => row.amount > 0);
-  const resultAoA = [
-    ["核算月份", "工号", "姓名", "人员状态", "二级组织", "三级组织", "四级组织", "补贴天数", "餐补金额"],
-    ...rows.map((row) => [
-      monthLabel,
-      row.employeeId,
-      row.employeeName,
-      row.status,
-      row.secondOrg,
-      row.thirdOrg,
-      row.fourthOrg,
-      row.payableDays,
-      row.amount,
-    ]),
-    ["合计", "", "", "", "", "", "", summary.payableDayCount || 0, summary.totalAmount || 0],
-  ];
-  const workbook = window.XLSX.utils.book_new();
-  const resultSheet = window.XLSX.utils.aoa_to_sheet(resultAoA);
-  resultSheet["!cols"] = [14, 14, 14, 12, 22, 22, 22, 12, 12].map((wch) => ({ wch }));
-  resultSheet["!autofilter"] = { ref: `A1:I${Math.max(1, resultAoA.length - 1)}` };
-  window.XLSX.utils.book_append_sheet(workbook, resultSheet, "餐补核算结果");
-
-  const sourceSheetName = summary.sourceType === "wx" ? "WX技术部考勤源" : "人事系统考勤源";
-  const sourceAoA = result.sourceAoA || [];
-  const sourceSheet = window.XLSX.utils.aoa_to_sheet(sourceAoA);
-  const sourceHeaders = sourceAoA[1] || [];
-  sourceHeaders.forEach((header, column) => {
-    if (!SOURCE_PUNCH_DATETIME_HEADERS.has(String(header || "").trim())) return;
-    for (let row = 2; row < sourceAoA.length; row += 1) {
-      const cell = sourceSheet[window.XLSX.utils.encode_cell({ r: row, c: column })];
-      if (cell && (cell.t === "d" || cell.t === "n")) cell.z = "yyyy/m/d h:mm:ss";
-    }
-  });
-  sourceSheet["!cols"] = Array.from({ length: Math.min((result.sourceAoA?.[0] || []).length || 16, 24) }, () => ({ wch: 16 }));
-  window.XLSX.utils.book_append_sheet(workbook, sourceSheet, sourceSheetName);
-
-  const prefix = summary.sourceType === "wx" ? "WX技术部餐补核算结果" : "技术部餐补核算结果";
-  window.XLSX.writeFile(workbook, `${prefix}_${monthLabel}_${result.runId}.xlsx`);
-}
-
-function formatDateTime(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function getVisibleRows() {
-  const rows = Array.isArray(latestResult?.results) ? latestResult.results : [];
-  const query = elements.resultSearch.value.trim().toLowerCase();
-  const status = elements.resultStatusFilter.value;
-  return rows.filter((row) => {
-    if (status === "payable" && !(row.amount > 0)) return false;
-    if (status === "unmatched" && row.amount > 0) return false;
-    if (!query) return true;
-    return [
-      row.employeeId,
-      row.employeeName,
-      row.status,
-      row.secondOrg,
-      row.thirdOrg,
-      row.fourthOrg,
-    ].some((value) => String(value ?? "").toLowerCase().includes(query));
-  });
-}
-
-function paginationRange(current, total) {
-  if (total <= 7) return Array.from({ length: total }, (_, index) => index + 1);
-  const pages = new Set([1, total, current, current - 1, current + 1]);
-  if (current <= 3) {
-    pages.add(2);
-    pages.add(3);
-    pages.add(4);
-  }
-  if (current >= total - 2) {
-    pages.add(total - 1);
-    pages.add(total - 2);
-    pages.add(total - 3);
-  }
-  const sorted = [...pages].filter((page) => page >= 1 && page <= total).sort((a, b) => a - b);
-  const range = [];
-  sorted.forEach((page, index) => {
-    if (index > 0 && page - sorted[index - 1] > 1) range.push("ellipsis");
-    range.push(page);
-  });
-  return range;
-}
-
-function renderPagination(totalPages) {
-  const items = paginationRange(currentPage, totalPages).map((page, index) => {
-    if (page === "ellipsis") {
-      return `
-        <li>
-          <span class="pagination-ellipsis" aria-hidden="true">
-            <svg viewBox="0 0 20 20"><circle cx="5" cy="10" r="1.5" /><circle cx="10" cy="10" r="1.5" /><circle cx="15" cy="10" r="1.5" /></svg>
-            <span class="sr-only">更多页码</span>
-          </span>
-        </li>
-      `;
-    }
-    const isActive = page === currentPage;
-    return `
-      <li>
-        <button class="pagination-link pagination-page${isActive ? " active-page" : ""}" type="button" data-page="${page}" ${isActive ? 'aria-current="page"' : ""}>
-          ${page}
-        </button>
-      </li>
-    `;
-  }).join("");
-
-  elements.paginationList.innerHTML = `
-    <li>
-      <button class="pagination-link pagination-prev" id="prevPage" type="button" aria-label="上一页" ${currentPage <= 1 ? "disabled" : ""}>
-        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 15 7.5 10l5-5" /></svg>
-        <span>Previous</span>
-      </button>
-    </li>
-    ${items}
-    <li>
-      <button class="pagination-link pagination-next" id="nextPage" type="button" aria-label="下一页" ${currentPage >= totalPages ? "disabled" : ""}>
-        <span>Next</span>
-        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7.5 5 5 5-5 5" /></svg>
-      </button>
-    </li>
-  `;
-  elements.prevPage = document.querySelector("#prevPage");
-  elements.nextPage = document.querySelector("#nextPage");
-  elements.pageInfo = elements.paginationList.querySelector(".active-page");
-}
-
-function renderTablePage() {
-  filteredRows = getVisibleRows();
-  const pageSize = Number(elements.pageSize.value || 50);
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
-  currentPage = Math.min(Math.max(currentPage, 1), totalPages);
-  const start = (currentPage - 1) * pageSize;
-  const pageRows = filteredRows.slice(start, start + pageSize);
-
-  elements.rows.innerHTML = pageRows.length ? pageRows.map((row) => `
-    <tr>
-      <td>${escapeHtml(row.employeeId)}</td>
-      <td>${escapeHtml(row.employeeName)}</td>
-      <td>${escapeHtml(row.secondOrg)}</td>
-      <td>${escapeHtml(row.thirdOrg)}</td>
-      <td>${escapeHtml(row.payableDays)}</td>
-      <td><strong>${money(row.amount)}</strong></td>
-      <td><span class="status-badge ${row.amount > 0 ? "success" : "muted"}">${row.amount > 0 ? "已计算" : "未命中"}</span></td>
-    </tr>
-  `).join("") : '<tr><td colspan="7" class="empty-table-cell">没有符合筛选条件的记录</td></tr>';
-
-  const rangeStart = filteredRows.length ? start + 1 : 0;
-  const rangeEnd = Math.min(start + pageSize, filteredRows.length);
-  elements.resultTotal.textContent = `共${filteredRows.length}条数据${filteredRows.length ? ` · ${rangeStart}-${rangeEnd}` : ""}`;
-  renderPagination(totalPages);
-}
-
-function resetTablePage() {
-  currentPage = 1;
-  renderTablePage();
-}
-
-function markActiveRun() {
-  elements.batchList.querySelectorAll("[data-run-id]").forEach((item) => {
-    item.classList.toggle("active", item.dataset.runId === latestResult?.runId);
-  });
-}
-
-function getSourceInput(sourceType) {
-  return sourceType === "wx" ? elements.wxAttendanceFiles : elements.attendanceFiles;
-}
-
-function getSelectedFiles() {
-  if (!activeSourceType) return [];
-  return Array.from(getSourceInput(activeSourceType)?.files || []);
-}
-
-function sourceLabel(sourceType) {
-  return sourceType === "wx" ? "WX技术部考勤" : "集团技术部考勤";
-}
-
-function updateSourceCards() {
-  elements.sourceCards.forEach((card) => {
-    const cardSource = card.dataset.sourceCard;
-    const locked = Boolean(activeSourceType && activeSourceType !== cardSource);
-    card.classList.toggle("active-source", activeSourceType === cardSource);
-    card.classList.toggle("locked-source", locked);
-    const input = card.querySelector("input");
-    if (input) input.disabled = locked;
-  });
-}
-
-function setRunAvailability() {
-  const files = getSelectedFiles();
-  const hasFiles = Boolean(files.length);
-  elements.run.disabled = !hasFiles;
-  elements.resetSource.disabled = !(activeSourceType || latestResult?.runId);
-  elements.runHint.textContent = hasFiles
-    ? `${sourceLabel(activeSourceType)}已就绪，可开始核算`
-    : "选择左侧来源后开始核算";
-  updateSourceCards();
-}
-
-function setButtonBusy(button, busyText) {
-  const previousHtml = button.innerHTML;
-  button.dataset.previousHtml = previousHtml;
-  button.disabled = true;
-  button.setAttribute("aria-busy", "true");
-  button.innerHTML = `<span class="button-spinner" aria-hidden="true"></span>${escapeHtml(busyText)}`;
-}
-
-function restoreButton(button, disabled = false) {
-  if (button.dataset.previousHtml) {
-    button.innerHTML = button.dataset.previousHtml;
-    delete button.dataset.previousHtml;
-  }
-  button.disabled = disabled;
-  button.removeAttribute("aria-busy");
-}
-
-async function exportCurrentResult() {
-  if (!latestResult?.runId) {
-    toast("请先完成餐补核算。");
-    return;
-  }
-
-  setButtonBusy(elements.export, "正在生成Excel...");
-  toast(latestResult.clientGenerated ? "正在本地生成导出文件。" : "正在生成导出文件，源数据较多时需要等待几十秒。");
-  const previousStatus = elements.status.textContent;
-  elements.status.textContent = "正在生成导出文件，请稍候...";
-  try {
-    if (latestResult.clientGenerated) {
-      exportClientSideResult(latestResult);
-      toast("导出结果已生成。");
-      return;
-    }
-    const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/${encodeURIComponent(latestResult.runId)}/export`));
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.detail || "导出结果失败");
-    }
-    const disposition = response.headers.get("content-disposition") || "";
-    const match = disposition.match(/filename\*=UTF-8''([^;]+)|filename=\"?([^\";]+)\"?/i);
-    const filename = match ? decodeURIComponent(match[1] || match[2]) : "技术部餐补核算结果.xlsx";
-    downloadBlob(filename, await response.blob());
-    toast("导出结果已生成。");
-  } catch (error) {
-    toast(friendlyFetchError(error, "导出结果失败。"));
-  } finally {
-    restoreButton(elements.export);
-    elements.status.textContent = previousStatus;
-  }
-}
-
-function renderResult(data) {
-  latestResult = data;
-  if (data?.runId) {
-    const url = new URL(location.href);
-    url.searchParams.set('run', data.runId);
-    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-    restoredEmployeeRunId = data.runId;
-  }
-  const summary = data?.summary || {};
-  const rows = Array.isArray(data?.results) ? data.results : [];
-  const missingColumnCount = data?.warnings?.missingColumns?.length || 0;
-  const duplicateCount = summary.duplicateCount || 0;
-  const dataIssueCount = missingColumnCount + duplicateCount;
-
-  elements.periodLabel.textContent = summary.dateStart && summary.dateEnd
-    ? `${summary.dateStart} 至 ${summary.dateEnd}${summary.sourceLabel ? ` · ${summary.sourceLabel}` : ""}`
-    : "待上传考勤记录";
-  elements.employees.textContent = summary.payableEmployeeCount ?? 0;
-  elements.amount.textContent = money(summary.totalAmount || 0);
-  elements.issueCount.textContent = dataIssueCount;
-  elements.export.disabled = !data?.runId;
-  elements.status.textContent = rows.length
-    ? `已核算 ${summary.rowCount || 0} 行考勤，${summary.payableDayCount || 0} 个补贴日`
-    : "等待上传并核算";
-
-  resetTablePage();
-
-  const warnings = [
-    ...(data?.warnings?.missingColumns?.length ? [`缺少必要字段：${data.warnings.missingColumns.join("、")}`] : []),
-    ...(data?.warnings?.duplicateKeys?.length ? [`发现 ${data.summary.duplicateCount} 条重复工号+考勤日期，请复核是否重复上传或系统导出重复`] : []),
-  ];
-  elements.issues.innerHTML = warnings.length
-    ? warnings.map((message) => `<article class="issue-item"><strong>待复核</strong><span>${escapeHtml(message)}</span></article>`).join("")
-    : '<article class="issue-item clear"><strong>暂无异常</strong><span>当前上传文件未发现缺必要字段或重复工号+考勤日期。</span></article>';
-}
-
-function renderEmpty() {
-  renderResult({ summary: {}, results: [], warnings: {} });
-}
-
-function toast(message) {
-  elements.toast.textContent = message;
-  elements.toast.classList.add("show");
-  window.setTimeout(() => elements.toast.classList.remove("show"), 2200);
-}
-
-async function loadRuns() {
-  elements.batchList.innerHTML = '<article class="batch-item muted">正在加载历史批次...</article>';
-  try {
-    const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance/runs"));
-    const data = await readJsonResponse(response, "批次加载失败");
-    const runs = Array.isArray(data.runs) ? data.runs : [];
-    elements.batchList.innerHTML = runs.length ? runs.slice(0, 8).map((run) => `
-      <button class="batch-item ${latestResult?.runId === run.runId ? "active" : ""}" data-run-id="${escapeHtml(run.runId)}" type="button">
-        <strong>${escapeHtml(run.monthLabel || "技术部餐补")}</strong>
-        <span>${escapeHtml(run.period || "待确认周期")} · ${escapeHtml(run.sourceLabel || sourceLabel(run.sourceType))}</span>
-        <small>${escapeHtml(formatDateTime(run.createdAt))} · ${escapeHtml(run.payableEmployeeCount)} 人 · ${escapeHtml(money(run.totalAmount))}</small>
-      </button>
-    `).join("") : '<article class="batch-item muted">暂无历史核算批次</article>';
-    markActiveRun();
-  } catch (error) {
-    elements.batchList.innerHTML = `<article class="batch-item muted">批次加载失败：${escapeHtml(friendlyFetchError(error, "未知错误"))}</article>`;
-  }
-}
-
-async function loadRun(runId) {
-  elements.status.textContent = "正在加载历史批次...";
-  try {
-    const response = await fetch(apiUrl(`/api/china-employee-payroll/meal-allowance/runs/${encodeURIComponent(runId)}`));
-    const data = await readJsonResponse(response, "批次加载失败");
-    renderResult(data);
-    markActiveRun();
-    await loadRuns();
-    toast("已加载历史核算批次。");
-  } catch (error) {
-    const message = friendlyFetchError(error, "批次加载失败。");
-    elements.status.textContent = message;
-    toast(message);
-  }
-}
-
-function clearSourceInput(sourceType) {
-  const input = getSourceInput(sourceType);
-  if (input) {
-    input.disabled = false;
-    input.value = "";
-  }
-  if (sourceType === "wx") {
-    elements.wxAttendanceFileName.textContent = "选择文件";
-  } else {
-    elements.attendanceFileName.textContent = "选择文件";
-  }
-}
-
-function resetCurrentSourceSelection() {
-  clearSourceInput("hr");
-  clearSourceInput("wx");
-  activeSourceType = "";
-  renderEmpty();
-  markActiveRun();
-  setRunAvailability();
-  toast("已清空当前来源，可选择集团技术部或 WX 技术部重新上传。");
-}
-
-function bindFileInput(input, label, sourceType) {
-  input.addEventListener("change", () => {
-    const files = Array.from(input.files || []);
-    if (files.length) {
-      activeSourceType = sourceType;
-      clearSourceInput(sourceType === "wx" ? "hr" : "wx");
-    } else if (activeSourceType === sourceType) {
-      activeSourceType = "";
-    }
-    label.textContent = files.length ? `${files.length} 个文件已选择` : "选择文件";
-    setRunAvailability();
-    toast(files.length ? `已选择${sourceLabel(sourceType)}，点击开始核算。` : "请选择考勤记录。");
-  });
-}
-
-function setView(view) {
-  const isWorkbench = view === "meal-allowance";
-  elements.moduleHub.hidden = isWorkbench;
-  elements.workbench.hidden = !isWorkbench;
-  elements.workbenchActions.forEach((node) => {
-    node.hidden = !isWorkbench;
-  });
-
-  if (isWorkbench) {
-    document.body.dataset.view = "workbench";
-    if (!latestResult) renderEmpty();
-    loadRuns();
-    const runId = new URLSearchParams(location.search).get('run');
-    if (runId && restoredEmployeeRunId !== runId) {
-      restoredEmployeeRunId = runId;
-      loadRun(runId);
-    }
-    return;
-  }
-
-  document.body.dataset.view = "hub";
-}
-
-function syncViewFromHash() {
-  setView(window.location.hash === "#meal-allowance" ? "meal-allowance" : "hub");
-}
-
-function bindDockCardMotion(card) {
-  card.addEventListener("pointermove", (event) => {
-    const rect = card.getBoundingClientRect();
-    const x = ((event.clientX - rect.left) / rect.width - 0.5).toFixed(3);
-    const y = ((event.clientY - rect.top) / rect.height - 0.5).toFixed(3);
-    card.style.setProperty("--dock-x", x);
-    card.style.setProperty("--dock-y", y);
-  });
-
-  card.addEventListener("pointerleave", () => {
-    card.style.setProperty("--dock-x", "0");
-    card.style.setProperty("--dock-y", "0");
-  });
-}
-
-elements.openMealAllowance.addEventListener("click", () => {
-  window.location.hash = "meal-allowance";
-  setView("meal-allowance");
-});
-
-elements.backToModuleHub.addEventListener("click", () => {
-  history.pushState("", document.title, window.location.pathname + window.location.search);
-  setView("hub");
-});
-
-elements.toggleSubnav.addEventListener("click", () => {
-  const collapsed = elements.workbench.classList.toggle("nav-collapsed");
-  elements.toggleSubnav.setAttribute("aria-expanded", String(!collapsed));
-  elements.toggleSubnav.setAttribute("aria-label", collapsed ? "展开子功能导航" : "收起子功能导航");
-});
-
-elements.refreshRuns.addEventListener("click", loadRuns);
-elements.batchList.addEventListener("click", (event) => {
-  const item = event.target.closest("[data-run-id]");
-  if (item) loadRun(item.dataset.runId);
-});
-
-elements.resultSearch.addEventListener("input", resetTablePage);
-elements.resultStatusFilter.addEventListener("change", resetTablePage);
-elements.pageSize.addEventListener("change", resetTablePage);
-elements.paginationList.addEventListener("click", (event) => {
-  const button = event.target.closest("button");
-  if (!button || button.disabled) return;
-  if (button.dataset.page) {
-    currentPage = Number(button.dataset.page);
-  } else if (button.id === "prevPage") {
-    currentPage -= 1;
-  } else if (button.id === "nextPage") {
-    currentPage += 1;
-  } else {
-    return;
-  }
-  renderTablePage();
-});
-
-elements.run.addEventListener("click", async () => {
-  const files = getSelectedFiles();
-  if (!files.length) {
-    toast("请先上传考勤记录 Excel。");
-    return;
-  }
-  const form = new FormData();
-  files.forEach((file) => form.append("attendance_files", file));
-  form.append("source_type", activeSourceType);
-  const totalUploadSize = files.reduce((sum, file) => sum + file.size, 0);
-  if (isProductionHost() && totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES) {
-    toast("生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。");
-  }
-  setButtonBusy(elements.run, "正在核算...");
-  elements.runHint.textContent = `正在解析${sourceLabel(activeSourceType)}并生成核算结果`;
-  elements.status.textContent = "正在解析考勤记录并核算...";
-  try {
-    if (isProductionHost() && totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES) {
-      const data = await calculateClientSideMealAllowance(files, activeSourceType);
-      renderResult(data);
-      toast("餐补核算完成。");
-      return;
-    }
-    const response = await fetch(apiUrl("/api/china-employee-payroll/meal-allowance"), {
-      method: "POST",
-      body: form,
-    });
-    const data = await readJsonResponse(response, "餐补核算失败");
-    renderResult(data);
-    await loadRuns();
-    toast("餐补核算完成。");
-  } catch (error) {
-    const message = friendlyFetchError(error, "餐补核算失败。");
-    elements.status.textContent = message;
-    elements.issues.innerHTML = `<article class="issue-item"><strong>核算失败</strong><span>${escapeHtml(message)}</span></article>`;
-    toast(message);
-  } finally {
-    restoreButton(elements.run, !getSelectedFiles().length);
-    setRunAvailability();
-  }
-});
-
-elements.export.addEventListener("click", () => {
-  exportCurrentResult();
-});
-
-elements.resetSource.addEventListener("click", resetCurrentSourceSelection);
-
-bindFileInput(elements.attendanceFiles, elements.attendanceFileName, "hr");
-bindFileInput(elements.wxAttendanceFiles, elements.wxAttendanceFileName, "wx");
-elements.dockCards.forEach(bindDockCardMotion);
-setRunAvailability();
-window.addEventListener("hashchange", syncViewFromHash);
-syncViewFromHash();
+  el("Files").addEventListener("change", () => { const s = states[active]; if (s.source !== "wx" || s.busy) return; s.files = [...el("Files").files]; render(s); });
+  el("ActivityStart").addEventListener("click", () => start(states[active]));
+  el("UploadStart").addEventListener("click", () => start(states[active]));
+  el("Retry").addEventListener("click", () => start(states[active]));
+  el("Reconnect").addEventListener("click", () => loadRun(states[active].runId, true));
+  el("Refresh").addEventListener("click", () => loadRuns());
+  el("Runs").addEventListener("click", event => { const button = event.target.closest("[data-run-id]"); if (button && !button.disabled) loadRun(button.dataset.runId); });
+  el("Search").addEventListener("input", () => { const s = states[active]; s.query = el("Search").value.trim(); s.page = 1; renderRows(s); });
+  el("Status").addEventListener("change", () => { const s = states[active]; s.filter = el("Status").value; s.page = 1; renderRows(s); });
+  el("PageSize").addEventListener("change", () => { const s = states[active]; s.pageSize = Number(el("PageSize").value); s.page = 1; renderRows(s); });
+  el("Prev").addEventListener("click", () => { const s = states[active]; --s.page; renderRows(s); });
+  el("Next").addEventListener("click", () => { const s = states[active]; ++s.page; renderRows(s); });
+  el("Export").addEventListener("click", exportResult);
+  window.addEventListener("hashchange", syncView); syncView();
+})();
