@@ -2,13 +2,10 @@
 from __future__ import annotations
 
 import calendar
-import getpass
 import json
 import math
 import os
 import re
-import subprocess
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -41,18 +38,6 @@ def validate_month(month):
     return month
 
 
-def _keychain(service):
-    if sys.platform != "darwin":
-        return ""
-    try:
-        return subprocess.check_output(
-            ["/usr/bin/security", "find-generic-password", "-a", getpass.getuser(), "-s", service, "-w"],
-            stderr=subprocess.DEVNULL, timeout=10, text=True,
-        ).strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
 class BeisenReadError(RelocationError):
     pass
 
@@ -73,8 +58,8 @@ def tracked_rows(rows, callback):
 class BeisenMonthlySource:
     """Read-only API client. Tokens stay in memory and never enter run files."""
     def __init__(self):
-        self.key = os.getenv("BEISEN_APP_KEY") or _keychain("beisen-social-insurance-key")
-        self.secret = os.getenv("BEISEN_APP_SECRET") or _keychain("beisen-social-insurance-secret")
+        self.key = os.getenv("BEISEN_APP_KEY")
+        self.secret = os.getenv("BEISEN_APP_SECRET")
         self.base = (os.getenv("BEISEN_BASE_URL") or "https://openapi.italent.cn").rstrip("/")
         if self.base != "https://openapi.italent.cn":
             raise RelocationError("北森接口地址未通过校验。")

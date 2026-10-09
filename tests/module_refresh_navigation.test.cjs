@@ -73,17 +73,27 @@ test('recruitment refresh restores the selected run instead of the newest run', 
   assert.equal(location.hash, '#run=older');
 });
 
-test('employee workbench restores the URL run once when hash synchronization repeats', () => {
-  const runs = [];
-  const context = vm.createContext({ URLSearchParams, location: { search: '?run=older' },
-    latestResult: null, restoredEmployeeRunId: '', document: { body: { dataset: {} } },
-    elements: { moduleHub: {}, workbench: {}, workbenchActions: [] },
-    renderEmpty(){}, loadRuns(){}, loadRun: id => runs.push(id),
+test('employee activity restores once and ignores an older navigation response', async () => {
+  const runs = [], requests = new Map(), nodes = new Map();
+  const context = vm.createContext({ URLSearchParams,
+    location: { search: '?activity=older', hash: '#meal-allowance' },
+    routeVersion: 0, timer: null, openedId: '', titles: { 'meal-allowance': '集团技术部餐补' },
+    api: '/api/china-employee-payroll/activities', clearInterval(){}, syncViews(){},
+    document: { getElementById(id) { if (!nodes.has(id)) nodes.set(id, {}); return nodes.get(id); } },
+    history: { replaceState(){} }, href: a => '?activity=' + a.activityId,
+    request: url => new Promise(resolve => requests.set(url.split('/').pop(), resolve)),
+    loadList(){}, showActivity(a) { context.openedId = a.activityId; runs.push(a.activityId); },
   });
-  vm.runInContext(section(read('china-employee-payroll'), 'function setView(', 'function syncViewFromHash('), context);
-  context.setView('meal-allowance'); context.setView('meal-allowance');
-  assert.deepEqual(runs, ['older']);
-  assert.equal(context.elements.workbench.hidden, false);
+  const source = read('payroll-activities');
+  vm.runInContext(section(source, 'async function route()', 'window.PayrollActivities ='), context);
+  const older = context.route();
+  context.location.search = '?activity=newer';
+  const newer = context.route();
+  requests.get('newer')({ activityId: 'newer' }); await newer;
+  requests.get('older')({ activityId: 'older' }); await older;
+  await context.route();
+  assert.deepEqual(runs, ['newer']);
+  assert.equal(requests.size, 2);
 });
 
 test('social insurance accepts only known restored views', () => {

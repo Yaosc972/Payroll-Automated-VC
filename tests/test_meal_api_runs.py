@@ -123,7 +123,7 @@ def test_beisen_rejects_invalid_month(client, month):
     assert not list(app_module.CHINA_EMPLOYEE_PAYROLL_RUNS_DIR.iterdir())
 
 
-def test_beisen_active_guard_and_restart_are_not_false_success(client, monkeypatch):
+def test_beisen_active_guard_and_other_instance_does_not_fail_job(client, monkeypatch):
     monkeypatch.setattr(meal_runs, "_active", True)
     assert client.post(f"{BASE}/beisen/runs", json={"month": "2026-09"}).status_code == 409
     run_id = meal_runs.new_run_id()
@@ -131,10 +131,10 @@ def test_beisen_active_guard_and_restart_are_not_false_success(client, monkeypat
     folder.mkdir()
     meal_runs.save_json(folder / "metadata.json", {"runId": run_id, "status": "running", "workerId": "old-process", "month": "2026-09"})
     response = client.get(f"{BASE}/runs/{run_id}").json()
-    assert response["status"] == "failed" and "服务已重启" in response["progress"]
+    assert response["status"] == "running"
     assert "results" not in response
     assert client.get(f"{BASE}/{run_id}/export").status_code == 409
-    assert json.loads((folder / "metadata.json").read_text())["status"] == "failed"
+    assert json.loads((folder / "metadata.json").read_text())["status"] == "running"
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("token=secret-access-key"), RelocationError("北森日考勤字段不完整")])

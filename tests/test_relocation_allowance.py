@@ -233,10 +233,10 @@ def test_failed_source_does_not_export(client, monkeypatch):
     assert client.get(f"{BASE}/{run_id}/export").status_code == 409
 
 
-def test_interrupted_run_and_invalid_id(client):
+def test_other_instance_run_and_invalid_id(client):
     run_id = "a" * 32
     routes._save({"runId": run_id, "month": "2026-08", "status": "running", "workerId": "old", "createdAt": "2026-09-30", "progress": "读取中"})
-    assert client.get(f"{BASE}/{run_id}").json()["status"] == "failed"
+    assert client.get(f"{BASE}/{run_id}").json()["status"] == "running"
     assert client.get(f"{BASE}/invalid").status_code == 404
 
 

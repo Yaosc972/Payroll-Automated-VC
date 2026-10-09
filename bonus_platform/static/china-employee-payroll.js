@@ -187,7 +187,8 @@
         else await followActivity(s, version);
       } else {
         const form = new FormData(); s.files.forEach(file => form.append("attendance_files", file)); form.append("source_type", "wx"); form.append("month", month);
-        const data = await request(s.activityId ? `/api/china-employee-payroll/activities/${s.activityId}/start` : base, { method: "POST", body: form }, 180000);
+        const direct = s.activityId ? await window.PayrollFiles.upload(s.activityId, s.files) : null;
+        const data = direct || await request(s.activityId ? `/api/china-employee-payroll/activities/${s.activityId}/start` : base, { method: "POST", body: form }, 180000);
         if (isCurrent(s, version)) {
           if (s.activityId) { creating = false; s.runId = data.runId; if (s.runId) await follow(s, s.runId, version); else await followActivity(s, version); }
           else complete(s, data);
@@ -222,10 +223,11 @@
     try {
       const response = await fetch(`${base}/${encodeURIComponent(id)}/export`, { signal: AbortSignal.timeout(120000) });
       if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(typeof data.detail === "string" ? data.detail : "导出失败，请重试。"); }
-      const blob = await response.blob();
+      const { blob, filename: storedFilename } = await window.PayrollFiles.download(response);
       if (!isCurrent(s, version) || s.runId !== id) return;
       const header = response.headers.get("content-disposition") || "", match = header.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
       let filename = `${monthLabel(s.month)}${titles[s.source]}.xlsx`; if (match) { try { filename = decodeURIComponent(match[1] || match[2]); } catch { /* Keep the source-specific fallback. */ } }
+      if (storedFilename) filename = storedFilename;
       const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
       s.exportState = "success"; s.exportMessage = "Excel 已生成，已开始下载。";
       setTimeout(() => { if (isCurrent(s, version) && s.runId === id && s.exportState === "success") { s.exportState = "idle"; s.exportMessage = ""; if (states[active] === s) renderExport(s); } }, 2400);

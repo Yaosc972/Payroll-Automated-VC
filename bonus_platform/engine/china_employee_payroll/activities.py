@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, Reque
 
 from bonus_platform.auth import current_user_from_request
 
-from . import meal_runs, relocation_router
+from . import meal_runs, relocation_router, durable
 from .relocation import RelocationError, validate_month
 
 router = APIRouter(prefix="/api/china-employee-payroll/activities", tags=["china-payroll-activities"])
@@ -70,11 +70,28 @@ def _save(record):
 def _run(subject, run_id):
     if subject == "relocation-allowance":
         return relocation_router._read(run_id)
+    if _app().company_run_storage_enabled("SIGMA_CHINA_EMPLOYEE_STORAGE_BACKEND"):
+        folder = _app()._china_employee_meal_run_dir(run_id)
+        run = meal_runs.read_metadata(folder)
+        run.setdefault("status", "completed")
+        run.setdefault("month", str(run.get("summary", {}).get("dateStart", ""))[:7])
+        return run
     return meal_runs.read_metadata(meal_runs.run_directory(_app().CHINA_EMPLOYEE_PAYROLL_RUNS_DIR, run_id))
 
 
 def _legacy_runs():
     root = _app().CHINA_EMPLOYEE_PAYROLL_RUNS_DIR
+    if _app().company_run_storage_enabled("SIGMA_CHINA_EMPLOYEE_STORAGE_BACKEND"):
+        for run_id in _app().list_company_run_ids("china-employee-meal"):
+            content = _app().load_company_run_file("china-employee-meal", run_id, "metadata.json")
+            if not content:
+                continue
+            run = json.loads(content)
+            run.setdefault("runId", run_id)
+            run.setdefault("status", "completed")
+            run.setdefault("month", str(run.get("summary", {}).get("dateStart", ""))[:7])
+            yield "wx-meal-allowance" if run.get("sourceType") == "wx" else "meal-allowance", run
+        return
     for folder in root.glob("china_employee_payroll_*"):
         if not folder.is_dir():
             continue
@@ -119,8 +136,6 @@ def _view(record, run=None):
             summary = run.get("summary") or run.get("result", {}).get("summary", {})
         except HTTPException:
             status, progress = "failed", "该活动的核算文件缺失，请重新核算。"
-    elif status == "running" and record.get("workerId") != WORKER_ID:
-        status, progress = "failed", "服务已重启，本次上传中断，请重新上传考勤。"
     return {key: record.get(key, "") for key in ("activityId", "name", "subject", "month", "createdAt", "updatedAt", "runId")} | {
         "status": status, "progress": progress, "creator": _public_creator(record), "employeeCount": summary.get("employeeCount", 0),
         "amount": summary.get("totalAmount", summary.get("amount", 0)), "attemptCount": len(record.get("attempts", []))}
@@ -140,6 +155,10 @@ def create_activity(request: Request, payload: dict = Body(...)):
         raise HTTPException(400, "活动名称最多 120 个字。")
     name = name.strip() or f"{month[:4]}年{int(month[5:])}月 {SUBJECTS[subject]}"
     activity_id = _id(payload["requestId"]) if "requestId" in payload else uuid4().hex
+    if durable.enabled():
+        record = {"activityId": activity_id, "name": name, "subject": subject, "month": month,
+                  "createdAt": meal_runs.now(), "updatedAt": meal_runs.now(), "status": "draft", "runId": "", "attempts": [], "creator": _creator(request)}
+        return durable.view(durable.Store().create(record))
     with _lock:
         path = _root() / f"{activity_id}.json"
         if path.is_file():
@@ -157,14 +176,14 @@ def create_activity(request: Request, payload: dict = Body(...)):
 def list_activities(search: str = "", subject: str = "", month: str = "", status: str = "", page: int = 1, page_size: int = 20):
     if page < 1 or not 1 <= page_size <= 100:
         raise HTTPException(400, "分页参数不正确。")
-    records = []
-    for path in _root().glob("*.json"):
+    records = durable.Store().records() if durable.enabled() else []
+    for path in ([] if durable.enabled() else _root().glob("*.json")):
         try:
             records.append(json.loads(path.read_text(encoding="utf-8")))
         except (ValueError, OSError):
             continue
     linked = {(r["subject"], run_id) for r in records for run_id in r.get("attempts", [r.get("runId")]) if run_id}
-    activities = [_view(r) for r in records]
+    activities = [(durable.view(r) if durable.enabled() else _view(r)) for r in records]
     activities.extend(_view(_legacy(s, r), r) for s, r in _legacy_runs() if (s, r["runId"]) not in linked)
     activities = [a for a in activities if (not search or search.casefold() in f"{a['name']} {a['creator']['name']}".casefold())
                   and (not subject or a["subject"] == subject) and (not month or a["month"] == month)
@@ -177,11 +196,29 @@ def list_activities(search: str = "", subject: str = "", month: str = "", status
 
 @router.get("/{activity_id}")
 def get_activity(activity_id: str):
+    if durable.enabled():
+        try:
+            return durable.view(durable.Store().get(_id(activity_id)))
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
     return _view(_record(activity_id))
 
 
 @router.post("/{activity_id}/start")
 async def start_activity(activity_id: str, background_tasks: BackgroundTasks, attendance_files: Optional[list[UploadFile]] = File(None)):
+    if durable.enabled():
+        if attendance_files:
+            raise HTTPException(400, "请使用考勤文件直传后开始核算。")
+        try:
+            return durable.start(_id(activity_id))
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            record = _record(activity_id)
+            if not record.get("legacy"):
+                raise
+            return _view(record)
     with _lock:
         record = _record(activity_id)
         view = _view(record)
@@ -211,3 +248,15 @@ async def start_activity(activity_id: str, background_tasks: BackgroundTasks, at
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(503, "核算活动暂时不可用，请重新打开活动查看状态。") from None
+
+
+@router.get("/config/upload")
+def upload_config():
+    return {"directUpload": durable.enabled()}
+
+
+@router.post("/{activity_id}/uploads")
+def prepare_activity_upload(activity_id: str, payload: dict = Body(...)):
+    if not durable.enabled():
+        raise HTTPException(409, "当前环境未启用文件直传。")
+    return durable.prepare_uploads(_id(activity_id), payload)

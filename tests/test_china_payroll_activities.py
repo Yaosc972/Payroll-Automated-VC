@@ -177,12 +177,12 @@ def test_legacy_history_is_unified_paginated_and_has_stable_links(client):
     assert client.get(BASE, params={"page_size": 0}).status_code == 400
 
 
-def test_restart_and_missing_snapshot_are_failed_not_permanent_running(client):
+def test_other_instance_is_not_failed_but_missing_snapshot_is(client):
     item = create(client, "wx-meal-allowance")
     record = activities._record(item["activityId"])
     record.update(status="running", workerId="old-process")
     activities._save(record)
-    assert client.get(f"{BASE}/{item['activityId']}").json()["status"] == "failed"
+    assert client.get(f"{BASE}/{item['activityId']}").json()["status"] == "running"
     record.update(runId="china_employee_payroll_missing", attempts=["china_employee_payroll_missing"])
     activities._save(record)
     assert client.get(f"{BASE}/{item['activityId']}").json()["status"] == "failed"

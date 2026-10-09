@@ -927,7 +927,8 @@ def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     css = STYLES_CSS.read_text(encoding="utf-8")
 
     assert "中国区正式工薪酬核算" in html
-    assert "技术部餐补核算" in html
+    assert "集团技术部餐补" in html
+    assert "WX 技术部餐补" in html
     assert 'data-module-id="employee"' in html
     assert "permission-guard.js?v=9" in html
     assert "china-employee-payroll.js" in html
@@ -1424,21 +1425,19 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
 
-def test_china_employee_payroll_can_calculate_large_files_without_server_upload():
+def test_china_employee_payroll_large_files_use_persistent_direct_upload():
     html = EMPLOYEE_PAYROLL_HTML.read_text(encoding="utf-8")
     js = EMPLOYEE_PAYROLL_JS.read_text(encoding="utf-8")
+    helper = EMPLOYEE_PAYROLL_JS.with_name("payroll-files.js").read_text(encoding="utf-8")
+    subjects = EMPLOYEE_PAYROLL_JS.with_name("china-payroll-subjects.js").read_text(encoding="utf-8")
 
-    assert "xlsx.full.min.js" in html
-    assert "calculateClientSideMealAllowance" in js
-    assert "exportClientSideResult" in js
-    assert "totalUploadSize > VERCEL_DIRECT_UPLOAD_WARNING_BYTES" in js
-    assert "生产环境文件较大，将在浏览器本地解析核算，不上传 Excel 原文件。" in js
-    assert "SOURCE_PUNCH_DATETIME_HEADERS" in js
-    assert 'cell.z = "yyyy/m/d h:mm:ss"' in js
-    assert "LBU速运事业部|战略运营部|BI组" in js
-    assert "LBU战略运营部BI组纳入" in html
-    assert '"深圳正常班"' in js
-    assert "核算班次包含深圳正常班" in html
+    assert "payroll-files.js" in html
+    assert "PayrollFiles.upload" in js
+    assert "target.signedUrl" in helper
+    assert "crypto.subtle.digest" in helper
+    assert "LBU战略运营部BI组纳入" in subjects
+    assert "核算班次包含深圳正常班" in subjects
+    assert "首打卡缺失" in subjects
 
 
 def test_release_info_marks_integration_branch_as_only_production_source():

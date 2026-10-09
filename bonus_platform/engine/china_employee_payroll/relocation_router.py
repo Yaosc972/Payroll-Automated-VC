@@ -10,6 +10,7 @@ from uuid import uuid4
 from urllib.parse import quote
 
 from .relocation_export import build_workbook
+from . import durable
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException
@@ -45,8 +46,6 @@ def _read(run_id):
     if not target.is_file():
         raise HTTPException(404, "核算批次不存在。")
     run = json.loads(target.read_text(encoding="utf-8"))
-    if run["status"] == "running" and run.get("workerId") != WORKER_ID:
-        run.update(status="failed", progress="服务已重启，本次核算中断，请重新核算。")
     run.pop("workerId", None)
     # Apply clarified review labels to saved batches without changing their amounts or source version.
     result = run.get("result")
@@ -93,6 +92,8 @@ def _work(run):
 @router.post("/runs", status_code=202)
 def start_run(background_tasks: BackgroundTasks, payload: dict = Body(...)):
     global _active
+    if durable.enabled():
+        return durable.legacy_start_disabled()
     try:
         month = validate_month(payload.get("month"))
     except RelocationError as exc:
@@ -115,17 +116,23 @@ def start_run(background_tasks: BackgroundTasks, payload: dict = Body(...)):
 
 @router.get("/runs")
 def list_runs():
+    if durable.enabled():
+        return durable.list_runs(True)
     paths = sorted(RUNS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:30]
     return {"runs": [{k: v for k, v in _read(path.stem).items() if k not in {"result", "attendanceSource"}} for path in paths]}
 
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str):
+    if durable.enabled():
+        return durable.get_run(run_id, True)
     return {k: v for k, v in _read(run_id).items() if k != "attendanceSource"}
 
 
 @router.get("/runs/{run_id}/export")
 def export_run(run_id: str):
+    if durable.enabled():
+        return durable.export_run(run_id, True)
     run = _read(run_id)
     if run["status"] != "completed":
         raise HTTPException(409, "核算尚未完成，无法导出。")

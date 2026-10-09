@@ -206,12 +206,13 @@
         const data = await response.json().catch(() => ({}));
         throw new Error(typeof data.detail === "string" ? data.detail : "导出失败，请重试。");
       }
-      const blob = await response.blob();
+      const { blob, filename: storedFilename } = await window.PayrollFiles.download(response);
       if (version !== generation) return;
       const disposition = response.headers.get("Content-Disposition") || "";
       const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i);
       let filename = "职场搬迁补贴.xlsx";
       if (encoded) { try { filename = decodeURIComponent(encoded[1]); } catch { /* Use the fallback filename. */ } }
+      if (storedFilename) filename = storedFilename;
       const url = URL.createObjectURL(blob), link = document.createElement("a");
       link.href = url; link.download = filename; document.body.append(link);
       link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);

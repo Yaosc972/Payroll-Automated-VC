@@ -65,9 +65,6 @@ def read_metadata(folder: Path) -> dict:
     metadata.setdefault("month", (summary.get("dateStart") or "")[:7])
     metadata.setdefault("sourceType", summary.get("sourceType", "hr"))
     metadata.setdefault("sourceLabel", summary.get("sourceLabel", ""))
-    if metadata["status"] == "running" and metadata.get("workerId") != WORKER_ID:
-        metadata.update(status="failed", progress="服务已重启，本次核算中断，请重新核算。", completedAt=now())
-        save_json(folder / "metadata.json", metadata)
     return {key: value for key, value in metadata.items() if key != "workerId"}
 
 

@@ -95,6 +95,7 @@ from .engine.domestic_labor.persistent_storage import (
     domestic_labor_storage_backend,
 )
 from .engine.china_employee_payroll import calculate_meal_allowance, parse_attendance_workbooks, parse_wx_attendance_workbooks
+from .engine.china_employee_payroll import durable as china_payroll_durable
 from .engine.company_run_storage import (
     enabled as company_run_storage_enabled,
     list_run_ids as list_company_run_ids,
@@ -922,12 +923,15 @@ async def lifespan(app: FastAPI):
     if not _is_vercel_runtime():
         _recover_stuck_labor_runs()
     _cleanup_expired_labor_data()
+    from .engine.policy import scheduler as policy_scheduler
+    policy_scheduler.start()
     social_insurance_scheduler_allowed = not _is_vercel_runtime()
     if social_insurance_scheduler_allowed:
         start_social_insurance_prefetch_scheduler()
     try:
         yield
     finally:
+        policy_scheduler.stop()
         if social_insurance_scheduler_allowed:
             stop_social_insurance_prefetch_scheduler()
 
@@ -2752,6 +2756,28 @@ def _labor_assert_runtime_current() -> dict:
             ),
         )
     return build
+
+
+@app.middleware("http")
+async def china_payroll_access_gate(request: Request, call_next):
+    if not request.url.path.startswith("/api/china-employee-payroll/"):
+        return await call_next(request)
+    from .engine.china_employee_payroll import durable
+    from .auth import current_user_from_request
+    try:
+        if durable.enabled() or durable.hosted() or labor_auth_required():
+            current = current_user_from_request(request)
+            if not current:
+                return JSONResponse({"detail": "请先登录。"}, status_code=401)
+            if not user_can_enter_module(current, "employee"):
+                return JSONResponse({"detail": "无权访问正式工薪酬核算模块。"}, status_code=403)
+        if durable.hosted() and not durable.enabled() and request.url.path.startswith(("/api/china-employee-payroll/activities", "/api/china-employee-payroll/relocation-allowance", "/api/china-employee-payroll/meal-allowance/beisen")):
+            return JSONResponse({"detail": "正式工核算持久化服务尚未配置。"}, status_code=503)
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    except Exception:
+        return JSONResponse({"detail": "核算持久化服务暂不可用，请稍后重试。"}, status_code=503)
 
 
 @app.middleware("http")
@@ -14471,6 +14497,8 @@ async def calculate_china_employee_meal_allowance(
     source_type: str = Form("hr"),
     month: Optional[str] = Form(None),
 ) -> dict:
+    if china_payroll_durable.enabled():
+        return china_payroll_durable.legacy_start_disabled()
     source_type = (source_type or "hr").strip().lower()
     if source_type not in {"hr", "wx"}:
         raise HTTPException(400, "考勤来源类型不支持，请选择人事系统考勤或WX技术部考勤。")
@@ -14545,6 +14573,8 @@ async def calculate_china_employee_meal_allowance(
 def start_china_employee_meal_allowance_beisen_run(
     background_tasks: BackgroundTasks, payload: dict = Body(...),
 ) -> dict:
+    if china_payroll_durable.enabled():
+        return china_payroll_durable.legacy_start_disabled()
     return china_employee_meal_runs.start_run(CHINA_EMPLOYEE_PAYROLL_RUNS_DIR, payload.get("month"), background_tasks)
 
 
@@ -14755,6 +14785,8 @@ def list_china_employee_meal_allowance_runs() -> dict:
                 else (CHINA_EMPLOYEE_PAYROLL_RUNS_DIR / run_id / "metadata.json").read_bytes()
             )
             metadata = json.loads(content) if content else {}
+            metadata.setdefault("status", "completed")
+            metadata.setdefault("month", str(metadata.get("summary", {}).get("dateStart", ""))[:7])
         except (OSError, ValueError, json.JSONDecodeError):
             continue
         summary = metadata.get("summary", {})
@@ -14778,6 +14810,9 @@ def list_china_employee_meal_allowance_runs() -> dict:
                 "totalAmount": summary.get("totalAmount", 0),
             }
         )
+    if china_payroll_durable.enabled():
+        runs.extend(china_payroll_durable.list_runs()["runs"])
+        runs.sort(key=lambda row: row.get("createdAt", ""), reverse=True)
     return {"runs": runs[:50]}
 
 
@@ -14792,24 +14827,37 @@ def _china_employee_meal_run_dir(run_id: str) -> Path:
 
 @app.get("/api/china-employee-payroll/meal-allowance/runs/{run_id}")
 def get_china_employee_meal_allowance_run(run_id: str) -> dict:
+    if china_payroll_durable.enabled() and re.fullmatch(r"[0-9a-f]{32}", run_id):
+        return china_payroll_durable.get_run(run_id)
     run_dir = _china_employee_meal_run_dir(run_id)
+    metadata = china_employee_meal_runs.read_metadata(run_dir)
+    if metadata.get("status", "completed") != "completed":
+        return metadata
     result_path = run_dir / "result.json"
     if not result_path.exists():
         raise HTTPException(status_code=404, detail="核算批次不存在，请重新上传并核算。")
     result = json.loads(result_path.read_text(encoding="utf-8"))
+    metadata_path = run_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else {}
     return {
+        "status": metadata.get("status", "completed"),
+        "month": metadata.get("month", str(result.get("summary", {}).get("dateStart", ""))[:7]),
         "runId": run_id,
         "summary": result["summary"],
         "results": _compact_china_employee_payroll_result(result),
         "files": result.get("files", []),
         "warnings": result.get("warnings", {}),
         "sourceType": result.get("summary", {}).get("sourceType", "hr"),
+        "sourceOrigin": metadata.get("sourceOrigin", "upload"),
+        "calculatedAt": metadata.get("calculatedAt", metadata.get("createdAt", "")),
         "sourceLabel": result.get("summary", {}).get("sourceLabel", ""),
     }
 
 
 @app.get("/api/china-employee-payroll/meal-allowance/{run_id}/export")
-def export_china_employee_meal_allowance(run_id: str) -> FileResponse:
+def export_china_employee_meal_allowance(run_id: str):
+    if china_payroll_durable.enabled() and re.fullmatch(r"[0-9a-f]{32}", run_id):
+        return china_payroll_durable.export_run(run_id)
     run_dir = _china_employee_meal_run_dir(run_id)
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="核算批次不存在，请重新上传并核算。")
