@@ -1,0 +1,99 @@
+{
+  "mode": "offline MySQL queue, file object adapter, simulated session; no production writes",
+  "baselineRef": "cca1f001",
+  "subjects": [
+    {
+      "subject": "meal-allowance",
+      "month": "2026-09",
+      "summary": {
+        "fileCount": 0,
+        "rowCount": 16412,
+        "employeeCount": 550,
+        "dateStart": "2026-09-01",
+        "dateEnd": "2026-09-30",
+        "distinctDateCount": 30,
+        "missingColumns": [],
+        "duplicateCount": 0,
+        "sourceType": "hr",
+        "sourceLabel": "集团技术部 · 北森考勤",
+        "eligibleEmployeeCount": 550,
+        "payableEmployeeCount": 320,
+        "payableDayCount": 1852,
+        "totalAmount": 37040,
+        "dailyAmount": 20
+      },
+      "excelSheets": [
+        "餐补核算结果",
+        "北森考勤源数据"
+      ],
+      "exactRowComparison": true,
+      "restartRecovery": true,
+      "snapshotSha256": "ee2571a59221fbbf8bfa28977bb61216e33ffcbc5fa9c7ec2146a2d0ee6080d5",
+      "exportSha256": "7ab5a8314c034d37dcbf4c7a784107f70e3d958a307083a6e9f3f9a34d179fdc"
+    },
+    {
+      "subject": "wx-meal-allowance",
+      "month": "2026-05",
+      "summary": {
+        "fileCount": 1,
+        "rowCount": 1317,
+        "employeeCount": 43,
+        "dateStart": "2026-05-01",
+        "dateEnd": "2026-05-31",
+        "distinctDateCount": 31,
+        "missingColumns": [],
+        "duplicateCount": 0,
+        "sourceType": "wx",
+        "sourceLabel": "WX技术部考勤",
+        "eligibleEmployeeCount": 43,
+        "payableEmployeeCount": 27,
+        "payableDayCount": 126,
+        "totalAmount": 2520,
+        "dailyAmount": 20
+      },
+      "excelSheets": [
+        "餐补核算结果",
+        "WX技术部考勤源"
+      ],
+      "exactRowComparison": true,
+      "restartRecovery": true,
+      "snapshotSha256": "e38116731ca9b63a24ae612df5a9798b5f0d7b07a4fcb73fa070bedb11e26ace",
+      "exportSha256": "287fca1ddad8992142debe09f778af5a8fea316e8ee0c912657a05c576e76e30"
+    },
+    {
+      "subject": "relocation-allowance",
+      "month": "2026-08",
+      "summary": {
+        "sourceCount": 184,
+        "employeeCount": 184,
+        "payableCount": 94,
+        "amount": 91300.0,
+        "reviewCount": 0,
+        "missingScopeCount": 0
+      },
+      "excelSheets": [
+        "职场搬迁补贴",
+        "考勤源数据"
+      ],
+      "exactRowComparison": true,
+      "restartRecovery": true,
+      "snapshotSha256": "85efefb56f3fb1727e989fb3e89591716540f5b34775644ae798c5eef128d109",
+      "exportSha256": "01ac51308db35ff0c0d8f1b11d15639105dd2b7b952922e1092972f85ac5ed9f"
+    }
+  ],
+  "productionRuleComparison": {
+    "productionRef": "0d1411ce",
+    "sourceAmount": 36720,
+    "productionAmount": 37040,
+    "deltaByReason": {
+      "当前班次不在餐补班次范围 → 符合餐补规则 (深圳正常班)": 400,
+      "符合餐补规则 → 首打卡(含补签)缺失，属于考勤异常 (深圳灵活打卡8:30-9:10)": -80
+    }
+  },
+  "inputSha256": {
+    "groupSource": "4c4379598552c07c01dee907454de8cc4ef9a47ef18a2b3b5eee3ed615b57b8e",
+    "wxWorkbook": "1ad5fa1ca680998eb729e50bc5d015998c5933a00018aef95c6f3c2e9e33db19",
+    "relocationSource": "76536ce5d9b371f0d81e3cb63f642450dbd1e82f25d6ceffeb5b6d593b3a032a",
+    "historicalOrganizations": "c998c09617226cc068c21a22368cdadbfb963ab95a624be1dfd0cb6372c2bd85"
+  }
+}

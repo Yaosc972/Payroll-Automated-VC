@@ -1,0 +1,715 @@
+sigma-company-full-pytest.log
+........................................................................ [  2%]
+........................................................................ [  5%]
+........................................................................ [  8%]
+........................................................................ [ 11%]
+........................................................................ [ 14%]
+........................................................................ [ 16%]
+........................................................................ [ 19%]
+........................................................................ [ 22%]
+........................................................................ [ 25%]
+........................................................F............... [ 28%]
+........................................................................ [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+...............................sssssss..s...sssssss.....ss.............. [ 45%]
+........................................................................ [ 48%]
+........................................................................ [ 50%]
+........................................................................ [ 53%]
+........................................................................ [ 56%]
+........................................................................ [ 59%]
+........................................................................ [ 62%]
+........................................................................ [ 65%]
+........................................................................ [ 67%]
+........................................................................ [ 70%]
+........................................................................ [ 73%]
+........................................................................ [ 76%]
+........................................................................ [ 79%]
+........................................................................ [ 82%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 90%]
+........................................................................ [ 93%]
+........................................................................ [ 96%]
+........................................................................ [ 99%]
+.........................                                                [100%]
+=================================== FAILURES ===================================
+____________ test_fbu_html_javascript_version_matches_content_hash _____________
+
+    def test_fbu_html_javascript_version_matches_content_hash():
+        digest = hashlib.sha256(FBU_JS.read_bytes()).hexdigest()[:12]
+
+>       assert f'fbu-performance.js?v={digest}' in _html()
+E       assert 'fbu-performance.js?v=139f56bb4c7c' in '<!doctype html>\n<html lang="zh-CN" data-module-id="fbu" data-server-guarded="true">\n  <head>\n    <script src="plat...mance.js?v=2a8ae8d66a46"></script>\n    <script src="feedback-widget.js?v=20260916-01"></script>\n  </body>\n</html>\n'
+E        +  where '<!doctype html>\n<html lang="zh-CN" data-module-id="fbu" data-server-guarded="true">\n  <head>\n    <script src="plat...mance.js?v=2a8ae8d66a46"></script>\n    <script src="feedback-widget.js?v=20260916-01"></script>\n  </body>\n</html>\n' = _html()
+
+tests/test_fbu_activity_workflow_static.py:22: AssertionError
+=============================== warnings summary ===============================
+tests/test_labor_generalization_fixtures.py::test_generalization_scenarios_cover_six_families_with_twelve_unique_cases
+tests/test_labor_generalization_fixtures.py::test_generalization_scenarios_cover_six_families_with_twelve_unique_cases
+  <frozen importlib._bootstrap>:228: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/test_labor_generalization_fixtures.py::test_generalization_scenarios_cover_six_families_with_twelve_unique_cases
+tests/test_labor_generalization_fixtures.py::test_generalization_scenarios_cover_six_families_with_twelve_unique_cases
+  <frozen importlib._bootstrap>:228: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/test_labor_generalization_fixtures.py::test_generalization_scenarios_cover_six_families_with_twelve_unique_cases
+  <frozen importlib._bootstrap>:228: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_fbu_activity_workflow_static.py::test_fbu_html_javascript_version_matches_content_hash
+1 failed, 2527 passed, 17 skipped, 5 warnings in 277.46s (0:04:37)
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+
+sigma-company-static-final.log
+........................................................................ [ 23%]
+........................................................................ [ 46%]
+........................................................................ [ 69%]
+........................................................................ [ 92%]
+......................                                                   [100%]
+310 passed in 1.98s
+
+
+sigma-company-full-node.log
+TAP version 13
+# Subtest: activation accepts only the worker scheme, HTTPS API, and one-time code
+ok 1 - activation accepts only the worker scheme, HTTPS API, and one-time code
+  ---
+  duration_ms: 1.32
+  type: 'test'
+  ...
+# Subtest: activation exchanges the one-time code over HTTPS before storing the worker token
+ok 2 - activation exchanges the one-time code over HTTPS before storing the worker token
+  ---
+  duration_ms: 0.245625
+  type: 'test'
+  ...
+# Subtest: activation links received before app readiness are delivered once after readiness
+ok 3 - activation links received before app readiness are delivered once after readiness
+  ---
+  duration_ms: 0.117291
+  type: 'test'
+  ...
+# Subtest: resolved Electron system proxy is passed to the Python worker
+ok 4 - resolved Electron system proxy is passed to the Python worker
+  ---
+  duration_ms: 0.424459
+  type: 'test'
+  ...
+# Subtest: packaged worker command launches only the dedicated worker executable
+ok 5 - packaged worker command launches only the dedicated worker executable
+  ---
+  duration_ms: 0.444458
+  type: 'test'
+  ...
+# Subtest: packaged Windows worker launches the bundled exe without a Python dependency
+ok 6 - packaged Windows worker launches the bundled exe without a Python dependency
+  ---
+  duration_ms: 0.449417
+  type: 'test'
+  ...
+# Subtest: Windows installer uses a stable x64 artifact name
+ok 7 - Windows installer uses a stable x64 artifact name
+  ---
+  duration_ms: 0.786125
+  type: 'test'
+  ...
+# Subtest: development worker command uses the Python module entrypoint
+ok 8 - development worker command uses the Python module entrypoint
+  ---
+  duration_ms: 0.235375
+  type: 'test'
+  ...
+# Subtest: packaged worker bundles and dispatches the local OCR runtime
+ok 9 - packaged worker bundles and dispatches the local OCR runtime
+  ---
+  duration_ms: 2.157375
+  type: 'test'
+  ...
+# Subtest: package metadata is worker-only and uses the dedicated product identity
+ok 10 - package metadata is worker-only and uses the dedicated product identity
+  ---
+  duration_ms: 0.8075
+  type: 'test'
+  ...
+# Subtest: main process does not start the platform backend or load the local workbench
+ok 11 - main process does not start the platform backend or load the local workbench
+  ---
+  duration_ms: 0.409791
+  type: 'test'
+  ...
+# Subtest: main process handles queued activation before renderer can request Keychain-backed status
+ok 12 - main process handles queued activation before renderer can request Keychain-backed status
+  ---
+  duration_ms: 0.163583
+  type: 'test'
+  ...
+# Subtest: main process exchanges activation through Electron networking for system proxy support
+ok 13 - main process exchanges activation through Electron networking for system proxy support
+  ---
+  duration_ms: 6.347459
+  type: 'test'
+  ...
+# Subtest: main process exchanges one-time activation before touching Keychain-backed storage
+ok 14 - main process exchanges one-time activation before touching Keychain-backed storage
+  ---
+  duration_ms: 0.326458
+  type: 'test'
+  ...
+# Subtest: main process caches the decrypted activation instead of polling Keychain for status
+ok 15 - main process caches the decrypted activation instead of polling Keychain for status
+  ---
+  duration_ms: 0.21475
+  type: 'test'
+  ...
+# Subtest: renderer falls back to an unactivated state when the Electron bridge is unavailable
+ok 16 - renderer falls back to an unactivated state when the Electron bridge is unavailable
+  ---
+  duration_ms: 0.241708
+  type: 'test'
+  ...
+# Subtest: status presentation covers the worker lifecycle and strips unknown fields
+ok 17 - status presentation covers the worker lifecycle and strips unknown fields
+  ---
+  duration_ms: 0.238333
+  type: 'test'
+  ...
+# Subtest: status presentation preserves actionable connection failure states
+ok 18 - status presentation preserves actionable connection failure states
+  ---
+  duration_ms: 0.134583
+  type: 'test'
+  ...
+# Subtest: pending update is shown only while the worker is not processing
+ok 19 - pending update is shown only while the worker is not processing
+  ---
+  duration_ms: 0.096959
+  type: 'test'
+  ...
+# Subtest: desktop shell exposes automatic update status and a safe browser download action
+ok 20 - desktop shell exposes automatic update status and a safe browser download action
+  ---
+  duration_ms: 1.004083
+  type: 'test'
+  ...
+# Subtest: active worker PID prevents duplicate desktop workers
+ok 21 - active worker PID prevents duplicate desktop workers
+  ---
+  duration_ms: 10.383
+  type: 'test'
+  ...
+# Subtest: desktop reconnect waits for the previous PID and adopts an existing live worker
+ok 22 - desktop reconnect waits for the previous PID and adopts an existing live worker
+  ---
+  duration_ms: 0.671333
+  type: 'test'
+  ...
+# Subtest: pending resignation is reviewed even when current employee has no last work date
+ok 23 - pending resignation is reviewed even when current employee has no last work date
+  ---
+  duration_ms: 48.60225
+  type: 'test'
+  ...
+# Subtest: missing employment business type requires review for that candidate
+ok 24 - missing employment business type requires review for that candidate
+  ---
+  duration_ms: 9.082583
+  type: 'test'
+  ...
+# Subtest: resignation query failure cannot become an empty resignation list
+ok 25 - resignation query failure cannot become an empty resignation list
+  ---
+  duration_ms: 1.608
+  type: 'test'
+  ...
+# Subtest: withdrawn resignation supersedes stale compatibility exclusion
+ok 26 - withdrawn resignation supersedes stale compatibility exclusion
+  ---
+  duration_ms: 13.844083
+  type: 'test'
+  ...
+# Subtest: old resignation query cannot erase a current employment departure signal
+ok 27 - old resignation query cannot erase a current employment departure signal
+  ---
+  duration_ms: 34.33125
+  type: 'test'
+  ...
+# Subtest: subjects returns aggregated contract subjects without employee records
+ok 28 - subjects returns aggregated contract subjects without employee records
+  ---
+  duration_ms: 0.7185
+  type: 'test'
+  ...
+# Subtest: sync returns standardized records and strips raw upstream responses
+ok 29 - sync returns standardized records and strips raw upstream responses
+  ---
+  duration_ms: 3.463042
+  type: 'test'
+  ...
+# Subtest: sync includes a private confirmation rule context for snapshot rebasing
+ok 30 - sync includes a private confirmation rule context for snapshot rebasing
+  ---
+  duration_ms: 4.661209
+  type: 'test'
+  ...
+# Subtest: sync requires review when compatibility records mix valid and missing process times
+ok 31 - sync requires review when compatibility records mix valid and missing process times
+  ---
+  duration_ms: 2.825334
+  type: 'test'
+  ...
+# Subtest: sync ignores a compatibility snapshot whose snapshot date is missing
+ok 32 - sync ignores a compatibility snapshot whose snapshot date is missing
+  ---
+  duration_ms: 2.272125
+  type: 'test'
+  ...
+# Subtest: sync ignores a compatibility snapshot whose snapshot date is not a real calendar date
+ok 33 - sync ignores a compatibility snapshot whose snapshot date is not a real calendar date
+  ---
+  duration_ms: 2.311959
+  type: 'test'
+  ...
+# Subtest: sync detects live Beisen dimission fields without treating modified time as approval time
+ok 34 - sync detects live Beisen dimission fields without treating modified time as approval time
+  ---
+  duration_ms: 1.845958
+  type: 'test'
+  ...
+# Subtest: sync requires review when Beisen only reports a dimission employee status
+ok 35 - sync requires review when Beisen only reports a dimission employee status
+  ---
+  duration_ms: 2.061042
+  type: 'test'
+  ...
+# Subtest: live dimission context takes precedence over a configured compatibility snapshot
+ok 36 - live dimission context takes precedence over a configured compatibility snapshot
+  ---
+  duration_ms: 3.477542
+  type: 'test'
+  ...
+# Subtest: an invalid compatibility snapshot does not block live Beisen dimission review
+ok 37 - an invalid compatibility snapshot does not block live Beisen dimission review
+  ---
+  duration_ms: 2.297667
+  type: 'test'
+  ...
+# Subtest: connector endpoint requires bearer token and does not echo supplied credentials
+ok 38 - connector endpoint requires bearer token and does not echo supplied credentials
+  ---
+  duration_ms: 0.234667
+  type: 'test'
+  ...
+# Subtest: health reports the connector configured without a monthly snapshot
+ok 39 - health reports the connector configured without a monthly snapshot
+  ---
+  duration_ms: 0.078208
+  type: 'test'
+  ...
+# Subtest: rule version mismatch is rejected before calling Beisen
+ok 40 - rule version mismatch is rejected before calling Beisen
+  ---
+  duration_ms: 0.450917
+  type: 'test'
+  ...
+# Subtest: early resignation: same-month voluntary before 15
+ok 41 - early resignation: same-month voluntary before 15
+  ---
+  duration_ms: 29.4835
+  type: 'test'
+  ...
+# Subtest: early resignation: same-month involuntary before 15
+ok 42 - early resignation: same-month involuntary before 15
+  ---
+  duration_ms: 0.500625
+  type: 'test'
+  ...
+# Subtest: early resignation: missing stop flag
+ok 43 - early resignation: missing stop flag
+  ---
+  duration_ms: 2.075458
+  type: 'test'
+  ...
+# Subtest: early resignation: 15 boundary
+ok 44 - early resignation: 15 boundary
+  ---
+  duration_ms: 0.552166
+  type: 'test'
+  ...
+# Subtest: early resignation: 16 boundary
+ok 45 - early resignation: 16 boundary
+  ---
+  duration_ms: 0.390709
+  type: 'test'
+  ...
+# Subtest: early resignation: different months
+ok 46 - early resignation: different months
+  ---
+  duration_ms: 0.239416
+  type: 'test'
+  ...
+# Subtest: early resignation: old employment
+ok 47 - early resignation: old employment
+  ---
+  duration_ms: 0.120417
+  type: 'test'
+  ...
+# Subtest: early resignation: after 16 without reliable time
+ok 48 - early resignation: after 16 without reliable time
+  ---
+  duration_ms: 0.1355
+  type: 'test'
+  ...
+# Subtest: early resignation: missing last date
+ok 49 - early resignation: missing last date
+  ---
+  duration_ms: 0.282292
+  type: 'test'
+  ...
+# Subtest: early resignation: future last date
+ok 50 - early resignation: future last date
+  ---
+  duration_ms: 0.416292
+  type: 'test'
+  ...
+# Subtest: early resignation: conflicting records
+ok 51 - early resignation: conflicting records
+  ---
+  duration_ms: 1.024
+  type: 'test'
+  ...
+# Subtest: departure query explicitly requests all approval states and batches candidate IDs
+ok 52 - departure query explicitly requests all approval states and batches candidate IDs
+  ---
+  duration_ms: 17.939917
+  type: 'test'
+  ...
+# Subtest: malformed departure query fails closed
+ok 53 - malformed departure query fails closed
+  ---
+  duration_ms: 0.826875
+  type: 'test'
+  ...
+# Subtest: a known employee with missing business type is retained for review rather than aborting all candidates
+ok 54 - a known employee with missing business type is retained for review rather than aborting all candidates
+  ---
+  duration_ms: 0.319125
+  type: 'test'
+  ...
+# Subtest: old resignation does not block rehire, but a current uncertain resignation does
+ok 55 - old resignation does not block rehire, but a current uncertain resignation does
+  ---
+  duration_ms: 0.325042
+  type: 'test'
+  ...
+# Subtest: 户口地址在深圳时不被外省户籍所在地覆盖
+ok 56 - 户口地址在深圳时不被外省户籍所在地覆盖
+  ---
+  duration_ms: 3.0145
+  type: 'test'
+  ...
+# Subtest: 户籍所在地在深圳时判深户但不改写外省户口地址，并提示人工核对
+ok 57 - 户籍所在地在深圳时判深户但不改写外省户口地址，并提示人工核对
+  ---
+  duration_ms: 2.107833
+  type: 'test'
+  ...
+# Subtest: 户口地址缺省市时从同区县的户籍所在地补齐，保留详细地址
+ok 58 - 户口地址缺省市时从同区县的户籍所在地补齐，保留详细地址
+  ---
+  duration_ms: 0.383167
+  type: 'test'
+  ...
+# Subtest: 户口地址仅到城市时从相同城市的户籍所在地补齐区县
+ok 59 - 户口地址仅到城市时从相同城市的户籍所在地补齐区县
+  ---
+  duration_ms: 0.190333
+  type: 'test'
+  ...
+# Subtest: 外省户口地址无法确定区县时，不使用冲突的深圳区县
+ok 60 - 外省户口地址无法确定区县时，不使用冲突的深圳区县
+  ---
+  duration_ms: 0.138
+  type: 'test'
+  ...
+# Subtest: 户口地址只有唯一可识别区县时，不被冲突的户籍所在地带偏
+ok 61 - 户口地址只有唯一可识别区县时，不被冲突的户籍所在地带偏
+  ---
+  duration_ms: 0.199583
+  type: 'test'
+  ...
+# Subtest: slow startup does not navigate away after the user opens an activity
+ok 62 - slow startup does not navigate away after the user opens an activity
+  ---
+  duration_ms: 4.021959
+  type: 'test'
+  ...
+# Subtest: a list request started before creation cannot remove the new uploading activity
+ok 63 - a list request started before creation cannot remove the new uploading activity
+  ---
+  duration_ms: 1.064292
+  type: 'test'
+  ...
+# Subtest: activity dates display China time even in a UTC browser
+ok 64 - activity dates display China time even in a UTC browser
+  ---
+  duration_ms: 29.47775
+  type: 'test'
+  ...
+# Subtest: stale response cannot roll back a run link assigned during upload
+ok 65 - stale response cannot roll back a run link assigned during upload
+  ---
+  duration_ms: 3.751167
+  type: 'test'
+  ...
+# Subtest: out-of-order refreshes keep the latest response
+ok 66 - out-of-order refreshes keep the latest response
+  ---
+  duration_ms: 1.28325
+  type: 'test'
+  ...
+# Subtest: opening activity list during startup reuses the read and exposes loading until completion
+ok 67 - opening activity list during startup reuses the read and exposes loading until completion
+  ---
+  duration_ms: 6.584333
+  type: 'test'
+  ...
+# Subtest: preflight confirmation uses displayed shift even before results exist
+ok 68 - preflight confirmation uses displayed shift even before results exist
+  ---
+  duration_ms: 7.42
+  type: 'test'
+  ...
+# Subtest: overnight rest retains next-day assignment
+ok 69 - overnight rest retains next-day assignment
+  ---
+  duration_ms: 1.533042
+  type: 'test'
+  ...
+# Subtest: genuinely missing shift time remains blocked
+ok 70 - genuinely missing shift time remains blocked
+  ---
+  duration_ms: 1.436042
+  type: 'test'
+  ...
+# Subtest: invalid rest interval remains blocked
+ok 71 - invalid rest interval remains blocked
+  ---
+  duration_ms: 2.667833
+  type: 'test'
+  ...
+# Subtest: successfully recalculated supplementary shifts no longer appear as configuration tasks
+ok 72 - successfully recalculated supplementary shifts no longer appear as configuration tasks
+  ---
+  duration_ms: 0.719208
+  type: 'test'
+  ...
+# Subtest: configuration continuation reuses uploaded files and retains retry through another gate
+ok 73 - configuration continuation reuses uploaded files and retains retry through another gate
+  ---
+  duration_ms: 0.805209
+  type: 'test'
+  ...
+# Subtest: missing-shift actions bind to the visible panel instead of a stale duplicate
+ok 74 - missing-shift actions bind to the visible panel instead of a stale duplicate
+  ---
+  duration_ms: 0.802708
+  type: 'test'
+  ...
+# Subtest: current examples cannot be presented as historical rules
+ok 75 - current examples cannot be presented as historical rules
+  ---
+  duration_ms: 1.073958
+  type: 'test'
+  ...
+# Subtest: position allowance keeps 56 hours intact and deducts all hours above the boundary
+ok 76 - position allowance keeps 56 hours intact and deducts all hours above the boundary
+  ---
+  duration_ms: 24.638833
+  type: 'test'
+  ...
+# Subtest: Dongguan meal allowance caps daily hours and rounds only after monthly accumulation
+ok 77 - Dongguan meal allowance caps daily hours and rounds only after monthly accumulation
+  ---
+  duration_ms: 0.381
+  type: 'test'
+  ...
+# Subtest: Jiashan meal example distinguishes sick leave from personal leave; Jinjiang stays zero
+ok 78 - Jiashan meal example distinguishes sick leave from personal leave; Jinjiang stays zero
+  ---
+  duration_ms: 1.851125
+  type: 'test'
+  ...
+# Subtest: housing example includes checkout day and updates month-length bounds
+ok 79 - housing example includes checkout day and updates month-length bounds
+  ---
+  duration_ms: 0.227708
+  type: 'test'
+  ...
+# Subtest: housing absence starts at 56 hours, while Jinjiang leave starts above seven days
+ok 80 - housing absence starts at 56 hours, while Jinjiang leave starts above seven days
+  ---
+  duration_ms: 0.47
+  type: 'test'
+  ...
+# Subtest: night windows independently apply minimum duration and half-hour truncation
+ok 81 - night windows independently apply minimum duration and half-hour truncation
+  ---
+  duration_ms: 4.031625
+  type: 'test'
+  ...
+# Subtest: LB15 uses regular hours rather than the ordinary three-yuan hourly rate
+ok 82 - LB15 uses regular hours rather than the ordinary three-yuan hourly rate
+  ---
+  duration_ms: 0.550833
+  type: 'test'
+  ...
+# Subtest: attendance award requires mutually exclusive lateness tiers and all other conditions
+ok 83 - attendance award requires mutually exclusive lateness tiers and all other conditions
+  ---
+  duration_ms: 0.357792
+  type: 'test'
+  ...
+# Subtest: seniority has its own inclusive threshold, caps, and independent FBU proration
+ok 84 - seniority has its own inclusive threshold, caps, and independent FBU proration
+  ---
+  duration_ms: 0.9165
+  type: 'test'
+  ...
+# Subtest: temperature examples match season, shift temperature, local caps and monthly rounding
+ok 85 - temperature examples match season, shift temperature, local caps and monthly rounding
+  ---
+  duration_ms: 3.839125
+  type: 'test'
+  ...
+# Subtest: invalid numeric entries and incompatible standards stay within the configured model
+ok 86 - invalid numeric entries and incompatible standards stay within the configured model
+  ---
+  duration_ms: 0.246541
+  type: 'test'
+  ...
+# Subtest: domestic refresh displays canbuBatches before the activity request finishes
+ok 87 - domestic refresh displays canbuBatches before the activity request finishes
+  ---
+  duration_ms: 2.009875
+  type: 'test'
+  ...
+# Subtest: domestic refresh displays canbuWorkbench before the activity request finishes
+ok 88 - domestic refresh displays canbuWorkbench before the activity request finishes
+  ---
+  duration_ms: 1.688042
+  type: 'test'
+  ...
+# Subtest: domestic refresh displays rulePackage before the activity request finishes
+ok 89 - domestic refresh displays rulePackage before the activity request finishes
+  ---
+  duration_ms: 2.009417
+  type: 'test'
+  ...
+# Subtest: FBU restores only the activity and step explicitly present in the URL
+ok 90 - FBU restores only the activity and step explicitly present in the URL
+  ---
+  duration_ms: 2.065833
+  type: 'test'
+  ...
+# Subtest: FBU startup does not override navigation while the activity list is loading
+ok 91 - FBU startup does not override navigation while the activity list is loading
+  ---
+  duration_ms: 0.884666
+  type: 'test'
+  ...
+# Subtest: recruitment refresh restores the selected run instead of the newest run
+ok 92 - recruitment refresh restores the selected run instead of the newest run
+  ---
+  duration_ms: 3.149209
+  type: 'test'
+  ...
+# Subtest: employee activity restores once and ignores an older navigation response
+ok 93 - employee activity restores once and ignores an older navigation response
+  ---
+  duration_ms: 0.841125
+  type: 'test'
+  ...
+# Subtest: social insurance accepts only known restored views
+ok 94 - social insurance accepts only known restored views
+  ---
+  duration_ms: 1.133083
+  type: 'test'
+  ...
+# Subtest: overseas results navigation retains run query and records the visible page
+ok 95 - overseas results navigation retains run query and records the visible page
+  ---
+  duration_ms: 0.94825
+  type: 'test'
+  ...
+# Subtest: unrelated reads and authentication bypass the progress UI
+ok 96 - unrelated reads and authentication bypass the progress UI
+  ---
+  duration_ms: 12.764791
+  type: 'test'
+  ...
+# Subtest: multipart upload can be aborted and rejects before processing results
+ok 97 - multipart upload can be aborted and rejects before processing results
+  ---
+  duration_ms: 1.271625
+  type: 'test'
+  ...
+# Subtest: stop after upload waits for the current server step and does not claim to kill it
+ok 98 - stop after upload waits for the current server step and does not claim to kill it
+  ---
+  duration_ms: 0.76675
+  type: 'test'
+  ...
+# Subtest: server errors remain errors; unknown progress has no invented percentage
+ok 99 - server errors remain errors; unknown progress has no invented percentage
+  ---
+  duration_ms: 1.389042
+  type: 'test'
+  ...
+# Subtest: server error details are shown in the progress panel
+ok 100 - server error details are shown in the progress panel
+  ---
+  duration_ms: 0.783833
+  type: 'test'
+  ...
+# Subtest: completion is idempotent and cannot turn a stopped operation into success
+ok 101 - completion is idempotent and cannot turn a stopped operation into success
+  ---
+  duration_ms: 0.37875
+  type: 'test'
+  ...
+1..101
+# tests 101
+# suites 0
+# pass 101
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 250.686083
+
+
+sigma-company-files-node.log
+PASS: >4.5 MB private direct upload; upload failure blocks start; export integrity and Chinese filename
+
+
+sigma-company-mysql-tests.log
+....                                                                     [100%]
+4 passed in 1.00s
+
+
+sigma-company-china-required.log
+........................................................................ [ 55%]
+..........................................................               [100%]
+130 passed in 1.44s
+
+
+sigma-company-aideploy-check.log
+   Building aideploy-devkit @ file:///var/folders/bw/t4v_tllj2w31w8ym24lhjdqr0000gp/T/sigma-aideploy-check-t1jmf71l/aideploy-devkit
+      Built aideploy-devkit @ file:///var/folders/bw/t4v_tllj2w31w8ym24lhjdqr0000gp/T/sigma-aideploy-check-t1jmf71l/aideploy-devkit
+Installed 1 package in 4ms
+✓ 未发现问题（规则 v3.0）

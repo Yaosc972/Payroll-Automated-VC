@@ -1,0 +1,37 @@
+{
+  "environment": "loopback MySQL, disposable file adapter, simulated server session; no company writes",
+  "browser": "ego-browser",
+  "taskSpaceId": 31,
+  "subjects": {
+    "meal-allowance": {
+      "month": "2026-09",
+      "rows": 1,
+      "amount": 0,
+      "input": "synthetic non-zt employee, correctly excluded"
+    },
+    "wx-meal-allowance": {
+      "month": "2026-05",
+      "rows": 1317,
+      "amount": 2520,
+      "input": "real workbook"
+    },
+    "relocation-allowance": {
+      "month": "2026-08",
+      "employees": 184,
+      "amount": 91300,
+      "input": "recorded Beisen source and historical organizations"
+    }
+  },
+  "checks": {
+    "confirmation": true,
+    "threeIndependentActivities": true,
+    "refreshRestoresActivityAndResult": true,
+    "exportDownloadedEachSubject": true,
+    "brokenAvatarFallsBackAndLoads": true
+  },
+  "limitations": [
+    "No live Beisen credential/API verification",
+    "No real OBS write/read or browser CORS verification",
+    "No authenticated company preview/production UAT"
+  ]
+}

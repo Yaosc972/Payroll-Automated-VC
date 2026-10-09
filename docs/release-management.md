@@ -173,7 +173,9 @@ vercel inspect <deployment-url> --scope yaosc-s-project
 
 ## 公司服务器发布线
 
-公司服务器部署线以：
+2026-10-09 已重新核实公司仓库 `gitlab/master` 为 `0d1411ceb605eacbac83e6fcbea9d1cde2cd822e`。本次功能候选使用 `codex/company-feature-integration-20261009`；最新候选、验证、迁移和审批事项见 [公司功能集成交接](company_feature_integration_20261009.md)。线上运行制品仍须在 AIDeploy 核实 release/source SHA 和镜像 digest，不能将远端 master 当成生产回滚版本。
+
+历史公司服务器部署线以：
 
 ```bash
 origin/codex/admin-module-release-consolidation-platform
