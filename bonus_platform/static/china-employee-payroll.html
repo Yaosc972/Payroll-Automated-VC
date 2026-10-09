@@ -5,22 +5,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>中国区正式工薪酬核算 · 西格玛工作台</title>
-    <link rel="icon" type="image/png" href="assets/bonus-logo-dark.png" />
+    <link rel="icon" type="image/png" href="assets/bonus-logo-header-blue.png" />
     <link rel="stylesheet" href="styles.css?v=35" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
     <script src="permission-guard.js?v=9"></script>
+    <link rel="stylesheet" href="relocation-allowance.css?v=7" />
+    <link rel="stylesheet" href="china-payroll-page.css?v=13" />
+    <link rel="stylesheet" href="meal-allowance.css?v=1" />
     <style>html { color-scheme: light; }</style>
   </head>
-  <body class="china-employee-payroll-shell">
+  <body class="china-employee-payroll-shell payroll-refresh">
     <header class="app-chrome">
       <div class="chrome-left">
-        <a class="portal-logo-mark compact-back" href="/" aria-label="返回西格玛工作台首页">
+        <a class="portal-logo-mark compact-back" href="/" aria-label="返回 西格玛工作台首页">
           <span class="brand-mark-frame">
             <img src="assets/bonus-logo-header-blue.png" alt="" />
           </span>
           <span class="brand-copy">
-            <span class="brand-name">Σ-WORKBENCH</span>
-            <span class="brand-note">西格玛工作台</span>
+            <span class="brand-name">西格玛工作台</span>
+            <span class="brand-note">Sigma Workbench</span>
           </span>
         </a>
         <div class="chrome-divider"></div>
@@ -30,250 +33,175 @@
           <span class="chrome-desc">补贴核算、奖金核算、扣款核算、社保个税与发薪结果校验</span>
         </div>
       </div>
-      <div class="chrome-right">
-        <div class="chrome-run-badge workbench-action">
-          <span class="run-dot"></span>
-          <span id="calcPeriodLabel">待上传考勤记录</span>
-        </div>
-        <button id="btnExport" class="btn-download workbench-action" type="button" disabled>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v8M4 6l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          导出结果
-        </button>
-      </div>
+      <nav class="payroll-page-tabs" aria-label="核算导航"><a href="#" id="payrollSubjectsTab">薪酬科目</a><a href="#activities" id="payrollActivitiesTab">活动列表</a></nav>
     </header>
 
-    <main class="employee-module-hub" id="moduleHub">
-      <section class="hub-head">
-        <div>
-          <p>China Employee Payroll</p>
-          <h1>中国区正式工薪酬核算</h1>
-          <span>从子功能卡片进入对应核算工作台。第一期先开放技术部餐补核算，后续继续扩展补贴、奖金、扣款、社保个税与发薪校验。</span>
-        </div>
-      </section>
-
-      <figure class="payroll-hero-spot" aria-hidden="true">
-        <img src="assets/china-payroll-hero-spot.png" alt="" />
-      </figure>
-
-      <section class="module-card-stage" aria-label="正式工薪酬子功能卡片">
-        <button class="payroll-feature-card active" id="openMealAllowance" type="button" data-dock-card aria-label="进入技术部餐补核算">
-          <span class="feature-card-tooltip" aria-hidden="true">进入技术部餐补核算</span>
-          <span class="feature-card-title">技术部餐补核算</span>
-          <span class="feature-card-meta">Tech Meal Allowance · Prototype</span>
-          <span class="feature-card-preview" aria-hidden="true">
-            <span class="preview-window">
-              <span class="preview-topbar"></span>
-              <span class="preview-heading"></span>
-              <span class="preview-grid">
-                <i></i><i></i><i></i>
-              </span>
-              <span class="preview-table">
-                <i></i><i></i><i></i><i></i>
-              </span>
-            </span>
-          </span>
-          <span class="feature-card-footer">
-            <span>进入核算</span>
-            <b aria-hidden="true">→</b>
-          </span>
-        </button>
+    <main id="payrollActivityLoading" class="payroll-activity-loading" hidden><p id="payrollActivityMessage" role="status">正在读取活动…</p><a href="#activities">返回活动列表</a></main>
+    <main id="payrollActivitiesView" class="payroll-activities-view" hidden>
+      <header class="payroll-activities-heading"><div><h1>活动列表</h1><p>三个科目统一管理，每个活动独立保存核算月份与结果。</p></div><a href="#" class="payroll-enter">＋ 新建活动</a></header>
+      <section class="payroll-activities-frame" aria-label="核算活动">
+        <div class="payroll-activities-toolbar"><input id="payrollActivitySearch" type="search" placeholder="搜索活动名称、创建人" aria-label="搜索活动名称、创建人" /><select id="payrollActivitySubject" aria-label="核算科目"><option value="">全部科目</option><option value="meal-allowance">集团技术部餐补</option><option value="wx-meal-allowance">WX 技术部餐补</option><option value="relocation-allowance">职场搬迁补贴 · ABU</option></select><input id="payrollActivityMonth" type="month" aria-label="核算月份" /><select id="payrollActivityStatus" aria-label="活动状态"><option value="">全部状态</option><option value="draft">待核算</option><option value="running">核算中</option><option value="completed">已核算</option><option value="failed">核算失败</option></select><button id="payrollActivityRefresh" type="button">刷新</button></div>
+        <p id="payrollActivitiesError" class="payroll-activities-error" role="status" hidden></p>
+        <div class="payroll-activities-table-wrap"><table class="payroll-activities-table"><thead><tr><th>活动名称</th><th>核算科目</th><th>核算月份</th><th>状态</th><th>核算人数</th><th>补贴金额</th><th>创建人</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="payrollActivityRows"></tbody></table></div>
+        <footer class="payroll-activities-footer"><span id="payrollActivityCount" role="status">正在读取活动…</span><div><button id="payrollActivityPrev" type="button">上一页</button><button id="payrollActivityNext" type="button">下一页</button></div></footer>
       </section>
     </main>
 
-    <main class="employee-workspace employee-workbench-view nav-collapsed" id="mealAllowanceWorkbench" hidden>
-      <aside class="employee-subnav" aria-label="正式工薪酬子功能导航">
-        <button class="subnav-toggle" id="toggleSubnav" type="button" aria-label="展开子功能导航" aria-expanded="false">
-          <span></span>
-          <span></span>
-          <span></span>
-        </button>
-        <div class="subnav-title">
-          <span>Payroll Modules</span>
-          <strong>子功能导航</strong>
-        </div>
-        <button class="subnav-item back-item" id="backToModuleHub" type="button">
-          <span>返回子功能卡片</span>
-          <small>Module Gallery</small>
-        </button>
-        <button class="subnav-item active" type="button">
-          <span>技术部餐补核算</span>
-          <small>Tech Meal Allowance</small>
-        </button>
-        <div class="subnav-batches" aria-labelledby="batchTitle">
-          <div class="subnav-batches-head">
-            <div>
-              <span>Payroll Runs</span>
-              <strong id="batchTitle">历史核算批次</strong>
-            </div>
-            <button class="btn-ghost-small" id="btnRefreshRuns" type="button">刷新</button>
+    <main class="employee-module-hub" id="moduleHub">
+      <section class="payroll-start-heading"><h1>开始核算</h1><p>选择科目并设置核算月份。</p></section>
+      <div class="payroll-start-layout">
+        <nav class="payroll-subjects" aria-label="薪酬科目">
+          <h2>补贴核算</h2>
+          <button id="openMealAllowance" class="payroll-subject" type="button" aria-pressed="false" data-subject="meal-allowance"><span class="payroll-module-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 3v6a3 3 0 0 0 6 0V3M6 3v18m12-9v9m0-9h-3V7c0-2 1-4 3-4v9Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="payroll-module-badge">集团</span></span><span class="payroll-subject-label"><strong>集团技术部餐补</strong><span class="payroll-source-note">北森考勤</span></span><span class="payroll-subject-arrow" aria-hidden="true">›</span></button>
+          <button id="openWxMealAllowance" class="payroll-subject" type="button" aria-pressed="false" data-subject="wx-meal-allowance"><span class="payroll-module-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 3v6a3 3 0 0 0 6 0V3M6 3v18m12-9v9m0-9h-3V7c0-2 1-4 3-4v9Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="payroll-module-badge payroll-module-badge-wx">WX</span></span><span class="payroll-subject-label"><strong>WX 技术部餐补</strong><span class="payroll-source-note">Excel 导入</span></span><span class="payroll-subject-arrow" aria-hidden="true">›</span></button>
+          <button id="openRelocationAllowance" class="payroll-subject" type="button" aria-pressed="false" data-subject="relocation-allowance"><span class="payroll-module-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8M7 7h4M7 11h4M7 15h2M1 21h9m4-4h8m-3-3 3 3-3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="payroll-module-badge payroll-module-badge-abu">ABU</span></span><span class="payroll-subject-label"><strong>职场搬迁补贴</strong></span><span class="payroll-subject-arrow" aria-hidden="true">›</span></button>
+        </nav>
+        <section class="payroll-start-panel" aria-label="设置核算月份">
+          <div id="payrollSubjectEmpty" class="payroll-subject-empty">
+            <svg class="payroll-start-art" viewBox="0 0 440 190" fill="none" aria-hidden="true"><ellipse cx="220" cy="100" rx="175" ry="67" stroke="#edf2fa"/><path d="M38 123c63 73 126 58 171-25s103-62 141-8 58-13 62-36" stroke="#dce9fc" stroke-width="12" stroke-linecap="round"/><path d="M38 123c63 73 126 58 171-25s103-62 141-8 58-13 62-36" stroke="#7db3ff" stroke-width="2"/><rect x="66" y="48" width="77" height="97" rx="13" fill="white" stroke="#cddbf0" stroke-width="1.5" transform="rotate(-8 66 48)"/><path d="M83 69h35m-31 48h28" stroke="#a7bbd6" stroke-width="2" stroke-linecap="round"/><rect x="81" y="82" width="52" height="19" rx="5" fill="#edf5ff"/><circle cx="91" cy="92" r="3" fill="#2563eb"/><rect x="193" y="25" width="83" height="95" rx="13" fill="white" stroke="#cddbf0" stroke-width="1.5"/><path d="M193 51h83m-62-32v13m42-13v13" stroke="#b2c5e0" stroke-width="1.5"/><rect x="220" y="73" width="24" height="24" rx="7" fill="#2563eb"/><path d="m226 85 4 4 8-9" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M336 62h35l18 19v65a9 9 0 0 1-9 9h-44a9 9 0 0 1-9-9V71a9 9 0 0 1 9-9Z" fill="white" stroke="#cddbf0" stroke-width="1.5"/><path d="M371 63v20h18m-48 20h30m-30 12h24" stroke="#b2c5e0" stroke-width="1.5"/><circle cx="381" cy="147" r="17" fill="#edf5ff" stroke="#cddbf0"/><path d="m374 147 5 5 10-11" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <h2>从一个科目开始</h2><p>选择左侧科目，设置本次核算月份。</p><div class="payroll-start-steps"><span>01 选择科目</span><i></i><span>02 设置月份</span><i></i><span>03 进入核算</span></div>
           </div>
-          <p>点击批次可回看结果并导出。</p>
-          <div class="batch-list" id="batchList"></div>
+          <form id="payrollSubjectForm" class="payroll-subject-form" hidden>
+            <p class="payroll-eyebrow">月度薪酬核算</p><div class="payroll-subject-title-row"><h2 id="payrollSelectedTitle"></h2><span id="payrollSelectedScope" class="payroll-scope-tag" hidden>ABU</span></div><p id="payrollSelectedDescription"></p>
+            <div class="payroll-month-field"><label for="payrollSelectedMonthTrigger">核算月份</label><input id="payrollSelectedMonth" type="month" min="2000-01" required data-payroll-month /></div>
+            <label class="payroll-activity-name-field">活动名称 <span>选填</span><input id="payrollActivityName" maxlength="120" placeholder="默认按月份和科目命名" autocomplete="off" /></label>
+            <div class="payroll-subject-info"><span>数据来源</span><strong id="payrollSelectedSource"></strong><p id="payrollSelectedHint"></p></div>
+            <p id="payrollSelectionStatus" role="status" aria-live="polite"></p>
+            <button class="payroll-enter" type="submit">进入核算 <span aria-hidden="true">→</span></button>
+          </form>
+        </section>
+      </div>
+    </main>
+
+    <main class="employee-workspace employee-workbench-view meal-workspace" id="mealAllowanceWorkbench" hidden>
+      <aside class="employee-subnav" aria-label="技术部餐补导航">
+        <a class="subnav-item back-item" href="#activities"><span>返回活动列表</span><small>Payroll Activities</small></a>
+        <div class="subnav-item active"><span id="mealNavTitle">集团技术部餐补</span><small id="mealNavSource">北森考勤</small></div>
+        <div class="subnav-batches" hidden>
+          <div class="subnav-batches-head"><strong>历史核算批次</strong><button id="mealRefresh" type="button" class="btn-ghost-small">刷新</button></div>
+          <p>点击批次可回看结果并导出。</p><div class="batch-list" id="mealRuns"></div>
         </div>
       </aside>
-
       <section class="employee-main">
-        <div class="employee-hero">
-          <div>
-            <p>正式工薪酬 · 第一期原型</p>
-            <h1>技术部餐补核算工作台</h1>
-            <span>上传人事系统导出的考勤记录，按已确认的技术部餐补口径生成核算结果与异常提示。</span>
-          </div>
-          <div class="hero-summary" aria-label="技术部餐补核算摘要">
-            <div><span>核算人数</span><strong id="summaryEmployees">0</strong></div>
-            <div><span>应发餐补</span><strong id="summaryAmount">¥0</strong></div>
-            <div><span>异常提醒</span><strong id="summaryIssues">0</strong></div>
-          </div>
-        </div>
-
-        <div class="employee-grid">
-          <section class="workspace-panel import-panel" aria-labelledby="importTitle">
-            <div class="section-header">
-              <div>
-                <h2 class="section-title" id="importTitle">数据导入区</h2>
-                <p class="section-sub">请选择一种考勤来源上传，同一批次不混合核算</p>
-              </div>
-            </div>
-            <div class="upload-stack">
-              <label class="upload-card" data-source-card="hr">
-                <input id="attendanceFiles" type="file" accept=".xlsx,.xlsm" multiple />
-                <span class="upload-card-head">
-                  <span>集团技术部考勤记录</span>
-                  <em>说明</em>
-                </span>
-                <strong id="attendanceFileName">选择文件</strong>
-                <small>
-                  <b>集团技术部考勤记录</b>
-                  上传集团技术部日考勤记录，可多选分片文件；本来源单独核算、单独导出。
-                </small>
-              </label>
-              <label class="upload-card" data-source-card="wx">
-                <input id="wxAttendanceFiles" type="file" accept=".xlsx,.xlsm" multiple />
-                <span class="upload-card-head">
-                  <span>WX技术部考勤记录</span>
-                  <em>说明</em>
-                </span>
-                <strong id="wxAttendanceFileName">选择文件</strong>
-                <small>
-                  <b>WX技术部考勤记录</b>
-                  上传体系外 WX-PBU技术部日报表，只核算并导出 WX 技术部结果。
-                </small>
-              </label>
-            </div>
-            <div class="import-actions">
-              <button class="btn-run-calc" id="btnRunCalc" type="button" disabled>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M4 2.75h5.4L12 5.35v7.9H4V2.75Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
-                  <path d="M9.2 2.9v2.6h2.6M6 8h4M6 10.3h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                点击开始核算
-              </button>
-              <button class="btn-reset-source" id="btnResetSource" type="button" disabled>重新选择来源</button>
-              <span id="runHint">选择左侧来源后开始核算</span>
-            </div>
-          </section>
-
-          <section class="workspace-panel rule-panel" aria-labelledby="ruleTitle">
-            <div class="section-header">
-              <div>
-                <h2 class="section-title" id="ruleTitle">核算规则配置区</h2>
-                <p class="section-sub">按已确认规则执行，页面不临时改规则</p>
-              </div>
-            </div>
-            <div class="rule-summary-list">
-              <span>集团技术部：HQU技术部整体纳入；ABU/FBU/FES/LBU/PBU 按技术部三级组织纳入；HRAS 指定技术组纳入；LBU战略运营部BI组纳入</span>
-              <span>集团技术部：核算班次包含深圳正常班</span>
-              <span>WX技术部：组织架构为 WX-PBU技术部 及下级组织，班次不是休息即工作日</span>
-              <span>补贴标准：命中来源规则且末打卡达到 21:00 的考勤日按 20 元/天计算；两种来源分开核算和导出</span>
-            </div>
-          </section>
-        </div>
-
-        <section class="workspace-panel result-panel" aria-labelledby="resultTitle">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title" id="resultTitle">结果预览区</h2>
-              <p class="section-sub">技术部餐补核算明细 · 支持筛选、分页与批次回看</p>
-            </div>
-            <div class="section-actions">
-              <span class="result-status" id="resultStatus">等待上传并核算</span>
-            </div>
-          </div>
-          <div class="result-toolbar" aria-label="结果筛选">
-            <label>
-              <span>关键词</span>
-              <input id="resultSearch" type="search" placeholder="搜索工号、姓名、组织" />
-            </label>
-            <label>
-              <span>状态</span>
-              <select id="resultStatusFilter">
-                <option value="all">全部</option>
-                <option value="payable">已计算餐补</option>
-                <option value="unmatched">未命中</option>
-              </select>
-            </label>
-          </div>
-          <div class="employee-table-wrap">
-            <table class="employee-payroll-table">
-              <thead>
-                <tr>
-                  <th>工号</th>
-                  <th>姓名</th>
-                  <th>二级组织</th>
-                  <th>三级组织</th>
-                  <th>补贴天数</th>
-                  <th>餐补金额</th>
-                  <th>状态</th>
-                </tr>
-              </thead>
-              <tbody id="resultRows"></tbody>
-            </table>
-          </div>
-          <div class="table-pagination" aria-label="结果分页">
-            <span id="resultTotal">共0条数据</span>
-            <nav class="pagination-nav" aria-label="结果分页导航">
-              <ul class="pagination-controls" id="paginationList">
-                <li>
-                  <button class="pagination-link pagination-prev" id="prevPage" type="button" aria-label="上一页">
-                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 15 7.5 10l5-5" /></svg>
-                    <span>Previous</span>
-                  </button>
-                </li>
-                <li>
-                  <span class="pagination-link active-page" id="resultPageInfo" aria-current="page">1</span>
-                </li>
-                <li>
-                  <button class="pagination-link pagination-next" id="nextPage" type="button" aria-label="下一页">
-                    <span>Next</span>
-                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7.5 5 5 5-5 5" /></svg>
-                  </button>
-                </li>
-              </ul>
-              <select id="pageSize" aria-label="每页条数">
-                <option value="20" selected>20 条/页</option>
-                <option value="50">50 条/页</option>
-                <option value="100">100 条/页</option>
-                <option value="200">200 条/页</option>
-              </select>
-            </nav>
-          </div>
+        <header class="meal-heading">
+          <div><p class="payroll-eyebrow" id="mealActivityName">月度餐补核算</p><h1><span id="mealTitle">集团技术部餐补</span><span id="mealMonthLabel"></span></h1></div>
+          <div class="meal-heading-actions"><a href="#">新建活动</a><button id="mealExport" type="button" hidden>导出明细</button><span id="mealExportStatus" class="meal-export-status" role="status" aria-live="polite"></span></div>
+        </header>
+        <section id="mealUpload" class="workspace-panel meal-upload" aria-labelledby="mealUploadTitle" hidden>
+          <div class="meal-upload-heading"><div><h2 id="mealUploadTitle">上传 WX 考勤</h2><p>上传所选月份的 WX 技术部日考勤，可同时选择多个分片文件。</p></div><span class="meal-source-badge">Excel 导入</span></div>
+          <label class="meal-upload-target" for="mealFiles"><span class="meal-upload-icon" aria-hidden="true">↑</span><strong id="mealFileLabel">选择考勤文件</strong><span>支持 .xlsx、.xlsm</span><input id="mealFiles" type="file" accept=".xlsx,.xlsm" multiple /></label>
+          <div class="meal-upload-bottom"><span id="mealUploadHint">仅核算 WX 技术部，与集团技术部分开保存。</span><button id="mealUploadStart" type="button" class="meal-primary" disabled>开始核算 <span aria-hidden="true">→</span></button></div>
         </section>
-
-        <section class="workspace-panel issue-panel" aria-labelledby="issueTitle">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title" id="issueTitle">异常/缺失数据提示区</h2>
-              <p class="section-sub">仅提示缺必要字段、重复工号+考勤日期等需要复核的数据问题</p>
+        <section id="mealProcessing" class="workspace-panel meal-processing" data-state="idle" aria-labelledby="mealProcessingTitle">
+          <div class="meal-processing-top"><span id="mealProcessingKicker">准备就绪</span><span id="mealElapsed">已用时 00:00</span></div>
+          <div class="meal-process-grid"><div class="meal-scene-stage" aria-hidden="true"><div class="meal-scene" data-meal-scene="0"><svg viewBox="0 0 560 300" fill="none">
+<path class="match-link" d="M210 78C280 78 280 96 350 96M210 150h140M210 222C280 222 280 204 350 204" stroke="#9db9ea" stroke-width="2" stroke-dasharray="6 6"/>
+<g class="person-card"><rect x="58" y="48" width="154" height="60" rx="12" fill="white" stroke="#cddcf0"/><circle cx="85" cy="72" r="9" fill="#bed2f2"/><path d="M72 93q13-19 26 0" fill="#dce8f8"/><rect x="111" y="67" width="68" height="7" rx="3" fill="#9fb9df"/><rect x="111" y="83" width="43" height="6" rx="3" fill="#dbe6f7"/></g><g class="record-card"><rect x="350" y="48" width="154" height="60" rx="12" fill="#f2f7ff" stroke="#cddcf0"/><rect x="367" y="67" width="82" height="7" rx="3" fill="#a9c4ed"/><rect x="367" y="83" width="53" height="6" rx="3" fill="#dbe6f7"/><path class="match-check" d="M469 77l6 6 11-13" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></g><g class="person-card"><rect x="58" y="120" width="154" height="60" rx="12" fill="white" stroke="#cddcf0"/><circle cx="85" cy="144" r="9" fill="#bed2f2"/><path d="M72 165q13-19 26 0" fill="#dce8f8"/><rect x="111" y="139" width="68" height="7" rx="3" fill="#9fb9df"/><rect x="111" y="155" width="43" height="6" rx="3" fill="#dbe6f7"/></g><g class="record-card"><rect x="350" y="120" width="154" height="60" rx="12" fill="#f2f7ff" stroke="#cddcf0"/><rect x="367" y="139" width="82" height="7" rx="3" fill="#a9c4ed"/><rect x="367" y="155" width="53" height="6" rx="3" fill="#dbe6f7"/><path class="match-check" d="M469 149l6 6 11-13" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></g><g class="person-card"><rect x="58" y="192" width="154" height="60" rx="12" fill="white" stroke="#cddcf0"/><circle cx="85" cy="216" r="9" fill="#bed2f2"/><path d="M72 237q13-19 26 0" fill="#dce8f8"/><rect x="111" y="211" width="68" height="7" rx="3" fill="#9fb9df"/><rect x="111" y="227" width="43" height="6" rx="3" fill="#dbe6f7"/></g><g class="record-card"><rect x="350" y="192" width="154" height="60" rx="12" fill="#f2f7ff" stroke="#cddcf0"/><rect x="367" y="211" width="82" height="7" rx="3" fill="#a9c4ed"/><rect x="367" y="227" width="53" height="6" rx="3" fill="#dbe6f7"/><path class="match-check" d="M469 221l6 6 11-13" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></g><circle class="match-orb" cx="280" cy="150" r="24" fill="#2563eb"/><path d="M272 150l6 6 12-14" stroke="white" stroke-width="3" stroke-linecap="round"/></svg></div><div class="meal-scene" data-meal-scene="1" hidden><svg viewBox="0 0 560 300" fill="none">
+<rect class="scene-sheet" x="96" y="30" width="368" height="240" rx="18" fill="white" stroke="#ccdcf2"/>
+<path d="M96 82h368" stroke="#e1eaf6"/><rect x="120" y="51" width="80" height="10" rx="5" fill="#c5d7f5"/>
+<circle cx="414" cy="56" r="4" fill="#0f766e"/><circle cx="432" cy="56" r="4" fill="#dce6f4"/>
+<g class="scan-row"><rect x="120" y="104" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="108" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="104" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="104" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="104" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="104" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="104" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="133" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="137" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="133" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="133" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="133" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="133" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="133" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="162" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="166" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="162" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="162" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="162" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="162" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="162" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="191" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="195" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="191" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="191" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="191" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="191" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="191" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="220" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="224" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="220" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="220" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="220" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="220" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="220" width="20" height="16" rx="4" fill="#dceaff"/></g><rect class="scan-light" x="106" y="94" width="348" height="28" rx="8" fill="#2563eb" opacity=".08"/><path class="scan-beam" d="M108 94h344" stroke="#3b82f6" stroke-width="2"/>
+<g class="scan-packet"><rect x="54" y="152" width="70" height="52" rx="12" fill="#2563eb"/><path d="M77 178h24m-7-7 7 7-7 7" stroke="white" stroke-width="2"/></g></svg></div><div class="meal-scene" data-meal-scene="2" hidden><svg viewBox="0 0 560 300" fill="none">
+<rect x="110" y="28" width="324" height="246" rx="16" fill="white" stroke="#cddcf0"/><rect x="134" y="52" width="95" height="10" rx="5" fill="#9fbae2"/><path d="M134 84h274" stroke="#e1eaf6"/>
+<g class="ledger-row"><rect x="134" y="106" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 115l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="111" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="111" width="80" height="7" rx="3" fill="#a9c4ec"/></g><g class="ledger-row"><rect x="134" y="138" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 147l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="143" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="143" width="80" height="7" rx="3" fill="#a9c4ec"/></g><g class="ledger-row"><rect x="134" y="170" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 179l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="175" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="175" width="80" height="7" rx="3" fill="#a9c4ec"/></g><g class="ledger-row"><rect x="134" y="202" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 211l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="207" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="207" width="80" height="7" rx="3" fill="#a9c4ec"/></g><path d="M134 241h150" stroke="#d6e2f3" stroke-width="7" stroke-linecap="round"/><g class="ledger-seal"><circle cx="423" cy="223" r="39" fill="#e6f4ef" stroke="#98cebd"/><path class="seal-check" d="M404 222l13 13 25-28" stroke="#0f766e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g></svg></div></div>
+            <div class="meal-progress-copy"><span id="mealStageIndex" class="meal-stage-index">北森考勤 · 自动核算</span><h2 id="mealProcessingTitle">选择月份后开始核算</h2><p id="mealProgress" role="status" aria-live="polite">自动读取日考勤，按集团技术部餐补规则生成明细。</p>
+              <div id="mealNumericProgress" hidden><div class="meal-progress-value"><strong id="mealPercent">0%</strong><span>当前步骤完成度</span></div><div id="mealMeter" class="meal-meter" role="progressbar" aria-label="当前核算步骤进度" aria-valuemin="0" aria-valuemax="100"><i id="mealMeterFill"></i></div><p id="mealCount"></p></div>
+              <div id="mealTransitionStatus" class="meal-transition-status" hidden><span class="meal-status-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="mealTransitionLabel">正在连接北森考勤</span></div>
+              <div class="meal-processing-actions"><a href="#" id="mealChooseMonth">新建核算活动 →</a><button id="mealActivityStart" type="button" class="meal-primary" hidden>开始核算 →</button><button id="mealRetry" type="button" class="meal-primary" hidden>重试核算</button><button id="mealReconnect" type="button" hidden>重新连接进度</button></div>
             </div>
           </div>
-          <div class="issue-list" id="issueList"></div>
+          <ol class="meal-steps" aria-label="核算步骤"><li data-meal-step="0"><div class="meal-step-track"><i></i></div><div class="meal-step-caption"><b>01</b><span>匹配核算人员</span><small>待开始</small></div></li><li data-meal-step="1"><div class="meal-step-track"><i></i></div><div class="meal-step-caption"><b>02</b><span>读取日考勤</span><small>待开始</small></div></li><li data-meal-step="2"><div class="meal-step-track"><i></i></div><div class="meal-step-caption"><b>03</b><span>核对并生成结果</span><small>待开始</small></div></li></ol>
+        </section>
+        <section id="mealResult" hidden aria-label="餐补核算结果">
+          <div class="meal-summary" id="mealSummary"></div>
+          <details id="mealWarnings" class="workspace-panel meal-warnings" hidden><summary>数据核对 <span id="mealWarningCount"></span></summary><ul id="mealWarningList"></ul></details>
+          <section class="workspace-panel" aria-labelledby="mealDetailTitle"><div class="meal-table-head"><h2 id="mealDetailTitle">核算明细</h2><span id="mealResultMeta"></span></div>
+            <div class="meal-filters"><label>搜索员工 / 组织<input id="mealSearch" type="search" placeholder="工号、姓名或组织" /></label><label>核算结果<select id="mealStatus"><option value="all">全部</option><option value="payable">有餐补</option><option value="unmatched">无餐补</option></select></label></div>
+            <div class="employee-table-wrap"><table class="employee-payroll-table meal-table"><thead><tr><th>工号</th><th>姓名</th><th>所属组织</th><th>补贴天数</th><th>餐补金额</th><th>核算说明</th></tr></thead><tbody id="mealRows"></tbody></table></div>
+            <div class="meal-pager"><span id="mealPageInfo"></span><select id="mealPageSize" aria-label="每页条数"><option value="25">25 条 / 页</option><option value="50">50 条 / 页</option><option value="100">100 条 / 页</option></select><button id="mealPrev" type="button">上一页</button><button id="mealNext" type="button">下一页</button></div>
+          </section>
         </section>
       </section>
     </main>
 
+    <main class="employee-workspace employee-workbench-view relocation-workspace" id="relocationWorkbench" hidden>
+      <aside class="employee-subnav" aria-label="职场搬迁补贴导航">
+        <a class="subnav-item back-item" href="#activities"><span>返回活动列表</span><small>Payroll Activities</small></a>
+        <div class="subnav-item active"><span>职场搬迁补贴</span><small>Relocation Allowance</small></div>
+        <div class="subnav-batches" hidden>
+          <div class="subnav-batches-head"><strong>历史核算批次</strong><button id="relocationRefresh" type="button" class="btn-ghost-small">刷新</button></div>
+          <p>点击批次可回看试算结果并导出。</p>
+          <div class="batch-list" id="relocationRuns"></div>
+        </div>
+      </aside>
+      <section class="employee-main">
+        <header class="relocation-heading">
+          <div><p class="payroll-eyebrow" id="relocationActivityName">月度补贴核算</p><h1>职场搬迁补贴 <span id="relocationMonthLabel"></span></h1></div>
+          <div class="relocation-heading-actions"><a href="#">新建活动</a><button id="relocationExport" type="button" disabled>导出明细</button><span id="relocationExportStatus" class="relocation-export-status" role="status" aria-live="polite"></span></div>
+        </header>
+        <form id="relocationForm" hidden><input id="relocationMonth" name="month" type="month" min="2000-01" required /></form>
+        <section id="relocationProcessing" class="workspace-panel relocation-processing" data-state="idle" aria-labelledby="relocationProcessingTitle">
+          <div class="relocation-processing-top"><span id="relocationProcessingKicker">准备就绪</span><span id="relocationElapsed">已用时 00:00</span></div>
+          <div class="relocation-process-grid">
+            <div class="relocation-scene-stage" aria-hidden="true"><div class="relocation-scene" data-scene="0"><svg viewBox="0 0 560 300" fill="none">
+<rect class="scene-sheet" x="96" y="30" width="368" height="240" rx="18" fill="white" stroke="#ccdcf2"/>
+<path d="M96 82h368" stroke="#e1eaf6"/><rect x="120" y="51" width="80" height="10" rx="5" fill="#c5d7f5"/>
+<circle cx="414" cy="56" r="4" fill="#0f766e"/><circle cx="432" cy="56" r="4" fill="#dce6f4"/>
+<g class="scan-row"><rect x="120" y="104" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="108" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="104" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="104" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="104" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="104" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="104" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="133" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="137" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="133" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="133" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="133" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="133" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="133" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="162" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="166" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="162" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="162" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="162" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="162" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="162" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="191" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="195" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="191" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="191" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="191" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="191" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="191" width="20" height="16" rx="4" fill="#dceaff"/></g><g class="scan-row"><rect x="120" y="220" width="16" height="16" rx="4" fill="#eaf2ff"/><rect x="151" y="224" width="94" height="7" rx="3" fill="#dbe6f7"/><rect x="273" y="220" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="304" y="220" width="20" height="16" rx="4" fill="#dceaff"/><rect x="335" y="220" width="20" height="16" rx="4" fill="#d5ebe6"/><rect x="366" y="220" width="20" height="16" rx="4" fill="#eaf2ff"/><rect x="397" y="220" width="20" height="16" rx="4" fill="#dceaff"/></g><rect class="scan-light" x="106" y="94" width="348" height="28" rx="8" fill="#2563eb" opacity=".08"/><path class="scan-beam" d="M108 94h344" stroke="#3b82f6" stroke-width="2"/>
+<g class="scan-packet"><rect x="54" y="152" width="70" height="52" rx="12" fill="#2563eb"/><path d="M77 178h24m-7-7 7 7-7 7" stroke="white" stroke-width="2"/></g></svg></div>
+<div class="relocation-scene" data-scene="1" hidden><svg viewBox="0 0 560 300" fill="none">
+<path class="match-link" d="M210 78C280 78 280 96 350 96M210 150h140M210 222C280 222 280 204 350 204" stroke="#9db9ea" stroke-width="2" stroke-dasharray="6 6"/>
+<g class="person-card"><rect x="58" y="48" width="154" height="60" rx="12" fill="white" stroke="#cddcf0"/><circle cx="85" cy="72" r="9" fill="#bed2f2"/><path d="M72 93q13-19 26 0" fill="#dce8f8"/><rect x="111" y="67" width="68" height="7" rx="3" fill="#9fb9df"/><rect x="111" y="83" width="43" height="6" rx="3" fill="#dbe6f7"/></g><g class="record-card"><rect x="350" y="48" width="154" height="60" rx="12" fill="#f2f7ff" stroke="#cddcf0"/><rect x="367" y="67" width="82" height="7" rx="3" fill="#a9c4ed"/><rect x="367" y="83" width="53" height="6" rx="3" fill="#dbe6f7"/><path class="match-check" d="M469 77l6 6 11-13" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></g><g class="person-card"><rect x="58" y="120" width="154" height="60" rx="12" fill="white" stroke="#cddcf0"/><circle cx="85" cy="144" r="9" fill="#bed2f2"/><path d="M72 165q13-19 26 0" fill="#dce8f8"/><rect x="111" y="139" width="68" height="7" rx="3" fill="#9fb9df"/><rect x="111" y="155" width="43" height="6" rx="3" fill="#dbe6f7"/></g><g class="record-card"><rect x="350" y="120" width="154" height="60" rx="12" fill="#f2f7ff" stroke="#cddcf0"/><rect x="367" y="139" width="82" height="7" rx="3" fill="#a9c4ed"/><rect x="367" y="155" width="53" height="6" rx="3" fill="#dbe6f7"/><path class="match-check" d="M469 149l6 6 11-13" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></g><g class="person-card"><rect x="58" y="192" width="154" height="60" rx="12" fill="white" stroke="#cddcf0"/><circle cx="85" cy="216" r="9" fill="#bed2f2"/><path d="M72 237q13-19 26 0" fill="#dce8f8"/><rect x="111" y="211" width="68" height="7" rx="3" fill="#9fb9df"/><rect x="111" y="227" width="43" height="6" rx="3" fill="#dbe6f7"/></g><g class="record-card"><rect x="350" y="192" width="154" height="60" rx="12" fill="#f2f7ff" stroke="#cddcf0"/><rect x="367" y="211" width="82" height="7" rx="3" fill="#a9c4ed"/><rect x="367" y="227" width="53" height="6" rx="3" fill="#dbe6f7"/><path class="match-check" d="M469 221l6 6 11-13" stroke="#0f766e" stroke-width="3" stroke-linecap="round"/></g><circle class="match-orb" cx="280" cy="150" r="24" fill="#2563eb"/><path d="M272 150l6 6 12-14" stroke="white" stroke-width="3" stroke-linecap="round"/></svg></div>
+<div class="relocation-scene" data-scene="2" hidden><svg viewBox="0 0 560 300" fill="none">
+<g stroke="#bed1ec" stroke-width="2"><path class="org-path" d="M280 78v38H144v32M280 116h136v32"/><path class="org-path" d="M144 185v28H76v30M144 213h68v30M416 185v28h-68v30M416 213h68v30"/></g>
+<g class="org-node"><rect x="228" y="26" width="104" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="242" y="44" width="76" height="7" rx="3" fill="#b9cfee"/></g><g class="org-node"><rect x="92" y="143" width="104" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="106" y="161" width="76" height="7" rx="3" fill="#b9cfee"/></g><g class="org-node"><rect x="364" y="143" width="104" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="378" y="161" width="76" height="7" rx="3" fill="#b9cfee"/></g><g class="org-node"><rect x="45" y="240" width="62" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="59" y="258" width="34" height="7" rx="3" fill="#b9cfee"/></g><g class="org-node"><rect x="181" y="240" width="62" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="195" y="258" width="34" height="7" rx="3" fill="#b9cfee"/></g><g class="org-node"><rect x="317" y="240" width="62" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="331" y="258" width="34" height="7" rx="3" fill="#b9cfee"/></g><g class="org-node"><rect x="453" y="240" width="62" height="44" rx="11" fill="white" stroke="#b6ccef"/><rect x="467" y="258" width="34" height="7" rx="3" fill="#b9cfee"/></g><circle class="org-pulse" cx="280" cy="48" r="36" stroke="#2563eb" stroke-width="2"/>
+</svg></div>
+<div class="relocation-scene" data-scene="3" hidden><svg viewBox="0 0 560 300" fill="none">
+<rect x="110" y="28" width="324" height="246" rx="16" fill="white" stroke="#cddcf0"/><rect x="134" y="52" width="95" height="10" rx="5" fill="#9fbae2"/><path d="M134 84h274" stroke="#e1eaf6"/>
+<g class="ledger-row"><rect x="134" y="106" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 115l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="111" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="111" width="80" height="7" rx="3" fill="#a9c4ec"/></g><g class="ledger-row"><rect x="134" y="138" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 147l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="143" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="143" width="80" height="7" rx="3" fill="#a9c4ec"/></g><g class="ledger-row"><rect x="134" y="170" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 179l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="175" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="175" width="80" height="7" rx="3" fill="#a9c4ec"/></g><g class="ledger-row"><rect x="134" y="202" width="18" height="18" rx="5" fill="#e8f3ef"/><path d="M139 211l3 3 6-7" stroke="#0f766e" stroke-width="1.5"/><rect x="166" y="207" width="95" height="7" rx="3" fill="#c5d6ee"/><rect x="326" y="207" width="80" height="7" rx="3" fill="#a9c4ec"/></g><path d="M134 241h150" stroke="#d6e2f3" stroke-width="7" stroke-linecap="round"/><g class="ledger-seal"><circle cx="423" cy="223" r="39" fill="#e6f4ef" stroke="#98cebd"/><path class="seal-check" d="M404 222l13 13 25-28" stroke="#0f766e" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g></svg></div></div>
+            <div class="relocation-progress-copy"><span class="relocation-stage-index" id="relocationStageIndex">步骤 01 / 03</span>
+              <h2 id="relocationProcessingTitle">从薪酬科目开始核算</h2>
+              <p id="relocationProgress" role="status" aria-live="polite">选择月份并确认后自动开始。</p>
+              <div id="relocationFinishingStatus" class="relocation-finishing-status" hidden><span class="relocation-status-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="relocationFinishingLabel">正在核对当月组织与补贴规则</span></div>
+              <div class="relocation-progress-value"><strong id="relocationPercent">—</strong><span>当前步骤完成度</span></div>
+              <div id="relocationMeter" class="relocation-meter" role="progressbar" aria-label="当前步骤完成度" aria-valuemin="0" aria-valuemax="100"><span id="relocationMeterFill"></span></div>
+              <p id="relocationCount" class="relocation-progress-count">等待任务开始</p>
+            </div>
+          </div>
+          <ol class="relocation-steps" aria-label="核算步骤"><li data-step="0"><div class="step-track"><i></i></div><div class="step-caption"><b>01</b><span>读取考勤</span><small>待开始</small></div></li><li data-step="1"><div class="step-track"><i></i></div><div class="step-caption"><b>02</b><span>匹配任职</span><small>待开始</small></div></li><li data-step="2"><div class="step-track"><i></i></div><div class="step-caption"><b>03</b><span>核对并生成结果</span><small>待开始</small></div></li></ol>
+          <div class="relocation-processing-actions"><a href="#" id="relocationChooseMonth">选择核算月份 →</a><button id="relocationStart" form="relocationForm" type="submit" class="relocation-primary" hidden>重新核算</button></div>
+        </section>
+        <section id="relocationResult" hidden aria-label="月度核算结果">
+          <div class="relocation-summary" id="relocationSummary"></div>
+          <details class="workspace-panel relocation-review" id="relocationReview"><summary>口径与数据说明 <span id="relocationReviewCount"></span></summary><ul id="relocationWarnings"></ul></details>
+          <section class="workspace-panel" aria-labelledby="relocationDetailTitle">
+            <div class="relocation-table-head"><h2 id="relocationDetailTitle">试算明细</h2><span id="relocationResultMonth"></span></div>
+            <div class="relocation-filters"><label>搜索工号 / 姓名<input id="relocationSearch" type="search" placeholder="输入工号或姓名" /></label><label>核算状态<select id="relocationStatus"><option value="">全部状态</option><option>已试算</option><option>待确认</option><option>不发放</option></select></label></div>
+            <div class="employee-table-wrap"><table class="employee-payroll-table relocation-table"><thead><tr><th>工号</th><th>姓名</th><th>三级 / 四级组织</th><th>职级</th><th>应出勤</th><th>病假</th><th>事假</th><th>旷工</th><th>产假</th><th>正常出勤</th><th>试算金额</th><th>状态 / 判定说明</th></tr></thead><tbody id="relocationRows"></tbody></table></div>
+            <div class="relocation-pager"><span id="relocationPageInfo"></span><button id="relocationPrev" type="button">上一页</button><button id="relocationNext" type="button">下一页</button></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="payrollStartConfirmation" class="payroll-confirm-dialog" aria-labelledby="payrollConfirmTitle" aria-describedby="payrollConfirmDescription">
+      <h2 id="payrollConfirmTitle">开始核算？</h2>
+      <p id="payrollConfirmDescription">确认后将自动读取北森考勤并核算补贴。</p>
+      <div class="payroll-confirm-details"><span id="payrollConfirmSubject">职场搬迁补贴</span><strong id="payrollConfirmMonth"></strong></div>
+      <form method="dialog" class="payroll-confirm-actions">
+        <button type="submit" value="cancel" autofocus>取消</button>
+        <button type="submit" value="start" class="payroll-enter">确认并开始</button>
+      </form>
+    </dialog>
     <div id="payrollToast" class="labor-toast" role="status" aria-live="polite"></div>
-    <script src="assets/xlsx.full.min.js"></script>
-    <script src="china-employee-payroll.js?v=20260928-page-restore-1"></script>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <script src="meal-allowance-motion.js?v=2"></script>
+    <script src="china-employee-payroll.js?v=5"></script>
+    <script src="relocation-motion.js?v=3"></script>
+    <script src="relocation-allowance.js?v=11"></script>
+    <script src="payroll-activities.js?v=2"></script>
+    <script src="china-payroll-subjects.js?v=7"></script>
+    <script src="payroll-month-picker.js?v=4"></script>
     <script src="feedback-widget.js?v=20260916-01"></script>
   </body>
 </html>
