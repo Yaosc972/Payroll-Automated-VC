@@ -264,6 +264,8 @@ class PayrollDataLoader:
         self._daily = None
         self._housing = None
         self._temperature = None
+        self._temperature_exclusions = None
+        self.supplemental_raw = {}
 
     def load(self):
         """Load all sheets."""
@@ -644,12 +646,16 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
     @staticmethod
     def _sheet_candidates(name: str, headers: Sequence[str]) -> List[str]:
         sheet_name = str(name or "").strip()
+        if sheet_name in {"填写说明", "填写示例", "示例"}:
+            return []
         header_set = {_normalized_header_name(header) for header in headers}
         if any(marker in sheet_name for marker in ("核算比对", "线下核对", "核对版")):
             # 生产核对工作簿常把线下金额、AI金额和月考勤基础字段放在同一结果页。
             # 结果页只用于人工比对，不能再次作为月考勤并入，否则每名员工会重复。
             return []
         employee = "工号" in header_set
+        if "不享有" in sheet_name and "高温" in sheet_name and employee:
+            return ["temperature_exclusions"]
         named = next((kind for marker, kind in (
             ("月考勤", "monthly"), ("月报", "monthly"), ("日考勤", "daily"),
             ("住宿", "housing"), ("宿舍", "housing"), ("测温", "temperature"),
@@ -685,6 +691,7 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             "daily": [{"工号"}, {"日期", "出勤日期"}],
             "housing": [{"工号"}, {"入住时间", "入宿时间", "退宿时间", "离宿时间"}],
             "temperature": [{"班次日期"}, {"测温班次"}, {"测温网点"}, {"测温温度"}],
+            "temperature_exclusions": [{"工号"}, {"姓名"}, {"工作地区"}, {"不享有原因"}, {"生效日期"}, {"结束日期"}],
             "ignore": [],
         }
         if kind not in requirements:
@@ -758,7 +765,7 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
     def _scan(self):
         if self._scanned:
             return
-        parts = {"monthly": [], "daily": [], "housing": [], "temperature": []}
+        parts = {"monthly": [], "daily": [], "housing": [], "temperature": [], "temperature_exclusions": []}
         pending = []
         for file_index, parser in enumerate(self.parsers):
             recognized = []
@@ -797,6 +804,16 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
 
         if pending:
             raise SheetConfirmationRequired(pending)
+
+        self.supplemental_raw = {kind: [row for part in parts[kind] for row in part.rows]
+                                 for kind in ("housing", "temperature", "temperature_exclusions")}
+        for part in parts["temperature_exclusions"]:
+            self._validate_sheet_choice("temperature_exclusions", part.headers, part.name)
+        self._temperature_exclusions = SheetData(
+            name="不享有高温补贴名单", headers=self._merge_headers(parts["temperature_exclusions"]),
+            rows=self.supplemental_raw["temperature_exclusions"],
+            row_count=len(self.supplemental_raw["temperature_exclusions"]),
+        ) if "temperature_exclusions" in self._present_types else None
 
         monthly_rows = self._normalize_valid_rows([
             row for part in parts["monthly"] for row in part.rows
@@ -886,6 +903,11 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
         self._scan()
         return self._temperature
 
+    @property
+    def temperature_exclusions(self) -> Optional[SheetData]:
+        self._scan()
+        return self._temperature_exclusions
+
     @staticmethod
     def _month_digits(value: Any) -> str:
         digits = "".join(char for char in str(value or "") if char.isdigit())
@@ -959,6 +981,8 @@ class MultiFilePayrollDataLoader(PayrollDataLoader):
             "present_types": sorted(self._present_types),
             "sources": self._source_summary,
         }
+        if "gaowen_butie" in engine_set:
+            summary["temperature_exclusion_rows"] = self.temperature_exclusions.row_count if self.temperature_exclusions else 0
         if "gonglingjiang" in engine_set:
             summary.update({
                 "requires_collection_seniority_roster": bool(collection_seniority_rows),

@@ -71,6 +71,7 @@ class ExcelExporter:
         "no_actual_attendance": "没有可计发的实际出勤时长",
         "outside_high_temperature_season": "不在6月至10月高温津贴期间",
         "employee_or_position_excluded": "命中地区固定排除人员或岗位规则",
+        "supplemental_period_excluded": "命中本批次不享有高温补贴名单生效区间",
         "measurement_site_unresolved": "无法识别员工对应测温网点",
         "attendance_shift_unresolved": "无法从考勤识别白班或夜班",
         "invalid_attendance_date": "出勤日期缺失或格式错误",
@@ -230,6 +231,9 @@ class ExcelExporter:
         if not daily:
             return cls._calculation_process(result)
         reason = daily.get("reason_code", "")
+        if reason == "supplemental_period_excluded":
+            return (f"本批次名单按工号匹配：{daily.get('exclusion_reason', '')}；"
+                    f"生效区间{daily.get('exclusion_start', '')}至{daily.get('exclusion_end') or '持续生效'}（含结束当天）；当日补贴=0元")
         if daily.get("status") != "calculated":
             return f"{cls.GAOWEN_REASON_LABELS.get(reason, reason or '原因待确认')}；当日补贴={fmt(daily.get('amount', 0))}元"
         rate, cap = detail.get("小时单价"), detail.get("单日封顶")

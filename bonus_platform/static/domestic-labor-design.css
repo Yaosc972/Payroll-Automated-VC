@@ -54,6 +54,7 @@ body.domestic-labor-shell::before { display:none; }
 .domestic-labor-shell .dl-upload-row strong { font-size:13px; font-weight:500; }
 .domestic-labor-shell .dl-upload-row>span { font-size:12px; line-height:1.7; color:var(--dl-muted); }
 .domestic-labor-shell .dl-upload-row .dl-badge { background:#f1f4f8; color:#667082; border:0; font-weight:400; }
+.domestic-labor-shell .dl-upload-row .dl-upload-template { justify-self:end; margin:0; white-space:nowrap; }
 .domestic-labor-shell .dl-upload-requirements-title { font-size:13px; color:#484851; font-weight:600; margin:20px 24px 4px; }
 .domestic-labor-shell .dl-upload-start { display:none; }
 .domestic-labor-shell .drawer-footer { background:#fafafb; border-top:1px solid var(--dl-line); padding:18px 24px; border-radius:0 0 18px 18px; gap:16px; }
@@ -237,6 +238,23 @@ body.domestic-labor-shell::before { display:none; }
 .domestic-labor-shell .dl-shift-form-head { position:relative; padding-right:48px; }
 .domestic-labor-shell .dl-shift-form-close { position:absolute; top:0; right:0; border:0; border-radius:6px; padding:5px 8px; background:#edf0f5; color:#525d6d; font-size:12px; cursor:pointer; }
 
+/* Edit one shift in a dialog so the list keeps its full configuration width. */
+.domestic-labor-shell .dl-night-shift-dialog { width:min(540px,calc(100vw - 32px)); max-width:none; max-height:calc(100dvh - 48px); padding:0; border:1px solid #dce3ef; border-radius:16px; background:#fff; color:#344054; box-shadow:0 24px 80px #14244733; }
+.domestic-labor-shell .dl-night-shift-dialog[open] { display:flex; flex-direction:column; }
+.domestic-labor-shell .dl-night-shift-dialog .dl-night-shift-form { display:flex; flex-direction:column; width:100%; min-height:0; max-height:calc(100dvh - 50px); overflow:hidden; border:0; background:#fff; padding:20px 24px 0; }
+.domestic-labor-shell .dl-night-shift-dialog .dl-shift-form-head { flex:none; margin-bottom:16px; }
+.domestic-labor-shell .dl-night-shift-dialog .dl-shift-form-close { display:grid; place-items:center; width:30px; height:30px; padding:0; }
+.domestic-labor-shell .dl-night-shift-dialog .dl-shift-form-fields { flex:1; min-height:0; overflow:auto; padding:2px 6px 16px 2px; scrollbar-gutter:stable; }
+.domestic-labor-shell .dl-night-shift-dialog .dl-shift-reset { flex:none; align-self:flex-start; padding:10px 0; margin:0; }
+.domestic-labor-shell .dl-shift-dialog-footer { flex:none; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 0 16px; border-top:1px solid #e7ebf2; }
+.domestic-labor-shell .dl-shift-dialog-footer p { margin:0; color:#667085; font-size:11px; line-height:1.5; }
+.domestic-labor-shell .dl-shift-dialog-footer button { flex-shrink:0; }
+@media(max-width:600px) { .domestic-labor-shell .dl-night-shift-dialog .dl-night-shift-form { padding:16px 16px 0; } }
+@media(max-width:1099px) {
+  .domestic-labor-shell .dl-night-upload-layout { grid-template-columns:minmax(0,1fr); }
+  #canbuWorkbenchRoot:has(.dl-night-upload-layout) .dl-stepper { overflow-x:auto; }
+}
+
 /* Night upload: aligned content insets and a shared bottom action baseline. */
 .domestic-labor-shell .dl-night-upload-layout { align-items:stretch; }
 .domestic-labor-shell .dl-night-upload-layout>.dl-panel { display:flex; flex-direction:column; overflow:hidden; }
@@ -278,7 +296,7 @@ body.domestic-labor-shell::before { display:none; }
   .domestic-labor-shell .dl-night-upload-layout .dl-night-editor-layout,
   .domestic-labor-shell .dl-night-upload-layout .dl-night-editor-layout:not(:has([data-night-shift-break-row])) { height:100%; min-height:0; }
   .domestic-labor-shell .dl-night-upload-layout>.dl-upload-primary .drawer-footer,
-  .domestic-labor-shell .dl-night-workspace-footer { flex:none; min-height:80px; padding:12px 18px; }
+  .domestic-labor-shell .dl-night-workspace-footer { flex:none; min-height:64px; padding:10px 18px; }
   .domestic-labor-shell .dl-night-upload-layout>.dl-upload-primary .drawer-footer p { margin:0; }
 }
 
@@ -306,6 +324,9 @@ body.domestic-labor-shell::before { display:none; }
 .domestic-labor-shell .dl-night-upload-layout .dl-night-list-table th { padding:8px; line-height:1.4; }
 .domestic-labor-shell .dl-night-upload-layout .dl-night-list-table td { padding:7px 8px; line-height:1.45; }
 .domestic-labor-shell .dl-night-list-table td small { margin-top:2px; line-height:1.4; }
+.domestic-labor-shell .dl-night-upload-layout .dl-night-list-table th:last-child { width:108px; }
+.domestic-labor-shell .dl-night-list-table td:last-child .dl-shift-state { display:inline-block; margin-right:8px; vertical-align:middle; }
+.domestic-labor-shell .dl-night-list-table .dl-shift-edit { margin-top:0; min-height:28px; vertical-align:middle; }
 @media (min-width:1100px) and (min-height:600px) {
   .domestic-labor-shell .dl-night-upload-layout>.dl-panel.dl-upload-primary:first-child .upload-zone { min-height:110px; height:auto; justify-content:center; }
 }
@@ -340,3 +361,13 @@ body.domestic-labor-shell::before { display:none; }
 .domestic-labor-shell .dl-aside-panel .dl-exception { display:block; width:100%; min-height:0; height:auto; padding:14px; text-align:left; }
 .domestic-labor-shell .dl-aside-panel .dl-exception-title { margin:0 0 6px; line-height:1.5; }
 .domestic-labor-shell .dl-aside-panel .dl-exception-meta { margin:0; line-height:1.6; }
+.domestic-labor-shell .dl-sheet-dialog input[data-empty-index] { appearance:auto; width:16px; height:16px; margin:0; border:0; accent-color:#2563eb; }
+
+/* Product-style unread release marker on the SkillHub navigation entry. */
+.domestic-labor-shell #navSkillHub { gap:9px; white-space:nowrap; }
+.dl-skill-new { position:relative; display:inline-flex; align-items:center; gap:5px; padding:4px 7px; border-radius:6px; background:#007aff; color:#fff; font-size:11px; font-weight:600; line-height:1.25; box-shadow:0 2px 6px #007aff1a; }
+.dl-skill-new::before { content:""; position:absolute; left:-4px; top:50%; margin-top:-4px; border-top:4px solid transparent; border-bottom:4px solid transparent; border-right:4px solid #007aff; }
+.dl-skill-new[hidden],.dl-skill-new-count[hidden] { display:none; }
+.dl-skill-new-mark { display:grid; place-items:center; width:13px; height:13px; flex:0 0 13px; border-radius:50%; background:#fff; color:#0064d5; font-size:10px; font-weight:800; }
+.dl-skill-new-count { padding-left:5px; border-left:1px solid #ffffff66; font-variant-numeric:tabular-nums; }
+@media (max-width:900px) { .domestic-labor-shell #navSkillHub { grid-column:1 / -1; justify-content:flex-start; } }

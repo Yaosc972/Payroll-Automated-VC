@@ -172,9 +172,12 @@ def _exception(
 class GaoWenBuTieEngine(BaseEngine):
     """Match attendance to same-site/date/shift temperature and calculate allowance."""
 
-    def __init__(self, temperature_records: Optional[Sequence[Mapping[str, Any]]] = None):
+    def __init__(self, temperature_records: Optional[Sequence[Mapping[str, Any]]] = None, exclusion_records=None):
         self.temperature_records = list(temperature_records or [])
         self.temperature_index = self._build_temperature_index(self.temperature_records)
+        self.exclusions_by_employee = {}
+        for record in exclusion_records or []:
+            self.exclusions_by_employee.setdefault(_text(record.get("工号")), []).append(record)
 
     @staticmethod
     def _build_temperature_index(
@@ -288,6 +291,8 @@ class GaoWenBuTieEngine(BaseEngine):
             status = "excluded"
             reason_code = ""
             amount = Decimal("0")
+            period_exclusion = next((record for record in self.exclusions_by_employee.get(employee_id, [])
+                                     if attendance_day and record["start"] <= attendance_day <= (record["end"] or date.max)), None)
 
             if attendance_day is None:
                 reason_code = "invalid_attendance_date"
@@ -295,6 +300,8 @@ class GaoWenBuTieEngine(BaseEngine):
                 reason_code = "outside_high_temperature_season"
             elif excluded_qualification:
                 reason_code = "employee_or_position_excluded"
+            elif period_exclusion:
+                reason_code = "supplemental_period_excluded"
             elif not daily_site:
                 reason_code = "measurement_site_unresolved"
             elif not shift:
@@ -317,7 +324,7 @@ class GaoWenBuTieEngine(BaseEngine):
                     payable_days += 1
                     raw_total += amount
 
-            daily_results.append(HighTemperatureDayResult(
+            day_result = HighTemperatureDayResult(
                 attendance_date=attendance_day.isoformat() if attendance_day else "",
                 shift=shift,
                 site=daily_site,
@@ -326,7 +333,12 @@ class GaoWenBuTieEngine(BaseEngine):
                 amount=_excel_round(float(amount), 4),
                 status=status,
                 reason_code=reason_code,
-            ).to_dict())
+            ).to_dict()
+            if period_exclusion:
+                day_result["exclusion_reason"] = period_exclusion["不享有原因"]
+                day_result["exclusion_start"] = period_exclusion["start"].isoformat()
+                day_result["exclusion_end"] = period_exclusion["end"].isoformat() if period_exclusion["end"] else ""
+            daily_results.append(day_result)
 
         monthly_before_cap = _excel_round(float(raw_total), 4)
         final_amount = _excel_round(min(float(raw_total), float(standard["monthly_cap"])), 2)
@@ -383,6 +395,7 @@ class GaoWenBuTieEngine(BaseEngine):
             "月度封顶前金额": monthly_before_cap,
             "daily_results": daily_results,
             "reason_counts": status_counts,
+            "不享有名单命中天数": status_counts.get("supplemental_period_excluded", 0),
             "exceptions": [item.to_dict() for item in exceptions],
             "validation_note": (
                 "嘉善/义乌按已确认的浙江室内标准1.15元/小时、9.2元/天、200元/月核算；"
@@ -403,6 +416,10 @@ class GaoWenBuTieEngine(BaseEngine):
                     "测温网点": site,
                     "日考勤记录数": len(daily_attendance),
                     "测温记录数": len(self.temperature_records),
+                    "本批次不享有名单区间": [
+                        {"不享有原因": record["不享有原因"], "生效日期": record["start"].isoformat(), "结束日期": record["end"].isoformat() if record["end"] else ""}
+                        for record in self.exclusions_by_employee.get(employee_id, [])
+                    ],
                     "职级参与计算": False,
                     "领色参与计算": False,
                 },
@@ -415,6 +432,7 @@ class GaoWenBuTieEngine(BaseEngine):
                     "月度封顶": standard["monthly_cap"],
                 },
                 steps=[
+                    "按工号匹配本批次不享有名单，仅在生效至结束日期（含当天）内排除，空结束日期表示持续生效",
                     "优先使用每条日考勤的测温网点，空值时根据员工工作地区和组织层级识别",
                     "优先使用日考勤测温班次，缺失时依次根据排班时间、班次名称、上班打卡识别白班/夜班",
                     "匹配同网点、同出勤日期、同班次的最高温度",

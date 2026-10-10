@@ -4,6 +4,9 @@ from typing import Dict, List, Any
 import openpyxl
 from openpyxl.comments import Comment
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.worksheet.datavalidation import DataValidation
+from .temperature_sites import TEMPERATURE_SITE_CANDIDATES
+from .supplemental_inputs import HIGH_TEMPERATURE_EXCLUSION_REASONS
 
 # 样式定义
 HEADER_FILL = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
@@ -125,7 +128,7 @@ ENGINE_TEMPLATES: Dict[str, Dict[str, Any]] = {
     },
     "gaowen_butie": {
         "name": "高温补贴核算模板",
-        "description": "用于上传月考勤、日考勤和测温登记；按同仓同日同班次测温及实际出勤逐日核算",
+        "description": "补充测温登记及不享有高温补贴名单；原始月考勤、日考勤另行上传",
         "columns": [
             {"name": "工号", "desc": "员工工号", "required": True, "example": "OWHN001"},
             {"name": "姓名", "desc": "员工姓名", "required": True, "example": "张三"},
@@ -258,15 +261,108 @@ GAOWEN_ATTENDANCE_SHEETS = {
         {"name": "正班时数", "desc": "当日正班小时数", "required": True},
         {"name": "刷卡加班", "desc": "当日刷卡加班小时数", "required": True},
         {"name": "实际上班时数", "desc": "明确为0时不发高温补贴", "required": False},
+        {"name": "测温网点", "desc": "候选可选也可手填；自填名称请与测温登记一致，留空沿用组织归属识别", "required": False},
     ],
     "测温登记": [
         {"name": "温度测温点", "desc": "测温地点说明", "required": False},
         {"name": "班次日期", "desc": "测温归属日期，格式YYYY-MM-DD", "required": True},
         {"name": "测温班次", "desc": "白班或夜班", "required": True},
-        {"name": "测温网点", "desc": "平台固定网点名称", "required": True},
+        {"name": "测温网点", "desc": "下拉仅为程序匹配候选，可手填真实名称；自填名称请与日考勤一致", "required": True},
         {"name": "测温温度", "desc": "摄氏温度，达到33℃才计发", "required": True},
     ],
 }
+
+SUPPLEMENTAL_TEMPLATE_SHEETS = {
+    "gaowen_butie": {
+        "测温登记": [column for column in GAOWEN_ATTENDANCE_SHEETS["测温登记"] if column["name"] != "温度测温点"],
+        "不享有高温补贴名单": [
+            {"name": "工号", "desc": "以文本保存，与月考勤工号一致", "required": True},
+            {"name": "姓名", "desc": "与该工号的月考勤姓名一致", "required": True},
+            {"name": "工作地区", "desc": "与月考勤工作地区一致", "required": True},
+            {"name": "不享有原因", "desc": "仅选择已确认规则；过渡性高温补贴仍在线下核算", "required": True},
+            {"name": "生效日期", "desc": "YYYY-MM-DD，当天起不享有", "required": True},
+            {"name": "结束日期", "desc": "YYYY-MM-DD，含当天；持续生效时留空", "required": False},
+        ],
+    },
+    "waisu_butie": {"住宿名单": WAISU_SHEETS["住宿名单"]},
+}
+
+
+def supplemental_template_instructions(engine_key, attendance_month=""):
+    month = str(attendance_month or "").replace("-", "")
+    if month and (len(month) != 6 or not month.isdigit() or not 1 <= int(month[4:]) <= 12):
+        raise ValueError("模板适用月份须为 YYYYMM 或 YYYY-MM")
+    rows = [
+        ["项目", "填写说明"], ["模板版本", "DL-SUPP.20261009.v1.0"],
+        ["适用月份", month or "按本次核算活动月份填写"],
+        ["原始考勤", "月考勤、日考勤使用原始导出文件，与本补充资料一同上传。"],
+        ["录入方式", "数据页第1行为固定表头，第2行开始填数据；浅黄色表头为必填，工号已设为文本。"],
+        ["日期格式", "统一 YYYY-MM-DD；填写实际日期，跨月记录保留原始日期。"],
+        ["资料状态", "无人员时保留空数据页，上传后确认本月无人；未提供名单时须先补充资料。"],
+        ["示例位置", "示例仅位于本说明页，不参与核算；数据页未填入示例人员。"],
+    ]
+    if engine_key == "gaowen_butie":
+        rows += [
+            ["测温记录", "一行一个网点、日期、班次；温度填数值，不带℃文字。"],
+            ["测温班次", "下拉选择白班或夜班；这里不是日考勤中的排班编号。"],
+            ["测温网点", "下拉仅为程序匹配候选，可自由手填；新名称请与日考勤测温网点一致，对不上先确认。"],
+            ["不享有名单", "一行一个工号及适用区间；按工号匹配，不与测温登记逐行对应。"],
+            ["日期区间", "生效日期、结束日期均包含当天；结束日期留空表示持续生效；同一工号多段区间分行，不可重叠。"],
+            ["原因范围", "仅支持办公地点有空调、固定排除名单、岗位不在晋江适用范围；后两项须符合既有地区规则。"],
+            ["线下事项", "出库发运组过渡性高温补贴仍在线下单独核算，不纳入本模板原因。"],
+            ["测温示例", "2026-10-01，白班，示例仓A，33.5（仅展示格式）"],
+            ["名单示例", "TEST000001，示例员工，东莞，办公地点有空调，2026-10-01，2026-10-03（虚构人员）"],
+        ]
+    else:
+        rows += [
+            ["住宿范围", "填写本月所有住宿人员，包括上月或更早入住、目前仍在宿的人员。"],
+            ["住宿区间", "入住时间填真实入住日期；仍在宿时退宿时间留空；多次入住、退宿分多行填写，区间不能重复或重叠。"],
+            ["退宿当天", "退宿当天沿用现有地区核算规则，不通过模板修改计发标准。"],
+            ["住宿示例", "TEST000001，示例员工，2026-09-20，退宿时间留空（虚构的跨月仍在宿人员）"],
+        ]
+    for sheet_name, columns in SUPPLEMENTAL_TEMPLATE_SHEETS[engine_key].items():
+        rows += [[f"{sheet_name} · {column['name']}", ("必填：" if column["required"] else "选填：") + column["desc"]] for column in columns]
+    return rows
+
+
+def _generate_supplemental_template(engine_key, attendance_month=""):
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    for sheet_name, columns in SUPPLEMENTAL_TEMPLATE_SHEETS[engine_key].items():
+        ws = wb.create_sheet(sheet_name)
+        _format_input_sheet(ws, columns)
+        ws.sheet_view.showGridLines = False
+        for index, column in enumerate(columns, 1):
+            cell = ws.cell(1, index)
+            cell.fill = PatternFill("solid", fgColor="FFF3CD" if column["required"] else "E8EFFA")
+            cell.font = Font(name="微软雅黑", size=11, bold=True, color="101828")
+            ws.column_dimensions[cell.column_letter].width = 25 if column["name"] in {"测温网点", "不享有原因"} else max(len(column["name"]) + 8, 16)
+            for row in range(2, 10002):
+                ws.cell(row, index).number_format = "@" if column["name"] == "工号" else "yyyy-mm-dd" if any(word in column["name"] for word in ("日期", "时间")) else "0.0" if column["name"] == "测温温度" else "General"
+            values = TEMPERATURE_SITE_CANDIDATES if column["name"] == "测温网点" else ("白班", "夜班") if column["name"] == "测温班次" else HIGH_TEMPERATURE_EXCLUSION_REASONS if column["name"] == "不享有原因" else None
+            if values:
+                validation = DataValidation(type="list", formula1='"' + ",".join(values) + '"', allow_blank=True)
+                validation.showErrorMessage = column["name"] != "测温网点"
+                validation.errorStyle = "stop"
+                validation.errorTitle = "请选择允许的选项"
+                validation.error = "请选择列表内选项。"
+                ws.add_data_validation(validation)
+                validation.add(f"{cell.column_letter}2:{cell.column_letter}10001")
+    notes = wb.create_sheet("填写说明")
+    for row in supplemental_template_instructions(engine_key, attendance_month):
+        notes.append(row)
+    notes.column_dimensions["A"].width, notes.column_dimensions["B"].width = 34, 100
+    notes.sheet_view.showGridLines = False
+    for row in notes:
+        for cell in row:
+            cell.alignment = Alignment(wrap_text=True, vertical="center")
+        notes.row_dimensions[row[0].row].height = 36
+    for cell in notes[1]:
+        cell.fill, cell.font = PatternFill("solid", fgColor="1E3A8A"), HEADER_FONT
+    from io import BytesIO
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
 
 
 def _format_input_sheet(ws, columns: List[Dict[str, Any]]) -> None:
@@ -312,23 +408,40 @@ def _generate_gaowen_template() -> bytes:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     for sheet_name, columns in GAOWEN_ATTENDANCE_SHEETS.items():
-        _format_input_sheet(wb.create_sheet(sheet_name), columns)
+        ws = wb.create_sheet(sheet_name)
+        _format_input_sheet(ws, columns)
+        for index, column in enumerate(columns, 1):
+            if column["name"] not in {"测温网点", "测温班次"}:
+                continue
+            is_site = column["name"] == "测温网点"
+            values = TEMPERATURE_SITE_CANDIDATES if is_site else ("白班", "夜班")
+            validation = DataValidation(type="list", formula1='"' + ",".join(values) + '"', allow_blank=True)
+            validation.showErrorMessage = not is_site
+            validation.errorStyle = "stop"
+            validation.errorTitle = "请选择测温班次"
+            validation.error = "测温班次请选择白班或夜班。"
+            validation.showInputMessage = True
+            validation.promptTitle = "网点候选（可手填）" if is_site else "测温班次"
+            validation.prompt = "候选不是标准清单；可填写真实名称，与日考勤保持一致。" if is_site else "请选择白班或夜班。"
+            ws.add_data_validation(validation)
+            letter = openpyxl.utils.get_column_letter(index)
+            validation.add(f"{letter}2:{letter}10001")
     from io import BytesIO
     output = BytesIO()
     wb.save(output)
     return output.getvalue()
 
 
-def generate_template(engine_key: str) -> bytes:
+def generate_template(engine_key: str, attendance_month: str = "") -> bytes:
     """生成指定引擎的Excel模板，返回文件字节流"""
     if engine_key not in ENGINE_TEMPLATES:
         raise ValueError(f"未知引擎: {engine_key}，可选: {list(ENGINE_TEMPLATES.keys())}")
     if engine_key == "waisu_butie":
-        return _generate_waisu_template()
+        return _generate_supplemental_template(engine_key, attendance_month)
     if engine_key == "yeban_butie":
         return _generate_yeban_template()
     if engine_key == "gaowen_butie":
-        return _generate_gaowen_template()
+        return _generate_supplemental_template(engine_key, attendance_month)
 
     template = ENGINE_TEMPLATES[engine_key]
     wb = openpyxl.Workbook()
@@ -382,6 +495,15 @@ def get_template_info(engine_key: str) -> Dict[str, Any]:
     if engine_key not in ENGINE_TEMPLATES:
         raise ValueError(f"未知引擎: {engine_key}")
     template = ENGINE_TEMPLATES[engine_key]
+    if engine_key in SUPPLEMENTAL_TEMPLATE_SHEETS:
+        sheets = SUPPLEMENTAL_TEMPLATE_SHEETS[engine_key]
+        return {
+            "engine": engine_key,
+            "name": "测温及不享有名单模板" if engine_key == "gaowen_butie" else "住宿名单模板",
+            "description": "原始月考勤、日考勤另传；补充资料分数据页与填写说明页",
+            "columns": next(iter(sheets.values())),
+            "sheets": [{"name": name, "columns": columns} for name, columns in sheets.items()] + [{"name": "填写说明", "columns": []}],
+        }
     return {
         "engine": engine_key,
         "name": template["name"],

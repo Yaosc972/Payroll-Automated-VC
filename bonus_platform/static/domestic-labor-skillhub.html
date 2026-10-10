@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN" data-module-id="domestic" data-server-guarded="true">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkillHub · HRAS 全球薪酬核算工作台</title>
+  <link rel="icon" href="/assets/workbench-logo-2026.png">
+  <link rel="stylesheet" href="/domestic-labor-skillhub.css?v=20261010-controls-7">
+  <link rel="stylesheet" href="/domestic-labor-skillhub-ui.css?v=20261010-1">
+  <script src="/domestic-labor-skillhub-ui.js?v=20261010-2" defer></script>
+  <script src="/permission-guard.js?v=9"></script>
+  <script src="/domestic-labor-skillhub-guide.js?v=20261010-3" defer></script>
+  <script src="/domestic-labor-skillhub.js?v=20261010-controls-7" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳转到主要内容</a>
+  <header class="topbar">
+    <a class="brand" href="/domestic-labor.html"><img src="/assets/workbench-logo-2026.png" alt=""><strong>HRAS 全球薪酬核算工作台</strong><span class="brand-divider"></span><span>SkillHub</span></a>
+    <nav aria-label="页面导航"><a href="/domestic-labor.html">薪酬核算</a><a href="/domestic-labor-skillhub.html" aria-current="page">SkillHub</a></nav>
+  </header>
+  <main id="main" tabindex="-1" class="shell">
+    <div class="breadcrumb">中国区外包工薪酬核算 <span>/</span> SkillHub</div>
+    <section class="intro" aria-labelledby="pageTitle">
+      <div><h1 id="pageTitle">算薪 Skill</h1><p>下载最新规则与核算工具，支持资料检查、核算和差异核验。</p></div>
+      <div class="intro-actions"><a class="button primary" id="downloadAll" hidden href="/api/domestic-labor/skillhub/bundle/download"><span data-ui-icon="download" aria-hidden="true"></span>下载全部 Skill</a><button class="button secondary" id="usageButton"><span data-ui-icon="guide" aria-hidden="true"></span>使用指引</button></div>
+    </section>
+    <div class="library-layout">
+      <section class="library" aria-labelledby="libraryTitle">
+        <div class="library-heading"><div><h2 id="libraryTitle">全部 Skill</h2><p id="resultCount" aria-live="polite">正在加载…</p></div><div class="view-tabs" aria-label="内容视图"><button id="catalogTab" aria-pressed="true"><span data-ui-icon="grid" aria-hidden="true"></span>技能目录</button><button id="releaseTab" aria-pressed="false"><span data-ui-icon="recent" aria-hidden="true"></span>上新动态</button><button id="guideTab" aria-pressed="false"><span data-ui-icon="guide" aria-hidden="true"></span>使用指引</button></div></div>
+        <div class="tools" id="catalogTools"><div id="categories" class="categories" aria-label="Skill 分类"><button data-category="all" aria-pressed="true">全部 Skill <span>—</span></button></div><label class="search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg><input type="search" id="search" placeholder="搜索 Skill、规则或所需资料" aria-label="搜索 Skill"></label><label class="sort"><span class="sr-only">排序</span><select id="sort" data-ui-select><option value="recent">最近更新</option><option value="name">名称排序</option></select></label></div>
+        <div id="error" class="error" hidden role="alert"></div>
+        <div id="skillCards" class="skill-grid" aria-live="polite"><p class="loading">正在加载技能目录…</p></div>
+        <div id="releaseFeed" class="release-feed" hidden></div>
+        <div id="guidePanel" class="guide-panel" hidden></div>
+        <div id="empty" class="empty" hidden><h3>没有找到相关 Skill</h3><p>试试科目名称，或清空搜索条件。</p><button id="clearSearch" class="button secondary">重置筛选</button></div>
+      </section>
+    </div>
+    <footer><span id="lastUpdated">正在同步版本</span><span>·</span> 规则更新后同步提供最新 Skill</footer>
+  </main>
+  <dialog id="detailDialog" aria-labelledby="dialogTitle"><div class="dialog-content" id="dialogContent"></div><button class="dialog-close" id="closeDialog" aria-label="关闭详情"><span data-ui-icon="close" aria-hidden="true"></span></button></dialog>
+</body>
+</html>

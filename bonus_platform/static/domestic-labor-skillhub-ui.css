@@ -1,0 +1,53 @@
+.ui-icon{width:17px;height:17px;display:inline-block;vertical-align:middle;flex:0 0 17px;pointer-events:none}
+.button,.text-button{display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.button{transition:background-color .14s,border-color .14s,box-shadow .14s,color .14s}
+.button:hover{filter:none;background:#f8fbff;border-color:#b6cbea;color:#174ba2}
+.button.primary:hover{background:#1d4ed8;border-color:#1d4ed8;color:#fff}
+.button:active{box-shadow:inset 0 1px 3px #10182812}
+.intro-actions .button{min-height:36px;gap:8px}.card-footer .button{min-height:32px;gap:6px}
+.card-footer .button .ui-icon{width:15px;height:15px;flex-basis:15px;color:#2563eb}
+.text-button:hover{color:#1d4ed8}.text-button:active{color:#1e3a8a}
+.card-footer .text-button{padding:5px 0;gap:5px}.card-footer .text-button .ui-icon{width:15px;height:15px;flex-basis:15px;color:#7b8ca7}
+.card-footer .text-button:hover .ui-icon{color:inherit}
+.view-tabs button{display:inline-flex;align-items:center;justify-content:center;gap:5px}.view-tabs .ui-icon{width:14px;height:14px;flex-basis:14px}
+.view-tabs button[aria-pressed=true] .ui-icon{color:#2563eb}
+.dialog-close{display:grid;place-items:center}.dialog-close .ui-icon{width:18px;height:18px}.dialog-close:hover{background:#eaf1fc;color:#174ba2}
+.copy-status .ui-icon{width:13px;height:13px;flex-basis:13px;margin-right:3px}
+.guide-copy-row .text-button .ui-icon{width:14px;height:14px;flex-basis:14px}
+.guide-toolbar .button .ui-icon{width:16px;height:16px;flex-basis:16px}
+.ui-control{display:inline-flex;min-width:0;vertical-align:middle;position:relative}
+.ui-control [hidden]{display:none!important}
+.ui-trigger{display:inline-flex;align-items:center;gap:7px;width:100%;min-width:0;min-height:36px;padding:7px 10px;border:1px solid #d7e0e9;border-radius:8px;background:#fff;box-shadow:0 1px 2px #10182804;color:#344054;text-align:left;font-size:12px;font-weight:500;transition:border-color .14s,background-color .14s,box-shadow .14s}
+.ui-trigger>.ui-icon:first-child{color:#7b8ca7;width:15px;height:15px;flex-basis:15px}
+.ui-trigger>.ui-icon:last-child{margin-left:auto;width:14px;height:14px;flex-basis:14px;color:#8592a6;transition:transform .14s}
+.ui-control-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.ui-trigger:hover:not(:disabled){border-color:#a8bfdc;background:#fcfdff}
+.ui-trigger[aria-expanded=true]{border-color:#7cacf1;box-shadow:0 0 0 3px #2563eb12}
+.ui-trigger[aria-expanded=true]>.ui-icon:last-child{transform:rotate(180deg);color:#2563eb}
+.ui-trigger:disabled{opacity:.5;cursor:not-allowed;background:#f8fafc}
+.ui-trigger:focus-visible{outline:3px solid #93b9f7;outline-offset:2px}
+.ui-control[data-control=sort]{width:144px}.ui-control[data-control=guideSubject]{width:160px}.ui-control[data-control=guideMonth]{width:160px}
+.ui-popup{position:fixed;z-index:60;border:1px solid #d8e1ed;border-radius:10px;background:#fff;box-shadow:0 8px 28px #20395a1f,0 2px 6px #20395a08;padding:5px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;color:#344054;font-size:12px}
+.ui-option{display:flex;align-items:center;gap:9px;min-height:36px;padding:7px 9px;border-radius:6px;cursor:pointer;user-select:none}
+.ui-option>span:not(.ui-subject-icon):not(.ui-option-check){flex:1}
+.ui-option>.ui-icon{width:16px;height:16px;flex-basis:16px;color:#8592a6}
+.ui-option.active{background:#f1f5fb}
+.ui-option[aria-selected=true]{background:#edf4ff;color:#1d4ed8;font-weight:600}
+.ui-option-check{margin-left:auto;color:#2563eb;opacity:0;display:flex;align-items:center}
+.ui-option-check .ui-icon{width:15px;height:15px;flex-basis:15px}
+.ui-option[aria-selected=true] .ui-option-check{opacity:1}
+.ui-subject-icon{width:23px;height:23px;flex:0 0 23px;display:grid;place-items:center;border-radius:6px;color:#007aff;background:#edf5ff}
+.ui-subject-icon svg{width:17px;height:17px}.ui-trigger .ui-subject-icon{width:21px;height:21px;flex-basis:21px}
+.ui-subject-icon[data-icon=home]{color:#16847f;background:#eaf6f4}.ui-subject-icon[data-icon=moon]{color:#6562b7;background:#f0effa}.ui-subject-icon[data-icon=briefcase]{color:#47657f;background:#edf2f7}.ui-subject-icon[data-icon=sun]{color:#af7124;background:#fbf3e7}.ui-subject-icon[data-icon=calendar],.ui-subject-icon[data-icon=clock]{color:#7160bb;background:#f2effa}
+.ui-month-popup{padding:12px}
+.ui-month-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:13px;font-weight:650;color:#344054}
+.ui-month-nav{display:grid;place-items:center;width:30px;height:30px;border:1px solid #e5ebf3;border-radius:7px;background:#fff;color:#667085;padding:0}
+.ui-month-nav:hover:not(:disabled){background:#edf4ff;color:#2563eb;border-color:#bfd4f6}.ui-month-nav:disabled{opacity:.4;cursor:not-allowed}
+.ui-month-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.ui-month-option{min-height:34px;border:1px solid transparent;border-radius:7px;background:#f8fafc;color:#475467;padding:7px 6px;font-size:12px;font-weight:500}
+.ui-month-option:hover{background:#edf4ff;color:#2563eb;border-color:#d5e4fc}.ui-month-option[aria-pressed=true]{background:#2563eb;border-color:#2563eb;color:white;font-weight:650}
+.ui-month-option:focus-visible,.ui-month-nav:focus-visible,.ui-month-shortcut:focus-visible{outline:2px solid #6ea2f6;outline-offset:1px}
+.ui-month-footer{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #edf0f5;margin-top:10px;padding-top:8px;font-size:10px;color:#98a2b3}
+.ui-month-shortcut{border:0;background:transparent;color:#2563eb;font-size:11px;font-weight:600;padding:5px 3px;border-radius:4px}.ui-month-shortcut:hover{background:#edf4ff}
+@media(max-width:600px){.ui-control[data-control=sort]{width:120px}.ui-control[data-control=guideSubject]{width:120px}.ui-control[data-control=guideMonth]{width:140px}.ui-trigger{padding:7px 8px;gap:5px}.view-tabs button{gap:4px;padding:6px 7px}.view-tabs .ui-icon{width:13px;height:13px;flex-basis:13px}.guide-toolbar-fields{gap:8px}.card-footer .button{min-height:36px}.ui-option{min-height:40px}.ui-month-option{min-height:38px}}
+@media(prefers-reduced-motion:reduce){.button,.ui-trigger,.ui-trigger>.ui-icon:last-child{transition:none}}

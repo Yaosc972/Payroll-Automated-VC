@@ -32,9 +32,16 @@ test('a list request started before creation cannot remove the new uploading act
 });
 test('activity dates display China time even in a UTC browser', () => {
   const context=vm.createContext({Intl,Date});
-  vm.runInContext(section('function formatDateTime(', 'function getCurrentMonthValue('),context);
+  vm.runInContext(section('function formatDateTime(', 'function getDefaultPayrollMonthValue('),context);
   assert.equal(context.formatDateTime('2026-09-16T10:23:00+00:00'),'2026-09-16 18:23');
   assert.equal(context.formatDateTime('2026-09-16T18:23:00+08:00'),'2026-09-16 18:23');
+});
+test('new payroll activities default to the previous China calendar month, including year rollover', () => {
+  const context = vm.createContext({Intl, Date});
+  vm.runInContext(section('function getDefaultPayrollMonthValue(', 'function getBatchStatusFromRunStatus('), context);
+  assert.equal(context.getDefaultPayrollMonthValue(new Date('2026-10-10T12:00:00+08:00')), '2026-09');
+  assert.equal(context.getDefaultPayrollMonthValue(new Date('2027-01-31T12:00:00+08:00')), '2026-12');
+  assert.equal(context.getDefaultPayrollMonthValue(new Date('2026-09-30T16:00:00Z')), '2026-09');
 });
 test('stale response cannot roll back a run link assigned during upload', async () => {
   let resolve;

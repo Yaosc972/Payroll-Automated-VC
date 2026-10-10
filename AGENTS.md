@@ -25,3 +25,7 @@ Do not modify authentication, secrets, database schema, deployment config, payme
 ## Verification
 
 After domestic labor code changes, run the most relevant targeted domestic labor checks when practical. If a change is documentation-only, validate formatting or the relevant tool output when available.
+
+## SkillHub Releases
+
+When domestic payroll rules, engines, input contracts, or supplemental templates change, include the matching standalone Skill updates in the same delivery. Run the targeted SkillHub checks and `python3 -m scripts.domestic_labor_skillhub_release` to maintain the durable release ledger. See `docs/DOMESTIC_LABOR_SKILLHUB.md` for canonical sources and release behavior. Preserve historical ZIP exports; generate new releases from the current sources.

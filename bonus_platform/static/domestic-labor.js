@@ -95,7 +95,7 @@ const SUBJECT_WORKBENCH = {
     resultField: 'gaowen_butie',
     totalField: 'total_gaowen_butie',
     uploadTitle: '高温补贴月考勤、日考勤与测温登记 Excel',
-    uploadDescription: '高温补贴核算需要月考勤、日考勤和高温测温登记；可上传一个多Sheet文件，也可上传三份拆分文件。',
+    uploadDescription: '上传原始月考勤、日考勤，以及同一工作簿内的测温登记和不享有高温补贴名单。网点可选候选或手填，名单按工号和生效区间匹配。',
   },
   yeban_butie: {
     name: '夜班补贴',
@@ -229,6 +229,7 @@ async function loadCanbuBatches() {
   }
   state.canbuBatches = [...rows.values()];
   state.activityUser = result.currentUser;
+  globalThis.DomesticSkillUpdates?.refresh(result.currentUser?.ownerId);
 }
 
 function saveCanbuBatches(batch = getActiveCanbuBatch()) {
@@ -503,22 +504,19 @@ async function init() {
 
 function setDefaultMonth() {
   if (!el.attendanceMonth) return;
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  el.attendanceMonth.value = `${y}-${m}`;
+  el.attendanceMonth.value = getDefaultPayrollMonthValue();
 }
 
 function setDefaultCanbuBatchMonth() {
   if (!el.canbuBatchMonth || el.canbuBatchMonth.value) return;
-  setCanbuBatchMonth(getCurrentMonthValue());
+  setCanbuBatchMonth(getDefaultPayrollMonthValue());
 }
 
 function setCanbuBatchMonth(monthValue) {
   if (!el.canbuBatchMonth) return;
-  const normalized = String(monthValue || getCurrentMonthValue()).match(/^\d{4}-\d{2}$/)
+  const normalized = String(monthValue || getDefaultPayrollMonthValue()).match(/^\d{4}-\d{2}$/)
     ? String(monthValue)
-    : getCurrentMonthValue();
+    : getDefaultPayrollMonthValue();
   el.canbuBatchMonth.value = normalized;
   state.canbuBatchPickerYear = Number(normalized.slice(0, 4));
   renderCanbuBatchMonthPicker();
@@ -527,7 +525,7 @@ function setCanbuBatchMonth(monthValue) {
 function renderCanbuBatchMonthPicker() {
   if (!el.canbuBatchYear || !el.canbuBatchMonthGrid) return;
   const year = Number(state.canbuBatchPickerYear || new Date().getFullYear());
-  const selected = el.canbuBatchMonth?.value || getCurrentMonthValue();
+  const selected = el.canbuBatchMonth?.value || getDefaultPayrollMonthValue();
   el.canbuBatchYear.textContent = String(year);
   el.canbuBatchMonthGrid.innerHTML = Array.from({ length: 12 }, (_, index) => {
     const month = String(index + 1).padStart(2, '0');
@@ -563,7 +561,7 @@ function loadTemplateLinks() {
   const html = Object.entries(ENGINE_META).map(([key, meta]) => `
     <a class="template-link" href="/api/domestic-labor/templates/${key}/download" download>
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v6M3 5l3 3 3-3M1 9h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      ${meta.name}模板
+      ${key === 'gaowen_butie' ? '下载测温及不享有名单模板' : key === 'waisu_butie' ? '下载住宿名单模板' : `${meta.name}模板`}
     </a>
   `).join('');
   el.templateLinks.innerHTML = `<p class="template-hint">没有模板？下载对应引擎的模板：</p>` + html;
@@ -759,7 +757,8 @@ function bindEvents() {
   });
 }
 
-const homeDraft = { subject: '', year: new Date().getFullYear(), month: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`, busy: false };
+const homeDraftMonth = getDefaultPayrollMonthValue();
+const homeDraft = { subject: '', year: Number(homeDraftMonth.slice(0, 4)), month: homeDraftMonth, busy: false };
 
 function selectHomeSubject(subject, card) {
   if (homeDraft.busy) return;
@@ -776,7 +775,7 @@ function selectHomeSubject(subject, card) {
     waisu_butie: '准备月考勤、日考勤和住宿名单；本月有自离员工时，还需上传自离名单。',
     yeban_butie: '准备日考勤数据，并核对共享班次休息配置；涉及排除人员时补充相应名单。',
     gangwei_butie: '准备月考勤数据，包含地区、岗位、排班天数及缺勤字段。',
-    gaowen_butie: '准备月考勤、日考勤和测温登记数据。',
+    gaowen_butie: '原始月、日考勤直接上传；另准备测温及不享有名单工作簿。',
     quanqinjiang: '准备月考勤、日考勤数据，月考勤需包含三档迟到次数。',
     gonglingjiang: '准备月考勤数据；涉及第四纵队时，需确认揽收线工龄奖名单。',
   };
@@ -1876,7 +1875,7 @@ function renderNightShiftBreakForm(config) {
   const row = editor.rows.find(item => item.shift_code === editor.selected);
   if (!row) return '<p class="inline-status">选择一个班次查看和调整。</p>';
   const field = (key, label, type = 'text') => `<label class="dl-shift-form-field"><span>${label}</span><input data-shift-field="${key}" type="${type}" value="${escapeHtml(row[key] ?? '')}"></label>`;
-  return `<div class="dl-shift-form-head"><button type="button" class="dl-shift-form-close" data-close-shift-editor aria-label="收起班次编辑">收起</button><span>当前班次</span><h3>${escapeHtml(row.shift_code)} <small>${escapeHtml(row.shift_name)}</small></h3></div>
+  return `<div class="dl-shift-form-head"><button type="button" class="dl-shift-form-close" data-close-shift-editor aria-label="关闭班次编辑"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button><span>调整班次</span><h3 id="nightShiftEditorTitle">${escapeHtml(row.shift_code)} <small>${escapeHtml(row.shift_name)}</small></h3></div>
     <div data-night-shift-break-row data-shift-code="${escapeHtml(row.shift_code)}" class="dl-shift-form-fields">
       ${renderEditorTimeField('shift_time', '班次时间', row.shift_time)}${field('regular_hours', '正班时数', 'number')}
       <p class="dl-shift-form-caption">休息类型按业务口径选择，跨零点时段不自动改判。</p>
@@ -1884,7 +1883,7 @@ function renderNightShiftBreakForm(config) {
       ${renderEditorDateField(row.effective_start_date)}
       ${field('note', '调整备注')}
       ${field('shift_name', '班次名称')}${field('shift_category', '班次类别')}
-    </div><button class="dl-shift-reset" type="button" id="btnResetNightShiftRow">撤销本条未保存修改</button>`;
+    </div><button class="dl-shift-reset" type="button" id="btnResetNightShiftRow">撤销本条未保存修改</button><footer class="dl-shift-dialog-footer"><p>调整后请在配置区保存共享班次调整。</p><button class="btn-primary" type="button" data-close-shift-editor>完成调整</button></footer>`;
 }
 
 function renderNightShiftBreakEditor(config) {
@@ -1895,8 +1894,8 @@ function renderNightShiftBreakEditor(config) {
       <div class="dl-night-list-tools"><label class="dl-break-search-field"><span class="sr-only">筛选班次</span><input id="nightShiftBreakSearch" type="search" value="${escapeHtml(editor.search)}" placeholder="搜索班次编号或名称" aria-label="筛选班次"></label>
       <input type="hidden" id="nightShiftBreakCategory" value="${escapeHtml(editor.category)}"><details class="dl-editor-picker dl-editor-category-filter"><summary><span data-category-filter-label>${escapeHtml(editor.category || '全部类别')}</span><span class="dl-editor-chevron">⌄</span></summary><div class="dl-editor-calendar-popup">${['', ...categories].map(category=>`<button type="button" data-editor-category-filter="${escapeHtml(category)}" aria-pressed="${editor.category===category}">${escapeHtml(category || '全部类别')}</button>`).join('')}</div></details><span>${editor.rows.length} 个班次</span></div>
       <div class="dl-night-list-scroll"><table class="dl-night-list-table"><thead><tr><th>编号 / 类别</th><th>班次 / 时间</th><th>休息安排</th><th>操作</th></tr></thead><tbody id="nightShiftBreakList">${renderNightShiftBreakList(config)}</tbody></table></div>
-    </section><aside class="dl-night-shift-form" id="nightShiftBreakForm" aria-label="调整选中班次">${renderNightShiftBreakForm(config)}</aside>
-  </div>`;
+    </section>
+  </div><dialog class="dl-night-shift-dialog" id="nightShiftEditorDialog" aria-labelledby="nightShiftEditorTitle"><div class="dl-night-shift-form" id="nightShiftBreakForm">${renderNightShiftBreakForm(config)}</div></dialog>`;
 }
 
 function collectNightShiftBreakOverrides(config) {
@@ -1918,8 +1917,8 @@ function renderNightShiftConfigWorkspace(batch) {
   const updated = config.updated_at
     ? `更新于 ${formatDateTime(config.updated_at)}`
     : ((config.shift_break_overrides || []).length ? '已加载共享班次配置' : '使用平台班次基线');
-  return `<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace">
-    <header class="dl-night-workspace-head"><div><h2>夜班核算配置 <span>${escapeHtml(formatMonthLabel(batch.month))}</span></h2><p>班次休息由所有用户共享，并从生效日期起自动沿用到后续月份；晋江不享有名单仍按当前用户和月份保存。已完成活动保留核算时的配置。</p></div><span class="dl-badge neutral">共享班次</span></header>
+  return `<section class="dl-panel dl-night-workspace" id="nightConfigWorkspace" aria-labelledby="nightConfigTitle">
+    <h2 class="sr-only" id="nightConfigTitle">夜班核算配置</h2>
     <nav class="dl-night-config-tabs" aria-label="夜班配置内容"><button type="button" data-night-config-tab="breaks" class="${editor.tab === 'breaks' ? 'active' : ''}" aria-pressed="${editor.tab === 'breaks'}">班次休息 <span>${Number(config.counts?.effective_shift_count || 0)}</span></button><button type="button" data-night-config-tab="roster" class="${editor.tab === 'roster' ? 'active' : ''}" aria-pressed="${editor.tab === 'roster'}">晋江不享有名单 <span class="${confirmed ? '' : 'needs-confirm'}">${confirmed ? `${count} 人` : '待确认'}</span></button></nav>
     <div id="nightConfigBreaks" ${editor.tab === 'breaks' ? '' : 'hidden'}>${renderNightShiftBreakEditor(config)}</div>
     <section class="dl-night-roster" id="nightConfigRoster" ${editor.tab === 'roster' ? '' : 'hidden'}>
@@ -1949,6 +1948,7 @@ function bindNightShiftEditorEvents() {
   const workspace = document.querySelector('#nightConfigWorkspace');
   if (!workspace || !config) return;
   const editor = getNightShiftEditor(config);
+  const dialog = workspace.querySelector('#nightShiftEditorDialog');
   workspace.addEventListener('keydown', event => {
     const picker = event.target.closest('.dl-editor-picker');
     if (event.key === 'Escape' && picker?.open) {
@@ -1995,9 +1995,17 @@ function bindNightShiftEditorEvents() {
     document.querySelector('#nightShiftBreakForm').innerHTML = renderNightShiftBreakForm(config);
     document.querySelector('#nightShiftBreakForm').scrollTop = 0;
     refreshList();
+    dialog.showModal();
     document.querySelector('#nightShiftBreakForm summary')?.focus({preventScroll:true});
   });
   const form = document.querySelector('#nightShiftBreakForm');
+  dialog.addEventListener('close', () => {
+    const previous = editor.selected;
+    editor.selected = '';
+    form.innerHTML = renderNightShiftBreakForm(config);
+    refreshList();
+    workspace.querySelectorAll('[data-edit-night-shift]').forEach(button => { if (button.dataset.editNightShift === previous) button.focus({preventScroll:true}); });
+  });
   form.addEventListener('toggle', event => {
     const picker = event.target;
     if (!picker.matches?.('.dl-editor-picker') || !picker.open) return;
@@ -2009,11 +2017,7 @@ function bindNightShiftEditorEvents() {
   }, true);
   form.addEventListener('click', event => {
     if (event.target.closest('[data-close-shift-editor]')) {
-      const previous = editor.selected;
-      editor.selected = '';
-      form.innerHTML = renderNightShiftBreakForm(config);
-      refreshList();
-      workspace.querySelectorAll('[data-edit-night-shift]').forEach(button => { if (button.dataset.editNightShift === previous) button.focus({preventScroll:true}); });
+      dialog.close();
       return;
     }
     const category = event.target.closest('[data-rest-category]');
@@ -2079,14 +2083,6 @@ function bindNightShiftEditorEvents() {
     refreshDraft();
   });
   form.addEventListener('click', event => {
-    if (event.target.closest('[data-close-shift-editor]')) {
-      const previous = editor.selected;
-      editor.selected = '';
-      form.innerHTML = renderNightShiftBreakForm(config);
-      refreshList();
-      workspace.querySelectorAll('[data-edit-night-shift]').forEach(button => { if (button.dataset.editNightShift === previous) button.focus({preventScroll:true}); });
-      return;
-    }
     if (!event.target.closest('#btnResetNightShiftRow')) return;
     const index = editor.rows.findIndex(row => row.shift_code === editor.selected);
     editor.rows[index] = JSON.parse(editor.original).find(row => row.shift_code === editor.selected);
@@ -2118,6 +2114,9 @@ function renderCanbuStepContent(step, results = []) {
     : [];
   if (step === 'upload') {
     const isNightShift = batch?.subject === 'yeban_butie';
+    const supplementalTemplateUrl = ['gaowen_butie', 'waisu_butie'].includes(batch?.subject)
+      ? `/api/domestic-labor/templates/${batch.subject}/download?attendance_month=${encodeURIComponent(batch.month || '')}`
+      : '';
     root.innerHTML = `
       ${isNightShift ? '<div class="dl-night-upload-layout">' : ''}
       <section class="dl-panel">
@@ -2141,15 +2140,16 @@ function renderCanbuStepContent(step, results = []) {
           ${batch?.subject === 'waisu_butie' ? `
           <div class="dl-upload-row">
             <strong>住宿名单字段</strong>
-            <span>工号、入住时间、退宿时间</span>
-            <span class="dl-badge warn">随 Excel 上传</span>
+            <span>工号、姓名、入住时间、退宿时间；包含跨月仍在宿人员，多次入住分行填写</span>
+            <a class="template-link dl-upload-template" href="${supplementalTemplateUrl}" aria-label="下载住宿名单模板" download>下载模板</a>
           </div>` : ''}
           ${batch?.subject === 'gaowen_butie' ? `
           <div class="dl-upload-row">
             <strong>高温测温登记</strong>
             <span>班次日期、测温班次、测温网点、测温温度；同仓同日同班次最高温达到33℃才计发</span>
-            <span class="dl-badge warn">随 Excel 上传</span>
-          </div>` : ''}
+            <a class="template-link dl-upload-template" href="${supplementalTemplateUrl}" aria-label="下载测温及不享有名单模板" title="包含测温登记、不享有高温补贴名单和填写说明" download>下载模板</a>
+          </div>
+          <div class="dl-upload-row"><strong>不享有高温补贴名单</strong><span>工号、姓名、工作地区、不享有原因、生效日期、结束日期；空名单须确认本月无人</span><a class="template-link dl-upload-template" href="${supplementalTemplateUrl}" aria-label="下载不享有名单及测温模板" title="包含测温登记、不享有高温补贴名单和填写说明" download>下载模板</a></div>` : ''}
         </div>
         ${batch?.subject === 'gonglingjiang' ? `
         <details class="dl-parameter-panel dl-upload-parameter">
@@ -2470,7 +2470,7 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
         ${validationSummary}
         <div class="dl-field-groups">
           ${renderFieldGroup('基础员工字段', ['工号', '姓名', '工作地区', '岗位名称', '考勤月份', '入职日期', '最后工作日'])}
-          ${renderFieldGroup('住宿名单字段', ['工号', '入住时间/入宿时间', '退宿时间/离宿时间'])}
+          ${renderFieldGroup('住宿名单字段', ['工号、姓名（与月考勤一致）', '入住时间/入宿时间', '退宿时间/离宿时间', `已识别 ${Number(inputSummary.housing_rows || 0)} 条住宿区间`, inputSummary.supplemental_confirmation?.housing === 'none' ? '已确认本月无住宿人员' : '包含跨月记录，多次入住分段计算'])}
           ${renderFieldGroup('缺勤折算字段', ['休年假小时', '事假时数', '病假时数', '排休请假时数/天数', '旷工时数/天数'])}
         </div>
         <div class="drawer-footer compact"><p class="inline-status">字段已识别，核算完成后可查看结果。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
@@ -2512,8 +2512,10 @@ function renderCanbuFieldCheck(subject = getActiveWorkbenchSubject()) {
             '班次日期', '测温班次（白班/夜班）', '测温网点', '测温温度',
             `已识别测温记录 ${Number(inputSummary.temperature_rows || 0)} 条`,
           ])}
+          ${renderFieldGroup('不享有高温补贴名单', [`已识别 ${Number(inputSummary.temperature_exclusion_rows || 0)} 条区间`, '按工号匹配，生效和结束日期均包含当天', inputSummary.supplemental_confirmation?.temperature_exclusions === 'none' ? '已确认本月无额外不享有人员' : '已按本批次日期区间逐日判断'])}
+          ${(inputSummary.temperature_site_matches || []).length ? renderFieldGroup('本次网点名称对照', inputSummary.temperature_site_matches.map(item => `${item.source}：${item.original} → ${item.matched}（${item.count} 条${item.method === 'confirmed' ? '，已确认' : ''}）`)) : ''}
         </div>
-        <div class="drawer-footer compact"><p class="inline-status">测温文件缺失不阻止任务，但测温区没有同班次记录时按0元；不会误判为无测温区域全额发放。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
+        <div class="drawer-footer compact"><p class="inline-status">缺少测温或名单须先补充；空名单须确认。有出勤但缺少对应班次测温时，结果会明确标出待补资料。</p><button class="btn-primary-lg" type="button" id="btnGoCanbuResults">查看核算结果</button></div>
       </section>
     `;
   }
@@ -3225,6 +3227,7 @@ const HIGH_TEMPERATURE_REASON_LABELS = {
   no_actual_attendance: '没有可计发的实际出勤时长',
   outside_high_temperature_season: '不在6月至10月高温津贴期间',
   employee_or_position_excluded: '命中地区固定排除人员或岗位规则',
+  supplemental_period_excluded: '命中本批次不享有高温补贴名单生效区间',
   measurement_site_unresolved: '无法识别员工对应测温网点',
   attendance_shift_unresolved: '无法从考勤识别白班或夜班',
   invalid_attendance_date: '出勤日期缺失或格式错误',
@@ -3254,7 +3257,9 @@ function renderHighTemperatureExplanation(row) {
         </tr></thead>
         <tbody>${dailyResults.map(daily => {
           const temperature = daily.temperature === null || daily.temperature === undefined ? '—' : `${Number(daily.temperature).toFixed(1)}℃`;
-          const reason = HIGH_TEMPERATURE_REASON_LABELS[daily.reason_code] || daily.reason_code || '原因待确认';
+          const reason = daily.reason_code === 'supplemental_period_excluded'
+            ? `${daily.exclusion_reason || '本批次不享有名单'}（${daily.exclusion_start} 至 ${daily.exclusion_end || '持续生效'}）`
+            : HIGH_TEMPERATURE_REASON_LABELS[daily.reason_code] || daily.reason_code || '原因待确认';
           return `
             <tr>
               <td>${escapeHtml(formatNightShiftAttendanceDate(daily.attendance_date))}</td>
@@ -4534,9 +4539,14 @@ function formatDateTime(value) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
-function getCurrentMonthValue() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+function getDefaultPayrollMonthValue(now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
+  }).formatToParts(now).map(part => [part.type, part.value]));
+  const currentMonth = Number(parts.month);
+  const year = Number(parts.year) - (currentMonth === 1 ? 1 : 0);
+  const month = currentMonth === 1 ? 12 : currentMonth - 1;
+  return `${year}-${String(month).padStart(2, '0')}`;
 }
 
 function getBatchStatusFromRunStatus(runStatus) {
@@ -4688,7 +4698,7 @@ function renderSheetConfirmation(sheets) {
     ${sheets.map(sheet => `<input type="hidden" data-sheet-key="${escapeHtml(sheet.key)}" value="${escapeHtml(previous[sheet.key] || '')}">`).join('')}`;
   const open = () => {
     if (document.querySelector('#sheetChoiceDialog')) return;
-    const labels = {monthly:['月考勤','员工信息与月度出勤汇总'],daily:['日考勤','逐日日期、班次和打卡记录'],housing:['住宿名单','员工入住与退宿记录'],temperature:['测温登记','日期、网点、班次与温度'],ignore:['跳过此表','本次核算不使用这张表']};
+    const labels = {monthly:['月考勤','员工信息与月度出勤汇总'],daily:['日考勤','逐日日期、班次和打卡记录'],housing:['住宿名单','员工入住与退宿记录'],temperature:['测温登记','日期、网点、班次与温度'],temperature_exclusions:['不享有高温补贴名单','工号、原因和生效日期区间'],ignore:['跳过此表','本次核算不使用这张表']};
     const dialog = document.createElement('dialog');
     dialog.id = 'sheetChoiceDialog';
     dialog.className = 'dl-sheet-dialog';
@@ -4808,6 +4818,71 @@ function confirmWaisuAbandonment(batch) {
   });
 }
 
+function confirmTemperatureSiteMapping(info) {
+  return new Promise(resolve => {
+    const records = info.records || [];
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dl-sheet-dialog';
+    dialog.setAttribute('aria-labelledby', 'temperatureSiteTitle');
+    let selection = null;
+    dialog.innerHTML = `<header><div><span class="dl-sheet-eyebrow">高温补贴 · 网点名称对照</span><h2 id="temperatureSiteTitle">确认这些名称对应哪个网点</h2><p>候选来自本次文件和程序现有匹配名称，并非标准网点清单。请只选择确实指向同一网点的名称；也可返回文件，在日考勤与测温表填写一致的真实名称。本次确认不影响其他批次。</p></div><button type="button" class="dl-btn" data-site-close aria-label="关闭确认弹窗">×</button></header>
+      <div class="dl-sheet-dialog-body">${records.map((record, index) => `<section class="dl-sheet-card"><div class="dl-sheet-heading"><span class="dl-sheet-number">${index + 1}</span><div><h3>${escapeHtml(record.name)}</h3><p>${Object.entries(record.sources || {}).map(([source, count]) => `${escapeHtml(source)} ${Number(count)} 条`).join(' · ')}</p></div></div><label>本次对应名称 <select class="dl-select" data-site-index="${index}"><option value="">请选择对应网点</option>${(info.candidate_sites || []).map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}${name === record.name ? '（保留此名称，另一张表的别名需对应至此）' : ''}</option>`).join('')}</select></label></section>`).join('')}</div>
+      <footer><span data-site-progress role="status"></span><div><button type="button" class="dl-btn" data-site-close>返回修改文件</button><button type="button" class="btn-primary" data-site-continue disabled>确认并继续核算 →</button></div></footer>`;
+    const choices = () => [...dialog.querySelectorAll('[data-site-index]')];
+    const update = () => {
+      const count = choices().filter(select => select.value).length;
+      dialog.querySelector('[data-site-progress]').textContent = `已确认 ${count} / ${records.length} 个名称`;
+      dialog.querySelector('[data-site-continue]').disabled = !records.length || count !== records.length;
+    };
+    dialog.addEventListener('change', update);
+    dialog.querySelectorAll('[data-site-close]').forEach(button => button.onclick = () => dialog.close());
+    dialog.querySelector('[data-site-continue]').onclick = () => {
+      selection = Object.fromEntries(choices().map((select, index) => [records[index].name, select.value]));
+      dialog.close();
+    };
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(selection); }, {once:true});
+    document.body.append(dialog);
+    update();
+    dialog.showModal();
+  });
+}
+
+function confirmEmptySupplementalSheets(info) {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dl-sheet-dialog';
+    dialog.setAttribute('aria-labelledby', 'emptySupplementalTitle');
+    const sheets = info.sheets || [];
+    let selection = null;
+    dialog.innerHTML = `<header><div><span class="dl-sheet-eyebrow">补充资料 · 空名单确认</span><h2 id="emptySupplementalTitle">这些名单为空，请确认本月情况</h2><p>空名单表示业务确认没有相关人员。请同时核对跨月仍在宿人员；缺少资料时返回补充。地区原有固定排除规则仍会生效。</p></div><button type="button" class="dl-btn" data-empty-close aria-label="关闭空名单确认">×</button></header><div class="dl-sheet-dialog-body">${sheets.map((sheet, index) => `<label class="dl-sheet-option"><input type="checkbox" data-empty-index="${index}"><span><strong>${escapeHtml(sheet.statement)}</strong><small>${escapeHtml(sheet.name)}已上传，尚无人员记录</small></span></label>`).join('')}</div><footer><span>确认仅对本次上传生效</span><div><button type="button" class="dl-btn" data-empty-close>返回补充资料</button><button type="button" class="btn-primary" data-empty-continue disabled>确认并继续核算 →</button></div></footer>`;
+    dialog.addEventListener('change', () => { dialog.querySelector('[data-empty-continue]').disabled = dialog.querySelectorAll('input:checked').length !== sheets.length; });
+    dialog.querySelectorAll('[data-empty-close]').forEach(button => button.onclick = () => dialog.close());
+    dialog.querySelector('[data-empty-continue]').onclick = () => {
+      selection = Object.fromEntries(sheets.map(sheet => [sheet.key, 'none'])); dialog.close();
+    };
+    dialog.addEventListener('close', () => { dialog.remove(); resolve(selection); }, {once:true});
+    document.body.append(dialog); dialog.showModal();
+  });
+}
+
+async function submitPayrollWithTemperatureSiteConfirmation(options, submit) {
+  let send = submit || (() => submitDomesticLaborRun(options));
+  while (true) {
+    try { return await send(); }
+    catch (error) {
+      const empty = error.detail?.code === 'supplemental_empty_confirmation_required';
+      if (!empty && error.detail?.code !== 'temperature_site_confirmation_required') throw error;
+      const mapping = await (empty ? confirmEmptySupplementalSheets(error.detail) : confirmTemperatureSiteMapping(error.detail));
+      if (!mapping) { setText(el.uploadStatus, '尚未提交核算，请核对网点名称后继续。'); return null; }
+      const key = empty ? 'supplementalConfirmation' : 'temperatureSiteMapping';
+      options[key] = {...options[key], ...mapping};
+      send = error.retryCompletion
+        ? () => error.retryCompletion({[key]: options[key]})
+        : () => submitDomesticLaborRun(options);
+    }
+  }
+}
+
 async function submitPayrollWithRosterConfirmation(options, batch) {
   options.activityId = batch.id;
   if(batch.subject==='waisu_butie'){
@@ -4819,7 +4894,7 @@ async function submitPayrollWithRosterConfirmation(options, batch) {
   const key = JSON.stringify([batch.id, batch.month, (state.payrollFiles?.length ? state.payrollFiles : [state.payrollFile]).filter(Boolean).map(file=>[file.name,file.size,file.lastModified]), JSON.stringify(options.sheetMapping)]);
   if (state.jinjiangRosterConfirmedKey === key) options.jinjiangRosterDecision = 'confirmed';
   try {
-    return await submitDomesticLaborRun(options);
+    return await submitPayrollWithTemperatureSiteConfirmation(options);
   } catch (error) {
     if (error.detail?.code !== 'jinjiang_roster_confirmation_required') throw error;
     const choice = await confirmJinjiangRoster(error.detail);
@@ -4828,8 +4903,8 @@ async function submitPayrollWithRosterConfirmation(options, batch) {
       state.jinjiangRosterUploadKey = null;
       options.jinjiangRosterDecision = 'confirmed';
       return error.retryCompletion
-        ? await error.retryCompletion({jinjiangRosterDecision: 'confirmed'})
-        : await submitDomesticLaborRun(options);
+        ? await submitPayrollWithTemperatureSiteConfirmation(options, () => error.retryCompletion({jinjiangRosterDecision: 'confirmed'}))
+        : await submitPayrollWithTemperatureSiteConfirmation(options);
     }
     if (choice === 'upload') {
       state.jinjiangRosterUploadKey = key;
@@ -4960,7 +5035,7 @@ async function submitCanbuBatch({ resumeNightShift = false } = {}) {
   }
 }
 
-async function submitDomesticLaborRun({ activityId = '', file, files = [], engines, attendanceMonth, password, hrbpList, sheetMapping = {}, jinjiangRosterDecision = '', waisuAbandonmentDecision = '', waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
+async function submitDomesticLaborRun({ activityId = '', file, files = [], engines, attendanceMonth, password, hrbpList, sheetMapping = {}, temperatureSiteMapping = {}, supplementalConfirmation = {}, jinjiangRosterDecision = '', waisuAbandonmentDecision = '', waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
   const selectedFiles = files.length ? files : [file].filter(Boolean);
   try {
     return await submitDomesticLaborRunDirect({
@@ -4971,6 +5046,8 @@ async function submitDomesticLaborRun({ activityId = '', file, files = [], engin
       password,
       hrbpList,
       sheetMapping,
+      temperatureSiteMapping,
+      supplementalConfirmation,
       jinjiangRosterDecision,
       waisuAbandonmentDecision,
       waisuAbandonmentFile,
@@ -4983,11 +5060,11 @@ async function submitDomesticLaborRun({ activityId = '', file, files = [], engin
     const directUnavailable = /未启用 Supabase 直传|DIRECT_UPLOAD_UNAVAILABLE/i.test(error.message || '');
     if (!localHost || !directUnavailable) throw error;
     setText(statusElement, '本地未启用对象存储，改用本地上传并核算...');
-    return submitDomesticLaborRunMultipart({ activityId, files: selectedFiles, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile });
+    return submitDomesticLaborRunMultipart({ activityId, files: selectedFiles, engines, attendanceMonth, password, hrbpList, sheetMapping, temperatureSiteMapping, supplementalConfirmation, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile });
   }
 }
 
-async function submitDomesticLaborRunDirect({ activityId, files, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
+async function submitDomesticLaborRunDirect({ activityId, files, engines, attendanceMonth, password, hrbpList, sheetMapping, temperatureSiteMapping, supplementalConfirmation, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile, statusElement, progressButton, onPlanCreated }) {
   const uploadFiles = waisuAbandonmentFile ? [...files, waisuAbandonmentFile] : files;
   updateUploadProgress(statusElement, progressButton, '正在生成安全直传地址...');
   const plan = await requestJson('/api/domestic-labor/runs/direct-upload-plan', {
@@ -5025,13 +5102,16 @@ async function submitDomesticLaborRunDirect({ activityId, files, engines, attend
   }
   state.progressTask?.check();
   updateUploadProgress(statusElement, progressButton, '上传完成，正在校验并核算...');
-  const completion = { engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision };
-  const complete = updates => requestJson(`/api/domestic-labor/runs/${plan.runId}/direct-upload-complete`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...completion, ...updates }),
-  });
-  try { return await complete(); }
-  catch (error) { error.retryCompletion = complete; throw error; }
+  const completion = { engines, attendanceMonth, password, hrbpList, sheetMapping, temperatureSiteMapping, supplementalConfirmation, jinjiangRosterDecision, waisuAbandonmentDecision };
+  const complete = async updates => {
+    Object.assign(completion, updates || {});
+    try {
+      return await requestJson(`/api/domestic-labor/runs/${plan.runId}/direct-upload-complete`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(completion),
+      });
+    } catch (error) { error.retryCompletion = complete; throw error; }
+  };
+  return complete();
 }
 
 async function uploadDomesticFilesConcurrently(uploads, files, onProgress) {
@@ -5096,7 +5176,7 @@ function uploadDomesticFileToSignedUrl(upload, file, onProgress, signal) {
   });
 }
 
-function submitDomesticLaborRunMultipart({ activityId, files, engines, attendanceMonth, password, hrbpList, sheetMapping, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile }) {
+function submitDomesticLaborRunMultipart({ activityId, files, engines, attendanceMonth, password, hrbpList, sheetMapping, temperatureSiteMapping, supplementalConfirmation, jinjiangRosterDecision, waisuAbandonmentDecision, waisuAbandonmentFile }) {
   const form = new FormData();
   files.forEach(file => form.append('files', file));
   form.append('activity_id', activityId || '');
@@ -5106,6 +5186,8 @@ function submitDomesticLaborRunMultipart({ activityId, files, engines, attendanc
   if (waisuAbandonmentFile) form.append('waisu_abandonment_file', waisuAbandonmentFile);
   form.append('password', password || '');
   form.append('sheet_mapping', JSON.stringify(sheetMapping || {}));
+  form.append('temperature_site_mapping', JSON.stringify(temperatureSiteMapping || {}));
+  form.append('supplemental_confirmation', JSON.stringify(supplementalConfirmation || {}));
   form.append('jinjiang_roster_decision', jinjiangRosterDecision || '');
   if (hrbpList) form.append('hrbp_list', JSON.stringify(hrbpList));
   return requestJson('/api/domestic-labor/runs', { method: 'POST', body: form, progressTask: state.progressTask });
