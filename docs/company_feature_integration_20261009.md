@@ -1,6 +1,6 @@
 # 公司功能集成交接 — 2026-10-09
 
-状态：六组功能已选择性集成并在本地提交；本地验证完成。远端推送尚未完成：2026-10-10 公司 DNS 已恢复，但本机缺少可用的公司 Git 写入身份。尚未执行公司环境迁移、绑定新增密钥、部署预览或生产发布。Vercel 正式工发布仍暂停。
+状态：六组功能已选择性集成并在本地提交；本地验证完成。候选分支已提交 GitLab并核对；公司环境迁移与发布尚未执行。尚未执行公司环境迁移、绑定新增密钥、部署预览或生产发布。Vercel 正式工发布仍暂停。
 
 ## 代码来源与范围
 
@@ -98,3 +98,7 @@ API 与 Worker 的数据库、私有 OBS bucket 和 `SIGMA_LABOR_STORAGE_ENV` �
 公司 Git 与 AIDeploy 域名已恢复解析，生产健康接口及 AIDeploy 首页 HTTP 200。重新 fetch 确认公司 `master` 仍为 `0d1411ce`，候选分支尚不存在于远端。HTTPS 推送返回 `could not read Username ... Device not configured`；使用本机已信任 SSH 主机记录的只读核对返回 `Permission denied`，没有可用的写入身份。未写入凭据、改变系统 DNS、修改远端或执行公司环境迁移/发布。
 
 当前阻塞转为公司 Git 写入认证；另仍待公司四表/Worker 配置批准及真实北森、私有 OBS/CORS、登录权限、镜像构建和回滚版本的预览验收。原本地测试结果可继续用于未改动的业务代码，健康接口 200 不代表这些业务已在线验证。
+
+### 2026-10-10 GitLab 交付完成
+
+用户在本机配置 Git 写入认证后，重新查询确认远端候选分支 `codex/company-feature-integration-20261009` 已为 `8c917ef53bbd63be497ec51b55e3c9f6a5137a5a`，与本地一致；再次推送返回 `Everything up-to-date`。此前 DNS 和写入认证阻塞已解除。此交付状态记录随候选分支同步。公司 `master` 仍为 `0d1411ceb605eacbac83e6fcbea9d1cde2cd822e`，没有生产分支改动或环境迁移、部署。
