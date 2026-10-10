@@ -102,3 +102,21 @@ test('site alias confirmation followed by empty roster confirmation keeps the sa
   assert.deepEqual(bodies[2].temperatureSiteMapping,{alias:'site'});
   assert.deepEqual(bodies[2].supplementalConfirmation,{temperature_exclusions:'none'});
 });
+
+test('company server upload retains site and empty-roster confirmations', async () => {
+  assert.ok(source.includes('async function getDomesticUploadMode('));
+  const start = source.indexOf('async function getDomesticUploadMode(');
+  const end = source.indexOf('async function submitDomesticLaborRunDirect(', start);
+  let sent;
+  const context = vm.createContext({
+    requestJson: async url => { assert.equal(url, '/api/domestic-labor/upload-mode'); return {mode:'server'}; },
+    submitDomesticLaborRunMultipart: async payload => { sent = payload; return {status:'已完成'}; },
+    submitDomesticLaborRunDirect: async () => { throw new Error('Company server mode must use backend upload'); },
+    updateUploadProgress: () => {},
+  });
+  vm.runInContext(source.slice(start, end), context);
+  await context.submitDomesticLaborRun({files:[{name:'synthetic.xlsx'}], engines:['gaowen_butie'],
+    temperatureSiteMapping:{alias:'site'}, supplementalConfirmation:{temperature_exclusions:'none'}});
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.temperatureSiteMapping)), {alias:'site'});
+  assert.deepEqual(JSON.parse(JSON.stringify(sent.supplementalConfirmation)), {temperature_exclusions:'none'});
+});
