@@ -1,6 +1,6 @@
 # 公司功能集成交接 — 2026-10-09
 
-状态：六组功能已选择性集成并在本地提交；本地验证完成。远端推送因公司 DNS 不可用尚未完成。尚未执行公司环境迁移、绑定新增密钥、部署预览或生产发布。Vercel 正式工发布仍暂停。
+状态：六组功能已选择性集成并在本地提交；本地验证完成。远端推送尚未完成：2026-10-10 公司 DNS 已恢复，但本机缺少可用的公司 Git 写入身份。尚未执行公司环境迁移、绑定新增密钥、部署预览或生产发布。Vercel 正式工发布仍暂停。
 
 ## 代码来源与范围
 
@@ -92,3 +92,9 @@ API 与 Worker 的数据库、私有 OBS bucket 和 `SIGMA_LABOR_STORAGE_ENV` �
 ## 远端交付状态
 
 提交前远端 `master` 核实为 `0d1411ce`；最终 `git push gitlab HEAD:refs/heads/codex/company-feature-integration-20261009` 失败：`Could not resolve host: git.eminxing.com`。后续解析及只读查询复核确认 `git.eminxing.com` 与 `hras-aideploy.ztn.cn` 均返回 `gaierror`。没有切换目的仓库或修改系统 DNS；公司网络恢复后只推送候选分支，先核对远端 `master` 是否有新修复，不直接推生产分支。
+
+### 2026-10-10 复核
+
+公司 Git 与 AIDeploy 域名已恢复解析，生产健康接口及 AIDeploy 首页 HTTP 200。重新 fetch 确认公司 `master` 仍为 `0d1411ce`，候选分支尚不存在于远端。HTTPS 推送返回 `could not read Username ... Device not configured`；使用本机已信任 SSH 主机记录的只读核对返回 `Permission denied`，没有可用的写入身份。未写入凭据、改变系统 DNS、修改远端或执行公司环境迁移/发布。
+
+当前阻塞转为公司 Git 写入认证；另仍待公司四表/Worker 配置批准及真实北森、私有 OBS/CORS、登录权限、镜像构建和回滚版本的预览验收。原本地测试结果可继续用于未改动的业务代码，健康接口 200 不代表这些业务已在线验证。
