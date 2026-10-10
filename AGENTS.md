@@ -116,3 +116,7 @@ After domestic labor code changes, run the most relevant targeted domestic labor
 > 本节由 aideploy devkit 依规则包 v3.0 生成，请勿手改；
 > 重跑 `aideploy init` 即可更新。
 <!-- END AIDEPLOY DEVKIT -->
+
+## SkillHub Releases
+
+When domestic payroll rules, engines, input contracts, or supplemental templates change, include the matching standalone Skill updates in the same delivery. Run the targeted SkillHub checks and `python3 -m scripts.domestic_labor_skillhub_release` to maintain the durable release ledger. See `docs/DOMESTIC_LABOR_SKILLHUB.md` for canonical sources and release behavior. Preserve historical ZIP exports; generate new releases from the current sources.

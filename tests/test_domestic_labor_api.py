@@ -812,26 +812,18 @@ def test_create_attendance_bonus_run_rejects_missing_lateness_bands():
 
 
 def test_download_waisu_template_is_directly_uploadable_workbook():
-    """外宿补贴模板应包含资格、日考勤和住宿记录三类输入，且不把说明写成数据行。"""
+    """住宿补充模板分开提供数据与说明，原始月、日考勤另传。"""
     client = TestClient(app)
     response = client.get("/api/domestic-labor/templates/waisu_butie/download")
 
     assert response.status_code == 200
     workbook = load_workbook(BytesIO(response.content), data_only=True)
-    assert workbook.sheetnames == ["月考勤", "日考勤", "住宿名单"]
-
-    monthly_headers = [cell.value for cell in workbook["月考勤"][1]]
-    assert {"工号", "姓名", "考勤月份", "工作地区", "一级部门名称", "岗位名称"}.issubset(monthly_headers)
-    assert {"入职日期", "最后工作日", "休年假小时", "病假时数"}.issubset(monthly_headers)
-    assert workbook["月考勤"].max_row == 1
-
-    daily_headers = [cell.value for cell in workbook["日考勤"][1]]
-    assert {"日期", "工号", "姓名", "工作地区", "岗位名称", "上班一", "下班一"}.issubset(daily_headers)
-    assert workbook["日考勤"].max_row == 1
+    assert workbook.sheetnames == ["住宿名单", "填写说明"]
 
     housing_headers = [cell.value for cell in workbook["住宿名单"][1]]
     assert housing_headers == ["工号", "姓名", "入住时间", "退宿时间"]
-    assert workbook["住宿名单"].max_row == 1
+    assert all(cell.value is None for row in workbook["住宿名单"].iter_rows(min_row=2) for cell in row)
+    assert workbook["住宿名单"]["A2"].number_format == "@"
 
 
 def test_download_night_shift_template_only_contains_attendance_inputs():
@@ -1835,7 +1827,12 @@ def test_night_shift_export_outputs_daily_audit_rows(tmp_path):
 
     wb = load_workbook(output_path)
     assert wb.sheetnames == ["核算汇总", "每日明细", "平台班次表"]
-    assert wb["平台班次表"].max_row == 153
+    from bonus_platform.engine.domestic_labor.night_shift_config import load_baseline_shift_breaks
+    baseline = load_baseline_shift_breaks()
+    assert wb["平台班次表"].max_row == len(baseline) + 1
+    assert [row[0] for row in wb["平台班次表"].iter_rows(min_row=2, values_only=True)] == [
+        shift["shift_code"] for shift in baseline
+    ]
     assert wb["平台班次表"].cell(1, 7).value == "休息段1类型"
     summary = wb["核算汇总"]
     assert [cell.value for cell in summary[1]] == [

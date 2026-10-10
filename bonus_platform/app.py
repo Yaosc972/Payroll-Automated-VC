@@ -71,6 +71,14 @@ from .engine.domestic_labor.engines import (
 )
 from .engine.domestic_labor.templates import generate_template, get_template_info, ENGINE_TEMPLATES
 from .engine.domestic_labor.engines.yeban_butie import find_missing_payable_shifts
+from .engine.domestic_labor.temperature_sites import (
+    prepare_temperature_sites, validate_temperature_site_mapping,
+    TemperatureSiteConfirmationRequired,
+)
+from .engine.domestic_labor.supplemental_inputs import (
+    prepare_supplemental_inputs, validate_supplemental_confirmation,
+    SupplementalConfirmationRequired,
+)
 from .engine.domestic_labor.exporter import ExcelExporter
 from .engine.domestic_labor.night_shift_config import (
     build_night_shift_config_snapshot,
@@ -2104,7 +2112,7 @@ def _fbu_access_response(request: Request) -> Response | None:
 def _domestic_labor_access_response(request: Request) -> Response | None:
     path = request.url.path
     is_domestic_api = path.startswith("/api/domestic-labor/")
-    is_domestic_page = path.rstrip("/") in {"/domestic-labor.html", "/labor.html"}
+    is_domestic_page = path.rstrip("/") in {"/domestic-labor.html", "/labor.html", "/domestic-labor-skillhub.html"}
     if not (is_domestic_api or is_domestic_page):
         return None
 
@@ -14956,6 +14964,38 @@ def get_domestic_labor_rule_package(version: str = "") -> dict:
         raise HTTPException(404, f"规则包版本不存在: {version}") from exc
 
 
+@app.get("/api/domestic-labor/skillhub")
+def get_domestic_labor_skillhub() -> dict:
+    from .engine.domestic_labor.skillhub import current_catalog
+    return current_catalog()[0]
+
+
+@app.get("/api/domestic-labor/skillhub/bundle/download")
+def download_domestic_labor_skillhub_bundle() -> Response:
+    from .engine.domestic_labor.skillhub import current_catalog, zip_bytes
+    catalog, bundles = current_catalog()
+    data = zip_bytes({f"{item['name']} skill.zip":bundles[item["id"]] for item in catalog["skills"]})
+    return Response(data, media_type="application/zip", headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote('全部中国区外包工薪酬 Skill.zip')}",
+        "Cache-Control":"no-store",
+    })
+
+
+@app.get("/api/domestic-labor/skillhub/{subject}/download")
+def download_domestic_labor_skill(subject: str, release: str = "") -> Response:
+    from .engine.domestic_labor.skillhub import current_catalog
+    catalog, bundles = current_catalog()
+    item = next((item for item in catalog["skills"] if item["id"] == subject), None)
+    if item is None:
+        raise HTTPException(404, "Skill 不存在")
+    if release and release != item["fingerprint"]:
+        raise HTTPException(409, "Skill 已更新，请刷新 SkillHub 后下载最新版本")
+    return Response(bundles[subject], media_type="application/zip", headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(item['name']+' skill.zip')}",
+        "Cache-Control":"no-store", "ETag":f'"{item["sha256"]}"',
+    })
+
+
 def _attach_domestic_engine_result(result: dict, subject: str, calculation) -> None:
     """Attach one engine result while keeping the legacy flat response fields."""
     result[subject] = calculation.amount
@@ -15014,7 +15054,9 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                               initial_metadata: dict | None = None,
                               night_shift_config: dict | None = None,
                               sheet_mapping: dict | None = None,
-                              abandoned_employee_ids=None) -> dict:
+                              abandoned_employee_ids=None,
+                              temperature_site_mapping: dict | None = None,
+                              supplemental_confirmation: dict | None = None) -> dict:
     """Load Excel, run engines, and persist the terminal task state."""
     payroll_logger.info("Starting payroll calculation for %s, engines=%s", run_id, engines)
     calculation_started = monotonic()
@@ -15042,6 +15084,14 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                 validation_started = monotonic()
                 try:
                     input_summary = loader.validate_inputs(engines, attendance_month)
+                    if "gaowen_butie" in engines:
+                        input_summary.update(prepare_temperature_sites(
+                            loader, temperature_site_mapping or (initial_metadata or {}).get("temperatureSiteMapping", {}),
+                        ))
+                    if set(engines) & {"gaowen_butie", "waisu_butie"}:
+                        input_summary.update(prepare_supplemental_inputs(
+                            loader, engines, supplemental_confirmation or (initial_metadata or {}).get("supplementalConfirmation", {}),
+                        ))
                     abandonment_roster = (initial_metadata or {}).get("waisuAbandonmentRoster") or []
                     validate_abandonment_roster(abandonment_roster, loader.monthly.rows)
                     abandoned_employee_ids = {item["employee_id"] for item in abandonment_roster}
@@ -15063,6 +15113,11 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                         input_summary.get("daily_rows", 0),
                         input_summary.get("housing_rows", 0),
                     )
+                except (TemperatureSiteConfirmationRequired, SupplementalConfirmationRequired) as exc:
+                    return update_payroll_metadata(run_id, {
+                        "status": "待确认", "errorCode": "INPUT_CONFIRMATION_REQUIRED",
+                        "confirmationDetail": exc.detail,
+                    })
                 except SheetConfirmationRequired as exc:
                     names = (initial_metadata or {}).get("fileNames") or []
                     for sheet in exc.sheets:
@@ -15096,11 +15151,17 @@ def _run_payroll_calculation(run_id: str, file_paths: list[str], attendance_mont
                         "errorCode": "INPUT_VALIDATION_FAILED",
                         "inputSummary": input_summary,
                     })
+            if set(engines) & {"gaowen_butie", "waisu_butie"} and not validate_inputs:
+                input_summary = prepare_supplemental_inputs(loader, engines, supplemental_confirmation)
+                if "gaowen_butie" in engines:
+                    input_summary.update(prepare_temperature_sites(loader, temperature_site_mapping))
+                # Keep the multipart validation counts alongside the matching audit.
+                input_summary = {**((initial_metadata or {}).get("inputSummary") or {}), **input_summary}
             monthly = loader.monthly
             daily_by_emp = loader.group_daily_by_employee()
             housing_by_emp = loader.group_housing_by_employee()
             temperature_records = loader.temperature.rows if loader.temperature else []
-            high_temperature_engine = GaoWenBuTieEngine(temperature_records)
+            high_temperature_engine = GaoWenBuTieEngine(temperature_records, getattr(loader, "validated_temperature_exclusions", []))
 
             engine_started = monotonic()
             results = []
@@ -15411,6 +15472,8 @@ async def create_domestic_labor_run(request: Request, activity_id: str = Body(""
                                      attendance_month: str = Body(""),
                                      password: str = Body(""), hrbp_list: str = Body(""),
                                      sheet_mapping: str = Body(""),
+                                     temperature_site_mapping: str = Body(""),
+                                     supplemental_confirmation: str = Body(""),
                                      jinjiang_roster_decision: str = Body(""),
                                      waisu_abandonment_decision: str = Body(""),
                                      waisu_abandonment_file: UploadFile = File(None)):
@@ -15421,12 +15484,24 @@ async def create_domestic_labor_run(request: Request, activity_id: str = Body(""
         mapping = __import__("json").loads(sheet_mapping) if sheet_mapping else {}
         if not isinstance(mapping, dict) or any(
             not isinstance(key, str) or not isinstance(value, str)
-            or value not in {"monthly", "daily", "housing", "temperature", "ignore"}
+            or value not in {"monthly", "daily", "housing", "temperature", "temperature_exclusions", "ignore"}
             for key, value in mapping.items()
         ):
             raise ValueError()
     except (ValueError, TypeError):
         raise HTTPException(400, "工作表用途确认格式错误")
+    try:
+        site_mapping = validate_temperature_site_mapping(
+            __import__("json").loads(temperature_site_mapping) if temperature_site_mapping else {},
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "网点名称对照格式错误") from exc
+    try:
+        supplementary_confirmed = validate_supplemental_confirmation(
+            __import__("json").loads(supplemental_confirmation) if supplemental_confirmation else {},
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "空名单确认格式错误") from exc
     for uploaded_file in uploaded_files:
         if not uploaded_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
             raise HTTPException(400, f"请上传 Excel 文件（.xlsx / .xlsm / .xls）：{uploaded_file.filename} 格式不支持")
@@ -15498,6 +15573,10 @@ async def create_domestic_labor_run(request: Request, activity_id: str = Body(""
     try:
         with MultiFilePayrollDataLoader([str(path) for path in saved_paths], password=password or None, sheet_mapping=mapping) as loader:
             input_summary = loader.validate_inputs(engine_list, attendance_month)
+            if "gaowen_butie" in engine_list:
+                input_summary.update(prepare_temperature_sites(loader, site_mapping))
+            if set(engine_list) & {"gaowen_butie", "waisu_butie"}:
+                input_summary.update(prepare_supplemental_inputs(loader, engine_list, supplementary_confirmed))
             validate_abandonment_roster(abandonment_roster, loader.monthly.rows)
             jinjiang_ids = set()
             if "yeban_butie" in engine_list:
@@ -15515,6 +15594,9 @@ async def create_domestic_labor_run(request: Request, activity_id: str = Body(""
             missing_shifts = find_missing_payable_shifts(
                 loader.monthly.rows, loader.group_daily_by_employee(), night_shift_config
             ) if "yeban_butie" in engine_list else []
+    except (TemperatureSiteConfirmationRequired, SupplementalConfirmationRequired) as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(409, exc.detail) from exc
     except SheetConfirmationRequired as exc:
         for sheet in exc.sheets:
             sheet["file_name"] = uploaded_files[int(sheet["key"].split(":", 1)[0])].filename
@@ -15563,6 +15645,8 @@ async def create_domestic_labor_run(request: Request, activity_id: str = Body(""
         "fileSize": sum(path.stat().st_size for path in saved_paths),
         "inputSummary": input_summary,
         "sheetMapping": mapping,
+        **({"temperatureSiteMapping": site_mapping} if "gaowen_butie" in engine_list else {}),
+        **({"supplementalConfirmation": supplementary_confirmed} if set(engine_list) & {"gaowen_butie", "waisu_butie"} else {}),
         "waisuAbandonmentDecision": waisu_abandonment_decision,
         "waisuAbandonmentRoster": abandonment_roster,
         "waisuAbandonmentRosterCount": len(abandonment_roster),
@@ -15587,6 +15671,9 @@ async def create_domestic_labor_run(request: Request, activity_id: str = Body(""
         night_shift_config=night_shift_config,
         sheet_mapping=mapping,
         abandoned_employee_ids={item["employee_id"] for item in abandonment_roster},
+        **({"temperature_site_mapping": site_mapping, "supplemental_confirmation": supplementary_confirmed,
+            "initial_metadata": {"inputSummary": input_summary}}
+           if set(engine_list) & {"gaowen_butie", "waisu_butie"} else {}),
     )
 
     status = metadata.get("status", "失败")
@@ -15794,8 +15881,16 @@ async def complete_domestic_labor_direct_upload(run_id: str, request: Request, p
     attendance_month = str(payload.get("attendanceMonth") or "")
     password = str(payload.get("password") or "") or None
     mapping = payload.get("sheetMapping") or {}
+    try:
+        site_mapping = validate_temperature_site_mapping(payload.get("temperatureSiteMapping", {}))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "网点名称对照格式错误") from exc
+    try:
+        supplementary_confirmed = validate_supplemental_confirmation(payload.get("supplementalConfirmation", {}))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, "空名单确认格式错误") from exc
     if not isinstance(mapping, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str) or value not in {"monthly", "daily", "housing", "temperature", "ignore"}
+        not isinstance(key, str) or not isinstance(value, str) or value not in {"monthly", "daily", "housing", "temperature", "temperature_exclusions", "ignore"}
         for key, value in mapping.items()
     ):
         raise HTTPException(400, "工作表用途确认格式错误")
@@ -15810,6 +15905,8 @@ async def complete_domestic_labor_direct_upload(run_id: str, request: Request, p
     actual_size = sum(path.stat().st_size for path in file_paths)
     initial_metadata = {
         "sheetMapping": mapping,
+        **({"temperatureSiteMapping": site_mapping} if "gaowen_butie" in engine_list else {}),
+        **({"supplementalConfirmation": supplementary_confirmed} if set(engine_list) & {"gaowen_butie", "waisu_butie"} else {}),
         "waisuAbandonmentDecision": abandonment_decision,
         "waisuAbandonmentRoster": abandonment_roster,
         "waisuAbandonmentRosterCount": len(abandonment_roster),
@@ -15957,17 +16054,22 @@ def list_domestic_labor_templates() -> dict:
 
 
 @app.get("/api/domestic-labor/templates/{engine_key}/download")
-def download_domestic_labor_template(engine_key: str) -> FileResponse:
+def download_domestic_labor_template(engine_key: str, background_tasks: BackgroundTasks, attendance_month: str = "") -> FileResponse:
     if engine_key not in ENGINE_TEMPLATES:
         raise HTTPException(404, "模板不存在")
-    data = generate_template(engine_key)
+    try:
+        data = generate_template(engine_key, attendance_month)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     tmp = NamedTemporaryFile(delete=False, suffix=f"_{engine_key}_template.xlsx")
     tmp.write(data)
     tmp.close()
+    background_tasks.add_task(Path(tmp.name).unlink, missing_ok=True)
     return FileResponse(
         tmp.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        filename=f"{engine_key}_template.xlsx",
+        filename={"gaowen_butie": "高温补贴补充资料.xlsx", "waisu_butie": "外宿补贴住宿名单.xlsx"}.get(engine_key, f"{engine_key}_template.xlsx"),
+        background=background_tasks,
     )
 
 

@@ -1,0 +1,58 @@
+{
+  "name": "餐补",
+  "engine": "CanBuEngine",
+  "fields": [
+    "工号",
+    "姓名",
+    "考勤月份",
+    "工作地区",
+    "岗位名称"
+  ],
+  "regional_fields": {
+    "东莞": [
+      "二级部门名称"
+    ],
+    "嘉善": [
+      "排班天数",
+      "实际在职工作日天数",
+      "事假时数",
+      "病假时数",
+      "旷工天数"
+    ],
+    "义乌": [
+      "排班天数",
+      "实际在职工作日天数",
+      "事假时数",
+      "病假时数",
+      "旷工天数"
+    ]
+  },
+  "sources": [],
+  "conditional_sources_by_area": {"东莞": ["daily"]},
+  "daily_fields": [
+    "正班时数",
+    "刷卡加班",
+    "是否异常"
+  ],
+  "daily_nullable_fields": [
+    "异常原因"
+  ],
+  "subject": "canbu",
+  "source_labels": {
+    "employees": "月考勤/员工核算主表",
+    "daily": "全月日考勤及排班状态",
+    "housing": "当月住宿名单（含跨月仍在住记录）",
+    "abandonment_roster": "本月自离名单",
+    "seniority_roster": "第四纵队揽收线工龄奖名单",
+    "temperatures": "本月网点分班次测温登记",
+    "night_config": "当月生效班次休息及晋江额外排除配置",
+    "offline": "线下已核算结果"
+  },
+  "numeric_fields": [
+    "事假时数",
+    "实际在职工作日天数",
+    "排班天数",
+    "旷工天数",
+    "病假时数"
+  ]
+}
