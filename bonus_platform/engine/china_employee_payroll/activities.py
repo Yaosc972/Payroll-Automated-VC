@@ -209,7 +209,9 @@ def get_activity(activity_id: str):
 async def start_activity(activity_id: str, background_tasks: BackgroundTasks, attendance_files: Optional[list[UploadFile]] = File(None)):
     if durable.enabled():
         if attendance_files:
-            raise HTTPException(400, "请使用考勤文件直传后开始核算。")
+            if not durable.server_file_transfer():
+                raise HTTPException(400, "请使用考勤文件直传后开始核算。")
+            await durable.accept_server_uploads(_id(activity_id), attendance_files)
         try:
             return durable.start(_id(activity_id))
         except HTTPException as exc:
@@ -252,7 +254,7 @@ async def start_activity(activity_id: str, background_tasks: BackgroundTasks, at
 
 @router.get("/config/upload")
 def upload_config():
-    return {"directUpload": durable.enabled()}
+    return {"directUpload": durable.enabled() and not durable.server_file_transfer()}
 
 
 @router.post("/{activity_id}/uploads")

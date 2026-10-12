@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 from uuid import uuid4
+from urllib.parse import unquote
+from zipfile import ZipFile, ZIP_STORED
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -224,8 +226,123 @@ def test_company_obs_private_adapter_publishes_and_exports(environment, monkeypa
     worker.process_one(store)
     assert store.get(item["activityId"])["status"] == "completed"
     assert durable.get_run(run["runId"])["summary"]["totalAmount"] == 20
-    assert durable.export_run(run["runId"])["downloadUrl"].startswith("https://obs.example.invalid/")
+    response = client.get(f"/api/china-employee-payroll/meal-allowance/{run['runId']}/export")
+    assert response.status_code == 200
+    assert response.content == durable.read_file(store.job(run["runId"])["export"])
+    assert "no-store" in response.headers["cache-control"]
     assert len(objects) == 3
+
+
+@pytest.mark.parametrize("backend", ["obs", "s3"])
+def test_company_server_upload_worker_export_and_retry(environment, monkeypatch, backend):
+    store, client, _, _ = environment
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", backend)
+    # Company browser transfers must not issue any private signed URLs.
+    def no_signing(*args, **kwargs):
+        pytest.fail("Company file transfers must go through the authenticated API")
+    monkeypatch.setattr(durable.storage, "create_labor_supabase_signed_upload_for_object", no_signing)
+    monkeypatch.setattr(durable.storage, "create_labor_supabase_signed_download", no_signing)
+    assert client.get(BASE + "/config/upload").json() == {"directUpload": False}
+    activity = create(client, "wx-meal-allowance")
+    raw = wx_file()
+    path = f"{BASE}/{activity['activityId']}/start"
+    response = client.post(path, files={"attendance_files": ("WX九月.xlsx", raw, durable.XLSX)})
+    assert response.status_code == 200, response.text
+    run = response.json()
+    manifest = store.get(activity["activityId"])["inputs"][0]
+    assert manifest["size"] == len(raw)
+    assert manifest["sha256"] == hashlib.sha256(raw).hexdigest()
+    assert durable.read_file(manifest) == raw
+    assert client.post(path, files={"attendance_files": ("重复.xlsx", b"different")}).json()["runId"] == run["runId"]
+    assert worker.process_one(Store())
+    assert Store().get(activity["activityId"])["summary"]["totalAmount"] == 20
+    export_path = f"/api/china-employee-payroll/meal-allowance/{run['runId']}/export"
+    exported = client.get(export_path)
+    assert exported.status_code == 200
+    filename = unquote(exported.headers["content-disposition"].split("UTF-8''")[1])
+    assert filename.startswith("2026年9月") and filename.endswith(".xlsx")
+    assert exported.content == durable.read_file(Store().job(run["runId"])["export"])
+    book = load_workbook(BytesIO(exported.content), read_only=True)
+    assert book.sheetnames == ["餐补核算结果", "WX技术部考勤源"]
+    book.close()
+    assert client.post(f"{BASE}/{activity['activityId']}/uploads", json={"files": []}).status_code == 409
+    # The API still verifies the stored export before returning bytes.
+    key = Store().job(run["runId"])["export"]["objectKey"]
+    durable.storage.put_labor_supabase_private_object(key, b"corrupted")
+    assert client.get(export_path).status_code == 409
+
+
+def test_company_server_upload_validation_and_storage_failure(environment, monkeypatch):
+    store, client, _, _ = environment
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "obs")
+    activity = create(client, "wx-meal-allowance")
+    path = f"{BASE}/{activity['activityId']}/start"
+    for name, content in [("wrong.txt", b"data"), ("../bad.xlsx", b"data"), ("empty.xlsx", b"")]:
+        assert client.post(path, files={"attendance_files": (name, content)}).status_code == 400
+    monkeypatch.setattr(durable, "MAX_FILE_BYTES", 5)
+    assert client.post(path, files={"attendance_files": ("large.xlsx", b"123456")}).status_code == 400
+    monkeypatch.setattr(durable, "MAX_TOTAL_BYTES", 5)
+    assert client.post(path, files=[("attendance_files", ("a.xlsx", b"123")), ("attendance_files", ("b.xlsx", b"123"))]).status_code == 400
+    store.uploads(activity["activityId"], [{"objectKey": "previous-input"}])
+    def fail(*args, **kwargs):
+        raise RuntimeError("private-storage-credential")
+    monkeypatch.setattr(durable.storage, "put_labor_supabase_private_object", fail)
+    response = client.post(path, files={"attendance_files": ("ok.xlsx", b"123")})
+    assert response.status_code == 503 and "credential" not in response.text
+    unchanged = Store().get(activity["activityId"])
+    assert unchanged["status"] == "draft" and unchanged["runId"] == ""
+    assert unchanged["inputs"] == [{"objectKey": "previous-input"}]
+
+
+def test_company_server_file_endpoints_keep_module_permissions(environment, monkeypatch):
+    store, client, current, _ = environment
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "obs")
+    item = create(client, "wx-meal-allowance")
+    raw = wx_file()
+    run = client.post(f"{BASE}/{item['activityId']}/start", files={"attendance_files": ("WX.xlsx", raw)}).json()
+    worker.process_one(store)
+    current["modules"][0]["canEnter"] = False
+    assert client.post(f"{BASE}/{item['activityId']}/start", files={"attendance_files": ("WX.xlsx", raw)}).status_code == 403
+    assert client.get(f"/api/china-employee-payroll/meal-allowance/{run['runId']}/export").status_code == 403
+    monkeypatch.setattr(auth, "current_user_from_request", lambda request: None)
+    assert client.post(f"{BASE}/{item['activityId']}/start", files={"attendance_files": ("WX.xlsx", raw)}).status_code == 401
+    assert client.get(f"/api/china-employee-payroll/meal-allowance/{run['runId']}/export").status_code == 401
+
+
+def test_company_server_upload_exceeds_vercel_body_limit(environment, monkeypatch):
+    store, client, _, _ = environment
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "obs")
+    item = create(client, "wx-meal-allowance")
+    buffer = BytesIO(wx_file())
+    with ZipFile(buffer, "a", compression=ZIP_STORED) as archive:
+        archive.writestr("large-file-fixture.bin", b"0" * (5 * 1024 * 1024))
+    raw = buffer.getvalue()
+    assert len(raw) > 5 * 1024 * 1024
+    response = client.post(f"{BASE}/{item['activityId']}/start", files={"attendance_files": ("大文件.xlsx", raw)})
+    assert response.status_code == 200, response.text
+    assert worker.process_one(store)
+    assert Store().get(item["activityId"])["summary"]["totalAmount"] == 20
+
+
+def test_company_server_relocation_export_and_storage_error(environment, monkeypatch):
+    store, client, _, _ = environment
+    monkeypatch.setenv("SIGMA_LABOR_STORAGE_BACKEND", "obs")
+    item = create(client, "relocation-allowance")
+    store.enqueue(item["activityId"])
+    job, token = store.claim()
+    raw, filename = b"saved-relocation-export", "2026年9月 ABU职场搬迁补贴.xlsx"
+    manifest = durable.put(item, filename, raw, "exports")
+    store.update(job["runId"], token, {"status": "completed", "export": manifest}, terminal=True)
+    path = f"/api/china-employee-payroll/relocation-allowance/runs/{job['runId']}/export"
+    response = client.get(path)
+    assert response.status_code == 200 and response.content == raw
+    assert unquote(response.headers["content-disposition"].split("UTF-8''")[1]) == filename
+    assert client.get(f"/api/china-employee-payroll/meal-allowance/{job['runId']}/export").status_code == 404
+    def fail(*args, **kwargs):
+        raise RuntimeError("private-storage-credential")
+    monkeypatch.setattr(durable.storage, "get_labor_supabase_private_object", fail)
+    response = client.get(path)
+    assert response.status_code == 503 and "credential" not in response.text
 
 
 def test_company_obs_legacy_history_survives_empty_instance_cache(environment, monkeypatch, tmp_path):
