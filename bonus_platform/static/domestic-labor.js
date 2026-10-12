@@ -94,7 +94,7 @@ const SUBJECT_WORKBENCH = {
     batchNoun: '高温补贴批次',
     resultField: 'gaowen_butie',
     totalField: 'total_gaowen_butie',
-    uploadTitle: '高温补贴月考勤、日考勤与测温登记 Excel',
+    uploadTitle: '月考勤、日考勤与高温补贴补充资料 Excel',
     uploadDescription: '上传原始月考勤、日考勤，以及同一工作簿内的测温登记和不享有高温补贴名单。网点可选候选或手填，名单按工号和生效区间匹配。',
   },
   yeban_butie: {
@@ -2145,11 +2145,10 @@ function renderCanbuStepContent(step, results = []) {
           </div>` : ''}
           ${batch?.subject === 'gaowen_butie' ? `
           <div class="dl-upload-row">
-            <strong>高温测温登记</strong>
-            <span>班次日期、测温班次、测温网点、测温温度；同仓同日同班次最高温达到33℃才计发</span>
-            <a class="template-link dl-upload-template" href="${supplementalTemplateUrl}" aria-label="下载测温及不享有名单模板" title="包含测温登记、不享有高温补贴名单和填写说明" download>下载模板</a>
-          </div>
-          <div class="dl-upload-row"><strong>不享有高温补贴名单</strong><span>工号、姓名、工作地区、不享有原因、生效日期、结束日期；空名单须确认本月无人</span><a class="template-link dl-upload-template" href="${supplementalTemplateUrl}" aria-label="下载不享有名单及测温模板" title="包含测温登记、不享有高温补贴名单和填写说明" download>下载模板</a></div>` : ''}
+            <strong>高温补贴补充资料</strong>
+            <span>用于补充测温记录及不享有人员名单，供高温补贴核算使用。</span>
+            <a class="template-link dl-upload-template" href="${supplementalTemplateUrl}" aria-label="下载高温补贴补充资料模板" title="包含测温登记、不享有高温补贴名单和填写说明" download>下载模板</a>
+          </div>` : ''}
         </div>
         ${batch?.subject === 'gonglingjiang' ? `
         <details class="dl-parameter-panel dl-upload-parameter">
