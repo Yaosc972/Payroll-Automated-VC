@@ -1,3 +1,4 @@
+FROM node:22.22.3-bookworm-slim AS node-runtime
 FROM python:3.12-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -11,6 +12,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
     PIP_EXTRA_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/ \
     PIP_TRUSTED_HOST="mirrors.aliyun.com pypi.tuna.tsinghua.edu.cn"
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-calc \
+    && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN python -m pip install \
     --no-cache-dir \

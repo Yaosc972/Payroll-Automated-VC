@@ -21,7 +21,7 @@ function keychainValue(service) {
  * and BEISEN_APP_SECRET through their secret manager/environment.
  */
 export function ensureLocalBeisenCredentials() {
-  if (process.env.VERCEL) return;
+  if (process.env.VERCEL || process.env.SIGMA_RUNTIME_MODE === "server" || process.platform !== "darwin") return;
   if (!String(process.env.BEISEN_APP_KEY || "").trim()) {
     process.env.BEISEN_APP_KEY = keychainValue(KEYCHAIN_SERVICES.appKey);
   }

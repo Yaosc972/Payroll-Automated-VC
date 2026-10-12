@@ -217,13 +217,20 @@ def _soffice_binary() -> str:
 
 
 def _convert_with_soffice(source: Path, output_dir: Path, format_name: str) -> Path:
-    completed = subprocess.run(
-        [_soffice_binary(), "--headless", "--convert-to", format_name, "--outdir", str(output_dir), str(source)],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+    # Each conversion owns its profile so simultaneous requests cannot attach
+    # to another LibreOffice process or reuse its output directory.
+    with tempfile.TemporaryDirectory(prefix="social-office-profile-") as profile:
+        try:
+            completed = subprocess.run(
+                [_soffice_binary(), f"-env:UserInstallation={Path(profile).as_uri()}",
+                 "--headless", "--convert-to", format_name, "--outdir", str(output_dir), str(source)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RunValidationError("政务模板格式转换超时，请重试。") from exc
     expected = output_dir / f"{source.stem}.{format_name.split(':', 1)[0]}"
     if completed.returncode != 0 or not expected.exists():
         raise RunValidationError("政务模板格式转换失败")

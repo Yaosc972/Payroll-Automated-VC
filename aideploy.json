@@ -41,11 +41,15 @@
         "FEISHU_APP_SECRET",
         "MIMO_API_KEY",
         "OBS_ACCESS_KEY",
-        "OBS_SECRET_KEY"
+        "OBS_SECRET_KEY",
+        "BEISEN_APP_KEY",
+        "BEISEN_APP_SECRET"
       ],
       "env": {
         "SIGMA_CHINA_PAYROLL_BACKEND": "mysql",
-        "SIGMA_POLICY_REFRESH_ENABLED": "true"
+        "SIGMA_POLICY_REFRESH_ENABLED": "true",
+        "SIGMA_SOCIAL_INSURANCE_ENGINE_DIR": "/app/social_insurance_connector",
+        "SOCIAL_INSURANCE_RULE_VERSION": "2026.10.12-01"
       }
     },
     {
