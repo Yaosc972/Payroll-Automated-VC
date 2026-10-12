@@ -16,6 +16,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from .subject_settings import read_settings
 from .report import build_audit_export
 from .runs import (
     RunNotFoundError,
@@ -240,11 +241,50 @@ def _header_matches(actual: Any, field: dict[str, Any]) -> bool:
     return normalized == expected or normalized == name or (name and name in normalized)
 
 
+def _template_options(workbook, validation):
+    formula = str(validation.formula1 or "").lstrip("=")
+    if formula.startswith('"') and formula.endswith('"'):
+        return set(formula[1:-1].split(','))
+    match = re.fullmatch(r"'?([^'!]+)'?!\$?([A-Z]+)(?:\$?(\d+))?:\$?([A-Z]+)(?:\$?(\d+))?", formula)
+    if not match or match[1] not in workbook.sheetnames or match[2] != match[4]:
+        raise RunValidationError("模板下拉引用发生变化，无法可靠识别，请核对模板版本")
+    sheet = workbook[match[1]]
+    return {str(sheet[f"{match[2]}{row}"].value) for row in range(int(match[3] or 1), min(int(match[5] or sheet.max_row), sheet.max_row) + 1)
+            if sheet[f"{match[2]}{row}"].value is not None}
+
+
+def _template_cell_value(workbook, sheet, column, row, field, value, validations):
+    value = str(value or "")
+    header = sheet.cell(2, column)
+    red = header.font.color and header.font.color.type == "rgb" and header.font.color.rgb[-6:] == "FF0000"
+    if not value and (field.get("required") or red or "必填" in str(header.value)):
+        raise RunValidationError(f"模板必填字段缺失：第{row}行 {field['name']}")
+    for validation, options in validations:
+        if f"{header.column_letter}{row}" not in validation.sqref:
+            continue
+        if value and value not in options:
+            # Explicitly verified equivalents; never guess arbitrary new enums.
+            aliases = {"管理(技术)岗位": "管理人员", "工人岗位": "工人", "管理人员": "管理(技术)岗位", "工人": "工人岗位"} if field['name'] == "岗位类别" else {}
+            candidate = aliases.get(value)
+            if candidate not in options:
+                raise RunValidationError(f"模板下拉值不匹配：第{row}行 {field['name']}；当前值：{value}；" + ("允许值：" + "、".join(sorted(options)) if len(options) <= 20 else "请按模板字典选择有效值"))
+            value = candidate
+    return value
+
+
+class TemplateIssuesError(RunValidationError):
+    def __init__(self, issues):
+        self.issues = issues
+        super().__init__(issues[0]["message"])
+
+
 def _fill_template(
     source: Path,
     route: str,
     employees: list[dict[str, Any]],
     output_dir: Path,
+    unit_number: str = "",
+    validate_only: bool = False,
 ) -> Path:
     schema = TEMPLATE_SCHEMAS[route]
     with tempfile.TemporaryDirectory(prefix="social-template-") as temporary:
@@ -256,6 +296,27 @@ def _fill_template(
         sheet = workbook[schema["sheet"]] if schema["sheet"] in workbook.sheetnames else workbook[workbook.sheetnames[0]]
         fields = list(schema["fields"])
         header_row = int(schema["headerRow"])
+        data_start = int(schema["dataStartRow"])
+        if route == "shenzhen-social-medical":
+            if unit_number:
+                sheet["B1"] = unit_number
+            unit_number = str(sheet["B1"].value or "").strip()
+            if _normalized_header(sheet["A1"].value) != "单位编号" or not unit_number.isdigit():
+                workbook.close()
+                raise RunValidationError("深圳政务模板缺少有效单位编号，请填写该主体的社保账号")
+            headers = [sheet.cell(row=header_row, column=column).value for column in range(1, sheet.max_column + 1)]
+            while headers and headers[-1] in (None, ""):
+                headers.pop()
+            by_header = {_normalized_header(field["name"]): field for field in fields}
+            normalized = [_normalized_header(header) for header in headers]
+            expected = set(by_header) - {"个人身份"}
+            unknown = [str(header) for header, key in zip(headers, normalized) if key not in by_header]
+            if unknown or len(set(normalized)) != len(normalized) or not expected.issubset(set(normalized)):
+                workbook.close()
+                raise RunValidationError("深圳模板字段发生未知变化或缺失，请核对：" + "、".join(unknown[:3] or sorted(expected - set(normalized)) or ["重复列"]))
+            fields = [by_header[key] for key in normalized]
+            if "个人身份" not in normalized:
+                data_start = header_row + 1
         mismatches = [
             field["name"]
             for column, field in enumerate(fields, start=1)
@@ -264,10 +325,11 @@ def _fill_template(
         if mismatches:
             workbook.close()
             raise RunValidationError(f"模板版本不匹配：{schema['label']} 表头缺少{'、'.join(mismatches[:3])}")
-        data_start = int(schema["dataStartRow"])
+        validations = [(v, _template_options(workbook, v)) for v in sheet.data_validations.dataValidation if v.type == "list"] if route == "shenzhen-social-medical" else []
         for row in range(data_start, max(data_start, sheet.max_row) + 1):
             for column in range(1, len(fields) + 1):
                 sheet.cell(row=row, column=column).value = None
+        issues = []
         style_row = data_start
         for offset, employee in enumerate(employees):
             row = data_start + offset
@@ -280,7 +342,23 @@ def _fill_template(
                         target._style = copy(template_cell._style)
                     target.number_format = template_cell.number_format
                     target.alignment = copy(template_cell.alignment)
-                target.value = _safe_excel_text(values.get(field["name"]))
+                value = values.get(field["name"])
+                if route == "shenzhen-social-medical":
+                    try:
+                        value = _template_cell_value(workbook, sheet, column, row, field, value, validations)
+                    except RunValidationError as exc:
+                        issues.append({"kind": "employee", "employeeId": employee.get("id"),
+                            "employeeName": (employee.get("report") or {}).get("姓名", "人员"),
+                            "field": field["name"], "message": str(exc),
+                            "action": "employee" if "必填" in str(exc) else "template",
+                            "resolution": "补充资料并保存，再重新校验。" if "必填" in str(exc) else "核对最新官方模板；如为新的枚举含义，请维护人员确认映射后重新校验。"})
+                target.value = _safe_excel_text(value)
+        if issues:
+            workbook.close()
+            raise TemplateIssuesError(issues)
+        if validate_only:
+            workbook.close()
+            return source
         safe_label = re.sub(r"[^\w\u4e00-\u9fff-]+", "", schema["label"])
         xlsx_output = output_dir / f"{safe_label}_{len(employees)}人.xlsx"
         workbook.save(xlsx_output)
@@ -329,10 +407,49 @@ def _build_summary_workbook(run: dict[str, Any], preflight: dict[str, Any], gene
     return output
 
 
+def validate_report_package(run_id: str) -> dict[str, Any]:
+    run = load_run(run_id)
+    issues = []
+    preflight = build_export_preflight(run)
+    with tempfile.TemporaryDirectory(prefix="social-validate-") as temporary:
+        for group in preflight["groups"]:
+            route = group["route"]
+            for employee in _route_employees(run, route):
+                for field in ((employee.get("templateReports") or {}).get(route) or {}).get("missingRequired", []):
+                    issues.append({"kind":"employee", "route":route, "employeeId":employee["id"],
+                        "employeeName":employee["report"].get("姓名", "人员"), "field":field,
+                        "message":f"缺少必填资料：{field}", "action":"employee", "resolution":"补充资料并保存，再重新校验。"})
+            reference = _template_reference(run, route)
+            if not group["templateUsable"] or not reference or not reference.get("path"):
+                issues.append({"kind":"template", "route":route, "message":group["label"]+"：需要有效主体模板", "action":"template", "resolution":"从政务网站下载最新原始模板，在上方导入后重新校验。"})
+                continue
+            try:
+                _fill_template(Path(reference["path"]), route, _route_employees(run, route), Path(temporary), read_settings(run)["unitNumber"], validate_only=True)
+            except TemplateIssuesError as exc:
+                for item in exc.issues:
+                    if not any(i.get("employeeId")==item.get("employeeId") and i.get("field")==item.get("field") and i.get("route")==route for i in issues):
+                        issues.append({**item, "route":route})
+            except RunValidationError as exc:
+                account = "单位编号" in str(exc)
+                issues.append({"kind":"subject" if account else "template", "route":route,
+                    "message":str(exc), "action":"subject" if account else "template",
+                    "resolution":"填写并保存该主体的社保账号，再重新校验。" if account else "重新导入最新官方模板；仍失败时，将此提示交维护人员适配，勿修改模板下拉绕过校验。"})
+    run["reportValidation"] = {"checkedAt":current_timestamp(), "passed":not issues, "issues":issues}
+    if issues:
+        run["reportPackage"] = None
+        run["reportFile"] = None
+        if run["status"] == "generated":
+            run["status"] = "confirmed"
+    return save_run(run)
+
+
 def generate_report_package(run_id: str) -> dict[str, Any]:
     run = load_run(run_id)
     if run.get("status") not in {"confirmed", "generated"}:
         raise RunValidationError("请先完成人员人工确认，再生成政务报盘包")
+    run = validate_report_package(run_id)
+    if not run["reportValidation"]["passed"]:
+        return run
     preflight = build_export_preflight(run)
     run_dir = get_run_dir(run_id)
     generated: list[dict[str, Any]] = []
@@ -351,10 +468,20 @@ def generate_report_package(run_id: str) -> dict[str, Any]:
             if not reference or not reference.get("path"):
                 continue
             try:
-                output = _fill_template(Path(reference["path"]), route, _route_employees(run, route), report_dir)
+                output = _fill_template(Path(reference["path"]), route, _route_employees(run, route), report_dir, read_settings(run)["unitNumber"])
+                shutil.copy2(output, run_dir / output.name)
                 generated.append({"route": route, "filename": output.name, "employeeCount": group["employeeCount"]})
             except RunValidationError as exc:
                 generation_errors[route] = str(exc)
+        if generation_errors:
+            run["reportValidation"] = {"checkedAt":current_timestamp(), "passed":False, "issues":[
+                {"kind":"template", "route":route, "message":message, "action":"template",
+                 "resolution":"未生成可上传的报盘表，请核对模板与转换环境后重新校验。"}
+                for route, message in generation_errors.items()]}
+            run["reportPackage"] = None
+            run["reportFile"] = None
+            if run["status"] == "generated": run["status"] = "confirmed"
+            return save_run(run)
         audit = build_audit_export(run_id)
         missing = build_missing_export(run_id)
         summary = _build_summary_workbook(run, preflight, generated)

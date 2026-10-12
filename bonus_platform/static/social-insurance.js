@@ -1074,7 +1074,20 @@
           return;
         }
         if (column.type === 'source') {
-          row.append(createReviewFieldCell(sourceColumnValue(employee, column.key), column.className, column.mask));
+          if (column.key === 'lastWorkDate' && !source.lastWorkDate) {
+            const pending = (source.departureRecords || []).filter((item) =>
+              ['审批中', 'Approving', '1'].includes(item.approvalStatus)
+              && /^\d{4}-\d{2}-\d{2}$/.test(item.lastWorkDate)
+              && (!employee.entryDate || item.lastWorkDate >= employee.entryDate));
+            const dates = [...new Set(pending.map((item) => item.lastWorkDate))];
+            const cell = createReviewFieldCell(dates.length === 1 ? dates[0] : (dates.length > 1 ? '日期待核对' : ''), column.className);
+            if (dates.length) {
+              const tag = textNode('span', 'departure-pending-tag', dates.length === 1 ? '离职申请中' : '申请日期冲突');
+              tag.title = dates.length === 1 ? '来源：审批中的离职任职记录，尚未生效' : `存在多个审批中日期：${dates.join('、')}`;
+              cell.append(tag);
+            }
+            row.append(cell);
+          } else row.append(createReviewFieldCell(sourceColumnValue(employee, column.key), column.className, column.mask));
           return;
         }
         row.append(createReviewFieldCell(column.value(employee), column.className || '', column.mask || ''));
@@ -1297,7 +1310,8 @@
     const readyRoutes = Number(preflight?.summary?.readyRoutes || 0);
     const templateRoutes = Number(preflight?.summary?.templateRoutes || 0);
     const canGenerate = Boolean(confirmed && preflight && (readyRoutes > 0 || templateRoutes === 0));
-    generateButton.disabled = !canGenerate || Boolean(state.operation);
+    generateButton.disabled = !canGenerate || Boolean(state.operation) || state.run?.reportValidation?.passed === false;
+    renderReportValidation();
     byId('reportState').textContent = !isCurrentBatch && run
       ? '等待同步新周期'
       : (run?.reportPackage
@@ -1305,17 +1319,19 @@
         : (canGenerate ? (readyRoutes < templateRoutes ? '可生成已就绪路径' : '可以生成') : (confirmed ? '请先处理阻断项' : '等待人员确认')));
     byId('reportCard').classList.toggle('ready', canGenerate);
     const download = byId('downloadButton');
-    if (isCurrentBatch && run?.reportPackage) {
-      const generatedCount = run.reportPackage.generatedRoutes?.length || 0;
-      const blockedCount = run.reportPackage.blockedRoutes?.length || 0;
-      download.classList.remove('hidden');
-      download.href = `${API_ROOT}/runs/${encodeURIComponent(run.id)}/package/download`;
-      download.textContent = blockedCount
-        ? `下载报盘包（已生成${generatedCount}条，待处理${blockedCount}条） ↓`
-        : `下载政务报盘包（${generatedCount}条路径） ↓`;
-    } else {
-      download.classList.add('hidden'); download.href = '#';
-    }
+    const generated = isCurrentBatch ? (run?.reportPackage?.generatedRoutes || []) : [];
+    download.classList.toggle('hidden', !generated.length);
+    download.textContent = generated.length ? `下载报盘表（${generated[0].filename.split('.').pop()}） ↓` : '';
+    download.href = generated.length ? reportDownloadUrl(run.id, generated[0].filename) : '#';
+    byId('additionalReportDownloads').replaceChildren();
+    generated.slice(1).forEach(item => {
+      const link = document.createElement('a');
+      link.className = 'download-button'; link.textContent = item.filename;
+      link.href = reportDownloadUrl(run.id, item.filename);
+      byId('additionalReportDownloads').append(link);
+    });
+    byId('packageDownloadButton').classList.toggle('hidden', !isCurrentBatch || !run?.reportPackage);
+    if (run?.reportPackage && !generated.length) byId('reportState').textContent = '报盘表生成失败';
     if (aggregate) {
       byId('templateState').textContent = '按主体分别上传';
       byId('reportState').textContent = '按主体分别生成';
@@ -1323,6 +1339,7 @@
   }
 
   function renderRun() {
+    loadSubjectSettings();
     syncTemplateRouteSelectors();
     renderMetrics(); renderTable(); renderProcessingPlan(); renderPreflight(); renderStages(); renderActions();
     syncSubjectPicker();
@@ -2194,19 +2211,29 @@
   async function generateReport() {
     if (!state.run || state.run.isAggregate || state.operation) return;
     state.operation = 'generate';
-    const button = byId('generateButton'); setBusy(button, true, '正在生成政务报盘包');
+    const button = byId('generateButton'); setBusy(button, true, '正在生成报盘表');
     const syncButton = byId('syncButton'); syncButton.disabled = true;
     try {
       state.run = await api(`${API_ROOT}/runs/${state.run.id}/generate-package`, { method: 'POST' });
       invalidateBatchCache(state.run.id);
       state.preflightKey = '';
       renderRun();
+      if (state.run.reportValidation?.passed === false) {
+        showToast('未生成可上传的报盘表，请处理问题清单后重新校验', 'error');
+        return;
+      }
       const packageResult = state.run.reportPackage || {};
       const generatedCount = packageResult.generatedRoutes?.length || 0;
       const blockedCount = packageResult.blockedRoutes?.length || 0;
-      showToast(blockedCount
-        ? `已生成 ${generatedCount} 条就绪路径，另有 ${blockedCount} 条路径随待补资料一并说明`
-        : `政务报盘包已生成，共 ${generatedCount} 条办理路径；请下载复核`);
+      if (!generatedCount) {
+        showToast(packageResult.blockedRoutes?.map(item => item.reason).join('；') || '报盘表未生成', 'error');
+      } else {
+        showToast(blockedCount ? `已生成 ${generatedCount} 份报盘表，另有 ${blockedCount} 条路径待处理` : '报盘表已生成');
+        if (generatedCount === 1) await downloadExportFile(reportDownloadUrl(state.run.id, packageResult.generatedRoutes[0].filename), {
+          allowDuringGeneration: true, control: button, title: '政务报盘表', detail: '正在下载可用于政务系统导入的报盘表',
+          fallbackFilename: packageResult.generatedRoutes[0].filename,
+        });
+      }
     } catch (error) { showToast(error.message, 'error'); }
     finally {
       state.operation = null;
@@ -2248,8 +2275,8 @@
     return filename.split(/[\\/]/).pop() || fallback;
   }
 
-  async function downloadExportFile(path, { control, title, detail, fallbackFilename }) {
-    if (!state.run || state.operation) return;
+  async function downloadExportFile(path, { control, title, detail, fallbackFilename, allowDuringGeneration = false }) {
+    if (!state.run || (state.operation && !(allowDuringGeneration && state.operation === 'generate'))) return;
     state.operation = 'export';
     renderActions();
     control?.classList.add('exporting');
@@ -2326,12 +2353,107 @@
     });
   }
 
+  function renderReportValidation() {
+    const validation = state.run?.reportValidation;
+    const holder = byId('reportValidationIssues'); holder.replaceChildren();
+    byId('revalidateReport').disabled = !state.run || state.run.isAggregate || Boolean(state.operation);
+    byId('reportValidationTitle').textContent = state.reportValidationError?.runId === state.run?.id
+      ? `校验未完成：${state.reportValidationError.message}。请处理后重新校验。`
+      : validation
+      ? (validation.passed ? '上次校验通过；修改后请重新校验' : `未生成可上传的报盘表 · ${validation.issues.length} 项待处理`)
+      : '生成前请校验最新模板与资料';
+    byId('reportValidationPanel').classList.toggle('has-issues', validation?.passed === false);
+    for (const issue of validation?.issues || []) {
+      const item = document.createElement('article');
+      item.append(textNode('b', '', [issue.employeeName, issue.field].filter(Boolean).join(' · ') || '模板／主体配置'));
+      item.append(textNode('p', '', issue.message), textNode('p', '', issue.resolution));
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-button';
+      button.textContent = issue.action === 'employee' ? '定位修改资料' : issue.action === 'subject' ? '配置主体' : '检查／重新导入模板';
+      button.disabled = Boolean(state.operation);
+      button.addEventListener('click', () => {
+        if (issue.action === 'employee') {
+          openDrawer(issue.employeeId);
+          const field = [...byId('editDrawer').querySelectorAll('[name]')].find(node => node.name === issue.field);
+          field?.scrollIntoView({block:'center'}); field?.focus();
+        } else if (issue.action === 'subject') {
+          byId('subjectUnitNumber').scrollIntoView({block:'center'}); byId('subjectUnitNumber').focus();
+        } else {
+          if (issue.route) { byId('templateUploadRoute').value = issue.route; byId('templateUploadRoute').dispatchEvent(new Event('change')); }
+          byId('templateInput').closest('section').scrollIntoView({block:'center'});
+          showToast('请重新导入官方原始模板；新增字段或新选项仍不识别时，需要维护人员确认映射');
+        }
+      });
+      item.append(button); holder.append(item);
+    }
+  }
+
+  async function revalidateReport() {
+    if (!state.run || state.run.isAggregate || state.operation) return;
+    state.reportValidationError = null; state.operation = 'validate'; renderActions();
+    const runId = state.run.id;
+    byId('reportValidationTitle').textContent = '正在校验模板与资料…';
+    try {
+      const run = await api(`${API_ROOT}/runs/${encodeURIComponent(runId)}/validate-package`, {method:'POST'});
+      if (state.run?.id !== runId) return;
+      state.run = run; invalidateBatchCache(runId); state.preflightKey = ''; renderRun();
+      showToast(run.reportValidation.passed ? '校验通过，完成人员确认后即可生成' : '未生成可上传的报盘表，请逐项处理问题', run.reportValidation.passed ? 'success' : 'error');
+    } catch (error) {
+      state.reportValidationError = {runId, message:error.message};
+      showToast(error.message, 'error');
+    } finally { state.operation = null; renderActions(); }
+  }
+
+  function reportDownloadUrl(runId, filename) {
+    return `${API_ROOT}/runs/${encodeURIComponent(runId)}/download/${encodeURIComponent(filename)}`;
+  }
+
+  let settingsRunId = '';
+  async function loadSubjectSettings() {
+    const run = state.run;
+    if (!run || run.isAggregate) {
+      settingsRunId = '';
+      byId('subjectUnitNumber').value = '';
+      byId('subjectUnitNumber').disabled = true;
+      byId('saveSubjectSettings').disabled = true;
+      return;
+    }
+    if (settingsRunId === run.id) return;
+    settingsRunId = run.id;
+    byId('subjectUnitNumber').value = '';
+    byId('subjectUnitNumber').disabled = true;
+    byId('saveSubjectSettings').disabled = true;
+    try {
+      const value = await api(`${API_ROOT}/runs/${encodeURIComponent(run.id)}/subject-settings`);
+      if (settingsRunId !== run.id) return;
+      byId('subjectUnitNumber').value = value.unitNumber;
+      byId('subjectUnitNumber').disabled = false;
+      byId('saveSubjectSettings').disabled = false;
+      byId('subjectSettingsHint').textContent = `${value.subject} · 保存后用于后续生成，已生成文件需重新生成。`;
+    } catch (error) {
+      if (settingsRunId === run.id) { settingsRunId = ''; showToast(error.message, 'error'); }
+    }
+  }
+
+  async function saveSubjectSettings() {
+    if (!state.run || state.run.isAggregate || state.operation) return;
+    const runId = state.run.id;
+    const button = byId('saveSubjectSettings');
+    setBusy(button, true, '保存中');
+    try {
+      await api(`${API_ROOT}/runs/${encodeURIComponent(runId)}/subject-settings`, {
+        method: 'PUT', body: JSON.stringify({unitNumber: byId('subjectUnitNumber').value}),
+      });
+      showToast('主体社保账号已保存，请重新生成报盘表');
+    } catch (error) { showToast(error.message, 'error'); }
+    finally { setBusy(button, false); }
+  }
+
   function downloadReportPackage(event) {
     event.preventDefault();
     if (!state.run?.reportPackage) return;
     const runId = encodeURIComponent(state.run.id);
     downloadExportFile(`${API_ROOT}/runs/${runId}/package/download`, {
-      control: byId('downloadButton'),
+      control: byId('packageDownloadButton'),
       title: '政务报盘包',
       detail: '正在打包已生成的办理路径和复核说明',
       fallbackFilename: '社保政务报盘包.zip',
@@ -2364,7 +2486,8 @@
     byId('auditExportButton').addEventListener('click', downloadAuditExport);
     byId('allSubjectsExportButton').addEventListener('click', downloadAllSubjectsExport);
     byId('missingExportButton').addEventListener('click', downloadMissingExport);
-    byId('downloadButton').addEventListener('click', downloadReportPackage);
+    byId('packageDownloadButton').addEventListener('click', downloadReportPackage);
+    byId('saveSubjectSettings').addEventListener('click', saveSubjectSettings);
     byId('confirmBatchButton').addEventListener('click', confirmBatch);
     byId('employeeSearch').addEventListener('input', (event) => { state.search = event.target.value; renderTable(); });
     document.querySelectorAll('.filter-tabs button').forEach((button) => button.addEventListener('click', () => {
@@ -2393,6 +2516,7 @@
     bindTemplateDropzone();
     byId('templateInput').addEventListener('change', (event) => uploadTemplate(event.target.files?.[0]));
     byId('generateButton').addEventListener('click', generateReport);
+    byId('revalidateReport').addEventListener('click', revalidateReport);
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeSubjectPicker(); closeDatePicker(); closeDrawer(); closeSupplementDialog(); } });
   }
 

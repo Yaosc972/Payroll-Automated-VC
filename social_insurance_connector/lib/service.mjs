@@ -25,7 +25,7 @@ function parseDateOnly(value, field) {
 }
 
 function validateRuleVersion(value) {
-  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.09.30-01").trim();
+  const expected = String(process.env.SOCIAL_INSURANCE_RULE_VERSION || "2026.10.12-01").trim();
   if (!value || String(value) !== expected) {
     throw new ConnectorError("RULE_VERSION_MISMATCH", "连接器规则版本与工作台不一致", 409);
   }
@@ -194,8 +194,8 @@ function dimissionIndexForEmployees(employees, resignationRows = []) {
       voluntaryStopFlag: fieldValue(row, BEISEN_FIELDS.SERVICE_CUSTOM.voluntaryStopFlag),
       // CreatedTime is the employment row creation time, not necessarily the
       // original application time (the September cases were recreated later).
-      processCreatedTime: "",
-      processTimeReliable: false,
+      processCreatedTime: text(row.approvalSubmissionTime),
+      processTimeReliable: Boolean(text(row.approvalSubmissionTime)),
       source: text(row.businessTypeOID) ? "beisen-dimission-record" : "beisen-employment-type-unknown",
       approvalStatus,
     });
@@ -345,7 +345,14 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
         confirmed: false,
         issues: reasons.filter(Boolean).map(issue),
         report: evaluated.report,
-        source: employee,
+        source: {
+          ...employee,
+          departureRecords: dimissionRecords.filter((record) => record.source === "beisen-dimission-record").map((record) => ({
+            lastWorkDate: record.lastWorkDate,
+            approvalStatus: record.approvalStatus,
+            source: record.source,
+          })),
+        },
         entryDate: dateOnly(employee.entryDate),
         dimissionReason: dimission.reason,
         coverageSource: {},
@@ -360,6 +367,7 @@ export async function syncCandidates(payload, { client = new BeisenClient() } = 
             processCreatedTime: record.processCreatedTime ?? "",
             processTimeReliable: record.processTimeReliable !== false,
             source: text(record.source),
+            approvalStatus: text(record.approvalStatus),
           })),
         },
       };

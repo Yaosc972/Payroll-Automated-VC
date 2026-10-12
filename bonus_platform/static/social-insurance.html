@@ -199,10 +199,20 @@
 
             <section class="action-card" id="reportCard">
               <header><b id="reportState">等待模板</b></header>
-              <h3>生成政务报盘包</h3>
-              <p>按办理路径生成报盘文件，并附审核清单、待补资料和生成说明。</p>
-              <button class="primary-button compact" id="generateButton" type="button" disabled>生成政务报盘包</button>
+              <h3>生成政务报盘</h3>
+              <label class="control-label" for="subjectUnitNumber">社保账号／单位编号</label>
+              <div class="subject-account-controls"><input id="subjectUnitNumber" inputmode="numeric" maxlength="30" aria-label="社保账号／单位编号"><button id="saveSubjectSettings" class="secondary-button" type="button">保存</button></div>
+              <p id="subjectSettingsHint">按合同主体保存，生成时自动写入模板。</p>
+              <p>生成后直接下载报盘表；完整压缩包另含审核清单、待补资料和生成说明。</p>
+              <section id="reportValidationPanel" class="report-validation" aria-live="polite">
+                <b id="reportValidationTitle">生成前请校验最新模板与资料</b>
+                <div id="reportValidationIssues"></div>
+                <button class="secondary-button" id="revalidateReport" type="button">重新校验</button>
+              </section>
+              <button class="primary-button compact" id="generateButton" type="button" disabled>生成并下载报盘表</button>
               <a class="download-button hidden" id="downloadButton" href="#" download>下载政务报盘包 <span>↓</span></a>
+              <div id="additionalReportDownloads"></div>
+              <a class="download-button hidden" id="packageDownloadButton" href="#">下载完整压缩包（可选） ↓</a>
             </section>
 
             <section class="rpa-card" aria-labelledby="rpaTitle">

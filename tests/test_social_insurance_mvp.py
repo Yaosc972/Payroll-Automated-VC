@@ -762,6 +762,7 @@ def test_run_preserves_business_audit_fields_from_source(tmp_path: Path, monkeyp
         "email": "test@example.com",
         "employmentPlace": "集团深圳",
         "changeDescription": "测试变动",
+        "departureRecords": [{"lastWorkDate": "2026-10-13", "approvalStatus": "审批中", "source": "beisen-dimission-record"}],
     })
     run = create_run(
         records=[record],
@@ -773,6 +774,8 @@ def test_run_preserves_business_audit_fields_from_source(tmp_path: Path, monkeyp
     )
 
     report = run["employees"][0]["report"]
+    assert run["employees"][0]["source"]["lastWorkDate"] == ""
+    assert run["employees"][0]["source"]["departureRecords"][0]["approvalStatus"] == "审批中"
     assert report["社保缴交基数"] == "4775"
     assert report["公积金缴交基数"] == "9200"
     assert report["公积金号"] == "HF-001"
@@ -3251,7 +3254,7 @@ def test_business_rules_api_is_versioned_and_uses_business_language():
     assert response.status_code == 200
     payload = response.json()
     assert payload["version"]
-    assert payload["updatedAt"] == "2026-09-30"
+    assert payload["updatedAt"] == "2026-10-12"
     assert payload["scope"] == "全国社保增员"
     assert any(section["id"] == "candidate-list" for section in payload["sections"])
     serialized = response.text

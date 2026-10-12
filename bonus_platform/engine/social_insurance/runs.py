@@ -526,6 +526,10 @@ def _normalized_employee(record: dict[str, Any], index: int) -> dict[str, Any]:
         "gender": str(source.get("gender") or "").strip(),
         "mobile": str(source.get("mobile") or "").strip(),
         "lastWorkDate": str(source.get("lastWorkDate") or "").strip(),
+        "departureRecords": [
+            {key: str(item.get(key) or "").strip() for key in ("lastWorkDate", "approvalStatus", "source")}
+            for item in source.get("departureRecords") or [] if isinstance(item, dict)
+        ],
         "housingContributionRate": str(source.get("housingContributionRate") or "").strip(),
         "socialContributionPlace": str(source.get("socialContributionPlace") or "").strip(),
         "birthplace": str(source.get("birthplace") or "").strip(),

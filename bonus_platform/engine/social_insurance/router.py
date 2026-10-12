@@ -911,6 +911,36 @@ def generate(request: Request, run_id: str) -> dict[str, Any]:
         raise _http_error(exc) from exc
 
 
+@router.get("/runs/{run_id}/subject-settings")
+def get_subject_settings(request: Request, run_id: str):
+    _require_access(request)
+    from .subject_settings import read_settings
+    try:
+        return read_settings(load_run(run_id))
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.put("/runs/{run_id}/subject-settings")
+def update_subject_settings(request: Request, run_id: str, payload: dict[str, Any] = Body(...)):
+    _require_access(request)
+    from .subject_settings import save_settings
+    try:
+        return save_settings(load_run(run_id), payload.get("unitNumber"))
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/runs/{run_id}/validate-package")
+def validate_package(request: Request, run_id: str):
+    _require_access(request)
+    from .report_package import validate_report_package
+    try:
+        return validate_report_package(run_id)
+    except (RunNotFoundError, RunValidationError) as exc:
+        raise _http_error(exc) from exc
+
+
 @router.post("/runs/{run_id}/generate-package")
 def generate_package(request: Request, run_id: str) -> dict[str, Any]:
     _require_access(request)

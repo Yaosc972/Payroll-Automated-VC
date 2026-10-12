@@ -194,7 +194,10 @@ def _load_bundled_administrative_divisions() -> list[str]:
 
 
 def load_administrative_divisions() -> list[str]:
-    if os.environ.get("VERCEL"):
+    if os.environ.get("VERCEL") or (
+        os.environ.get("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", "").strip()
+        and not os.environ.get("SIGMA_SOCIAL_INSURANCE_TEMPLATE_FILE", "").strip()
+    ):
         return _load_bundled_administrative_divisions()
     engine_dir = _engine_dir()
     template_path = _template_path()

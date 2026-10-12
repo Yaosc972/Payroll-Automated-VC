@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 from typing import Any
@@ -140,6 +141,8 @@ def _parse_rule_datetime(value: Any) -> datetime | None:
         raw = f"{raw}T00:00:00+08:00"
     elif raw.endswith("Z"):
         raw = f"{raw[:-1]}+00:00"
+    # .NET timestamps carry 7 fractional digits; Python 3.9 accepts at most 6.
+    raw = re.sub(r"(\.\d{6})\d+(?=Z|[+-]\d{2}:\d{2}$|$)", r"\1", raw)
     try:
         parsed = datetime.fromisoformat(raw)
     except ValueError:

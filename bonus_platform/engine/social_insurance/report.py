@@ -592,6 +592,7 @@ def resolve_download(run_id: str, filename: str) -> Path:
     run = load_run(run_id)
     report = run.get("reportFile") if isinstance(run.get("reportFile"), dict) else {}
     allowed = {Path(str(report.get(key) or "")).name for key in ("filename", "previewFilename")}
+    allowed.update(item["filename"] for item in (run.get("reportPackage") or {}).get("generatedRoutes", []))
     safe_name = Path(str(filename).replace("\\", "/")).name
     if not safe_name or safe_name not in allowed:
         raise RunNotFoundError("报盘文件不存在")

@@ -6,7 +6,7 @@ import subjectsHandler from "../api/subjects.mjs";
 import healthHandler from "../api/health.mjs";
 import { listSubjects, syncCandidates } from "../lib/service.mjs";
 
-const RULE_VERSION = "2026.09.30-01";
+const RULE_VERSION = "2026.10.12-01";
 
 function setConfiguration() {
   process.env.CONNECTOR_TOKEN = "test-connector-token";
@@ -70,6 +70,10 @@ test("pending resignation is reviewed even when current employee has no last wor
     confirmationDate:"2026-08-24", subject:"SZ001", ruleVersion:RULE_VERSION}, {client});
   assert.equal(result.records[0].status, "needs_review");
   assert.equal(result.records[0].confirmationRuleContext.dimissionRecords[0].source, "beisen-dimission-record");
+  assert.equal(result.records[0].source.lastWorkDate || "", "");
+  assert.deepEqual(result.records[0].source.departureRecords, [{
+    lastWorkDate: "2026-08-10", approvalStatus: "审批中", source: "beisen-dimission-record",
+  }]);
 });
 
 test("missing employment business type requires review for that candidate", async () => {
@@ -340,6 +344,7 @@ test("sync detects live Beisen dimission fields without treating modified time a
     processCreatedTime: "2026-08-20T10:00:00+08:00",
     processTimeReliable: false,
     source: "beisen-live-employment-record",
+    approvalStatus: "",
   }]);
 });
 
@@ -450,4 +455,14 @@ test("rule version mismatch is rejected before calling Beisen", async () => {
     listSubjects({ periodStart: "2026-07-16", periodEnd: "2026-08-15", ruleVersion: "old" }, { client: fakeClient() }),
     (error) => error.code === "RULE_VERSION_MISMATCH" && error.status === 409,
   );
+});
+
+test('verified late submission persists time for confirmation reevaluation',async()=>{
+  setConfiguration(); const client=fakeClient();
+  client.getDimissionRecords=async()=>[{userID:1001,businessTypeOID:'5',lastWorkDate:'2026-10-13',approvalStatus:1,
+    approvalSubmissionTime:'2026-10-09T17:27:06.4670000+08:00',translateProperties:{ApprovalStatusText:'审批中'}}];
+  const result=await syncCandidates({periodStart:'2026-07-16',periodEnd:'2026-08-15',confirmationDate:'2026-08-24',subject:'SZ001',ruleVersion:RULE_VERSION},{client});
+  assert.equal(result.records[0].dimissionReason,'离职流程晚于名单确认时点');
+  assert.equal(result.records[0].confirmationRuleContext.dimissionRecords[0].processTimeReliable,true);
+  assert.equal(result.records[0].confirmationRuleContext.dimissionRecords[0].processCreatedTime,'2026-10-09T17:27:06.4670000+08:00');
 });

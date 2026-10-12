@@ -140,16 +140,23 @@ def test_administrative_division_search_choices_include_parent_city():
     assert "贵港市" in choices[0]["searchText"]
 
 
-def test_vercel_runtime_uses_bundled_administrative_divisions(
+@pytest.mark.parametrize("runtime", ["vercel", "local-connector"])
+def test_connector_runtime_uses_bundled_administrative_divisions(
     monkeypatch: pytest.MonkeyPatch,
+    runtime: str,
 ):
-    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", raising=False)
+    if runtime == "vercel":
+        monkeypatch.setenv("VERCEL", "1")
+    else:
+        monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", "http://127.0.0.1:18022")
     monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_ENGINE_DIR", raising=False)
     monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_TEMPLATE_FILE", raising=False)
     monkeypatch.setattr(
         field_metadata.subprocess,
         "run",
-        lambda *_args, **_kwargs: pytest.fail("Vercel metadata must not invoke the local Node bridge"),
+        lambda *_args, **_kwargs: pytest.fail("Connector metadata must not invoke the local Node bridge"),
     )
 
     values = field_metadata.load_administrative_divisions()

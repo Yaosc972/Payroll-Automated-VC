@@ -4,12 +4,12 @@ from copy import deepcopy
 from typing import Any
 
 
-RULE_VERSION = "2026.09.30-01"
+RULE_VERSION = "2026.10.12-01"
 
 
 RULE_CATALOG: dict[str, Any] = {
     "version": RULE_VERSION,
-    "updatedAt": "2026-09-30",
+    "updatedAt": "2026-10-12",
     "scope": "全国社保增员",
     "status": "业务验证中",
     "summary": "这份规则说明当前名单怎么产生、字段怎么填写、哪些情况必须由业务同事确认。",
@@ -226,6 +226,11 @@ RULE_CATALOG: dict[str, Any] = {
                     "result": "保留模板原有结构",
                 },
                 {
+                    "title": "深圳模板按实际版本导出",
+                    "detail": "支持新版19列和旧版20列深圳模板，严格核对表头顺序；新版不输出个人身份列，仍保留内部身份判断用于岗位类别等字段。单位编号必须填写该合同主体的社保账号，不能留空或借用其他主体账号。",
+                    "result": "按上传模板原有列序生成",
+                },
+                {
                     "title": "只写入本批纳入人员",
                     "detail": "已排除人员不会进入报盘；生成前再次检查模板字段和模板允许的选项。",
                     "result": "生成可复核文件",
@@ -241,6 +246,11 @@ RULE_CATALOG: dict[str, Any] = {
     "history": [
         {
             "version": RULE_VERSION,
+            "date": "2026-10-12",
+            "change": "兼容深圳新版19列政务模板，保留旧版20列导出，并校验模板单位编号为主体社保账号。",
+        },
+        {
+            "version": "2026.09.30-01",
             "date": "2026-09-30",
             "change": "补查审批中的离职；同月入职且15日前离职按自愿、非自愿停保自动处理，日期边界或信息不全交人工确认。离职查询失败则同步失败，旧任职离职不阻挡重新入职。",
         },

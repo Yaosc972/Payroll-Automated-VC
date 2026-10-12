@@ -235,7 +235,51 @@ export class BeisenClient {
         if ((String(row.businessTypeOID) === "5" || !String(row.businessTypeOID ?? "").trim()) && row.stdIsDeleted !== true) rows.push(row);
       }
     }
+    const workflowTimes = new Map();
+    for (const row of rows) {
+      const id = String(row.workFlowProcessId ?? "").trim();
+      // Only verified active approval states; never enrich drafts or void rows.
+      if (!["1", "2", "4", "Approving", "Success", "Effective"].includes(String(row.approvalStatus)) ||
+          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(id)) continue;
+      if (!workflowTimes.has(id)) workflowTimes.set(id, await this.getApprovalSubmissionTime(id));
+      row.approvalSubmissionTime = workflowTimes.get(id);
+    }
     return rows;
+  }
+
+  async getApprovalSubmissionTime(approvalObjectId) {
+    if (!this.accessToken) await this.authenticate();
+    const records = [];
+    const offsets = new Set();
+    let offsetId = "";
+    for (let page = 0; page < 200; page += 1) {
+      const query = new URLSearchParams({ approvalObjectId, ...(offsetId ? { offsetId } : {}) });
+      let payload;
+      try {
+        const response = await this.fetchImpl(`${this.baseUrl}/approvalcentre/api/v1/record/search?${query}`, {
+          method: "GET", headers: { Authorization: `Bearer ${this.accessToken}` },
+          signal: AbortSignal.timeout(30000),
+        });
+        payload = await response.json();
+        if (!response.ok || String(payload.code) !== "200" || !Array.isArray(payload.data?.instanceList)) throw new Error();
+      } catch {
+        throw new ConnectorError("BEISEN_APPROVAL_UNAVAILABLE", "北森审批操作记录查询失败，本次同步已停止", 502);
+      }
+      records.push(...payload.data.instanceList);
+      if (payload.data.isLastData === true) {
+        const starts = records.filter((record) => record.activityDefinitionName === "开始" && record.comment?.trim() === "提交。");
+        // Multiple submissions need review; do not infer which restart applies.
+        if (starts.length !== 1) return "";
+        const raw = String(starts[0].createdTime ?? "");
+        if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|[+-]\d{2}:\d{2})?$/u.test(raw)) return "";
+        const time = /(?:Z|[+-]\d{2}:\d{2})$/u.test(raw) ? raw : `${raw}+08:00`;
+        return Number.isFinite(Date.parse(time)) ? time : "";
+      }
+      offsetId = payload.data.offsetId;
+      if (typeof offsetId !== "string" || !offsetId || offsets.has(offsetId)) break;
+      offsets.add(offsetId);
+    }
+    throw new ConnectorError("BEISEN_APPROVAL_PAGE_ERROR", "北森审批操作记录分页异常，本次同步已停止", 502);
   }
 
   clear() {
