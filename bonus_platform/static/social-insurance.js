@@ -2357,7 +2357,7 @@
     const validation = state.run?.reportValidation;
     const holder = byId('reportValidationIssues'); holder.replaceChildren();
     byId('revalidateReport').disabled = !state.run || state.run.isAggregate || Boolean(state.operation);
-    byId('reportValidationTitle').textContent = state.reportValidationError?.runId === state.run?.id
+    byId('reportValidationTitle').textContent = state.reportValidationError && state.run && state.reportValidationError.runId === state.run.id
       ? `校验未完成：${state.reportValidationError.message}。请处理后重新校验。`
       : validation
       ? (validation.passed ? '上次校验通过；修改后请重新校验' : `未生成可上传的报盘表 · ${validation.issues.length} 项待处理`)
