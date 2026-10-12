@@ -259,6 +259,7 @@ def test_company_server_upload_worker_export_and_retry(environment, monkeypatch,
     export_path = f"/api/china-employee-payroll/meal-allowance/{run['runId']}/export"
     exported = client.get(export_path)
     assert exported.status_code == 200
+    assert exported.headers["content-disposition"].startswith("attachment; filename*=UTF-8''")
     filename = unquote(exported.headers["content-disposition"].split("UTF-8''")[1])
     assert filename.startswith("2026年9月") and filename.endswith(".xlsx")
     assert exported.content == durable.read_file(Store().job(run["runId"])["export"])

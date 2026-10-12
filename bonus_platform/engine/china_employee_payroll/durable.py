@@ -156,7 +156,7 @@ def export_run(run_id, relocation=False):
         except Exception:
             raise HTTPException(503, "导出文件读取失败，请稍后重试。") from None
         return Response(content, media_type=XLSX,
-                        headers={"Content-Disposition": f"attachment; filename=payroll.xlsx; filename*=UTF-8''{quote(manifest['filename'], safe='')}",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(manifest['filename'], safe='')}",
                                  "Cache-Control": "no-store"})
     signed = storage.create_labor_supabase_signed_download(manifest["objectKey"], filename=manifest["filename"])
     return {"downloadUrl": signed["signedUrl"], "filename": manifest["filename"], "sha256": manifest["sha256"], "size": manifest["size"]}
