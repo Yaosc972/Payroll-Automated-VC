@@ -140,15 +140,18 @@ def test_administrative_division_search_choices_include_parent_city():
     assert "贵港市" in choices[0]["searchText"]
 
 
-@pytest.mark.parametrize("runtime", ["vercel", "local-connector"])
+@pytest.mark.parametrize("runtime", ["vercel", "local-connector", "company-server"])
 def test_connector_runtime_uses_bundled_administrative_divisions(
     monkeypatch: pytest.MonkeyPatch,
     runtime: str,
 ):
     monkeypatch.delenv("VERCEL", raising=False)
     monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", raising=False)
+    monkeypatch.delenv("SIGMA_RUNTIME_MODE", raising=False)
     if runtime == "vercel":
         monkeypatch.setenv("VERCEL", "1")
+    elif runtime == "company-server":
+        monkeypatch.setenv("SIGMA_RUNTIME_MODE", "server")
     else:
         monkeypatch.setenv("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", "http://127.0.0.1:18022")
     monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_ENGINE_DIR", raising=False)
@@ -166,6 +169,25 @@ def test_connector_runtime_uses_bundled_administrative_divisions(
     assert "450801.市辖区" in values
     assert len(choices) == len(values)
     assert any(item["context"].endswith("贵港市") for item in choices if item["value"] == "450801.市辖区")
+
+
+def test_company_metadata_api_enables_template_upload_without_local_template(monkeypatch):
+    from fastapi import FastAPI
+    from bonus_platform.engine.social_insurance import router
+    monkeypatch.setattr(router, "current_user_from_request", lambda request: {"id": "metadata-test"})
+    monkeypatch.setattr(router, "user_can_enter_module", lambda user, module: module == "social_insurance")
+    monkeypatch.setenv("SIGMA_RUNTIME_MODE", "server")
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_TEMPLATE_FILE", raising=False)
+    monkeypatch.delenv("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", raising=False)
+    monkeypatch.delenv("VERCEL", raising=False)
+    metadata_app = FastAPI()
+    metadata_app.include_router(router.router)
+    response = TestClient(metadata_app).get("/api/social-insurance/metadata")
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["administrativeDivisions"]) > 3000
+    assert any(schema["route"] == "shenzhen-social-medical" for schema in payload["schemas"])
+    assert "/Users/" not in response.text
 
 
 def test_employee_drawer_uses_metadata_driven_controls():

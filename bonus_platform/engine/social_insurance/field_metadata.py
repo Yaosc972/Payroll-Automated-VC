@@ -195,7 +195,8 @@ def _load_bundled_administrative_divisions() -> list[str]:
 
 def load_administrative_divisions() -> list[str]:
     if os.environ.get("VERCEL") or (
-        os.environ.get("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", "").strip()
+        (os.environ.get("SIGMA_RUNTIME_MODE") == "server"
+         or os.environ.get("SIGMA_SOCIAL_INSURANCE_CONNECTOR_URL", "").strip())
         and not os.environ.get("SIGMA_SOCIAL_INSURANCE_TEMPLATE_FILE", "").strip()
     ):
         return _load_bundled_administrative_divisions()
