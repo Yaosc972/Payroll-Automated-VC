@@ -14,7 +14,10 @@ from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from ...auth import current_user_from_request, labor_auth_required, user_can_enter_module
-from ..labor.persistent_storage import labor_private_object_storage_enabled
+from ..labor.persistent_storage import (
+    labor_private_object_storage_enabled, labor_obs_storage_enabled,
+    put_labor_supabase_private_object, get_labor_supabase_private_object,
+)
 from .service import _legacy_module, list_tools, process_files
 from .platform_page import render_platform_page
 from .tasks import (
@@ -277,16 +280,37 @@ def create_overseas_payroll_task(request: Request, payload: dict = Body(...)) ->
 @router.put("/tasks/{task_id}/files/{file_id}/content")
 async def upload_local_overseas_payroll_file(task_id: str, file_id: str, request: Request) -> dict:
     owner_user_id = _require_access(request)
-    if labor_private_object_storage_enabled():
-        raise HTTPException(status_code=404, detail="生产文件必须使用签名地址直传私有存储。")
-    task = load_task(task_id, owner_user_id=owner_user_id)
+    if labor_private_object_storage_enabled() and not labor_obs_storage_enabled():
+        raise HTTPException(status_code=404, detail="当前存储使用签名上传地址。")
+    try:
+        task = load_task(task_id, owner_user_id=owner_user_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if task.get("status") not in {"uploading", "ready"}:
+        raise HTTPException(status_code=409, detail="任务已开始处理，不能覆盖输入文件。")
     file = next((item for item in task.get("files", []) if item.get("id") == file_id), None)
     if not file:
         raise HTTPException(status_code=404, detail="上传文件记录不存在。")
-    content = await request.body()
-    if len(content) > MAX_FILE_BYTES or len(content) != int(file["sizeBytes"]):
+    expected_size = int(file["sizeBytes"])
+    content = bytearray()
+    async for chunk in request.stream():
+        content.extend(chunk)
+        if len(content) > MAX_FILE_BYTES or len(content) > expected_size:
+            raise HTTPException(status_code=413, detail="上传文件大小与任务清单不一致。")
+    if len(content) != expected_size:
         raise HTTPException(status_code=413, detail="上传文件大小与任务清单不一致。")
-    store_local_file(task_id, file_id, content)
+    content = bytes(content)
+    if hashlib.sha256(content).hexdigest() != file["sha256"]:
+        raise HTTPException(status_code=422, detail="上传文件校验失败，请重新选择文件。")
+    if labor_obs_storage_enabled():
+        try:
+            await asyncio.to_thread(put_labor_supabase_private_object, file["objectKey"], content,
+                                    content_type=file.get("contentType") or "application/octet-stream")
+        except Exception as exc:
+            logger.warning("Overseas input storage unavailable (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="文件存储暂不可用，请重试上传。") from exc
+    else:
+        store_local_file(task_id, file_id, content)
     return {"ok": True}
 
 
@@ -354,10 +378,10 @@ def get_overseas_payroll_download(task_id: str, request: Request) -> dict:
 
 
 @router.get("/tasks/{task_id}/output/content")
-def download_local_overseas_payroll_output(task_id: str, request: Request) -> FileResponse:
+def download_local_overseas_payroll_output(task_id: str, request: Request) -> Response:
     owner_user_id = _require_access(request)
-    if labor_private_object_storage_enabled():
-        raise HTTPException(status_code=404, detail="生产结果必须通过签名地址下载。")
+    if labor_private_object_storage_enabled() and not labor_obs_storage_enabled():
+        raise HTTPException(status_code=404, detail="当前存储使用签名下载地址。")
     try:
         task = load_task(task_id, owner_user_id=owner_user_id)
     except FileNotFoundError as exc:
@@ -365,6 +389,19 @@ def download_local_overseas_payroll_output(task_id: str, request: Request) -> Fi
     output = task.get("output") if isinstance(task.get("output"), dict) else None
     if task.get("status") != "succeeded" or not output:
         raise HTTPException(status_code=409, detail="处理结果尚未生成。")
+    if output.get("status") != "ready":
+        raise HTTPException(status_code=409, detail="处理结果尚未生成。")
+    if labor_obs_storage_enabled():
+        try:
+            content = get_labor_supabase_private_object(output["objectKey"], bypass_cache=True)
+        except Exception as exc:
+            logger.warning("Overseas output storage unavailable (%s)", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="结果存储暂不可用，请稍后重试下载。") from exc
+        if content is None:
+            raise HTTPException(status_code=404, detail="处理结果文件不存在。")
+        return Response(content, media_type=output.get("contentType") or "application/octet-stream",
+                        headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(output["filename"], safe=""),
+                                 "Cache-Control": "private, no-store"})
     path = local_file_path(task_id, output["id"], output=True)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="处理结果文件不存在。")

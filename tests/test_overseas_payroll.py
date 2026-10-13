@@ -430,3 +430,111 @@ def test_private_task_inputs_are_downloaded_and_hash_verified(monkeypatch: pytes
     task["files"][0]["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="SHA-256"):
         tasks.load_task_inputs(task)
+
+
+@pytest.fixture
+def company_obs(monkeypatch):
+    objects = {}
+    def put(key, content, *, content_type='application/octet-stream'):
+        objects[key] = bytes(content)
+        return {'sizeBytes': len(content)}
+    def get(key, *, bypass_cache=False):
+        return objects.get(key)
+    for module in (tasks, payroll_router):
+        monkeypatch.setattr(module, 'labor_private_object_storage_enabled', lambda: True)
+        monkeypatch.setattr(module, 'labor_obs_storage_enabled', lambda: True)
+        monkeypatch.setattr(module, 'put_labor_supabase_private_object', put)
+        monkeypatch.setattr(module, 'get_labor_supabase_private_object', get)
+    monkeypatch.setattr(tasks, 'labor_supabase_object_metadata', lambda key: {
+        'sizeBytes': len(objects[key]), 'sha256': hashlib.sha256(objects[key]).hexdigest(),
+    })
+    monkeypatch.setattr(payroll_router, '_require_access', lambda _: 'company-test-owner')
+    monkeypatch.setattr(tasks, 'create_labor_supabase_signed_upload_for_object',
+                        lambda *a, **k: pytest.fail('Browser must not upload directly to OBS'))
+    monkeypatch.setattr(tasks, 'create_labor_supabase_signed_download',
+                        lambda *a, **k: pytest.fail('Browser must not download directly from OBS'))
+    return objects
+
+
+def create_company_input(client, content=b'synthetic-pdf'):
+    created = client.post('/api/overseas-payroll/tasks', json={
+        'toolId': 'de_lohnjournal', 'files': [{
+            'filename': 'synthetic.pdf', 'sizeBytes': len(content),
+            'sha256': hashlib.sha256(content).hexdigest(), 'contentType': 'application/pdf',
+        }],
+    })
+    assert created.status_code == 200
+    payload = created.json()
+    return payload['task']['id'], payload['intents'][0]
+
+
+def test_company_obs_upload_finalize_and_authenticated_download(company_obs):
+    content = b'synthetic-pdf'
+    with TestClient(app) as client:
+        task_id, intent = create_company_input(client, content)
+        assert intent['signedUrl'].startswith('/api/overseas-payroll/tasks/')
+        assert client.put(intent['signedUrl'], content=content).status_code == 200
+        finalized = client.post(f"/api/overseas-payroll/tasks/{task_id}/files/{intent['fileId']}/finalize")
+        assert finalized.status_code == 200
+        assert finalized.json()['task']['status'] == 'ready'
+        company_obs['test-result'] = b'xlsx-result'
+        tasks.update_task(task_id, owner_user_id='company-test-owner', updater=lambda t: {
+            **t, 'status': 'succeeded', 'output': {
+                'id': 'payroll_file_result', 'status': 'ready', 'objectKey': 'test-result',
+                'filename': '德国结果.xlsx', 'contentType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            },
+        })
+        download = client.get(f'/api/overseas-payroll/tasks/{task_id}/download')
+        url = download.json()['signedUrl']
+        assert url == f'/api/overseas-payroll/tasks/{task_id}/output/content'
+        response = client.get(url)
+        assert response.status_code == 200 and response.content == b'xlsx-result'
+        assert response.headers['cache-control'] == 'private, no-store'
+        assert response.headers['content-disposition'].startswith("attachment; filename*=UTF-8''")
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+@pytest.mark.parametrize('content,status', [(b'bad', 413), (b'other-content', 422)])
+def test_company_obs_rejects_input_size_or_digest_mismatch(company_obs, content, status):
+    with TestClient(app) as client:
+        _, intent = create_company_input(client)
+        count = len(company_obs)
+        assert client.put(intent['signedUrl'], content=content).status_code == status
+        assert len(company_obs) == count
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def test_company_obs_input_cannot_be_overwritten_after_enqueue(company_obs):
+    with TestClient(app) as client:
+        task_id, intent = create_company_input(client)
+        tasks.update_task(task_id, owner_user_id='company-test-owner', updater=lambda t: {**t, 'status': 'queued'})
+        assert client.put(intent['signedUrl'], content=b'synthetic-pdf').status_code == 409
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def test_company_obs_foreign_user_cannot_upload_or_download(company_obs, monkeypatch):
+    with TestClient(app) as client:
+        task_id, intent = create_company_input(client)
+        monkeypatch.setattr(payroll_router, '_require_access', lambda _: 'other-owner')
+        assert client.put(intent['signedUrl'], content=b'synthetic-pdf').status_code == 404
+        assert client.get(f'/api/overseas-payroll/tasks/{task_id}/output/content').status_code == 404
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def test_company_obs_storage_failures_are_visible_and_do_not_leak_details(company_obs, monkeypatch):
+    def unavailable(*a, **k):
+        raise RuntimeError('private credential and storage details')
+    with TestClient(app) as client:
+        task_id, intent = create_company_input(client)
+        monkeypatch.setattr(payroll_router, 'put_labor_supabase_private_object', unavailable)
+        response = client.put(intent['signedUrl'], content=b'synthetic-pdf')
+        assert response.status_code == 503
+        assert 'private credential' not in response.text
+        assert tasks.load_task(task_id, owner_user_id='company-test-owner')['status'] == 'uploading'
+        tasks.update_task(task_id, owner_user_id='company-test-owner', updater=lambda t: {
+            **t, 'status': 'succeeded', 'output': {'status': 'ready', 'objectKey': 'test-result', 'filename': 'result.xlsx'},
+        })
+        monkeypatch.setattr(payroll_router, 'get_labor_supabase_private_object', unavailable)
+        response = client.get(f'/api/overseas-payroll/tasks/{task_id}/output/content')
+        assert response.status_code == 503 and 'private credential' not in response.text
+    asyncio.set_event_loop(asyncio.new_event_loop())

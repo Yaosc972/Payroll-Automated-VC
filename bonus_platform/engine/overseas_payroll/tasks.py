@@ -20,6 +20,7 @@ from ..labor.persistent_storage import (
     labor_p1_object_key,
     labor_supabase_object_metadata,
     labor_private_object_storage_enabled,
+    labor_obs_storage_enabled,
     put_labor_supabase_private_object,
 )
 from .service import list_tools
@@ -208,7 +209,7 @@ def create_task(owner_user_id: str, tool_id: str, raw_files: list[dict[str, Any]
     _write_task(task)
     intents = []
     for spec in specs:
-        if labor_private_object_storage_enabled():
+        if labor_private_object_storage_enabled() and not labor_obs_storage_enabled():
             signed = create_labor_supabase_signed_upload_for_object(
                 spec["objectKey"],
                 file_kind="overseas_payroll_input",
@@ -446,7 +447,7 @@ def output_download(task: dict[str, Any]) -> dict[str, Any]:
     output = task.get("output") if isinstance(task.get("output"), dict) else None
     if task.get("status") != "succeeded" or not output or output.get("status") != "ready":
         raise ValueError("处理结果尚未生成。")
-    if labor_private_object_storage_enabled():
+    if labor_private_object_storage_enabled() and not labor_obs_storage_enabled():
         return create_labor_supabase_signed_download(output["objectKey"], filename=output["filename"], expires_in=300)
     return {
         "signedUrl": f"/api/overseas-payroll/tasks/{task['id']}/output/content",
