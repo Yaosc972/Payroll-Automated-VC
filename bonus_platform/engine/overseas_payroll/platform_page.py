@@ -69,6 +69,20 @@ async function apiTools(){
 }
 
 """)
+    # Start the tool overview collapsed, including users with older saved state.
+    html = _replace_once(
+        html,
+        "const isOpen = (k in memo) ? memo[k] : (gi === 0);",
+        "const isOpen = false; // 每次进入首页默认收起\n",
+    )
+    html = _replace_once(
+        html,
+        "function showHome(){ setQuickActive('qi-home');",
+        """function showHome(){
+  document.querySelectorAll('.country-group.open').forEach(group => group.classList.remove('open'));
+  syncToggleAllLabel();
+  setQuickActive('qi-home');""",
+    )
     old_guard = "if (!CURRENT_USER){ if (typeof showLock === 'function') showLock(); else location.href='/'; return; }"
     if html.count(old_guard) != 2:
         raise ValueError("Overseas payroll handover tool login guards have changed")

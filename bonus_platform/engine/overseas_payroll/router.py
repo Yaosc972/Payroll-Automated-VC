@@ -117,7 +117,7 @@ def overseas_payroll_page(request: Request) -> HTMLResponse:
     except ValueError:
         logger.exception("Overseas payroll login adapter does not match the handover page")
         raise HTTPException(status_code=503, detail="海外薪资页面暂不可用，请联系维护人员。") from None
-    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=5"></script></body>')
+    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=6"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 

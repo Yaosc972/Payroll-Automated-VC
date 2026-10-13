@@ -573,7 +573,7 @@
   }
 
   function preparationHint(tool) {
-    return (tool.drop_hint || tool.desc || '').replace(/^一次(?:拖入|上传)[：:]?/, '需准备：');
+    return (tool.drop_hint || tool.desc || '').trim().replace(/^一次(?:拖入|上传)[：:]?/, '需准备：').replace(/[。.!！?？；;]+$/u, '');
   }
 
   function applyToolDropHint(tool) {
