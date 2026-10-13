@@ -836,8 +836,8 @@ def test_admin_console_is_static_permission_management_shell():
     js = ADMIN_JS.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert "后台管理 · 西格玛工作台" in html
-    assert "用户与角色" in html
+    assert "后台管理 · HRAS 全球薪酬核算工作台" in html
+    assert "组织与人员" in html
     assert "模块权限" in html
     assert "功能权限" in html
     assert "模块配置" in html
@@ -846,9 +846,9 @@ def test_admin_console_is_static_permission_management_shell():
     assert "组织同步仅在生产环境启用" in html
     assert 'data-admin-only="true"' in html
     assert "permission-guard.js" in html
-    assert 'id="activeAdminUser"' in html
-    assert 'src="admin.js?v=20260905-1"' in html
-    assert 'href="admin-directory.css?v=20260905-1"' in html
+    assert 'id="activeAdminUser"' not in html
+    assert 'src="admin.js?v=20261013-3"' in html
+    assert 'href="admin-directory.css?v=20261013-4"' in html
     assert 'id="adminUserSearch"' in html
     assert 'id="adminUserStatusFilter"' in html
     assert 'id="adminUserPagination"' in html
@@ -856,12 +856,12 @@ def test_admin_console_is_static_permission_management_shell():
     assert "tabulator-tables" not in html
     assert "rolePermissions" in js
     assert "moduleAccess" in js
-    assert "selectedUserId" in js
+    assert "editingUserId" in js
     assert "roleIds" in js
     assert "admin-user-table" in js
     assert "admin-user-avatar" in js
     assert "avatarUrl" in js
-    assert "admin-role-dropdown" in js
+    assert "adminUserEditor" in js
     assert "filteredUsers" in js
     assert "adminUserPageSize" in js
     assert "data-user-page" in js

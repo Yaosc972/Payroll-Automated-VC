@@ -1,7 +1,6 @@
 (() => {
   const storageKey = "sigma-admin-console-draft-v4";
   const defaults = {
-    selectedUserId: "payrollAdmin",
     users: [
       { id: "payrollAdmin", name: "姚硕灿", email: "admin@example.com", employeeNumber: "HRAS0001", feishuUserId: "u_demo_admin", directoryScope: "hras", departmentNames: ["HRAS 人力综合条线"], departments: [{ id: "od_hras", name: "HRAS 人力综合条线", isPrimary: true }], roleIds: ["admin"], status: "启用" },
       { id: "recruitmentAdminUser", name: "吴金凤", email: "recruitment@example.com", employeeNumber: "HRAS0012", feishuUserId: "u_demo_recruitment", directoryScope: "hras", departmentNames: ["招聘运营部"], departments: [{ id: "od_recruitment", name: "招聘运营部", isPrimary: true }], roleIds: ["recruitmentAdmin"], status: "启用" },
@@ -67,11 +66,11 @@
       exportPolicy: "owner-and-admin",
     },
     logs: [
-      { time: "2026-06-12 09:30", actor: "Payroll Admin", action: "初始化权限草稿", target: "后台管理" },
-      { time: "2026-06-12 09:42", actor: "Payroll Admin", action: "启用模块", target: "FBU美洲绩效奖金核算" },
-      { time: "2026-06-12 10:05", actor: "Recruitment Admin", action: "进入模块核算", target: "全球招聘奖金核算" },
-      { time: "2026-06-12 10:28", actor: "Domestic Labor Admin", action: "提交核算", target: "中国区外包工薪酬核算" },
-      { time: "2026-06-12 11:10", actor: "Overseas Audit Admin", action: "进入模块核对", target: "海外劳务报账核对" },
+      { time: "2026-06-12 09:30", actor: "系统管理员", action: "初始化权限草稿", target: "后台管理" },
+      { time: "2026-06-12 09:42", actor: "系统管理员", action: "启用模块", target: "FBU美洲绩效奖金核算" },
+      { time: "2026-06-12 10:05", actor: "招聘核算管理员", action: "进入模块核算", target: "全球招聘奖金核算" },
+      { time: "2026-06-12 10:28", actor: "外包工核算管理员", action: "提交核算", target: "中国区外包工薪酬核算" },
+      { time: "2026-06-12 11:10", actor: "海外劳务管理员", action: "进入模块核对", target: "海外劳务报账核对" },
     ],
   };
 
@@ -100,6 +99,8 @@
     departmentId: "all",
     page: 1,
     pageSize: 10,
+    includeDescendants: true,
+    editingUserId: "",
   };
   const auditLogUi = {
     page: 1,
@@ -109,6 +110,7 @@
     loading: false,
   };
   let requestedUserFocused = false;
+  const departmentUi = { query: "", expanded: new Set(), knownRoots: new Set() };
 
   const auditApiUrl = (page = auditLogUi.page) => (
     `/api/admin/audit-logs?page=${page}&page_size=${auditLogUi.pageSize}`
@@ -154,10 +156,10 @@
     });
     if (response.status === 401) {
       window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname || "/admin.html")}`;
-      throw new Error("Unauthorized");
+      throw new Error("登录已失效，请重新登录");
     }
     if (!response.ok) {
-      let detail = `API ${response.status}`;
+      let detail = `请求失败（${response.status}）`;
       try {
         const data = await response.json();
         detail = data.detail || detail;
@@ -300,7 +302,7 @@
   const addLog = (action, target = "权限配置") => {
     const now = new Date();
     const time = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    state.logs.unshift({ time, actor: "Payroll Admin", action, target });
+    state.logs.unshift({ time, actor: "系统管理员", action, target });
     state.logs = state.logs.slice(0, 12);
     saveState("操作已写入本地草稿");
     render();
@@ -365,13 +367,14 @@
 
   const filteredUsers = () => {
     const query = userListUi.query.trim().toLocaleLowerCase("zh-CN");
+    const allowedDepartmentIds = userListUi.includeDescendants
+      ? departmentDescendantIds(userListUi.departmentId) : new Set([userListUi.departmentId]);
     return state.users.filter(user => {
       if (userListUi.status !== "all" && getStatusKey(user.status) !== userListUi.status) return false;
       if (userListUi.departmentId === "all" && user.directoryScope !== "hras") return false;
-      if (userListUi.departmentId === "external" && user.directoryScope !== "external") return false;
+      if (userListUi.departmentId === "external" && user.directoryScope === "hras") return false;
       if (userListUi.departmentId !== "all" && userListUi.departmentId !== "external") {
         const departmentIds = (user.departments || []).map(department => department.id);
-        const allowedDepartmentIds = departmentDescendantIds(userListUi.departmentId);
         if (!departmentIds.some(departmentId => allowedDepartmentIds.has(departmentId))) return false;
       }
       if (!query) return true;
@@ -390,40 +393,88 @@
     });
   };
 
+  const departmentPath = (departmentId) => {
+    const path = [];
+    const visited = new Set();
+    let department = state.departments.find(item => item.id === departmentId);
+    while (department && !visited.has(department.id)) {
+      visited.add(department.id);
+      path.unshift(department.name);
+      department = state.departments.find(item => item.id === department.parentId);
+    }
+    return path.join(" / ");
+  };
+
   const renderDepartmentTree = () => {
     const tree = document.getElementById("adminDepartmentTree");
     if (!tree) return;
     const departments = Array.isArray(state.departments) ? state.departments : [];
-    const scopedCount = state.users.filter(user => user.directoryScope === "hras").length;
-    const externalCount = state.users.filter(user => user.directoryScope !== "hras").length;
-    const rootName = state.directory?.rootDepartmentName || "HRAS 人力综合条线";
-    const childrenOf = parentId => departments.filter(item => item.parentId === parentId);
-    const rootDepartment = departments.find(item => item.id === item.rootId)
-      || departments.find(item => item.name === rootName);
-    const departmentUserCount = departmentId => {
-      const allowedIds = departmentDescendantIds(departmentId);
-      return state.users.filter(user => (
-        user.directoryScope === "hras"
-        && (user.departments || []).some(department => allowedIds.has(department.id))
-      )).length;
+    const byId = new Map(departments.map(item => [item.id, item]));
+    const children = new Map();
+    departments.forEach(department => {
+      const parentId = byId.has(department.parentId) && department.parentId !== department.id
+        ? department.parentId : null;
+      if (!children.has(parentId)) children.set(parentId, []);
+      children.get(parentId).push(department);
+    });
+    const roots = children.get(null) || [];
+    roots.forEach(root => {
+      if (!departmentUi.knownRoots.has(root.id)) {
+        departmentUi.expanded.add(root.id);
+        departmentUi.knownRoots.add(root.id);
+      }
+    });
+    const query = departmentUi.query.trim().toLocaleLowerCase("zh-CN");
+    const matches = new Set();
+    if (query) departments.forEach(department => {
+      if (!department.name.toLocaleLowerCase("zh-CN").includes(query)) return;
+      let current = department;
+      const ancestors = new Set();
+      while (current && !ancestors.has(current.id)) {
+        ancestors.add(current.id);
+        matches.add(current.id);
+        current = byId.get(current.parentId);
+      }
+    });
+    // Unique user sets roll up to ancestors; multi-department staff count only once.
+    const counts = new Map(departments.map(item => [item.id, new Set()]));
+    state.users.filter(user => user.directoryScope === "hras").forEach(user => {
+      (user.departments || []).forEach(membership => {
+        let current = byId.get(membership.id);
+        const visited = new Set();
+        while (current && !visited.has(current.id)) {
+          visited.add(current.id);
+          counts.get(current.id).add(user.id);
+          current = byId.get(current.parentId);
+        }
+      });
+    });
+    const rendered = new Set();
+    const itemMarkup = department => {
+      if (rendered.has(department.id) || (query && !matches.has(department.id))) return "";
+      rendered.add(department.id);
+      const branch = (children.get(department.id) || []).filter(child => !rendered.has(child.id));
+      const expanded = Boolean(query) || departmentUi.expanded.has(department.id);
+      return `<li class="admin-tree-node">
+        <div class="admin-tree-row">
+          ${branch.length ? `<button type="button" class="admin-tree-toggle" data-department-toggle="${escapeHtml(department.id)}" aria-expanded="${expanded}" ${query ? 'disabled title="清空组织搜索后可展开或收起"' : ""} aria-label="${expanded ? "收起" : "展开"}${escapeHtml(department.name)}"><span aria-hidden="true">${expanded ? "▾" : "▸"}</span></button>` : '<span class="admin-tree-leaf" aria-hidden="true"></span>'}
+          <button type="button" class="admin-department-item ${userListUi.departmentId === department.id ? "is-active" : ""}" data-department-id="${escapeHtml(department.id)}" ${branch.length ? `data-department-branch="true" aria-expanded="${expanded}"` : ""} aria-current="${userListUi.departmentId === department.id ? "true" : "false"}" title="${escapeHtml(department.name)}">
+            <span>${escapeHtml(department.name)}</span><b>${counts.get(department.id).size}</b>
+          </button>
+        </div>
+        ${branch.length ? `<ul class="admin-tree-children" ${expanded ? "" : "hidden"}>${branch.map(itemMarkup).join("")}</ul>` : ""}
+      </li>`;
     };
-    const itemMarkup = (department, depth = 0) => `
-      <button type="button" class="admin-department-item ${userListUi.departmentId === department.id ? "is-active" : ""}" data-department-id="${escapeHtml(department.id)}" style="--depth:${depth}">
-        <span>${escapeHtml(department.name)}</span><b>${departmentUserCount(department.id)}</b>
-      </button>
-      ${childrenOf(department.id).map(child => itemMarkup(child, depth + 1)).join("")}
-    `;
-    tree.innerHTML = `
-      <button type="button" class="admin-department-item is-root ${userListUi.departmentId === "all" ? "is-active" : ""}" data-department-id="all">
-        <span>${escapeHtml(rootName)}</span><b>${scopedCount}</b>
-      </button>
-      ${rootDepartment ? childrenOf(rootDepartment.id).map(item => itemMarkup(item, 1)).join("") : ""}
-      ${departments.filter(item => item.id !== rootDepartment?.id && item.parentId && !departments.some(candidate => candidate.id === item.parentId)).map(item => itemMarkup(item, 1)).join("")}
+    const rootMarkup = roots.map(itemMarkup).join("");
+    // Keep malformed/orphaned components visible without recursing through cycles.
+    const remainingMarkup = departments.filter(item => !rendered.has(item.id)).map(itemMarkup).join("");
+    const scopedCount = state.users.filter(user => user.directoryScope === "hras").length;
+    const scopeButton = (id, label, count) => `<button type="button" class="admin-department-item admin-directory-scope ${userListUi.departmentId === id ? "is-active" : ""}" data-department-id="${id}" aria-current="${userListUi.departmentId === id}"><span>${label}</span><b>${count}</b></button>`;
+    tree.innerHTML = `${scopeButton("all", "全部组织人员", scopedCount)}
+      <ul class="admin-tree-roots" aria-label="组织层级">${rootMarkup}${remainingMarkup}</ul>
+      ${query && !matches.size ? '<p class="admin-tree-empty">没有匹配的组织</p>' : ""}
       <div class="admin-department-divider"></div>
-      <button type="button" class="admin-department-item ${userListUi.departmentId === "external" ? "is-active" : ""}" data-department-id="external">
-        <span>组织外已登录</span><b>${externalCount}</b>
-      </button>
-    `;
+      ${scopeButton("external", "组织外已登录", state.users.length - scopedCount)}`;
   };
 
   const userPaginationMarkup = (total, totalPages) => {
@@ -452,77 +503,30 @@
     const pageStart = (userListUi.page - 1) * userListUi.pageSize;
     const pageUsers = users.slice(pageStart, pageStart + userListUi.pageSize);
     const rows = pageUsers.map(user => {
-      const roleNames = getUserRoleNames(user);
       const moduleNames = getUserModuleNames(user);
-      const statusKey = getStatusKey(user.status);
       const primaryDepartment = (user.departments || []).find(department => department.isPrimary)
         || (user.departments || [])[0];
-      return `
-        <tr>
-          <td>
-            <div class="admin-user-identity">
-              ${userAvatarMarkup(user)}
-              <div>
-                <strong>${escapeHtml(user.name)}</strong>
-                <span>${escapeHtml(user.email || "未提供企业邮箱")}</span>
-              </div>
-            </div>
-          </td>
-          <td><strong class="admin-directory-value">${escapeHtml(user.employeeNumber || "—")}</strong></td>
-          <td><strong class="admin-directory-value">${escapeHtml(primaryDepartment?.name || "组织外")}</strong></td>
-          <td><code class="admin-feishu-user-id">${escapeHtml(user.feishuUserId || "登录后待补齐")}</code></td>
-          <td><span class="admin-status-pill is-${statusKey}">${escapeHtml(getStatusLabel(user.status))}</span></td>
-          <td>
-            <details class="admin-role-dropdown" data-role-dropdown data-user="${escapeHtml(user.id)}">
-              <summary>
-                <span>${escapeHtml(user.roleIds.length ? `${user.roleIds.length} 个角色 · ${moduleNames.length} 个模块` : "默认权限")}</span>
-                <b>编辑</b>
-              </summary>
-              <div class="admin-role-menu" data-user="${escapeHtml(user.id)}">
-                <div class="admin-role-menu-context">
-                  <strong>${escapeHtml(user.name)}</strong>
-                  <span>${adminTagListMarkup(roleNames, "未配置角色")}</span>
-                </div>
-                ${roleOptionMarkup(user)}
-                <button type="button" data-type="save-user-roles" data-user="${escapeHtml(user.id)}">保存授权</button>
-              </div>
-            </details>
-          </td>
-        </tr>
-      `;
-    }).join("") || `
-      <tr>
-        <td colspan="7">
-          <div class="admin-user-empty">
-            <strong>没有匹配的用户</strong>
-            <span>请调整搜索词或账号状态筛选。</span>
-          </div>
-        </td>
-      </tr>
-    `;
-    list.innerHTML = `
-      <table class="admin-user-table">
-        <colgroup>
-          <col class="admin-user-column" />
-          <col class="admin-employee-column" />
-          <col class="admin-department-column" />
-          <col class="admin-feishu-column" />
-          <col class="admin-status-column" />
-          <col class="admin-action-column" />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>用户</th>
-            <th>工号</th>
-            <th>主部门</th>
-            <th>飞书用户 ID</th>
-            <th>状态</th>
-            <th>角色与权限</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
+      return `<tr class="${userListUi.editingUserId === user.id ? "is-selected" : ""}">
+        <td><div class="admin-user-identity">${userAvatarMarkup(user)}<div><strong>${escapeHtml(user.name)}</strong><span>工号：${escapeHtml(user.employeeNumber || "未提供")}</span></div></div></td>
+        <td><strong class="admin-directory-value">${escapeHtml(primaryDepartment?.name || (user.directoryScope === "hras" ? "未分配部门" : "组织外"))}</strong></td>
+        <td><span class="admin-status-pill is-${getStatusKey(user.status)}">${escapeHtml(getStatusLabel(user.status))}</span></td>
+        <td><span class="admin-role-summary" title="${escapeHtml(moduleNames.join("、"))}">${escapeHtml(user.roleIds.length ? `${user.roleIds.length} 个角色 · ${moduleNames.includes("全模块") ? "全模块" : `${moduleNames.length} 个模块`}` : "待授权")}</span></td>
+        <td><button class="admin-edit-user" type="button" data-edit-user="${escapeHtml(user.id)}" aria-expanded="${userListUi.editingUserId === user.id}" aria-controls="adminUserEditor" aria-haspopup="dialog">授权</button></td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="5"><div class="admin-user-empty"><strong>没有匹配的人员</strong><span>请选择其他组织，或调整搜索词和账号状态。</span></div></td></tr>`;
+    list.innerHTML = `<table class="admin-user-table">
+      <colgroup><col class="admin-user-column" /><col class="admin-department-column" /><col class="admin-status-column" /><col class="admin-role-column" /><col class="admin-action-column" /></colgroup>
+      <thead><tr><th>人员 / 工号</th><th>主部门</th><th>状态</th><th>已授权范围</th><th>操作</th></tr></thead><tbody>${rows}</tbody>
+    </table>`;
+    const department = state.departments.find(item => item.id === userListUi.departmentId);
+    document.getElementById("adminSelectedDepartment").textContent = department?.name
+      || (userListUi.departmentId === "external" ? "组织外已登录" : "全部组织人员");
+    document.getElementById("adminSelectedDepartmentPath").textContent = department
+      ? departmentPath(department.id) : (userListUi.departmentId === "external" ? "登录后登记的组织外账号" : "按左侧组织筛选，可选择是否包含下级组织");
+    const includeDescendants = document.getElementById("adminIncludeDescendants");
+    includeDescendants.disabled = !department;
+    includeDescendants.checked = userListUi.includeDescendants;
+    renderUserEditor();
     const resultSummary = document.getElementById("adminUserListSummary");
     if (resultSummary) {
       const visibleStart = users.length ? pageStart + 1 : 0;
@@ -531,6 +535,41 @@
     }
     const pagination = document.getElementById("adminUserPagination");
     if (pagination) pagination.innerHTML = userPaginationMarkup(users.length, totalPages);
+  };
+
+  const userEditorAnchor = () => Array.from(document.querySelectorAll("[data-edit-user]"))
+    .find(button => button.dataset.editUser === userListUi.editingUserId);
+
+  const positionUserEditor = () => {
+    const editor = document.getElementById("adminUserEditor");
+    const anchor = userEditorAnchor();
+    if (!anchor || !editor.matches(":popover-open")) return;
+    const buttonRect = anchor.getBoundingClientRect();
+    const editorRect = editor.getBoundingClientRect();
+    const left = Math.max(12, Math.min(buttonRect.right - editorRect.width, window.innerWidth - editorRect.width - 12));
+    const below = buttonRect.bottom + 6;
+    const top = below + editorRect.height <= window.innerHeight - 12
+      ? below : Math.max(12, buttonRect.top - editorRect.height - 6);
+    editor.style.left = `${left}px`;
+    editor.style.top = `${top}px`;
+  };
+
+  const renderUserEditor = () => {
+    const editor = document.getElementById("adminUserEditor");
+    const user = state.users.find(item => item.id === userListUi.editingUserId);
+    const anchor = userEditorAnchor();
+    if (!user || !anchor) {
+      if (editor.matches(":popover-open")) editor.hidePopover();
+      editor.hidden = true;
+      editor.innerHTML = "";
+      return;
+    }
+    editor.hidden = false;
+    editor.innerHTML = `<header><h3>${escapeHtml(user.name)} · 授权角色</h3><button type="button" data-close-user-editor aria-label="关闭角色选择">关闭</button></header>
+      <div class="admin-role-menu" data-user="${escapeHtml(user.id)}"><div class="admin-role-options">${roleOptionMarkup(user)}</div><button type="button" data-type="save-user-roles" data-user="${escapeHtml(user.id)}">保存授权</button></div>
+      <details class="admin-account-detail"><summary>账号信息</summary><p>企业邮箱：${escapeHtml(user.email || "未提供")}<br />飞书账号：${escapeHtml(user.feishuUserId || "待补齐")}</p></details>`;
+    if (!editor.matches(":popover-open")) editor.showPopover();
+    positionUserEditor();
   };
 
   const renderModules = () => {
@@ -595,16 +634,9 @@
     const defaultPeriod = document.getElementById("defaultPeriod");
     const reviewThreshold = document.getElementById("reviewThreshold");
     const exportPolicy = document.getElementById("exportPolicy");
-    const activeAdminUser = document.getElementById("activeAdminUser");
     if (defaultPeriod) defaultPeriod.value = state.config.defaultPeriod;
     if (reviewThreshold) reviewThreshold.value = state.config.reviewThreshold;
     if (exportPolicy) exportPolicy.value = state.config.exportPolicy;
-    if (activeAdminUser) {
-      activeAdminUser.innerHTML = state.users.map(user => `
-        <option value="${user.id}">${user.name} · ${getRoleNames(user.roleIds)}</option>
-      `).join("");
-      activeAdminUser.value = state.selectedUserId;
-    }
   };
 
   const auditActionLabels = {
@@ -645,7 +677,7 @@
     if (!identifier) return "";
     const text = String(identifier);
     const shortId = text.length > 18 ? `…${text.slice(-8)}` : text;
-    return `<small class="admin-audit-id" title="${escapeHtml(text)}">ID · ${escapeHtml(shortId)}</small>`;
+    return `<small class="admin-audit-id" title="${escapeHtml(text)}">编号 · ${escapeHtml(shortId)}</small>`;
   };
 
   const auditUserMarkup = (identifier) => {
@@ -821,25 +853,40 @@
     }
     if (syncHint) syncHint.textContent = state.directory?.canSync
       ? "仅同步 HRAS 人力综合条线"
-      : "本地与 Preview 不执行真实同步";
-    if (environment) environment.textContent = `当前环境：${state.directory?.environment || "local"} · ${state.directory?.canSync ? "可同步" : "只读"}`;
+      : "本地与预览环境不执行真实同步";
+    document.getElementById("resetAdminConfig").hidden = apiBacked;
+    document.querySelector(".admin-department-heading small").textContent = state.directory?.rootDepartmentName || "HRAS 人力综合条线";
+    const environmentName = { production: "生产环境", preview: "预览环境", local: "本地环境", development: "开发环境", test: "测试环境" }[state.directory?.environment] || "其他环境";
+    if (environment) environment.textContent = `${environmentName} · ${state.directory?.canSync ? "可同步组织" : "组织同步未启用"}`;
+  };
+
+  const showSection = () => {
+    const sections = Array.from(document.querySelectorAll(".admin-console-section"));
+    const sectionId = sections.some(section => `#${section.id}` === window.location.hash)
+      ? window.location.hash.slice(1) : (new URLSearchParams(window.location.search).has("feedback") ? "feedbackCenter" : "usersRoles");
+    sections.forEach(section => { section.hidden = section.id !== sectionId; });
+    document.querySelectorAll(".dashboard-nav a[href^='#']").forEach(link => {
+      const active = link.getAttribute("href") === `#${sectionId}`;
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+    });
+    document.getElementById("adminSectionName").textContent = document.getElementById(sectionId).querySelector("h2").textContent;
   };
 
   const focusRequestedUser = () => {
-    if (requestedUserFocused || !requestedUserId || !state.users.some(user => user.id === requestedUserId)) return;
-    state.selectedUserId = requestedUserId;
-    const requestedIndex = filteredUsers().findIndex(user => user.id === requestedUserId);
-    if (requestedIndex >= 0) userListUi.page = Math.floor(requestedIndex / userListUi.pageSize) + 1;
+    const user = state.users.find(item => item.id === requestedUserId);
+    if (requestedUserFocused || !user) return;
+    userListUi.departmentId = user.directoryScope === "hras" ? "all" : "external";
+    const requestedIndex = filteredUsers().findIndex(item => item.id === user.id);
+    userListUi.page = Math.floor(requestedIndex / userListUi.pageSize) + 1;
+    userListUi.editingUserId = user.id;
+    requestedUserFocused = true;
+    renderDepartmentTree();
     renderUsers();
     requestAnimationFrame(() => {
-      const dropdown = Array.from(document.querySelectorAll("[data-role-dropdown]")).find(
-        dropdown => dropdown instanceof HTMLDetailsElement && dropdown.dataset.user === requestedUserId,
-      );
-      if (!dropdown) return;
-      requestedUserFocused = true;
-      dropdown.open = true;
-      dropdown.scrollIntoView({ behavior: "smooth", block: "center" });
-      dropdown.querySelector("summary")?.focus({ preventScroll: true });
+      userEditorAnchor()?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      positionUserEditor();
+      document.getElementById("adminUserEditor").querySelector("input")?.focus({ preventScroll: true });
     });
   };
 
@@ -852,6 +899,7 @@
     renderLogs();
     renderAuditPagination();
     renderMetrics();
+    showSection();
     focusRequestedUser();
   };
 
@@ -860,6 +908,7 @@
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
 
     if (target.id === "adminUserStatusFilter") {
+      userListUi.editingUserId = "";
       userListUi.status = target.value;
       userListUi.page = 1;
       renderUsers();
@@ -867,6 +916,7 @@
     }
 
     if (target.id === "adminUserPageSize") {
+      userListUi.editingUserId = "";
       userListUi.pageSize = Number(target.value) || 10;
       userListUi.page = 1;
       renderUsers();
@@ -957,13 +1007,6 @@
       return;
     }
 
-    if (target.id === "activeAdminUser") {
-      const user = state.users.find(item => item.id === target.value);
-      if (!user) return;
-      state.selectedUserId = user.id;
-      addLog("切换模拟当前用户", `${user.name} · ${getRoleNames(user.roleIds)}`);
-      return;
-    }
 
     if (target.id in state.config) {
       state.config[target.id] = target.type === "number" ? Number(target.value) : target.value;
@@ -972,12 +1015,49 @@
   });
 
   document.addEventListener("click", async (event) => {
-    const departmentButton = event.target.closest("[data-department-id]");
+    const toggle = event.target.closest("[data-department-toggle]");
+    if (toggle) {
+      const id = toggle.dataset.departmentToggle;
+      if (departmentUi.expanded.has(id)) departmentUi.expanded.delete(id); else departmentUi.expanded.add(id);
+      renderDepartmentTree();
+      Array.from(document.querySelectorAll("[data-department-toggle]")).find(button => button.dataset.departmentToggle === id)?.focus();
+      return;
+    }
+    const treeAction = event.target.closest("[data-tree-action]");
+    if (treeAction) {
+      departmentUi.query = "";
+      document.getElementById("adminDepartmentSearch").value = "";
+      departmentUi.expanded = treeAction.dataset.treeAction === "expand" ? new Set(state.departments.map(item => item.id)) : new Set();
+      renderDepartmentTree();
+      return;
+    }
+    const editUser = event.target.closest("[data-edit-user]");
+    if (editUser) {
+      userListUi.editingUserId = userListUi.editingUserId === editUser.dataset.editUser ? "" : editUser.dataset.editUser;
+      renderUsers();
+      document.getElementById("adminUserEditor").querySelector("input")?.focus({ preventScroll: true });
+      return;
+    }
+    if (event.target.closest("[data-close-user-editor]")) {
+      const id = userListUi.editingUserId;
+      userListUi.editingUserId = "";
+      renderUsers();
+      Array.from(document.querySelectorAll("[data-edit-user]")).find(button => button.dataset.editUser === id)?.focus();
+      return;
+    }
+    const departmentButton = event.target.closest("[data-department-id]")
+      || event.target.closest(".admin-tree-row")?.querySelector("[data-department-id]");
     if (departmentButton) {
+      userListUi.editingUserId = "";
       userListUi.departmentId = departmentButton.dataset.departmentId || "all";
+      if (departmentButton.dataset.departmentBranch && !departmentUi.query.trim()) {
+        const id = userListUi.departmentId;
+        if (departmentUi.expanded.has(id)) departmentUi.expanded.delete(id); else departmentUi.expanded.add(id);
+      }
       userListUi.page = 1;
       renderDepartmentTree();
       renderUsers();
+      Array.from(document.querySelectorAll("[data-department-id]")).find(button => button.dataset.departmentId === userListUi.departmentId)?.focus();
       return;
     }
 
@@ -992,7 +1072,7 @@
           headers: { "Content-Type": "application/json" },
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.detail || `API ${response.status}`);
+        if (!response.ok) throw new Error(payload.detail || `请求失败（${response.status}）`);
         await refreshApiState(`已同步 ${payload.sync?.userCount || 0} 位组织人员`);
       } catch (error) {
         saveState(error.message || "飞书通讯录同步失败");
@@ -1013,17 +1093,11 @@
 
     const pageButton = event.target.closest("[data-user-page]");
     if (pageButton && !pageButton.disabled) {
+      userListUi.editingUserId = "";
       userListUi.page += pageButton.dataset.userPage === "next" ? 1 : -1;
       renderUsers();
       document.getElementById("usersRoles")?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
-    }
-
-    const roleSummary = event.target.closest(".admin-role-dropdown summary");
-    if (roleSummary) {
-      document.querySelectorAll(".admin-role-dropdown[open]").forEach(dropdown => {
-        if (dropdown !== roleSummary.parentElement) dropdown.removeAttribute("open");
-      });
     }
 
     const saveRolesButton = event.target.closest("[data-type='save-user-roles']");
@@ -1055,6 +1129,7 @@
           });
           sessionStorage.removeItem("sigma-auth-context-v1");
           sessionStorage.removeItem("sigma-auth-context-v2");
+          userListUi.editingUserId = "";
           await refreshApiState("用户角色已写入数据库");
         } catch (error) {
           saveState(error.message || "用户角色保存失败");
@@ -1062,6 +1137,7 @@
         }
         return;
       }
+      userListUi.editingUserId = "";
       user.roleIds = nextRoleIds;
       user.status = nextRoleIds.length ? "启用" : "待授权";
       addLog("更新用户角色", `${user.name} · ${getRoleNames(user.roleIds) || "默认权限：无模块权限"}`);
@@ -1102,11 +1178,37 @@
   });
 
   document.getElementById("adminUserSearch")?.addEventListener("input", event => {
+    userListUi.editingUserId = "";
     userListUi.query = event.target.value;
     userListUi.page = 1;
     renderUsers();
   });
 
+  document.getElementById("adminDepartmentSearch")?.addEventListener("input", event => {
+    departmentUi.query = event.target.value;
+    renderDepartmentTree();
+  });
+  document.getElementById("adminIncludeDescendants")?.addEventListener("change", event => {
+    userListUi.editingUserId = "";
+    userListUi.includeDescendants = event.target.checked;
+    userListUi.page = 1;
+    renderUsers();
+  });
+  const userEditor = document.getElementById("adminUserEditor");
+  userEditor.addEventListener("toggle", event => {
+    if (event.target === userEditor && event.newState === "closed" && userListUi.editingUserId) {
+      userListUi.editingUserId = "";
+      renderUsers();
+    }
+  });
+  userEditor.addEventListener("toggle", positionUserEditor, true);
+  window.addEventListener("resize", positionUserEditor);
+  window.addEventListener("scroll", positionUserEditor, true);
+  window.addEventListener("hashchange", () => {
+    userListUi.editingUserId = "";
+    renderUsers();
+    showSection();
+  });
   render();
   loadApiState();
 })();

@@ -16,7 +16,7 @@ def test_admin_directory_uses_current_brand_and_org_people_layout():
     assert "同步飞书通讯录" in html
     assert "工号" in js
     assert "主部门" in js
-    assert "飞书用户 ID" in js
+    assert "飞书账号" in js
     assert "入职日期" not in html + js
     assert "直属主管" not in html + js
     assert "岗位" not in html + js

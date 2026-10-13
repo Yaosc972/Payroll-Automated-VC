@@ -3,12 +3,12 @@
   <head>
     <script src="platform-font.js?v=1"></script>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=1280" />
-    <title>后台管理 · 西格玛工作台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>后台管理 · HRAS 全球薪酬核算工作台</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
     <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
     <link rel="stylesheet" href="styles.css?v=admin-users-20260810" />
-    <link rel="stylesheet" href="admin-directory.css?v=20260905-1" />
+    <link rel="stylesheet" href="admin-directory.css?v=20261013-4" />
     <link rel="stylesheet" href="admin-feedback.css?v=20260820-1" />
     <script src="permission-guard.js?v=9"></script>
   </head>
@@ -20,69 +20,54 @@
       <span class="mesh-grid"></span>
     </div>
 
-    <div class="dashboard-frame admin-console-frame" aria-label="西格玛工作台后台管理">
+    <div class="dashboard-frame admin-console-frame" aria-label="HRAS 全球薪酬核算工作台后台管理">
       <aside class="dashboard-sidebar" aria-label="后台导航">
-        <a class="dashboard-logo" href="/" aria-label="返回西格玛工作台首页">
+        <a class="dashboard-logo" href="/" aria-label="返回 HRAS 工作台首页">
           <img src="assets/workbench-logo-2026.png" alt="" />
           <span>
             <strong>HRAS 管理后台</strong>
-            <small>Global Payroll Workbench</small>
+            <small>组织、人员与权限</small>
           </span>
         </a>
 
         <nav class="dashboard-nav">
           <p class="nav-group-label">后台管理</p>
-          <a class="active" href="admin.html">
-            <span>权限配置总览</span>
-            <b>Access Matrix</b>
-          </a>
-          <a href="#usersRoles">
-            <span>用户与角色</span>
-            <b>Users & Roles</b>
+          <a class="active" href="#usersRoles">
+            <span>组织与人员</span>
           </a>
           <a href="#modulePermissions">
             <span>模块权限</span>
-            <b>Module Grants</b>
           </a>
           <a href="#featurePermissions">
             <span>功能权限</span>
-            <b>Feature Controls</b>
           </a>
           <a href="#moduleConfig">
             <span>模块配置</span>
-            <b>Module Settings</b>
           </a>
           <a href="#feedbackCenter">
             <span>反馈与更新</span>
-            <b>Feedback & Updates</b>
           </a>
           <a href="#auditLog">
             <span>操作日志</span>
-            <b>Audit Trail</b>
           </a>
         </nav>
 
         <p class="nav-group-label admin-label">工作台</p>
         <a class="admin-entry" href="/">
           <span>返回首页</span>
-          <b>Dashboard Overview</b>
         </a>
       </aside>
 
       <main class="dashboard-main admin-console-main">
         <header class="dashboard-topbar admin-console-topbar">
           <div>
-            <p>用户与角色 / HRAS 人力综合条线</p>
+            <p>后台管理 / <span id="adminSectionName">组织与人员</span></p>
             <strong>HRAS 全球薪酬核算工作台</strong>
           </div>
           <div class="admin-save-state" role="status" aria-live="polite">
             <span id="adminSaveState">正在读取权限数据</span>
             <small id="adminDirectoryEnvironment">组织同步仅在生产环境启用</small>
           </div>
-          <label class="admin-user-switch">
-            <span>模拟当前用户</span>
-            <select id="activeAdminUser"></select>
-          </label>
           <div class="admin-reset-action">
             <button id="resetAdminConfig" type="button">重置草稿</button>
           </div>
@@ -90,9 +75,9 @@
 
         <section class="admin-hero-panel" aria-labelledby="adminHeroTitle">
           <div>
-            <p class="portal-kicker">People & Access</p>
+            <p class="portal-kicker">管理概览</p>
             <h1 id="adminHeroTitle">组织人员与权限</h1>
-            <span>同步 HRAS 人力综合条线组织人员，统一查看身份、登录状态和业务权限；组织范围外用户仍可正常登录并单独授权。</span>
+            <span>按组织查看人员与授权，组织外账号单独管理。</span>
           </div>
           <div class="admin-hero-metrics" aria-label="后台配置摘要">
             <span><b id="adminScopedUserCount">0</b><small>组织内人员</small></span>
@@ -104,7 +89,6 @@
         <section id="usersRoles" class="admin-console-section" aria-labelledby="usersRolesTitle">
           <div class="section-bar">
             <div>
-              <p>Directory & Access</p>
               <h2 id="usersRolesTitle">组织与人员</h2>
             </div>
             <div class="admin-directory-actions">
@@ -119,6 +103,14 @@
                 <strong>组织架构</strong>
                 <small>HRAS 人力综合条线</small>
               </div>
+              <label class="admin-department-search">
+                <span class="sr-only">搜索组织</span>
+                <input id="adminDepartmentSearch" type="search" placeholder="搜索组织名称" autocomplete="off" />
+              </label>
+              <div class="admin-tree-actions">
+                <button type="button" data-tree-action="expand">展开全部</button>
+                <button type="button" data-tree-action="collapse">收起全部</button>
+              </div>
               <div id="adminDepartmentTree" class="admin-department-tree"></div>
               <div class="admin-department-note">
                 <strong>范围说明</strong>
@@ -126,11 +118,15 @@
               </div>
             </aside>
             <div class="admin-people-panel">
+              <div class="admin-people-heading">
+                <div><h3 id="adminSelectedDepartment">全部组织人员</h3><p id="adminSelectedDepartmentPath">包含下级组织</p></div>
+                <label class="admin-descendants-option"><input id="adminIncludeDescendants" type="checkbox" checked />包含下级组织</label>
+              </div>
               <div class="admin-user-toolbar" aria-label="用户列表筛选">
                 <label class="admin-user-search">
                   <span class="admin-user-search-icon" aria-hidden="true"></span>
                   <span class="sr-only">搜索用户</span>
-                  <input id="adminUserSearch" type="search" autocomplete="off" placeholder="搜索姓名、工号、飞书用户 ID、部门或角色" />
+                  <input id="adminUserSearch" type="search" autocomplete="off" placeholder="搜索姓名、工号、部门或角色" />
                 </label>
                 <label class="admin-user-filter">
                   <span>账号状态</span>
@@ -146,14 +142,14 @@
 
               <div class="admin-user-table-wrap" id="userRoleList"></div>
               <div class="admin-user-pagination" id="adminUserPagination" aria-label="用户列表分页"></div>
+              <section id="adminUserEditor" class="admin-user-editor" popover="auto" role="dialog" aria-label="选择人员角色" hidden></section>
             </div>
           </div>
         </section>
 
-        <section id="modulePermissions" class="admin-console-section" aria-labelledby="modulePermissionsTitle">
+        <section id="modulePermissions" class="admin-console-section" aria-labelledby="modulePermissionsTitle" hidden>
           <div class="section-bar">
             <div>
-              <p>Module Grants</p>
               <h2 id="modulePermissionsTitle">模块权限</h2>
             </div>
           </div>
@@ -161,10 +157,9 @@
           <div class="admin-permission-grid" id="modulePermissionList"></div>
         </section>
 
-        <section id="featurePermissions" class="admin-console-section" aria-labelledby="featurePermissionsTitle">
+        <section id="featurePermissions" class="admin-console-section" aria-labelledby="featurePermissionsTitle" hidden>
           <div class="section-bar">
             <div>
-              <p>Feature Controls</p>
               <h2 id="featurePermissionsTitle">功能权限</h2>
             </div>
           </div>
@@ -172,10 +167,9 @@
           <div class="admin-feature-matrix" id="featurePermissionList"></div>
         </section>
 
-        <section id="moduleConfig" class="admin-console-section" aria-labelledby="moduleConfigTitle">
+        <section id="moduleConfig" class="admin-console-section" aria-labelledby="moduleConfigTitle" hidden>
           <div class="section-bar">
             <div>
-              <p>Module Settings</p>
               <h2 id="moduleConfigTitle">模块配置</h2>
             </div>
             <button class="admin-secondary-action" type="button" data-log-action="保存模块配置">保存配置</button>
@@ -205,10 +199,9 @@
           </div>
         </section>
 
-        <section id="feedbackCenter" class="admin-console-section admin-feedback-center" aria-labelledby="feedbackCenterTitle">
+        <section id="feedbackCenter" class="admin-console-section admin-feedback-center" aria-labelledby="feedbackCenterTitle" hidden>
           <div class="section-bar">
             <div>
-              <p>Feedback & Release Notes</p>
               <h2 id="feedbackCenterTitle">反馈与更新</h2>
             </div>
             <span class="admin-feedback-lightweight">只收集 · 只播报 · 不做工单流转</span>
@@ -217,7 +210,7 @@
           <div class="admin-feedback-layout">
             <section class="admin-feedback-inbox" aria-labelledby="adminFeedbackInboxTitle">
               <header>
-                <div><span>LISTENING INBOX</span><h3 id="adminFeedbackInboxTitle">用户反馈</h3></div>
+                <div><span>收集意见</span><h3 id="adminFeedbackInboxTitle">用户反馈</h3></div>
                 <button id="adminFeedbackRefresh" type="button">刷新</button>
               </header>
               <div class="admin-feedback-list" id="adminFeedbackList"></div>
@@ -226,7 +219,7 @@
 
             <section class="admin-announcement-composer" aria-labelledby="adminAnnouncementTitle">
               <header>
-                <div><span>PIN A NEW NOTE</span><h3 id="adminAnnouncementTitle">发布更新公告</h3></div>
+                <div><span>更新播报</span><h3 id="adminAnnouncementTitle">发布更新公告</h3></div>
                 <i aria-hidden="true">✦</i>
               </header>
               <form id="adminAnnouncementForm">
@@ -237,7 +230,7 @@
                 <label><span>标题</span><input name="title" type="text" minlength="2" maxlength="120" required placeholder="一句话说明本次更新" /></label>
                 <div class="admin-rich-editor">
                   <div class="admin-rich-toolbar" aria-label="富文本快捷格式">
-                    <button type="button" data-rich-wrap="**" title="加粗">B</button>
+                    <button type="button" data-rich-wrap="**" title="加粗">加粗</button>
                     <button type="button" data-rich-wrap="==" title="高亮">重点</button>
                     <button type="button" data-rich-prefix="- " title="项目符号">• 列表</button>
                     <button type="button" data-rich-prefix="> " title="提示块">❯ 提示</button>
@@ -259,10 +252,9 @@
           </div>
         </section>
 
-        <section id="auditLog" class="admin-console-section" aria-labelledby="auditLogTitle">
+        <section id="auditLog" class="admin-console-section" aria-labelledby="auditLogTitle" hidden>
           <div class="section-bar">
             <div>
-              <p>Audit Trail</p>
               <h2 id="auditLogTitle">操作日志</h2>
             </div>
             <span class="admin-audit-context" id="auditLogContext">最近 12 条 · 北京时间</span>
@@ -288,7 +280,8 @@
       </main>
     </div>
 
-    <script src="admin.js?v=20260905-1"></script>
+    <script src="admin.js?v=20261013-3"></script>
+    <script src="admin-controls.js?v=20261013-1"></script>
     <script src="admin-feedback.js?v=20260820-2"></script>
   </body>
 </html>
