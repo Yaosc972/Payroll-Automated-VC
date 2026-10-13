@@ -1,0 +1,23 @@
+/* Shared, local feedback for payroll navigation; no page-scroll interception. */
+.dl-motion { position:relative; isolation:isolate; }
+.dl-motion-plate { position:absolute; top:0; left:0; z-index:-1; pointer-events:none; border-radius:9px; background:#eaf2ff; box-shadow:inset 0 0 0 1px #dce8fa; opacity:0; }
+.dl-motion-home > .dl-motion-plate { border-radius:12px; background:linear-gradient(180deg,#edf4ff,#e7effd); }
+.dl-motion-segments > .dl-motion-plate { border-radius:7px; background:white; box-shadow:0 1px 4px #10182812; }
+#canbuBatchListView .dl-motion-segments [data-activity-scope],
+.view-tabs.dl-motion-segments > button,
+.categories.dl-motion > button,
+#rulePackageView .dl-motion [data-rule-subject] { background:transparent; box-shadow:none; }
+#canbuBatchTable.dl-motion > .dl-motion-plate { background:#f0f6ff; box-shadow:none; border-radius:0; }
+#canbuBatchListView #canbuBatchTable.dl-motion :is(tbody tr,tbody td) { background:transparent; }
+#rulePackageView .dl-motion [data-rule-subject]:hover { color:#0064d5; }
+#canbuBatchListView [data-open-canbu-batch]::after { display:inline-block; transition:transform 180ms ease-out; }
+#canbuBatchListView [data-open-canbu-batch]:hover::after { transform:translateX(2px); }
+@media (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference) {
+  .skill-card { transition:transform 200ms cubic-bezier(.23,1,.32,1),border-color 180ms ease,box-shadow 180ms ease; }
+  .skill-card:hover { transform:translateY(-2px); border-color:#adc6e9; box-shadow:0 7px 20px #1e3a8a0c; }
+}
+.skill-card:focus-within { border-color:#adc6e9; }
+@media (prefers-reduced-motion:reduce) {
+  #canbuBatchListView [data-open-canbu-batch]::after { transition:none; transform:none; }
+}
+.dl-smooth-scroll, .dl-smooth-scroll body { scroll-behavior:auto !important; }

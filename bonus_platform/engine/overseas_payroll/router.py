@@ -18,7 +18,7 @@ from ..labor.persistent_storage import (
     labor_private_object_storage_enabled, labor_obs_storage_enabled,
     put_labor_supabase_private_object, get_labor_supabase_private_object,
 )
-from .service import _legacy_module, list_tools, process_files
+from .service import _legacy_module, list_tools, process_files, validate_prepared_files
 from .platform_page import render_platform_page
 from .tasks import (
     create_task,
@@ -117,7 +117,7 @@ def overseas_payroll_page(request: Request) -> HTMLResponse:
     except ValueError:
         logger.exception("Overseas payroll login adapter does not match the handover page")
         raise HTTPException(status_code=503, detail="海外薪资页面暂不可用，请联系维护人员。") from None
-    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=4"></script></body>')
+    html = html.replace("</body>", '<script src="/overseas-payroll-async.js?v=5"></script></body>')
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
@@ -406,6 +406,24 @@ def download_local_overseas_payroll_output(task_id: str, request: Request) -> Re
     if not path.is_file():
         raise HTTPException(status_code=404, detail="处理结果文件不存在。")
     return FileResponse(path, filename=output["filename"], media_type=output.get("contentType") or "application/octet-stream")
+
+
+@router.post("/tools/{tool_id}/validate-files")
+async def validate_overseas_prepared_files(tool_id: str, request: Request, files: list[UploadFile] = File(...)) -> dict:
+    _require_access(request)
+    if len(files) > MAX_FILES:
+        raise HTTPException(status_code=413, detail=f"一次最多准备 {MAX_FILES} 个文件。")
+    prepared, total = [], 0
+    for file in files:
+        content = await file.read(MAX_FILE_BYTES + 1)
+        total += len(content)
+        if len(content) > MAX_FILE_BYTES or total > MAX_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="单文件最多 40 MB，一次最多 80 MB。")
+        prepared.append((Path(file.filename or "input.bin").name, content))
+    try:
+        return await asyncio.to_thread(validate_prepared_files, tool_id, prepared)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/tools/{tool_id}/process")

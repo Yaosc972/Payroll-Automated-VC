@@ -626,12 +626,14 @@ function bindEvents() {
     renderResultsTable(state.currentResults);
   });
 
+  const updateHomeHighlight = window.DomesticMotion.highlight(el.subjectCardGrid, { selector:'[data-subject-entry]', kind:'home', pull:1, follow:true });
   el.subjectCardGrid?.addEventListener('click', (event) => {
     const card = event.target.closest('[data-subject-entry]');
     if (!card || card.disabled) return;
     const subject = card.dataset.subjectEntry;
     if (!SUBJECT_WORKBENCH[subject]) return;
     selectHomeSubject(subject, card);
+    updateHomeHighlight();
   });
 
   el.navSubjectHome?.addEventListener('click', (event) => {
@@ -681,7 +683,9 @@ function bindEvents() {
     if (el.rulePackageSearch) el.rulePackageSearch.value = '';
     renderRulePackageNavigation();
     renderRulePackageSubject();
-    window.scrollTo({ top: 0 });
+    window.DomesticMotion.reveal(el.rulePackageContent);
+    el.rulePackageSubjectTabs.querySelector(`[data-rule-subject="${state.activeRuleSubject}"]`)?.focus({preventScroll:true});
+    window.DomesticMotion.scrollTo(0, {immediate:true});
   });
   el.rulePackageSearch?.addEventListener('input', () => {
     const query = el.rulePackageSearch.value.trim();
@@ -704,7 +708,9 @@ function bindEvents() {
     if (el.rulePackageSearch) el.rulePackageSearch.value = '';
     renderRulePackageNavigation();
     renderRulePackageSubject();
-    window.scrollTo({ top: 0 });
+    window.DomesticMotion.reveal(el.rulePackageContent);
+    el.rulePackageSubjectTabs.querySelector(`[data-rule-subject="${state.activeRuleSubject}"]`)?.focus({preventScroll:true});
+    window.DomesticMotion.scrollTo(0, {immediate:true});
   });
   el.rulePackageVersionSelect?.addEventListener('change', () => {
     loadRulePackageVersion(el.rulePackageVersionSelect.value);
@@ -760,8 +766,27 @@ function bindEvents() {
 const homeDraftMonth = getDefaultPayrollMonthValue();
 const homeDraft = { subject: '', year: Number(homeDraftMonth.slice(0, 4)), month: homeDraftMonth, busy: false };
 
+
+const homeContentAnimations = new Map();
+function animateHomeSubjectContent(firstSelection) {
+  for (const animation of homeContentAnimations.values()) animation.cancel();
+  homeContentAnimations.clear();
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const nodes = firstSelection ? [document.querySelector('#homeCreateForm')]
+    : document.querySelectorAll('#homeCreateForm .dl-home-config-head, #homeCreateForm .dl-home-preparation');
+  for (const node of nodes) {
+    if (!node?.animate) continue;
+    homeContentAnimations.set(node, node.animate([
+      { opacity: .65, transform: 'translateY(4px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: 180, easing: 'cubic-bezier(.23, 1, .32, 1)' }));
+  }
+}
+
 function selectHomeSubject(subject, card) {
   if (homeDraft.busy) return;
+  const changed = homeDraft.subject !== subject;
+  const firstSelection = !homeDraft.subject;
   homeDraft.subject = subject;
   document.querySelectorAll('[data-subject-entry]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.subjectEntry === subject)));
   document.querySelector('#homeEmpty').hidden = true;
@@ -784,6 +809,7 @@ function selectHomeSubject(subject, card) {
   document.querySelector('#homePrevYear').onclick = () => { homeDraft.year--; renderHomeMonths(); };
   document.querySelector('#homeNextYear').onclick = () => { homeDraft.year++; renderHomeMonths(); };
   form.onsubmit = createHomeActivity;
+  if (changed) animateHomeSubjectContent(firstSelection);
 }
 
 function renderHomeMonths() {
@@ -910,7 +936,7 @@ function updateSubjectWorkbenchLabels() {
 
 function showView(viewName) {
   state.navigationRevision++;
-  if (state.view != viewName) { closeExplainDrawer(); closeCalcModal(); window.scrollTo({ top: 0, behavior: 'instant' }); }
+  if (state.view != viewName) { closeExplainDrawer(); closeCalcModal(); window.DomesticMotion.scrollTo(0, {immediate:true}); }
   document.body.classList.toggle('dl-activities-active', viewName === 'canbuBatches');
   document.body.classList.toggle('dl-home-active', viewName === 'home');
   state.view = viewName;
@@ -930,6 +956,7 @@ function showView(viewName) {
   el.navSubjectHome?.classList.toggle('active', viewName === 'home');
   el.navBatchList?.classList.toggle('active', ['canbuBatches', 'canbuWorkbench'].includes(viewName));
   el.navRulePackage?.classList.toggle('active', viewName === 'rulePackage');
+  window.DomesticMotion.setScrollView(viewName);
 }
 
 function beginCanbuOperation(batch, message = '正在准备上传文件...') {
@@ -994,7 +1021,7 @@ function refreshCanbuOperationStatus() {
 async function openRulePackageView() {
   showView('rulePackage');
   if (el.rulePackageSearch) el.rulePackageSearch.value = '';
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  window.DomesticMotion.scrollTo(0, {immediate:true});
   if (state.rulePackage) {
     renderRulePackage();
     return;
@@ -1405,6 +1432,9 @@ function refreshActivities() {
 }
 
 function setupActivityList() {
+  window.DomesticMotion.highlight(document.querySelector('.dl-activity-scopes'), { selector:'[data-activity-scope]', kind:'segments', hover:false });
+  window.DomesticMotion.highlight(el.canbuBatchTable, { selector:'tbody tr', kind:'rows' });
+  window.DomesticMotion.highlight(el.rulePackageSubjectTabs, { selector:'[data-rule-subject]', kind:'nav', pull:.5 });
   const subject = document.querySelector('#activitySubject');
   subject.innerHTML = '<option value="all">全部科目</option>' + Object.entries(SUBJECT_WORKBENCH).map(([key, value]) => `<option value="${key}">${escapeHtml(value.name)}</option>`).join('');
   document.querySelectorAll('[data-activity-scope]').forEach(button => button.addEventListener('click', () => {

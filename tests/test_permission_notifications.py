@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 import bonus_platform.app as app_module
@@ -30,7 +32,7 @@ def test_new_user_card_is_polished_json_v2_with_admin_entry():
             "email": "new.user@example.com",
             "createdAt": "2026-08-10T08:00:00Z",
         },
-        "https://sigma-workbench.vercel.app/admin.html?user=feishu_ou_new",
+        "https://hras-ai-vc.ztn.cn/admin.html?user=feishu_ou_new",
     )
 
     assert card["schema"] == "2.0"
@@ -87,7 +89,7 @@ def test_permission_change_card_uses_clear_change_sections_and_workbench_link():
             "currentModules": ["FBU美洲绩效奖金核算"],
             "changedAt": "2026-08-10T08:30:00Z",
         },
-        "https://sigma-workbench.vercel.app/",
+        "https://hras-ai-vc.ztn.cn/",
     )
 
     assert card["schema"] == "2.0"
@@ -96,15 +98,15 @@ def test_permission_change_card_uses_clear_change_sections_and_workbench_link():
     assert "权限配置已更新" in rendered
     assert "新增" in rendered and "移除" in rendered
     assert "FBU美洲绩效奖金核算" in rendered
-    assert _button_url(card) == "https://sigma-workbench.vercel.app/"
+    assert _button_url(card) == "https://hras-ai-vc.ztn.cn/"
 
 
 def test_admin_card_deep_link_selects_and_expands_target_user():
     js = (ROOT / "bonus_platform" / "static" / "admin.js").read_text(encoding="utf-8")
 
     assert 'new URLSearchParams(window.location.search).get("user")' in js
-    assert 'dropdown.dataset.user === requestedUserId' in js
-    assert "dropdown.open = true" in js
+    assert "userListUi.editingUserId = user.id" in js
+    assert "editor.showPopover()" in js
     assert "scrollIntoView" in js
     assert "requestedUserHandled" not in js
 
@@ -273,3 +275,46 @@ def test_feishu_transport_sends_interactive_json_v2_card(monkeypatch):
     assert captured["payload"]["receive_id"] == "ou_admin"
     assert captured["payload"]["msg_type"] == "interactive"
     assert json.loads(captured["payload"]["content"])["schema"] == "2.0"
+
+
+@pytest.mark.parametrize("kind, payload, expected_paths", [
+    ("new_user_pending", {"userId": "review user"}, ["/admin.html?user=review%20user"]),
+    ("permission_changed", {}, ["/"]),
+    ("feedback_submitted", {"feedbackId": "review feedback", "userOpenId": "review-user"},
+     ["/admin.html?feedback=review%20feedback#feedbackCenter"]),
+    ("workbench_announcement", {"announcementId": "review notice"}, ["/?announcement=review%20notice"]),
+])
+def test_notification_cards_default_to_company_production_with_current_brand(
+    monkeypatch, kind, payload, expected_paths,
+):
+    monkeypatch.setitem(app_module.PERMISSION_NOTIFICATION_CONFIG, "public_url", "")
+    monkeypatch.setenv("VERCEL_PROJECT_PRODUCTION_URL", "sigma-workbench.vercel.app")
+    monkeypatch.setenv("VERCEL_URL", "old-preview.vercel.app")
+    monkeypatch.setattr(app_module, "_get_feishu_tenant_access_token", lambda: "synthetic-token")
+    captured = []
+
+    def capture_card(path, body, token=None):
+        captured.append(json.loads(body["content"]))
+        return {"code": 0, "data": {"message_id": "synthetic-message"}}
+
+    monkeypatch.setattr(app_module, "_feishu_post_json", capture_card)
+    app_module._send_feishu_permission_card({
+        "kind": kind, "payload": payload, "recipientOpenId": "synthetic-user",
+    })
+    card = captured[0]
+    assert card["header"]["subtitle"]["content"].startswith("HRAS 全球薪酬核算工作台 · ")
+    rendered = json.dumps(card, ensure_ascii=False)
+    assert "西格玛" not in rendered and "Sigma Workbench" not in rendered
+    assert "HRAS Global Payroll Workbench" not in rendered
+    behavior_list = [behavior for element in card["body"]["elements"]
+                     for behavior in element.get("behaviors", []) if behavior["type"] == "open_url"]
+    production_urls = [behavior["default_url"] for behavior in behavior_list
+                       if not behavior["default_url"].startswith("https://applink.feishu.cn/")]
+    assert production_urls == ["https://hras-ai-vc.ztn.cn" + path for path in expected_paths]
+    for behavior in behavior_list:
+        assert all(behavior[key] == behavior["default_url"] for key in ["pc_url", "ios_url", "android_url"])
+
+
+def test_notification_public_url_keeps_explicit_environment_override(monkeypatch):
+    monkeypatch.setitem(app_module.PERMISSION_NOTIFICATION_CONFIG, "public_url", "https://preview.example.com/")
+    assert app_module._permission_notification_public_url() == "https://preview.example.com"

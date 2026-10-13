@@ -55,6 +55,7 @@
   function showDialog(html) {
     $('dialogContent').innerHTML = html;
     if (!$('detailDialog').open) $('detailDialog').showModal();
+    DomesticMotion.reveal($('dialogContent'));
     $('detailDialog').scrollTop = 0;
     SkillHubUI.enhance($('detailDialog'), subjectIcons);
   }
@@ -78,6 +79,7 @@
     state.view = 'guide';
     render();
     rememberGuide();
+    DomesticMotion.reveal($('guidePanel'));
     $('libraryTitle').scrollIntoView({block:'start', behavior:'auto'});
   }
 
@@ -109,7 +111,7 @@
     const detailButton = event.target.closest('[data-detail]');
     const category = event.target.closest('[data-category]');
     if (detailButton) detail(detailButton.dataset.detail);
-    if (category) { state.category = category.dataset.category; render(); }
+    if (category) { state.category = category.dataset.category; render(); DomesticMotion.reveal(state.view === 'releases' ? $('releaseFeed') : $('skillCards')); }
     const usageButton = event.target.closest('[data-usage]');
     if (usageButton) usage(usageButton.dataset.usage);
     const guideCopy = event.target.closest('[data-guide-copy]');
@@ -138,13 +140,15 @@
     render();
     rememberGuide();
   });
-  const switchView = (view) => { state.view = view; render(); history.replaceState(null, '', location.pathname); };
+  const switchView = (view) => { state.view = view; render(); DomesticMotion.reveal(view === 'releases' ? $('releaseFeed') : $('skillCards')); history.replaceState(null, '', location.pathname); };
   $('catalogTab').addEventListener('click', () => switchView('catalog'));
   $('releaseTab').addEventListener('click', () => switchView('releases'));
   $('guideTab').addEventListener('click', () => usage());
   $('usageButton').addEventListener('click', () => usage());
   $('closeDialog').addEventListener('click', () => $('detailDialog').close());
   $('detailDialog').addEventListener('close', () => { if (state.view !== 'guide') history.replaceState(null, '', location.pathname); });
+  DomesticMotion.highlight($('categories'), {selector:'[data-category]', kind:'nav', hover:false});
+  DomesticMotion.highlight(document.querySelector('.view-tabs'), {selector:'button', kind:'segments', hover:false});
   SkillHubUI.enhance(document, subjectIcons);
   load();
 })();

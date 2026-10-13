@@ -180,6 +180,29 @@ body.domestic-labor-shell::before { display:none; }
 .dl-start-guide li + li::before { content:''; width:32px; height:1px; background:#dce4ee; margin:0 18px 0 10px; }
 .dl-start-guide li>span { font-size:10px; color:#879bb5; font-variant-numeric:tabular-nums; }
 @media (prefers-reduced-motion:no-preference) { .dl-start-art { animation:dl-start-appear .5s ease-out both; } @keyframes dl-start-appear { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:translateY(0); } } }
+/* Shared subject highlight: rows keep their full, stationary click targets. */
+#subjectCardGrid.dl-home-motion { position:relative; isolation:isolate; }
+.dl-home-highlight { position:absolute; left:0; top:0; z-index:-1; pointer-events:none; border-radius:12px; opacity:0; background:linear-gradient(180deg,#edf4ff,#e7effd); box-shadow:inset 0 0 0 1px #d7e5fa,inset 0 1px 0 #ffffffb3,0 3px 10px #2460a308; }
+#subjectCardGrid.dl-home-motion .dl-home-subject,
+#subjectCardGrid.dl-home-motion .dl-home-subject:hover,
+#subjectCardGrid.dl-home-motion .dl-home-subject:active,
+#subjectCardGrid.dl-home-motion .dl-home-subject[aria-pressed="true"] { background:transparent; box-shadow:none; }
+#subjectCardGrid.dl-home-motion .dl-home-subject > * { transform:translate(var(--subject-pull-x,0px),var(--subject-pull-y,0px)); }
+#subjectCardGrid.dl-home-motion .dl-home-subject strong,
+#subjectCardGrid.dl-home-motion .dl-home-forward { transition:color 150ms ease-out; }
+@media (max-width:760px) {
+  #subjectHomeView .dl-home-workspace { grid-template-columns:minmax(0,1fr); gap:16px; }
+  #subjectHomeView .dl-home-groups { gap:16px; }
+  #subjectHomeView .dl-home-config { min-width:0; padding:24px 20px; }
+  #subjectHomeView .dl-home-months { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  #subjectHomeView .dl-home-config-footer { flex-wrap:wrap; }
+  #subjectHomeView .dl-start-guide li + li::before { width:12px; margin:0 8px; }
+}
+@media (prefers-reduced-motion:reduce) {
+  #subjectCardGrid.dl-home-motion .dl-home-subject > * { transform:none; }
+  #subjectCardGrid.dl-home-motion .dl-home-subject strong,
+  #subjectCardGrid.dl-home-motion .dl-home-forward { transition:none; }
+}
 /* Fit the launch workspace to desktop viewport height without scaling text. */
 @media (max-height:820px) {
   body.dl-home-active .dl-main-full { padding-top:12px; padding-bottom:20px; }

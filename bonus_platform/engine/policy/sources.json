@@ -20,8 +20,8 @@
     "name": "上海市人力资源和社会保障局",
     "region": "上海",
     "category": "社保",
-    "url": "https://rsj.sh.gov.cn/tshbx_17282/index.html",
-    "articlePattern": "/.*\\.html"
+    "url": "https://rsj.sh.gov.cn/tshbx_17729/",
+    "articlePattern": "/tshbx_(?:17729|17282)/\\d{8}/t\\d+_\\d+\\.html"
   },
   {
     "id": "guangzhou-gjj",

@@ -455,10 +455,17 @@ function mount(root, packageData, subject, regionOverride) {
     const button=event.target.closest('button'); if(!button)return;
     if(button.hasAttribute('data-rb-night-example'))update({evening:8,morning:0});
     if(button.dataset.rbRegion!==undefined){
-      const scroll=window.scrollY; mount(root,packageData,subject,Number(button.dataset.rbRegion));window.scrollTo(0,scroll);
+      const scroll=window.scrollY; mount(root,packageData,subject,Number(button.dataset.rbRegion));
+      if(window.DomesticMotion?.scrollTo) window.DomesticMotion.scrollTo(scroll,{immediate:true});
+      else window.scrollTo(0,scroll);
       root.querySelector(`[data-rb-region="${button.dataset.rbRegion}"]`)?.focus({preventScroll:true});
     }
-    if(button.dataset.rbGo) { root.querySelectorAll('[data-rb-go]').forEach(node => node.setAttribute('aria-current', String(node === button))); root.querySelector(`#rb-${button.dataset.rbGo}`)?.scrollIntoView({block:'start',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}); }
+    if(button.dataset.rbGo) {
+      root.querySelectorAll('[data-rb-go]').forEach(node => node.setAttribute('aria-current', String(node === button)));
+      const target=root.querySelector(`#rb-${button.dataset.rbGo}`);
+      if(window.DomesticMotion?.scrollTo) window.DomesticMotion.scrollTo(target);
+      else target?.scrollIntoView({block:'start',behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+    }
     if(button.hasAttribute('data-rb-reset'))update({},true);
     if(button.dataset.rbPreset!==undefined)update({...r.values,...r.model.presets[Number(button.dataset.rbPreset)].values});
   },{signal:abort.signal});

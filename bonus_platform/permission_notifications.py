@@ -8,6 +8,10 @@ from urllib.parse import quote
 from .time_utils import utcnow_naive
 
 
+WORKBENCH_NAME = "HRAS 全球薪酬核算工作台"
+DEFAULT_WORKBENCH_PUBLIC_URL = "https://hras-ai-vc.ztn.cn"
+
+
 def _safe_text(value: Any, fallback: str = "-") -> str:
     text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or "")).strip()
     if not text:
@@ -75,12 +79,12 @@ def build_new_user_card(user: dict[str, Any], admin_url: str) -> dict[str, Any]:
     created_at = _display_time(user.get("createdAt") or user.get("created_at"))
     return _base_card(
         "新用户等待权限配置",
-        "Sigma Workbench · 权限中心",
+        f"{WORKBENCH_NAME} · 权限中心",
         "orange",
         [
             {
                 "tag": "markdown",
-                "content": f"👤 **{name}** 首次登录了西格玛工作台，请确认是否需要开通业务权限。",
+                "content": f"👤 **{name}** 首次登录了{WORKBENCH_NAME}，请确认是否需要开通业务权限。",
                 "text_size": "normal",
             },
             {
@@ -142,7 +146,7 @@ def build_permission_change_payload(
     user = dict(after.get("user") or {})
     return {
         "userId": str(user.get("id") or ""),
-        "userName": str(user.get("name") or "西格玛用户"),
+        "userName": str(user.get("name") or "工作台用户"),
         "recipientOpenId": str(user.get("feishuOpenId") or ""),
         "actorId": str(actor.get("id") or ""),
         "actorName": str(actor.get("name") or "系统管理员"),
@@ -168,12 +172,12 @@ def build_permission_change_card(payload: dict[str, Any], workbench_url: str) ->
     current_modules = list(payload.get("currentModules") or [])
     return _base_card(
         "权限配置已更新",
-        "Sigma Workbench · 权限中心",
+        f"{WORKBENCH_NAME} · 权限中心",
         "blue",
         [
             {
                 "tag": "markdown",
-                "content": f"你好，**{_safe_text(payload.get('userName'), '西格玛用户')}**。你的工作台权限已由 **{_safe_text(payload.get('actorName'), '系统管理员')}** 更新。",
+                "content": f"你好，**{_safe_text(payload.get('userName'), '工作台用户')}**。你的工作台权限已由 **{_safe_text(payload.get('actorName'), '系统管理员')}** 更新。",
                 "text_size": "normal",
             },
             {
@@ -210,7 +214,7 @@ def build_permission_change_card(payload: dict[str, Any], workbench_url: str) ->
                 "content": f"<font color='grey'>修改时间：{_display_time(payload.get('changedAt'))}\n如页面仍显示旧权限，请刷新工作台后重试。</font>",
                 "text_size": "notation",
             },
-            _button("打开西格玛工作台", workbench_url),
+            _button(f"打开{WORKBENCH_NAME}", workbench_url),
         ],
     )
 
@@ -228,7 +232,7 @@ def build_feedback_submitted_card(
     attachment_text = f"{attachment_count} 张截图" if attachment_count else "无截图"
     return _base_card(
         "收到新的平台反馈",
-        "HRAS Global Payroll Workbench · 用户反馈",
+        f"{WORKBENCH_NAME} · 用户反馈",
         "orange",
         [
             {
@@ -263,14 +267,14 @@ def build_feedback_submitted_card(
 def build_workbench_announcement_card(payload: dict[str, Any], workbench_url: str) -> dict[str, Any]:
     is_issue = str(payload.get("kind") or "") == "known_issue"
     return _base_card(
-        _safe_text(payload.get("title"), "HRAS 工作台更新"),
-        f"HRAS Global Payroll Workbench · {_safe_text(payload.get('kindLabel'), '产品更新')}",
+        _safe_text(payload.get("title"), f"{WORKBENCH_NAME}更新"),
+        f"{WORKBENCH_NAME} · {_safe_text(payload.get('kindLabel'), '产品更新')}",
         "orange" if is_issue else "blue",
         [
             {
                 "tag": "markdown",
                 "content": (
-                    f"**{_safe_text(payload.get('moduleName'), 'HRAS 全球薪酬核算工作台')}**\n\n"
+                    f"**{_safe_text(payload.get('moduleName'), WORKBENCH_NAME)}**\n\n"
                     f"{_safe_text(payload.get('content'))}"
                 ),
             },

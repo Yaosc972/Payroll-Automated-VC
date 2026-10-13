@@ -70,7 +70,7 @@ def test_original_page_is_unchanged_and_runtime_loads_async_adapter(monkeypatch:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
     assert page.status_code == 200
-    assert '<script src="/overseas-payroll-async.js?v=4"></script>' in page.text
+    assert '<script src="/overseas-payroll-async.js?v=5"></script>' in page.text
     assert "workbench-progress.js" not in page.text
     assert "workbench-progress.css" not in page.text
     assert adapter.status_code == 200
@@ -92,8 +92,8 @@ def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
     assert 'href="overseas-compensation.html" data-module-any="fbu overseas_payroll"' in home
     assert 'href="fbu-performance.html" data-child-module="fbu"' in parent
     assert 'href="overseas-payroll.html" data-child-module="overseas_payroll"' in parent
-    assert 'href="overseas-labor.html" data-child-module="overseas"' in parent
-    assert "8 项海外薪资工具" in parent
+    assert "dashboard-sidebar" not in parent
+    assert "多国薪资文件提取" in parent
     assert "对接人" in parent
     assert "夏盈盈" in parent
     assert "海外薪酬组" in parent
@@ -101,7 +101,7 @@ def test_overseas_compensation_parent_keeps_invoice_audit_separate() -> None:
     assert "Worker 0.3.16" not in parent
     assert 'href="styles.css?v=20260901-contact-card-1"' in parent
     assert "/api/workbench/module-contacts/overseas-payroll" in (static_root / "overseas-compensation.js").read_text(encoding="utf-8")
-    assert "海外劳务报账核对保持独立" in parent
+    assert "海外劳务报账核对保持独立" not in parent
 
 
 def test_single_file_tool_returns_decoded_content(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -537,4 +537,64 @@ def test_company_obs_storage_failures_are_visible_and_do_not_leak_details(compan
         monkeypatch.setattr(payroll_router, 'get_labor_supabase_private_object', unavailable)
         response = client.get(f'/api/overseas-payroll/tasks/{task_id}/output/content')
         assert response.status_code == 503 and 'private credential' not in response.text
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+def prepared_workbook(names):
+    from io import BytesIO
+    from openpyxl import Workbook
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for name in names:
+        workbook.create_sheet(name)
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+def test_preparation_checks_france_source_and_templates_before_creating_task():
+    source = ('source.xlsx', prepared_workbook(['出勤情况', '工资合计']))
+    template = ('import.xlsx', prepared_workbook(['import']))
+    with pytest.raises(ValueError, match='源表'):
+        service.validate_prepared_files('import_paie', [template])
+    with pytest.raises(ValueError, match='模板'):
+        service.validate_prepared_files('import_paie', [source])
+    with pytest.raises(ValueError, match='一份工资源表'):
+        service.validate_prepared_files('import_paie', [source, ('source2.xlsx', source[1]), template])
+    result = service.validate_prepared_files('import_paie', [template, source])
+    assert [file['role'] for file in result['files']] == ['import 模板', '工资源表']
+    with pytest.raises(ValueError, match='无法读取'):
+        service.validate_prepared_files('import_paie', [('broken.xlsx', b'bad'), source])
+
+
+@pytest.mark.parametrize('tool,files,error', [
+    ('pl_pdf_encrypt', [('data.pdf', b'pdf')], '密码表'),
+    ('pl_pdf_encrypt', [('password.xlsx', b'xlsx')], '待加密文件'),
+    ('pl_pdf_rename', [('data.pdf', b'pdf')], '映射表'),
+    ('pl_pdf_rename', [('mapping.xlsx', b'xlsx')], 'PDF'),
+    ('pl_pdf_sanitize', [('keywords.txt', b'keywords')], 'PDF'),
+    ('swedish_tax', [('one.pdf', b'pdf'), ('two.pdf', b'pdf')], '只支持一个文件'),
+])
+def test_preparation_missing_combinations_are_not_reported_ready(tool, files, error):
+    with pytest.raises(ValueError, match=error):
+        service.validate_prepared_files(tool, files)
+
+
+def test_preparation_endpoint_requires_access_and_does_not_store_or_process(monkeypatch):
+    def denied(request):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail='请登录')
+    monkeypatch.setattr(payroll_router, '_require_access', denied)
+    monkeypatch.setattr(payroll_router, 'create_task', lambda *a: pytest.fail('Preparation must not create tasks'))
+    monkeypatch.setattr(payroll_router, 'process_files', lambda *a: pytest.fail('Preparation must not run tools'))
+    with TestClient(app) as client:
+        url = '/api/overseas-payroll/tools/import_paie/validate-files'
+        files = [('files', ('source.xlsx', prepared_workbook(['出勤情况', '工资合计']))),
+                 ('files', ('template.xlsx', prepared_workbook(['import'])))]
+        assert client.post(url, files=files).status_code == 401
+        monkeypatch.setattr(payroll_router, '_require_access', lambda _: 'test-owner')
+        response = client.post(url, files=files)
+        assert response.status_code == 200 and response.json()['ok']
+        assert client.post(url, files=files[:1]).status_code == 422
+        assert client.post(url, files=[('files', ('template.pdf', b'pdf'))]).status_code == 422
     asyncio.set_event_loop(asyncio.new_event_loop())

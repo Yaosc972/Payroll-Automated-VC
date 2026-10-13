@@ -248,6 +248,7 @@ from .engine.admin_store import (
     upsert_feishu_user,
 )
 from .permission_notifications import (
+    DEFAULT_WORKBENCH_PUBLIC_URL,
     admin_user_url,
     build_feedback_submitted_card,
     build_new_user_card,
@@ -1220,14 +1221,7 @@ def _get_feishu_tenant_access_token() -> str:
 
 def _permission_notification_public_url() -> str:
     configured = str(PERMISSION_NOTIFICATION_CONFIG.get("public_url") or "").strip().rstrip("/")
-    if configured:
-        return configured
-    vercel_host = str(
-        os.environ.get("VERCEL_PROJECT_PRODUCTION_URL")
-        or os.environ.get("VERCEL_URL")
-        or ""
-    ).strip().strip("/")
-    return f"https://{vercel_host}" if vercel_host else "http://localhost:8000"
+    return configured or DEFAULT_WORKBENCH_PUBLIC_URL
 
 
 def _send_feishu_permission_card(notification: dict[str, Any]) -> str:

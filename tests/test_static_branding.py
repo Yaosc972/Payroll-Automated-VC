@@ -1407,9 +1407,9 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     assert 'data-module-any="fbu overseas_payroll"' in index_html
     assert "海外薪资工作台" in overseas_compensation_html
     assert 'data-child-module="overseas_payroll"' in overseas_compensation_html
-    assert "Available · 已上线" in fbu_card
-    assert '<span class="module-version">V1.0</span>' in fbu_card
-    assert "<dt>最新批次</dt><dd>2026-05</dd>" in fbu_card
+    assert "module-status" not in fbu_card
+    assert "module-version" not in fbu_card
+    assert "<dt>最新批次</dt>" not in fbu_card
     assert "真实回归" not in fbu_card
     assert "96.86%" not in fbu_card
     admin_js = ADMIN_JS.read_text(encoding="utf-8")

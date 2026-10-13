@@ -30,8 +30,6 @@
     entry.setAttribute('title', reason);
     const action = entry.querySelector('.module-action span');
     if (action) action.textContent = '无权限进入';
-    const status = entry.querySelector('.module-status');
-    if (status) status.textContent = 'Locked · 无权限';
   };
 
   try {

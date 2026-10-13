@@ -3,11 +3,90 @@
   <head>
     <script src="platform-font.js?v=1"></script>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=1280" />
-    <title>海外薪酬核算 · HRAS 全球薪酬核算工作台</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>海外薪酬核算 · 全球薪酬核算工作台</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
     <link rel="stylesheet" href="styles.css?v=20260901-contact-card-1" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
+    <style>
+      html[data-module-id="overseas-compensation"] body { min-width: 0; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .dashboard-frame {
+        grid-template-columns: minmax(0, 1fr);
+        max-width: 1120px;
+      }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .dashboard-topbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-back-link {
+        gap: 8px;
+        min-height: 36px;
+        padding: 8px 16px;
+        border: 1px solid rgba(255, 255, 255, .78);
+        border-radius: 999px;
+        color: #17408f;
+        background: linear-gradient(135deg, rgba(255,255,255,.74), rgba(184,211,255,.48)), rgba(219,234,254,.38);
+        box-shadow: 0 10px 24px rgba(64,101,170,.16), inset 0 1px 0 rgba(255,255,255,.92), inset 0 -1px 0 rgba(76,121,205,.16);
+        backdrop-filter: blur(16px) saturate(145%);
+        -webkit-backdrop-filter: blur(16px) saturate(145%);
+      }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-back-link:hover {
+        color: #10377f;
+        background: linear-gradient(135deg, rgba(255,255,255,.84), rgba(159,195,255,.56)), rgba(191,219,254,.46);
+      }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-back-link:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-back-link svg { width: 18px; height: 18px; flex: 0 0 auto; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .dashboard-topbar > :first-child {
+        flex: 1;
+      }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-compensation-grid { width: 100%; max-width: none; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px; padding: 28px 36px 44px; justify-items: center; animation: compensation-float 7s ease-in-out infinite; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card { display: grid; grid-template-rows: 76px minmax(62px, auto) 44px 36px; align-content: center; justify-items: center; align-items: center; gap: 14px; width: 100%; max-width: 420px; aspect-ratio: 1; min-height: 0; box-sizing: border-box; border-radius: 50%; padding: 44px 30px; text-align: center; isolation: isolate; border: 1px solid rgba(255,255,255,.9); background: radial-gradient(ellipse at 30% 15%, rgba(255,255,255,.98), rgba(255,255,255,.38) 48%, rgba(186,230,253,.45) 100%); box-shadow: inset 0 2px 4px #fff, inset -10px -14px 32px rgba(56,189,248,.12), 0 22px 44px rgba(30,58,138,.10); transition: box-shadow .25s ease, border-color .25s ease; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module { background: radial-gradient(ellipse at 30% 15%, rgba(255,255,255,.98), rgba(255,255,255,.4) 48%, rgba(199,210,254,.48) 100%); }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card::before { content: ''; position: absolute; inset: 10px; border: 1px solid rgba(255,255,255,.55); border-radius: 50%; pointer-events: none; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:hover, html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:focus-visible { animation-play-state: paused; border-color: #93c5fd; box-shadow: inset 0 2px 4px #fff, inset -10px -14px 32px rgba(56,189,248,.15), 0 28px 52px rgba(30,58,138,.18); }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:focus-visible { outline: 3px solid #2563eb; outline-offset: 6px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-bubble-icon { display: block; width: 76px; height: 76px; flex: 0 0 auto; color: #1e3a8a; transition: transform .3s ease; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:hover .module-bubble-icon, html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:focus-visible .module-bubble-icon { transform: translateY(-3px) rotate(-5deg); }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-copy { margin: 0; width: 100%; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-copy h2 { margin: 0; min-height: 0; font-size: clamp(18px, 1.8vw, 23px); line-height: 1.4; letter-spacing: -.02em; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-copy > span { display: block; margin: 8px auto 0; max-width: 250px; color: #52647b; font-size: 13px; line-height: 1.65; font-weight: 400; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module dl { grid-row: 3; align-self: center; width: fit-content; max-width: 100%; margin: 0; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module dl > div { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module .module-contact { margin: 0; min-height: 28px; gap: 7px; text-align: left; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module .module-contact-avatar { width: 28px; height: 28px; flex-basis: 28px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module .module-contact-copy { gap: 2px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-payroll-module .module-contact-copy small { font-size: 10px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-action { grid-row: 4; align-self: center; margin: 0; min-height: 36px; padding: 8px 16px; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .module-action b { transition: transform .25s ease; }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:hover .module-action b { transform: translateX(3px); }
+      html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card.permission-locked { animation: none; }
+      @keyframes compensation-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+      @media (prefers-reduced-motion: reduce) {
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-compensation-grid, html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card, html[data-module-id="overseas-compensation"] body.dashboard-shell .module-bubble-icon, html[data-module-id="overseas-compensation"] body.dashboard-shell .module-action b { animation: none; transition: none; transform: none; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:hover .module-bubble-icon,
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:focus-visible .module-bubble-icon,
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card:hover .module-action b { transform: none; }
+      }
+      @media (max-width: 640px) {
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .dashboard-topbar > :first-child { flex-basis: 100%; }
+
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .dashboard-frame {
+          width: calc(100dvw - 24px);
+          margin: 12px auto;
+        }
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .overseas-compensation-grid {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 28px;
+          padding: 16px 4px 28px;
+        }
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .saas-module-card { max-width: 360px; grid-template-rows: 56px minmax(52px, auto) 44px 36px; padding: 28px 24px; gap: 10px; }
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .module-bubble-icon { width: 56px; height: 56px; }
+        html[data-module-id="overseas-compensation"] body.dashboard-shell .module-copy > span { font-size: 12px; max-width: 220px; }
+      }
+    </style>
   </head>
   <body class="portal-shell dashboard-shell">
     <div class="portal-mesh" aria-hidden="true">
@@ -18,80 +97,38 @@
     </div>
 
     <div class="dashboard-frame" aria-label="海外薪酬核算模块导航">
-      <aside class="dashboard-sidebar" aria-label="主导航">
-        <a class="dashboard-logo" href="/" aria-label="返回 HRAS 全球薪酬核算工作台首页">
-          <img src="assets/workbench-logo-2026.png" alt="" />
-          <span>
-            <strong>HRAS 全球薪酬核算工作台</strong>
-            <small>HRAS Global Payroll Workbench</small>
-          </span>
-        </a>
-        <nav class="dashboard-nav">
-          <p class="nav-group-label">控制台</p>
-          <a href="/"><span>工作台</span><b>Overview</b></a>
-          <p class="nav-group-label">海外薪酬核算</p>
-          <a class="active" href="overseas-compensation.html"><span>模块概览</span><b>Overview</b></a>
-          <a href="fbu-performance.html" data-child-module="fbu"><span>FBU美洲绩效奖金核算</span><b>FBU Bonus</b></a>
-          <a href="overseas-payroll.html" data-child-module="overseas_payroll"><span>海外薪资工作台</span><b>Payroll Tools</b></a>
-          <p class="nav-group-label">独立模块</p>
-          <a href="overseas-labor.html" data-child-module="overseas"><span>海外劳务报账核对</span><b>Invoice Audit</b></a>
-        </nav>
-      </aside>
 
       <main class="dashboard-main">
         <header class="dashboard-topbar">
           <div><p>当前模块</p><strong>海外薪酬核算</strong></div>
-          <div class="dashboard-search overseas-compensation-context">
-            <span>模块边界</span>
-            <strong>绩效奖金与海外薪资工具</strong>
-            <small>海外劳务报账核对保持独立，不纳入本模块。</small>
-          </div>
-          <a class="module-back-link" href="/">返回工作台</a>
+          <a class="module-back-link" href="/">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-7h4v7h5V9"/></svg>
+            <span>返回首页</span>
+          </a>
         </header>
 
-        <section class="welcome-panel overseas-compensation-hero">
-          <img class="dashboard-hras-watermark" src="assets/hras-logo-original.svg" alt="" aria-hidden="true" />
-          <div>
-            <p class="portal-kicker">Overseas Compensation</p>
-            <h1>海外薪酬核算</h1>
-            <span>统一承载 FBU 美洲绩效奖金核算与海外薪资工作台，两个子模块沿用各自现有权限和业务链路。</span>
-          </div>
-        </section>
 
         <section class="dashboard-section" aria-labelledby="overseasModulesTitle">
           <div class="section-bar">
-            <div><p>Modules</p><h2 id="overseasModulesTitle">选择子模块</h2></div>
+            <div><h2 id="overseasModulesTitle">选择子模块</h2></div>
           </div>
           <div class="saas-module-grid overseas-compensation-grid">
             <a class="saas-module-card fbu-module" href="fbu-performance.html" data-child-module="fbu">
-              <div class="module-card-top">
-                <span class="module-status available">Available · 已上线</span>
-                <span class="module-version">V1.0</span>
-              </div>
+              <svg class="module-bubble-icon" viewBox="0 0 80 80" fill="none" aria-hidden="true"><rect x="14" y="13" width="46" height="54" rx="12" fill="#eff6ff" stroke="currentColor" stroke-width="2.5"/><path d="M25 51V43M36 51V35M47 51V27M24 58H49" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/><circle cx="60" cy="23" r="13" fill="#d9f4ff" stroke="currentColor" stroke-width="2.5"/><path d="M60 15V31M64 18H58a3 3 0 000 6h4a3 3 0 010 6H56" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               <div class="module-copy">
-                <p>FBU Americas Performance</p>
                 <h2>FBU美洲绩效奖金核算</h2>
-                <span>月度活动、数据诊断、异常队列与绩效奖金结果复核。</span>
+                <span>月度奖金核算，异常检查与结果复核</span>
               </div>
-              <dl>
-                <div><dt>最新批次</dt><dd>2026-05</dd></div>
-                <div><dt>状态</dt><dd>已上线</dd></div>
-              </dl>
               <div class="module-action"><span>进入模块</span><b aria-hidden="true">→</b></div>
             </a>
 
             <a class="saas-module-card overseas-payroll-module" href="overseas-payroll.html" data-child-module="overseas_payroll">
-              <div class="module-card-top">
-                <span class="module-status available">Integrated · 已集成</span>
-                <span class="module-version">V1.0</span>
-              </div>
+              <svg class="module-bubble-icon" viewBox="0 0 80 80" fill="none" aria-hidden="true"><circle cx="34" cy="34" r="23" fill="#eff6ff" stroke="currentColor" stroke-width="2.5"/><ellipse cx="34" cy="34" rx="10" ry="23" stroke="#2563eb" stroke-width="2"/><path d="M13 26H55M13 42H55" stroke="#2563eb" stroke-width="2"/><path d="M48 36H61L70 45V66a4 4 0 01-4 4H48a4 4 0 01-4-4V40a4 4 0 014-4Z" fill="#e0e7ff" stroke="currentColor" stroke-width="2.5"/><path d="M60 37V46H69M51 54H63M51 61H60" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               <div class="module-copy">
-                <p>Overseas Payroll Workbench</p>
                 <h2>海外薪资工作台</h2>
-                <span>8 项海外薪资工具，支持异步私有直传、任务队列处理与签名结果下载。</span>
+                <span>多国薪资文件提取、整理与批量处理</span>
               </div>
               <dl>
-                <div><dt>工具数量</dt><dd>8</dd></div>
                 <div>
                   <dt>对接人</dt>
                   <dd class="module-contact">
@@ -110,7 +147,7 @@
       </main>
     </div>
 
-    <script src="overseas-compensation.js?v=20260901-contact-card-1"></script>
+    <script src="overseas-compensation.js?v=20261013-compact-1"></script>
     <script src="feedback-widget.js?v=20260916-01"></script>
   </body>
 </html>

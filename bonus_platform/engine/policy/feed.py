@@ -126,6 +126,17 @@ def publication(meta):
 
 
 def fetch_html(client, url):
+    # One bounded retry for transient connection establishment failures only.
+    # HTTP rejection, certificate errors and malformed pages remain visible.
+    for attempt in range(2):
+        try:
+            return _fetch_html(client, url)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if attempt or 'CERTIFICATE_VERIFY_FAILED' in str(exc):
+                raise
+
+
+def _fetch_html(client, url):
     # Fixed registry hosts only, no arbitrary user URLs or cross-host redirects.
     with client.stream('GET', url) as response:
         response.raise_for_status()
@@ -142,10 +153,20 @@ def fetch_html(client, url):
         return data.decode(encoding, errors='replace')
 
 
+def error_code(exc):
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f'HTTP {exc.response.status_code}'
+    if isinstance(exc, ValueError):
+        return str(exc)[:80]
+    if isinstance(exc, httpx.ConnectError) and 'CERTIFICATE_VERIFY_FAILED' in str(exc):
+        return 'tls_verification_failed'
+    return type(exc).__name__
+
+
 def collect(source, fetcher=None):
-    rows, failures = [], 0
+    rows, failures = [], []
     try:
-        with httpx.Client(timeout=8, follow_redirects=False, headers={'User-Agent': 'SigmaPolicyReader/1.0'}) as client:
+        with httpx.Client(timeout=httpx.Timeout(8, connect=15), follow_redirects=False, headers={'User-Agent': 'HRASPolicyReader/1.0'}) as client:
             fetch = fetcher or (lambda url: fetch_html(client, url))
             listing = fetch(source['url'])
             links = extract_links(source, listing)
@@ -163,11 +184,11 @@ def collect(source, fetcher=None):
                     if not published:
                         raise ValueError('publication_missing')
                     rows.append({'id': sha256(url.encode()).hexdigest(), 'source_id': source['id'], 'title': title[:500], 'url': url, 'published': published, 'fetched_at': now()})
-                except (httpx.HTTPError, ValueError):
-                    failures += 1
-        return rows, ('error' if failures and not rows else 'partial' if failures else 'ok'), ('article_fetch_failed' if failures else '')
+                except (httpx.HTTPError, ValueError) as exc:
+                    failures.append(error_code(exc))
+        return rows, ('error' if failures and not rows else 'partial' if failures else 'ok'), (f'article_fetch_failed:{len(failures)}:{failures[0]}' if failures else '')
     except (httpx.HTTPError, ValueError) as exc:
-        error = f'HTTP {exc.response.status_code}' if isinstance(exc, httpx.HTTPStatusError) else str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        error = error_code(exc)
         return [], 'error', error
 
 

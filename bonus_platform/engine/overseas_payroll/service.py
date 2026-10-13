@@ -155,6 +155,46 @@ def _validate_files(tool: ToolSpec, files: list[tuple[str, bytes]]) -> None:
             raise ValueError(f"{filename} 是空文件。")
 
 
+def validate_prepared_files(tool_id: str, files: list[tuple[str, bytes]]) -> dict:
+    """Check the prepared combination without creating a task or storing files."""
+    tool = _TOOL_INDEX.get(tool_id)
+    if tool is None:
+        raise ValueError("未知海外薪酬工具。")
+    _validate_files(tool, files)
+    if len({name.lower() for name, _ in files}) != len(files):
+        raise ValueError("存在同名文件，请移除重复文件或改名后添加。")
+    roles = ["待处理文件"] * len(files)
+    if tool_id == 'import_paie':
+        from io import BytesIO
+        from openpyxl import load_workbook
+        sources = 0
+        for i, (name, content) in enumerate(files):
+            try:
+                workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+                names = workbook.sheetnames
+                workbook.close()
+            except Exception as exc:
+                raise ValueError(f"{name} 无法读取，请使用有效的 xlsx 文件。") from exc
+            source = any('出勤情况' in n for n in names) and any('工资合计' in n for n in names)
+            sources += int(source)
+            roles[i] = '工资源表' if source else 'import 模板'
+        if sources != 1:
+            raise ValueError("请准备一份工资源表，需同时含“出勤情况”和“工资合计”工作表。")
+        if len(files) == 1:
+            raise ValueError("请再添加至少一份 import 空白模板。")
+    if tool_id in {'pl_pdf_encrypt', 'pl_pdf_rename'}:
+        tables = sum(Path(name).suffix.lower() in {'.xlsx', '.xls'} for name, _ in files)
+        if not tables:
+            raise ValueError("请添加密码表。" if tool_id == 'pl_pdf_encrypt' else "请添加工号映射表。")
+        if tool_id == 'pl_pdf_rename' and not any(name.lower().endswith('.pdf') for name, _ in files):
+            raise ValueError("请添加要重命名的 PDF 文件。")
+        if tool_id == 'pl_pdf_encrypt' and len(files) < 2:
+            raise ValueError("请同时准备密码表和待加密文件。")
+    if tool_id == 'pl_pdf_sanitize' and not any(name.lower().endswith('.pdf') for name, _ in files):
+        raise ValueError("请添加待脱敏的 PDF，关键词 txt 仅是辅助文件。")
+    return {'ok': True, 'files': [{'filename': name, 'role': role} for (name, _), role in zip(files, roles)]}
+
+
 def _decode_result(result) -> ProcessResult:
     if not result or len(result) < 2 or not result[0] or not result[1]:
         summary = result[2] if result and len(result) > 2 else "未提取到有效数据，请确认文件版式和文本层。"

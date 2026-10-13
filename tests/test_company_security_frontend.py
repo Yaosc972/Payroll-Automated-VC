@@ -151,7 +151,7 @@ def test_served_tools_use_platform_login_without_legacy_lock_endpoints(monkeypat
         assert obsolete not in response.text
     assert "共享口令" not in response.text
     assert "const grid = document.getElementById('grid')" in response.text
-    assert '<script src="/overseas-payroll-async.js?v=4"></script>' in response.text
+    assert '<script src="/overseas-payroll-async.js?v=5"></script>' in response.text
     # Parse the real served inline JavaScript, not just an isolated replacement snippet.
     inline = re.search(r"<script>(.*?)</script>", response.text, re.S).group(1)
     if shutil.which("node"):

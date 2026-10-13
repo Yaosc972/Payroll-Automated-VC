@@ -52,7 +52,7 @@ def test_collect_reports_partial_failure_and_never_invents_date():
     rows, state, error = feed.collect(source, fetch)
     assert len(rows) == 1
     assert state == 'partial'
-    assert error == 'article_fetch_failed'
+    assert error == 'article_fetch_failed:1:publication_missing'
     assert rows[0]['published'] == '2026-09-08'
 
 
@@ -160,3 +160,59 @@ def test_keeps_hr_operational_policies(title):
 def test_no_hr_matches_is_success_not_a_collection_failure():
     rows, state, error = feed.collect(feed.SOURCES[0], lambda url: '<a href="/art/2026/9/8/art_104_1.html">关于医药代表管理办法的公告</a>')
     assert (rows, state, error) == ([], 'ok', '')
+
+
+@pytest.mark.parametrize('source_id', ['shanghai-rsj', 'shenzhen-rsj', 'guangzhou-gjj', 'shanxi-ybj', 'hunan-ybj'])
+def test_failed_sources_parse_captured_official_pages(source_id):
+    import json
+    from pathlib import Path
+    fixture = json.loads((Path(__file__).parent / 'fixtures' / 'policy' / f'{source_id}.json').read_text())
+    source = next(s for s in feed.SOURCES if s['id'] == source_id)
+    assert source['url'] == fixture['source_url']
+    def fetch(url):
+        return fixture['listing'] if url == source['url'] else fixture['article']
+    rows, state, error = feed.collect(source, fetch)
+    assert (state, error) == ('ok', '')
+    assert len(rows) == 1
+    assert rows[0]['url'] == fixture['article_url']
+    assert rows[0]['published'] == fixture['published']
+    if source_id == 'shanghai-rsj':
+        assert feed.article_url(source, '/index.html') is None
+        assert feed.article_url(source, '/txwfb_17086/20260812/t0035_1443067.html') is None
+
+
+@pytest.mark.parametrize('exception', [httpx.ConnectError, httpx.ConnectTimeout])
+def test_transient_connections_retry_once(exception):
+    calls = []
+    def handle(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise exception('temporary connection failure', request=request)
+        return httpx.Response(200, headers={'content-type': 'text/html'}, text='<html>official</html>')
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert feed.fetch_html(client, feed.SOURCES[0]['url']) == '<html>official</html>'
+    assert len(calls) == 2
+
+
+def test_connection_retries_are_bounded_and_certificate_failures_not_retried():
+    for message, expected in [('connection unavailable', 2), ('CERTIFICATE_VERIFY_FAILED', 1)]:
+        calls = []
+        def handle(request):
+            calls.append(request)
+            raise httpx.ConnectError(message, request=request)
+        with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+            with pytest.raises(httpx.ConnectError):
+                feed.fetch_html(client, feed.SOURCES[0]['url'])
+        assert len(calls) == expected
+    assert feed.error_code(httpx.ConnectError('CERTIFICATE_VERIFY_FAILED private details')) == 'tls_verification_failed'
+
+
+def test_article_http_failure_keeps_safe_actionable_reason():
+    source = feed.SOURCES[0]
+    def fetch(url):
+        if url == source['url']:
+            return '<a href="/art/2026/9/8/art_104_1.html">关于参加基本医疗保险有关政策的通知</a>'
+        request = httpx.Request('GET', url)
+        response = httpx.Response(403, request=request)
+        raise httpx.HTTPStatusError('private server details', request=request, response=response)
+    assert feed.collect(source, fetch) == ([], 'error', 'article_fetch_failed:1:HTTP 403')
