@@ -19,9 +19,9 @@
     "正班时数",
     "刷卡加班",
     "实际上班时数",
-    "测温班次",
     "测温网点"
   ],
+  "daily_optional_fields": ["测温班次", "班次分类", "班次时间段", "班次类别名称", "班次名称", "上班一"],
   "subject": "gaowen_butie",
   "source_labels": {
     "employees": "月考勤/员工核算主表",

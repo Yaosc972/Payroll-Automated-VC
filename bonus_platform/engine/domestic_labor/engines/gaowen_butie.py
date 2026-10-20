@@ -91,11 +91,14 @@ def _normalize_shift(value: Any) -> str:
 
 
 def _attendance_shift(attendance: Mapping[str, Any]) -> str:
-    # 测温班次若由上游明确提供可直接使用；日考勤中的班次名称可能含
-    # “早上连班”等说明文字，必须优先以真正的排班起始时间判定。
+    # 明确填写的白/夜班优先于时间推断；缺少分类时，排班起点优先于
+    # 班次名称中的“早上连班”等说明文字。
     shift = _normalize_shift(attendance.get("测温班次"))
     if shift:
         return shift
+    classification = _text(attendance.get("班次分类"))
+    if classification in {"白班", "夜班"}:
+        return classification
 
     schedule = _text(attendance.get("班次时间段"))
     match = re.search(r"(?<!\d)(\d{1,2}):(\d{2})", schedule)
@@ -278,6 +281,7 @@ class GaoWenBuTieEngine(BaseEngine):
             ))
 
         daily_results: List[Dict[str, Any]] = []
+        shift_conflicts: List[str] = []
         raw_total = Decimal("0")
         hot_days = 0
         payable_days = 0
@@ -286,6 +290,13 @@ class GaoWenBuTieEngine(BaseEngine):
         for attendance, daily_site in zip(daily_attendance, attendance_sites):
             attendance_day = _date_value(attendance.get("出勤日期") or attendance.get("日期"))
             shift = _attendance_shift(attendance)
+            explicit_shift = _normalize_shift(attendance.get("测温班次"))
+            classification = _text(attendance.get("班次分类"))
+            if explicit_shift and classification in {"白班", "夜班"} and explicit_shift != classification:
+                shift_conflicts.append(
+                    f"{attendance_day.isoformat() if attendance_day else '日期未识别'}"
+                    f"（测温班次={explicit_shift}，班次分类={classification}）"
+                )
             temperature = self.temperature_index.get((daily_site, attendance_day, shift)) if daily_site and attendance_day and shift else None
             hours, hours_reason = self._hours(attendance)
             status = "excluded"
@@ -346,6 +357,14 @@ class GaoWenBuTieEngine(BaseEngine):
         for row in daily_results:
             status_counts[row["reason_code"]] = status_counts.get(row["reason_code"], 0) + 1
 
+        if shift_conflicts:
+            message = "日考勤的测温班次与班次分类不一致，当前优先采用测温班次：" + "、".join(shift_conflicts)
+            warnings.append(message)
+            exceptions.append(_exception(
+                "HIGH_TEMPERATURE_SHIFT_CONFLICT", employee_id, employee_name, message,
+                "核对上述日期的测温班次和班次分类，统一为实际白班或夜班后重新核算。",
+            ))
+
         missing_measurements = [
             row for row in daily_results if row["reason_code"] == "no_matching_temperature"
         ]
@@ -396,6 +415,7 @@ class GaoWenBuTieEngine(BaseEngine):
             "daily_results": daily_results,
             "reason_counts": status_counts,
             "不享有名单命中天数": status_counts.get("supplemental_period_excluded", 0),
+            "班次冲突天数": len(shift_conflicts),
             "exceptions": [item.to_dict() for item in exceptions],
             "validation_note": (
                 "嘉善/义乌按已确认的浙江室内标准1.15元/小时、9.2元/天、200元/月核算；"
@@ -434,7 +454,7 @@ class GaoWenBuTieEngine(BaseEngine):
                 steps=[
                     "按工号匹配本批次不享有名单，仅在生效至结束日期（含当天）内排除，空结束日期表示持续生效",
                     "优先使用每条日考勤的测温网点，空值时根据员工工作地区和组织层级识别",
-                    "优先使用日考勤测温班次，缺失时依次根据排班时间、班次名称、上班打卡识别白班/夜班",
+                    "优先使用日考勤测温班次，其次采用明确填写的班次分类（白班/夜班）；均未明确时再按排班时间、班次名称、上班打卡识别；两列冲突时提示核对",
                     "匹配同网点、同出勤日期、同班次的最高温度",
                     "温度达到33℃且有实际出勤时，取正班时数与刷卡加班较大值",
                     f"按{standard['hourly_rate']:g}元/小时计算，单日封顶{standard['daily_cap']:g}元",

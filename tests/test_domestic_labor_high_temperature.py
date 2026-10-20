@@ -174,6 +174,53 @@ def test_schedule_start_overrides_misleading_early_morning_continuous_shift_name
     assert result.details["daily_results"][0]["shift"] == "夜班"
 
 
+@pytest.mark.parametrize("schedule,classification,expected", [
+    ("16:00-24:30;", "夜班", "夜班"),
+    ("17:00-26:00;", "夜班", "夜班"),
+    ("15:00-23:30;", "白班", "白班"),
+    ("19:00-28:00;", "白班", "白班"),
+    ("17:00-26:00;", "", "白班"),
+    ("19:00-28:00;", "华东班次", "夜班"),
+])
+def test_explicit_attendance_classification_precedes_time_inference(schedule, classification, expected):
+    day = date(2026, 9, 25)
+    result = GaoWenBuTieEngine([
+        _temperature(day, "白班", 35), _temperature(day, "夜班", 31),
+    ]).calculate(_employee(), [_day(day, schedule=schedule, 班次分类=classification)])
+    detail = result.details["daily_results"][0]
+    assert detail["shift"] == expected
+    assert result.amount == (13.8 if expected == "白班" else 0)
+
+
+def test_conflicting_explicit_shift_columns_keep_measurement_priority_and_warn():
+    day = date(2026, 9, 25)
+    result = GaoWenBuTieEngine([
+        _temperature(day, "白班", 31), _temperature(day, "夜班", 35),
+    ]).calculate(_employee(), [_day(day, 测温班次="夜班", 班次分类="白班")])
+    assert result.amount == 13.8
+    assert result.details["daily_results"][0]["shift"] == "夜班"
+    conflict = next(e for e in result.details["exceptions"] if e["code"] == "HIGH_TEMPERATURE_SHIFT_CONFLICT")
+    assert all(text in conflict["message"] for text in ["2026-09-25", "测温班次=夜班", "班次分类=白班"])
+    assert result.details["班次冲突天数"] == 1
+
+
+def test_matching_explicit_shift_columns_do_not_warn():
+    day = date(2026, 9, 25)
+    result = GaoWenBuTieEngine([_temperature(day, "夜班", 35)]).calculate(
+        _employee(), [_day(day, schedule="17:00-26:00;", 测温班次="夜班", 班次分类="夜班")])
+    assert result.amount == 13.8
+    assert not any(e["code"] == "HIGH_TEMPERATURE_SHIFT_CONFLICT" for e in result.details["exceptions"])
+
+
+def test_previous_rule_package_keeps_original_shift_inference():
+    from bonus_platform.engine.domestic_labor.rule_package import get_rule_package
+    previous = get_rule_package("1.4.9")
+    subject = next(s for s in previous["subjects"] if s["id"] == "gaowen_butie")
+    field = next(f for f in subject["field_calculations"] if f["field"] == "测温班次")
+    assert subject["version"] == "DL-GAOWEN.v0.9.1"
+    assert "班次分类" not in field["definition"]
+
+
 def test_dongguan_site_resolution_distinguishes_b2b_qingxi_and_liaobu_entities():
     day = date(2026, 7, 3)
     measurements = [
@@ -459,7 +506,8 @@ def test_rule_package_and_subject_card_publish_high_temperature_as_validating():
     high_temperature = next(subject for subject in package["subjects"] if subject["id"] == "gaowen_butie")
     payload = str(high_temperature)
 
-    assert package["version"] == "1.4.9"
+    assert package["version"] == "1.4.10"
+    assert high_temperature["version"] == "DL-GAOWEN.v0.9.2"
     assert high_temperature["status"] == "验证中"
     assert "同测温网点、同出勤日期、同白/夜班" in payload
     assert "MAX(正班时数,刷卡加班)" in payload

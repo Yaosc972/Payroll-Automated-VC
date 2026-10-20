@@ -1,6 +1,33 @@
 {
   "releases": [
     {
+      "id": "gaowen_butie-0b95d4e45434555de81f4e0a3e8a2d130b29b39925500a11292cbf0166f5181e",
+      "kind": "update",
+      "name": "操作线高温补贴",
+      "package_version": "2026.10.20+0b95d4e4",
+      "released_at": "2026-10-20T10:16:46+08:00",
+      "rule_version": "DL-GAOWEN.v0.9.2",
+      "skill_id": "gaowen_butie",
+      "title": "操作线高温补贴 Skill 上新",
+      "updates": [
+        "兼容日考勤班次分类列，明确白/夜班优先于开始时间推断；测温班次与班次分类冲突时提示核对。"
+      ]
+    },
+    {
+      "id": "waisu_butie-f183e21f9290fd16f359423fbd0ae31619f704aa1997a2cac33e4c62f2f86133",
+      "kind": "update",
+      "name": "操作线外宿补贴",
+      "package_version": "2026.10.20+f183e21f",
+      "released_at": "2026-10-20T10:16:46+08:00",
+      "rule_version": "DL-WAISU.v1.0.6",
+      "skill_id": "waisu_butie",
+      "title": "操作线外宿补贴 Skill 上新",
+      "updates": [
+        "同步最新核算引擎与配套输入校验",
+        "规则版本：DL-WAISU.v1.0.6；实现内容已更新"
+      ]
+    },
+    {
       "id": "gonglingjiang-6d1163868c682952cfd15cd1cd149b889258e9fa9b0daa08b85f1b6fd75e2bcd",
       "kind": "new",
       "name": "全区域工龄奖",
@@ -462,8 +489,8 @@
         "subject": "waisu_butie"
       },
       "description": "结合完整住宿区间与出勤记录，核算外宿补贴。",
-      "download_url": "/api/domestic-labor/skillhub/waisu_butie/download?release=e7eb6d12633b9d7cd394957f5d8f643567a7d49b617995968a4b23ecff9e743a",
-      "fingerprint": "e7eb6d12633b9d7cd394957f5d8f643567a7d49b617995968a4b23ecff9e743a",
+      "download_url": "/api/domestic-labor/skillhub/waisu_butie/download?release=f183e21f9290fd16f359423fbd0ae31619f704aa1997a2cac33e4c62f2f86133",
+      "fingerprint": "f183e21f9290fd16f359423fbd0ae31619f704aa1997a2cac33e4c62f2f86133",
       "icon": "home",
       "id": "waisu_butie",
       "inputs": [
@@ -474,8 +501,8 @@
       ],
       "is_new": true,
       "name": "操作线外宿补贴",
-      "package_version": "2026.10.10+e7eb6d12",
-      "released_at": "2026-10-10T09:51:45+08:00",
+      "package_version": "2026.10.20+f183e21f",
+      "released_at": "2026-10-20T10:16:46+08:00",
       "rule_version": "DL-WAISU.v1.0.6",
       "rules": {
         "category_id": "allowance",
@@ -578,12 +605,12 @@
         ],
         "version": "DL-WAISU.v1.0.6"
       },
-      "sha256": "9d2d32c576a6593e76c246e81aa147f366ddedee3ad92351602150bbb6cabf0e",
-      "size_bytes": 58420,
+      "sha256": "0e67716b02d018ccd111a480510287303cfb4a97b9db2adbad30a706e36ddfa1",
+      "size_bytes": 58674,
       "slug": "hras-waisu-butie",
       "source_sha256": {
         "engines/base.py": "1c805c9d023a8800509a90756c089b8dc7b2f1adb53250ef1a763a29d43a4d6e",
-        "engines/gaowen_butie.py": "da91125335300e4269042015b3a6d73871c2a5781f5ace3964f6ec8aea42e945",
+        "engines/gaowen_butie.py": "1573a98dadb14a1538b706470015307340442395252c6a7524ce366da46449e1",
         "engines/position_rules.py": "c76042657afdb510831c9f0da7a37c61ab90a63d1da665ed927f3cf0ffa95985",
         "engines/waisu_butie.py": "4eb6e88b10effa68e7057f037a63e6cb01908a35eab1f1d1a168ea60feb0e286",
         "models.py": "8bc8ba01f006c495ae3d28778ef0a27359cc1a38273b5dedc5ce796481d1e62b",
@@ -591,9 +618,8 @@
         "temperature_sites.py": "97f7e40d36fd5df034adb6de7630677ee9e8ef3027105eeb2bded69fce4f6a6c"
       },
       "updates": [
-        "同步地区资格、低出勤复核及退宿后缺勤扣减",
-        "支持跨月、持续在宿与多次入住；校验空名单及重叠区间",
-        "附住宿名单与填写说明工作簿"
+        "同步最新核算引擎与配套输入校验",
+        "规则版本：DL-WAISU.v1.0.6；实现内容已更新"
       ]
     },
     {
@@ -1133,8 +1159,15 @@
           "正班时数",
           "刷卡加班",
           "实际上班时数",
-          "测温班次",
           "测温网点"
+        ],
+        "daily_optional_fields": [
+          "测温班次",
+          "班次分类",
+          "班次时间段",
+          "班次类别名称",
+          "班次名称",
+          "上班一"
         ],
         "engine": "GaoWenBuTieEngine",
         "fields": [
@@ -1148,7 +1181,7 @@
         "name": "高温补贴",
         "numeric_fields": [],
         "regional_fields": {},
-        "rule_version": "DL-GAOWEN.v0.9.1",
+        "rule_version": "DL-GAOWEN.v0.9.2",
         "source_labels": {
           "abandonment_roster": "本月自离名单",
           "daily": "全月日考勤及排班状态",
@@ -1168,8 +1201,8 @@
         "subject": "gaowen_butie"
       },
       "description": "匹配网点、日期、班次测温，并应用不享有名单。",
-      "download_url": "/api/domestic-labor/skillhub/gaowen_butie/download?release=7cf0b6447ef3c4ef3943dc453aac96064867f24e2e0a5e707fb3be0e5f364832",
-      "fingerprint": "7cf0b6447ef3c4ef3943dc453aac96064867f24e2e0a5e707fb3be0e5f364832",
+      "download_url": "/api/domestic-labor/skillhub/gaowen_butie/download?release=0b95d4e45434555de81f4e0a3e8a2d130b29b39925500a11292cbf0166f5181e",
+      "fingerprint": "0b95d4e45434555de81f4e0a3e8a2d130b29b39925500a11292cbf0166f5181e",
       "icon": "sun",
       "id": "gaowen_butie",
       "inputs": [
@@ -1180,12 +1213,17 @@
       ],
       "is_new": true,
       "name": "操作线高温补贴",
-      "package_version": "2026.10.10+7cf0b644",
-      "released_at": "2026-10-10T09:51:45+08:00",
-      "rule_version": "DL-GAOWEN.v0.9.1",
+      "package_version": "2026.10.20+0b95d4e4",
+      "released_at": "2026-10-20T10:16:46+08:00",
+      "rule_version": "DL-GAOWEN.v0.9.2",
       "rules": {
         "category_id": "allowance",
         "change_log": [
+          {
+            "changes": "兼容日考勤班次分类列，明确白/夜班优先于开始时间推断；测温班次与班次分类冲突时提示核对。",
+            "released_at": "2026-10-20",
+            "version": "DL-GAOWEN.v0.9.2"
+          },
           {
             "changes": "根据薪酬确认将嘉善、义乌本批高温补贴改为浙江室内标准：1.15元/小时、9.2元/天、200元/月；原线下13.8元/天公式登记为线下错误。",
             "released_at": "2026-09-07",
@@ -1211,7 +1249,7 @@
         ],
         "data_sources": [
           "月考勤：工号、姓名、工作地区、岗位及各级组织字段，用于识别员工对应测温网点。",
-          "日考勤：出勤日期、班次名称/时间段、正班时数、刷卡加班和实际上班时数。",
+          "日考勤：出勤日期、测温班次或班次分类（白班/夜班）、班次名称/时间段、正班时数、刷卡加班和实际上班时数。",
           "高温测温登记：班次日期、测温班次、测温网点和测温温度。",
           "不享有高温补贴名单：工号、姓名、工作地区、不享有原因、生效日期和结束日期；按工号及适用日期关联。",
           "地区固定排除：东莞、嘉善/义乌人员名单；晋江固定岗位范围和HRBP排除人员。"
@@ -1226,10 +1264,10 @@
             "formula": "测温网点=日考勤测温网点；为空时取固定组织到物理仓库映射[工作地区, 各级组织名称]"
           },
           {
-            "definition": "优先读取日考勤测温班次；缺失时依次按排班起始时间、班次名称、上班打卡识别白班/夜班。",
-            "example": "19:00-28:00识别为夜班；09:00-18:00识别为白班。",
+            "definition": "优先读取日考勤测温班次，其次采用班次分类中明确填写的白班/夜班；均未明确时依次按排班起始时间、班次名称、上班打卡识别。两列冲突时提示核对，当前采用测温班次。",
+            "example": "17:00-26:00若班次分类为夜班则按夜班匹配温度；未填写明确分类时才按起始时间推断。",
             "field": "测温班次",
-            "formula": "起始时间≥18:00或<06:00→夜班；其余→白班"
+            "formula": "测温班次→班次分类（白班/夜班）→时间推断（起始时间≥18:00或<06:00为夜班，其余为白班）"
           },
           {
             "definition": "只取与员工同仓、同出勤日期、同白/夜班的测温记录最高值。",
@@ -1300,23 +1338,21 @@
           "华东2026年7月298名员工、8262条日考勤及274条测温记录完成可计算性验证；该表未提供线下高温应发金额，不计入金额准确率。",
           "平台API三文件上传、结果汇总、每日明细和专用Excel导出已建立自动化回归。"
         ],
-        "version": "DL-GAOWEN.v0.9.1"
+        "version": "DL-GAOWEN.v0.9.2"
       },
-      "sha256": "00c66ea49acc51e0dbf2a4650dbfeb6823a39edcd1bbeef55bc29655be5d694a",
-      "size_bytes": 62727,
+      "sha256": "1a1134910ac36118b056a9d86217a0d4aed7e3087e331863c8b4eaffb25bebd2",
+      "size_bytes": 63284,
       "slug": "hras-gaowen-butie",
       "source_sha256": {
         "engines/base.py": "1c805c9d023a8800509a90756c089b8dc7b2f1adb53250ef1a763a29d43a4d6e",
-        "engines/gaowen_butie.py": "da91125335300e4269042015b3a6d73871c2a5781f5ace3964f6ec8aea42e945",
+        "engines/gaowen_butie.py": "1573a98dadb14a1538b706470015307340442395252c6a7524ce366da46449e1",
         "engines/position_rules.py": "c76042657afdb510831c9f0da7a37c61ab90a63d1da665ed927f3cf0ffa95985",
         "models.py": "8bc8ba01f006c495ae3d28778ef0a27359cc1a38273b5dedc5ce796481d1e62b",
         "supplemental_inputs.py": "e4bc5f66b1a5648c3c6fab80054b5f2074fb4ae689e1f19732a7aa3f4c0f2994",
         "temperature_sites.py": "97f7e40d36fd5df034adb6de7630677ee9e8ef3027105eeb2bded69fce4f6a6c"
       },
       "updates": [
-        "支持不享有名单按生效、结束日期排除",
-        "网点候选与自填名称并存，名称差异须确认对照",
-        "附测温登记、不享有名单、填写说明合并工作簿"
+        "兼容日考勤班次分类列，明确白/夜班优先于开始时间推断；测温班次与班次分类冲突时提示核对。"
       ]
     },
     {
@@ -1720,5 +1756,5 @@
       ]
     }
   ],
-  "updated_at": "2026-10-10T09:51:45+08:00"
+  "updated_at": "2026-10-20T10:16:46+08:00"
 }

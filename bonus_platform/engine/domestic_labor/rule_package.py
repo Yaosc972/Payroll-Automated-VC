@@ -2507,7 +2507,33 @@ _gonglingjiang["change_log"].insert(0, {
     "changes": "工龄奖新增二级部门东南B2B枢纽组，岗位范围、每年50元标准及150元封顶均与东南枢纽一致。",
 })
 
+# 2026-10-20：高温补贴采用源表明确填写的白/夜班分类。
+_RULE_PACKAGE_V1_4_9 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_9)
+_RULE_PACKAGE.update({
+    "version": "1.4.10", "display_version": "DL-PAYROLL.v1.4.10", "released_at": "2026-10-20",
+})
+_gaowen_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gaowen_butie")
+_gaowen_butie["version"] = "DL-GAOWEN.v0.9.2"
+_gaowen_butie["data_sources"][1] = "日考勤：出勤日期、测温班次或班次分类（白班/夜班）、班次名称/时间段、正班时数、刷卡加班和实际上班时数。"
+_temperature_shift_field = next(item for item in _gaowen_butie["field_calculations"] if item["field"] == "测温班次")
+_temperature_shift_field.update({
+    "definition": "优先读取日考勤测温班次，其次采用班次分类中明确填写的白班/夜班；均未明确时依次按排班起始时间、班次名称、上班打卡识别。两列冲突时提示核对，当前采用测温班次。",
+    "formula": "测温班次→班次分类（白班/夜班）→时间推断（起始时间≥18:00或<06:00为夜班，其余为白班）",
+    "example": "17:00-26:00若班次分类为夜班则按夜班匹配温度；未填写明确分类时才按起始时间推断。",
+})
+_gaowen_butie["change_log"].insert(0, {
+    "version": "DL-GAOWEN.v0.9.2", "released_at": "2026-10-20",
+    "changes": "兼容日考勤班次分类列，明确白/夜班优先于开始时间推断；测温班次与班次分类冲突时提示核对。",
+})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_9["version_history"][0],
+    "version": "1.4.10", "display_version": "DL-PAYROLL.v1.4.10", "status": "当前版本",
+    "released_at": "2026-10-20", "summary": "高温补贴优先采用日考勤明确的白/夜班分类，并提示分类冲突。",
+}, {**_RULE_PACKAGE_V1_4_9["version_history"][0], "status": "历史版本"}, *_RULE_PACKAGE_V1_4_9["version_history"][1:]]
+
 _RULE_PACKAGE_VERSIONS = {
+    _RULE_PACKAGE_V1_4_9["version"]: _RULE_PACKAGE_V1_4_9,
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
     _RULE_PACKAGE_V1_4_6["version"]: _RULE_PACKAGE_V1_4_6,

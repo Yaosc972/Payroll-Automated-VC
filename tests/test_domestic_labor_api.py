@@ -350,7 +350,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.4.9"
+    assert package["version"] == "1.4.10"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {
@@ -369,7 +369,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.4.9"
+    assert package["version_history"][0]["version"] == "1.4.10"
     assert package["version_history"][0]["subject_ids"] == [
         "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
         "gaowen_butie",
@@ -690,7 +690,7 @@ def test_historical_rule_package_keeps_latest_version_available_for_navigation()
     ).json()
 
     assert package["version"] == "1.1.3"
-    assert package["available_versions"][0]["version"] == "1.4.9"
+    assert package["available_versions"][0]["version"] == "1.4.10"
     assert package["available_versions"][0]["status"] == "当前版本"
     assert any(item["version"] == "1.1.3" for item in package["available_versions"])
 

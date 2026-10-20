@@ -76,6 +76,29 @@ def test_release_is_reproducible_and_unchanged_build_has_no_new_arrivals(release
     assert len(second["releases"]) == 7
 
 
+@pytest.mark.parametrize("conflict", [False, True])
+def test_temperature_package_uses_attendance_classification_and_exposes_conflicts(tmp_path, released, conflict):
+    catalog, bundles = released
+    item = next(item for item in catalog["skills"] if item["id"] == "gaowen_butie")
+    payload = payload_for(item)
+    for row in payload["daily"]:
+        row.pop("测温班次")
+        row.update({"班次分类": "夜班", "班次时间段": "17:00-26:00;"})
+        if conflict:
+            row["测温班次"] = "白班"
+    payload["temperatures"] += [{**r, "测温班次": "夜班", "测温温度": 31} for r in list(payload["temperatures"])]
+    report = execute_package(tmp_path, bundles[item["id"]], item, payload)
+    result = report["results"][0]
+    if conflict:
+        assert result["status"] == "needs_review"
+        assert result["amount"] is None
+        assert any(e["code"] == "HIGH_TEMPERATURE_SHIFT_CONFLICT" for e in result["details"]["exceptions"])
+    else:
+        assert result["status"] == "calculated"
+        assert result["amount"] == 0
+        assert all(row["shift"] == "夜班" for row in result["details"]["daily_results"])
+
+
 def test_same_rule_version_with_changed_engine_creates_one_new_release(monkeypatch, released, tmp_path):
     catalog, _ = released
     source = tmp_path / "source"
