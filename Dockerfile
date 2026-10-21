@@ -1,29 +1,13 @@
-FROM node:22.22.3-bookworm-slim AS node-runtime
-FROM python:3.12-slim
+# Reuse verified production #45 dependencies; dependency changes require a full rebuild.
+FROM host-harbor.nwhm-internal.ztn.cn/dc-hras-aideploy/42141ddcae8f43b19aef63f95008442b-api:1-14675733-930@sha256:104c921f0a3dec46b59f536c92fc7f9edf3509b9d347187bdd73c69f85414cb1
+USER root
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    SIGMA_RUNTIME_MODE=server \
-    SIGMA_LABOR_AUTH_REQUIRED=true \
-    SIGMA_ENABLE_MOCK_LOGIN=false \
-    SESSION_COOKIE_SECURE=true \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=120 \
-    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
-    PIP_EXTRA_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple/ \
-    PIP_TRUSTED_HOST="mirrors.aliyun.com pypi.tuna.tsinghua.edu.cn"
-COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-RUN sed -i 's|http://deb.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g; s|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends libreoffice-calc \
-    && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN python -m pip install \
-    --no-cache-dir \
-    --retries 10 \
-    --prefer-binary \
-    -r requirements.txt
+COPY requirements.txt /tmp/hras-release-requirements.txt
+RUN echo "f3a7451c62b47efbcc36d0fd8379be13de6819cbfc551171b29802830cdbd1eb  /tmp/hras-release-requirements.txt" | sha256sum -c - \
+    && cmp /tmp/hras-release-requirements.txt /app/requirements.txt \
+    && rm /tmp/hras-release-requirements.txt
 COPY . .
-RUN useradd -m app && chown -R app /app
+RUN chown -R app:app /app
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "bonus_platform.app:app", "--host", "0.0.0.0", "--port", "8000"]
