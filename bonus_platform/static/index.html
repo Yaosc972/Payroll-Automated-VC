@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="dashboard-user-summary.css?v=1" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
     <link rel="stylesheet" href="policy-drawer.css?v=6" />
-    <link rel="stylesheet" href="home-layout.css?v=1" />
+    <link rel="stylesheet" href="home-layout.css?v=6" />
   </head>
   <body class="portal-shell dashboard-shell">
     <div class="portal-mesh" aria-hidden="true">
@@ -121,6 +121,7 @@
 
           <div class="saas-module-grid">
             <a class="saas-module-card active-module" href="recruitment.html" data-module-id="recruitment">
+              <span class="module-card-art module-card-art--recruitment" aria-hidden="true"></span>
               <div class="module-card-top">
                 <span class="module-status available">已上线</span>
               </div>
@@ -132,6 +133,7 @@
             </a>
 
             <a class="saas-module-card formal-module" href="china-employee-payroll.html" data-module-id="employee">
+              <span class="module-card-art module-card-art--employee" aria-hidden="true"></span>
               <div class="module-card-top">
                 <span class="module-status available">餐补核算 · 已上线</span>
               </div>
@@ -139,12 +141,13 @@
                 <h2>中国区正式工薪酬核算</h2>
                 <span>先开放正式工餐补核算，支持集团、WX考勤、月度规则计算与结果导出。</span>
               </div>
-              <div class="module-action"><span>进入餐补核算</span><b aria-hidden="true">→</b></div>
+              <div class="module-action"><span>进入薪酬核算</span><b aria-hidden="true">→</b></div>
             </a>
 
             <a class="saas-module-card domestic-module" href="domestic-labor.html" data-module-id="domestic">
+              <span class="module-card-art module-card-art--domestic" aria-hidden="true"></span>
               <div class="module-card-top">
-                <span class="module-status available">试运行 · 已开放</span>
+                <span class="module-status available">已上线</span>
               </div>
               <div class="module-copy">
                 <h2>中国区外包工薪酬核算</h2>
@@ -154,6 +157,7 @@
             </a>
 
             <a class="saas-module-card overseas-compensation-module" href="overseas-compensation.html" data-module-any="fbu overseas_payroll">
+              <span class="module-card-art module-card-art--overseas-payroll" aria-hidden="true"></span>
               <div class="module-card-top">
                 <span class="module-status available">已上线</span>
                 <span class="module-version" data-child-module-count aria-label="包含的子模块数量"></span>
@@ -166,6 +170,7 @@
             </a>
 
             <a class="saas-module-card overseas-module pilot-card" href="overseas-labor.html" data-module-id="overseas">
+              <span class="module-card-art module-card-art--invoice-audit" aria-hidden="true"></span>
               <div class="module-card-top">
                 <span class="module-status uat">试用版</span>
               </div>
@@ -177,6 +182,7 @@
             </a>
 
             <a class="saas-module-card social-insurance-module pilot-card" href="social-insurance.html" data-module-id="social_insurance">
+              <span class="module-card-art module-card-art--social-insurance" aria-hidden="true"></span>
               <div class="module-card-top">
                 <span class="module-status uat">已验证主链路</span>
               </div>
@@ -259,7 +265,7 @@
           modules: [
             { id: 'recruitment', name: '全球招聘奖金核算', href: 'recruitment.html', enabled: true, developmentStatus: 'available' },
             { id: 'employee', name: '中国区正式工薪酬核算', href: 'china-employee-payroll.html', enabled: true, developmentStatus: 'available' },
-            { id: 'domestic', name: '中国区外包工薪酬核算', href: 'domestic-labor.html', enabled: true, developmentStatus: 'uat' },
+            { id: 'domestic', name: '中国区外包工薪酬核算', href: 'domestic-labor.html', enabled: true, developmentStatus: 'available' },
             { id: 'fbu', name: 'FBU美洲绩效奖金核算', href: 'fbu-performance.html', enabled: true, developmentStatus: 'available' },
             { id: 'overseas_payroll', name: '海外薪资工作台', href: 'overseas-payroll.html', enabled: true, developmentStatus: 'available' },
             { id: 'overseas', name: '海外劳务报账核对', href: 'overseas-labor.html', enabled: true, developmentStatus: 'uat' },

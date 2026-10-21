@@ -30,7 +30,7 @@ def test_admin_state_seeds_users_roles_modules_and_permissions(tmp_path, monkeyp
     assert any(
         module["id"] == "domestic"
         and module["enabled"] is True
-        and module["developmentStatus"] == "uat"
+        and module["developmentStatus"] == "available"
         for module in data["modules"]
     )
     assert any(

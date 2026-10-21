@@ -1400,7 +1400,7 @@ def test_login_page_provides_mock_feishu_ready_session_entry():
     overseas_compensation_html = (ROOT / "bonus_platform" / "static" / "overseas-compensation.html").read_text(encoding="utf-8")
     overseas_compensation_card = index_html.split('class="saas-module-card overseas-compensation-module"', 1)[1].split("</a>", 1)[0]
     fbu_card = overseas_compensation_html.split('class="saas-module-card fbu-module"', 1)[1].split("</a>", 1)[0]
-    assert "试运行 · 已开放" in domestic_card
+    assert ">已上线</span>" in domestic_card
     assert "module-version" not in domestic_card
     assert "海外薪酬核算" in overseas_compensation_card
     assert "data-child-module-count" in overseas_compensation_card

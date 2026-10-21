@@ -51,3 +51,26 @@ html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy span
   html[data-module-id="home"] .dashboard-shell .dashboard-user { flex-basis: 100%; }
   html[data-module-id="home"] .dashboard-shell .dashboard-user summary { width: 100%; min-width: 0; max-width: none; }
 }
+
+/* Decorative module illustrations live behind content and never capture clicks. */
+html[data-module-id="home"] .dashboard-shell .saas-module-card { isolation: isolate; }
+html[data-module-id="home"] .dashboard-shell .module-card-art {
+  position: absolute;
+  top: -14px;
+  right: -12px;
+  width: 150px;
+  height: 150px;
+  background-image: url("assets/home-module-icons-20261021-v6.png");
+  background-repeat: no-repeat;
+  background-size: 300% 200%;
+  opacity: 0.16;
+  transform: rotate(-10deg);
+  pointer-events: none;
+  z-index: -1;
+}
+html[data-module-id="home"] .dashboard-shell .module-card-art--recruitment { background-position: 0% 0%; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--employee { background-position: 50% 0%; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--domestic { background-position: 100% 0%; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--overseas-payroll { background-position: 0% 100%; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--invoice-audit { background-position: 50% 100%; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--social-insurance { background-position: 100% 100%; }
