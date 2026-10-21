@@ -1,7 +1,7 @@
 """外宿补贴计算引擎 (External Housing Subsidy Engine)."""
 from collections import Counter
 from datetime import date, datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from .base import BaseEngine, CalculationResult, safe_float
 from .position_rules import is_position_eligible
 from ..models import AuditExplanation
@@ -342,6 +342,7 @@ class WaiSuBuTieEngine(BaseEngine):
             month_end,
             employment_start,
             employment_end,
+            _to_date(last_work_day) if isinstance(last_work_day, (date, datetime)) else None,
         )
 
         # F6: 外宿补贴天数
@@ -372,6 +373,7 @@ class WaiSuBuTieEngine(BaseEngine):
                 housing_records,
                 employment_start,
                 employment_end,
+                _to_date(last_work_day) if isinstance(last_work_day, (date, datetime)) else None,
             )
             effective_days = max(subsidy_days - external_absence_days, 0)
             subsidy_amount = round(standard / days_in_month * effective_days, 2)
@@ -421,6 +423,7 @@ class WaiSuBuTieEngine(BaseEngine):
                     [
                         f"当月在职区间为{employment_start.isoformat()}至{employment_end.isoformat()}，在职{days_employed}天",
                         f"住宿名单扣除{housing_deduction_days}天",
+                        "入住当天计为住宿；通常退宿当天开始享有外宿补贴，住宿至实际离职当天并退宿的，当天仍计为住宿、不新增外宿补贴",
                         f"外宿补贴天数=max(在职天数-住宿扣除天数, 0)={subsidy_days}",
                         "低正班出勤时，以完整上下班打卡天数复核实际出勤",
                         "退宿后外宿期间的请假日从外宿补贴天数中扣除；入住前外宿天数不因后续在宿缺勤清零",
@@ -494,6 +497,7 @@ class WaiSuBuTieEngine(BaseEngine):
         month_end: date,
         employment_start: date,
         employment_end: date,
+        last_work_day: Optional[date] = None,
     ) -> int:
         deduction_days = 0
         for record in housing_records or []:
@@ -509,7 +513,8 @@ class WaiSuBuTieEngine(BaseEngine):
                 housing_end = month_end
             else:
                 co = _to_date(check_out)
-                housing_end = min(co - date.resolution, month_end)
+                # 实际离职日与当月在职区间的月末截点不同，不能用 employment_end 代替。
+                housing_end = min(co if co == last_work_day else co - date.resolution, month_end)
 
             overlap_start = max(employment_start, housing_start)
             overlap_end = min(employment_end, housing_end)
@@ -554,6 +559,7 @@ class WaiSuBuTieEngine(BaseEngine):
         housing_records: List[Dict[str, Any]],
         employment_start: date,
         employment_end: date,
+        last_work_day: Optional[date] = None,
     ) -> float:
         checkout_dates = [
             _to_date(record.get("退宿时间"))
@@ -564,6 +570,13 @@ class WaiSuBuTieEngine(BaseEngine):
         if not checkout_dates:
             return 0.0
         first_checkout = max(min(checkout_dates), employment_start)
+        exit_day_in_housing = last_work_day is not None and any(
+            str(record.get("工号", "")) == employee_id
+            and isinstance(record.get("入住时间"), (date, datetime))
+            and isinstance(record.get("退宿时间"), (date, datetime))
+            and _to_date(record["入住时间"]) <= last_work_day == _to_date(record["退宿时间"])
+            for record in housing_records or []
+        )
         absence_days = 0.0
         for day in daily_attendance or []:
             attendance_date = day.get("出勤日期")
@@ -571,6 +584,8 @@ class WaiSuBuTieEngine(BaseEngine):
                 continue
             attendance_date = _to_date(attendance_date)
             if not (first_checkout <= attendance_date <= employment_end):
+                continue
+            if exit_day_in_housing and attendance_date == last_work_day:
                 continue
             if day.get("上班一") and day.get("下班一"):
                 continue

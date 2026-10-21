@@ -1,5 +1,5 @@
 """国内劳务工薪酬核算 API 测试"""
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 import re
@@ -350,7 +350,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.4.10"
+    assert package["version"] == "1.4.12"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {
@@ -369,7 +369,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.4.10"
+    assert package["version_history"][0]["version"] == "1.4.12"
     assert package["version_history"][0]["subject_ids"] == [
         "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
         "gaowen_butie",
@@ -529,7 +529,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
     }
 
     assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.8"
-    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.6"
+    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.7"
     assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.9"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
         payload = str(subjects[subject_id])
@@ -579,12 +579,12 @@ def test_rule_package_publishes_intern_housing_allowance_eligibility():
     dongguan = next(region for region in waisu["regions"] if region["name"] == "东莞")
     jiashan_yiwu = next(region for region in waisu["regions"] if region["name"] == "嘉善 / 义乌")
 
-    assert waisu["version"] == "DL-WAISU.v1.0.6"
+    assert waisu["version"] == "DL-WAISU.v1.0.7"
     assert "东莞、嘉善、义乌实习生享有外宿补贴" in str(dongguan)
     assert "嘉善、义乌所有岗位均具备外宿补贴资格" in str(jiashan_yiwu)
     assert "低正班出勤人员按完整上下班打卡复核实际出勤" in str(waisu)
     assert "嘉善、义乌外宿补贴不限制岗位" in str(jiashan_yiwu)
-    assert waisu["change_log"][0]["version"] == "DL-WAISU.v1.0.6"
+    assert waisu["change_log"][0]["version"] == "DL-WAISU.v1.0.7"
     assert any(item["version"] == "DL-WAISU.v1.0.5" for item in waisu["change_log"])
     assert any(item["version"] == "DL-WAISU.v1.0.4" for item in waisu["change_log"])
     assert any(item["version"] == "DL-WAISU.v1.0.3" for item in waisu["change_log"])
@@ -690,7 +690,7 @@ def test_historical_rule_package_keeps_latest_version_available_for_navigation()
     ).json()
 
     assert package["version"] == "1.1.3"
-    assert package["available_versions"][0]["version"] == "1.4.10"
+    assert package["available_versions"][0]["version"] == "1.4.12"
     assert package["available_versions"][0]["status"] == "当前版本"
     assert any(item["version"] == "1.1.3" for item in package["available_versions"])
 
@@ -728,7 +728,7 @@ def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
     current_waisu = next(subject for subject in current["subjects"] if subject["id"] == "waisu_butie")
     previous_waisu = next(subject for subject in previous["subjects"] if subject["id"] == "waisu_butie")
 
-    assert current_waisu["version"] == "DL-WAISU.v1.0.6"
+    assert current_waisu["version"] == "DL-WAISU.v1.0.7"
     assert "最后工作日在核算月月末或之后" in "".join(current_waisu["common_rules"])
     assert previous_waisu["version"] == "DL-WAISU.v1.0.0"
     assert "最后工作日在核算月月末或之后" not in "".join(previous_waisu["common_rules"])
@@ -3165,27 +3165,72 @@ def test_waisu_butie_first_day_exit_without_punches_gets_zero():
     assert result.details["reason"] == "首日离职且无打卡"
 
 
-def test_waisu_butie_checkout_on_last_workday_keeps_checkout_day_external():
-    """退宿日等于最后工作日，当天仍享有外宿补贴。"""
+@pytest.mark.parametrize("area", ["东莞", "嘉善", "义乌"])
+@pytest.mark.parametrize(("hire", "last", "check_in", "check_out", "expected_days"), [
+    (date(2026, 9, 9), date(2026, 9, 10), date(2026, 9, 8), date(2026, 9, 10), 0),
+    (date(2026, 9, 1), date(2026, 9, 30), date(2026, 8, 1), date(2026, 9, 30), 0),
+    (date(2026, 9, 1), None, date(2026, 8, 1), date(2026, 9, 30), 1),
+    (date(2026, 9, 1), date(2026, 10, 5), date(2026, 8, 1), date(2026, 9, 30), 1),
+    (date(2026, 9, 9), date(2026, 9, 11), date(2026, 9, 8), date(2026, 9, 10), 2),
+    (date(2026, 9, 1), date(2026, 9, 10), date(2026, 9, 8), date(2026, 9, 10), 7),
+    (date(2026, 9, 9), date(2026, 9, 9), date(2026, 9, 9), date(2026, 9, 9), 0),
+    (date(2026, 9, 9), datetime(2026, 9, 10), date(2026, 9, 8), datetime(2026, 9, 10), 0),
+])
+def test_waisu_butie_checkout_on_last_workday_excludes_only_exit_day(
+    area, hire, last, check_in, check_out, expected_days,
+):
+    """住宿至实际离职日并退宿不新增外宿日，普通退宿及入住前外宿日保留。"""
     employee = {
         "工号": "OWHN001",
         "姓名": "张三",
-        "工作地区": "东莞",
+        "工作地区": area,
         "岗位名称": "操作员",
-        "考勤月份": "202605",
-        "外宿补贴标准": "/",
-        "入职日期": date(2026, 5, 14),
-        "最后工作日": date(2026, 5, 18),
+        "考勤月份": "202609",
+        "外宿补贴标准": "150",
+        "入职日期": hire,
+        "最后工作日": last,
         "排班天数": 22,
         "实际在职工作日天数": 3,
     }
     daily_attendance = [{"工号": "OWHN001", "上班一": "09:00", "下班一": "18:00"}]
-    housing_records = [{"工号": "OWHN001", "入住时间": date(2026, 5, 12), "退宿时间": date(2026, 5, 18)}]
+    housing_records = [{"工号": "OWHN001", "入住时间": check_in, "退宿时间": check_out}]
 
     result = WaiSuBuTieEngine().calculate(employee, daily_attendance, housing_records)
 
-    assert result.amount == 4.84
-    assert result.details["外宿补贴天数"] == 1
+    assert result.amount == expected_days * 5
+    assert result.details["外宿补贴天数"] == expected_days
+
+
+@pytest.mark.parametrize("area", ["东莞", "嘉善", "义乌"])
+def test_waisu_butie_exit_checkout_absence_does_not_reduce_pre_checkin_days(area):
+    employee = {
+        "工号": "TEST001", "姓名": "测试人员", "工作地区": area, "岗位名称": "操作员",
+        "考勤月份": "202609", "入职日期": date(2026, 9, 1), "最后工作日": date(2026, 9, 30),
+        "排班天数": 22, "实际在职工作日天数": 22, "事假时数": 56,
+    }
+    daily = [
+        {"工号": "TEST001", "出勤日期": date(2026, 9, 1), "上班一": "09:00", "下班一": "18:00"},
+        {"工号": "TEST001", "出勤日期": date(2026, 9, 30), "事假": 8},
+    ]
+    housing = [{"工号": "TEST001", "入住时间": date(2026, 9, 8), "退宿时间": date(2026, 9, 30)}]
+    result = WaiSuBuTieEngine().calculate(employee, daily, housing)
+    assert result.details["外宿补贴天数"] == 7
+    assert result.details["退宿后外宿期间缺勤天数"] == 0
+    assert result.amount == 35
+
+
+def test_rule_package_publishes_checkout_exit_boundary_and_preserves_history():
+    client = TestClient(app)
+    current = client.get("/api/domestic-labor/rule-package", params={"version": "1.4.11"}).json()
+    previous = client.get("/api/domestic-labor/rule-package", params={"version": "1.4.10"}).json()
+    current_subjects = {s["id"]: s for s in current["subjects"]}
+    previous_subjects = {s["id"]: s for s in previous["subjects"]}
+    assert previous_subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.6"
+    assert "住宿至实际离职当天并退宿" not in str(previous_subjects["waisu_butie"])
+    assert current_subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.7"
+    assert "住宿至实际离职当天并退宿" in str(current_subjects["waisu_butie"])
+    for subject_id in current_subjects.keys() - {"waisu_butie"}:
+        assert current_subjects[subject_id] == previous_subjects[subject_id]
 
 
 def test_waisu_butie_active_housing_keeps_pre_checkin_external_days():

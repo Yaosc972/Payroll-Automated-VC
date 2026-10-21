@@ -99,6 +99,21 @@ def test_temperature_package_uses_attendance_classification_and_exposes_conflict
         assert all(row["shift"] == "夜班" for row in result["details"]["daily_results"])
 
 
+@pytest.mark.parametrize(("air_conditioned", "expected"), [("否", 36), ("是", 0)])
+def test_temperature_skill_southeast_security_officer(tmp_path, released, air_conditioned, expected):
+    catalog, bundles = released
+    item = next(item for item in catalog["skills"] if item["id"] == "gaowen_butie")
+    payload = payload_for(item)
+    payload["employees"][0].update({"工作地区":"晋江", "岗位名称":"安全员", "一级部门名称":"东南枢纽", "办公地点是否有空调":air_conditioned})
+    for row in payload["daily"]:
+        row["测温网点"] = "东南枢纽-晋江仓"
+    for row in payload["temperatures"]:
+        row["测温网点"] = "东南枢纽-晋江仓"
+    report = execute_package(tmp_path, bundles[item["id"]], item, payload)
+    assert report["status"] == "calculated", report
+    assert report["results"][0]["amount"] == expected
+
+
 def test_same_rule_version_with_changed_engine_creates_one_new_release(monkeypatch, released, tmp_path):
     catalog, _ = released
     source = tmp_path / "source"
@@ -215,6 +230,45 @@ def test_housing_checkout_deducts_actual_daily_leave_from_external_days(tmp_path
     assert report["status"] == "calculated", report
     assert report["results"][0]["details"]["退宿后外宿期间缺勤天数"] == 1
     assert report["results"][0]["amount"] == 140.32
+
+
+@pytest.mark.parametrize("area", ["东莞", "嘉善", "义乌"])
+@pytest.mark.parametrize(("last", "checkout", "expected_days"), [
+    ("2026-07-02", "2026-07-02", 0),
+    ("2026-07-03", "2026-07-02", 2),
+    (None, "2026-07-31", 1),
+])
+def test_housing_skill_checkout_uses_actual_exit_not_month_end(tmp_path, released, area, last, checkout, expected_days):
+    catalog, bundles = released
+    item = next(item for item in catalog["skills"] if item["id"] == "waisu_butie")
+    payload = payload_for(item)
+    payload["employees"][0].update({"工作地区":area, "入职日期":"2026-07-01", "最后工作日":last})
+    for field in item["contract"]["regional_fields"].get(area, []):
+        payload["employees"][0].setdefault(field, 0)
+    payload["housing"] = [{"工号":"000001", "姓名":"测试人员", "入住时间":"2026-06-30", "退宿时间":checkout}]
+    payload["sources"]["housing"]["status"] = "provided"
+    report = execute_package(tmp_path, bundles[item["id"]], item, payload)
+    assert report["status"] == "calculated", report
+    result = report["results"][0]
+    assert result["details"]["外宿补贴天数"] == expected_days
+    assert result["amount"] == round(150 / 31 * expected_days, 2)
+
+
+def test_housing_skill_exit_checkout_leave_keeps_pre_checkin_external_days(tmp_path, released):
+    catalog, bundles = released
+    item = next(item for item in catalog["skills"] if item["id"] == "waisu_butie")
+    payload = payload_for(item)
+    payload["employees"][0].update({"入职日期":"2026-07-01", "最后工作日":"2026-07-31", "事假时数":56})
+    payload["housing"] = [{"工号":"000001", "姓名":"测试人员", "入住时间":"2026-07-08", "退宿时间":"2026-07-31"}]
+    payload["sources"]["housing"]["status"] = "provided"
+    payload["daily"].append({**payload["daily"][0], "出勤日期":"2026-07-31", "上班一":None, "下班一":None})
+    for row in payload["daily"]:
+        row.update({field:0 for field in item["contract"]["checkout_daily_fields"]})
+    payload["daily"][-1]["事假"] = 8
+    report = execute_package(tmp_path, bundles[item["id"]], item, payload)
+    assert report["status"] == "calculated", report
+    assert report["results"][0]["details"]["退宿后外宿期间缺勤天数"] == 0
+    assert report["results"][0]["amount"] == 33.87
 
 
 def test_housing_low_attendance_uses_complete_punch_dates(tmp_path, released):

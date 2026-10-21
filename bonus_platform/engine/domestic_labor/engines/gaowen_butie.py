@@ -30,7 +30,7 @@ DONGGUAN_EXCLUDED_NAMES = {
 }
 ZHEJIANG_EXCLUDED_NAMES = {"张青", "盛菊英", "周钰铉", "周钰炫", "叶玉", "樊明雪"}
 JINJIANG_EXCLUDED_NAMES = {"陈远远"}
-JINJIANG_ELIGIBLE_POSITIONS = {"操作员", "门禁员", "操作组长"}
+JINJIANG_ELIGIBLE_POSITIONS = {"操作员", "门禁员", "操作组长", "安全员"}
 
 REGION_STANDARDS = {
     "东莞": {"hourly_rate": 1.725, "daily_cap": 13.8, "monthly_cap": 300.0},
@@ -212,7 +212,7 @@ class GaoWenBuTieEngine(BaseEngine):
         if "晋江" in work_area and name in JINJIANG_EXCLUDED_NAMES:
             return "固定排除名单", "晋江HRBP固定排除人员"
         if "晋江" in work_area and position not in JINJIANG_ELIGIBLE_POSITIONS:
-            return "岗位不在晋江适用范围", "晋江当前仅操作员、门禁员和操作组长适用"
+            return "岗位不在晋江适用范围", "晋江当前仅操作员、门禁员、操作组长和安全员适用"
         return "符合当前适用范围", "忽略职级和领色，按地区固定规则判断"
 
     @staticmethod

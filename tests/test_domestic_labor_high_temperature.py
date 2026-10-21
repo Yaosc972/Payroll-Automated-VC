@@ -501,13 +501,60 @@ def test_api_runs_high_temperature_allowance_from_monthly_daily_and_temperature_
     assert metadata["summary"]["total_gaowen_butie"] == 13.8
 
 
+@pytest.mark.parametrize(("position", "temperature", "hours", "air_conditioned", "expected"), [
+    ("安全员", 33, 4, "否", 6),
+    ("安全员", 35, 10, "否", 12),
+    ("安全员", 32.9, 8, "否", 0),
+    ("安全员", 35, 8, "是", 0),
+    ("安全主管", 35, 8, "否", 0),
+    ("高级安全员", 35, 8, "否", 0),
+    ("操作员", 35, 8, "否", 12),
+    ("门禁员", 35, 8, "否", 12),
+    ("操作组长", 35, 8, "否", 12),
+])
+def test_southeast_security_officer_high_temperature_eligibility(position, temperature, hours, air_conditioned, expected):
+    day = date(2026, 9, 1)
+    engine = GaoWenBuTieEngine([_temperature(day, "夜班", temperature, "东南枢纽-晋江仓")])
+    result = engine.calculate(
+        _employee(work_area="晋江", position=position, 一级部门名称="东南枢纽", 办公地点是否有空调=air_conditioned),
+        [_day(day, regular=hours, actual=hours)],
+    )
+    assert result.amount == expected
+
+
+def test_southeast_security_officer_monthly_cap():
+    days = [date(2026, 7, day) for day in range(1, 32)]
+    engine = GaoWenBuTieEngine([_temperature(day, "夜班", 35, "东南枢纽-晋江仓") for day in days])
+    result = engine.calculate(
+        _employee(work_area="晋江", position="安全员", 一级部门名称="东南枢纽"),
+        [_day(day) for day in days],
+    )
+    assert result.amount == 260
+
+
+def test_southeast_security_officer_rule_preserves_previous_version():
+    client = TestClient(app)
+    current = client.get("/api/domestic-labor/rule-package").json()
+    previous = client.get("/api/domestic-labor/rule-package", params={"version":"1.4.11"}).json()
+    current_subjects = {s["id"]:s for s in current["subjects"]}
+    previous_subjects = {s["id"]:s for s in previous["subjects"]}
+    high = current_subjects["gaowen_butie"]
+    old_high = previous_subjects["gaowen_butie"]
+    assert old_high["version"] == "DL-GAOWEN.v0.9.2"
+    assert high["version"] == "DL-GAOWEN.v0.9.3"
+    assert "安全员" in next(r["rule"] for r in high["regions"] if r["name"] == "福建（晋江）")
+    assert "安全员" not in next(r["rule"] for r in old_high["regions"] if r["name"] == "福建（晋江）")
+    for subject_id in current_subjects.keys() - {"gaowen_butie"}:
+        assert current_subjects[subject_id] == previous_subjects[subject_id]
+
+
 def test_rule_package_and_subject_card_publish_high_temperature_as_validating():
     package = TestClient(app).get("/api/domestic-labor/rule-package").json()
     high_temperature = next(subject for subject in package["subjects"] if subject["id"] == "gaowen_butie")
     payload = str(high_temperature)
 
-    assert package["version"] == "1.4.10"
-    assert high_temperature["version"] == "DL-GAOWEN.v0.9.2"
+    assert package["version"] == "1.4.12"
+    assert high_temperature["version"] == "DL-GAOWEN.v0.9.3"
     assert high_temperature["status"] == "验证中"
     assert "同测温网点、同出勤日期、同白/夜班" in payload
     assert "MAX(正班时数,刷卡加班)" in payload

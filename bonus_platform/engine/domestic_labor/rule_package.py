@@ -2532,7 +2532,56 @@ _RULE_PACKAGE["version_history"] = [{
     "released_at": "2026-10-20", "summary": "高温补贴优先采用日考勤明确的白/夜班分类，并提示分类冲突。",
 }, {**_RULE_PACKAGE_V1_4_9["version_history"][0], "status": "历史版本"}, *_RULE_PACKAGE_V1_4_9["version_history"][1:]]
 
+# 2026-10-20：住宿至实际离职当天并退宿，不新增该日外宿补贴。
+_RULE_PACKAGE_V1_4_10 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_10)
+_RULE_PACKAGE.update({
+    "version": "1.4.11", "display_version": "DL-PAYROLL.v1.4.11", "released_at": "2026-10-20",
+})
+_waisu_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "waisu_butie")
+_waisu_butie["version"] = "DL-WAISU.v1.0.7"
+_checkout_exit_rule = (
+    "入住当天计为住宿；通常退宿当天开始享有外宿补贴，住宿扣除截至退宿前一日。"
+    "东莞、嘉善、义乌住宿至实际离职当天并退宿的，当天仍计为住宿、不新增外宿补贴；"
+    "以月考勤最后工作日判断，月末截点不视为离职日，入住前已形成的外宿天数保留。"
+)
+_waisu_butie["common_rules"] = [
+    _checkout_exit_rule if rule.startswith("入住当天计为住宿；退宿当天") else rule
+    for rule in _waisu_butie["common_rules"]
+]
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.7", "released_at": "2026-10-20",
+    "changes": "东莞、嘉善、义乌住宿至实际离职当天并退宿的，该日不新增外宿补贴；普通退宿及入住前外宿天数口径不变。",
+})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_10["version_history"][0],
+    "version": "1.4.11", "display_version": "DL-PAYROLL.v1.4.11", "status": "当前版本",
+    "released_at": "2026-10-20", "summary": "外宿补贴补充住宿至离职当天并退宿的日期边界，不新增离职当日外宿补贴。",
+}, {**_RULE_PACKAGE_V1_4_10["version_history"][0], "status": "历史版本"}, *_RULE_PACKAGE_V1_4_10["version_history"][1:]]
+
+# 2026-10-21：东南（晋江）高温补贴享有岗位新增安全员。
+_RULE_PACKAGE_V1_4_11 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_11)
+_RULE_PACKAGE.update({
+    "version": "1.4.12", "display_version": "DL-PAYROLL.v1.4.12", "released_at": "2026-10-21",
+})
+_gaowen_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "gaowen_butie")
+_gaowen_butie["version"] = "DL-GAOWEN.v0.9.3"
+_jinjiang_temperature = next(region for region in _gaowen_butie["regions"] if region["name"] == "福建（晋江）")
+_jinjiang_temperature["rule"] = "操作员、门禁员、操作组长、安全员按1.5元/小时核算；HRBP陈远远排除。"
+_gaowen_butie["change_log"].insert(0, {
+    "version": "DL-GAOWEN.v0.9.3", "released_at": "2026-10-21",
+    "changes": "东南（晋江）高温补贴享有岗位新增安全员；沿用同网点同日同班次33℃门槛、1.5元/小时、每日12元及每月260元封顶。",
+})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_11["version_history"][0],
+    "version": "1.4.12", "display_version": "DL-PAYROLL.v1.4.12", "status": "当前版本",
+    "released_at": "2026-10-21", "summary": "东南（晋江）高温补贴享有岗位新增安全员。",
+}, {**_RULE_PACKAGE_V1_4_11["version_history"][0], "status": "历史版本"}, *_RULE_PACKAGE_V1_4_11["version_history"][1:]]
+
 _RULE_PACKAGE_VERSIONS = {
+    _RULE_PACKAGE_V1_4_11["version"]: _RULE_PACKAGE_V1_4_11,
+    _RULE_PACKAGE_V1_4_10["version"]: _RULE_PACKAGE_V1_4_10,
     _RULE_PACKAGE_V1_4_9["version"]: _RULE_PACKAGE_V1_4_9,
     _RULE_PACKAGE_V1_4_8["version"]: _RULE_PACKAGE_V1_4_8,
     _RULE_PACKAGE_V1_4_7["version"]: _RULE_PACKAGE_V1_4_7,
