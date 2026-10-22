@@ -12,9 +12,11 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import httpx
 
-RULE_VERSION = "2026.09.30-04"
+RULE_VERSION = "2026.10.22-01"
 GRADES = {f"{prefix}{step}" for prefix in ("P1-", "P2-", "M2-") for step in (1, 2, 3)}
-EXCLUDED = {"zt18927", "zt25820", "zt27838", "zt27439"}
+EXCLUDED = {"zt18927"}
+# Confirmed on 2026-10-22: these employees returned to the relocated office in September.
+EXCLUDED_UNTIL = {"zt25820": "2026-08", "zt27838": "2026-08", "zt27439": "2026-08"}
 INCLUDED = {"zt25631", "zt28124"}
 # Organization OIds verified through Organization/GetByIds on 2026-09-30.
 # Use unit identifiers, not names or time-axis record objectIds.
@@ -274,7 +276,7 @@ def calculate_relocation(month, source, progress=lambda message: None):
         grade = st.get("OIdJobLevelText") or ""
         employment_type = st.get("EmployTypeText") or ""
         reasons, reviews = [], []
-        if job in EXCLUDED:
+        if job in EXCLUDED or month <= EXCLUDED_UNTIL.get(job, ""):
             reasons.append("指定排除人员")
         try:
             datetime.strptime(entry, "%Y-%m-%d")

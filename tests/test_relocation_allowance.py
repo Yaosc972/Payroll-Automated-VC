@@ -53,6 +53,57 @@ def test_eligibility(source, change):
     assert row(source)["status"] == "不发放"
 
 
+@pytest.mark.parametrize("employee_id", ["zt25820", "zt27838", "zt27439"])
+@pytest.mark.parametrize("month,expected", [("2026-08", 0), ("2026-09", 1000), ("2026-10", 1000)])
+def test_returning_employees_receive_allowance_from_september(source, employee_id, month, expected):
+    source["services"][0]["jobNumber"] = employee_id
+    source["attendance"][0]["Month"] = f"{month}-01"
+    result = calculate_relocation(month, source)
+    employee = result["results"][0]
+    assert employee["amount"] == expected
+    assert employee["status"] == ("不发放" if month < "2026-09" else "已试算")
+    assert ("指定排除人员" in employee["reason"]) == (month < "2026-09")
+    assert result["summary"]["amount"] == expected
+
+
+@pytest.mark.parametrize("employee_id", ["zt25820", "zt27838", "zt27439"])
+def test_returning_employees_still_use_attendance_formula(source, employee_id):
+    source["services"][0]["jobNumber"] = employee_id
+    attendance = source["attendance"][0]
+    attendance.update(Month="2026-09-01", TargetDays=20, AbsenteeismDuration=1)
+    attendance["Properties"].update(AttendanceItem5=4, AttendanceItem6=8, AttendanceItem16=2)
+    employee = calculate_relocation("2026-09", source)["results"][0]
+    assert employee["status"] == "已试算"
+    assert employee["normalDays"] == 15.5
+    assert employee["amount"] == 775
+
+
+@pytest.mark.parametrize("employee_id", ["zt25820", "zt27838", "zt27439"])
+@pytest.mark.parametrize("change", ["cutoff", "grade"])
+def test_returning_employees_still_need_other_eligibility_conditions(source, employee_id, change):
+    service = source["services"][0]
+    service["jobNumber"] = employee_id
+    source["attendance"][0]["Month"] = "2026-09-01"
+    if change == "cutoff":
+        service["entryDate"] = "2026-05-01"
+    else:
+        service["translateProperties"]["OIdJobLevelText"] = "P3-1"
+    employee = calculate_relocation("2026-09", source)["results"][0]
+    assert employee["amount"] == 0
+    assert employee["status"] == "不发放"
+    assert "指定排除人员" not in employee["reason"]
+
+
+@pytest.mark.parametrize("month", ["2026-08", "2026-09", "2026-10"])
+def test_remaining_excluded_employee_stays_excluded(source, month):
+    source["services"][0]["jobNumber"] = "zt18927"
+    source["attendance"][0]["Month"] = f"{month}-01"
+    employee = calculate_relocation(month, source)["results"][0]
+    assert employee["amount"] == 0
+    assert employee["status"] == "不发放"
+    assert "指定排除人员" in employee["reason"]
+
+
 def test_organization_scope_and_named_inclusion(source):
     unit = source["organizations"][0]
     org = source["organizations"][0]["translateProperties"]
