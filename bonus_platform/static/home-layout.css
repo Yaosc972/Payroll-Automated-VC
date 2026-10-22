@@ -35,9 +35,17 @@ html[data-module-id="home"] .dashboard-shell .saas-module-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, max(250px, calc((100% - 42px) / 4))), 1fr));
   gap: 14px;
 }
-html[data-module-id="home"] .dashboard-shell .saas-module-card { min-height: 206px; padding: 16px; border-radius: 20px; }
+html[data-module-id="home"] .dashboard-shell .saas-module-card {
+  min-height: 206px;
+  padding: 16px;
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 255, 0.90));
+  box-shadow: 0 12px 32px rgba(30, 58, 138, 0.08), var(--inner-edge-glow);
+}
+html[data-module-id="home"] .dashboard-shell .module-card-top { justify-content: flex-start; gap: 8px; }
+html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy span { color: #475569; }
 html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy { margin-top: 12px; margin-bottom: 16px; }
-html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy h2 { font-size: 17px; line-height: 1.35; }
+html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy h2 { font-size: 17px; line-height: 1.35; padding-right: 40px; }
 html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy span { margin-top: 8px; }
 @media (max-width: 1100px) {
   html[data-module-id="home"] .dashboard-shell .dashboard-frame { grid-template-columns: 230px minmax(0, 1fr); gap: 16px; }
@@ -52,25 +60,40 @@ html[data-module-id="home"] .dashboard-shell .saas-module-card .module-copy span
   html[data-module-id="home"] .dashboard-shell .dashboard-user summary { width: 100%; min-width: 0; max-width: none; }
 }
 
-/* Decorative module illustrations live behind content and never capture clicks. */
+/* Crop the illustrations at the top-right corner without adding card height. */
 html[data-module-id="home"] .dashboard-shell .saas-module-card { isolation: isolate; }
 html[data-module-id="home"] .dashboard-shell .module-card-art {
+  --art-size: 112px;
+  --art-x: 0px;
+  --art-y: 0px;
+  --art-position: 0% 0%;
   position: absolute;
-  top: -14px;
-  right: -12px;
-  width: 150px;
-  height: 150px;
-  background-image: url("assets/home-module-icons-20261021-v6.png");
-  background-repeat: no-repeat;
-  background-size: 300% 200%;
-  opacity: 0.16;
-  transform: rotate(-10deg);
+  top: -18px;
+  right: -48px;
+  width: 112px;
+  height: 112px;
+  opacity: 0.14;
+  transform: rotate(-12deg);
   pointer-events: none;
   z-index: -1;
 }
-html[data-module-id="home"] .dashboard-shell .module-card-art--recruitment { background-position: 0% 0%; }
-html[data-module-id="home"] .dashboard-shell .module-card-art--employee { background-position: 50% 0%; }
-html[data-module-id="home"] .dashboard-shell .module-card-art--domestic { background-position: 100% 0%; }
-html[data-module-id="home"] .dashboard-shell .module-card-art--overseas-payroll { background-position: 0% 100%; }
-html[data-module-id="home"] .dashboard-shell .module-card-art--invoice-audit { background-position: 50% 100%; }
-html[data-module-id="home"] .dashboard-shell .module-card-art--social-insurance { background-position: 100% 100%; }
+html[data-module-id="home"] .dashboard-shell .module-card-art::before {
+  content: "";
+  position: absolute;
+  top: calc(50% + var(--art-y));
+  left: calc(50% + var(--art-x));
+  width: var(--art-size);
+  height: var(--art-size);
+  background-image: url("assets/home-module-icons-20261021-v6.png");
+  background-repeat: no-repeat;
+  background-size: 300% 200%;
+  background-position: var(--art-position);
+  transform: translate(-50%, -50%);
+}
+/* Optical corrections account for the artwork's different ink bounds. */
+html[data-module-id="home"] .dashboard-shell .module-card-art--recruitment { --art-size: 106px; --art-x: -7px; --art-y: -7px; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--employee { --art-position: 50% 0%; --art-size: 116px; --art-x: -4px; --art-y: -10px; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--domestic { --art-position: 100% 0%; --art-size: 115px; --art-x: 1px; --art-y: -8px; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--overseas-payroll { --art-position: 0% 100%; --art-size: 111px; --art-x: -6px; --art-y: 2px; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--invoice-audit { --art-position: 50% 100%; --art-size: 122px; --art-x: 2px; --art-y: 5px; }
+html[data-module-id="home"] .dashboard-shell .module-card-art--social-insurance { --art-position: 100% 100%; --art-x: -1px; --art-y: 3px; }
