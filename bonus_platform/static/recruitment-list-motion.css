@@ -1,0 +1,11 @@
+.flow-motion-host { position:relative; }
+.flow-row-plate { position:absolute; top:0; left:0; z-index:4; pointer-events:none; border-radius:7px; background:linear-gradient(180deg,#3977c714,#3977c71c); box-shadow:inset 0 0 0 1px #7ca5dd40,inset 0 1px 0 #fff9; opacity:0; will-change:transform; }
+.recruitment-experience .flow-motion-host :is(.flow-ledger,.flow-recipient-table) tbody tr:hover td[data-tone] { background:var(--band-cell); }
+.recruitment-experience .flow-motion-host :is(.flow-ledger,.flow-recipient-table) tbody tr:nth-child(even):hover td[data-tone] { background:var(--band-stripe); }
+.recruitment-experience .flow-motion-host .flow-recipient-table thead th { z-index:5; }
+.recruitment-experience .flow-result-tabs { position:relative; isolation:isolate; gap:12px; padding:0 24px; }
+.recruitment-experience .flow-result-tabs button { position:relative; z-index:1; padding:10px 14px; border-bottom-color:transparent; transition:color 150ms ease; }
+.recruitment-experience .flow-result-tabs button[aria-pressed=true] { border-bottom-color:transparent; background:transparent; color:#1d569c; }
+.flow-tab-plate { position:absolute; top:0; left:0; z-index:0; pointer-events:none; border-radius:8px; background:linear-gradient(#f1f6fd,#e9f1fb); box-shadow:inset 0 0 0 1px #dce7f6,inset 0 1px 0 #fff; will-change:transform; }
+.recruitment-experience .flow-motion-host { overscroll-behavior-y:auto; }
+@media(prefers-reduced-motion:reduce) { .flow-row-plate,.flow-tab-plate { will-change:auto; } }

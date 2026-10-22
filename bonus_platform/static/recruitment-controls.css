@@ -1,0 +1,88 @@
+/* Final control layer: consistent closed, open, hover and keyboard states. */
+.rc-select-search { position:sticky;top:0;z-index:1;width:100%;min-height:36px;padding:8px 10px;margin-bottom:6px;border:1px solid #dce3ee;border-radius:8px;background:#fff;font:inherit; }
+.rc-select-empty { margin:14px 10px;color:#667085; }
+:is(.recruitment-experience,.ra-page) :is(button,a,summary,input,textarea,[tabindex]):focus-visible { outline:2px solid #679cec; outline-offset:2px; }
+:is(.recruitment-experience,.ra-page) .rd-search { border:1px solid #dce3ed; background:#f8fafc; transition:border-color 160ms,box-shadow 160ms,background 160ms; }
+:is(.recruitment-experience,.ra-page) .rd-search:focus-within { background:#fff; border-color:#7ca8e6; box-shadow:0 0 0 3px #2563eb14; }
+:is(.recruitment-experience,.ra-page) .rd-search input:focus-visible { outline:none; box-shadow:none; }
+:is(.recruitment-experience,.ra-page) .rd-search input { min-width:0; border:0; background:transparent; }
+:is(.recruitment-experience,.ra-page) input[type=search]::-webkit-search-cancel-button { cursor:pointer; }
+.rc-select { display:inline-grid; min-width:0; max-width:100%; vertical-align:middle; }
+.rc-select-native { display:none!important; }
+:is(.recruitment-experience,.ra-page) .rc-select-trigger { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:34px; width:100%; padding:6px 11px; border:1px solid #dce3ed; border-radius:8px; background:#fff; color:#344054; font-size:13px; line-height:20px; text-align:left; }
+.rc-select-trigger>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rc-select-trigger>.rd-icon { width:16px; height:16px; color:#7b8ba1; }
+:is(.recruitment-experience,.ra-page) .rc-select-trigger:hover:not(:disabled) { background:#f8fafc; border-color:#b8c8dc; }
+:is(.recruitment-experience,.ra-page) .rc-select-trigger[aria-expanded=true] { border-color:#7ca8e6; box-shadow:0 0 0 3px #2563eb14; }
+.rc-select-trigger[aria-expanded=true]>.rd-icon { transform:rotate(180deg); }
+.rc-select-popover { position:fixed; inset:auto; margin:0; padding:5px; border:1px solid #dce3ed; border-radius:11px; background:#fff; color:#344054; box-shadow:0 10px 32px #1d36551c,0 2px 6px #1d36550a; overflow:auto; font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif; }
+.rc-select-popover:popover-open { animation:rc-menu-in 140ms ease-out; }
+.rc-select-option { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:9px 10px; border-radius:6px; cursor:pointer; min-height:36px; }
+.rc-select-option>span { overflow-wrap:anywhere; }
+.rc-select-option>.rd-icon { width:16px; height:16px; opacity:0; }
+.rc-select-option[aria-selected=true] { color:#0969d6; font-weight:600; }
+.rc-select-option[aria-selected=true]>.rd-icon { opacity:1; }
+.rc-select-option[data-highlighted=true] { background:#edf4ff; }
+.rc-select-option[aria-disabled=true] { color:#98a2b3; cursor:default; }
+:is(.recruitment-experience,.ra-page) .rd-inspector .rc-select { width:100%; }
+:is(.recruitment-experience,.ra-page) .rd-inspector .rc-select-trigger { min-height:38px; }
+:is(.recruitment-experience,.ra-page) .flow-column-nav .rc-select { width:220px; }
+:is(.recruitment-experience,.ra-page) .rd-scope .rc-select { min-width:148px; }
+:is(.recruitment-experience,.ra-page) .rd-menu-items { padding:5px; border:1px solid #dce3ed; border-radius:11px; box-shadow:0 10px 32px #1d36551c; }
+:is(.recruitment-experience,.ra-page) .rd-menu-items>button { border-radius:6px; padding:9px 12px; }
+:is(.recruitment-experience,.ra-page) .rd-menu-items>button:hover,:is(.recruitment-experience,.ra-page) .rd-menu-items>button:focus-visible { background:#edf4ff; color:#0969d6; }
+:is(.recruitment-experience,.ra-page) input[type=checkbox] { appearance:none; width:17px!important; height:17px!important; min-height:17px!important; padding:0!important; border:1px solid #afbdd0; border-radius:5px; background:#fff; vertical-align:middle; cursor:pointer; display:inline-grid; place-content:center; flex-shrink:0; }
+:is(.recruitment-experience,.ra-page) input[type=checkbox]:checked,:is(.recruitment-experience,.ra-page) input[type=checkbox]:indeterminate { border-color:#0969d6; background:#0969d6; }
+:is(.recruitment-experience,.ra-page) input[type=checkbox]:checked::after { content:''; width:8px; height:4px; border-left:2px solid #fff; border-bottom:2px solid #fff; transform:translateY(-1px) rotate(-45deg); }
+:is(.recruitment-experience,.ra-page) input[type=checkbox]:indeterminate::after { content:''; width:8px; height:2px; background:#fff; }
+:is(.recruitment-experience,.ra-page) input[type=checkbox]:disabled { opacity:.45; cursor:default; }
+@keyframes rc-menu-in { from {opacity:0;transform:translateY(-3px)} to {opacity:1;transform:translateY(0)} }
+@media(prefers-reduced-motion:reduce) { .rc-select-popover:popover-open { animation:none; } }
+
+/* Date entry, calendar and person search use the same field and popover tokens. */
+.rc-date-native{position:absolute!important;inline-size:1px!important;block-size:1px!important;min-height:0!important;padding:0!important;border:0!important;clip-path:inset(50%);overflow:hidden;white-space:nowrap}
+.rc-date{display:flex;align-items:center;width:100%;min-width:0;min-height:36px;border:1px solid #dce3ed;border-radius:8px;background:#fff;transition:border-color 160ms,box-shadow 160ms}
+.rc-date:focus-within{border-color:#7ca8e6;box-shadow:0 0 0 3px #2563eb14}
+.recruitment-experience .rd-inspector .rc-date-input{flex:1;min-width:0;width:100%;min-height:34px;border:0;background:transparent;padding:7px 11px;border-radius:8px;font:inherit;font-size:13px;font-variant-numeric:tabular-nums;color:#344054;outline:none;box-shadow:none}
+.recruitment-experience .rc-date-input::placeholder{color:#98a2b3;font-size:12px}
+.recruitment-experience .rc-date-input:focus-visible{outline:none;box-shadow:none}
+.recruitment-experience .rc-date-trigger{display:grid;place-items:center;flex:0 0 34px;width:34px;height:32px;min-height:32px;margin:1px 3px 1px 0;padding:0;border:0;border-radius:6px;background:transparent;color:#718299;cursor:pointer}
+.recruitment-experience .rc-date-trigger:hover:not(:disabled),.rc-date-trigger[aria-expanded=true]{background:#edf4ff;color:#0969d6}
+.rc-date-trigger .rd-icon{width:17px;height:17px}
+.rc-date:has(:disabled){background:#f8fafc;color:#98a2b3}
+.rc-date-popover{position:fixed;inset:auto;margin:0;padding:12px;border:1px solid #dce3ed;border-radius:12px;background:#fff;box-shadow:0 10px 32px #1d36551c,0 2px 6px #1d36550a;color:#344054;font:13px/1.5 system-ui,-apple-system,"PingFang SC",sans-serif;overflow:auto;box-sizing:border-box}
+.rc-date-popover button{font:inherit;color:inherit;cursor:pointer;border:0;background:transparent;box-shadow:none}
+.rc-date-header{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:10px}
+.rc-date-popover .rc-date-header>button{display:flex;align-items:center;justify-content:center;gap:6px;padding:0;min-height:32px;border-radius:7px;width:32px}
+.rc-date-popover .rc-date-header>.rc-date-heading{width:auto;min-width:140px;font-weight:600;font-size:14px;color:#243b5b}
+.rc-date-heading .rd-icon{width:13px;height:13px;color:#7b8ba1}
+.rc-date-header .rd-icon{width:16px;height:16px}
+.rc-date-header>button:hover:not(:disabled),.rc-date-popover .rc-date-choices>button:hover:not(:disabled){background:#edf4ff}
+.rc-date-week,.rc-date-grid>[role=row]{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.rc-date-week{margin-bottom:4px;color:#98a2b3;text-align:center;font-size:11px;line-height:24px}
+.rc-date-popover .rc-date-day{position:relative;min-height:32px;margin:1px 0;padding:0;border:1px solid transparent;border-radius:7px;font-size:13px;font-variant-numeric:tabular-nums;text-align:center}
+.rc-date-day[data-outside=true]{color:#a6b0bf}
+.rc-date-day:hover:not(:disabled){background:#edf4ff;color:#0969d6}
+.rc-date-day[aria-current=date]:not([aria-selected=true])::after{content:'';position:absolute;bottom:3px;left:calc(50% - 2px);width:4px;height:4px;border-radius:50%;background:#0969d6}
+.rc-date-popover .rc-date-day[aria-selected=true],.rc-date-popover .rc-date-choices>button[aria-pressed=true]{background:#0969d6;color:#fff;font-weight:600}
+.rc-date-popover button:focus-visible{outline:2px solid #679cec;outline-offset:1px}
+.rc-date-popover button:disabled{color:#c1c8d3;cursor:default;opacity:.7}
+.rc-date-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:3px 0}
+.rc-date-popover .rc-date-choices>button{min-height:42px;padding:0;border-radius:8px}
+.rc-date-footer{display:flex;align-items:center;justify-content:space-between;margin-top:9px;padding-top:8px;border-top:1px solid #edf0f4}
+.rc-date-popover .rc-date-footer>button{min-height:28px;padding:2px 6px;color:#0969d6;border-radius:5px;font-size:12px}
+.rc-date-footer>button:hover:not(:disabled){background:#edf4ff}
+.recruitment-experience .flow-person-picker{margin:0 0 12px}
+.recruitment-experience .flow-person-picker>label{font-size:12px;font-weight:500;margin-bottom:6px}
+.rc-person-search{display:flex;align-items:center;gap:8px;padding-left:10px;border:1px solid #dce3ed;border-radius:8px;background:#fff}
+.rc-person-search:focus-within{border-color:#7ca8e6;box-shadow:0 0 0 3px #2563eb14}
+.rc-person-search>.rd-icon{width:16px;height:16px;flex-shrink:0;color:#7b8ba1}
+.recruitment-experience .rd-inspector .rc-person-search input{min-width:0;width:100%;border:0;background:transparent;box-shadow:none;outline:none;min-height:34px;padding:7px 10px 7px 0;font-size:13px}
+.recruitment-experience .rd-inspector .rc-person-search input:focus-visible{outline:none}
+.recruitment-experience .flow-picker-options{margin:6px 0 0;padding:4px;list-style:none;border:1px solid #dce3ed;border-radius:9px;max-height:220px;overflow:auto;background:#fff;box-shadow:0 6px 18px #1d365510}
+.recruitment-experience .flow-picker-options li{padding:0;border:0}
+.recruitment-experience .flow-picker-options button{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:8px 10px;min-height:34px;border:0;border-radius:6px;background:transparent;text-align:left;font-size:13px}
+.recruitment-experience .flow-picker-options button:hover,.recruitment-experience .flow-picker-options button:focus-visible{background:#edf4ff;color:#0969d6}
+.recruitment-experience .flow-picker-options button span{color:#718299;font-size:12px}
+.recruitment-experience .flow-person-picker .flow-picker-hint{margin-top:5px;font-size:12px;line-height:1.5}
+@media(prefers-reduced-motion:reduce){.rc-date{transition:none}}

@@ -6,6 +6,14 @@ from openpyxl import Workbook, load_workbook
 from bonus_platform.engine.recruitment_import_validation import (
     CompareResult,
     STANDARD_IMPORT_HEADERS,
+    _domestic_holiday_exclusion_days,
+    _employee_lookup_key,
+    _lookup_domestic_offer,
+    _merge_people,
+    _normalize_abc,
+    _normalized_region_type,
+    _read_cycle_exclusions,
+    _read_overseas_offers,
     build_auto_import_rows,
     compare_import_rows,
     write_validation_report,
@@ -374,12 +382,12 @@ def test_validation_report_lists_pending_confirmation_items(tmp_path):
     rows = list(sheet.iter_rows(values_only=True))
     assert rows[0] == ("类别", "姓名", "工号", "字段", "当前结论", "建议动作")
     assert rows[1] == (
-        "待接入数据源",
+        "已确认排除",
         "Kejian YIN 尹克俭",
         None,
         "招聘渠道",
-        "人员调动/异动审批源未接入，暂不自动生成",
-        "等待人员调动或异动审批导出后再验证",
+        "人员调动不享受招聘奖金，不应自动生成",
+        "从线下导入清单排除",
     )
     assert rows[2] == (
         "待业务确认",
@@ -394,6 +402,168 @@ def test_validation_report_lists_pending_confirmation_items(tmp_path):
         None,
         None,
         "周期剔除天数",
-        "已接入本次OA特殊事项审批明细，PPT已列明节假日及海外特殊剔除条件，该字段仍有 1 条差异",
-        "继续补充国内节假日历、完整OA审批明细，或复核人工模板差异",
+        "已接入国内节假日日历和本次OA特殊事项审批明细，该字段仍有 1 条差异",
+        "复核OA申请说明中的实际员工和线下人工填写",
     )
+
+
+def test_region_type_prefers_organization_then_falls_back_to_work_location():
+    assert _normalized_region_type({
+        "标签分类": "海外",
+        "二级组织": "FBU仓储事业部",
+        "三级组织": "欧洲区",
+        "四级组织": "德国区",
+        "工作地": "中国大陆",
+    }) == "海外发达国家"
+    assert _normalized_region_type({
+        "标签分类": "海外",
+        "二级组织": "海外事业部",
+        "三级组织": "综合支持部",
+        "四级组织": "",
+        "工作地": "非中国/英国",
+    }) == "海外发达国家"
+    assert _normalized_region_type({
+        "标签分类": "海外",
+        "二级组织": "海外事业部",
+        "三级组织": "综合支持部",
+        "四级组织": "",
+        "工作地": "非中国",
+    }) == ""
+
+
+def test_overseas_other_channel_uses_secondary_channel_and_preserves_unknowns(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append([
+        "offer编码", "状态", "招聘渠道", "其他渠道", "招聘负责人工号",
+    ])
+    sheet.append(["OFFER-1", "已入职", "其他", "pracuj.pl", "zt100"])
+    sheet.append(["OFFER-2", "已入职", "其他", "REFERRAL", "zt100"])
+    sheet.append(["OFFER-3", "已入职", "其他", "本地招聘会", "zt100"])
+    sheet.append(["OFFER-4", "已入职", "其他", "行政實習生 zt0022109 Anran Lei /Ann 但內推選項裡搜尋不到", "zt100"])
+    sheet.append(["OFFER-5", "已入职", "其他", "尚未核实的业务来源", "zt100"])
+    path = _save(workbook, tmp_path / "overseas_offer.xlsx")
+
+    offers = _read_overseas_offers(path)
+
+    assert offers["offer-1"]["招聘渠道"] == "招聘网站"
+    assert offers["offer-2"]["招聘渠道"] == "招聘网站"
+    assert offers["offer-3"]["招聘渠道"] == "招聘网站"
+    assert offers["offer-3"]["_channelNeedsConfirmation"] is False
+    assert offers["offer-5"]["招聘渠道"] == "其他"
+    assert offers["offer-5"]["_channelNeedsConfirmation"] is True
+    assert offers["offer-4"]["招聘渠道"] == "内推"
+    assert offers["offer-4"]["推荐人工号"] == "zt0022109"
+    assert offers["offer-4"]["推荐人姓名"] == "Anran Lei /Ann"
+
+
+def test_cycle_exclusion_uses_candidate_number_from_approval_description(tmp_path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append([
+        "申请单编号", "申请人工号", "申请人姓名", "申请说明", "事项分类", "文档状态",
+        "招聘周期特殊剔除时间（天）",
+    ])
+    sheet.append([
+        "ZTJT-LC-1", "zt999", "HRBP",
+        "已入职候选人Junda Ren，工号zt0021632，申请剔除招聘周期30天",
+        "招聘：海外招聘周期时长剔除", "结束", 30,
+    ])
+    path = _save(workbook, tmp_path / "special_approval.xlsx")
+
+    exclusions = _read_cycle_exclusions(path)
+
+    assert "zt0021632" in exclusions
+    assert "zt999" not in exclusions
+    assert exclusions["zt0021632"]["周期剔除天数"] == 30
+
+
+def test_domestic_holiday_exclusion_counts_only_overlap_days():
+    assert _domestic_holiday_exclusion_days(
+        datetime(2026, 4, 28), datetime(2026, 5, 3),
+    ) == 3
+    assert _domestic_holiday_exclusion_days(
+        datetime(2026, 5, 3), datetime(2026, 5, 20),
+    ) == 3
+    assert _domestic_holiday_exclusion_days(
+        datetime(2026, 5, 6), datetime(2026, 5, 20),
+    ) == 0
+
+
+def test_domestic_offer_lookup_rejects_stale_offer_with_different_employee_number():
+    person = {"工号": "zt27772", "证件号": "ID-HXQ"}
+    offers = {
+        "id-hxq": {
+            "_employeeNo": "zt25100",
+            "招聘渠道": "二次入职",
+            "_sortDate": datetime(2023, 9, 9),
+        }
+    }
+
+    assert _lookup_domestic_offer(person, offers) == {}
+
+
+def test_domestic_offer_lookup_prefers_employee_number_when_id_numbers_differ():
+    person = {"工号": "zt28966", "证件号": "H60690456"}
+    offer = {
+        "_employeeNo": "zt28966",
+        "招聘渠道": "招聘网站",
+        "招聘启动日期": datetime(2026, 4, 20),
+    }
+
+    assert _lookup_domestic_offer(person, {"emp:zt28966": offer}) == offer
+
+
+def test_compare_ignores_offline_rows_confirmed_as_transfer_exclusions():
+    generated = [{"工号": "zt100", "姓名": "正常员工", "核算月份": 202605}]
+    target = [
+        {"工号": "zt100", "姓名": "正常员工", "核算月份": 202605},
+        {"工号": "", "姓名": "调动员工", "核算月份": 202605, "招聘渠道": "人员调动"},
+    ]
+
+    result = compare_import_rows(
+        generated,
+        target,
+        headers=["核算月份", "姓名", "工号", "招聘渠道"],
+    )
+
+    assert result.summary["missingInGenerated"] == 0
+    assert result.summary["excludedTargetRows"] == 1
+    assert result.excluded_target_rows[0]["姓名"] == "调动员工"
+
+
+def test_compare_separates_authoritative_source_refresh_from_true_differences():
+    generated = [{
+        "工号": "zt100",
+        "姓名": "员工",
+        "核算月份": 202605,
+        "人员状态": "离职",
+        "_sourceRefreshFields": {"人员状态"},
+    }]
+    target = [{"工号": "zt100", "姓名": "员工", "核算月份": 202605, "人员状态": "正式"}]
+
+    result = compare_import_rows(generated, target, headers=["核算月份", "姓名", "工号", "人员状态"])
+
+    assert result.summary["fieldDiffCount"] == 0
+    assert result.summary["sourceRefreshCount"] == 1
+    assert result.source_refreshes[0]["字段"] == "人员状态"
+
+
+def test_no_headcount_abc_category_uses_existing_domestic_overseas_categories():
+    assert _normalize_abc("不占编", "国内") == "C类"
+    assert _normalize_abc("不占编", "海外") == "C1类"
+
+
+def test_ehr_dynamic_fields_take_priority_when_ehr_and_oehr_share_employee_number():
+    merged = _merge_people(
+        {"zt100": {"工号": "zt100", "转正日期": datetime(2026, 5, 8), "人员状态": "正式"}},
+        {"zt100": {"工号": "zt100", "转正日期": "", "人员状态": "试用", "工作地": "非中国"}},
+    )
+
+    assert merged["zt100"]["转正日期"] == datetime(2026, 5, 8)
+    assert merged["zt100"]["人员状态"] == "正式"
+
+
+def test_zero_manager_placeholders_are_treated_as_empty_employee_numbers():
+    assert _employee_lookup_key(0) == ""
+    assert _employee_lookup_key("0") == ""

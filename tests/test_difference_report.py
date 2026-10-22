@@ -48,3 +48,55 @@ def test_difference_report_reads_payroll_style_multirow_offline_headers(tmp_path
     assert metrics["referralDetailDiffCount"] == 1
     workbook = load_workbook(output_path, data_only=True, read_only=True)
     assert workbook["招聘明细差异"].cell(2, 6).value == 20
+
+
+def test_difference_report_total_delta_does_not_double_count_node_differences(tmp_path: Path):
+    platform_path = tmp_path / "platform.xlsx"
+    offline_path = tmp_path / "offline.xlsx"
+    output_path = tmp_path / "diff.xlsx"
+
+    platform = Workbook()
+    recruitment = platform.active
+    recruitment.title = "招聘奖金汇总"
+    recruitment.append(["工号", "姓名", "币种", "入职1月奖金", "入职3月奖金", "入职6月奖金", "转正奖金", "合计发放"])
+    recruitment.append(["zt-rec", "招聘人", "人民币", 100, 0, 0, 50, 150])
+    platform.save(platform_path)
+
+    offline = Workbook()
+    recruitment = offline.active
+    recruitment.title = "招聘奖金汇总"
+    recruitment.append(["工号", "姓名", "币种", "入职1月奖金", "入职3月奖金", "入职6月奖金", "转正奖金", "合计发放"])
+    recruitment.append(["zt-rec", "招聘人", "人民币", 80, 0, 0, 20, 100])
+    offline.save(offline_path)
+
+    metrics = build_difference_report(platform_path, offline_path, output_path)
+
+    assert metrics["recruitmentSummaryDiffCount"] == 3
+    assert metrics["recruitmentSummaryDelta"] == 50
+
+
+def test_difference_report_normalizes_euro_to_platform_foreign_currency_bucket(tmp_path: Path):
+    platform_path = tmp_path / "platform.xlsx"
+    offline_path = tmp_path / "offline.xlsx"
+    output_path = tmp_path / "diff.xlsx"
+
+    platform = Workbook()
+    recruitment = platform.active
+    recruitment.title = "招聘奖金汇总"
+    recruitment.append(["工号", "姓名", "币种", "合计发放"])
+    referral = platform.create_sheet("内推奖金汇总")
+    referral.append(["推荐人工号", "推荐人姓名", "币种", "合计发放"])
+    referral.append(["zt-ref", "推荐人", "美元/欧元", 100])
+    platform.save(platform_path)
+
+    offline = Workbook()
+    referral = offline.active
+    referral.title = "内推奖金汇总"
+    referral.append(["推荐人工号", "推荐人姓名", "币种", "合计发放"])
+    referral.append(["zt-ref", "推荐人", "欧元", 100])
+    offline.save(offline_path)
+
+    metrics = build_difference_report(platform_path, offline_path, output_path)
+
+    assert metrics["referralSummaryDiffCount"] == 0
+    assert metrics["referralSummaryDelta"] == 0

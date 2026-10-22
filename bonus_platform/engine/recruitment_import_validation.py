@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
 from typing import Any, Iterable
+import xml.etree.ElementTree as ET
+import zipfile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Side, Border
@@ -44,7 +46,45 @@ DEVELOPED_LOCATION_TOKENS = {
     "netherlands", "holland", "italy", "spain", "portugal", "austria",
     "switzerland", "belgium", "luxembourg", "denmark", "sweden", "norway",
     "finland", "ireland", "australia", "new zealand", "singapore", "israel",
-    "poland",
+    "poland", "匈牙利", "hungary", "香港", "hong kong", "台湾", "臺灣", "taiwan",
+    "加州", "california", "洛杉矶", "洛杉磯", "los angeles",
+}
+DEVELOPING_LOCATION_TOKENS = {
+    "越南", "菲律宾", "菲律賓", "马来西亚", "馬來西亞", "泰国", "泰國", "印度尼西亚", "印度尼西亞",
+    "印尼", "印度", "巴基斯坦", "孟加拉", "柬埔寨", "老挝", "老撾", "缅甸", "緬甸",
+    "墨西哥", "巴西", "秘鲁", "秘魯", "哥伦比亚", "哥倫比亞", "土耳其", "南非",
+    "阿联酋", "阿聯酋", "沙特", "俄罗斯", "俄羅斯", "乌克兰", "烏克蘭",
+    "vietnam", "philippines", "malaysia", "thailand", "indonesia", "india", "pakistan",
+    "bangladesh", "cambodia", "laos", "myanmar", "mexico", "brazil", "peru", "colombia",
+    "turkey", "türkiye", "south africa", "uae", "saudi arabia", "russia", "ukraine",
+}
+RECRUITMENT_WEBSITE_TOKENS = {
+    "招聘网站", "招聘網站", "boss直聘", "boss", "indeed", "linkedin", "领英", "領英", "猎聘", "獵聘", "智联招聘", "智聯招聘",
+    "pracuj.pl", "pracuj", "topcv", "moovup", "careerviet", "career viet", "jobsdb", "handshake",
+    "华人资讯网", "華人資訊網", "奋韩网", "奮韓網", "华人168", "華人168", "小红书", "小紅書",
+    "微信群", "德国插队", "在德国插队", "超人", "国内收到转发", "邮箱投递简历", "线下广告张贴",
+    "referral",
+}
+# These descriptions already have the direct-recruitment award factor. Keep
+# source matching and award calculation on the same canonical channel.
+DIRECT_RECRUITMENT_CHANNELS = {
+    '招聘网站','网站招聘','社招','社会招聘','自主招聘','自主开发','广告','招聘广告',
+    '招聘会','线下招聘会','本地招聘会','直接招聘',
+    # Exact names from overseas source files, using the existing direct/web
+    # category (not new award rules). See channel-notes-20261013 verification.
+    '新欧洲','西华网','facebook',
+}
+DOMESTIC_HOLIDAY_RANGES = {
+    2025: (
+        (date(2025, 1, 28), date(2025, 2, 4), "春节"),
+        (date(2025, 5, 1), date(2025, 5, 5), "五一"),
+        (date(2025, 10, 1), date(2025, 10, 8), "国庆"),
+    ),
+    2026: (
+        (date(2026, 2, 15), date(2026, 2, 23), "春节"),
+        (date(2026, 5, 1), date(2026, 5, 5), "五一"),
+        (date(2026, 10, 1), date(2026, 10, 7), "国庆"),
+    ),
 }
 OVERSEAS_CHINA_LOCATION_TOKENS = {"非中国", "香港", "澳门", "澳門", "台湾", "臺灣"}
 MAINLAND_LOCATION_TOKENS = {
@@ -75,6 +115,11 @@ AUTO_ENRICHMENT_FIELDS = {
     "证件号", "海外offer流程编号", "海外招聘需求编号",
     "直线经理", "直线经理工号", "直接上级工号",
     "间接上级1工号", "间接上级2工号", "间接上级3工号", "间接上级4工号",
+    "周期剔除天数", "标签分类", "职族", "职类", "职族分类",
+}
+SOURCE_DATE_FIELDS = {
+    "EntryDate", "RegularizationDate", "ProbationStopDate", "LastWorkDate", "入职日期", "最后工作日",
+    "LookupPrefix_RecruitmentRequirement_CreateDate", "招聘启动日期", "创建时间", "结束时间",
 }
 
 
@@ -88,6 +133,8 @@ class CompareResult:
     duplicate_keys: list[dict[str, Any]]
     alias_resolved_missing: list[dict[str, Any]]
     auto_enrichments: list[dict[str, Any]]
+    excluded_target_rows: list[dict[str, Any]] = field(default_factory=list)
+    source_refreshes: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_auto_import_rows(
@@ -109,27 +156,32 @@ def build_auto_import_rows(
     overseas_offers = _read_overseas_offers(Path(overseas_offer))
     resignations = _read_resignations(ehr_resignations, oehr_resignations)
     cycle_exclusions = _read_cycle_exclusions(special_approvals)
-    people_by_no = {**ehr_people, **oehr_people}
+    people_by_no = _merge_people(ehr_people, oehr_people)
 
     diagnostics: dict[str, Any] = {
         "counts": {
             "historyRows": len(history_rows),
             "ehrPeople": len(ehr_people),
             "oehrPeople": len(oehr_people),
-            "domesticOffers": len(domestic_offers),
+            "domesticOffers": len({id(offer) for offer in domestic_offers.values()}),
             "overseasOffers": len(overseas_offers),
             "resignationRows": len(resignations),
             "cycleExclusionRows": len(cycle_exclusions),
             "newDomesticRows": 0,
             "newOverseasRows": 0,
+            "excludedRows": 0,
         },
         "issues": [],
         "changes": [],
         "newRows": [],
+        "excludedRows": [],
     }
 
     rows_by_key: dict[str, dict[str, Any]] = {}
     for row in history_rows:
+        if _confirmed_out_of_scope_row(row):
+            _record_excluded_row(diagnostics, row, f"{_normalize_channel(row.get('招聘渠道'))}不享受招聘奖金", "历史台账")
+            continue
         key = _row_key(row)
         if not key:
             diagnostics["issues"].append({"类型": "历史台账缺少主键", "姓名": row.get("姓名", ""), "工号": row.get("工号", "")})
@@ -148,10 +200,15 @@ def build_auto_import_rows(
             continue
         if _row_key(person) in rows_by_key:
             continue
+        raw_offer = _raw_domestic_offer(person, domestic_offers)
         offer = _lookup_domestic_offer(person, domestic_offers)
+        exclusion_reason = _new_hire_exclusion_reason(person, raw_offer, offer)
+        if exclusion_reason:
+            _record_excluded_row(diagnostics, person, exclusion_reason, "EHR花名册/国内Offer")
+            continue
         row = _new_domestic_row(target_month, person, offer, diagnostics)
         _refresh_dynamic_fields(row, people_by_no, resignations, diagnostics)
-        _apply_cycle_exclusion(row, cycle_exclusions, diagnostics)
+        _apply_cycle_exclusion(row, cycle_exclusions, diagnostics, include_domestic_holidays=True)
         rows_by_key[_row_key(row)] = row
         diagnostics["counts"]["newDomesticRows"] += 1
         diagnostics["newRows"].append(_new_row_record(row, "EHR花名册"))
@@ -164,6 +221,10 @@ def build_auto_import_rows(
         if _row_key(person) in rows_by_key:
             continue
         offer = overseas_offers.get(_norm_key(person.get("海外offer流程编号")), {})
+        exclusion_reason = _new_hire_exclusion_reason(person, offer, offer)
+        if exclusion_reason:
+            _record_excluded_row(diagnostics, person, exclusion_reason, "OEHR花名册/海外Offer")
+            continue
         row = _new_overseas_row(target_month, person, offer, diagnostics)
         _refresh_dynamic_fields(row, people_by_no, resignations, diagnostics)
         _apply_cycle_exclusion(row, cycle_exclusions, diagnostics)
@@ -177,7 +238,7 @@ def build_auto_import_rows(
 
 
 def extract_history_rows(path: Path, target_month: int) -> list[dict[str, Any]]:
-    workbook = load_workbook(path, data_only=True, read_only=False)
+    workbook = load_workbook(path, data_only=True, read_only=True)
     if HISTORY_DETAIL_SHEET not in workbook.sheetnames:
         raise ValueError(f"历史核算表缺少工作表：{HISTORY_DETAIL_SHEET}")
     sheet = workbook[HISTORY_DETAIL_SHEET]
@@ -217,38 +278,51 @@ def extract_history_rows(path: Path, target_month: int) -> list[dict[str, Any]]:
         "奖金地区类型": 57,
         "推荐人姓名": 58,
         "推荐人工号": 59,
+        "直接上级工号": 74,
+        "间接上级1工号": 76,
+        "间接上级2工号": 78,
+        "间接上级3工号": 80,
+        "间接上级4工号": 82,
     }
 
     rows: list[dict[str, Any]] = []
-    for row_number in range(4, sheet.max_row + 1):
-        name = sheet.cell(row_number, 2).value
-        employee_no = sheet.cell(row_number, 3).value
-        id_no = sheet.cell(row_number, 4).value
+    max_column = max(mapping.values())
+    for values in sheet.iter_rows(min_row=4, max_col=max_column, values_only=True):
+        name = values[1] if len(values) > 1 else ""
+        employee_no = values[2] if len(values) > 2 else ""
+        id_no = values[3] if len(values) > 3 else ""
         if not any(_text(value) for value in (name, employee_no, id_no)):
             continue
         if _text(name) in {"姓名", "合计"} or _text(employee_no) == "工号":
             continue
         row = _blank_standard_row(target_month)
         for field, column in mapping.items():
-            if column <= sheet.max_column:
-                row[field] = _clean_value(sheet.cell(row_number, column).value)
+            row[field] = _clean_value(values[column - 1] if column <= len(values) else "")
         row["核算月份"] = target_month
         row["招聘渠道"] = _normalize_channel(row.get("招聘渠道"))
         rows.append(row)
+    workbook.close()
     return rows
 
 
 def read_standard_import_rows(path: Path | str) -> list[dict[str, Any]]:
-    workbook = load_workbook(path, data_only=True, read_only=False)
+    workbook = load_workbook(path, data_only=True, read_only=True)
     if STANDARD_IMPORT_SHEET not in workbook.sheetnames:
         raise ValueError(f"标准导入模板缺少工作表：{STANDARD_IMPORT_SHEET}")
     sheet = workbook[STANDARD_IMPORT_SHEET]
-    headers = [_text(sheet.cell(1, column).value) for column in range(1, sheet.max_column + 1)]
+    values_iter = sheet.iter_rows(values_only=True)
+    first_row = next(values_iter, ())
+    headers = [_text(value) for value in first_row]
     rows: list[dict[str, Any]] = []
-    for row_number in range(2, sheet.max_row + 1):
-        row = {header: _clean_value(sheet.cell(row_number, column).value) for column, header in enumerate(headers, start=1) if header}
+    for values in values_iter:
+        row = {
+            header: _clean_value(values[index] if index < len(values) else "")
+            for index, header in enumerate(headers)
+            if header
+        }
         if any(_text(row.get(field)) for field in ("工号", "姓名", "证件号")):
             rows.append({field: row.get(field, "") for field in STANDARD_IMPORT_HEADERS})
+    workbook.close()
     return rows
 
 
@@ -259,6 +333,8 @@ def compare_import_rows(
     headers: list[str] | None = None,
 ) -> CompareResult:
     headers = headers or STANDARD_IMPORT_HEADERS
+    excluded_target_rows = [row for row in target_rows if _confirmed_out_of_scope_row(row)]
+    target_rows = [row for row in target_rows if not _confirmed_out_of_scope_row(row)]
     generated_index, generated_dupes = _index_rows(generated_rows)
     target_index, target_dupes = _index_rows(target_rows)
     common_keys = sorted(set(generated_index) & set(target_index))
@@ -283,6 +359,7 @@ def compare_import_rows(
     }
     differences: list[dict[str, Any]] = []
     auto_enrichments: list[dict[str, Any]] = []
+    source_refreshes: list[dict[str, Any]] = []
 
     for key in common_keys:
         generated = generated_index[key]
@@ -304,6 +381,17 @@ def compare_import_rows(
                 })
             elif _equal_cell_for_field(field, generated.get(field), target.get(field), generated, target):
                 field_rates[field]["matchCount"] += 1
+            elif field in generated.get("_sourceRefreshFields", set()):
+                field_rates[field]["matchCount"] += 1
+                source_refreshes.append({
+                    "匹配键": key,
+                    "工号": target.get("工号") or generated.get("工号", ""),
+                    "姓名": target.get("姓名") or generated.get("姓名", ""),
+                    "字段": field,
+                    "自动刷新值": generated.get(field, ""),
+                    "线下旧值": target.get(field, ""),
+                    "说明": "按本次花名册/离职源刷新，不视为整合失败",
+                })
             else:
                 field_rates[field]["diffCount"] += 1
                 differences.append({
@@ -334,10 +422,23 @@ def compare_import_rows(
         "missingInTarget": len(missing_in_target),
         "manualBlankIdMatchedByAlias": len(alias_resolved_missing),
         "autoEnrichmentCount": len(auto_enrichments),
+        "sourceRefreshCount": len(source_refreshes),
         "fieldDiffCount": len(differences),
         "duplicateKeyCount": len(duplicate_keys),
+        "excludedTargetRows": len(excluded_target_rows),
     }
-    return CompareResult(summary, field_rates, differences, missing_in_generated, missing_in_target, duplicate_keys, alias_resolved_missing, auto_enrichments)
+    return CompareResult(
+        summary,
+        field_rates,
+        differences,
+        missing_in_generated,
+        missing_in_target,
+        duplicate_keys,
+        alias_resolved_missing,
+        auto_enrichments,
+        excluded_target_rows,
+        source_refreshes,
+    )
 
 
 def write_standard_import_workbook(rows: list[dict[str, Any]], output_path: Path | str) -> Path:
@@ -376,13 +477,16 @@ def write_validation_report(
     _write_dict_sheet(workbook, "字段命中率", list(compare.field_rates.values()), ["field", "total", "matchCount", "diffCount", "matchRate"])
     _write_dict_sheet(workbook, "字段差异", compare.field_differences, ["匹配键", "工号", "姓名", "字段", "自动生成值", "人工模板值"])
     _write_dict_sheet(workbook, "自动补全人工空值", compare.auto_enrichments, ["匹配键", "工号", "姓名", "字段", "自动补充值", "人工模板值", "说明"])
+    _write_dict_sheet(workbook, "源数据刷新线下旧值", compare.source_refreshes, ["匹配键", "工号", "姓名", "字段", "自动刷新值", "线下旧值", "说明"])
     _write_dict_sheet(workbook, "人工有自动缺", compare.missing_in_generated, STANDARD_IMPORT_HEADERS)
     _write_dict_sheet(workbook, "人工缺工号疑似重复", compare.alias_resolved_missing, STANDARD_IMPORT_HEADERS + ["自动匹配工号", "匹配说明"])
     _write_dict_sheet(workbook, "自动有人工缺", compare.missing_in_target, STANDARD_IMPORT_HEADERS)
+    _write_dict_sheet(workbook, "已确认排除", compare.excluded_target_rows, STANDARD_IMPORT_HEADERS)
     _write_dict_sheet(workbook, "待确认事项", _pending_confirmation_items(compare, diagnostics), ["类别", "姓名", "工号", "字段", "当前结论", "建议动作"])
     _write_dict_sheet(workbook, "数据源异常", diagnostics.get("issues", []), None)
     _write_dict_sheet(workbook, "字段刷新留痕", diagnostics.get("changes", []), ["工号", "姓名", "字段", "原值", "新值", "来源"])
     _write_dict_sheet(workbook, "新增人员清单", diagnostics.get("newRows", []), ["工号", "姓名", "标签分类", "来源"])
+    _write_dict_sheet(workbook, "源数据已排除", diagnostics.get("excludedRows", []), ["工号", "姓名", "招聘渠道", "排除原因", "来源"])
     _write_dict_sheet(workbook, "重复主键", compare.duplicate_keys, ["来源", "匹配键", "重复行数"])
 
     for sheet in workbook.worksheets:
@@ -400,6 +504,8 @@ def write_exception_workbook(diagnostics: dict[str, Any], output_path: Path | st
     _write_rows_to_sheet(sheet, diagnostics.get("issues", []), None)
     changes = workbook.create_sheet("字段刷新留痕")
     _write_rows_to_sheet(changes, diagnostics.get("changes", []), ["工号", "姓名", "字段", "原值", "新值", "来源"])
+    excluded = workbook.create_sheet("源数据已排除")
+    _write_rows_to_sheet(excluded, diagnostics.get("excludedRows", []), ["工号", "姓名", "招聘渠道", "排除原因", "来源"])
     for ws in workbook.worksheets:
         _format_report_sheet(ws)
     workbook.save(output_path)
@@ -454,9 +560,26 @@ def _blank_standard_row(target_month: int) -> dict[str, Any]:
     return row
 
 
+def _merge_people(
+    ehr_people: dict[str, dict[str, Any]],
+    oehr_people: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    # OEHR contains most EHR employees too, but omits several payroll-critical dynamic fields.
+    return {**oehr_people, **ehr_people}
+
+
 def _read_ehr_people(path: Path) -> dict[str, dict[str, Any]]:
     people: dict[str, dict[str, Any]] = {}
-    for record in _read_records(path):
+    fields = {
+        "JobNumber", "parent_Name", "EmployeeStatus", "parent_IDNumber", "EntryDate",
+        "RegularizationDate", "ProbationStopDate", "LastWorkDate",
+        "LookupPrefix_OIdDepartment_SecondLevelOrganization",
+        "LookupPrefix_OIdDepartment_ThirdLevelOrganization",
+        "LookupPrefix_OIdDepartment_FourthLevelOrganization",
+        "LookupPrefix_OIdDepartment_FifthLevelOrganization",
+        "OIdJobPosition_Name", "OIdJobLevel", "POIdEmpAdmin-ExportName", "POIdEmpAdmin-StaffCode",
+    }
+    for record in _read_records(path, fields=fields):
         employee_no = _text(record.get("JobNumber"))
         if not employee_no:
             continue
@@ -479,7 +602,7 @@ def _read_ehr_people(path: Path) -> dict[str, dict[str, Any]]:
             "直线经理工号": record.get("POIdEmpAdmin-StaffCode", ""),
             "标签分类": "国内",
             "候选人入职时间": _clean_value(record.get("EntryDate")),
-            "转正日期": _clean_value(record.get("RegularizationDate")),
+            "转正日期": _clean_value(record.get("RegularizationDate") or record.get("ProbationStopDate")),
             "直接上级工号": record.get("POIdEmpAdmin-StaffCode", ""),
             "推荐人职级": record.get("OIdJobLevel", ""),
             "推荐人职位": record.get("OIdJobPosition_Name", ""),
@@ -489,7 +612,12 @@ def _read_ehr_people(path: Path) -> dict[str, dict[str, Any]]:
 
 def _read_oehr_people(path: Path) -> dict[str, dict[str, Any]]:
     people: dict[str, dict[str, Any]] = {}
-    for record in _read_records(path):
+    fields = {
+        "姓名", "工号", "证件号码", "入职日期", "人员状态", "办公地址", "工作地区", "最后工作日",
+        "职级", "二级部门", "三级部门", "四级部门", "五级部门", "职位", "职族", "职类",
+        "直接上级", "直接上级工号", "offer流程编号",
+    }
+    for record in _read_records(path, fields=fields):
         employee_no = _text(record.get("工号"))
         if not employee_no:
             continue
@@ -523,19 +651,45 @@ def _read_oehr_people(path: Path) -> dict[str, dict[str, Any]]:
     return people
 
 
+def offer_validity(values: dict[str, Any], source_kind: str) -> dict[str, str]:
+    statuses = list(dict.fromkeys(_text(values.get(field)) for field in ("审批状态", "状态", "approvalStatus", "ApprovalStatus") if _text(values.get(field))))
+    status = " / ".join(statuses)
+    voids = [values.get("是否作废"), values.get("stdIsDeleted")]
+    invalid = {"已废弃", "已驳回", "已撤回", "已撤销", "已取消", "已作废", "作废", "驳回", "撤回", "审批未通过", "已拒绝", "拒绝offer", "已拒绝offer", "rejected", "void", "cancelled", "canceled"}
+    if any(_text(void).lower() in {"是", "true", "1", "1.0", "已作废"} for void in voids) or any(value.lower() in invalid for value in statuses):
+        return {"state": "invalid", "status": status, "reason": "录用资料已失效"}
+    if not status:
+        return {"state": "absent", "status": "", "reason": "原导出未提供状态，沿用历史兼容口径"}
+    supported = VALID_OVERSEAS_OFFER_STATUSES | {"已归档"} if source_kind == "overseas_offer" else VALID_DOMESTIC_OFFER_STATUSES | {"已通过", "已完成", "已结束", "审批结束", "2"}
+    state = "valid" if all(value in supported for value in statuses) else "unknown"
+    return {"state": state, "status": status, "reason": "" if state == "valid" else "录用状态尚未识别"}
+
+
 def _read_domestic_offers(path: Path) -> dict[str, dict[str, Any]]:
     offers: dict[str, dict[str, Any]] = {}
-    for record in _read_records(path):
+    fields = {
+        "LookupPrefix_LURecord_JobNumber", "IDNumber",
+        "LookupPrefix_RecruitmentRequirement_extzhiweifenlei_109025_933701443",
+        "HrDutyUserId-ExportName", "HrDutyUserId-StaffCode",
+        "extzhuanyuan12_109025_1971095424-ExportName", "extzhuanyuan12_109025_1971095424-StaffCode",
+        "extxiezhuzhaopinfuzerengonghao_109025_801104894", "extxiezhuzhaopinfuzeren_109025_1163526586",
+        "LookupPrefix_RecruitmentRequirement_CreateDate", "extQ20210635_109025_2041445622",
+        "extQ202106334_109025_847145517-ExportName", "extQ202106334_109025_847145517-StaffCode",
+        "ApprovalStatus",
+    }
+    for record in _read_records(path, fields=fields):
         id_no = _norm_key(record.get("IDNumber"))
-        if not id_no:
+        employee_no = _employee_lookup_key(record.get("LookupPrefix_LURecord_JobNumber"))
+        if not id_no and not employee_no:
             continue
         status = _text(record.get("ApprovalStatus"))
         if status and status not in VALID_DOMESTIC_OFFER_STATUSES:
             continue
         offer = {
+            "_employeeNo": record.get("LookupPrefix_LURecord_JobNumber", ""),
             "ABC类别": record.get("LookupPrefix_RecruitmentRequirement_extzhiweifenlei_109025_933701443", ""),
-            "招聘负责人工号": record.get("HrDutyUserId-StaffCode", ""),
-            "招聘负责人姓名": record.get("HrDutyUserId-ExportName", ""),
+            "招聘负责人工号": record.get("extzhuanyuan12_109025_1971095424-StaffCode", "") or record.get("HrDutyUserId-StaffCode", ""),
+            "招聘负责人姓名": record.get("extzhuanyuan12_109025_1971095424-ExportName", "") or record.get("HrDutyUserId-ExportName", ""),
             "协助招聘人工号": record.get("extxiezhuzhaopinfuzerengonghao_109025_801104894", ""),
             "协助招聘人姓名": record.get("extxiezhuzhaopinfuzeren_109025_1163526586", ""),
             "招聘渠道": _normalize_channel(record.get("extQ20210635_109025_2041445622")),
@@ -545,31 +699,49 @@ def _read_domestic_offers(path: Path) -> dict[str, dict[str, Any]]:
             "_status": status,
             "_sortDate": _as_date(record.get("LookupPrefix_RecruitmentRequirement_CreateDate")) or datetime.min,
         }
-        offers[id_no] = _choose_offer(offers.get(id_no), offer)
+        if id_no:
+            offers[id_no] = _choose_offer(offers.get(id_no), offer)
+        if employee_no:
+            employee_key = f"emp:{employee_no}"
+            offers[employee_key] = _choose_offer(offers.get(employee_key), offer)
     return offers
 
 
 def _read_overseas_offers(path: Path) -> dict[str, dict[str, Any]]:
     offers: dict[str, dict[str, Any]] = {}
-    for record in _read_records(path):
+    fields = {
+        "offer编码", "状态", "编制ABC分类", "招聘负责人工号", "招聘负责人",
+        "协助招聘负责人工号", "协助招聘负责人姓名", "招聘渠道", "其他渠道",
+        "招聘需求编码", "招聘启动日期", "内推人姓名", "内推人工号",
+        "招聘渠道说明", "渠道说明", "备注", "说明", "招聘备注", "招聘渠道备注",
+    }
+    for record in _read_records(path, fields=fields):
         offer_no = _norm_key(record.get("offer编码"))
         if not offer_no:
             continue
         status = _text(record.get("状态"))
         if status and status not in VALID_OVERSEAS_OFFER_STATUSES:
             continue
+        raw_channel = record.get("招聘渠道")
+        other_channel = record.get("其他渠道")
+        notes=[record.get(k) for k in ('招聘渠道说明','渠道说明','备注','说明','招聘备注','招聘渠道备注') if record.get(k)]
+        normalized_channel, channel_needs_confirmation = _normalize_offer_channel(raw_channel, other_channel, notes)
+        inferred_referrer_no, inferred_referrer_name = _referrer_from_other_channel(raw_channel, other_channel)
         offer = {
             "ABC类别": record.get("编制ABC分类", ""),
             "招聘负责人工号": record.get("招聘负责人工号", ""),
             "招聘负责人姓名": record.get("招聘负责人", ""),
             "协助招聘人工号": record.get("协助招聘负责人工号", ""),
             "协助招聘人姓名": record.get("协助招聘负责人姓名", ""),
-            "招聘渠道": _normalize_channel(record.get("招聘渠道")),
+            "招聘渠道": normalized_channel,
             "海外offer流程编号": record.get("offer编码", ""),
             "海外招聘需求编号": record.get("招聘需求编码", ""),
             "招聘启动日期": _clean_value(record.get("招聘启动日期")),
-            "推荐人姓名": record.get("内推人姓名", ""),
-            "推荐人工号": record.get("内推人工号", ""),
+            "推荐人姓名": record.get("内推人姓名", "") or inferred_referrer_name,
+            "推荐人工号": record.get("内推人工号", "") or inferred_referrer_no,
+            "_rawChannel": raw_channel,
+            "_otherChannel": other_channel,
+            "_channelNeedsConfirmation": channel_needs_confirmation,
             "_status": status,
             "_sortDate": _as_date(record.get("招聘启动日期")) or datetime.min,
         }
@@ -583,14 +755,14 @@ def _read_resignations(
 ) -> dict[str, dict[str, Any]]:
     resignations: dict[str, dict[str, Any]] = {}
     if ehr_resignations:
-        for record in _read_records(Path(ehr_resignations)):
+        for record in _read_records(Path(ehr_resignations), fields={"JobNumber", "LastWorkDate", "ApprovalStatus"}):
             employee_no = _norm_key(record.get("JobNumber"))
             last_work = _clean_value(record.get("LastWorkDate"))
             status = _text(record.get("ApprovalStatus"))
             if employee_no and last_work and status not in INVALID_RESIGN_STATUSES:
                 resignations[employee_no] = {"人员状态": "离职", "最后工作日": last_work, "来源": "EHR离职审批"}
     if oehr_resignations:
-        for record in _read_records(Path(oehr_resignations)):
+        for record in _read_records(Path(oehr_resignations), fields={"工号", "最后工作日", "审批状态", "是否作废"}):
             employee_no = _norm_key(record.get("工号"))
             last_work = _clean_value(record.get("最后工作日"))
             status = _text(record.get("审批状态"))
@@ -604,12 +776,19 @@ def _read_cycle_exclusions(special_approvals: Path | str | None) -> dict[str, di
     exclusions: dict[str, dict[str, Any]] = {}
     if not special_approvals:
         return exclusions
-    for record in _read_records(Path(special_approvals)):
+    fields = {
+        "申请单编号", "申请人工号", "申请人姓名", "申请说明", "事项分类", "文档状态",
+        "招聘需求单号", "招聘周期特殊剔除时间（天）", "候选人姓名",
+    }
+    for record in _read_records(Path(special_approvals), fields=fields):
         if "招聘周期" not in _text(record.get("事项分类")) or "剔除" not in _text(record.get("事项分类")):
             continue
         if _text(record.get("文档状态")) != "结束":
             continue
-        employee_no = _employee_lookup_key(record.get("申请人工号"))
+        description = _text(record.get("申请说明"))
+        employee_no = _employee_no_from_description(description)
+        if not employee_no:
+            employee_no = _employee_lookup_key(record.get("申请人工号"))
         days = _as_number(record.get("招聘周期特殊剔除时间（天）"))
         if not employee_no or days <= 0:
             continue
@@ -618,12 +797,28 @@ def _read_cycle_exclusions(special_approvals: Path | str | None) -> dict[str, di
             exclusions[employee_no] = {
                 "周期剔除天数": days,
                 "来源": record.get("申请单编号", "") or "特殊事项申请（HR）",
-                "申请说明": record.get("申请说明", ""),
+                "申请说明": description,
+                "申请人姓名": record.get("申请人姓名", ""),
             }
     return exclusions
 
 
 def _lookup_domestic_offer(person: dict[str, Any], offers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    person_no = _employee_lookup_key(person.get("工号"))
+    offer = offers.get(f"emp:{person_no}", {}) if person_no else {}
+    if offer:
+        return offer
+    offer = offers.get(_norm_key(person.get("证件号")), {})
+    offer_no = _employee_lookup_key(offer.get("_employeeNo"))
+    if person_no and offer_no and person_no != offer_no:
+        return {}
+    return offer
+
+
+def _raw_domestic_offer(person: dict[str, Any], offers: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    person_no = _employee_lookup_key(person.get("工号"))
+    if person_no and f"emp:{person_no}" in offers:
+        return offers[f"emp:{person_no}"]
     return offers.get(_norm_key(person.get("证件号")), {})
 
 
@@ -672,6 +867,17 @@ def _new_overseas_row(
     row["奖金地区类型"] = _normalized_region_type(row)
     if not offer:
         _issue(diagnostics, "海外新增人员未匹配offer", row)
+    elif offer.get("_channelNeedsConfirmation"):
+        row["人工备注"] = f"其他渠道待确认：{_text(offer.get('_otherChannel')) or '未填写'}"
+        _issue(diagnostics, "其他渠道无法自动归类", row, {
+            "招聘渠道原值": offer.get("_rawChannel", ""),
+            "其他渠道": offer.get("_otherChannel", ""),
+        })
+    if not row["奖金地区类型"]:
+        _issue(diagnostics, "国家类别无法判断", row, {
+            "组织架构": _organization_text(row),
+            "工作地": row.get("工作地", ""),
+        })
     _required_issue(diagnostics, row, ["ABC类别", "招聘负责人工号", "招聘渠道"])
     return row
 
@@ -723,7 +929,7 @@ def _refresh_dynamic_fields(
         _set_with_audit(row, "ABC类别", normalized_abc, "字段规范化", diagnostics)
     normalized_region = _normalized_region_type(row)
     if normalized_region:
-        _set_with_audit(row, "奖金地区类型", normalized_region, "工作地规则", diagnostics)
+        _set_with_audit(row, "奖金地区类型", normalized_region, "组织架构/工作地规则", diagnostics)
     special_region_rule = _normalized_special_region_rule(row)
     if special_region_rule:
         _set_with_audit(row, "特殊地区规则", special_region_rule, "部门规则", diagnostics)
@@ -764,17 +970,76 @@ def _apply_cycle_exclusion(
     row: dict[str, Any],
     cycle_exclusions: dict[str, dict[str, Any]],
     diagnostics: dict[str, Any],
+    *,
+    include_domestic_holidays: bool = False,
 ) -> None:
-    exclusion = cycle_exclusions.get(_norm_key(row.get("工号")))
-    if not exclusion:
+    candidates: list[tuple[float, str]] = []
+    current_days = _as_number(row.get("周期剔除天数"))
+    if current_days > 0:
+        candidates.append((current_days, "历史台账"))
+
+    exclusion = _find_cycle_exclusion(row, cycle_exclusions)
+    if exclusion:
+        candidates.append((
+            _as_number(exclusion.get("周期剔除天数")),
+            _text(exclusion.get("来源")) or "特殊事项申请（HR）",
+        ))
+
+    if include_domestic_holidays and _text(row.get("标签分类")) == "国内":
+        holiday_days = _domestic_holiday_exclusion_days(
+            row.get("招聘启动日期"),
+            row.get("候选人入职时间") or row.get("入职日期"),
+        )
+        if holiday_days > 0:
+            candidates.append((holiday_days, "国内法定节假日（春节/五一/国庆）"))
+
+    if not candidates:
         return
-    _set_with_audit(row, "周期剔除天数", exclusion.get("周期剔除天数"), exclusion.get("来源", "特殊事项申请（HR）"), diagnostics)
+    days, source = max(candidates, key=lambda item: item[0])
+    _set_with_audit(row, "周期剔除天数", days, source, diagnostics)
+
+
+def _find_cycle_exclusion(
+    row: dict[str, Any],
+    cycle_exclusions: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    by_number = cycle_exclusions.get(_employee_lookup_key(row.get("工号")))
+    if by_number:
+        return by_number
+    name = _norm_name(row.get("姓名"))
+    if len(name) < 3:
+        return None
+    matches = [
+        exclusion
+        for exclusion in cycle_exclusions.values()
+        if name in _norm_name(exclusion.get("申请说明"))
+    ]
+    return max(matches, key=lambda item: _as_number(item.get("周期剔除天数"))) if matches else None
+
+
+def _domestic_holiday_exclusion_days(start_value: Any, end_value: Any) -> int:
+    start = _as_date(start_value)
+    end = _as_date(end_value)
+    if not start or not end or end.date() < start.date():
+        return 0
+    first = start.date()
+    last = end.date()
+    total = 0
+    for year in range(first.year, last.year + 1):
+        for holiday_start, holiday_end, _name in DOMESTIC_HOLIDAY_RANGES.get(year, ()):
+            overlap_start = max(first, holiday_start)
+            overlap_end = min(last, holiday_end)
+            if overlap_start <= overlap_end:
+                total += (overlap_end - overlap_start).days + 1
+    return total
 
 
 def _normalize_abc(value: Any, label: Any) -> str:
     category = _text(value)
     if not category:
         return ""
+    if category in {"不占编", "不佔編", "不占编制", "不佔編制"}:
+        return "C1类" if _text(label) == "海外" else "C类"
     if category in {"A", "B", "C"}:
         if category == "C" and _text(label) == "海外":
             return "C1类"
@@ -784,21 +1049,55 @@ def _normalize_abc(value: Any, label: Any) -> str:
     return category
 
 
+def _confirmed_domestic_scope(row: dict[str, Any]) -> bool:
+    # Confirmed on 2026-09-15: matching domestic tag and mainland workplace
+    # take precedence over the overseas business organization.
+    location = _text(row.get("工作地"))
+    return (_text(row.get("标签分类")) == "国内"
+            and _is_domestic_location(location)
+            and not _classify_overseas_country(location))
+
+
 def _normalized_region_type(row: dict[str, Any]) -> str:
     imported = _text(row.get("奖金地区类型"))
-    if imported in {"国内发展中国家", "海外发达国家", "海外发展中国家"}:
-        return imported
     location = _text(row.get("工作地"))
-    if _text(row.get("标签分类")) == "国内" or _is_domestic_location(location):
+    if _text(row.get("标签分类")) == "国内":
         return "国内发展中国家"
-    location_lower = location.lower()
-    if any(token in location_lower for token in DEVELOPED_LOCATION_TOKENS):
-        return "海外发达国家"
+
+    organization_class = _classify_overseas_country(_organization_text(row))
+    if organization_class:
+        return organization_class
+    if _is_domestic_location(location):
+        return "国内发展中国家"
+    location_class = _classify_overseas_country(location)
+    if location_class:
+        return location_class
+    if imported in {"海外发达国家", "海外发展中国家"}:
+        return imported
     if imported == "发达国家":
         return "海外发达国家"
     if imported == "发展中国家":
         return "国内发展中国家" if _text(row.get("标签分类")) == "国内" else "海外发展中国家"
-    return "海外发展中国家" if location else ""
+    return ""
+
+
+def _organization_text(row: dict[str, Any]) -> str:
+    return " | ".join(
+        _text(row.get(field))
+        for field in ("二级组织", "三级组织", "四级组织", "五级组织")
+        if _text(row.get(field))
+    )
+
+
+def _classify_overseas_country(value: Any) -> str:
+    text = _text(value).lower()
+    if not text:
+        return ""
+    if any(token.lower() in text for token in DEVELOPED_LOCATION_TOKENS):
+        return "海外发达国家"
+    if any(token.lower() in text for token in DEVELOPING_LOCATION_TOKENS):
+        return "海外发展中国家"
+    return ""
 
 
 def _is_domestic_location(location: str) -> bool:
@@ -814,25 +1113,169 @@ def _is_domestic_location(location: str) -> bool:
     )
 
 
-def _read_records(path: Path, sheet_name: str | None = None) -> list[dict[str, Any]]:
+def _read_records(
+    path: Path,
+    sheet_name: str | None = None,
+    *,
+    fields: set[str] | None = None,
+) -> list[dict[str, Any]]:
     if path.suffix.lower() == ".xls":
         with tempfile.TemporaryDirectory() as tmpdir:
-            return _read_records(_convert_xls_to_xlsx(path, Path(tmpdir)), sheet_name)
-    workbook = load_workbook(path, data_only=True, read_only=False)
+            return _read_records(_convert_xls_to_xlsx(path, Path(tmpdir)), sheet_name, fields=fields)
+    if fields is not None and sheet_name is None:
+        return _read_xlsx_records_streaming(path, fields)
+    workbook = load_workbook(path, data_only=True, read_only=True)
     sheet = workbook[sheet_name] if sheet_name else workbook[workbook.sheetnames[0]]
     header_row = _detect_header_row(sheet)
     headers = [_text(sheet.cell(header_row, column).value) for column in range(1, sheet.max_column + 1)]
+    selected = [
+        (index, header)
+        for index, header in enumerate(headers)
+        if header and (fields is None or header in fields)
+    ]
     records: list[dict[str, Any]] = []
     for values in sheet.iter_rows(min_row=header_row + 1, values_only=True):
         if not any(value not in (None, "") for value in values):
             continue
         record = {}
-        for index, header in enumerate(headers):
-            if header:
-                record[header] = _clean_value(values[index] if index < len(values) else "")
+        for index, header in selected:
+            record[header] = _clean_value(values[index] if index < len(values) else "")
         if any(_text(value) and _text(value) != header for header, value in record.items()):
             records.append(record)
+    workbook.close()
     return records
+
+
+def _read_xlsx_records_streaming(path: Path, fields: set[str]) -> list[dict[str, Any]]:
+    with zipfile.ZipFile(path) as archive:
+        shared_strings = _read_shared_strings(archive)
+        sheet_path = _first_worksheet_path(archive)
+        buffered_rows: list[dict[int, Any]] = []
+        records: list[dict[str, Any]] = []
+        header_map: dict[int, str] | None = None
+
+        with archive.open(sheet_path) as source:
+            for _event, element in ET.iterparse(source, events=("end",)):
+                if _local_name(element.tag) != "row":
+                    continue
+                parsed = _parse_xlsx_row(element, shared_strings)
+                element.clear()
+                if header_map is None:
+                    buffered_rows.append(parsed)
+                    if len(buffered_rows) < 15:
+                        continue
+                    header_map, header_index = _stream_header_map(buffered_rows, fields)
+                    for row in buffered_rows[header_index + 1:]:
+                        record = _selected_record(row, header_map)
+                        if record:
+                            records.append(record)
+                    buffered_rows.clear()
+                    continue
+
+                record = _selected_record(parsed, header_map)
+                if record:
+                    records.append(record)
+
+        if header_map is None:
+            header_map, header_index = _stream_header_map(buffered_rows, fields)
+            for row in buffered_rows[header_index + 1:]:
+                record = _selected_record(row, header_map)
+                if record:
+                    records.append(record)
+        return records
+
+
+def _read_shared_strings(archive: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in archive.namelist():
+        return []
+    strings: list[str] = []
+    with archive.open("xl/sharedStrings.xml") as source:
+        for _event, element in ET.iterparse(source, events=("end",)):
+            if _local_name(element.tag) != "si":
+                continue
+            strings.append("".join(node.text or "" for node in element.iter() if _local_name(node.tag) == "t"))
+            element.clear()
+    return strings
+
+
+def _first_worksheet_path(archive: zipfile.ZipFile) -> str:
+    workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+    first_sheet = next(node for node in workbook_root.iter() if _local_name(node.tag) == "sheet")
+    relationship_id = first_sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+    relationships_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+    for relationship in relationships_root:
+        if relationship.attrib.get("Id") == relationship_id:
+            target = relationship.attrib.get("Target", "worksheets/sheet1.xml").lstrip("/")
+            return target if target.startswith("xl/") else f"xl/{target}"
+    return "xl/worksheets/sheet1.xml"
+
+
+def _parse_xlsx_row(element: ET.Element, shared_strings: list[str]) -> dict[int, Any]:
+    row: dict[int, Any] = {}
+    for cell in element:
+        if _local_name(cell.tag) != "c":
+            continue
+        reference = cell.attrib.get("r", "")
+        index = _column_index(reference)
+        cell_type = cell.attrib.get("t", "")
+        raw_value = ""
+        if cell_type == "inlineStr":
+            raw_value = "".join(node.text or "" for node in cell.iter() if _local_name(node.tag) == "t")
+        else:
+            value_node = next((node for node in cell if _local_name(node.tag) == "v"), None)
+            raw_value = value_node.text if value_node is not None and value_node.text is not None else ""
+        if cell_type == "s" and raw_value:
+            value: Any = shared_strings[int(raw_value)]
+        elif cell_type == "b":
+            value = raw_value == "1"
+        elif raw_value:
+            try:
+                numeric = float(raw_value)
+                value = int(numeric) if numeric.is_integer() else numeric
+            except ValueError:
+                value = raw_value
+        else:
+            value = ""
+        row[index] = value
+    return row
+
+
+def _stream_header_map(rows: list[dict[int, Any]], fields: set[str]) -> tuple[dict[int, str], int]:
+    if not rows:
+        return {}, -1
+    header_index = max(range(len(rows)), key=lambda index: sum(value not in (None, "") for value in rows[index].values()))
+    header_map = {
+        column: _text(value)
+        for column, value in rows[header_index].items()
+        if _text(value) in fields
+    }
+    return header_map, header_index
+
+
+def _selected_record(row: dict[int, Any], header_map: dict[int, str]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for column, header in header_map.items():
+        value = _clean_value(row.get(column, ""))
+        if header in SOURCE_DATE_FIELDS:
+            value = _as_date(value) or value
+        record[header] = value
+    if not any(_text(value) and _text(value) != header for header, value in record.items()):
+        return {}
+    return record
+
+
+def _column_index(reference: str) -> int:
+    letters = re.match(r"[A-Z]+", reference.upper())
+    if not letters:
+        return 0
+    index = 0
+    for character in letters.group(0):
+        index = index * 26 + ord(character) - ord("A") + 1
+    return index - 1
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
 
 def _convert_xls_to_xlsx(path: Path, output_dir: Path) -> Path:
@@ -884,6 +1327,8 @@ def _set_with_audit(row: dict[str, Any], field: str, value: Any, source: str, di
     if value in (None, ""):
         return
     old = row.get(field, "")
+    if source.startswith("花名册") or "离职审批" in source:
+        row.setdefault("_sourceRefreshFields", set()).add(field)
     if _equal_cell(old, value):
         row[field] = value
         return
@@ -916,17 +1361,54 @@ def _new_row_record(row: dict[str, Any], source: str) -> dict[str, Any]:
     return {"工号": row.get("工号", ""), "姓名": row.get("姓名", ""), "标签分类": row.get("标签分类", ""), "来源": source}
 
 
+def _record_excluded_row(
+    diagnostics: dict[str, Any],
+    row: dict[str, Any],
+    reason: str,
+    source: str,
+) -> None:
+    item = {
+        "工号": row.get("工号", ""),
+        "姓名": row.get("姓名", ""),
+        "招聘渠道": row.get("招聘渠道", ""),
+        "排除原因": reason,
+        "来源": source,
+    }
+    diagnostics["excludedRows"].append(item)
+    diagnostics["counts"]["excludedRows"] += 1
+
+
+def _new_hire_exclusion_reason(
+    person: dict[str, Any],
+    raw_offer: dict[str, Any],
+    matched_offer: dict[str, Any],
+) -> str:
+    offer = matched_offer or raw_offer
+    channel = _normalize_channel(offer.get("招聘渠道"))
+    if channel in {"人员调动", "外包转正式"}:
+        return f"{channel}不享受招聘奖金"
+    person_no = _employee_lookup_key(person.get("工号"))
+    offer_no = _employee_lookup_key(raw_offer.get("_employeeNo"))
+    if channel == "二次入职" and person_no and offer_no and person_no != offer_no:
+        return "历史二次入职Offer工号与当前工号不一致，确认属于非本次招聘记录"
+    return ""
+
+
+def _confirmed_out_of_scope_row(row: dict[str, Any]) -> bool:
+    return _normalize_channel(row.get("招聘渠道")) in {"人员调动", "外包转正式"}
+
+
 def _pending_confirmation_items(compare: CompareResult, diagnostics: dict[str, Any]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for row in compare.missing_in_generated:
         if "人员调动" in _text(row.get("招聘渠道")):
             items.append({
-                "类别": "待接入数据源",
+                "类别": "已确认排除",
                 "姓名": row.get("姓名", ""),
                 "工号": row.get("工号", ""),
                 "字段": "招聘渠道",
-                "当前结论": "人员调动/异动审批源未接入，暂不自动生成",
-                "建议动作": "等待人员调动或异动审批导出后再验证",
+                "当前结论": "人员调动不享受招聘奖金，不应自动生成",
+                "建议动作": "从线下导入清单排除",
             })
     for row in compare.missing_in_target:
         if _normalize_channel(row.get("招聘渠道")) == "二次入职":
@@ -943,14 +1425,14 @@ def _pending_confirmation_items(compare: CompareResult, diagnostics: dict[str, A
     if diff_count:
         cycle_source_count = diagnostics.get("counts", {}).get("cycleExclusionRows", 0)
         current_conclusion = (
-            f"已接入本次OA特殊事项审批明细，PPT已列明节假日及海外特殊剔除条件，该字段仍有 {diff_count} 条差异"
+            f"已接入国内节假日日历和本次OA特殊事项审批明细，该字段仍有 {diff_count} 条差异"
             if cycle_source_count
-            else f"PPT已列明节假日及海外特殊剔除条件，该字段仍有 {diff_count} 条差异"
+            else f"已接入国内节假日日历，该字段仍有 {diff_count} 条差异"
         )
         advice = (
-            "继续补充国内节假日历、完整OA审批明细，或复核人工模板差异"
+            "复核OA申请说明中的实际员工和线下人工填写"
             if cycle_source_count
-            else "接入节假日历和OA特殊事项审批后再自动计算"
+            else "补充完整OA特殊事项审批明细后再验证"
         )
         items.append({
             "类别": "待接入数据源",
@@ -959,6 +1441,53 @@ def _pending_confirmation_items(compare: CompareResult, diagnostics: dict[str, A
             "字段": "周期剔除天数",
             "当前结论": current_conclusion,
             "建议动作": advice,
+        })
+
+    relationship_fields = {
+        "招聘渠道", "招聘负责人工号", "招聘负责人姓名", "协助招聘人工号", "协助招聘人姓名",
+        "推荐人姓名", "推荐人工号", "推荐人职级", "推荐人人员状态", "推荐人职位", "ABC类别",
+    }
+    relationship_differences: dict[str, dict[str, Any]] = {}
+    for difference in compare.field_differences:
+        if difference.get("字段") not in relationship_fields:
+            continue
+        key = _text(difference.get("工号")) or _norm_name(difference.get("姓名"))
+        item = relationship_differences.setdefault(key, {
+            "姓名": difference.get("姓名", ""),
+            "工号": difference.get("工号", ""),
+            "字段": [],
+        })
+        item["字段"].append(_text(difference.get("字段")))
+    for difference in relationship_differences.values():
+        fields = "、".join(dict.fromkeys(difference["字段"]))
+        items.append({
+            "类别": "待补充变更源",
+            "姓名": difference["姓名"],
+            "工号": difference["工号"],
+            "字段": fields,
+            "当前结论": "线下存在招聘关系或ABC类别人工修正，本批Offer/OA剔除数据无法还原",
+            "建议动作": "补充Offer评论或OA招聘信息变更导出后自动覆盖",
+        })
+
+    unavailable_role_statuses = [
+        difference
+        for difference in compare.field_differences
+        if difference.get("字段") in {
+            "招聘负责人人员状态", "招聘负责人最后工作日",
+            "协助招聘人人员状态", "协助招聘人最后工作日",
+            "推荐人人员状态", "推荐人最后工作日",
+        }
+        and not _text(difference.get("自动生成值"))
+        and _text(difference.get("人工模板值"))
+    ]
+    if unavailable_role_statuses:
+        items.append({
+            "类别": "待补充人员源",
+            "姓名": "",
+            "工号": "",
+            "字段": "发放对象人员状态/最后工作日",
+            "当前结论": f"有 {len(unavailable_role_statuses)} 个字段在线下有值，但当前EHR/OEHR及离职源无法匹配",
+            "建议动作": "补充体系外/GL账号花名册或历史角色状态台账",
         })
     return items
 
@@ -1080,8 +1609,8 @@ def _norm_name(value: Any) -> str:
 
 def _employee_lookup_key(value: Any) -> str:
     text = _norm_key(value).replace(" ", "")
-    if not text or text == "-":
-        return text
+    if not text or text in {"-", "0", "0.0"}:
+        return ""
     if "-" in text:
         tail = text.split("-")[-1]
         if tail:
@@ -1101,8 +1630,17 @@ def _normalize_channel(value: Any) -> str:
     channel = _text(value)
     if not channel or channel == "-":
         return channel
+    if channel.lower() in DIRECT_RECRUITMENT_CHANNELS:
+        return "招聘网站"
+    channel_lower = channel.lower()
+    if any(token in channel for token in ("体系外转体系内", "體系外轉體系內", "人员调动", "人員調動", "内部调动", "內部調動")):
+        return "人员调动"
+    if any(token in channel_lower for token in ("agency to contract", "劳务工转正", "勞務工轉正", "中介工转正", "中介工轉正", "外包转正式", "外包轉正式", "working for agency")):
+        return "外包转正式"
     if "内推" in channel or "内部推荐" in channel:
         return "内推"
+    if channel_lower == "referral" or "外部推荐" in channel:
+        return "招聘网站"
     if "二次" in channel:
         return "二次入职"
     if "返聘" in channel:
@@ -1111,7 +1649,110 @@ def _normalize_channel(value: Any) -> str:
         return "校招"
     if "猎头" in channel:
         return "猎头"
-    return "招聘网站"
+    if any(token in channel_lower for token in RECRUITMENT_WEBSITE_TOKENS):
+        return "招聘网站"
+    return "其他"
+
+
+def _channel_notes(values):
+    return [values.get(k) for k in ('招聘渠道说明', '招聘渠道备注', '人工备注', '备注') if values.get(k)] + values.get('_channelNotes', [])
+
+
+def _channel_note_categories(value):
+    """Read channel statements, not incidental mentions of referral awards."""
+    notes = value if isinstance(value, (list, tuple)) else [value]
+    categories = set()
+    exact = DIRECT_RECRUITMENT_CHANNELS | RECRUITMENT_WEBSITE_TOKENS | {
+        '内推', '内部推荐', '外包转正式', '劳务工转正', '中介工转正', '人员调动', '体系外转体系内',
+        '二次入职', '返聘', '校招', '猎头',
+    }
+    for note in notes:
+        for part in re.split(r'[;；\n。]', _text(note)):
+            part = part.strip()
+            explicit = re.search(r'(?:(?:实际|招聘|应聘|录用|简历)?(?:渠道|来源)(?:说明)?|(?:recruitment\s+)?channel|source)\s*[:：=为是]\s*(.+)', part, re.I)
+            if not explicit:explicit=re.match(r'(?:通过|来自|从)\s*(.+?)(?:招聘|应聘|投递|获得简历)?$',part)
+            value = explicit.group(1).strip() if explicit else part
+            if re.search(r'不是|并非|非(?:内推|猎头|校招)|不属于|不确定|待确认|待核|可能|[?？]|\bor\b', part, re.I):
+                continue
+            if not explicit and value.lower() not in exact:
+                continue
+            for item in re.split(r'[,，/、]|或者|或|\s+and\s+', value, flags=re.I):
+                normalized, unknown = _normalize_other_channel(item.strip())
+                if not unknown: categories.add(normalized)
+    return categories
+
+
+def _normalize_offer_channel(main_value: Any, other_value: Any = "", remarks: Any = "") -> tuple[str, bool]:
+    main = _text(main_value)
+    if main != "其他":
+        return _normalize_channel(main), False
+
+    channel, unknown = _normalize_other_channel(other_value)
+    categories = _channel_note_categories(remarks)
+    if not unknown: categories.add(channel)
+    if len(categories) == 1:
+        return next(iter(categories)), False
+    return '其他', True
+
+
+def _normalize_other_channel(other_value):
+    other = _text(other_value)
+    other_lower = other.lower()
+    if not other:
+        return "其他", True
+    if re.search(r'不是|并非|非(?:内推|猎头|校招)|不确定|待确认|待核|可能|[?？]', other):
+        return '其他', True
+    alternatives=re.split(r'或者|或|\s+or\s+|/',other,flags=re.I)
+    if len(alternatives)>1:
+        kinds={kind for part in alternatives for kind,unknown in [_normalize_other_channel(part)] if not unknown}
+        return (next(iter(kinds)),False) if len(kinds)==1 else ('其他',True)
+    if other_lower in DIRECT_RECRUITMENT_CHANNELS:
+        return "招聘网站", False
+    if any(token in other_lower for token in RECRUITMENT_WEBSITE_TOKENS):
+        return "招聘网站", False
+    if any(token in other_lower for token in ("内推", "內推", "内部推荐", "內部推薦", "推荐", "推薦", "介紹", "介绍")):
+        return "内推", False
+    if any(token in other_lower for token in ("agency to contract", "劳务工转正", "勞務工轉正", "中介工转正", "中介工轉正", "外包转正式", "外包轉正式", "working for agency")):
+        return "外包转正式", False
+    if any(token in other_lower for token in ("体系外转体系内", "體系外轉體系內", "人员调动", "人員調動", "内部调动", "內部調動")):
+        return "人员调动", False
+    if "二次入职" in other or "二次入職" in other or "former employee" in other_lower:
+        return "二次入职", False
+    if "返聘" in other:
+        return "返聘", False
+    if "校招" in other:
+        return "校招", False
+    if "猎头" in other or "獵頭" in other:
+        return "猎头", False
+    return "其他", True
+
+
+def _referrer_from_other_channel(main_value: Any, other_value: Any) -> tuple[str, str]:
+    if _text(main_value) != "其他":
+        return "", ""
+    other = _text(other_value)
+    if not any(token in other for token in ("内推", "內推", "内部推荐", "內部推薦")):
+        return "", ""
+    employee_no = _employee_no_from_description(other)
+    if not employee_no:
+        return "", ""
+    match = re.search(re.escape(employee_no), other, flags=re.IGNORECASE)
+    if not match:
+        return employee_no, ""
+    tail = other[match.end():].strip(" ，,：:-")
+    name = re.split(r"\s+(?:但|但是|因|由于|由於)|[，,；;]", tail, maxsplit=1)[0].strip()
+    return employee_no, name
+
+
+def _employee_no_from_description(value: Any) -> str:
+    text = _text(value).lower()
+    if not text:
+        return ""
+    labelled = re.search(r"(?:工号|工號|员工编号|員工編號|employee\s*no\.?)\s*[:：]?\s*((?:zt|lg)\d+)", text)
+    if labelled:
+        return _employee_lookup_key(labelled.group(1))
+    matches = re.findall(r"(?<![a-z0-9])((?:zt|lg)\d+)(?![a-z0-9])", text)
+    return _employee_lookup_key(matches[-1]) if matches else ""
 
 
 def _equal_cell(left: Any, right: Any) -> bool:
@@ -1144,6 +1785,8 @@ def _equal_cell_for_field(
 def _is_auto_enrichment(field: str, generated_value: Any, target_value: Any) -> bool:
     if field not in AUTO_ENRICHMENT_FIELDS:
         return False
+    if field == "周期剔除天数":
+        return _as_number(generated_value) > 0 and _as_number(target_value) <= 0
     generated_text = _text(generated_value)
     target_text = _text(target_value)
     return bool(generated_text and target_text in {"", "-", "0"})
@@ -1161,8 +1804,9 @@ def _normalize_compare_value(field: str, value: Any, row: dict[str, Any]) -> Any
         return _normalized_region_type({**row, field: value})
     if field == "特殊地区规则":
         return _normalized_special_region_rule({**row, field: value})
-    if field == "周期剔除天数" and text in {"", "-"}:
-        return 0
+    if field == "周期剔除天数":
+        number = _as_number(value) if text not in {"", "-"} else 0
+        return int(number) if float(number).is_integer() else number
     if field in ROLE_STATUS_FIELDS and text in {"正式", "试用"}:
         return "正式在职"
     return value
@@ -1173,6 +1817,8 @@ def _placeholder_or_default_role_value(value: Any) -> bool:
 
 
 def _normalized_special_region_rule(row: dict[str, Any]) -> str:
+    if _confirmed_domestic_scope(row):
+        return ""
     explicit = _text(row.get("特殊地区规则"))
     if explicit:
         return explicit

@@ -16,6 +16,7 @@ from .models import (
     yyyymm,
 )
 from .rules import RuleBook
+from .recruitment_import_validation import _confirmed_domestic_scope
 
 
 CURRENT_EMPLOYEE_STATUSES = {"正式", "试用", "待入职", "在职", "正式在职", "试用在职"}
@@ -238,6 +239,8 @@ def _calculate_row(
         referral_6m_period=_period(row, "内推入职6月发放周期_覆盖", _period_after(onboard_date, 6, referral_6m, last_work_date), allow_legacy_overrides),
         referral_probation_bonus=referral_probation,
         referral_probation_period=_period(row, "内推转正发放周期_覆盖", _probation_period(probation_date, referral_probation, last_work_date), allow_legacy_overrides),
+        exclusion_days=exclusion_days,
+        source_values=dict(row.values),
         exceptions=exceptions,
     )
 
@@ -371,6 +374,8 @@ def _manager_ids(row: ImportRow) -> set[str]:
 
 
 def _referral_scope(row: ImportRow) -> str:
+    if _confirmed_domestic_scope(row.values):
+        return "集团统一"
     explicit_scope = row.text("特殊地区规则")
     if explicit_scope in {"FBU德国", "FBU捷克"}:
         return explicit_scope

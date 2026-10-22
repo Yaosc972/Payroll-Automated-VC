@@ -1,0 +1,207 @@
+/* Desktop workspace: readable hierarchy, natural page height, one content pane. */
+.recruitment-experience { --flow-ease:cubic-bezier(.22,1,.36,1); font-size:13px; }
+.recruitment-experience .rd-header-inner { max-width:1504px; margin:auto; padding:8px 32px; }
+.recruitment-experience .rd-brand { font-size:14px; gap:10px; }
+.recruitment-experience .rd-brand img { width:30px; height:30px; }
+.recruitment-experience .rd-home { min-height:36px; }
+.recruitment-experience .rd-home,.recruitment-experience .ra-back { font-size:13px; }
+.recruitment-experience .rd-shell { max-width:1504px; padding:20px 32px 20px; }
+.recruitment-experience .ra-back { margin-bottom:12px; }
+.recruitment-experience .rd-heading { margin-bottom:16px; }
+.recruitment-experience .rd-heading h1 { font-size:22px; line-height:1.3; letter-spacing:-.025em; }
+.recruitment-experience .rd-button { min-height:36px; font-size:13px; padding:7px 12px; border-radius:9px; }
+.recruitment-experience .rd-text-button { min-height:32px; font-size:13px; padding:6px 10px; }
+.recruitment-experience :is(button,a,summary) { transition:background 180ms ease,color 180ms ease,border-color 180ms ease,box-shadow 180ms ease,transform 180ms var(--flow-ease); }
+.recruitment-experience button:active:not(:disabled) { transform:scale(.98); }
+.recruitment-experience .rd-draft-label,.recruitment-experience .ra-activity-month { font-size:13px; }
+.recruitment-experience .rd-save-line { font-size:12px; padding-top:12px; }
+.recruitment-experience .rd-button>.rd-icon { width:18px; height:18px; }
+.recruitment-experience .rd-month select { min-height:36px; font-size:13px; padding-block:6px; }
+.recruitment-experience .rd-menu-items { top:calc(100% + 6px); }
+.recruitment-experience .rd-menu-items>* { min-height:36px; padding:8px 10px; }
+
+/* A real workflow, not a numbered tab strip. Status never restricts navigation. */
+.flow-stepper { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:32px; padding:0 0 18px; }
+.flow-step { position:relative; display:flex; align-items:center; gap:12px; padding:10px 14px; border:1px solid transparent; border-radius:12px; background:transparent; text-align:left; min-width:0; }
+.flow-step:not(:last-child)::after { content:''; position:absolute; right:-24px; top:50%; width:16px; height:1px; background:#d5dce6; }
+.flow-step:hover { background:#edf1f6; }
+.flow-step[aria-selected=true] { background:#fff; border-color:#e0e6ef; box-shadow:0 4px 16px #203f6306; }
+.flow-step-mark { position:relative; display:grid; place-items:center; flex:none; width:36px; height:36px; color:#6c7b90; background:#e9edf3; border-radius:10px; }
+.flow-step-mark>.rd-icon { width:21px; height:21px; stroke-width:1.55; }
+.flow-step[aria-selected=true] .flow-step-mark { color:#0969d6; background:#edf4ff; }
+.flow-step-copy { display:grid; gap:3px; min-width:0; }
+.flow-step-copy strong { font-size:14px; font-weight:600; color:#364152; }
+.flow-step[aria-selected=true] .flow-step-copy strong { color:#163d75; }
+.flow-step-note { font-size:12px; color:#667085; line-height:1.5; }
+.flow-step[data-state=attention] .flow-step-note { color:#92621c; }
+.flow-step[data-state=running] .flow-step-note { color:#0969d6; }
+.flow-step[data-state=complete] .flow-step-note { color:#0f766e; }
+.flow-step[data-state=running] .flow-step-mark::after { content:''; position:absolute; inset:-3px; border:1px solid #89b5f0; border-radius:13px; animation:flow-pulse 1.8s ease-in-out infinite; }
+
+/* Prominent progress; the moving track is deliberately indeterminate. */
+.recruitment-experience .flow-progress { display:block; margin:0 0 18px; min-height:0; }
+.flow-progress-card { display:grid; grid-template-columns:44px minmax(0,1fr) auto; gap:16px; align-items:center; padding:18px 22px; border:1px solid #dce7f7; border-radius:18px; background:#f8fbff; animation:flow-enter 240ms var(--flow-ease); }
+.flow-progress-symbol { position:relative; display:grid; place-items:center; width:44px; height:44px; color:#0969d6; background:#e9f2ff; border-radius:13px; }
+.flow-progress-symbol>.rd-icon { width:24px; height:24px; stroke-width:1.6; }
+.flow-progress-card[data-tone=running] .flow-progress-symbol>.rd-icon { animation:flow-spin 1.8s linear infinite; }
+.flow-progress-copy { min-width:0; }
+.flow-progress-copy h2 { color:#193958; font-size:17px; font-weight:600; margin:0 0 7px; line-height:1.4; }
+.flow-progress-copy p { font-size:13px; color:#526780; line-height:1.6; margin:0; max-width:64ch; }
+.flow-progress-track { position:relative; height:4px; background:#dde9f8; overflow:hidden; border-radius:3px; margin-top:18px; }
+.flow-progress-track>span { display:block; width:34%; height:100%; background:#4389df; border-radius:3px; animation:flow-track 2.1s var(--flow-ease) infinite; }
+.flow-progress-phases { display:flex; gap:28px; list-style:none; padding:0; margin:14px 0 0; font-size:13px; color:#718299; }
+.flow-progress-phases li { display:flex; align-items:center; gap:7px; }
+.flow-progress-phases .rd-icon { width:16px; height:16px; }
+.flow-phase-dot { width:7px; height:7px; border-radius:50%; background:#c5cedb; }
+.flow-progress-phases [data-state=active] { color:#0969d6; font-weight:550; }
+.flow-progress-phases [data-state=active] .flow-phase-dot { background:#0969d6; animation:flow-pulse 1.6s ease-in-out infinite; }
+.flow-progress-phases [data-state=done] { color:#0f766e; }
+.flow-progress-card[data-tone=complete] { background:#f4faf7; border-color:#d6e9df; }
+.flow-progress-card[data-tone=complete] .flow-progress-symbol { color:#0f766e; background:#e4f3eb; }
+.flow-progress-card[data-tone=attention] { background:#fffaf2; border-color:#efe2cc; }
+.flow-progress-card[data-tone=attention] .flow-progress-symbol { color:#92621c; background:#faefd9; }
+.flow-progress-card[data-tone=error] { background:#fff7f5; border-color:#f1d8d3; }
+.flow-progress-card[data-tone=error] .flow-progress-symbol { color:#b42318; background:#fbe7e3; }
+.flow-progress-card[data-tone=error] .flow-progress-copy h2 { color:#962d22; }
+.flow-progress-card[data-tone=neutral] { background:#f2f4f7; border-color:#e0e5eb; }
+.flow-progress-card[data-tone=neutral] .flow-progress-symbol { background:#e8ebf0; color:#667085; }
+.flow-progress-card[data-tone=cancelled] { background:#f2f4f7; border-color:#e0e5eb; }
+.flow-progress-card[data-tone=cancelled] .flow-progress-symbol { background:#e8ebf0; color:#667085; }
+.recruitment-experience #flowProgressStop { width:auto; min-height:32px; padding:5px 12px; font-size:13px; align-self:start; }
+.flow-progress-card:is([data-tone=complete],[data-tone=attention]) { grid-template-columns:36px minmax(0,1fr) auto; gap:12px; padding:12px 20px; border-radius:11px; }
+.flow-progress-card:is([data-tone=complete],[data-tone=attention]) .flow-progress-symbol { width:36px; height:36px; border-radius:11px; }
+.flow-progress-card:is([data-tone=complete],[data-tone=attention]) .flow-progress-symbol>.rd-icon { width:21px; height:21px; }
+.flow-progress-card:is([data-tone=complete],[data-tone=attention]) .flow-progress-copy { display:flex; flex-wrap:wrap; align-items:center; gap:8px 24px; }
+.flow-progress-card:is([data-tone=complete],[data-tone=attention]) h2 { font-size:14px; margin:0; }
+
+/* Sources use page scrolling. Tables retain their operational scroll region. */
+.recruitment-experience .rd-shell .rd-workarea { height:auto; min-height:0; overflow:hidden; border:1px solid #e2e7ee; border-radius:20px; box-shadow:0 6px 24px #24355104; }
+.recruitment-experience .rd-toolbar { padding:18px 24px 14px; gap:14px; border-bottom:0; }
+.flow-view-heading { display:flex; align-items:center; gap:10px; margin-right:auto; min-width:0; }
+.flow-view-heading h2 { font-size:18px; font-weight:600; letter-spacing:-.02em; margin:0; white-space:nowrap; }
+.flow-view-heading>span { font-size:13px; color:#667085; white-space:nowrap; }
+.recruitment-experience .rd-search { min-height:36px; background:#f8f9fc; border-radius:9px; }
+.recruitment-experience .rd-search input { font-size:13px; padding:7px 0; width:180px; }
+.recruitment-experience .rd-scope select { min-height:36px; font-size:13px; }
+.recruitment-experience .rd-content { flex:none; min-height:0; overflow:visible; max-height:none; scrollbar-gutter:auto; }
+.recruitment-experience .rd-workarea[data-view=rows] .rd-content,
+.recruitment-experience .rd-workarea[data-view=comparison] .rd-content { max-height:660px; min-height:340px; overflow:auto; }
+/* Keep table scrolling inside the viewport, not inside a second scrolling page. */
+@media (min-height:600px) {
+  .recruitment-experience:has(.rd-workarea:not([hidden]):is([data-view=rows],[data-view=comparison])) { height:100dvh; display:flex; flex-direction:column; overflow:hidden; }
+  .recruitment-experience>.rd-header { flex:none; }
+  .recruitment-experience .rd-shell:has(>.rd-workarea:not([hidden]):is([data-view=rows],[data-view=comparison])) { display:flex; flex-direction:column; flex:1; min-height:0; width:100%; }
+  .recruitment-experience .rd-shell>* { flex-shrink:0; }
+  .recruitment-experience .rd-shell .rd-workarea:is([data-view=rows],[data-view=comparison]) { flex:1; min-height:0; }
+  .recruitment-experience .rd-workarea:is([data-view=rows],[data-view=comparison])>:not(.rd-content) { flex-shrink:0; }
+  .recruitment-experience .rd-workarea:is([data-view=rows],[data-view=comparison]) .rd-content { flex:1; min-height:0; max-height:none; }
+}
+.recruitment-experience .rd-workarea:is([data-view=rows],[data-view=comparison]) .rd-content { scrollbar-gutter:stable; }
+.recruitment-experience .rd-content::-webkit-scrollbar { width:12px; height:12px; }
+.recruitment-experience .rd-content::-webkit-scrollbar-track { background:#f8fafc; }
+.recruitment-experience .rd-content::-webkit-scrollbar-thumb { border:3px solid #f8fafc; border-radius:8px; background:#b7c2d0; }
+.recruitment-experience .rd-content::-webkit-scrollbar-thumb:hover { background:#899aaf; }
+.recruitment-experience .rd-content::-webkit-scrollbar-corner { background:#f8fafc; }
+.recruitment-experience .flow-worksheet td,.recruitment-experience .flow-worksheet.ra-selectable td,.recruitment-experience .flow-worksheet .rd-row-open { font-size:13px; }
+.recruitment-experience .flow-worksheet th { font-size:13px; }
+.recruitment-experience .flow-worksheet :is(th,td) { padding-block:8px; }
+.recruitment-experience .flow-worksheet .rd-row-open { min-height:24px; }
+.recruitment-experience .rd-footer { font-size:12px; min-height:44px; padding:6px 24px; background:#fff; }
+.recruitment-experience .rd-footer .rd-button { min-height:36px; width:36px; padding:6px; }
+
+/* One category shelf and one file list: the Item/Badge pattern keeps long names readable. */
+.flow-materials { padding:2px 24px 20px; }
+.flow-material-categories { display:grid; grid-template-columns:repeat(var(--material-columns),minmax(0,1fr)); gap:6px; padding:6px; border:1px solid #e9edf3; border-radius:16px; background:#f5f7fa; }
+.flow-material-category { position:relative; isolation:isolate; display:grid; grid-template-columns:28px minmax(0,1fr); align-content:center; align-items:center; gap:8px; width:100%; min-width:0; min-height:92px; padding:12px 10px; border:0; border-radius:11px; text-align:left; background:transparent; cursor:pointer; }
+.flow-material-category:hover { background:#eaf0f8; }
+.flow-material-category[aria-pressed=true] { z-index:1; }
+.flow-material-selection { position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none; opacity:0; }
+.flow-material-category[aria-pressed=true] .flow-material-selection { opacity:1; background:#fff; border:1px solid #c5d9f1; box-shadow:0 2px 5px #183b6310; }
+.flow-material-category strong { font-size:14px; font-weight:600; line-height:1.45; color:#344054; }
+.flow-material-category[aria-pressed=true] strong { color:#173f7a; }
+.flow-material-category:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+.flow-material-icon { display:grid; place-items:center; width:28px; height:28px; border-radius:8px; background:#e7edf5; color:#5f7694; }
+.flow-material-icon .rd-icon { width:19px; height:19px; stroke-width:1.6; }
+.flow-material-category[aria-pressed=true] .flow-material-icon { color:#0969d6; background:#eaf2ff; }
+.flow-material-status { display:inline-flex; align-items:center; justify-self:start; gap:6px; font-size:12px; font-weight:500; line-height:20px; color:#637087; background:#edf0f5; border-radius:6px; padding:2px 8px; white-space:nowrap; }
+.flow-material-categories .flow-material-category>.flow-material-status { grid-column:1/-1; padding:0; border-radius:0; background:transparent; margin-left:2px; font-size:12px; }
+.flow-material-category>.flow-material-status::before { content:''; width:5px; height:5px; border-radius:50%; background:currentColor; flex:none; }
+.flow-material-status .rd-icon { width:15px; height:15px; stroke-width:1.8; }
+.flow-material-status[data-tone=info] { color:#326596; background:#e9f0fa; }
+.flow-material-status[data-tone=ready] { color:#0b705d; background:#e3f3ec; }
+.flow-material-status[data-tone=missing] { color:#885710; background:#fff0d5; }
+.flow-material-status[data-tone=error] { color:#a63126; background:#fbe6e1; }
+.flow-material-status[data-tone=muted] { color:#667085; background:#eceff3; }
+.flow-material-panel { padding-top:24px; min-width:0; }
+.flow-material-panel>header { display:flex; align-items:center; gap:20px; justify-content:space-between; min-height:32px; margin-bottom:12px; }
+.flow-material-panel-actions { display:flex; align-items:center; gap:16px; }
+.flow-material-panel h3 { display:flex; align-items:center; gap:8px; font-size:16px; font-weight:600; margin:0; }
+.flow-material-panel h3>span { display:grid; place-items:center; min-width:24px; height:24px; padding:0 6px; border-radius:6px; background:#f0f3f7; font-size:12px; font-weight:500; color:#667085; }
+.flow-material-files { display:grid; grid-template-columns:minmax(0,1fr); list-style:none; padding:0; margin:0; border:1px solid #e1e7ef; border-radius:12px; overflow:hidden; }
+.flow-material-file { min-width:0; background:#fff; }
+.flow-material-file+.flow-material-file { border-top:1px solid #edf0f4; }
+.flow-file-open { display:grid; grid-template-columns:38px minmax(0,1fr) auto 20px; align-items:center; gap:16px; width:100%; min-height:72px; padding:14px 16px; border:0; text-align:left; background:transparent; cursor:pointer; color:#344054; }
+.flow-file-open:hover { background:#f5f8fd; }
+.flow-file-open:focus-visible { outline:2px solid #2563eb; outline-offset:-3px; }
+.flow-file-mark { display:grid; place-items:center; width:38px; height:42px; border-radius:9px; color:#607893; background:#edf1f7; }
+.flow-file-mark .rd-icon { width:24px; height:24px; stroke-width:1.6; }
+.flow-file-mark[data-format=excel] { color:#247250; background:#eaf5ee; }
+.flow-file-mark[data-format=pdf] { color:#ae493d; background:#fcf0ec; }
+.flow-file-mark[data-format=image] { color:#8054a1; background:#f3eef9; }
+.flow-file-mark[data-format=api] { color:#3266aa; background:#eaf2fd; }
+.flow-file-copy { display:flex; align-items:center; gap:12px; min-width:0; }
+.flow-file-copy strong { overflow-wrap:anywhere; font-size:14px; font-weight:500; line-height:1.6; color:#344054; }
+.flow-file-period { flex:none; color:#667085; background:#f0f3f7; border-radius:5px; padding:1px 6px; font-size:12px; }
+.flow-file-time { color:#667085; font-size:13px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.flow-sync-history { margin-top:14px; }
+.flow-sync-history>summary { display:flex; align-items:center; gap:8px; padding:10px 2px; list-style:none; cursor:pointer; color:#526780; font-size:13px; }
+.flow-sync-history>summary::-webkit-details-marker { display:none; }
+.flow-sync-history>summary>span { color:#667085; }
+.flow-sync-history>summary>.rd-icon { width:16px; height:16px; transition:transform 180ms ease; }
+.flow-sync-history[open]>summary>.rd-icon { transform:rotate(180deg); }
+.flow-sync-history .flow-material-file { background:#fafbfd; }
+.flow-preview-version { display:inline-flex; align-items:center; gap:12px; color:#344054; font-size:13px; }
+.flow-preview-version time { color:#667085; font-variant-numeric:tabular-nums; }
+.flow-file-action { display:inline-flex; color:#8591a3; }
+.flow-file-action .rd-icon { width:18px; height:18px; transition:transform 180ms var(--flow-ease); }
+.flow-file-open:is(:hover,:focus-visible) .flow-file-action { color:#0969d6; }
+.flow-file-open:is(:hover,:focus-visible) .flow-file-action .rd-icon { transform:translateX(2px); }
+.flow-file-adopt { padding:0 12px 8px; border-top:1px solid #edf0f4; }
+.flow-file-adopt>.rd-text-button { display:flex; width:100%; align-items:center; justify-content:space-between; padding:9px 8px; }
+.flow-materials #flowPerson { display:inline-flex; align-items:center; gap:8px; }
+.flow-material-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; min-height:200px; padding:24px; border:1px dashed #d3dfed; border-radius:14px; background:#fafcff; text-align:center; }
+.flow-material-empty-icon { display:grid; place-items:center; width:52px; height:52px; border-radius:14px; background:#eaf2ff; color:#5a83b8; margin-bottom:5px; }
+.flow-material-empty-icon .rd-icon { width:28px; height:28px; stroke-width:1.35; }
+.flow-material-empty strong { font-size:17px; font-weight:550; color:#35445a; }
+.flow-material-empty p { font-size:13px; margin:0; color:#667085; }
+.flow-sync-status { display:inline-flex; align-items:center; gap:6px; color:#0f766e; font-size:13px; }
+.flow-sync-status .rd-icon { width:16px; height:16px; }
+.flow-sync-status.is-pending { color:#885710; }
+.flow-material-intake { margin-top:18px; color:#667085; font-size:13px; }
+.flow-material-intake summary { cursor:pointer; padding:8px 0; }
+.flow-material-intake p { margin:8px 0; font-size:13px; line-height:1.7; }
+.flow-materials .flow-step-actions { justify-content:space-between; gap:20px; padding-top:18px; margin-top:18px; border-top:1px solid #edf0f4; }
+.recruitment-experience .rd-workarea[data-view=sources]>.rd-footer { display:none; }
+@media (max-width:1250px) {
+  .flow-material-categories { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  .flow-file-copy { flex-wrap:wrap; gap:4px 10px; }
+}
+.recruitment-experience .flow-export { padding:8px 24px 24px; max-width:1000px; }
+.recruitment-experience .flow-export>h2 { display:none; }
+.recruitment-experience .flow-export p,.recruitment-experience .flow-export-sheets { font-size:13px; }
+.recruitment-experience .flow-review-notice { border-radius:9px; margin:0 24px 14px; font-size:13px; padding:8px 14px; }
+.recruitment-experience #flowOpeningNotice { margin:0 0 24px; }
+.recruitment-experience .flow-export .flow-review-notice { margin:16px 0; }
+.recruitment-experience .flow-case { padding:16px 24px; }
+.recruitment-experience .flow-case h3 { font-size:14px; }
+.recruitment-experience .flow-work-section .flow-case p { font-size:13px; }
+
+@keyframes flow-enter { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:translateY(0); } }
+@keyframes flow-spin { to { transform:rotate(360deg); } }
+@keyframes flow-pulse { 50% { opacity:.42; } }
+@keyframes flow-track { from { transform:translateX(-110%); } to { transform:translateX(400%); } }
+@media (prefers-reduced-motion:reduce) {
+  .recruitment-experience *,.recruitment-experience *::before,.recruitment-experience *::after { animation:none!important; transition:none!important; }
+  .flow-progress-track>span { width:100%; opacity:.5; }
+  .flow-material-category:hover { transform:none; }
+}

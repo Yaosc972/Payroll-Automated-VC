@@ -11,6 +11,7 @@ from bonus_platform.config import DEFAULT_RULE_WORKBOOK
 from bonus_platform.engine.calculator import calculate
 from bonus_platform.engine.models import ImportRow
 from bonus_platform.engine.rules import load_rulebook
+from bonus_platform.engine.workbook_io import build_result_workbook
 
 
 def _monthly_workbook_bytes() -> bytes:
@@ -243,6 +244,54 @@ def test_uncalculable_historical_row_does_not_pollute_current_month_exception_li
 
     assert result.month == 202606
     assert result.exceptions == []
+
+
+def test_initial_result_detail_matches_offline_source_order_and_keeps_cycle_exclusion(tmp_path: Path):
+    result = calculate(
+        [
+            ImportRow(
+                source_row=2,
+                values={
+                    "核算月份": 202605,
+                    "姓名": "模板顺序测试",
+                    "工号": "zt-template-order",
+                    "证件号": "id-001",
+                    "入职日期": "2026-05-20",
+                    "人员状态": "正式",
+                    "工作地": "中国大陆",
+                    "职级": "P1-3",
+                    "二级组织": "测试事业部",
+                    "三级组织": "测试部门",
+                    "职位": "测试岗位",
+                    "ABC类别": "C类",
+                    "招聘渠道": "招聘网站",
+                    "招聘负责人工号": "zt-recruiter",
+                    "招聘负责人姓名": "招聘负责人",
+                    "招聘启动日期": "2026-04-01",
+                    "候选人入职时间": "2026-05-20",
+                    "周期剔除天数": 7,
+                },
+            )
+        ],
+        load_rulebook(DEFAULT_RULE_WORKBOOK),
+    )
+    output = tmp_path / "initial.xlsx"
+
+    build_result_workbook(result, output)
+
+    workbook = load_workbook(output, data_only=True, read_only=True)
+    sheet = workbook["招聘奖金明细"]
+    headers = [sheet.cell(1, column).value for column in range(1, sheet.max_column + 1)]
+    assert headers[:35] == [
+        "唯一验证", "姓名", "工号", "证件号", "入职日期", "人员状态", "工作地", "最后工作日", "职级",
+        "二级组织", "三级组织", "四级组织", "五级组织", "职位", "职族", "职类", "直线经理", "直线经理工号",
+        "标签分类", "职族分类", "ABC类别", "招聘负责人工号", "招聘负责人姓名", "协助招聘人工号", "协助招聘人姓名",
+        "招聘渠道", "海外offer流程编号", "海外招聘需求编号", "招聘启动日期", "候选人入职时间", "转正日期",
+        "标准入职周期", "周期剔除天数", "实际入职周期", "入职周期差异",
+    ]
+    header_columns = {header: index for index, header in enumerate(headers, start=1)}
+    assert sheet.cell(2, header_columns["周期剔除天数"]).value == 7
+    assert sheet.cell(2, header_columns["二级组织"]).value == "测试事业部"
 
 
 def test_uncalculable_row_with_recruitment_node_due_this_month_remains_in_exception_list():

@@ -134,6 +134,8 @@ class RecruitmentDetail:
     referral_6m_period: Any
     referral_probation_bonus: float
     referral_probation_period: Any
+    exclusion_days: float = 0.0
+    source_values: Dict[str, Any] = field(default_factory=dict)
     exceptions: List[str] = field(default_factory=list)
 
     @property

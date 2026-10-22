@@ -1,0 +1,101 @@
+/* Desktop review workspace. Shared detail styles cover every existing task route. */
+.recruitment-experience .rd-workarea[data-view=todos] .rc-toolbar{position:sticky;top:0;z-index:5;background:rgba(255,255,255,.97);padding:10px 18px;backdrop-filter:blur(16px)}
+.recruitment-experience .rc-tabs{gap:4px;padding:3px;border-radius:10px;background:#f1f4f8}
+.recruitment-experience .rc-tabs .rd-button{border-color:transparent;background:transparent;box-shadow:none;min-height:30px;font-size:13px;padding:5px 12px}
+.recruitment-experience .rc-tabs .rd-button[aria-pressed=true]{background:#fff;color:#1e3a8a;box-shadow:0 1px 4px #1e3a8a12}
+.recruitment-experience .flow-review-heading{padding:0 16px;border:0;min-height:32px}
+.recruitment-experience .flow-review-section{margin:8px 18px 12px;border-radius:10px}
+.recruitment-experience .flow-review-section>header{padding:6px 14px;background:#f8fafc}
+.recruitment-experience .flow-review-section>header h2{font-size:12px;font-weight:600}
+.recruitment-experience .flow-review-section>header>span{font-size:12px}
+.recruitment-experience .flow-review-item{grid-template-columns:30px minmax(0,1fr) minmax(150px,210px) 152px;gap:14px;padding:11px 14px;min-height:74px}
+.recruitment-experience .flow-review-item:hover{background:#f8fbff}
+.recruitment-experience .flow-review-item:focus-within{background:#f3f7ff}
+.recruitment-experience .flow-review-copy h3{font-size:13px;margin:0 0 4px;font-weight:600;line-height:1.45}
+.recruitment-experience .flow-review-copy .flow-review-names{font-size:12px;line-height:1.5;color:#667085;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recruitment-experience .flow-review-meta{display:grid;justify-items:end;gap:4px}
+.recruitment-experience .flow-review-count{font-size:12px;color:#475467;line-height:1.4}
+.recruitment-experience .flow-review-tags{display:flex;justify-content:flex-end;gap:4px;flex-wrap:wrap}
+.recruitment-experience .flow-review-tags .flow-status-tag{font-size:11px;padding:2px 6px;border-radius:5px;line-height:1.5;background:#f1f4f8}
+.recruitment-experience .flow-review-item .rd-button{font-size:12px;min-height:32px;justify-content:space-between;padding:6px 10px;gap:6px}
+.recruitment-experience .flow-review-item .rd-button .rd-icon{width:14px;height:14px;color:#667085}
+.recruitment-experience .flow-review-section[data-review-section=policy] .flow-review-symbol{background:#f0f2f7;color:#53627b}
+.recruitment-experience .flow-review-section[data-review-section=review_history] .flow-review-symbol{background:#fff6e8;color:#946319}
+.recruitment-experience :is(.flow-automatic,.flow-future){margin:12px 18px;padding:10px 14px;border-radius:10px}
+.recruitment-experience .rd-inspector{display:flex;flex-direction:column;max-height:calc(100dvh - 40px);overflow:hidden;border:1px solid #dce3ed;box-shadow:0 20px 80px #172b4d24}
+.recruitment-experience .rd-inspector:not([open]){display:none}
+.recruitment-experience .rd-inspector-head{flex-shrink:0;padding:16px 22px;background:#fff;border-bottom:1px solid #e3e8ef}
+.recruitment-experience .rd-inspector-head h2{font-size:18px;line-height:1.4}
+.recruitment-experience .rd-inspector-body{min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:18px 22px 0;scroll-padding-block:16px 82px}
+.recruitment-experience .rd-inspector-body::after{content:'';display:block;height:18px}
+.recruitment-experience .rd-inspector :is(input,textarea,.rc-select-trigger){min-height:36px}
+.recruitment-experience .flow-edit-tools{display:flex;align-items:center;justify-content:flex-end;margin:0 0 12px;gap:8px}
+.recruitment-experience .flow-review-person{margin:0 0 14px;padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;background:#fff}
+.recruitment-experience .flow-review-person>header{gap:10px;margin:0 0 12px}
+.recruitment-experience .flow-review-person>header h3{margin:0;font-size:14px}
+.recruitment-experience .flow-person-fields{gap:12px 16px}
+.recruitment-experience .flow-field-label{margin:0 0 6px;gap:8px}
+.recruitment-experience .flow-field-label label{font-size:12px;font-weight:500;color:#475467}
+.recruitment-experience .flow-review-person .flow-status-tag{font-size:11px;padding:3px 7px;border-radius:5px}
+.recruitment-experience .flow-reference-panel{margin:0 0 14px;padding:14px;background:#f8fafc}
+.recruitment-experience .flow-reference-field{gap:6px;font-size:12px;padding-bottom:12px;border-bottom:1px solid #e2e8f0}
+.recruitment-experience .flow-reference-field:last-child{border:0;padding-bottom:0}
+.recruitment-experience .flow-reference-field>label{margin:0;line-height:1.5}
+.recruitment-experience .flow-reference-panel .rc-select-trigger{font-size:12px}
+.recruitment-experience .rd-inspector .rw-sticky-actions{position:sticky;bottom:0;z-index:4;margin:14px -1px 0;padding:12px 0;background:rgba(255,255,255,.98);border-top:1px solid #e2e8f0;box-shadow:0 -8px 16px #fff}
+.recruitment-experience #flowImpact:not(:empty){margin-top:0;padding:16px;border:1px solid #dce6f3}
+.recruitment-experience .flow-review-form[data-preview=true]>.flow-edit-people{display:none}
+.recruitment-experience .flow-policy-scope{padding:12px 16px;margin-bottom:14px;border-radius:10px;background:#f8fafc;line-height:1.6}
+.recruitment-experience .flow-policy-scope p{margin:6px 0 0}
+.recruitment-experience .rc-amount-compare{display:grid;grid-template-columns:1fr 1fr;gap:1px;border:1px solid #dfe6f0;border-radius:10px;overflow:hidden;margin:14px 0;background:#dfe6f0}
+.recruitment-experience .rc-amount-compare>div{display:grid;gap:5px;padding:14px;background:#f8fafc;min-width:0}
+.recruitment-experience .rc-amount-compare span{font-size:12px;color:#667085}
+.recruitment-experience .rc-amount-compare strong{font-size:18px;color:#243b5b;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.recruitment-experience .rc-table thead{position:sticky;top:63px;z-index:3}
+.recruitment-experience .rc-table tbody tr:hover{background:#f8fbff}
+.recruitment-experience .rc-form .rd-primary{justify-self:end}
+.recruitment-experience .rs-panel .rs-record{padding:16px;border:1px solid #e1e7ef;border-radius:10px;margin-bottom:14px}
+.recruitment-experience .rs-panel .rs-record>strong{display:block;font-size:14px;margin-bottom:12px}
+.recruitment-experience .rs-panel .rs-record table{margin:12px 0;font-variant-numeric:tabular-nums}
+.recruitment-experience .rs-panel .rs-record .rd-dialog-actions{border-top:1px solid #edf0f4;padding-top:12px;margin-top:12px;flex-wrap:wrap}
+.recruitment-experience .ra-form>details{padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:14px}
+.recruitment-experience .ra-form .ra-table-wrap{max-height:none}
+.recruitment-experience .rer-toolbar{gap:10px;flex-wrap:wrap}
+.recruitment-experience .rer-footer{position:sticky;bottom:0;z-index:3;background:#fff;border-top:1px solid #e2e8f0;padding-block:12px}
+.recruitment-experience .rer-table th{position:sticky;top:0;z-index:2}
+@media(min-width:1300px){
+  .recruitment-experience .rd-inspector:has(#flowSources:not([hidden])){width:min(1120px,calc(100vw - 80px));max-width:none}
+  .recruitment-experience .flow-review-form:has(>#flowSources:not([hidden])):not([data-preview=true]){display:grid;grid-template-columns:minmax(0,1.45fr) minmax(280px,1fr);gap:0 20px;align-items:start}
+  .recruitment-experience .flow-review-form>.flow-edit-tools{grid-column:1/-1}
+  .recruitment-experience .flow-review-form:has(>#flowSources:not([hidden]))>.flow-edit-people{grid-column:1;grid-row:2}
+  .recruitment-experience .flow-review-form>#flowSources{grid-column:2;grid-row:2;max-height:calc(100dvh - 230px);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+  .recruitment-experience .flow-review-form>:is(#flowImpact,#flowEditError,.rw-sticky-actions){grid-column:1/-1}
+}
+@media(max-width:1299px){
+  .recruitment-experience #flowSources:not([hidden]){max-height:280px;overflow:auto}
+  .recruitment-experience .flow-review-item{grid-template-columns:30px minmax(0,1fr) 170px 145px;gap:10px}
+}
+@media(prefers-reduced-motion:reduce){
+  .recruitment-experience :is(button,a,input,select,textarea,summary,.rd-inspector,.rc-select-trigger){transition:none!important;animation:none!important}
+  .recruitment-experience *{scroll-behavior:auto!important}
+}
+/* Bound long review ledgers so filters, hit targets and scroll stay in the workspace. */
+.recruitment-experience .rd-shell .rd-workarea[data-view=todos]{height:calc(100dvh - 210px);min-height:420px}
+.recruitment-experience .rd-workarea[data-view=todos]>.rd-content{flex:1;min-height:0;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}
+.recruitment-experience .rd-workarea[data-view=todos]>:not(.rd-content){flex-shrink:0}
+.recruitment-experience .rs-panel .rs-record>table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:left;background:#fff;border:1px solid #e2e8f0}
+.recruitment-experience .rs-panel .rs-record>table :is(th,td){padding:10px 12px;vertical-align:top;overflow-wrap:anywhere;line-height:1.6}
+.recruitment-experience .rs-panel .rs-record>table th{font-size:12px;background:#edf2f8;color:#475467;font-weight:500}
+.recruitment-experience .rs-panel .rs-record>table td{font-size:13px;border-top:1px solid #e2e8f0}
+.recruitment-experience .rw-fact-editor .rw-edit-line{padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:12px}
+.recruitment-experience .rw-current-impact{border:1px solid #e2e8f0;border-radius:10px;padding:0 14px;background:#f8fafc}
+.recruitment-experience .rd-workarea[data-view=todos]>.rd-content{position:relative;z-index:0;isolation:isolate}
+.recruitment-experience .rd-workarea[data-view=todos]>.rd-content{scroll-padding-top:72px;scroll-padding-bottom:16px}
+.recruitment-experience :is([data-flow-work],[data-rc-handle],.rc-pager button){scroll-margin-block:72px 16px}
+.recruitment-experience .flow-review-form>.flow-edit-footer{grid-column:1/-1;position:sticky;bottom:0;z-index:4;background:#fff;border-top:1px solid #e2e8f0;padding-top:10px}
+.recruitment-experience .flow-edit-footer>#flowEditError{margin:0 0 8px;line-height:1.6;overflow-wrap:anywhere}
+.recruitment-experience .flow-edit-footer>#flowEditError:empty{display:none}
+.recruitment-experience .flow-edit-footer>.rw-sticky-actions{position:static;margin:0;padding:0 0 12px;border:0;box-shadow:none}
+.recruitment-experience .flow-remaining{margin:14px 0;padding:12px 14px;border:1px solid #f0ddb9;border-radius:8px;background:#fffaf0}
+.recruitment-experience .flow-remaining>div+div{border-top:1px solid #f0e6d4;padding-top:10px;margin-top:10px}
+.recruitment-experience .flow-remaining p{margin:4px 0 0}

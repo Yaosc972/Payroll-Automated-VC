@@ -898,6 +898,11 @@ from .engine.labor.ocr_worker_cache import cleanup_ocr_cache, labor_ocr_cache_di
 from .engine.labor.ocr_targeted_retry import build_targeted_ocr_retry_plan, merge_targeted_ocr_retry_rows
 from .engine.labor.workbook import list_workbook_sheets, parse_reocr_candidate_rows, read_workbook_rows, suggest_mapping, summarize_otws_costs
 from .engine.rules import load_rulebook
+from .engine.recruitment_sources import (
+    build_recruitment_initial_data,
+    inspect_recruitment_source_package,
+    source_package_error_message,
+)
 from .engine.runs import (
     attach_file_record,
     create_run_dir,
@@ -937,15 +942,23 @@ async def lifespan(app: FastAPI):
     social_insurance_scheduler_allowed = not _is_vercel_runtime()
     if social_insurance_scheduler_allowed:
         start_social_insurance_prefetch_scheduler()
+    from .engine.recruitment_runtime import start_scheduler
+    recruitment_scheduler = start_scheduler()
     try:
         yield
     finally:
+        if recruitment_scheduler:
+            recruitment_scheduler.close()
         policy_scheduler.stop()
         if social_insurance_scheduler_allowed:
             stop_social_insurance_prefetch_scheduler()
 
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
+from .engine.recruitment_runtime import require_runtime as require_recruitment_runtime
+from .recruitment_draft_api import router as recruitment_draft_router, trials_router, trial_drafts_router, activities_router, activity_drafts_router
+for recruitment_router in (activities_router, activity_drafts_router, recruitment_draft_router, trials_router, trial_drafts_router):
+    app.include_router(recruitment_router, dependencies=[Depends(require_recruitment_runtime)])
 app.include_router(social_insurance_router)
 app.include_router(relocation_allowance_router)
 app.include_router(china_payroll_activities_router)
@@ -968,6 +981,8 @@ _BUSINESS_AUDIT_MODULE_NAMES = {
 }
 _BUSINESS_AUDIT_PAGE_MODULES = {
     "/recruitment.html": "recruitment",
+    "/recruitment-activities.html": "recruitment",
+    "/recruitment-history.html": "recruitment",
     "/china-employee-payroll.html": "employee",
     "/employee-payroll.html": "employee",
     "/domestic-labor.html": "domestic",
@@ -989,7 +1004,7 @@ _BUSINESS_AUDIT_ACTION_LABELS = {
 
 
 def _business_audit_module_id(path: str) -> str | None:
-    if path == "/api/calculate" or path.startswith("/api/runs"):
+    if path == "/api/calculate" or path.startswith(("/api/runs", "/api/recruitment/")):
         return "recruitment"
     prefixes = (
         ("/api/china-employee-payroll/", "employee"),
@@ -2148,7 +2163,7 @@ def _domestic_labor_access_response(request: Request) -> Response | None:
 def _protected_static_page_access_response(request: Request) -> Response | None:
     path = request.url.path.rstrip("/")
     page_config = {
-        "/recruitment.html": {"module_id": "recruitment", "label": "全球招聘奖金核算"},
+        **{route: {"module_id": "recruitment", "label": "全球招聘奖金核算"} for route in ("/recruitment.html", "/recruitment-activities.html", "/recruitment-history.html", "/recruitment-guide.html", "/recruitment-guide.md")},
         "/china-employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
         "/employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
         "/overseas-compensation.html": {"module_ids": ("fbu", "overseas_payroll"), "label": "海外薪酬核算"},
@@ -2611,7 +2626,7 @@ def _payroll_business_api_auth_response(request: Request) -> Response | None:
         return None  # Covered by the browser module gate below, including unknown paths.
     module = "employee" if path.startswith("/api/china-employee-payroll/") else "recruitment" if (
         path in {"/api/calculate", "/api/finalize", "/api/template", "/api/runs"}
-        or path.startswith(("/api/runs/", "/api/download/"))
+        or path.startswith(("/api/runs/", "/api/download/", "/api/recruitment/"))
     ) else ""
     current = _labor_current_user_from_request(request)
     if current is None:
@@ -3731,9 +3746,46 @@ async def calculate_bonus(
     }
 
 
+def _recruitment_revision_metadata(parent_run_id: str, month: int) -> dict:
+    parent_id = str(parent_run_id or "").strip()
+    if not parent_id:
+        return {}
+    try:
+        parent = load_metadata(get_run_dir(parent_id))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise ValueError("找不到人工修订所关联的原始批次。") from exc
+    if int(parent.get("month") or 0) != int(month):
+        raise ValueError("人工修订数据的核算月份与原始批次不一致。")
+
+    inherited_package = parent.get("sourcePackage") or {}
+    root_run_id = inherited_package.get("rootRunId") or parent.get("rootRunId") or parent_id
+    source_package = {
+        "mode": "manual_revision",
+        "rootRunId": root_run_id,
+        "parentRunId": parent_id,
+        "parentDisplayName": parent.get("displayName") or parent.get("shortCode") or parent_id,
+        "baseline": inherited_package.get("baseline") or {},
+        "files": inherited_package.get("files") or [],
+        "warnings": inherited_package.get("warnings") or [],
+        "ready": True,
+    }
+    metadata = {
+        "parentRunId": parent_id,
+        "rootRunId": root_run_id,
+        "sourcePackage": source_package,
+    }
+    if parent.get("integrationSummary"):
+        metadata["integrationSummary"] = {
+            **parent["integrationSummary"],
+            "manualRevision": True,
+        }
+    return metadata
+
+
 @app.post("/api/runs/calculate")
 async def calculate_run(
     file: UploadFile = File(...),
+    parent_run_id: str = Form(""),
 ) -> dict:
     if not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=400, detail="请上传 Excel 文件（.xlsx 或 .xlsm）。")
@@ -3741,14 +3793,17 @@ async def calculate_run(
         raise HTTPException(status_code=500, detail=f"找不到规则模板：{DEFAULT_RULE_WORKBOOK}")
 
     temp_upload_path = await _save_upload(file)
+    revision_metadata: dict = {}
     try:
         rows = read_import_rows(temp_upload_path)
         rules = load_rulebook(DEFAULT_RULE_WORKBOOK)
         result = calculate(rows, rules)
+        revision_metadata = _recruitment_revision_metadata(parent_run_id, result.month)
         run_id = new_run_id(result.month)
         run_dir = create_run_dir(run_id)
         run_sequence = _next_recruitment_run_sequence(result.month)
-        input_path = run_dir / _recruitment_output_name(result.month, run_sequence, "原始导入")
+        input_stage = "修订初算数据" if revision_metadata else "原始导入"
+        input_path = run_dir / _recruitment_output_name(result.month, run_sequence, input_stage)
         shutil.move(str(temp_upload_path), input_path)
         output_path = run_dir / _recruitment_output_name(result.month, run_sequence, "初算结果")
         pending_path = run_dir / _recruitment_output_name(result.month, run_sequence, "待确认表")
@@ -3767,8 +3822,9 @@ async def calculate_run(
 
     payload = _calculation_payload(result)
     status = "待确认" if payload["pendingCount"] else "已初算"
+    input_label = "修订初算数据" if revision_metadata else "原始导入"
     files = {
-        "input": attach_file_record(run_id, input_path, "原始导入"),
+        "input": attach_file_record(run_id, input_path, input_label),
         "initialResult": attach_file_record(run_id, output_path, "初算结果"),
         "pending": attach_file_record(run_id, pending_path, "待确认表"),
     }
@@ -3782,11 +3838,132 @@ async def calculate_run(
             "shortCode": _recruitment_run_short_code(result.month, run_sequence),
             "status": status,
             "sourceFilename": file.filename,
+            **revision_metadata,
             "files": files,
             "ruleInfo": rule_info(),
             **payload,
             "downloadUrl": files["initialResult"]["downloadUrl"],
             "pendingDownloadUrl": files["pending"].get("downloadUrl", ""),
+        },
+    )
+    return metadata
+
+
+@app.post("/api/recruitment/source-packages/calculate")
+async def calculate_recruitment_source_package(
+    month: int = Form(...),
+    files: list[UploadFile] = File(...),
+) -> dict:
+    target_month = _coerce_month(month)
+    if not target_month or target_month % 100 not in range(1, 13):
+        raise HTTPException(status_code=400, detail="核算月份格式无效，请使用YYYYMM。")
+    if not files:
+        raise HTTPException(status_code=400, detail="请上传招聘奖金原始数据文件。")
+    if not DEFAULT_RULE_WORKBOOK.exists():
+        raise HTTPException(status_code=500, detail=f"找不到规则模板：{DEFAULT_RULE_WORKBOOK}")
+
+    invalid = [upload.filename for upload in files if Path(upload.filename or "").suffix.lower() not in {".xlsx", ".xlsm", ".xls"}]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"仅支持Excel文件：{'、'.join(invalid)}")
+
+    run_id = new_run_id(target_month)
+    run_dir = create_run_dir(run_id)
+    source_dir = run_dir / "sources"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    saved_sources: list[tuple[str, Path]] = []
+    try:
+        used_names: set[str] = set()
+        for index, upload in enumerate(files, start=1):
+            original_name = Path(upload.filename or f"source_{index}.xlsx").name
+            safe_name = _safe_recruitment_source_name(original_name, index, used_names)
+            saved_path = await _save_upload_to(upload, source_dir / safe_name)
+            saved_sources.append((original_name, saved_path))
+
+        package = inspect_recruitment_source_package(saved_sources)
+        if not package["ready"]:
+            raise ValueError(source_package_error_message(package))
+
+        integration = build_recruitment_initial_data(
+            target_month=target_month,
+            package=package,
+            output_dir=run_dir,
+        )
+        run_sequence = _next_recruitment_run_sequence(target_month)
+        input_path = run_dir / _recruitment_output_name(target_month, run_sequence, "整合初算数据")
+        source_report_path = run_dir / _recruitment_output_name(target_month, run_sequence, "数据整合报告")
+        shutil.move(str(integration["initialDataPath"]), input_path)
+        shutil.move(str(integration["sourceReportPath"]), source_report_path)
+
+        rules = load_rulebook(DEFAULT_RULE_WORKBOOK)
+        import_rows = read_import_rows(input_path)
+        result = calculate(import_rows, rules)
+        output_path = run_dir / _recruitment_output_name(target_month, run_sequence, "初算结果")
+        pending_path = run_dir / _recruitment_output_name(target_month, run_sequence, "待确认表")
+        build_result_workbook(result, output_path)
+        if result.pending_confirmations:
+            build_pending_workbook(result, pending_path)
+        else:
+            pending_path = None
+        save_table_data(run_dir, build_table_data(run_id, result))
+    except ValueError as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"原始数据整合失败：{exc}") from exc
+
+    payload = _calculation_payload(result)
+    diagnostics = integration["diagnostics"]
+    source_issue_count = len(diagnostics.get("issues", []))
+    status = "待确认" if payload["pendingCount"] or source_issue_count else "已初算"
+    raw_source_records = []
+    for (original_name, saved_path), inspection in _pair_recruitment_sources(saved_sources, package["files"]):
+        raw_source_records.append(
+            attach_file_record(run_id, saved_path, inspection["roleLabel"])
+            | {
+                "sourceRole": inspection["role"],
+                "sourceRoleLabel": inspection["roleLabel"],
+                "confidence": inspection["confidence"],
+                "originalFilename": original_name,
+            }
+        )
+    files_record = {
+        "sourceFiles": raw_source_records,
+        "input": attach_file_record(run_id, input_path, "整合初算数据"),
+        "sourceReport": attach_file_record(run_id, source_report_path, "数据整合报告"),
+        "initialResult": attach_file_record(run_id, output_path, "初算结果"),
+        "pending": attach_file_record(run_id, pending_path, "待确认表"),
+    }
+    integration_summary = {
+        **diagnostics.get("counts", {}),
+        "sourceFileCount": len(saved_sources),
+        "sourceIssueCount": source_issue_count,
+        "optionalMissingRoles": package.get("optionalMissingRoles", []),
+    }
+    metadata = save_metadata(
+        run_dir,
+        {
+            "id": run_id,
+            "month": result.month,
+            "runSequence": run_sequence,
+            "displayName": _recruitment_run_display_name(result.month, run_sequence, status),
+            "shortCode": _recruitment_run_short_code(result.month, run_sequence),
+            "status": status,
+            "sourceFilename": f"原始数据包（{len(saved_sources)}个文件）",
+            "sourcePackage": {
+                "mode": "raw_sources",
+                "baseline": integration["baseline"],
+                "files": package["files"],
+                "warnings": package.get("warnings", []),
+                "ready": True,
+            },
+            "integrationSummary": integration_summary,
+            "files": files_record,
+            "ruleInfo": rule_info(),
+            **payload,
+            "exceptionCount": payload["exceptionCount"] + source_issue_count,
+            "downloadUrl": files_record["initialResult"]["downloadUrl"],
+            "pendingDownloadUrl": files_record["pending"].get("downloadUrl", ""),
         },
     )
     return metadata
@@ -13938,6 +14115,19 @@ def download_run_file(run_id: str, filename: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="批次不存在。") from exc
     path = run_dir / Path(filename).name
     if not path.exists():
+        try:
+            metadata = load_metadata(run_dir)
+        except FileNotFoundError:
+            metadata = {}
+        for record in _iter_labor_file_records(metadata.get("files") or {}):
+            record_name = Path(str(record.get("filename") or record.get("path") or "")).name
+            if record_name != Path(filename).name:
+                continue
+            candidate = Path(str(record.get("path") or ""))
+            if candidate.exists():
+                path = candidate
+                break
+    if not path.exists():
         raise HTTPException(status_code=404, detail="文件不存在或已被清理。")
     return FileResponse(path, filename=path.name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -13959,6 +14149,29 @@ def _output_path(original_name: str, suffix: str = "平台计算结果") -> Path
     stem = Path(original_name).stem.replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return EXPORT_DIR / f"{stem}_{suffix}_{timestamp}.xlsx"
+
+
+def _safe_recruitment_source_name(original_name: str, index: int, used_names: set[str]) -> str:
+    original = Path(original_name).name
+    suffix = Path(original).suffix.lower() or ".xlsx"
+    stem = Path(original).stem
+    safe_stem = "".join(char if char.isalnum() or char in "_-" else "_" for char in stem).strip("_") or f"source_{index}"
+    candidate = f"{safe_stem}{suffix}"
+    counter = 2
+    while candidate.lower() in used_names:
+        candidate = f"{safe_stem}_{counter}{suffix}"
+        counter += 1
+    used_names.add(candidate.lower())
+    return candidate
+
+
+def _pair_recruitment_sources(
+    saved_sources: list[tuple[str, Path]],
+    inspections: list[dict],
+) -> list[tuple[tuple[str, Path], dict]]:
+    if len(saved_sources) != len(inspections):
+        raise ValueError("原始来源文件与识别结果数量不一致。")
+    return list(zip(saved_sources, inspections))
 
 
 async def _save_upload(file: UploadFile) -> Path:
@@ -14180,9 +14393,19 @@ def _calculation_payload(result) -> dict:
         "pendingCount": len(result.pending_confirmations),
         "pendingTotal": pending_total,
         "detailPreview": preview,
-        "pendingConfirmations": result.pending_confirmations[:MAX_PREVIEW_ROWS],
-        "exceptions": result.exceptions[:MAX_PREVIEW_ROWS],
+        "pendingConfirmations": _json_safe(result.pending_confirmations[:MAX_PREVIEW_ROWS]),
+        "exceptions": _json_safe(result.exceptions[:MAX_PREVIEW_ROWS]),
     }
+
+
+def _json_safe(value):
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def _final_calculation_payload(final_path: Path, fallback_metadata: dict) -> dict:

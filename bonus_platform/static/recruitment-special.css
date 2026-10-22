@@ -1,0 +1,51 @@
+.rs-panel {display:grid;align-content:start;gap:16px;font-size:13px}
+.rs-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-bottom:14px}
+.rs-panel label:not(.rd-choice) {display:grid;gap:6px;font-size:12px;color:#425b78}
+.rs-panel input:not([type=checkbox]),.rs-panel select,.rs-panel textarea {box-sizing:border-box;width:100%;min-height:36px;border:1px solid #d7e1ed;border-radius:8px;padding:8px 10px;background:#fff;color:#25364b;font:inherit}
+.rs-panel textarea {resize:vertical}.rs-panel .rd-choice {margin:10px 0}.rs-panel [hidden] {display:none!important}
+.rs-panel input:focus-visible,.rs-panel textarea:focus-visible {outline:2px solid #94bffc;outline-offset:2px}
+.rs-panel details {border:1px solid #e2e8f0;border-radius:8px;padding:10px}.rs-attachments {max-height:200px;overflow:auto}
+.rs-panel .rd-message {font-size:12px;line-height:1.6;margin:4px 0}.rs-panel h3 {font-size:14px;margin:4px 0 12px}
+.rs-impact,.rs-record {background:#f7f9fc;border:1px solid #dce5ef;border-radius:10px;padding:16px}
+.rs-record>span {float:right;font-size:12px;color:#64748b}.rs-record p {line-height:1.6;margin:8px 0;overflow-wrap:anywhere}
+.rs-impact table {width:100%;border-collapse:collapse}.rs-impact th,.rs-impact td {text-align:left;padding:8px;border-bottom:1px solid #dce5ef}
+.rs-node-impact {max-height:280px;overflow:auto;line-height:1.6}.rs-node-impact p {border-bottom:1px solid #e2e8f0;padding-bottom:10px}
+.rs-panel button:disabled {opacity:.5;cursor:not-allowed}
+
+.rs-panel input:disabled,.rs-panel textarea:disabled {background:#f5f7fa;color:#758399}
+.rs-impact-table {max-height:240px;overflow:auto}
+
+.rs-history-card {display:grid;gap:14px;background:#fff}
+.rs-history-heading {display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.rs-history-heading>div {display:grid;gap:4px;min-width:0}
+.rs-history-heading strong {font-size:14px;color:#243b5b}
+.rs-history-heading>div>span {font-size:12px;color:#667085}
+.rs-panel .rs-history-question {margin:0;font-size:15px;line-height:1.5;color:#243b5b}
+.rs-history-basis {display:grid;gap:12px;min-width:0}
+.rs-history-basis h4 {font-size:12px;font-weight:600;color:#667085;margin:0 0 7px}
+.rs-history-note {padding:10px 12px;background:#f8fafc;border-radius:8px}
+.rs-history-note p {margin:0;line-height:1.65}
+.rs-history-links {display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:5px;font-size:12px}
+.rs-panel .rs-history-notes>details {padding:0;border:0;margin-top:6px}
+.rs-history-notes>details .rs-history-note {margin-top:8px}
+.rs-history-records ul {display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.rs-history-records li {padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px}
+.rs-history-records li>div {display:flex;align-items:center;justify-content:space-between;gap:10px}
+.rs-history-records li strong {font-weight:500}
+.rs-history-records li p {margin:4px 0 0}
+.rs-history-basis .rs-history-missing {margin:0;color:#667085}
+.rs-history-amounts {width:100%;border-collapse:collapse;border:1px solid #e2e8f0;font-variant-numeric:tabular-nums}
+.rs-history-amounts :is(th,td) {width:33.33%;text-align:left;padding:9px 12px}
+.rs-history-amounts th {background:#f8fafc;color:#667085;font-size:12px;font-weight:500}
+.rs-history-amounts td {border-top:1px solid #e2e8f0;color:#344054}
+.rs-panel .rs-history-installments {border:0;padding:0}
+.rs-history-installments summary,.rs-history-notes>details>summary {font-size:13px;color:#425b78;cursor:pointer}
+.rs-history-installments p {margin:8px 0 0}
+.rs-history-footer {display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid #edf0f4;padding-top:12px}
+.rs-history-footer>span {color:#667085;font-size:12px}
+.rs-history-footer .rd-dialog-actions {margin:0;gap:8px}
+.rs-history-result {display:grid;gap:8px;margin:12px 0}
+.rs-history-result>div {display:flex;justify-content:space-between;gap:16px}
+.rs-history-result dt {color:#667085}
+.rs-history-result dd {margin:0}
+.rs-history-completed>.rs-history-card {margin-top:12px}

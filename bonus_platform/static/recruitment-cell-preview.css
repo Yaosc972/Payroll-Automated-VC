@@ -1,0 +1,11 @@
+.flow-cell-preview {
+  position:fixed; inset:auto; margin:0; padding:10px 13px;
+  min-width:96px; max-width:min(380px,calc(100vw - 24px)); max-height:min(360px,calc(100vh - 24px));
+  overflow:auto; overscroll-behavior:contain; border:1px solid #dce5f0; border-radius:10px; background:#fff; color:#173451;
+  box-shadow:0 6px 24px #1734511a,0 2px 6px #1734510a; pointer-events:auto; user-select:text;
+}
+.flow-cell-preview:popover-open { animation:flow-cell-preview-in 120ms ease-out; }
+.flow-cell-preview-caption { margin-bottom:4px; font-size:11px; line-height:1.4; color:#667085; }
+.flow-cell-preview-value { font-size:13px; line-height:1.5; font-weight:500; font-variant-numeric:tabular-nums; white-space:pre-wrap; overflow-wrap:anywhere; }
+@keyframes flow-cell-preview-in { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:translateY(0); } }
+@media(prefers-reduced-motion:reduce) { .flow-cell-preview:popover-open { animation:none; } }

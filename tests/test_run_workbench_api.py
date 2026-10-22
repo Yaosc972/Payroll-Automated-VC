@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
 from bonus_platform.app import app
+from bonus_platform.engine.runs import update_metadata
 from bonus_platform.engine.workbook_io import PENDING_CONFIRMATION_HEADERS
 
 
@@ -119,6 +120,70 @@ def test_same_month_run_calculations_do_not_overwrite_each_other():
     assert first["id"] != second["id"]
     assert Path(first["files"]["initialResult"]["path"]).exists()
     assert Path(second["files"]["initialResult"]["path"]).exists()
+
+
+def test_manual_revision_creates_linked_immutable_batch():
+    client = TestClient(app)
+    parent = client.post(
+        "/api/runs/calculate",
+        files={"file": ("integrated.xlsx", _monthly_workbook_bytes("zt-source"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    ).json()
+    parent = update_metadata(parent["id"], {
+        "sourcePackage": {
+            "mode": "raw_sources",
+            "baseline": {"filename": "trusted-history.xlsx"},
+            "files": [{"filename": "EHR花名册.xlsx", "role": "ehr_roster"}],
+            "warnings": ["本次未提供：体系外补充数据"],
+            "ready": True,
+        },
+        "integrationSummary": {"generatedRows": 1, "sourceFileCount": 8},
+    })
+
+    response = client.post(
+        "/api/runs/calculate",
+        data={"parent_run_id": parent["id"]},
+        files={"file": ("manual-revision.xlsx", _monthly_workbook_bytes("zt-revised"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 200
+    revised = response.json()
+    assert revised["id"] != parent["id"]
+    assert revised["parentRunId"] == parent["id"]
+    assert revised["rootRunId"] == parent["id"]
+    assert revised["sourcePackage"]["mode"] == "manual_revision"
+    assert revised["sourcePackage"]["parentRunId"] == parent["id"]
+    assert revised["sourcePackage"]["baseline"]["filename"] == "trusted-history.xlsx"
+    assert revised["sourcePackage"]["files"][0]["role"] == "ehr_roster"
+    assert revised["integrationSummary"]["sourceFileCount"] == 8
+    assert revised["integrationSummary"]["manualRevision"] is True
+    assert revised["files"]["input"]["label"] == "修订初算数据"
+    assert "_修订初算数据_" in revised["files"]["input"]["filename"]
+    assert Path(parent["files"]["input"]["path"]).exists()
+    assert Path(revised["files"]["input"]["path"]).exists()
+
+
+def test_manual_revision_rejects_different_month_from_parent():
+    client = TestClient(app)
+    parent = client.post(
+        "/api/runs/calculate",
+        files={"file": ("parent.xlsx", _monthly_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    ).json()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "导入_月度数据"
+    sheet.append(["核算月份", "工号", "姓名", "工作地", "标签分类", "职级", "ABC类别", "招聘渠道"])
+    sheet.append([202511, "zt-revised", "跨月修订", "中国大陆", "国内", "P1-3", "C类", "招聘网站"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+
+    response = client.post(
+        "/api/runs/calculate",
+        data={"parent_run_id": parent["id"]},
+        files={"file": ("wrong-month.xlsx", buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 400
+    assert "核算月份与原始批次不一致" in response.json()["detail"]
 
 
 def test_run_finalize_uses_saved_initial_result_and_updates_batch():

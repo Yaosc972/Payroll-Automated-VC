@@ -48,7 +48,11 @@ def build_difference_report(platform_path: Path, offline_path: Path, output_path
         "referralSummaryDiffCount": len(referral_diffs),
         "recruitmentDetailDiffCount": len(recruitment_detail_diffs),
         "referralDetailDiffCount": len(referral_detail_diffs),
-        "recruitmentSummaryDelta": round(sum(_number(row.get("差异金额")) for row in recruitment_diffs), 2),
+        "recruitmentSummaryDelta": round(sum(
+            _number(row.get("差异金额"))
+            for row in recruitment_diffs
+            if row.get("字段") == "合计发放"
+        ), 2),
         "referralSummaryDelta": round(sum(_number(row.get("差异金额")) for row in referral_diffs), 2),
     }
 
@@ -78,7 +82,7 @@ def _sheet_dicts(workbook, sheet_name: str) -> List[Dict[str, Any]]:
     sheet = workbook[sheet_name]
     if sheet_name == "附件一-招聘奖金核算明细":
         header_rows = list(sheet.iter_rows(min_row=1, max_row=3, values_only=True))
-        if len(header_rows) >= 3 and _value_at(header_rows[2], 3):
+        if len(header_rows) >= 3:
             return _payroll_detail_rows(sheet, header_rows)
     elif sheet_name == "附件二-招聘奖金汇总表":
         header_rows = list(sheet.iter_rows(min_row=1, max_row=2, values_only=True))
@@ -145,7 +149,12 @@ def _payroll_referral_summary_rows(sheet) -> List[Dict[str, Any]]:
 def _payroll_detail_rows(sheet, header_rows: List[tuple[Any, ...]]) -> List[Dict[str, Any]]:
     groups = header_rows[1]
     subheaders = header_rows[2]
-    headers = [_payroll_detail_header(group, subheader, column) for column, (group, subheader) in enumerate(zip(groups, subheaders), start=1)]
+    headers: List[str] = []
+    current_group: Any = ""
+    for column, (group, subheader) in enumerate(zip(groups, subheaders), start=1):
+        if group not in (None, ""):
+            current_group = group
+        headers.append(_payroll_detail_header(current_group, subheader, column))
     rows: List[Dict[str, Any]] = []
     for values in sheet.iter_rows(min_row=4, values_only=True):
         row = {header: value for header, value in zip(headers, values) if header}
@@ -167,10 +176,16 @@ def _payroll_detail_header(group: Any, subheader: Any, column: int) -> str:
         return _node_header("招聘人", sub_text)
     if "协助人入职奖金明细" in group_text:
         return _node_header("协助人", sub_text)
-    if "招聘人转正奖金" in group_text and "转正发放奖金" in sub_text:
-        return "招聘人转正奖金"
-    if "协助人转正奖金" in group_text and "转正发放奖金" in sub_text:
-        return "协助人转正奖金"
+    if "招聘人转正奖金" in group_text:
+        if "转正发放奖金" in sub_text:
+            return "招聘人转正奖金"
+        if "转正发放周期" in sub_text:
+            return "招聘人转正周期"
+    if "协助人转正奖金" in group_text:
+        if "转正发放奖金" in sub_text:
+            return "协助人转正奖金"
+        if "转正发放周期" in sub_text:
+            return "协助人转正周期"
     if "内推奖明细" in group_text:
         return _node_header("内推", sub_text)
     return str(group or subheader or "").strip()
@@ -285,6 +300,8 @@ def _normalize_key(value: Any) -> str:
     text = str(value or "").strip()
     if text.upper() in {"RMB", "CNY"}:
         return "人民币"
+    if text.upper() in {"EUR", "USD"} or text in {"欧元", "美元"}:
+        return "美元/欧元"
     return text
 
 

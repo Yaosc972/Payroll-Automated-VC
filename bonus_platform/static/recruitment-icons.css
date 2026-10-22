@@ -1,0 +1,18 @@
+/* One optical weight for the entire recruitment workspace. */
+.rd-icon { width:20px; height:20px; flex:none; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+.ra-back,.ra-enter,.ru-month-year button { display:inline-flex; align-items:center; gap:6px; }
+.ru-month-year button { justify-content:center; }
+.ru-month-trigger::after { content:none; }
+.ru-month-trigger>.rd-icon { width:16px; height:16px; color:var(--muted); }
+.ra-back .rd-icon,.ra-enter .rd-icon { width:17px; height:17px; }
+.ra-manage { display:inline-grid; place-items:center; }
+.ra-empty-mark { display:inline-grid; place-items:center; }
+.ra-empty-mark .rd-icon { width:30px; height:30px; }
+.ru-month-year button .rd-icon { width:20px; height:20px; }
+#flowUpload:is(:hover,:focus-visible):not(:disabled) .rd-icon { animation:recruitment-upload 450ms cubic-bezier(.22,1,.36,1); }
+.flow-step[data-draft-view=export]:is(:hover,:focus-visible) .rd-icon { animation:recruitment-download 450ms cubic-bezier(.22,1,.36,1); }
+@keyframes recruitment-upload { 45% { transform:translateY(-3px); } }
+@keyframes recruitment-download { 45% { transform:translateY(3px); } }
+@media (prefers-reduced-motion:reduce) {
+  #flowUpload .rd-icon,.flow-step .rd-icon { animation:none!important; }
+}

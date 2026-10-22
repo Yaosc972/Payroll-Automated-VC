@@ -1,0 +1,50 @@
+/* Observed Drive surfaces, adapted to business categories and real file states. */
+.flow-material-view-switch { display:flex; flex:none; border:1px solid #aeb9c7; border-radius:18px; overflow:hidden; }
+.flow-material-view-switch button { width:44px; height:32px; display:grid; place-items:center; border:0; border-radius:0; background:white; color:#56657a; padding:0; }
+.flow-material-view-switch button+button { border-left:1px solid #aeb9c7; }
+.flow-material-view-switch button[aria-pressed=true] { background:#c2e7ff; color:#064a76; }
+.flow-material-view-switch button:hover { background:#e9f3fc; }
+.flow-material-view-switch .rd-icon { width:19px; height:19px; }
+.recruitment-experience .flow-material-board { gap:16px; align-items:start; }
+.recruitment-experience .flow-material-block { display:flex; flex-direction:column; padding:16px; background:#f0f4f9; border:1px solid #e8eef5; border-radius:12px; box-shadow:none; }
+.recruitment-experience .flow-material-block>header { min-height:40px; gap:10px; margin-bottom:14px; }
+.recruitment-experience .flow-material-block h3 { font-size:14px; color:#1f2937; font-weight:600; }
+.flow-block-icon { width:36px; height:36px; border-radius:50%; }
+.recruitment-experience .flow-material-block>header>.flow-material-status { border-radius:20px; padding:4px 9px; font-size:11px; }
+.recruitment-experience .flow-material-block .flow-material-files { border:0; border-radius:8px; overflow:visible; background:transparent; gap:6px; }
+.recruitment-experience .flow-material-block .flow-material-file { display:grid; grid-template-columns:minmax(0,1fr) 36px; position:relative; border:1px solid #e4eaf2; border-radius:8px; background:#fff; }
+.recruitment-experience .flow-material-block .flow-material-file+.flow-material-file { border-top:1px solid #e4eaf2; }
+.recruitment-experience .flow-material-block .flow-file-open { grid-template-columns:28px minmax(0,1fr); min-height:78px; padding:11px 8px 11px 12px; border-radius:7px; gap:4px 10px; }
+.recruitment-experience .flow-material-block .flow-file-open:hover { background:#e9f1fb; }
+.recruitment-experience .flow-material-block .flow-file-copy strong { font-size:12px; line-height:1.45; font-weight:500; }
+.flow-file-meta { display:block; color:#7a8595; font-size:11px; line-height:1.5; margin-top:3px; }
+.recruitment-experience .flow-material-block .flow-file-time { display:none; }
+.recruitment-experience .flow-material-block .flow-file-open>.flow-material-status { padding:0; background:transparent; font-size:11px; line-height:1.45; }
+.flow-file-menu { align-self:start; margin:7px 3px 0 0; }
+.flow-file-menu>summary { width:32px; height:32px; min-height:32px; display:grid; place-items:center; padding:0; border:0; border-radius:50%; background:transparent; color:#5f6d7d; list-style:none; cursor:pointer; }
+.flow-file-menu>summary::-webkit-details-marker { display:none; }
+.flow-file-menu>summary:hover,.flow-file-menu[open]>summary { background:#e4edf7; }
+.flow-file-menu .rd-icon { width:18px; height:18px; }
+.flow-file-menu>summary .rd-icon { transform:rotate(90deg); }
+.flow-file-menu .rd-menu-items { z-index:20; min-width:160px; top:38px; right:0; }
+.flow-file-menu .rd-menu-items>* { display:flex; gap:9px; align-items:center; }
+.recruitment-experience .flow-material-block .flow-file-adopt { grid-column:1/-1; }
+.flow-file-stack { margin:7px 3px 0; }
+.flow-file-stack>summary { padding-top:9px; }
+.recruitment-experience .flow-material-block .flow-sync-history { margin-top:7px; }
+.recruitment-experience .flow-material-block[data-tone=missing] { background:#fff8ee; border-color:#ead4b3; }
+.flow-materials[data-layout=list] .flow-material-board { grid-template-columns:minmax(0,1fr); gap:12px; }
+.flow-materials[data-layout=list] .flow-material-block { padding:12px 16px; }
+.flow-materials[data-layout=list] .flow-material-block>header { min-height:30px; margin-bottom:9px; }
+.flow-materials[data-layout=list] .flow-block-icon { width:28px; height:28px; }
+.recruitment-experience .flow-materials[data-layout=list] .flow-file-open { grid-template-columns:28px minmax(180px,1fr) auto; min-height:48px; gap:12px; padding:8px 12px; }
+.recruitment-experience .flow-materials[data-layout=list] .flow-file-mark { grid-row:1; height:28px; }
+.recruitment-experience .flow-materials[data-layout=list] .flow-file-open>.flow-material-status { grid-column:3; }
+.flow-materials[data-layout=list] .flow-file-meta { display:inline; margin-left:12px; }
+.flow-materials[data-layout=list] .flow-file-copy { display:flex; align-items:center; flex-wrap:wrap; }
+.flow-materials[data-layout=list] .flow-file-menu { margin-top:7px; }
+.flow-materials[data-layout=list] .flow-file-stack { border:0; box-shadow:none; }
+.flow-materials[data-layout=list] .flow-file-stack>summary { display:none; }
+
+.recruitment-experience .flow-material-block .flow-file-copy { display:block; }
+.recruitment-experience .flow-material-block .flow-block-sync { align-self:flex-start; margin:8px 0 0; min-height:28px; }

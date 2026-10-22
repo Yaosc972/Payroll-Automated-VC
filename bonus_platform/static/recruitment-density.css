@@ -1,0 +1,292 @@
+/* Shared desktop scale for activity lists, monthly work and their inspectors.
+   Keep real text sizes and natural wrapping; never shrink the page with zoom. */
+:is(.recruitment-experience,.ra-page) {
+  --recruit-body:13px;
+  --recruit-label:12px;
+  --recruit-subtitle:14px;
+  --recruit-section:16px;
+  --recruit-dialog:18px;
+  --recruit-title:20px;
+  font-size:var(--recruit-body);
+  line-height:1.5;
+}
+:is(.recruitment-experience,.ra-page) .rd-header-inner { min-height:52px; padding:8px 32px; }
+:is(.recruitment-experience,.ra-page) .rd-brand { font-size:var(--recruit-subtitle); gap:10px; }
+:is(.recruitment-experience,.ra-page) .rd-brand img { width:30px; height:30px; }
+:is(.recruitment-experience,.ra-page) .rd-home { font-size:var(--recruit-body); min-height:32px; }
+:is(.recruitment-experience,.ra-page) .rd-button { min-height:32px; padding:6px 12px; font-size:var(--recruit-body); border-radius:8px; }
+:is(.recruitment-experience,.ra-page) .rd-text-button { min-height:32px; padding:6px 10px; font-size:var(--recruit-body); }
+:is(.recruitment-experience,.ra-page) .rd-icon-button { width:32px; height:32px; padding:6px; }
+:is(.recruitment-experience,.ra-page) .rd-menu-items>* { min-height:32px; padding:7px 10px; font-size:var(--recruit-body); }
+.recruitment-experience .rd-shell { padding-top:16px; }
+.recruitment-experience .rd-heading { margin-bottom:12px; }
+.recruitment-experience .rd-heading h1 { font-size:var(--recruit-title); line-height:1.4; }
+.recruitment-experience .ra-back { margin-bottom:10px; }
+/* Two compact, connected steps; status is separate from current selection. */
+.recruitment-experience .flow-stepper { grid-template-columns:repeat(2,max-content); justify-content:center; gap:80px; padding:0 0 8px; }
+.recruitment-experience .flow-step { gap:10px; min-height:44px; padding:4px 8px; border:0; background:transparent; border-radius:16px; box-shadow:none; }
+.recruitment-experience .flow-step:hover { background:#ffffff70; border-color:transparent; }
+.recruitment-experience .flow-step[aria-selected=true] { background:transparent; border:0; box-shadow:none; }
+.recruitment-experience .flow-step:not(:last-child)::after { width:48px; right:-64px; top:50%; height:2px; background:repeating-linear-gradient(to right,#c3d1e5 0 6px,transparent 6px 12px); border-radius:2px; }
+.recruitment-experience .flow-step:not(:last-child)::before { content:none; }
+.recruitment-experience .flow-step-mark { width:32px; height:32px; border-radius:50%; background:#e6f0ff; color:#536c8d; transition:box-shadow 180ms ease,transform 180ms ease; }
+.recruitment-experience .flow-step[aria-selected=true] .flow-step-mark { background:#e6f0ff; color:#176ade; box-shadow:0 0 0 4px #f2f7ff,0 0 0 5px #b4cff5; }
+.recruitment-experience .flow-step:hover .flow-step-mark { transform:translateY(-2px); }
+.recruitment-experience .flow-step-mark>.rd-icon { width:19px; height:19px; stroke-width:1.65; }
+.recruitment-experience .flow-step-copy { display:flex; flex:none; align-items:flex-start; flex-direction:row; justify-content:center; align-items:center; gap:8px; }
+.recruitment-experience .flow-step-copy strong { font-size:14px; line-height:1.35; font-weight:600; color:#172b4d; }
+.recruitment-experience .flow-step[aria-selected=true] .flow-step-copy strong { color:#123c74; }
+.recruitment-experience .flow-step-note { padding:2px 7px; border-radius:8px; background:#e6f0ff; color:#0969d6; font-size:11px; line-height:1.5; }
+.recruitment-experience .flow-step[data-state=attention] .flow-step-mark { background:#fff2e5; color:#7f6954; }
+.recruitment-experience .flow-step[data-state=attention][aria-selected=true] .flow-step-mark { box-shadow:0 0 0 4px #fff9f2,0 0 0 5px #ebcaa8; }
+.recruitment-experience .flow-step[data-state=attention] .flow-step-note { background:#fff0df; color:#a65309; }
+.recruitment-experience .flow-step[data-state=running] .flow-step-note { background:#eaf2ff; }
+.recruitment-experience .flow-step[data-state=complete] .flow-step-note { background:#e3f3ec; color:#0f766e; }
+.recruitment-experience .flow-step[data-state=running] .flow-step-mark::after { border-radius:50%; }
+.recruitment-experience .flow-upload-mark { position:absolute; display:grid; place-items:center; right:0; bottom:0; width:14px; height:14px; border:1px solid #e6f0ff; border-radius:50%; background:#0875ef; color:white; }
+.recruitment-experience .flow-upload-mark .rd-icon { width:9px; height:9px; }
+@media(prefers-reduced-motion:reduce) { .recruitment-experience .flow-step-mark { transition:none; } .recruitment-experience .flow-step:hover .flow-step-mark { transform:none; } }
+.recruitment-experience .rd-toolbar { padding:14px 24px 10px; }
+.recruitment-experience .flow-view-heading h2 { font-size:var(--recruit-section); line-height:1.5; }
+.recruitment-experience .rd-search,.recruitment-experience .rd-scope select { min-height:32px; }
+.recruitment-experience .rd-search input { padding-block:5px; }
+.recruitment-experience .flow-progress-copy h2 { font-size:var(--recruit-section); }
+
+/* One compact row per issue, with names beside their explanation. */
+.recruitment-experience .flow-review-heading { padding:4px 24px 12px; gap:16px; }
+.recruitment-experience .flow-review-heading p { font-size:var(--recruit-body); line-height:1.5; }
+.recruitment-experience .flow-review-section { margin:16px 24px; border-radius:12px; }
+.recruitment-experience .flow-review-section>header { padding:10px 16px; }
+.recruitment-experience .flow-review-section>header h2 { font-size:var(--recruit-subtitle); line-height:1.5; }
+.recruitment-experience .flow-review-section>header>span { font-size:var(--recruit-label); }
+.recruitment-experience .flow-review-item { grid-template-columns:30px minmax(0,1fr) 112px 128px; gap:14px; padding:14px 16px; }
+.recruitment-experience .flow-review-symbol { width:30px; height:30px; border-radius:8px; }
+.recruitment-experience .flow-review-symbol .rd-icon { width:18px; height:18px; }
+.recruitment-experience .flow-review-copy h3 { margin-bottom:4px; font-size:var(--recruit-subtitle); line-height:1.5; }
+.recruitment-experience :is(.flow-review-copy p,.flow-review-preview li,.flow-review-count) { font-size:var(--recruit-body); line-height:1.55; }
+.recruitment-experience .flow-review-preview { gap:6px; }
+.recruitment-experience .flow-review-preview li { display:block; }
+.recruitment-experience .flow-review-preview strong { margin-right:10px; }
+.recruitment-experience .flow-review-copy { overflow-wrap:anywhere; }
+.recruitment-experience .flow-review-item .rd-button { min-height:32px; }
+.recruitment-experience .flow-automatic { margin:16px 24px; padding:12px 16px; }
+.recruitment-experience .flow-automatic :is(summary,dt,dd) { font-size:var(--recruit-body); line-height:1.55; }
+.recruitment-experience .flow-automatic dl { gap:12px; margin-top:12px; }
+.recruitment-experience .flow-future>summary { padding:12px 24px; }
+
+/* The same hierarchy continues inside every detail and correction panel. */
+.recruitment-experience .rd-inspector { font-size:var(--recruit-body); }
+.recruitment-experience .rd-inspector-head { padding:14px 24px; }
+.recruitment-experience .rd-inspector-head h2 { font-size:var(--recruit-dialog); line-height:1.4; }
+.recruitment-experience .rd-inspector-body { padding:18px 24px 24px; }
+.recruitment-experience .rd-inspector :is(p,label,select,textarea,input,.flow-current,.flow-person,.flow-facts,.flow-provenance,.flow-purpose,.flow-award-summary,.flow-detail-tabs button,.flow-opening-file>span,.flow-opening-file a,.flow-linked-people,.flow-policy-scope,.flow-query-receipts,.flow-standard-facts dt,.flow-picker-options button,.flow-review-range,summary) { font-size:var(--recruit-body); line-height:1.55; }
+.recruitment-experience .rd-inspector :is(h3,.flow-review-person>header h3,.flow-review-person>h3,.flow-review-lead h3,.flow-standard-facts dd) { font-size:var(--recruit-subtitle); line-height:1.5; }
+.recruitment-experience .rd-inspector :is(.flow-review-person h3>span,.flow-provenance span,.flow-batch-roster td span,.flow-intake-table td span) { font-size:var(--recruit-label); }
+.recruitment-experience .rd-inspector :is(input:not([type=checkbox]):not([type=radio]),select) { min-height:36px; padding:7px 10px; }
+.recruitment-experience .rd-inspector textarea { min-height:76px; padding:8px 10px; }
+.recruitment-experience .flow-review-person { margin:16px 0; padding-bottom:18px; }
+.recruitment-experience :is(.flow-review-person>header h3,.flow-review-person>h3) { margin-bottom:12px; }
+.recruitment-experience .flow-person-fields { gap:16px; }
+.recruitment-experience .flow-person-fields .flow-field>label { margin-bottom:6px; }
+.recruitment-experience .flow-person-fields .flow-field>p { margin-bottom:8px; }
+.recruitment-experience .flow-person-cause { margin-bottom:14px; }
+.recruitment-experience .flow-review-lead { gap:12px; margin-bottom:18px; }
+.recruitment-experience .flow-review-lead>.rd-icon { width:22px; height:22px; }
+.recruitment-experience .flow-review-lead h3 { margin-bottom:6px; }
+.recruitment-experience :is(.flow-policy-scope,.flow-opening-file) { padding:14px; margin-block:16px; }
+.recruitment-experience :is(.flow-optional-note,.flow-linked-people,.flow-query-receipts) { margin-top:16px; }
+.recruitment-experience .flow-review-form .rw-employment-observations>div { padding:12px; }
+.recruitment-experience .flow-review-form .rw-employment-observations b { font-size:var(--recruit-subtitle); }
+.recruitment-experience .flow-review-form .rw-sticky-actions { margin-top:18px; padding-top:12px; }
+.recruitment-experience .flow-detail-tabs { gap:20px; margin:14px 0; }
+.recruitment-experience .flow-facts { gap:10px 16px; }
+.recruitment-experience .flow-award { padding-bottom:18px; }
+.recruitment-experience .ra-form { gap:16px; }
+.recruitment-experience .ra-editor { padding:16px; gap:14px; }
+.recruitment-experience .ra-picker-grid { gap:16px; }
+.recruitment-experience .ra-form .ra-table :is(th,td) { padding:10px 12px; font-size:var(--recruit-body); }
+
+/* Materials, export and activity management use the same scale. */
+.recruitment-experience .flow-material-panel h3 { font-size:var(--recruit-section); }
+.recruitment-experience .flow-material-empty strong { font-size:var(--recruit-subtitle); }
+.recruitment-experience .flow-export-sheets { margin:16px 0; }
+.recruitment-experience .flow-export-sheets :is(th,td) { padding:12px 10px; }
+.recruitment-experience .flow-month-confirm { margin-top:24px; padding-top:18px; }
+.recruitment-experience .flow-month-confirm .rd-choice { font-size:var(--recruit-body); }
+.ra-page .ra-shell { padding-top:24px; }
+.ra-page .ra-heading { margin-bottom:20px; }
+.ra-page .ra-heading h1 { font-size:var(--recruit-title); line-height:1.4; margin-bottom:6px; }
+.ra-page :is(.ra-heading p,.ra-empty p,.ra-table) { font-size:var(--recruit-body); }
+.ra-page .ra-toolbar { padding:12px 24px; }
+.ra-page .ra-table th { padding-block:12px; }
+.ra-page .ra-table td { padding-block:16px; }
+.ra-page .ra-meta { margin-top:4px; }
+.ra-page :is(.ra-dialog h2,.ra-empty h2) { font-size:var(--recruit-dialog); }
+.ra-page .ra-dialog header { padding:18px 24px 0; }
+.ra-page .ra-fields { padding:18px 24px; gap:16px; }
+.ra-page .ra-fields :is(input,select) { height:36px; padding:7px 10px; }
+.ra-page .ra-dialog footer { padding:14px 24px; }
+
+/* Offline worksheet: fixed identities, paired amount/period columns and two header tiers. */
+.recruitment-experience { min-width:1024px; }
+.recruitment-experience .rd-workarea[data-view=rows] .rd-content>.flow-review-notice { position:sticky; left:24px; }
+.recruitment-experience .flow-column-nav { display:flex; align-items:center; gap:8px; margin-left:12px; color:#667085; }
+.recruitment-experience .flow-column-nav label { white-space:nowrap; font-size:12px; }
+.recruitment-experience .flow-column-nav[hidden] { display:none; }
+.recruitment-experience .flow-column-nav select { min-height:30px; width:204px; padding:4px 24px 4px 10px; border:1px solid #dde4ed; border-radius:7px; background:#fff; color:#344054; font:inherit; }
+.recruitment-experience .flow-ledger { min-width:100%; border-collapse:separate; border-spacing:0; }
+.recruitment-experience .flow-ledger thead { position:sticky; top:0; z-index:5; }
+.recruitment-experience .flow-worksheet.flow-ledger :is(th,td) { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.recruitment-experience .flow-worksheet.flow-ledger th { position:static; width:auto; min-width:0; height:36px; padding:8px 10px; font-size:12px; text-align:left; background:#f5f7fa; border-bottom:1px solid #e3e9f1; }
+.recruitment-experience .flow-worksheet.flow-ledger thead tr:last-child th { height:48px; white-space:normal; line-height:1.4; }
+.recruitment-experience .flow-ledger th.flow-ledger-group { background:#eaf0f7; color:#405979; border-right:1px solid #dbe3ed; overflow:visible; }
+.recruitment-experience .flow-ledger-group>span { display:inline-block; position:sticky; left:340px; }
+.recruitment-experience .flow-worksheet.flow-ledger .flow-fixed-name { position:sticky; left:42px; z-index:2; }
+.recruitment-experience .flow-worksheet.flow-ledger .flow-fixed-id { position:sticky; left:202px; z-index:2; background:#fff; box-shadow:1px 0 #dbe3ed; }
+.recruitment-experience .flow-worksheet.flow-ledger :is(th.flow-fixed-name,th.flow-fixed-id,th.ra-select-cell) { background:#eaf0f7; z-index:6; }
+.recruitment-experience .flow-worksheet.flow-ledger .ra-select-cell { width:42px; min-width:42px; position:sticky; left:0; }
+.recruitment-experience .flow-worksheet.flow-ledger :is(th,td).ra-select-cell { padding:0; text-align:center; text-overflow:clip; }
+.recruitment-experience .flow-ledger td { height:40px; }
+.recruitment-experience .flow-ledger th.rd-number { text-align:right; }
+.recruitment-experience .flow-ledger td.flow-warn { color:#925c15; }
+
+/* Give the ledger a full working area even when the workflow header is tall. */
+.recruitment-experience:has(.rd-workarea:not([hidden])[data-view=rows]) { height:auto; min-height:100dvh; display:block; overflow:auto; }
+.recruitment-experience .rd-shell:has(>.rd-workarea:not([hidden])[data-view=rows]) { display:block; }
+.recruitment-experience .rd-shell .rd-workarea[data-view=rows] { height:auto; min-height:0; }
+.recruitment-experience .rd-workarea[data-view=rows] .rd-content { flex:none; height:clamp(600px,72dvh,1000px); min-height:600px; max-height:none; }
+.flow-result-tabs { display:flex; gap:24px; padding:0 24px; border-bottom:1px solid #e3e9f1; }
+.flow-result-tabs button { padding:10px 0; border-bottom:2px solid transparent; border-radius:0; }
+.flow-result-tabs button[aria-pressed=true] { color:#0969d6; border-bottom-color:#0969d6; }
+.flow-summary-description,.flow-summary-totals { padding:12px 24px; font-size:13px; color:#667085; line-height:1.6; }
+.flow-summary-totals { padding-top:0; color:#344054; font-variant-numeric:tabular-nums; }
+.flow-recipient-table { width:100%; min-width:1450px; border-collapse:separate; border-spacing:0; font-size:13px; }
+.flow-recipient-table :is(th,td) { padding:12px 10px; border-bottom:1px solid #e3e9f1; text-align:left; white-space:nowrap; height:40px; }
+.flow-recipient-table th { position:sticky; top:0; background:#eaf0f7; color:#405979; z-index:2; }
+.flow-recipient-table .rd-number { text-align:right; font-variant-numeric:tabular-nums; }
+.flow-recipient-table tbody tr:nth-child(even) { background:#f9fbfd; }
+.flow-recipient-table tfoot { background:#eef3f7; font-weight:600; }
+.flow-recipient-table td:last-child { white-space:normal; min-width:220px; max-width:360px; }
+
+/* Worksheet color bands: information, installments, probation and totals. */
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) [data-tone] {
+  --band-head:#e8eff8; --band-ink:#365579; --band-cell:#fcfdff; --band-stripe:#f5f8fc; --band-edge:#d8e3f0;
+}
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) [data-tone=recruiting] {
+  --band-head:#dff0f3; --band-ink:#2d606e; --band-cell:#fbfefe; --band-stripe:#f0f8fa; --band-edge:#cde4e9;
+}
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) [data-tone=installment] {
+  --band-head:#dff0f3; --band-ink:#2d606e; --band-cell:#f8fcfd; --band-stripe:#edf6f8; --band-edge:#cde4e9;
+}
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) :is([data-tone=probation],[data-tone=referral]) {
+  --band-head:#eae6f5; --band-ink:#5c507e; --band-cell:#fcfaff; --band-stripe:#f4f0fa; --band-edge:#dfd8ec;
+}
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) [data-tone=total] {
+  --band-head:#d8e7fb; --band-ink:#214e86; --band-cell:#eef5ff; --band-stripe:#e7f0fd; --band-edge:#c2d7f1;
+}
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) [data-tone=pending] {
+  --band-head:#f6ecd8; --band-ink:#78591f; --band-cell:#fffcf5; --band-stripe:#fcf5e7; --band-edge:#e9ddc2;
+}
+.recruitment-experience :is(.flow-ledger,.flow-recipient-table) [data-tone=neutral] {
+  --band-head:#edf0f4; --band-ink:#576579; --band-cell:#fff; --band-stripe:#f8f9fb; --band-edge:#e0e5ed;
+}
+.recruitment-experience .flow-worksheet.flow-ledger th[data-tone],
+.recruitment-experience .flow-recipient-table th[data-tone] { background:var(--band-head); color:var(--band-ink); border-bottom-color:var(--band-edge); }
+.recruitment-experience .flow-worksheet.flow-ledger th.flow-ledger-group { border-top:3px solid var(--band-edge); border-right:2px solid var(--band-edge); }
+.recruitment-experience .flow-worksheet.flow-ledger td[data-tone],
+.recruitment-experience .flow-recipient-table tbody td[data-tone] { background:var(--band-cell); border-bottom-color:#e5eaf1; }
+.recruitment-experience .flow-worksheet.flow-ledger tr:nth-child(even) td[data-tone],
+.recruitment-experience .flow-recipient-table tbody tr:nth-child(even) td[data-tone] { background:var(--band-stripe); }
+.recruitment-experience .flow-worksheet.flow-ledger tr:hover td[data-tone],
+.recruitment-experience .flow-recipient-table tbody tr:hover td[data-tone] { background:#e9f1fb; }
+.recruitment-experience .flow-recipient-table :is(th,td)[data-tone=total] { font-weight:600; color:#214e86; border-left:2px solid #c2d7f1; }
+.recruitment-experience .flow-recipient-table :is(th,td)[data-tone=pending] { border-left:1px solid #e9ddc2; }
+.recruitment-experience .flow-recipient-table tfoot td { background:#e7effa; color:#24486f; font-weight:600; border-top:2px solid #bdcfe6; border-bottom:1px solid #cddbeb; }
+.recruitment-experience .flow-recipient-table tfoot td[data-tone=total] { background:#d6e5fa; color:#194678; }
+.recruitment-experience .flow-recipient-table tfoot td[data-tone=pending] { background:#f4ead7; color:#78591f; }
+.recruitment-experience .flow-recipient-table th { height:48px; }
+.recruitment-experience .flow-result-tabs button { color:#596b82; font-weight:500; }
+.recruitment-experience .flow-result-tabs button[aria-pressed=true] { color:#0969d6; background:#f0f6ff; box-shadow:inset 0 -2px #0969d6; }
+.recruitment-experience .flow-result-tabs button { padding-inline:12px; }
+
+.rd-inspector:has(.flow-source-preview) { width:min(1160px,92vw); }
+.flow-preview-toolbar,.flow-preview-filters,.flow-preview-pager { display:flex; align-items:center; gap:12px; }
+.flow-preview-toolbar { justify-content:flex-end; margin-bottom:18px; }
+.flow-preview-toolbar>details { position:relative; font-size:13px; }
+.flow-preview-toolbar>details>summary { cursor:pointer; padding:8px; color:#667085; }
+.flow-preview-toolbar>details>.rw-source-card { position:absolute; right:0; top:100%; width:560px; background:#fff; border:1px solid #dde4ed; border-radius:10px; padding:16px; box-shadow:0 8px 24px #24355118; z-index:10; }
+.flow-preview-note { font-size:13px; color:#667085; margin:0 0 16px; }
+.flow-preview-filters { margin-bottom:14px; font-size:13px; }
+.flow-preview-filters label { display:flex; align-items:center; gap:8px; }
+.flow-preview-filters :is(input,select),.flow-preview-page select { padding:8px 10px; border:1px solid #d8e2ef; border-radius:7px; color:#344054; background:#fff; max-width:320px; }
+.flow-preview-filters input { margin-left:auto; width:240px; }
+.flow-preview-scroll { max-height:62vh; overflow:auto; border:1px solid #dce5f0; border-radius:8px; }
+.flow-preview-scroll table { border-collapse:separate; border-spacing:0; min-width:100%; font-size:13px; }
+.flow-preview-scroll :is(th,td) { padding:10px 12px; white-space:nowrap; border-bottom:1px solid #e6ecf3; text-align:left; max-width:340px; overflow:hidden; text-overflow:ellipsis; }
+.flow-preview-scroll th { position:sticky; top:0; background:#e8eff8; color:#365579; z-index:2; }
+.flow-preview-scroll tbody tr:nth-child(even) { background:#f5f8fc; }
+.flow-preview-pager { margin-top:14px; font-size:13px; color:#667085; }
+.flow-preview-pager span { margin-right:auto; }
+.flow-preview-page { display:flex; align-items:center; gap:10px; font-size:13px; margin-bottom:12px; }
+.flow-preview-image { background:#f1f4f8; padding:12px; border-radius:8px; }
+.flow-preview-image img { display:block; width:100%; height:auto; }
+.flow-preview-filters label { white-space:nowrap; flex-shrink:0; }
+
+/* Non-modal progress window: no layout shift and no invented percentage. */
+.recruitment-experience .flow-progress { position:fixed; z-index:1200; top:86px; right:28px; width:360px; margin:0; }
+.recruitment-experience .flow-progress-card { grid-template-columns:40px minmax(0,1fr) auto; gap:12px; padding:18px; border:1px solid #dce6f3; border-radius:16px; background:#fff; box-shadow:0 12px 40px #18365820,0 2px 8px #1836580a; animation:flow-enter 180ms ease; }
+.recruitment-experience .flow-progress-symbol { width:40px; height:40px; border-radius:12px; background:#edf4ff; }
+.recruitment-experience .flow-progress-copy h2 { font-size:14px; margin:0 0 4px; }
+.recruitment-experience .flow-progress-copy p { font-size:12px; line-height:1.5; }
+.recruitment-experience .flow-progress-track { grid-column:1/-1; margin:2px 0 0; height:4px; }
+.recruitment-experience .flow-progress-phases { grid-column:1/-1; gap:12px; margin:0; font-size:11px; }
+.recruitment-experience #flowProgressRetry { grid-column:2/-1; justify-self:start; }
+.flow-scan-icon { width:28px; height:28px; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+.flow-scan-line { stroke:#0875ef; stroke-width:2.5; animation:flow-scan 1.6s ease-in-out infinite; }
+@keyframes flow-scan { 0%,100% { transform:translateY(-7px); opacity:.45; } 50% { transform:translateY(7px); opacity:1; } }
+@media(prefers-reduced-motion:reduce) { .flow-scan-line { animation:none; } }
+
+/* Material categories are visible together, with expandable file stacks. */
+.recruitment-experience .flow-material-board { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; align-items:start; }
+.recruitment-experience .flow-material-block { min-width:0; border:1px solid #e2e8f0; border-radius:14px; padding:16px; background:#fff; }
+.recruitment-experience .flow-material-block>header { display:flex; gap:9px; align-items:center; margin-bottom:14px; }
+.recruitment-experience .flow-material-block h3 { font-size:14px; margin:0; flex:1; }
+.flow-block-icon { width:30px; height:30px; display:grid; place-items:center; border-radius:9px; background:#eaf2ff; color:#4476b1; flex:none; }
+.flow-block-icon .rd-icon { width:19px; height:19px; }
+[data-category=roster] .flow-block-icon { background:#e7f5f0; color:#26775f; }
+[data-category=domestic] .flow-block-icon { background:#eef0fb; color:#6965a2; }
+[data-category=overseas] .flow-block-icon { background:#e7f4f8; color:#32819a; }
+[data-category=extra] .flow-block-icon { background:#fff2e4; color:#a46c2d; }
+[data-category=comparison] .flow-block-icon { background:#f1edf8; color:#8561a7; }
+.recruitment-experience .flow-material-block .flow-material-files { border-radius:9px; margin:0; }
+.recruitment-experience .flow-material-block .flow-file-open { display:grid; grid-template-columns:28px minmax(0,1fr) 12px; gap:6px 10px; padding:12px 10px; min-height:76px; }
+.recruitment-experience .flow-material-block .flow-file-mark { width:28px; height:34px; border-radius:7px; grid-row:1/3; }
+.recruitment-experience .flow-material-block .flow-file-mark .rd-icon { width:18px; height:18px; }
+.recruitment-experience .flow-material-block .flow-file-copy strong { font-size:12px; line-height:1.5; white-space:normal; overflow-wrap:anywhere; }
+.recruitment-experience .flow-material-block .flow-file-open>.flow-material-status { grid-column:2; justify-self:start; font-size:11px; }
+.recruitment-experience .flow-material-block .flow-file-action { grid-column:3; grid-row:1/3; }
+.recruitment-experience .flow-material-block .flow-material-status { font-size:11px; white-space:normal; }
+.flow-file-stack { position:relative; margin:5px 3px 0; border-top:2px solid #e5ebf3; box-shadow:0 -3px 0 #f3f6fa; }
+.flow-file-stack>summary { display:flex; align-items:center; gap:6px; padding:10px 2px 4px; color:#61758e; font-size:12px; cursor:pointer; list-style:none; }
+.flow-file-stack>summary::-webkit-details-marker { display:none; }
+.flow-file-stack>summary>.rd-icon:last-child { margin-left:auto; }
+.flow-file-stack[open]>summary { padding-bottom:12px; }
+.flow-file-stack[open]>summary>.rd-icon:last-child { transform:rotate(180deg); }
+.flow-block-warning { color:#a66b23; font-size:11px; }
+.flow-block-empty { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-height:76px; padding:12px; border:1px dashed #d9e1ec; border-radius:9px; color:#7c899b; font-size:12px; }
+.flow-block-empty[data-tone=missing] { color:#9b6727; background:#fffbf4; border-color:#e7cfae; }
+.recruitment-experience .flow-material-block[data-tone=missing] { border-color:#e7cfae; }
+.recruitment-experience .flow-material-block .flow-sync-history { margin-top:10px; }
+.recruitment-experience .flow-material-block .flow-sync-history>summary { padding:8px 0; font-size:11px; }
+.recruitment-experience .flow-material-block .flow-material-intake { margin-top:10px; font-size:11px; }
+.flow-block-sync { margin-top:10px; font-size:12px; }
+@media(max-width:1200px) { .recruitment-experience .flow-material-board { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+/* Header returns and the month label keep workflow framing compact. */
+.recruitment-experience .rd-header-nav { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.recruitment-experience .rd-header-nav>a { display:inline-flex; align-items:center; gap:6px; min-height:32px; padding:5px 9px; border-radius:8px; font-size:12px; color:#64748b; white-space:nowrap; }
+.recruitment-experience .rd-header-nav>a:hover { background:#edf3fb; color:#1d5699; }
+.recruitment-experience .rd-header-nav .rd-icon { width:16px; height:16px; }
+.recruitment-experience .ra-activity-month { display:inline-flex; align-items:center; gap:5px; height:26px; padding:3px 8px; border:1px solid #d8e4f4; border-radius:7px; background:#edf4fd; color:#3c6090; font-size:12px; line-height:1.4; }
+.recruitment-experience .ra-activity-month .rd-icon { width:14px; height:14px; }
+.recruitment-experience .rd-heading { margin-bottom:8px; }

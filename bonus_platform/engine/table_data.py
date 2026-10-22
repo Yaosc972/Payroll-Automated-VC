@@ -15,8 +15,14 @@ TABLE_ROWS_FILE = "table_rows.json"
 
 def save_table_data(run_dir: Path, payload: Dict[str, Any]) -> Dict[str, Any]:
     path = run_dir / TABLE_ROWS_FILE
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default), encoding="utf-8")
     return payload
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def load_table_data(run_dir: Path) -> Dict[str, Any]:

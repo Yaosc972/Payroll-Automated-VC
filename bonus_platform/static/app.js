@@ -8,6 +8,7 @@ const state = {
   optionalColumnsHidden: false,
   runsCollapsed: true,
   filtersCollapsed: false,
+  sourceFiles: [],
   sortField: "",
   sortDir: "asc",
   currentPage: 1,
@@ -17,8 +18,18 @@ const state = {
 const elements = {
   fileInput: document.querySelector("#fileInput"),
   fileName: document.querySelector("#fileName"),
+  standardCalculationTitle: document.querySelector("#standardCalculationTitle"),
+  revisionLinkControl: document.querySelector("#revisionLinkControl"),
+  linkRevisionToCurrent: document.querySelector("#linkRevisionToCurrent"),
   calculateButton: document.querySelector("#calculateButton"),
   status: document.querySelector("#status"),
+  sourceMonth: document.querySelector("#sourceMonth"),
+  sourceFilesInput: document.querySelector("#sourceFilesInput"),
+  sourceFileName: document.querySelector("#sourceFileName"),
+  clearSourceFilesButton: document.querySelector("#clearSourceFilesButton"),
+  sourceCalculateButton: document.querySelector("#sourceCalculateButton"),
+  sourcePackageList: document.querySelector("#sourcePackageList"),
+  sourceStatus: document.querySelector("#sourceStatus"),
   confirmationInput: document.querySelector("#confirmationInput"),
   confirmationName: document.querySelector("#confirmationName"),
   finalizeButton: document.querySelector("#finalizeButton"),
@@ -33,8 +44,6 @@ const elements = {
   currentRunSubTitle: document.querySelector("#currentRunSubTitle"),
   ruleVersion: document.querySelector("#ruleVersion"),
   tableSummary: document.querySelector("#tableSummary"),
-  visibleRows: document.querySelector("#visibleRows"),
-  totalRows: document.querySelector("#totalRows"),
   globalSearch: document.querySelector("#globalSearch"),
   bonusTypeFilter: document.querySelector("#bonusTypeFilter"),
   statusFilter: document.querySelector("#statusFilter"),
@@ -58,13 +67,28 @@ const optionalColumnFields = ["grade", "category", "channel", "ownerName", "sour
 init();
 
 function init() {
+  setDefaultSourceMonth();
   bindEvents();
   syncRunsPanelState();
+  syncFiltersPanelState();
   renderIcons();
   loadRuns(new URLSearchParams(location.hash.slice(1)).get('run') || '');
 }
 
 function bindEvents() {
+  elements.sourceFilesInput.addEventListener("change", () => {
+    state.sourceFiles = mergeSourceFiles(state.sourceFiles, [...elements.sourceFilesInput.files]);
+    elements.sourceFilesInput.value = "";
+    syncSourceFileSelection();
+    setStatus(elements.sourceStatus, `已累计选择 ${state.sourceFiles.length} 个文件，可继续分次添加。`, false);
+  });
+  elements.clearSourceFilesButton.addEventListener("click", clearSourceFiles);
+  elements.sourcePackageList.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-remove-source-file]");
+    if (!removeButton) return;
+    removeSourceFile(Number(removeButton.dataset.removeSourceFile));
+  });
+
   elements.fileInput.addEventListener("change", () => {
     elements.fileName.textContent = elements.fileInput.files[0]?.name || "选择本月 Excel 文件";
   });
@@ -74,6 +98,7 @@ function bindEvents() {
   });
 
   elements.calculateButton.addEventListener("click", calculateRun);
+  elements.sourceCalculateButton.addEventListener("click", calculateSourcePackage);
   elements.finalizeButton.addEventListener("click", finalizeRun);
   elements.refreshRunsButton.addEventListener("click", loadRuns);
   elements.toggleRunsButton.addEventListener("click", toggleRunsPanel);
@@ -94,6 +119,77 @@ function bindEvents() {
   });
 }
 
+function mergeSourceFiles(currentFiles, incomingFiles) {
+  const filesByIdentity = new Map();
+  for (const file of [...currentFiles, ...incomingFiles]) {
+    const identity = `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
+    filesByIdentity.set(identity, file);
+  }
+  return [...filesByIdentity.values()];
+}
+
+function syncSourceFileSelection() {
+  const count = state.sourceFiles.length;
+  elements.sourceFileName.textContent = count ? `已累计 ${count} 个文件（可继续添加）` : "选择原始数据文件";
+  elements.clearSourceFilesButton.disabled = count === 0;
+  renderSelectedSourceFiles(state.sourceFiles);
+}
+
+function clearSourceFiles() {
+  state.sourceFiles = [];
+  elements.sourceFilesInput.value = "";
+  syncSourceFileSelection();
+  setStatus(elements.sourceStatus, "已清空原始数据文件，可重新选择。", false);
+}
+
+function removeSourceFile(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.sourceFiles.length) return;
+  const [removedFile] = state.sourceFiles.splice(index, 1);
+  elements.sourceFilesInput.value = "";
+  syncSourceFileSelection();
+  const remaining = state.sourceFiles.length;
+  setStatus(
+    elements.sourceStatus,
+    remaining
+      ? `已移除 ${removedFile.name}，当前共 ${remaining} 个文件。`
+      : `已移除 ${removedFile.name}，当前未选择文件。`,
+    false,
+  );
+}
+
+async function calculateSourcePackage() {
+  const month = parseMonth(elements.sourceMonth.value);
+  const files = state.sourceFiles || [];
+  if (!month) {
+    setStatus(elements.sourceStatus, "请选择核算月份。", true);
+    return;
+  }
+  if (!files.length) {
+    setStatus(elements.sourceStatus, "请选择原始数据文件。", true);
+    return;
+  }
+
+  const form = new FormData();
+  form.append("month", String(month));
+  for (const file of files) form.append("files", file);
+  setStatus(elements.sourceStatus, "正在识别原始数据并生成核算批次...", false);
+  showTableSkeleton("正在整合原始数据");
+  elements.sourceCalculateButton.disabled = true;
+
+  try {
+    const data = await requestJson("/api/recruitment/source-packages/calculate", { method: "POST", body: form });
+    await loadRuns(data.id);
+    renderDetectedSourceFiles(data.sourcePackage?.files || []);
+    setStatus(elements.sourceStatus, `数据整合完成：${data.integrationSummary?.generatedRows || data.importedRows || 0} 条`, false);
+    showToast("原始数据已整合并完成初算。");
+  } catch (error) {
+    setStatus(elements.sourceStatus, error.message, true);
+    showToast(error.message, "error");
+  } finally {
+    elements.sourceCalculateButton.disabled = false;
+  }
+}
+
 async function calculateRun() {
   const file = elements.fileInput.files[0];
   if (!file) {
@@ -103,16 +199,17 @@ async function calculateRun() {
 
   const form = new FormData();
   form.append("file", file);
-  setStatus(elements.status, "正在创建批次并初算...", false);
+  const revisionParent = elements.linkRevisionToCurrent.checked && hasRawSourceLineage(state.currentRun) ? state.currentRun : null;
+  if (revisionParent) form.append("parent_run_id", revisionParent.id);
+  setStatus(elements.status, revisionParent ? "正在基于当前原始数据批次重新初算..." : "正在创建批次并初算...", false);
   showTableSkeleton("正在生成本月核算结果");
   elements.calculateButton.disabled = true;
 
   try {
     const data = await requestJson("/api/runs/calculate", { method: "POST", body: form });
     await loadRuns(data.id);
-    await selectRun(data);
-    setStatus(elements.status, `初算完成：${runDisplayName(data)}`, false);
-    showToast("初算完成，已生成新的核算批次。");
+    setStatus(elements.status, `${revisionParent ? "修订初算" : "初算"}完成：${runDisplayName(data)}`, false);
+    showToast(revisionParent ? "修订数据已生成新的可追溯批次。" : "初算完成，已生成新的核算批次。");
   } catch (error) {
     setStatus(elements.status, error.message, true);
     showToast(error.message, "error");
@@ -142,7 +239,6 @@ async function finalizeRun() {
     const data = await requestJson(`/api/runs/${state.currentRun.id}/finalize`, { method: "POST", body: form });
     if (data.inlineFile) downloadInlineFile(data.inlineFile);
     await loadRuns(data.id);
-    await selectRun(data);
     setStatus(elements.finalStatus, `最终结果已生成：${fileDisplayName(data.files.finalResult, data, "最终结果")}`, false);
     showToast("最终结果已生成。");
   } catch (error) {
@@ -185,12 +281,77 @@ function renderRun(run) {
   }
   elements.currentRunTitle.textContent = runDisplayName(run);
   elements.currentRunSubTitle.textContent = run.id
-    ? `批次标识 ${runShortCode(run)} · ${formatDateTime(run.updatedAt || run.createdAt)}`
+    ? `批次标识 ${runShortCode(run)} · ${formatDateTime(run.updatedAt || run.createdAt)}${run.parentRunId ? ` · 修订自 ${run.sourcePackage?.parentDisplayName || run.parentRunId}` : ""}`
     : "上传月度导入表后，平台会生成一个可追溯的核算批次。";
   elements.ruleVersion.textContent = formatRuleInfo(run.ruleInfo);
   renderDownloads(run);
   updateStepState(run);
   updatePrimaryDownloads(run);
+  const hasSourceLineage = hasRawSourceLineage(run);
+  elements.standardCalculationTitle.textContent = hasSourceLineage ? "修改整合数据后重新初算" : "标准初算数据直接核算";
+  elements.revisionLinkControl.hidden = !hasSourceLineage;
+  elements.linkRevisionToCurrent.checked = hasSourceLineage;
+  elements.calculateButton.textContent = hasSourceLineage ? "修订后重新初算" : "创建核算批次";
+  if (!elements.fileInput.files.length) {
+    elements.fileName.textContent = hasSourceLineage ? "选择修改后的整合初算数据" : "选择本月 Excel 文件";
+  }
+  if (hasSourceLineage) {
+    renderDetectedSourceFiles(run.sourcePackage.files || []);
+    const count = run.integrationSummary?.generatedRows || run.importedRows || 0;
+    const sourceMessage = run.sourcePackage.mode === "manual_revision"
+      ? `当前批次由 ${run.sourcePackage.parentDisplayName || "原始数据批次"} 修订后重新初算`
+      : `当前批次由原始数据整合生成，共 ${count} 条`;
+    setStatus(elements.sourceStatus, sourceMessage, false);
+  } else if (!state.sourceFiles.length) {
+    renderSelectedSourceFiles([]);
+    setStatus(elements.sourceStatus, "等待原始数据包", false);
+  }
+}
+
+function hasRawSourceLineage(run) {
+  const sourcePackage = run?.sourcePackage;
+  return ["raw_sources", "manual_revision"].includes(sourcePackage?.mode) && Boolean(sourcePackage?.baseline || sourcePackage?.files?.length);
+}
+
+function renderSelectedSourceFiles(files) {
+  if (!files.length) {
+    elements.sourcePackageList.innerHTML = '<span class="source-file-empty">尚未选择原始数据文件</span>';
+    return;
+  }
+  elements.sourcePackageList.innerHTML = files
+    .map(
+      (file, index) => `
+        <span class="source-file-item">
+          <i data-lucide="file-spreadsheet"></i>
+          <strong title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</strong>
+          <button
+            class="source-file-remove"
+            type="button"
+            data-remove-source-file="${index}"
+            title="移除 ${escapeHtml(file.name)}"
+            aria-label="移除 ${escapeHtml(file.name)}"
+          ><i data-lucide="x"></i></button>
+        </span>
+      `,
+    )
+    .join("");
+  renderIcons();
+}
+
+function renderDetectedSourceFiles(files) {
+  if (!files.length) return;
+  elements.sourcePackageList.innerHTML = files
+    .map(
+      (file) => `
+        <span class="source-file-item detected">
+          <i data-lucide="circle-check"></i>
+          <strong>${escapeHtml(file.roleLabel || "已识别")}</strong>
+          <em>${escapeHtml(file.filename || "")}</em>
+        </span>
+      `,
+    )
+    .join("");
+  renderIcons();
 }
 
 async function loadTableData(runId) {
@@ -280,14 +441,6 @@ function renderCommandTable(rows) {
     ],
   });
   state.table.on("rowClick", (_event, row) => openDrawer(row.getData()));
-  state.table.on("dataFiltered", (_filters, filteredRows) => {
-    elements.visibleRows.textContent = filteredRows.length;
-  });
-  state.table.on("dataLoaded", () => {
-    elements.visibleRows.textContent = state.table.getDataCount("active");
-    elements.totalRows.textContent = rows.length;
-  });
-  applyTableFilters();
 }
 
 function renderFallbackTable(rows) {
@@ -404,15 +557,10 @@ function applyTableFilters() {
   state.filteredRows = filtered;
 
   if (state.table) {
-    state.table.replaceData(filtered).then(() => {
-      elements.visibleRows.textContent = filtered.length;
-      elements.totalRows.textContent = rows.length;
-    });
+    state.table.replaceData(filtered);
   } else {
     state.currentPage = 1;
     renderFallbackTable(filtered);
-    elements.visibleRows.textContent = filtered.length;
-    elements.totalRows.textContent = rows.length;
   }
 }
 
@@ -467,8 +615,6 @@ function fillSelect(select, values) {
 }
 
 function updateTableSummary(stats) {
-  elements.visibleRows.textContent = stats.totalRows || 0;
-  elements.totalRows.textContent = stats.totalRows || 0;
   elements.tableSummary.textContent = `共 ${stats.totalRows || 0} 行，待确认 ${stats.pendingRows || 0}，异常 ${stats.exceptionRows || 0}。`;
 }
 
@@ -556,8 +702,14 @@ function renderRunList() {
 
 function renderDownloads(run) {
   const files = run.files || {};
+  const inputLabel = run.sourcePackage?.mode === "raw_sources"
+    ? "整合初算数据"
+    : run.sourcePackage?.mode === "manual_revision"
+      ? "修订初算数据"
+      : "原始导入";
   const ordered = [
-    ["input", "原始导入"],
+    ["input", inputLabel],
+    ["sourceReport", "数据整合报告"],
     ["initialResult", "初算结果"],
     ["pending", "待确认表"],
     ["confirmation", "确认结果"],
@@ -587,13 +739,24 @@ function updatePrimaryDownloads(run) {
 }
 
 function updateStepState(run) {
-  const activeSteps = new Set(["upload", "calculate"]);
+  const activeSteps = new Set(["calculate"]);
+  if (hasRawSourceLineage(run)) {
+    activeSteps.add("baseline");
+    activeSteps.add("source");
+  }
   if ((run.pendingCount || 0) > 0 || run.status === "待确认") activeSteps.add("pending");
   if (run.files?.finalResult) activeSteps.add("final");
   if (run.files?.finalResult) activeSteps.add("archive");
   document.querySelectorAll(".flow-step").forEach((step) => {
     step.classList.toggle("active", activeSteps.has(step.dataset.step));
   });
+}
+
+function setDefaultSourceMonth() {
+  if (!elements.sourceMonth || elements.sourceMonth.value) return;
+  const now = new Date();
+  now.setMonth(now.getMonth() - 1);
+  elements.sourceMonth.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function toggleOptionalColumns() {
@@ -621,9 +784,14 @@ function syncRunsPanelState() {
 
 function toggleFiltersPanel() {
   state.filtersCollapsed = !state.filtersCollapsed;
+  syncFiltersPanelState();
+}
+
+function syncFiltersPanelState() {
   document.body.classList.toggle("filters-collapsed", state.filtersCollapsed);
-  elements.toggleFiltersButton.title = state.filtersCollapsed ? "展开筛选器" : "收起筛选器";
-  elements.toggleFiltersButton.innerHTML = `<i data-lucide="${state.filtersCollapsed ? "sliders-horizontal" : "panel-left-close"}"></i>`;
+  elements.toggleFiltersButton.title = state.filtersCollapsed ? "展开筛选条件" : "收起筛选条件";
+  elements.toggleFiltersButton.setAttribute("aria-expanded", String(!state.filtersCollapsed));
+  elements.toggleFiltersButton.innerHTML = `<i data-lucide="${state.filtersCollapsed ? "chevron-down" : "chevron-up"}"></i>筛选条件`;
   renderIcons();
 }
 
@@ -645,9 +813,18 @@ function statusClass(value) {
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
-  const data = await response.json();
+  const responseText = await response.text();
+  let data = {};
+  if (responseText) {
+    try {
+      data = JSON.parse(responseText);
+    } catch (_error) {
+      if (!response.ok) throw new Error(responseText || `请求失败（${response.status}）`);
+      throw new Error("服务返回格式异常，请刷新后重试。");
+    }
+  }
   if (!response.ok) {
-    throw new Error(data.detail || "请求失败");
+    throw new Error(data.detail || `请求失败（${response.status}）`);
   }
   return data;
 }

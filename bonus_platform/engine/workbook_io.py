@@ -36,19 +36,21 @@ THIN_BORDER = Border(
 
 
 DETAIL_HEADERS = [
-    "唯一验证", "姓名", "工号", "人员状态", "工作地", "职级", "ABC类别", "招聘渠道",
-    "招聘负责人工号", "招聘负责人姓名", "招聘负责人状态", "招聘负责人最后工作日",
-    "协助招聘人工号", "协助招聘人姓名", "协助招聘人状态", "协助招聘人最后工作日",
-    "招聘启动日期", "候选人入职时间", "转正日期", "标签分类", "标准入职周期", "实际入职周期",
-    "入职周期差异", "渠道系数", "招聘奖金标准", "招聘人实际发放标准",
+    "唯一验证", "姓名", "工号", "证件号", "入职日期", "人员状态", "工作地", "最后工作日", "职级",
+    "二级组织", "三级组织", "四级组织", "五级组织", "职位", "职族", "职类", "直线经理", "直线经理工号",
+    "标签分类", "职族分类", "ABC类别", "招聘负责人工号", "招聘负责人姓名", "协助招聘人工号", "协助招聘人姓名",
+    "招聘渠道", "海外offer流程编号", "海外招聘需求编号", "招聘启动日期", "候选人入职时间", "转正日期",
+    "标准入职周期", "周期剔除天数", "实际入职周期", "入职周期差异", "渠道系数", "招聘奖金标准", "招聘人实际发放标准",
     "招聘人入职1月奖金", "招聘人入职1月周期", "招聘人入职3月奖金", "招聘人入职3月周期",
     "招聘人入职6月奖金", "招聘人入职6月周期", "招聘人转正奖金", "招聘人转正周期",
     "协助人实际发放标准", "协助人入职1月奖金", "协助人入职1月周期", "协助人入职3月奖金",
     "协助人入职3月周期", "协助人入职6月奖金", "协助人入职6月周期", "协助人转正奖金",
-    "协助人转正周期", "币种", "推荐人姓名", "推荐人工号", "推荐人状态", "推荐人是否上级",
+    "协助人转正周期", "币种", "奖金地区类型", "推荐人姓名", "推荐人工号", "推荐人状态", "推荐人最后工作日", "推荐人是否上级",
     "内推规则范围", "内推奖金标准", "内推入职1月奖金", "内推入职1月周期", "内推入职3月奖金",
     "内推入职3月周期", "内推入职6月奖金", "内推入职6月周期", "内推转正奖金", "内推转正周期",
-    "异常提示",
+    "直接上级工号", "间接上级1工号", "间接上级2工号", "间接上级3工号", "间接上级4工号",
+    "招聘负责人状态", "招聘负责人最后工作日", "协助招聘人状态", "协助招聘人最后工作日",
+    "特殊地区规则", "人工备注", "异常提示",
 ]
 
 RECRUITMENT_SUMMARY_HEADERS = ["工号", "姓名", "角色", "币种", "核算月份", "入职1月奖金", "入职3月奖金", "入职6月奖金", "转正奖金", "合计发放"]
@@ -149,41 +151,71 @@ def _write_detail_sheet(workbook: Workbook, details: List[RecruitmentDetail]) ->
         sheet.append(_detail_values(detail))
     _format_sheet(sheet, table_name="tbl_detail")
     _format_detail_groups(sheet)
-    _apply_date_format(sheet, _columns_by_headers(sheet, ["招聘负责人最后工作日", "协助招聘人最后工作日", "招聘启动日期", "候选人入职时间", "转正日期"]))
+    _apply_date_format(sheet, _columns_by_headers(sheet, [
+        "入职日期", "最后工作日", "招聘负责人最后工作日", "协助招聘人最后工作日",
+        "推荐人最后工作日", "招聘启动日期", "候选人入职时间", "转正日期",
+    ]))
     _apply_money_format(sheet, _columns_by_headers(sheet, [
         "招聘奖金标准", "招聘人实际发放标准", "招聘人入职1月奖金", "招聘人入职3月奖金", "招聘人入职6月奖金", "招聘人转正奖金",
         "协助人实际发放标准", "协助人入职1月奖金", "协助人入职3月奖金", "协助人入职6月奖金", "协助人转正奖金",
         "内推奖金标准", "内推入职1月奖金", "内推入职3月奖金", "内推入职6月奖金", "内推转正奖金",
     ]))
-    sheet.column_dimensions["E"].width = 24
-    sheet.column_dimensions["J"].width = 18
-    sheet.column_dimensions["N"].width = 18
+    for column in _columns_by_headers(sheet, ["证件号"]):
+        for row in range(2, sheet.max_row + 1):
+            sheet.cell(row, column).number_format = "@"
+    for header, width in {
+        "证件号": 22,
+        "工作地": 22,
+        "二级组织": 24,
+        "三级组织": 24,
+        "四级组织": 24,
+        "五级组织": 24,
+        "职位": 24,
+        "招聘负责人姓名": 18,
+        "协助招聘人姓名": 18,
+        "推荐人姓名": 18,
+    }.items():
+        for column in _columns_by_headers(sheet, [header]):
+            sheet.column_dimensions[get_column_letter(column)].width = width
     sheet.column_dimensions[get_column_letter(sheet.max_column)].width = 40
 
 
 def _detail_values(detail: RecruitmentDetail) -> List[Any]:
+    source = detail.source_values
     return [
         "重复" if "工号重复" in detail.exceptions else "唯一",
         detail.name,
         detail.employee_no,
+        as_text(source.get("证件号")),
+        source.get("入职日期") or detail.onboard_date,
         detail.status,
         detail.location,
+        source.get("最后工作日"),
         detail.grade,
+        source.get("二级组织"),
+        source.get("三级组织"),
+        source.get("四级组织"),
+        source.get("五级组织"),
+        source.get("职位"),
+        source.get("职族"),
+        source.get("职类"),
+        source.get("直线经理"),
+        source.get("直线经理工号"),
+        detail.label,
+        source.get("职族分类"),
         detail.category,
-        detail.channel,
         detail.recruiter_id,
         detail.recruiter_name,
-        detail.recruiter_status,
-        detail.recruiter_last_work_date,
         detail.assistant_id,
         detail.assistant_name,
-        detail.assistant_status,
-        detail.assistant_last_work_date,
+        detail.channel,
+        source.get("海外offer流程编号"),
+        source.get("海外招聘需求编号"),
         detail.start_date,
         detail.onboard_date,
         detail.probation_date,
-        detail.label,
         detail.standard_cycle_days,
+        detail.exclusion_days,
         detail.actual_cycle_days,
         detail.cycle_diff_days,
         detail.channel_ratio,
@@ -207,9 +239,11 @@ def _detail_values(detail: RecruitmentDetail) -> List[Any]:
         detail.assistant_probation_bonus,
         detail.assistant_probation_period,
         detail.currency,
+        source.get("奖金地区类型"),
         detail.referrer_name,
         detail.referrer_id,
         detail.referrer_status,
+        detail.referrer_last_work_date,
         detail.referrer_is_manager,
         detail.referral_rule_scope,
         detail.referral_standard_bonus,
@@ -221,6 +255,17 @@ def _detail_values(detail: RecruitmentDetail) -> List[Any]:
         detail.referral_6m_period,
         detail.referral_probation_bonus,
         detail.referral_probation_period,
+        source.get("直接上级工号"),
+        source.get("间接上级1工号"),
+        source.get("间接上级2工号"),
+        source.get("间接上级3工号"),
+        source.get("间接上级4工号"),
+        detail.recruiter_status,
+        detail.recruiter_last_work_date,
+        detail.assistant_status,
+        detail.assistant_last_work_date,
+        source.get("特殊地区规则"),
+        source.get("人工备注"),
         "；".join(detail.exceptions),
     ]
 

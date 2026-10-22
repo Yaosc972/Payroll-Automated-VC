@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN" data-module-id="recruitment" data-server-guarded="true">
+<head>
+  <script src="platform-font.js?v=1"></script>
+  <script src="permission-guard.js?v=9"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>核算活动 · 招聘奖金与内推奖金</title>
+  <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
+  <link rel="stylesheet" href="recruitment-draft.css?v=11" />
+  <link rel="stylesheet" href="recruitment-activities.css?v=4" />
+  <link rel="stylesheet" href="recruitment-ui.css?v=2" />
+  <link rel="stylesheet" href="recruitment-icons.css?v=1" />
+  <link rel="stylesheet" href="recruitment-density.css?v=1" />
+  <link rel="stylesheet" href="recruitment-controls.css?v=3" />
+  <script src="recruitment-icons.js?v=11" defer></script>
+  <script src="recruitment-ui.js?v=3" defer></script>
+  <script src="recruitment-activities.js?v=8" defer></script>
+  <script src="recruitment-controls.js?v=3" defer></script>
+  <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
+</head>
+<body class="ra-page">
+  <a class="rd-skip" href="#activities">跳到活动列表</a>
+  <header class="rd-header"><div class="rd-header-inner">
+    <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/bonus-logo-header-blue.png" alt="" /><span>招聘奖金与内推奖金</span></a>
+    <nav aria-label="招聘奖金导航"><a class="ra-nav-current" href="recruitment-activities.html" aria-current="page">活动列表</a><a class="ra-guide-link" href="recruitment-history.html">历史批次</a><a class="ra-guide-link" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a></nav>
+    <a class="rd-home" href="/">返回首页<svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></a>
+  </div></header>
+  <main id="activities" class="ra-shell">
+    <div class="ra-heading"><div><h1>核算活动</h1></div><div><button id="activitySync" class="rd-button" type="button">资料同步</button> <button id="activityNew" class="rd-button rd-primary" type="button"><svg class="rd-icon" aria-hidden="true"><use href="#icon-plus"/></svg>新建核算活动</button></div></div>
+    <div id="activityFeedback" class="ra-feedback" role="status" hidden></div>
+    <section class="ra-panel" aria-label="核算活动列表">
+      <div class="ra-toolbar">
+        <div class="ra-tabs" role="group" aria-label="记录范围"><button type="button" data-scope="activities" aria-pressed="true">核算活动</button><button type="button" data-scope="legacy" aria-pressed="false">原核算记录</button></div>
+        <label class="ra-search"><span class="rd-sr-only">搜索活动名称</span><svg class="rd-icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="activitySearch" type="search" placeholder="搜索活动名称" /></label>
+        <label><span class="rd-sr-only">核算月份</span><select id="activityMonth"><option value="">全部月份</option></select></label>
+        <label id="activityStateLabel"><span class="rd-sr-only">活动状态</span><select id="activityState"><option value="active">未归档</option><option value="all">全部状态</option><option value="未开始">未开始</option><option value="核算中">核算中</option><option value="正在整理">正在整理</option><option value="已确认">已确认</option><option value="archived">已归档</option></select></label>
+        <button id="activityRefresh" type="button" class="rd-text-button">刷新</button>
+      </div>
+      <div id="activityNote" class="ra-note" hidden>原核算记录按原方式保留。新建活动独立保存资料，不会覆盖这些记录。</div>
+      <div id="activityTable" class="ra-table-wrap" aria-live="polite"><div class="ra-empty" role="status">正在读取活动…</div></div>
+      <footer class="ra-footer"><span id="activityCount"></span><div><button id="activityPrev" type="button" class="rd-button" aria-label="上一页"><svg class="rd-icon" aria-hidden="true"><use href="#icon-left"/></svg></button><button id="activityNext" type="button" class="rd-button" aria-label="下一页"><svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></button></div></footer>
+    </section>
+  </main>
+  <dialog id="activityDialog" class="ra-dialog" aria-labelledby="activityDialogTitle"><form id="activityForm">
+    <header><h2 id="activityDialogTitle"></h2><button type="button" id="activityClose" class="rd-button rd-icon-button" aria-label="关闭"><svg class="rd-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></header>
+    <div id="activityFields" class="ra-fields"></div>
+    <p id="activityError" class="ra-error" role="alert"></p>
+    <button id="activityReload" class="rd-text-button ra-reload" type="button" hidden>重新读取活动</button>
+    <footer><button id="activityCancel" class="rd-button" type="button">取消</button><button id="activitySubmit" class="rd-button rd-primary" type="submit"></button></footer>
+  </form></dialog>
+  <script src="feedback-widget.js?v=20260916-01"></script>
+</body>
+</html>

@@ -13,6 +13,7 @@ PERMISSION_GUARD_JS = ROOT / "bonus_platform" / "static" / "permission-guard.js"
 LOGIN_HTML = ROOT / "bonus_platform" / "static" / "login.html"
 LOGIN_JS = ROOT / "bonus_platform" / "static" / "login.js"
 RECRUITMENT_HTML = ROOT / "bonus_platform" / "static" / "recruitment.html"
+RECRUITMENT_HISTORY_HTML = ROOT / "bonus_platform" / "static" / "recruitment-history.html"
 LABOR_HTML = ROOT / "bonus_platform" / "static" / "labor.html"
 DOMESTIC_LABOR_HTML = ROOT / "bonus_platform" / "static" / "domestic-labor.html"
 DOMESTIC_LABOR_JS = ROOT / "bonus_platform" / "static" / "domestic-labor.js"
@@ -526,27 +527,16 @@ def test_overseas_labor_surfaces_component_backed_amount_difference():
 
 def test_header_uses_blue_brand_asset_and_favicon_keeps_dark_asset():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
-
-    assert 'href="assets/bonus-logo-dark.png"' in html
-    assert 'src="assets/bonus-logo-header-blue.png"' in html
-    assert "Σ-Workbench" in html
-    assert "西格玛工作台" in html
-    assert "招聘奖金核算" in html
-    assert "月度核算工作台" not in html
+    assert 'HRAS 全球薪酬核算工作台' in html
+    assert 'assets/workbench-logo-2026.png' in html
+    assert '西格玛工作台' not in html
+    assert 'Σ-Workbench' not in html
+    assert 'recruitment-history.html' in html
 
 
-def test_header_branding_and_hero_title_have_dedicated_layout_rules():
-    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
-    css = STYLES_CSS.read_text(encoding="utf-8")
 
-    assert 'class="brand-logo"' in html
-    assert 'class="hero-title ' in html
-    assert ".brand-logo {" in css
-    assert "box-shadow:" not in css.split(".brand-logo {", 1)[1].split("}", 1)[0]
-    assert ".hero-title {" in css
-
-
-def test_header_logo_background_is_truly_transparent():
+def test_recruitment_logo_background_is_truly_transparent():
+    assert 'src="assets/bonus-logo-header-blue.png"' in RECRUITMENT_HTML.read_text()
     with Image.open(HEADER_LOGO) as logo:
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
@@ -564,7 +554,7 @@ def test_monthly_calculation_ui_does_not_offer_history_upload():
 
 
 def test_command_center_table_replaces_limited_preview_tabs():
-    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    html = RECRUITMENT_HISTORY_HTML.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
 
     assert "tabulator-tables" in html
@@ -578,7 +568,7 @@ def test_command_center_table_replaces_limited_preview_tabs():
 
 
 def test_recruitment_page_removes_difference_review_workflow():
-    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    html = RECRUITMENT_HISTORY_HTML.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
 
     for removed_copy in [
@@ -600,7 +590,7 @@ def test_recruitment_page_removes_difference_review_workflow():
 
 
 def test_command_center_uses_glass_toast_skeleton_and_collapsible_panels():
-    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+    html = RECRUITMENT_HISTORY_HTML.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
     app_js = APP_JS.read_text(encoding="utf-8")
 
@@ -614,6 +604,20 @@ def test_command_center_uses_glass_toast_skeleton_and_collapsible_panels():
     assert "showToast" in app_js
     assert "runs-collapsed" in app_js
     assert "filters-collapsed" in app_js
+
+
+def test_recruitment_filters_are_integrated_above_command_table():
+    html = RECRUITMENT_HISTORY_HTML.read_text(encoding="utf-8")
+    css = STYLES_CSS.read_text(encoding="utf-8")
+
+    command_main = html.split('<section class="command-main">', 1)[1].split("</section>", 1)[0]
+    assert 'class="filter-toolbar"' in command_main
+    assert command_main.index('class="filter-toolbar"') < command_main.index('id="commandTable"')
+    assert 'class="filter-rail"' not in html
+    assert "grid-template-columns: minmax(0, 1fr)" in css
+    assert "Command Center" not in command_main
+    assert 'id="visibleRows"' not in command_main
+    assert 'id="totalRows"' not in command_main
 
 
 def test_command_center_uses_next_gen_minimal_glass_language():
@@ -669,7 +673,7 @@ def test_portal_home_is_multi_module_entry_without_calculation_bootstrap():
     assert "招聘奖金核算" in html
     assert "中国区外包工薪酬核算" in html
     assert "海外劳务报账核对" in html
-    assert 'href="recruitment.html"' in html
+    assert 'href="recruitment-activities.html"' in html
     assert 'href="domestic-labor.html"' in html
     assert 'href="overseas-labor.html"' in html
     assert 'href="china-employee-payroll.html"' in html
@@ -939,18 +943,20 @@ def test_employee_payroll_meal_allowance_page_is_guarded_live_module():
     assert 'window.location.replace("china-employee-payroll.html")' in legacy_html
 
 
-def test_recruitment_page_keeps_command_center_and_home_link():
+def test_recruitment_page_keeps_home_and_usable_primary_actions():
     html = RECRUITMENT_HTML.read_text(encoding="utf-8")
 
     assert 'data-module-id="recruitment"' in html
     assert "permission-guard.js" in html
     assert 'href="/"' in html
     assert "返回首页" in html
-    assert 'class="brand-block brand-home-link"' in html
-    assert 'aria-label="返回西格玛工作台首页"' in html
-    assert "app.js" in html
-    assert 'id="commandTable"' in html
-    assert "招聘奖金核算" in html
+    assert 'id="draftUploadButton"' in html
+    assert 'id="draftExport"' in html
+    assert 'role="tablist"' in html
+    assert 'id="draftInspector"' in html
+    assert 'https://cdn.' not in html
+    assert 'recruitment-draft.js' in html
+
 
 
 def test_recruitment_header_omits_user_menu():
@@ -969,16 +975,36 @@ def test_recruitment_header_omits_user_menu():
     assert "background-size: 1px 10px" not in css
 
 
-def test_recruitment_template_download_lives_in_step_one_card():
-    html = RECRUITMENT_HTML.read_text(encoding="utf-8")
+def test_recruitment_template_download_lives_in_history_step_one_card():
+    html = RECRUITMENT_HISTORY_HTML.read_text(encoding="utf-8")
     css = STYLES_CSS.read_text(encoding="utf-8")
 
     header_actions = html.split('<div class="header-actions">', 1)[1].split("</div>", 1)[0]
     assert "下载导入模板" not in header_actions
-    assert "Step 1-2" in html
     assert 'class="template-inline-button"' in html
     assert 'href="/api/template?v=20260608"' in html
     assert ".template-inline-button" in css
+
+
+def test_recruitment_history_preserves_raw_source_intake():
+    html = RECRUITMENT_HISTORY_HTML.read_text(encoding="utf-8")
+    app_js = APP_JS.read_text(encoding="utf-8")
+
+    assert 'id="sourceMonth"' in html
+    assert 'id="sourceFilesInput"' in html
+    assert 'multiple' in html
+    assert 'id="sourceCalculateButton"' in html
+    assert 'id="clearSourceFilesButton"' in html
+    assert 'id="revisionLinkControl"' in html
+    assert 'id="linkRevisionToCurrent"' in html
+    assert "原始数据整合" in html
+    assert "可信基线" in html
+    assert "mergeSourceFiles" in app_js
+    assert 'elements.sourceFilesInput.value = ""' in app_js
+    assert 'data-remove-source-file="${index}"' in app_js
+    assert "removeSourceFile(Number(removeButton.dataset.removeSourceFile))" in app_js
+    assert "state.sourceFiles.splice(index, 1)" in app_js
+    assert "response.text()" in app_js
 
 
 def test_labor_page_redirects_to_domestic_labor():
