@@ -62,7 +62,7 @@ test('recruitment refresh restores the selected run instead of the newest run', 
     history: { replaceState: (_, __, url) => { location.hash = new URL(url, 'https://example.test').hash; } },
     requestJson: async () => ({ runs: [{ id: 'newest' }, { id: 'older' }] }),
     elements: { runList: {} }, renderRunList(){}, renderRun(){}, loadTableData: async () => {}, escapeHtml: String,
-    bindEvents(){}, syncRunsPanelState(){}, renderIcons(){},
+    bindEvents(){}, syncRunsPanelState(){}, syncFiltersPanelState(){}, setDefaultSourceMonth(){}, renderIcons(){},
   });
   const source = read('app');
   vm.runInContext(section(source, 'async function loadRuns(', 'function renderRun('), context);

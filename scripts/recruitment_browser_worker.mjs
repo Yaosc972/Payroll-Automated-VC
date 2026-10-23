@@ -39,10 +39,20 @@ export async function run({spaceId,controlPage,stopFile,gateway,targetUrl}){
     });
   }
   console.log('RECRUITMENT_WORKER_READY');
+  let disconnected=false;
   while(!await stopped()){
     let response;
     try{response=await post('/api/recruitment/browser-worker/claim');}
-    catch(error){console.log('RECRUITMENT_WORKER_STOPPED:'+([401,403].includes(error.status)?'LOGIN_REQUIRED':'CONNECTION_UNAVAILABLE'));return;}
+    catch(error){
+      const network=['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EHOSTUNREACH','ENOTFOUND','EAI_AGAIN','EPIPE'];
+      const transient=error.status===429||error.status>=500||network.includes(error.code)||error.message==='WORKER_TIMEOUT';
+      if(transient){
+        if(!disconnected)console.log('RECRUITMENT_WORKER_WAITING:CONNECTION_UNAVAILABLE');
+        disconnected=true;await new Promise(resolve=>setTimeout(resolve,5000));continue;
+      }
+      console.log('RECRUITMENT_WORKER_STOPPED:'+([401,403].includes(error.status)?'LOGIN_REQUIRED':'CONNECTION_UNAVAILABLE'));return;
+    }
+    if(disconnected){console.log('RECRUITMENT_WORKER_RECONNECTED');disconnected=false;}
     const job=response.job;
     if(!job){await new Promise(resolve=>setTimeout(resolve,5000));continue;}
     console.log('RECRUITMENT_JOB_STARTED:'+job.id);

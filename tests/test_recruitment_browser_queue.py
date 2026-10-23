@@ -100,3 +100,18 @@ def test_application_login_and_recruitment_permission_are_required(monkeypatch):
     assert client.post('/api/recruitment/browser-worker/claim').status_code==401
     monkeypatch.setattr(queue,'current_user_from_request',lambda _:{'user':{'id':'synthetic'},'modules':[],'roles':[]})
     assert client.post('/api/recruitment/browser-worker/claim').status_code==403
+
+
+def test_waiting_worker_progress_is_republished_when_the_message_does_not_change(worker,monkeypatch):
+    client,_,_=worker
+    clock=[0];messages=[]
+    monkeypatch.setattr(queue.time,'monotonic',lambda:clock[0])
+    def tick(_):
+        clock[0]+=2
+        if clock[0]>=8:
+            job=client.post('/api/recruitment/browser-worker/claim').json()['job']
+            assert client.post(f"/api/recruitment/browser-worker/{job['id']}/complete",json={'lease':job['lease'],'snapshot':value()}).status_code==200
+    monkeypatch.setattr(queue.time,'sleep',tick)
+    result=queue.QueuedClient().fetch(202608,progress=messages.append)
+    assert result['month']==202608
+    assert len(messages)>=2 and messages[0]==messages[1]

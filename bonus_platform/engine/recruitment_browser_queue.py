@@ -71,7 +71,7 @@ class QueuedClient:
         from .recruitment_cancellation import checkpoint, PreparationCancelled
         from .recruitment_overseas import validate_snapshot
         identifier = enqueue(month,job_numbers,offer_codes)
-        deadline, message = time.monotonic()+900, ''
+        deadline, message, last_report = time.monotonic()+900, '', 0
         while time.monotonic() < deadline:
             try:
                 checkpoint()
@@ -89,8 +89,8 @@ class QueuedClient:
             if row['status'] == 'failed':
                 raise ValueError(document.get('message','海外取数未完成，原资料保留'))
             latest = document.get('message') or ('等待已登录的 Ego 取数端领取任务' if row['status']=='pending' else '海外 Ego 取数端正在读取资料')
-            if progress and latest != message:
-                progress(latest); message = latest
+            if progress and (latest != message or time.monotonic()-last_report >= 5):
+                progress(latest); message = latest; last_report = time.monotonic()
             time.sleep(2)
         with connection() as db, db.cursor() as cursor:
             cursor.execute("UPDATE sigma_recruitment_browser_jobs SET status='failed',document=%s WHERE environment=%s AND id=%s AND status IN ('pending','running')",
