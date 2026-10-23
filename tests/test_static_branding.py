@@ -536,8 +536,8 @@ def test_header_uses_blue_brand_asset_and_favicon_keeps_dark_asset():
 
 
 def test_recruitment_logo_background_is_truly_transparent():
-    assert 'src="assets/bonus-logo-header-blue.png"' in RECRUITMENT_HTML.read_text()
-    with Image.open(HEADER_LOGO) as logo:
+    assert 'src="assets/workbench-logo-2026.png"' in RECRUITMENT_HTML.read_text()
+    with Image.open(LOGIN_WORKBENCH_LOGO) as logo:
         assert logo.mode == "RGBA"
         assert logo.getpixel((0, 0))[3] == 0
 

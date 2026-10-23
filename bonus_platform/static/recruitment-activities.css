@@ -15,4 +15,4 @@
 .rd-shell:has(>.ra-back):has(#flowOpeningNotice:not([hidden])) .rd-workarea{height:calc(100dvh - 316px)}
 .ra-feedback{padding:12px 16px;margin-bottom:16px;border:1px solid #b8ddd5;border-radius:10px;background:#f0faf7;color:#0f665b;font-size:13px;line-height:1.6}.ra-reload{margin:0 26px 16px}.ra-page .rd-loading{min-height:350px;padding:32px 26px;align-content:start}.ra-page .rd-loading p{color:var(--muted);font-size:13px}.ra-dialog[open]{max-height:calc(100dvh - 48px);overflow:auto}.ra-fields .ru-month-year button{padding:0;min-height:30px}.ra-page :is(button,a,input,select,summary):focus-visible{outline:3px solid #007aff66;outline-offset:3px}
 @media(prefers-reduced-motion:reduce){.ra-page .rd-loading span{animation:none}}
-.ra-header-actions{display:flex;align-items:center;gap:16px}
+.ra-page .ra-header-actions{display:flex;align-items:center;gap:16px;margin-left:auto}

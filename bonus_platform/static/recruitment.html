@@ -1,7 +1,6 @@
 <!doctype html>
 <html lang="zh-CN" data-module-id="recruitment" data-server-guarded="true">
 <head>
-  <script src="platform-font.js?v=1"></script>
   <script src="permission-guard.js?v=9"></script>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -36,7 +35,7 @@
   <script src="recruitment-adjustment-model.js?v=1" defer></script>
   <script src="recruitment-special.js?v=12" defer></script>
   <link rel="stylesheet" href="recruitment-assignments.css?v=2" />
-  <link rel="stylesheet" href="recruitment-activities.css?v=3" />
+  <link rel="stylesheet" href="recruitment-activities.css?v=6" />
   <link rel="stylesheet" href="recruitment-experience.css?v=9" />
   <link rel="stylesheet" href="recruitment-icons.css?v=1" />
   <link rel="stylesheet" href="recruitment-density.css?v=12" />
@@ -62,8 +61,8 @@
   <a class="rd-skip" href="#draftWorkspace">跳到工作区</a>
   <header class="rd-header">
     <div class="rd-header-inner">
-      <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/bonus-logo-header-blue.png" alt="" /><span>HRAS <span class="rd-platform-name">全球薪酬核算工作台</span></span></a>
-      <nav class="rd-header-nav" aria-label="页面返回导航"><a id="recruitmentGuide" class="rd-home" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a><a id="recruitmentHistory" class="rd-home" href="recruitment-history.html">历史批次</a><a class="rd-home" href="/"><svg class="rd-icon" aria-hidden="true"><use href="#icon-home"/></svg>返回首页</a><a class="rd-activity-return" href="recruitment-activities.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-list"/></svg>返回活动列表</a><span data-feedback-slot></span></nav>
+      <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/workbench-logo-2026.png" alt="" /><span>HRAS <span class="rd-platform-name">全球薪酬核算工作台</span></span></a>
+      <nav class="rd-header-nav" aria-label="页面返回导航"><a id="recruitmentGuide" class="rd-home" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a><a class="rd-home" href="/"><svg class="rd-icon" aria-hidden="true"><use href="#icon-home"/></svg>返回首页</a><a class="rd-activity-return" href="recruitment-activities.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-list"/></svg>返回活动列表</a><span data-feedback-slot></span></nav>
     </div>
   </header>
   <main id="draftWorkspace" class="rd-shell" aria-labelledby="draftTitle">
@@ -121,7 +120,7 @@
       </div>
       <div class="rd-commandbar" aria-label="底稿操作">
         <div><button id="draftAddPerson" class="rd-text-button" type="button">补充人员</button><button id="draftCarry" class="rd-text-button" type="button" hidden>承接上月</button><span class="rd-command-divider"></span><a id="draftEditableExport" class="rd-text-button" href="#">导出可编辑底稿</a><button id="draftWorkbookReturn" class="rd-text-button" type="button">回传修改表格</button><a id="draftRawExport" class="rd-text-button" href="#">导出原始底稿</a></div>
-        <a class="rd-text-button" href="recruitment-history.html">历史批次</a>
+        <a id="recruitmentHistory" class="rd-text-button" href="recruitment-history.html">历史批次</a>
       </div>
       <div id="draftTableTools" class="rd-table-tools" hidden><div><label class="rd-view-choice">列视图<select id="draftColumnView"><option value="review">核算明细</option><option value="all">完整台账</option><option value="payments">各人分期</option><option value="facts">人员与依据</option><option value="reference">线下原表数据</option></select></label><button id="draftColumns" class="rd-text-button" type="button">列设置</button><span class="rd-command-divider"></span><button id="draftGridToggle" class="rd-text-button" type="button">编辑资料</button></div><div><button id="draftUndo" class="rd-text-button" type="button">撤销</button><button id="draftRedo" class="rd-text-button" type="button">重做</button></div></div>
       <div id="draftContext" class="rd-context" hidden></div>
