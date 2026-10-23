@@ -956,6 +956,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="招聘奖金与内推奖金核算平台", lifespan=lifespan)
 from .engine.recruitment_runtime import require_runtime as require_recruitment_runtime
+from .engine.recruitment_browser_queue import router as recruitment_browser_worker_router
+app.include_router(recruitment_browser_worker_router, dependencies=[Depends(require_recruitment_runtime)])
 from .recruitment_draft_api import router as recruitment_draft_router, trials_router, trial_drafts_router, activities_router, activity_drafts_router
 for recruitment_router in (activities_router, activity_drafts_router, recruitment_draft_router, trials_router, trial_drafts_router):
     app.include_router(recruitment_router, dependencies=[Depends(require_recruitment_runtime)])

@@ -109,7 +109,12 @@ def _summary(state,name,folder):
 
 
 class ScopedDraftStore(ActivityStore,DraftStore):
-    def __init__(self,root):self.base_root=Path(root)
+    def __init__(self,root):self._base_root=Path(root)
+    @property
+    def base_root(self):
+        from .recruitment_persistence import SESSION
+        session=SESSION.get()
+        return session.root/"recruitment_drafts" if session else self._base_root
     @property
     def default_root(self):
         return self.activity_root/ACTIVITY.get()/'drafts' if ACTIVITY.get() else self.base_root

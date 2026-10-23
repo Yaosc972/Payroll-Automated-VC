@@ -30,6 +30,7 @@ export async function collect(options){
   const checkpoint=async()=>{if(options.cancelFile){try{await fs.access(options.cancelFile);fail('CANCELLED');}catch(e){if(e.code==='CANCELLED')throw e;if(e.code!=='ENOENT')throw e;}}};
   const progress=async message=>{
     if(options.progressFile)await fs.writeFile(options.progressFile,message,{mode:0o600});
+    if(options.onProgress)await options.onProgress(message);
     console.log('OVERSEAS_PROGRESS:'+message);
   };
   try{

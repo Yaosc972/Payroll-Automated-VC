@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from threading import Event, RLock, Thread
 from zoneinfo import ZoneInfo
+from uuid import uuid4
 
 from . import recruitment_domestic as domestic, recruitment_overseas as overseas
 from .recruitment_cancellation import ACTIVE, PreparationCancelled, checkpoint
@@ -110,7 +111,8 @@ class SnapshotLibrary:
     def status(self,month):
         manifest=self.current(month)
         job=self._read(self._folder(month)/'job.json',{'status':'idle','sources':{}})
-        if job['status']=='running':
+        from .recruitment_persistence import job_active
+        if job['status']=='running' and not job_active(job.get('id')):
             with self.lock('.refresh-lock') as acquired:
                 if acquired:job={**job,'status':'interrupted','message':'上次同步已中断，上次成功资料保留，可重新同步。'}
         return {'month':month,'snapshots':manifest,'job':job,'schedule':self.schedule_status()}
@@ -130,14 +132,16 @@ class SnapshotLibrary:
         if legacy.is_file():rows.extend(json.loads(legacy.read_text()).get('rows',[]))
         return {'month':month,'rows':rows}
 
-    def refresh(self,month,stop=None,started=None):
+    def refresh(self,month,stop=None,started=None,job_id=None):
         folder=self._folder(month)
         with self.lock('.refresh-lock') as acquired:
             if not acquired:raise ValueError('公共资料正在同步，请稍后查看进度')
             token=ACTIVE.set(stop)
-            job={'status':'running','startedAt':now().isoformat(timespec='seconds'),'sources':{},'message':'正在同步公共资料'}
+            job={'id':job_id or uuid4().hex,'status':'running','startedAt':now().isoformat(timespec='seconds'),'sources':{},'message':'正在同步公共资料'}
             def save(**values):
                 job.update(values);self.files._write(folder/'job.json',job)
+                from .recruitment_persistence import progress
+                progress(force=values.get('status') in {'complete','failed','interrupted'})
             try:
                 save()
                 if started:started.set()
@@ -236,7 +240,10 @@ class SnapshotScheduler:
         self.library.store.snapshot_scheduler_running=True
         def run():
             while not self.stop.is_set():
-                try:self.library.tick(stop=self.stop)
+                try:
+                    from .recruitment_persistence import run_background, Busy
+                    run_background(lambda:SnapshotLibrary(self.library.store).tick(stop=self.stop),job_id=uuid4().hex)
+                except Busy:pass
                 except Exception:LOG.exception('Shared HR scheduler tick failed')
                 self.stop.wait(30)
         self.thread=Thread(target=run,name='recruitment-snapshot-scheduler',daemon=True);self.thread.start()
@@ -258,9 +265,12 @@ def start_refresh(store,month):
     with REFRESH_GUARD:
         thread=getattr(store,'snapshot_refresh_thread',None)
         if thread and thread.is_alive():raise ValueError('公共资料正在同步，请稍后查看进度')
-        started=Event();errors=[];stop=Event()
+        started=Event();errors=[];stop=Event();job_id=uuid4().hex
+        from .recruitment_persistence import enabled, run_background
+        if enabled():
+            library.files._write(library._folder(month)/'job.json',{'id':job_id,'status':'running','sources':{},'message':'等待开始同步'})
         def run():
-            try:library.refresh(month,stop,started)
+            try:run_background(lambda:SnapshotLibrary(store).refresh(month,stop,started,job_id),job_id=job_id,wait=15)
             except ValueError as exc:errors.append(str(exc))
             finally:started.set()
         thread=Thread(target=run,name='recruitment-snapshot-manual',daemon=True)

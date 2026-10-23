@@ -1,13 +1,11 @@
 """Company integration checks; all inputs and identities are synthetic."""
-import io
 import json
-from types import SimpleNamespace
 
 from fastapi import HTTPException
 import pytest
 
 from bonus_platform.engine import recruitment_runtime as runtime
-from bonus_platform.engine.recruitment_remote import RemoteClient, configured_client
+from bonus_platform.engine.recruitment_overseas import configured_client
 from bonus_platform.engine.recruitment_snapshot_library import SnapshotLibrary
 from bonus_platform.engine.recruitment_trials import ScopedDraftStore
 from test_company_security_api import secured_company, identity
@@ -55,16 +53,15 @@ def test_recruitment_pages_use_company_login_and_module_gate(secured_company, mo
     assert response.status_code == 403
 
 
-def test_hosted_workbench_rejects_ephemeral_storage_and_missing_lock_database(monkeypatch, tmp_path):
+def test_hosted_workbench_requires_existing_mysql_and_private_obs(monkeypatch):
+    from bonus_platform.engine import recruitment_persistence as durable
     monkeypatch.setattr(runtime, 'production_runtime', lambda: True)
-    monkeypatch.delenv('SIGMA_RECRUITMENT_DATA_DIR', raising=False)
-    with pytest.raises(HTTPException) as failure:
-        runtime.require_runtime()
+    monkeypatch.setattr(durable, 'enabled', lambda: True)
+    monkeypatch.setattr(durable, 'obs_storage_configured', lambda: False)
+    monkeypatch.setattr(runtime.config, 'ADMIN_DATABASE_URL', 'mysql://invalid/synthetic')
+    with pytest.raises(HTTPException) as failure: runtime.require_runtime()
     assert failure.value.status_code == 503
-    monkeypatch.setenv('SIGMA_RECRUITMENT_DATA_DIR', str(tmp_path))
-    monkeypatch.setattr(runtime, 'shared_mount', lambda _: False)
-    with pytest.raises(HTTPException): runtime.require_runtime()
-    monkeypatch.setattr(runtime, 'shared_mount', lambda _: True)
+    monkeypatch.setattr(durable, 'obs_storage_configured', lambda: True)
     monkeypatch.setattr(runtime.config, 'ADMIN_DATABASE_URL', 'sqlite:///synthetic')
     with pytest.raises(HTTPException): runtime.require_runtime()
     monkeypatch.setattr(runtime.config, 'ADMIN_DATABASE_URL', 'mysql://invalid/synthetic')
@@ -130,29 +127,12 @@ def test_hosted_overseas_never_falls_back_to_local_browser(monkeypatch):
     monkeypatch.setattr(auth, 'production_runtime', lambda: True)
     monkeypatch.delenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_URL', raising=False)
     monkeypatch.delenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_TOKEN', raising=False)
-    with pytest.raises(ValueError, match='尚未接通'): configured_client()
+    from bonus_platform.engine.recruitment_browser_queue import QueuedClient
+    assert isinstance(configured_client(), QueuedClient)
 
 
-@pytest.mark.parametrize('url', ['http://invalid.example', 'https://user:pass@invalid.example', 'https://invalid.example/other', 'https://invalid.example?key=value'])
-def test_remote_connector_rejects_unsafe_destinations(monkeypatch, url):
-    monkeypatch.setenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_URL', url)
-    monkeypatch.setenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_TOKEN', 'synthetic-token')
-    with pytest.raises(ValueError): RemoteClient()
 
 
-def test_remote_snapshot_keeps_capture_time_and_validates_month(monkeypatch):
-    monkeypatch.setenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_URL', 'https://connector.invalid')
-    monkeypatch.setenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_TOKEN', 'synthetic-token')
-    value = {'version': 1, 'month': 202608, 'queriedAt': '2026-08-31T08:00:00+08:00', 'roster': [], 'offers': []}
-    client = RemoteClient(); requests = []
-    def open_request(request, **kwargs):
-        requests.append(request)
-        return io.BytesIO(json.dumps(value).encode())
-    client.opener = SimpleNamespace(open=open_request)
-    assert client.fetch(202608)['queriedAt'] == value['queriedAt']
-    assert requests[0].full_url.endswith('/v1/recruitment/overseas-snapshot')
-    assert json.loads(requests[0].data)['month'] == 202608
-    with pytest.raises(ValueError): client.fetch(202609)
 
 
 def test_beisen_uses_deployment_secrets_without_local_file(monkeypatch):
@@ -165,55 +145,3 @@ def test_beisen_uses_deployment_secrets_without_local_file(monkeypatch):
     monkeypatch.setattr(Client, 'post', lambda self, path, body: seen.append(body) or {'access_token': 'synthetic-result'})
     assert Client().token == 'synthetic-result'
     assert seen == [{'grant_type': 'client_credentials', 'app_key': 'synthetic-key', 'app_secret': 'synthetic-secret'}]
-
-
-def test_runtime_mount_check_rejects_container_submount_and_accepts_nfs(monkeypatch, tmp_path):
-    from pathlib import Path
-    original_file, original_text = Path.is_file, Path.read_text
-    mountinfo = Path('/proc/self/mountinfo')
-    monkeypatch.setattr(Path, 'is_file', lambda p: True if p == mountinfo else original_file(p))
-    root = tmp_path.resolve()
-    lines = ['1 0 0:1 / / rw - overlay overlay rw',
-             f'2 1 0:2 / {root} rw - nfs4 storage:/payroll rw']
-    monkeypatch.setattr(Path, 'read_text', lambda p, *a, **kw: '\n'.join(lines) if p == mountinfo else original_text(p, *a, **kw))
-    assert runtime.shared_mount(root/'recruitment')
-    lines.append(f'3 2 0:3 / {root}/recruitment rw - tmpfs tmpfs rw')
-    assert not runtime.shared_mount(root/'recruitment')
-
-
-def test_ego_runner_protocol_auth_scope_busy_and_login_failure(monkeypatch):
-    from http.server import ThreadingHTTPServer
-    from threading import Thread
-    import urllib.error
-    import urllib.request
-    from scripts import recruitment_overseas_connector as runner
-    from bonus_platform.engine.recruitment_remote import PATH
-    monkeypatch.setenv('SIGMA_RECRUITMENT_OVERSEAS_CONNECTOR_TOKEN', 'synthetic-token')
-    calls = []
-    payload = {'version': 1, 'month': 202608, 'queriedAt': '2026-08-31T08:00:00+08:00', 'roster': [], 'offers': []}
-    monkeypatch.setattr(runner.BrowserClient, 'fetch', lambda self, *a: calls.append(a) or payload)
-    server = ThreadingHTTPServer(('127.0.0.1', 0), runner.Handler)
-    thread = Thread(target=server.serve_forever, daemon=True); thread.start()
-    query = {'month': 202608, 'jobNumbers': [], 'offerCodes': []}
-    def request(body=query, token='synthetic-token'):
-        req = urllib.request.Request(f'http://127.0.0.1:{server.server_port}{PATH}',
-            data=json.dumps(body).encode(), headers={'Authorization': 'Bearer '+token})
-        try:
-            with urllib.request.urlopen(req, timeout=5) as response:
-                return response.status, json.load(response)
-        except urllib.error.HTTPError as exc:
-            return exc.code, json.load(exc)
-    try:
-        assert request(token='invalid')[0] == 401
-        assert request({**query, 'url': 'https://arbitrary.invalid'})[0] == 400
-        assert not calls
-        with runner.BUSY:
-            assert request()[0] == 409
-        assert request() == (200, {**payload, 'requestedJobNumbers': [], 'requestedOfferCodes': [], 'missingOfferCodes': []})
-        assert len(calls) == 1
-        def expired(*args): raise ValueError('private upstream diagnostic')
-        monkeypatch.setattr(runner.BrowserClient, 'fetch', expired)
-        status, error = request()
-        assert status == 424 and 'private' not in json.dumps(error)
-    finally:
-        server.shutdown(); server.server_close(); thread.join(timeout=2)

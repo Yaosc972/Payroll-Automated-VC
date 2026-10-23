@@ -289,8 +289,15 @@ class BrowserClient:
         return json.loads(result_text)
 
 
+def configured_client():
+    from ..auth import production_runtime
+    if production_runtime():
+        from .recruitment_browser_queue import QueuedClient
+        return QueuedClient()
+    return BrowserClient()
+
+
 def fetch(month, *, job_numbers=(), offer_codes=(), client=None, progress=None):
-    from .recruitment_remote import configured_client
     checkpoint()
     payload=(client or configured_client()).fetch(month,job_numbers,offer_codes,progress)
     checkpoint()

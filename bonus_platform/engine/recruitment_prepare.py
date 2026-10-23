@@ -15,7 +15,9 @@ CANCELLATIONS={}
 GUARD=RLock()
 
 
-def key_for(store,month):return str(store._folder(month)/'prepare.json')
+def key_for(store,month):
+    from .recruitment_persistence import logical_path
+    return str(logical_path(store._folder(month)/'prepare.json'))
 
 
 def coverage_gaps(state,month):
@@ -47,7 +49,8 @@ def read_status(store,month):
     with GUARD:
         if not path.exists():return None
         data=json.loads(path.read_text())
-        if data['status'] in {'running','cancelling'} and str(path) not in RUNNING:
+        from .recruitment_persistence import job_active
+        if data['status'] in {'running','cancelling'} and key_for(store,month) not in RUNNING and not job_active(data.get('id')):
             return {**data,'status':'interrupted','message':'准备任务已中断，已有资料保留，可重新准备。'}
         return data
 
@@ -91,6 +94,10 @@ def cancel(store,month,job_id):
         job=json.loads(path.read_text())
         if not job_id or job.get('id')!=job_id:raise ValueError('资料准备任务已变化，请刷新后重试')
         if job['status'] not in {'running','cancelling'}:return job
+        from .recruitment_persistence import enabled, request_cancel, job_active
+        if enabled() and job_active(job_id):
+            request_cancel(job_id)
+            return {**job,'status':'cancelling','message':'正在停止，已保存的资料保留'}
         active=CANCELLATIONS.get(key)
         if RUNNING.get(key)!=job_id or not active or active[0]!=job_id:
             return {**job,'status':'interrupted','message':'准备任务已中断，已有资料保留，可重新准备。'}
@@ -101,18 +108,26 @@ def cancel(store,month,job_id):
 
 
 def run(store,month,job,force,key,local_only=False,include_overseas=False,overseas_only=False,domestic_only=False,monthly_all=False):
+    from .recruitment_persistence import run_background
+    return run_background(lambda:_run(store,month,job,force,key,local_only,include_overseas,overseas_only,domestic_only,monthly_all),job_id=job.get('id'),wait=15)
+
+
+def _run(store,month,job,force,key,local_only=False,include_overseas=False,overseas_only=False,domestic_only=False,monthly_all=False):
     from .recruitment_beisen import fetch, fetch_employment, fetch_channel_details, coverage_sets, CHANNEL
     from .recruitment_drafts import staff_id
     from .recruitment_attention import recipient_requirements
     from .recruitment_trials import TRIAL
     active=CANCELLATIONS.get(key)
-    context_token=ACTIVE.set(active[1] if active and active[0]==job.get('id') else None)
+    from .recruitment_persistence import enabled, Cancellation, progress
+    event=active[1] if active and active[0]==job.get('id') else None
+    context_token=ACTIVE.set(Cancellation(job['id'],event) if enabled() else event)
     def save(**values):
         with GUARD:
             if values.get('status')!='cancelled':checkpoint()
             job.update(values);store._write(store._folder(month)/'prepare.json',job)
             if values.get('status') in {'complete','failed','cancelled'} and RUNNING.get(key)==job.get('id'):
                 RUNNING.pop(key,None);CANCELLATIONS.pop(key,None)
+        progress(force=values.get('status') in {'complete','failed','cancelled'})
     try:
         checkpoint()
         if not store.read(month)['revision']:

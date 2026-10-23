@@ -12,8 +12,9 @@ def main():
         raise RuntimeError("Company migrations require MySQL")
     migrate_fbu()
     migrate_policy()
-    sql_path = Path(__file__).resolve().parents[1] / "mysql/20261009_china_payroll.sql"
-    sql = "\n".join(line for line in sql_path.read_text().splitlines() if not line.lstrip().startswith("--"))
+    sql_root = Path(__file__).resolve().parents[1] / "mysql"
+    sql = "\n".join(line for name in ("20261009_china_payroll.sql", "20261023_recruitment_state.sql")
+                    for line in (sql_root / name).read_text().splitlines() if not line.lstrip().startswith("--"))
     connection = mysql_connection(config.ADMIN_DATABASE_URL)
     try:
         with connection.cursor() as cursor:

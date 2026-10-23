@@ -109,7 +109,8 @@ class ActivityStore:
                 if type(payload['archived']) is not bool:raise ValueError('归档状态无效')
                 from .recruitment_prepare import RUNNING
                 folder=self.activity_root/identifier
-                if payload['archived'] and any(Path(key).is_relative_to(folder) for key in RUNNING):
+                from .recruitment_persistence import logical_path
+                if payload['archived'] and any(Path(key).is_relative_to(logical_path(folder)) for key in RUNNING):
                     raise DraftConflict('资料正在整理，完成后再归档')
                 item['archived']=payload['archived']
             item.update(version=item['version']+1,updatedAt=datetime.now().isoformat(timespec='seconds'))

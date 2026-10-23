@@ -20,8 +20,9 @@ from .engine.recruitment_trials import (ScopedDraftStore, TRIAL, require_confirm
 from .engine.recruitment_monthly import project as monthly_project
 from .engine.recruitment_activities import ACTIVITY
 from .engine.recruitment_runtime import data_root
+from .engine.recruitment_persistence import PersistentRoute
 
-router=APIRouter(prefix='/api/recruitment/drafts',tags=['recruitment-drafts'])
+router=APIRouter(route_class=PersistentRoute,prefix='/api/recruitment/drafts',tags=['recruitment-drafts'])
 store=ScopedDraftStore(data_root()/'recruitment_drafts')
 
 
@@ -578,7 +579,7 @@ def installment_apply(month:int,token:str,payload:dict[str,Any]):
     return public_response(call(apply_plan,store,month,payload.get('revision'),token))
 
 
-trials_router=APIRouter(prefix='/api/recruitment/trials',tags=['recruitment-trials'])
+trials_router=APIRouter(route_class=PersistentRoute,prefix='/api/recruitment/trials',tags=['recruitment-trials'])
 
 
 @trials_router.get('')
@@ -598,12 +599,12 @@ async def trial_context(trial_id:str,month:int):
     finally:TRIAL.reset(token)
 
 
-trial_drafts_router=APIRouter(prefix='/api/recruitment/trials/{trial_id}',dependencies=[Depends(trial_context)])
+trial_drafts_router=APIRouter(route_class=PersistentRoute,prefix='/api/recruitment/trials/{trial_id}',dependencies=[Depends(trial_context)])
 trial_drafts_router.include_router(router)
 
 # The activity dependency scopes every existing intake, export, review and trial
 # route, including copied ContextVars in background preparation jobs.
-activities_router=APIRouter(prefix='/api/recruitment/activities',tags=['recruitment-activities'])
+activities_router=APIRouter(route_class=PersistentRoute,prefix='/api/recruitment/activities',tags=['recruitment-activities'])
 
 @activities_router.get('')
 def activities():return {'activities':call(store.list_activities),'legacyRecords':call(store.legacy_records)}
@@ -642,7 +643,7 @@ async def activity_context(activity_id:str,request:Request):
     except DraftConflict as exc:raise HTTPException(409,str(exc)) from exc
     except ValueError as exc:raise HTTPException(400,str(exc)) from exc
 
-activity_drafts_router=APIRouter(prefix='/api/recruitment/activities/{activity_id}',dependencies=[Depends(activity_context)])
+activity_drafts_router=APIRouter(route_class=PersistentRoute,prefix='/api/recruitment/activities/{activity_id}',dependencies=[Depends(activity_context)])
 activity_drafts_router.include_router(router)
 activity_drafts_router.include_router(trials_router)
 activity_drafts_router.include_router(trial_drafts_router)
