@@ -141,6 +141,12 @@
   // Only the entry lives in the navigation. Keep overlays outside transformed
   // or clipped page headers so opening the drawer never changes the work area.
   const mountLauncher = () => {
+    const explicitSlot = document.querySelector('[data-feedback-slot]');
+    if (explicitSlot) {
+      explicitSlot.classList.add('feedback-header-actions');
+      explicitSlot.append(launcher);
+      return;
+    }
     const actions = document.querySelector(".app-chrome .chrome-right, .app-header .header-actions, .top-bar .top-bar-right");
     if (actions) {
       actions.classList.add("feedback-header-actions");

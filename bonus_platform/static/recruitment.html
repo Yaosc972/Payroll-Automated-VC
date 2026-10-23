@@ -55,7 +55,7 @@
   <link rel="stylesheet" href="recruitment-actions.css?v=2" />
   <script src="recruitment-actions.js?v=6" defer></script>
   <link rel="stylesheet" href="recruitment-todos.css?v=5" />
-  <script src="recruitment-guide-link.js?v=1" defer></script>
+  <script src="recruitment-guide-link.js?v=2" defer></script>
   <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
 </head>
 <body>
@@ -63,7 +63,7 @@
   <header class="rd-header">
     <div class="rd-header-inner">
       <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/bonus-logo-header-blue.png" alt="" /><span>HRAS <span class="rd-platform-name">全球薪酬核算工作台</span></span></a>
-      <nav class="rd-header-nav" aria-label="页面返回导航"><a id="recruitmentGuide" class="rd-home" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a><a class="rd-home" href="/"><svg class="rd-icon" aria-hidden="true"><use href="#icon-home"/></svg>返回首页</a><a class="rd-activity-return" href="recruitment-activities.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-list"/></svg>返回活动列表</a></nav>
+      <nav class="rd-header-nav" aria-label="页面返回导航"><a id="recruitmentGuide" class="rd-home" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a><a id="recruitmentHistory" class="rd-home" href="recruitment-history.html">历史批次</a><a class="rd-home" href="/"><svg class="rd-icon" aria-hidden="true"><use href="#icon-home"/></svg>返回首页</a><a class="rd-activity-return" href="recruitment-activities.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-list"/></svg>返回活动列表</a><span data-feedback-slot></span></nav>
     </div>
   </header>
   <main id="draftWorkspace" class="rd-shell" aria-labelledby="draftTitle">
@@ -135,6 +135,6 @@
     <header class="rd-inspector-head"><h2 id="draftInspectorTitle">人员详情</h2><button id="draftCloseInspector" class="rd-button rd-icon-button" type="button" aria-label="关闭详情"><svg class="rd-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></header>
     <div id="draftInspectorBody" class="rd-inspector-body"></div>
   </dialog>
-  <script src="feedback-widget.js?v=20260916-01"></script>
+  <script src="feedback-widget.js?v=20261023-02"></script>
 </body>
 </html>

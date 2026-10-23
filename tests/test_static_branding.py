@@ -763,7 +763,7 @@ def test_portal_feedback_and_creative_updates_are_lightweight_and_available():
         module_html = (STATIC_DIR / filename).read_text(encoding="utf-8")
         assert f'data-module-id="{module_id}"' in module_html
         assert 'href="feedback-widget.css?v=20260916-01"' in module_html
-        assert 'src="feedback-widget.js?v=20260916-01"' in module_html
+        assert 'src="feedback-widget.js?v=' in module_html
 
     assert 'drawer.addEventListener("paste"' in widget_js
     assert 'dropzone.addEventListener("drop"' in widget_js

@@ -5,21 +5,21 @@
   <script src="permission-guard.js?v=9"></script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>招聘奖金核算 · HRAS 全球薪酬核算工作台</title>
+    <title>历史批次 · 招聘奖金与内推奖金</title>
     <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
     <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <link href="https://unpkg.com/tabulator-tables@6.3.1/dist/css/tabulator_semanticui.min.css" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css?v=21" />
-    <link rel="stylesheet" href="recruitment-history.css?v=1" />
+    <link rel="stylesheet" href="recruitment-history.css?v=2" />
     <link rel="stylesheet" href="recruitment-draft.css?v=1" />
     <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
 </head>
-  <body class="brushed-metal recruitment-draft-page">
+  <body class="brushed-metal recruitment-draft-page recruitment-history-page">
     <header class="app-header">
       <div class="header-inner">
-        <a class="brand-block brand-home-link" href="recruitment.html" aria-label="返回HRAS 全球薪酬核算工作台首页">
+        <a class="brand-block brand-home-link" href="recruitment-activities.html" aria-label="返回招聘奖金活动列表">
           <img class="brand-logo" src="assets/bonus-logo-header-blue.png" alt="招聘奖金核算 logo" />
           <div>
 
@@ -27,12 +27,14 @@
           </div>
         </a>
         <div class="header-copy">
-          <h2 class="hero-title workbench-title">历史批次</h2>
-          <span>历史批次仅用于核对旧版结果。</span>
+          <h2 id="legacyPageTitle" class="hero-title workbench-title">历史批次</h2>
+          <span id="legacyPurpose">查阅旧版记录与下载文件；新核算请从活动列表开始。</span>
         </div>
         <div class="header-actions">
-          <a class="ghost-button" href="recruitment.html">返回招聘奖金</a>
+          <a class="ghost-button" href="recruitment-activities.html">返回活动列表</a>
+          <a id="legacyReturnActivity" class="ghost-button" href="recruitment-activities.html" hidden>返回当前核算</a>
           <a id="downloadLink" class="solid-button disabled" href="#" aria-disabled="true"><i data-lucide="file-down"></i>下载当前结果</a>
+          <span data-feedback-slot></span>
         </div>
       </div>
     </header>
@@ -50,16 +52,23 @@
           </div>
         </div>
         <div id="runList" class="run-list">
-          <div class="empty-card">暂无批次，先上传本月导入表。</div>
+          <div class="empty-card">暂无旧版批次。新核算请从活动列表开始。</div>
         </div>
       </aside>
 
       <section class="main-column">
+        <section class="panel legacy-purpose-panel" aria-label="页面用途">
+          <p id="legacyModeNote">这里保留旧版批次查阅和下载。新核算请在活动列表新建活动，按需导入上月未结奖金资料。</p>
+          <div class="legacy-purpose-actions">
+            <a class="solid-button" href="recruitment-activities.html">打开活动列表</a>
+            <a id="legacyModeLink" class="ghost-button" href="recruitment-history.html?mode=legacy">旧版核算（兼容）</a>
+          </div>
+        </section>
         <section class="status-strip panel">
           <div>
 
             <h2 id="currentRunTitle">尚未选择批次</h2>
-            <span id="currentRunSubTitle">上传月度导入表后，平台会生成一个可追溯的核算批次。</span>
+            <span id="currentRunSubTitle">选择旧版批次后查看结果；新核算请在活动列表新建活动。</span>
           </div>
           <div class="rule-chip">
             <i data-lucide="shield-check"></i>
@@ -70,7 +79,7 @@
           </div>
         </section>
 
-        <section class="flow panel" aria-label="核算流程">
+        <section class="flow panel" data-legacy-calculation aria-label="旧版核算流程">
           <div class="flow-step active" data-step="baseline">
             <span>1</span>
             <div><strong>可信基线</strong><em>已确认历史</em></div>
@@ -97,7 +106,7 @@
           </div>
         </section>
 
-        <section class="panel source-intake-panel">
+        <section class="panel source-intake-panel" data-legacy-calculation>
           <div class="panel-heading">
             <div>
 
@@ -130,7 +139,7 @@
           <div id="sourceStatus" class="status">等待原始数据包</div>
         </section>
 
-        <section class="action-grid">
+        <section class="action-grid" data-legacy-calculation>
           <section class="panel action-card">
             <div class="panel-heading">
               <div>
@@ -193,7 +202,7 @@
             </div>
           </div>
           <div id="downloadGrid" class="download-grid">
-            <div class="empty-card">创建批次后显示原始导入、初算结果、待确认表和最终结果。</div>
+            <div class="empty-card">选择旧版批次后可下载原始导入、初算结果、待确认表和最终结果。</div>
           </div>
         </section>
 
@@ -278,7 +287,8 @@
     <div id="toastRegion" class="toast-region" aria-live="polite" aria-label="操作通知"></div>
 
     <script src="https://unpkg.com/tabulator-tables@6.3.1/dist/js/tabulator.min.js"></script>
-    <script src="app.js?v=21"></script>
-    <script src="feedback-widget.js?v=20260916-01"></script>
+    <script src="recruitment-history.js?v=1"></script>
+    <script src="app.js?v=22"></script>
+    <script src="feedback-widget.js?v=20261023-02"></script>
 </body>
 </html>

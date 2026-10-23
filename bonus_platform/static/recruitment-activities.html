@@ -9,7 +9,7 @@
   <title>核算活动 · 招聘奖金与内推奖金</title>
   <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
   <link rel="stylesheet" href="recruitment-draft.css?v=11" />
-  <link rel="stylesheet" href="recruitment-activities.css?v=4" />
+  <link rel="stylesheet" href="recruitment-activities.css?v=5" />
   <link rel="stylesheet" href="recruitment-ui.css?v=2" />
   <link rel="stylesheet" href="recruitment-icons.css?v=1" />
   <link rel="stylesheet" href="recruitment-density.css?v=1" />
@@ -25,7 +25,7 @@
   <header class="rd-header"><div class="rd-header-inner">
     <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/bonus-logo-header-blue.png" alt="" /><span>招聘奖金与内推奖金</span></a>
     <nav aria-label="招聘奖金导航"><a class="ra-nav-current" href="recruitment-activities.html" aria-current="page">活动列表</a><a class="ra-guide-link" href="recruitment-history.html">历史批次</a><a class="ra-guide-link" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a></nav>
-    <a class="rd-home" href="/">返回首页<svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></a>
+    <div class="ra-header-actions"><a class="rd-home" href="/">返回首页<svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></a><span data-feedback-slot></span></div>
   </div></header>
   <main id="activities" class="ra-shell">
     <div class="ra-heading"><div><h1>核算活动</h1></div><div><button id="activitySync" class="rd-button" type="button">资料同步</button> <button id="activityNew" class="rd-button rd-primary" type="button"><svg class="rd-icon" aria-hidden="true"><use href="#icon-plus"/></svg>新建核算活动</button></div></div>
@@ -50,6 +50,6 @@
     <button id="activityReload" class="rd-text-button ra-reload" type="button" hidden>重新读取活动</button>
     <footer><button id="activityCancel" class="rd-button" type="button">取消</button><button id="activitySubmit" class="rd-button rd-primary" type="submit"></button></footer>
   </form></dialog>
-  <script src="feedback-widget.js?v=20260916-01"></script>
+  <script src="feedback-widget.js?v=20261023-02"></script>
 </body>
 </html>

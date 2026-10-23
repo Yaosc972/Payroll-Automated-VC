@@ -67,6 +67,7 @@ const optionalColumnFields = ["grade", "category", "channel", "ownerName", "sour
 init();
 
 function init() {
+  if (new URLSearchParams(location.search).get("mode") !== "legacy") state.runsCollapsed = false;
   setDefaultSourceMonth();
   bindEvents();
   syncRunsPanelState();
@@ -282,7 +283,7 @@ function renderRun(run) {
   elements.currentRunTitle.textContent = runDisplayName(run);
   elements.currentRunSubTitle.textContent = run.id
     ? `批次标识 ${runShortCode(run)} · ${formatDateTime(run.updatedAt || run.createdAt)}${run.parentRunId ? ` · 修订自 ${run.sourcePackage?.parentDisplayName || run.parentRunId}` : ""}`
-    : "上传月度导入表后，平台会生成一个可追溯的核算批次。";
+    : "选择旧版批次后查看结果；新核算请在活动列表新建活动。";
   elements.ruleVersion.textContent = formatRuleInfo(run.ruleInfo);
   renderDownloads(run);
   updateStepState(run);
@@ -682,7 +683,7 @@ function drawerPair(label, value) {
 
 function renderRunList() {
   if (!state.runs.length) {
-    elements.runList.innerHTML = '<div class="empty-card">暂无批次，先上传本月导入表。</div>';
+    elements.runList.innerHTML = '<div class="empty-card">暂无旧版批次。新核算请从活动列表开始。</div>';
     return;
   }
   elements.runList.innerHTML = "";
@@ -717,7 +718,7 @@ function renderDownloads(run) {
   ];
   const available = ordered.map(([key, label]) => ({ key, label, file: files[key] })).filter((item) => item.file?.downloadUrl);
   if (!available.length) {
-    elements.downloadGrid.innerHTML = '<div class="empty-card">创建批次后显示原始导入、初算结果、待确认表和最终结果。</div>';
+    elements.downloadGrid.innerHTML = '<div class="empty-card">此批次暂无可下载文件，请选择其他旧版批次。</div>';
     return;
   }
   elements.downloadGrid.innerHTML = "";
