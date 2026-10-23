@@ -1,0 +1,29 @@
+.rr-page{min-width:980px}
+.rr-shell{max-width:1320px;padding-top:32px;padding-bottom:48px}
+.rr-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+.rr-heading h1{margin:0;font-size:28px;letter-spacing:-.03em;font-weight:650}
+.rr-heading p{margin:9px 0 0;color:#667085;font-size:14px}
+.rr-heading .rr-jump{display:flex;gap:8px;margin:0}
+.rr-heading .rr-jump a{background:#fff;color:#1e3a8a;border:1px solid #dce4ee;padding:10px 18px;border-radius:9px;font-size:14px}
+.rr-heading .rr-jump a:hover{background:#edf3ff}
+.rr-source{color:#667085;font-size:13px;line-height:1.8;margin:0 0 24px}
+.rr-group{scroll-margin-top:24px}
+.rr-group>h2{font-size:22px;margin:30px 0 16px;font-weight:650;color:#1e3a8a}
+.rr-card{background:#fff;border:1px solid #dce4ee;border-radius:18px;padding:26px 28px;margin-bottom:20px}
+.rr-card>header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.rr-card h3{font-size:18px;margin:0;font-weight:650}
+.rr-card header span,.rr-table-title{font-size:12px;color:#667085}
+.rr-table-title{margin:0 0 12px;line-height:1.7}
+.rr-table-wrap{overflow:auto;border:1px solid #e2e8f0;border-radius:10px}
+.rr-card table{width:100%;border-collapse:collapse;font-size:14px;text-align:left;font-variant-numeric:tabular-nums}
+.rr-card th{font-weight:600;color:#475467;background:#f8fafc;font-size:12px;line-height:1.6}
+.rr-card td,.rr-card th{padding:12px 16px;border-bottom:1px solid #e9edf3;vertical-align:middle}
+.rr-card tbody tr:last-child td{border-bottom:0}
+.rr-card tbody tr:hover{background:#f8faff}
+.rr-card h4{margin:24px 0 10px;font-size:14px;font-weight:650;color:#344054}
+.rr-original{white-space:pre-line;line-height:1.9;font-size:14px;margin:0;color:#344054;max-width:100%}
+.rr-appendix{margin-top:26px}
+.rr-appendix summary{cursor:pointer;font-size:16px;color:#344054;font-weight:600}
+.rr-appendix[open] summary{margin-bottom:16px}
+.rr-footer{font-size:12px;color:#667085;line-height:1.8;padding:0 2px}
+@media print{.rd-header,.rd-skip,.rr-jump{display:none!important}.rr-page{min-width:0;background:#fff}.rr-shell{max-width:none;padding:0}.rr-card{break-inside:avoid;border-radius:0}.rr-card td,.rr-card th{padding:7px}.rr-original{font-size:11px}.rr-group{break-before:page}.rr-group:first-of-type{break-before:auto}}

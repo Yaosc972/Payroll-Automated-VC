@@ -985,6 +985,7 @@ _BUSINESS_AUDIT_PAGE_MODULES = {
     "/recruitment.html": "recruitment",
     "/recruitment-activities.html": "recruitment",
     "/recruitment-history.html": "recruitment",
+    "/recruitment-rules.html": "recruitment",
     "/china-employee-payroll.html": "employee",
     "/employee-payroll.html": "employee",
     "/domestic-labor.html": "domestic",
@@ -2165,7 +2166,7 @@ def _domestic_labor_access_response(request: Request) -> Response | None:
 def _protected_static_page_access_response(request: Request) -> Response | None:
     path = request.url.path.rstrip("/")
     page_config = {
-        **{route: {"module_id": "recruitment", "label": "全球招聘奖金核算"} for route in ("/recruitment.html", "/recruitment-activities.html", "/recruitment-history.html", "/recruitment-guide.html", "/recruitment-guide.md")},
+        **{route: {"module_id": "recruitment", "label": "全球招聘奖金核算"} for route in ("/recruitment.html", "/recruitment-activities.html", "/recruitment-history.html", "/recruitment-guide.html", "/recruitment-guide.md", "/recruitment-rules.html")},
         "/china-employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
         "/employee-payroll.html": {"module_id": "employee", "label": "中国区正式工薪酬核算"},
         "/overseas-compensation.html": {"module_ids": ("fbu", "overseas_payroll"), "label": "海外薪酬核算"},

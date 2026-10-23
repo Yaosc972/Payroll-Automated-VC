@@ -1,0 +1,32 @@
+.ra-page{background:#eef3f7;color:#101828}
+.ra-page [hidden]{display:none!important}
+.ra-page .rd-header-inner{min-height:112px;max-width:1600px;padding:24px 32px}
+.ra-page .rd-brand{color:#1e3a8a;font-size:17px;white-space:nowrap}
+.ra-page .rd-brand small{display:block;font-size:10px;font-weight:500;color:#667085;margin-top:7px}
+.ra-context{display:grid;gap:5px;border-left:1px solid #dce4ee;padding-left:24px;color:#344054;white-space:nowrap}
+.ra-context small{font-size:10px;letter-spacing:.08em;color:#667085;font-weight:650}
+.ra-context strong{font-size:14px}
+.ra-page nav{margin-left:auto;border:0;padding-left:0;white-space:nowrap}
+.ra-page .rd-home{display:none}
+.ra-page nav a{padding:12px 16px;color:#667085;text-decoration:none;font-size:13px;border-radius:9px}
+.ra-page nav .ra-nav-current{background:#edf3ff;color:#1e3a8a;font-weight:650}
+.ra-start{padding-top:24px;max-width:1320px}
+.ra-start-panel{min-width:0;padding:12px 24px 20px;border:1px solid #dfe6ef;border-radius:24px;background:#fff}
+.ra-start-flow{display:block;width:100%;max-width:1040px;height:auto;margin:0 auto}
+.ra-create-form{border-top:1px solid #e4e9f1;padding-top:16px}
+.ra-create-row{display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:32px;align-items:center}
+.ra-create-month{display:grid;gap:8px}.ra-create-form label{font-size:13px;font-weight:600;color:#344054}
+.ra-create-summary strong{font-size:14px;color:#344054}.ra-create-summary p,.ra-create-note{margin:6px 0 0;font-size:13px;color:#667085;line-height:1.5}
+#startSubmit{min-height:48px;font-size:16px;justify-content:center}
+.ra-create-details{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:24px;margin-top:16px}
+.ra-create-details label{display:grid;gap:6px}.ra-create-details input,.ra-create-details select{width:100%;height:38px;padding:8px 12px;border:1px solid #dce4ee;border-radius:9px;background:#fff;color:#344054;font:inherit;font-weight:400}
+#startLoadStatus{margin:8px 0 0;color:#b42318;font-size:13px}#startLoadStatus:empty{display:none}.ra-create-form .ra-error{padding:8px 0 0;margin:0}
+
+.ra-page{min-height:100vh}.ra-page .rd-brand img{width:44px;height:44px}
+.ra-create-month .ru-month-panel{top:auto;bottom:auto}
+
+.ra-start-page .rd-header-inner{min-height:80px;padding-top:14px;padding-bottom:14px}
+.ra-page .ra-start{padding-top:16px;padding-bottom:8px}
+.ra-create-actions{display:grid;gap:10px}.ra-create-actions #startSync{justify-self:end;min-height:28px;padding:2px 8px}
+.ra-create-month .ru-month-year{margin-bottom:8px}.ra-create-month .ru-month-grid{gap:6px}.ra-create-month .ru-month-grid button{min-height:36px}
+.ra-create-details{margin-top:12px;gap:24px}.ra-create-note{font-size:12px}

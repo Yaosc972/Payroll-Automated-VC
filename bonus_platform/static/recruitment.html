@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light" />
   <title>招聘奖金与内推奖金 · HRAS 全球薪酬核算工作台</title>
-  <script>if(!['activity','month','trial'].some(key=>new URLSearchParams(location.search).has(key)))location.replace('recruitment-activities.html');</script>
+  <script>if(!['activity','month','trial'].some(key=>new URLSearchParams(location.search).has(key)))location.replace('recruitment-activities.html?view=start');</script>
   <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
   <link rel="apple-touch-icon" href="assets/workbench-logo-2026.png" />
   <link rel="stylesheet" href="recruitment-draft.css?v=12" />
@@ -62,7 +62,7 @@
   <header class="rd-header">
     <div class="rd-header-inner">
       <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/workbench-logo-2026.png" alt="" /><span>HRAS <span class="rd-platform-name">全球薪酬核算工作台</span></span></a>
-      <nav class="rd-header-nav" aria-label="页面返回导航"><a id="recruitmentGuide" class="rd-home" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a><a class="rd-home" href="/"><svg class="rd-icon" aria-hidden="true"><use href="#icon-home"/></svg>返回首页</a><a class="rd-activity-return" href="recruitment-activities.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-list"/></svg>返回活动列表</a><span data-feedback-slot></span></nav>
+      <nav class="rd-header-nav" aria-label="页面导航"><a id="recruitmentRules" class="rd-home" href="recruitment-rules.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-file"/></svg>规则明细</a><a class="rd-activity-return" href="recruitment-activities.html"><svg class="rd-icon" aria-hidden="true"><use href="#icon-list"/></svg>活动列表</a><span data-feedback-slot></span></nav>
     </div>
   </header>
   <main id="draftWorkspace" class="rd-shell" aria-labelledby="draftTitle">

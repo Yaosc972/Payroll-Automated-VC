@@ -41,7 +41,7 @@ def test_recruitment_role_can_read_isolated_activity_list(secured_company, monke
     assert response.json() == {'activities': [], 'legacyRecords': []}
 
 
-@pytest.mark.parametrize('page', ['recruitment.html', 'recruitment-activities.html', 'recruitment-history.html', 'recruitment-guide.html', 'recruitment-guide.md'])
+@pytest.mark.parametrize('page', ['recruitment.html', 'recruitment-activities.html', 'recruitment-history.html', 'recruitment-guide.html', 'recruitment-guide.md', 'recruitment-rules.html'])
 def test_recruitment_pages_use_company_login_and_module_gate(secured_company, monkeypatch, page):
     import bonus_platform.app as platform
     response = secured_company.get('/'+page, follow_redirects=False)

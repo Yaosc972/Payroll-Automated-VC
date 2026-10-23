@@ -13,19 +13,40 @@
   <link rel="stylesheet" href="recruitment-icons.css?v=1" />
   <link rel="stylesheet" href="recruitment-density.css?v=1" />
   <link rel="stylesheet" href="recruitment-controls.css?v=3" />
+  <link rel="stylesheet" href="recruitment-start.css?v=3" />
   <script src="recruitment-icons.js?v=11" defer></script>
   <script src="recruitment-ui.js?v=3" defer></script>
-  <script src="recruitment-activities.js?v=8" defer></script>
+  <script src="recruitment-activities.js?v=11" defer></script>
   <script src="recruitment-controls.js?v=3" defer></script>
   <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
 </head>
 <body class="ra-page">
   <a class="rd-skip" href="#activities">跳到活动列表</a>
   <header class="rd-header"><div class="rd-header-inner">
-    <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/workbench-logo-2026.png" alt="" /><span>招聘奖金与内推奖金</span></a>
-    <nav aria-label="招聘奖金导航"><a class="ra-nav-current" href="recruitment-activities.html" aria-current="page">活动列表</a><a class="ra-guide-link" href="recruitment-guide.html" target="_blank" rel="noopener">操作指引</a></nav>
+    <a class="rd-brand" href="/" aria-label="返回 HRAS 首页"><img src="assets/workbench-logo-2026.png" alt="" /><span>HRAS 全球薪酬核算工作台<small>HRAS Global Payroll Workbench</small></span></a><div class="ra-context"><small>RECRUITMENT BONUS</small><strong>招聘奖金与内推奖金</strong></div>
+    <nav aria-label="招聘奖金导航"><a id="startTab" class="ra-guide-link" href="recruitment-activities.html?view=start">开始核算</a><a id="listTab" class="ra-nav-current" href="recruitment-activities.html" aria-current="page">活动列表</a><a class="ra-guide-link" href="recruitment-rules.html">规则明细</a></nav>
     <div class="ra-header-actions"><a class="rd-home" href="/">返回首页<svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></a><span data-feedback-slot></span></div>
   </div></header>
+  <main id="recruitmentStart" class="ra-shell ra-start" hidden>
+    <section class="ra-start-panel" aria-label="操作指引与开始核算">
+      <img class="ra-start-flow" src="recruitment-flow.svg?v=2" alt="月度核算流程：新建活动，准备资料，核对明细，导出确认；有待办或差异时修改保存后复核。" />
+      <form id="startCreateForm" class="ra-create-form">
+        <div class="ra-create-row">
+          <div class="ra-create-month"><label for="startMonth">奖金所属月份</label><input id="startMonth" type="month" required min="2000-01" max="2099-12" /></div>
+          <div class="ra-create-actions"><div class="ra-create-summary"><strong>复用当月已同步资料</strong><p id="startSnapshotNote" role="status">正在检查已同步资料…</p></div>
+          <button id="startSubmit" class="rd-button rd-primary" type="submit" disabled>开始核算 <svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></button>
+          <button id="startSync" class="rd-text-button" type="button">资料同步</button></div>
+        </div>
+        <div class="ra-create-details">
+          <label>活动名称<input id="startName" maxlength="60" /></label>
+          <label id="startOpeningField" hidden>承接上月结果<select id="startOpening"></select></label>
+        </div>
+        <p id="startOpeningNote" class="ra-create-note"></p>
+        <p id="startLoadStatus" role="status"></p><button id="startRetry" class="rd-text-button" type="button" hidden>重新读取</button>
+        <p id="startError" class="ra-error" role="alert" hidden></p><a id="startCheckList" class="rd-text-button" href="recruitment-activities.html" hidden>前往活动列表核对</a>
+      </form>
+    </section>
+  </main>
   <main id="activities" class="ra-shell">
     <div class="ra-heading"><div><h1>核算活动</h1></div><div><button id="activitySync" class="rd-button" type="button">资料同步</button> <button id="activityNew" class="rd-button rd-primary" type="button"><svg class="rd-icon" aria-hidden="true"><use href="#icon-plus"/></svg>新建核算活动</button></div></div>
     <div id="activityFeedback" class="ra-feedback" role="status" hidden></div>

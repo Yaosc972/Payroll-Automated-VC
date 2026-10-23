@@ -1,0 +1,87 @@
+<svg viewBox="0 0 1440 412" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-title flow-desc">
+      <title id="flow-title">招聘奖金与内推奖金月度核算流程</title>
+      <desc id="flow-desc">新建活动时选择月份与承接上月结果，自动复用当月已同步资料。核对上月基础，按需同步或导入资料。核对人员、金额、分期、币种及汇总；有待办或差异时修改并保存，再返回复核。无待处理项后核对三表并确认本月结果，供下月承接。手动同步保留人工调整，实际发薪另行核实。</desc>
+      <style>    text { font-family: Inter, Geist, "SF Pro Text", "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", sans-serif; }
+    .title { fill: #1e3a8a; font-size: 28px; font-weight: 750; }
+    .subtitle, .footer { fill: #667085; font-size: 18px; }
+    .card { fill: #f5f8ff; stroke: #cbd8ef; stroke-width: 1.5; }
+    .node-icon { color: #2563eb; }
+    .card-title { fill: #1e3a8a; font-size: 24px; font-weight: 750; }
+    .body { fill: #475467; font-size: 20px; }
+    .step-number { fill: #667085; font-size: 14px; font-weight: 600; text-anchor: end; }
+    .connector { fill: none; stroke: #2563eb; stroke-width: 2.5; marker-end: url(#blue-arrow); }
+    .branch { fill: none; stroke: #b7791f; stroke-width: 2.5; marker-end: url(#amber-arrow); }
+    .return { fill: none; stroke: #0f766e; stroke-width: 2.5; marker-end: url(#teal-arrow); }
+    .route-label { font-size: 18px; fill: #475467; }
+    .issue-card { fill: #fffaf0; stroke: #dfc58f; stroke-width: 1.5; }
+    .issue-icon { color: #946016; }
+    .issue-title { fill: #80510f; font-size: 22px; font-weight: 700; }
+</style>
+      <defs>
+        <marker id="blue-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#2563eb"/></marker>
+        <marker id="amber-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#b7791f"/></marker>
+        <marker id="teal-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#0f766e"/></marker>
+        <symbol id="icon-calendar" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 10h18M7 14h3m4 0h3m-10 4h3"/></g></symbol>
+        <symbol id="icon-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19V6a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Zm9-2V10m-3 3 3-3 3 3"/></g></symbol>
+        <symbol id="icon-review" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21H3V3h14v5M7 7h6m-6 4h3"/><circle cx="14" cy="15" r="5"/><path d="m18 19 4 4"/></g></symbol>
+        <symbol id="icon-complete" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H5v18h14V8l-5-5Zm0 0v5h5m-11 7 3 3 5-6"/></g></symbol>
+        <symbol id="icon-edit" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="7" r="3"/><path d="M2 21v-3a6 6 0 0 1 9-5m2 7 7-7-3-3-7 7-1 4 4-1Z"/></g></symbol>
+      </defs>
+
+      <text class="title" x="56" y="40">招聘奖金与内推奖金</text>
+      <text class="subtitle" x="1384" y="38" text-anchor="end">月度核算流程</text>
+
+      <path class="connector" d="M320 142 H408"/>
+      <path class="connector" d="M676 142 H764"/>
+      <path class="connector" d="M1032 142 H1120"/>
+      <text class="route-label" x="1076" y="129" text-anchor="middle">无待处理项</text>
+
+      <g aria-label="第一步，新建活动" data-step="01">
+        <rect class="card" x="56" y="70" width="260" height="142" rx="12"/>
+        <use class="node-icon" href="#icon-calendar" x="78" y="86" width="28" height="28" aria-hidden="true"/>
+        <text class="card-title" x="118" y="110">新建活动</text>
+        <text class="step-number" x="294" y="96">01</text>
+        <text class="body" x="78" y="150">选月份、承接上月</text>
+        <text class="body" x="78" y="185">复用当月已同步资料</text>
+      </g>
+
+      <g aria-label="第二步，准备资料" data-step="02">
+        <rect class="card" x="412" y="70" width="260" height="142" rx="12"/>
+        <use class="node-icon" href="#icon-upload" x="434" y="86" width="28" height="28" aria-hidden="true"/>
+        <text class="card-title" x="474" y="110">准备资料</text>
+        <text class="step-number" x="650" y="96">02</text>
+        <text class="body" x="434" y="150">核对上月基础</text>
+        <text class="body" x="434" y="185">按需同步或导入</text>
+      </g>
+
+      <g aria-label="第三步，核对明细" data-step="03">
+        <rect class="card" x="768" y="70" width="260" height="142" rx="12"/>
+        <use class="node-icon" href="#icon-review" x="790" y="86" width="28" height="28" aria-hidden="true"/>
+        <text class="card-title" x="830" y="110">核对明细</text>
+        <text class="step-number" x="1006" y="96">03</text>
+        <text class="body" x="790" y="150">人员、金额、分期、币种</text>
+        <text class="body" x="790" y="185">明细与汇总一起核对</text>
+      </g>
+
+      <g aria-label="第四步，导出确认" data-step="04">
+        <rect class="card" x="1124" y="70" width="260" height="142" rx="12"/>
+        <use class="node-icon" href="#icon-complete" x="1146" y="86" width="28" height="28" aria-hidden="true"/>
+        <text class="card-title" x="1186" y="110">导出确认</text>
+        <text class="step-number" x="1362" y="96">04</text>
+        <text class="body" x="1146" y="150">核对三表并确认</text>
+        <text class="body" x="1146" y="185">下月承接本月结果</text>
+      </g>
+
+      <path class="branch" d="M812 216 V288"/>
+      <text class="route-label" x="794" y="256" text-anchor="end">有待办或差异</text>
+      <path class="return" d="M984 288 V216"/>
+      <text class="route-label" x="1002" y="256">保存后复核</text>
+      <g aria-label="处理待办与差异，修改并保存后返回核对明细">
+        <rect class="issue-card" x="768" y="292" width="260" height="78" rx="12"/>
+        <use class="issue-icon" href="#icon-edit" x="790" y="301" width="26" height="26" aria-hidden="true"/>
+        <text class="issue-title" x="828" y="322">处理待办与差异</text>
+        <text class="body" x="790" y="352">修改并保存</text>
+      </g>
+
+      <text class="footer" x="56" y="396">手动同步保留人工调整 · 实际发薪另行核实</text>
+    </svg>
