@@ -4,12 +4,12 @@ No current result workbook is read here. Opening schedules preserve prior-month
 arrangements; current entitlements are always recalculated from adopted facts.
 """
 from copy import deepcopy
-from datetime import datetime
 import hashlib
 from decimal import Decimal
 import json
 import re
 from uuid import uuid4
+from .recruitment_time import now as recruitment_now
 from .recruitment_awards import award, money, number, NODES, ensure_calculated
 from .recruitment_draft_sources import text, digest
 from .recruitment_opening import period, COLUMNS
@@ -296,7 +296,7 @@ def apply_plan(store,month,revision,token):
         if not path.is_file():raise ValueError('安排预览不存在')
         plan=json.loads(path.read_text());store._check(state,plan['revision'])
         if plan.get('basisType')!='manual':approved_basis(state,plan['sourceId'],plan['rowId'])
-        op={'id':uuid4().hex,'month':month,'active':True,'label':'分期安排','at':datetime.now().isoformat(timespec='seconds')}
+        op={'id':uuid4().hex,'month':month,'active':True,'label':'分期安排','at':recruitment_now().isoformat(timespec='seconds')}
         state.setdefault('operations',[]).append(op);state['redoOperations']=[]
         state.setdefault('installmentPlans',[]).append({k:v for k,v in {**plan,'operationId':op['id']}.items() if k not in {'id','amount','currency'}})
         state.setdefault('appliedPlanPreviews',[]).append(token)

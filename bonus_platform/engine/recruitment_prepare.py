@@ -2,11 +2,11 @@
 from contextvars import copy_context
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 import json
 from threading import Event, RLock
 from uuid import uuid4
 
+from .recruitment_time import now as recruitment_now
 from .recruitment_cancellation import ACTIVE, PreparationCancelled, checkpoint
 
 POOL=ThreadPoolExecutor(max_workers=2,thread_name_prefix='recruitment-intake')
@@ -75,7 +75,7 @@ def start(store,month,revision,force=False,local_only=False,include_overseas=Fal
         state=store.read(month);store._check(state,revision)
         job={'id':uuid4().hex,'status':'running','stage':'sync' if overseas_only or domestic_only or monthly_all else 'refresh',
              'message':'正在同步本月国内及海外资料' if monthly_all else '正在读取本月国内花名册和 Offer' if domestic_only else '正在读取本月海外花名册和 Offer' if overseas_only else '正在整理已保存的资料',
-             'startedAt':datetime.now().isoformat(timespec='seconds'),'revision':revision,'localOnly':local_only,
+             'startedAt':recruitment_now().isoformat(timespec='seconds'),'revision':revision,'localOnly':local_only,
              'includeOverseas':include_overseas,'overseasOnly':overseas_only,'domesticOnly':domestic_only,'monthlyAll':monthly_all}
         if monthly_all:job['syncResults']={name:{'status':'pending'} for name in ('domestic','overseas')}
         store._write(store._folder(month)/'prepare.json',job)

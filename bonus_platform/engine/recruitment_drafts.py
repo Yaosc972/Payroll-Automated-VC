@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime
 from functools import lru_cache
 import hashlib
 import json
@@ -17,6 +16,7 @@ from xml.etree import ElementTree as ET
 import zipfile
 from uuid import uuid4
 
+from .recruitment_time import now as recruitment_now
 from .recruitment_cancellation import checkpoint
 
 from .recruitment_draft_sources import (
@@ -891,7 +891,7 @@ class DraftStore:
         if recalculate:
             from .recruitment_external_results import attach_rows
             attach_rows(state)
-        state['revision']+=1; state['updatedAt']=datetime.now().isoformat(timespec='seconds')
+        state['revision']+=1; state['updatedAt']=recruitment_now().isoformat(timespec='seconds')
         if recalculate:
             from .recruitment_awards import calculate_draft
             calculate_draft(state)
@@ -1066,7 +1066,7 @@ class DraftStore:
                 path=folder/'sources'/f'{sid}{suffix}'; path.parent.mkdir(parents=True,exist_ok=True)
                 with path.open('wb') as dest:
                     dest.write(content); dest.flush(); os.fsync(dest.fileno())
-                source={'id':sid,'name':name,'storedName':path.name,'active':True,'bytes':len(content),'forMonth':month,'addedAt':datetime.now().isoformat(timespec='seconds'),'comparisonOnly':comparison_only}
+                source={'id':sid,'name':name,'storedName':path.name,'active':True,'bytes':len(content),'forMonth':month,'addedAt':recruitment_now().isoformat(timespec='seconds'),'comparisonOnly':comparison_only}
                 try:
                     self._parse_source(folder,source)
                     if state.get('strictInputs') and 'ledger' in source.get('roles',[]):
@@ -1188,7 +1188,7 @@ class DraftStore:
             state['edits'].append({'rowId':rid,'field':field,'value':value,'before':known[rid]['values'].get(field,''),
                  'reason':text(edit.get('reason')) or ('采用原始资料' if refs else '手工修改'),
                  'evidenceId':evidence,'evidenceRefs':refs,'revision':state['revision']+1,
-                 'at':datetime.now().isoformat(timespec='seconds'),'operationId':operation_id,'active':True,
+                 'at':recruitment_now().isoformat(timespec='seconds'),'operationId':operation_id,'active':True,
                  **({'fieldSourceBasis':proof} if proof else {}),
                  **{k:deepcopy(edit[k]) for k in ('referenceFact','employmentBasis') if trusted_edits and k in edit}})
         identity_edits=[e for e in change.get('edits',[]) if e.get('field') in IDENTITY | {'入职日期','候选人入职时间'}]
@@ -1213,7 +1213,7 @@ class DraftStore:
             values.setdefault('体系外人员编号',uid)
             state['manualRows'].append({'role':'supplement','values':values,'fieldColumns':{},'ref':{'sourceId':'manual-'+uid,'sheet':'人工补充','row':1},'historyCells':[]})
         if change.get('edits'):
-            state.setdefault('operations',[]).append({'id':operation_id,'month':state['month'],'active':True,'label':'资料更正','at':datetime.now().isoformat(timespec='seconds')})
+            state.setdefault('operations',[]).append({'id':operation_id,'month':state['month'],'active':True,'label':'资料更正','at':recruitment_now().isoformat(timespec='seconds')})
             state['redoOperations']=[]
             state['operations'][-1]['referenceFacts']=[deepcopy(e['referenceFact']) for e in change['edits'] if e.get('referenceFact')]
             state['operations'][-1]['employmentSelections']=[deepcopy(e['employmentBasis']) for e in change['edits'] if e.get('employmentBasis')]
@@ -1241,7 +1241,7 @@ class DraftStore:
             else: raise ValueError('不支持的历史操作')
             for edit in state['edits']:
                 if edit.get('operationId')==operation['id']: edit['active']=operation['active']
-            state.setdefault('historyActions',[]).append({'operationId':operation['id'],'action':action,'at':datetime.now().isoformat(timespec='seconds')})
+            state.setdefault('historyActions',[]).append({'operationId':operation['id'],'action':action,'at':recruitment_now().isoformat(timespec='seconds')})
             return self._save(folder,self._rebuild(folder,state))
 
     def carry_forward(self, month, source_month, revision):

@@ -1,7 +1,6 @@
 """Isolated, user-created calculation batches; never copy an answer-filled draft."""
 from contextvars import ContextVar
 from contextlib import contextmanager
-from datetime import datetime
 from copy import deepcopy
 import filecmp
 import json
@@ -11,6 +10,7 @@ import re
 import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
+from .recruitment_time import now as recruitment_now
 from .recruitment_drafts import DraftStore, DraftConflict
 from .recruitment_activities import ActivityStore, ACTIVITY, activity_url
 
@@ -139,7 +139,7 @@ class ScopedDraftStore(ActivityStore,DraftStore):
         self._folder(month)
         if not isinstance(name,str) or len(name)>60:raise ValueError('名称不能超过60字')
         name=name.strip() or f'{month//100}年{month%100}月核算'
-        item={'id':uuid4().hex,'month':month,'name':name,'createdAt':datetime.now().isoformat(timespec='seconds')}
+        item={'id':uuid4().hex,'month':month,'name':name,'createdAt':recruitment_now().isoformat(timespec='seconds')}
         if opening is not None:return self._create_from_previous(item,opening)
         self._write(self.trial_root/item['id']/'trial.json',item)
         fresh={'month':month,'revision':0,'sources':[],'rows':[],'todos':[],'baseline':'','edits':[],'manualRows':[],
@@ -229,7 +229,7 @@ class ScopedDraftStore(ActivityStore,DraftStore):
 
     def _commit_adoption(self,month,item,source,target,source_folder,target_folder):
         """Stage evidence and a full recovery copy before changing monthly files."""
-        now=datetime.now().isoformat(timespec='seconds');revision=target['revision']+1
+        now=recruitment_now().isoformat(timespec='seconds');revision=target['revision']+1
         for info in source['sources']:
             raw=source_folder/'sources'/info['storedName']
             parsed=source_folder/'parsed'/(info['id']+'.json')

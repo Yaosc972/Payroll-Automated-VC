@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from copy import deepcopy
-from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from io import BytesIO
 import hashlib
@@ -13,6 +12,7 @@ from uuid import uuid4
 
 from openpyxl import Workbook, load_workbook
 
+from .recruitment_time import now as recruitment_now
 from .recruitment_draft_sources import date_text, text, PARSER_VERSION
 
 VERSION=2
@@ -30,7 +30,7 @@ def _hash(value):return hashlib.sha256(value.encode()).hexdigest()
 def _normal(value):return text(value).casefold().removeprefix('海外-')
 def _project(kind,role):return '内推奖金' if kind=='referral' else role+'奖金'
 def _slot(record):return (record['month'],record['rowId'],record['kind'],record['role'])
-def _now():return datetime.now().isoformat(timespec='seconds')
+def _now():return recruitment_now().isoformat(timespec='seconds')
 
 
 def _amount(value):

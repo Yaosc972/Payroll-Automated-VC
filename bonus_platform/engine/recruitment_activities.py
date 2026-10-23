@@ -1,7 +1,6 @@
 """Local calculation activities. Independent files, not an authorization layer."""
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime
 from functools import lru_cache
 import fcntl
 import json
@@ -12,6 +11,7 @@ import shutil
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from .recruitment_time import now as recruitment_now
 from .recruitment_drafts import DraftStore, DraftConflict
 
 ACTIVITY=ContextVar('recruitment_activity',default='')
@@ -58,7 +58,7 @@ class ActivityStore:
         if type(month) is not int:raise ValueError('请选择核算月份')
         DraftStore(self.base_root)._folder(month)
         if not isinstance(name,str) or len(name)>60:raise ValueError('活动名称不能超过60字')
-        now=datetime.now().isoformat(timespec='seconds')
+        now=recruitment_now().isoformat(timespec='seconds')
         item={'id':uuid4().hex,'month':month,'name':name.strip() or f'{month//100}年{month%100}月招聘与内推奖金',
               'createdAt':now,'updatedAt':now,'archived':False,'version':1}
         self.activity_root.mkdir(parents=True,exist_ok=True)
@@ -113,7 +113,7 @@ class ActivityStore:
                 if payload['archived'] and any(Path(key).is_relative_to(logical_path(folder)) for key in RUNNING):
                     raise DraftConflict('资料正在整理，完成后再归档')
                 item['archived']=payload['archived']
-            item.update(version=item['version']+1,updatedAt=datetime.now().isoformat(timespec='seconds'))
+            item.update(version=item['version']+1,updatedAt=recruitment_now().isoformat(timespec='seconds'))
             self._write(self.activity_root/identifier/'activity.json',item)
         return item
 

@@ -1,9 +1,9 @@
 """Live review queue. Conclusions annotate differences; they never set money or payment."""
 from collections import Counter
-from datetime import datetime
 from hashlib import sha256
 import json
 
+from .recruitment_time import now as recruitment_now
 from .recruitment_awards import ensure_calculated
 from .recruitment_attention import project as attention
 from .recruitment_work_items import project as work_items
@@ -208,7 +208,7 @@ def save_review(store, month, payload):
             'rowId': difference['rowId'], 'kind': difference['kind'], 'item': difference['item'],
             'outcome': outcome, 'reason': reason, 'basisType': 'manual' if manual else 'source',
             'evidenceId': evidence_id, 'evidenceSignature': evidence_signature(state, evidence_id),
-            'at': datetime.now().isoformat(timespec='seconds'), 'requestFingerprint': fingerprint(payload)}
+            'at': recruitment_now().isoformat(timespec='seconds'), 'requestFingerprint': fingerprint(payload)}
         if difference.get('subject'):
             entry.update(subject=difference['subject'],differenceSnapshot={k:v for k,v in difference.items() if k not in {'review','status','reviewValid'}},originMonth=difference.get('originMonth',month),**({'followupOriginFingerprint':difference['followupOriginFingerprint']} if difference.get('followupOriginFingerprint') else {}))
         state.setdefault('differenceReviews', []).append(entry)

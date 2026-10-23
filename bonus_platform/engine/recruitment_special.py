@@ -8,6 +8,7 @@ import math
 import re
 from uuid import uuid4
 
+from .recruitment_time import now as recruitment_now
 from .models import add_months, as_date
 from .recruitment_reviews import evidence_check
 
@@ -296,7 +297,7 @@ def preview(store, month, payload):
         if typ not in {'adjustment','exception','cutoff','revoke','history'}:raise ValueError('处理类型无效')
         if typ!='revoke' and kind not in ROLES:raise ValueError('奖金类型无效')
         token=uuid4().hex; reviewed=None
-        record={'id':uuid4().hex,'month':month,'kind':kind,'at':datetime.now().isoformat(timespec='seconds')}
+        record={'id':uuid4().hex,'month':month,'kind':kind,'at':recruitment_now().isoformat(timespec='seconds')}
         if typ=='revoke':
             old=next((r for r in context(before)['records'] if r['id']==payload.get('recordId') and r['active']),None)
             if not old:raise ValueError('没有可撤销的当前或后续安排')
@@ -438,7 +439,7 @@ def apply_preview(store, month, revision, token):
         if p['evidence']:evidence_check(store,state,p['evidence'],True)
         from .recruitment_settlement import approved_basis
         if p['type']=='cutoff' and p['record'].get('basisType')!='manual':approved_basis(state,p['record']['sourceId'])
-        op={'id':token,'month':month,'active':True,'at':datetime.now().isoformat(timespec='seconds'),
+        op={'id':token,'month':month,'active':True,'at':recruitment_now().isoformat(timespec='seconds'),
             'label':{'adjustment':'手工补扣' if p['record'].get('basisType')=='manual' else '审批补扣','exception':'资格例外','cutoff':'核算截点','revoke':'撤销特殊安排','history':'认可历史安排'}[p['type']]}
         state.setdefault('operations',[]).append(op);state['redoOperations']=[]
         state.setdefault(p['key'],[]).append({**p['record'],'operationId':token})

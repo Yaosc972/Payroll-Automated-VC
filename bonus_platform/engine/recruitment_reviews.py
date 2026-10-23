@@ -16,6 +16,7 @@ from zipfile import BadZipFile
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 
+from .recruitment_time import now as recruitment_now
 from .recruitment_awards import calculate_draft, ensure_calculated, money
 from .recruitment_draft_sources import DATE_FIELDS, date_text, text
 from .recruitment_drafts import EDITABLE_FIELDS
@@ -100,7 +101,7 @@ def evidence_check(store,state,evidence,applying=False):
             raise ValueError('审批招聘负责人须有正文姓名及可核实的工号依据')
         extra = {'personScope': checked, 'recruiter': {'name': name, 'employeeId': number}}
     return {**extra,'sourceId':sid,'pageNumbers':sorted(set(pages)),'status':status,'scopeChecked':bool(evidence.get('scopeChecked')),'scopeComplete':bool(evidence.get('scopeComplete')),
-            'attachmentIds':attachments,'missingAttachments':missing,'note':text(evidence['note']),'at':datetime.now().isoformat(timespec='seconds')}
+            'attachmentIds':attachments,'missingAttachments':missing,'note':text(evidence['note']),'at':recruitment_now().isoformat(timespec='seconds')}
 
 
 def save_review(store,month,revision,evidence):
@@ -154,7 +155,7 @@ def prepare_preview(store,month,revision,edits,*,evidence=None,origin='资料更
             if decision.get('role') and decision['role'] not in roles[decision['kind']]:raise ValueError('奖金处理角色无效')
             proof=reviewed or batch_by_source.get(decision.get('sourceId'))
             if batch_reviews and not proof:raise ValueError('不发决定缺少对应审批原件')
-            decision.update(id=uuid4().hex,at=datetime.now().isoformat(timespec='seconds'),
+            decision.update(id=uuid4().hex,at=recruitment_now().isoformat(timespec='seconds'),
                 basisType='manual' if manual else 'approval',sourceId=proof['sourceId'] if proof else '',
                 pageNumbers=proof['pageNumbers'] if proof else [],reason=proof['note'] if proof else '手工设置不发奖金')
             row=next(r for r in after['rows'] if r['id']==decision['rowId'])
@@ -247,7 +248,7 @@ def apply_preview(store,month,revision,token):
         state=store._prepare_change(folder,state,{'edits':valid},trusted_edits=True,validate_only=True)
         if preview['edits']: operation=state['operations'][-1]
         else:
-            operation={'id':uuid4().hex,'month':month,'active':True,'at':datetime.now().isoformat(timespec='seconds')}
+            operation={'id':uuid4().hex,'month':month,'active':True,'at':recruitment_now().isoformat(timespec='seconds')}
             state.setdefault('operations',[]).append(operation);state['redoOperations']=[]
         operation['label']=preview['origin'];operation['previewId']=token
         if preview['evidence']:

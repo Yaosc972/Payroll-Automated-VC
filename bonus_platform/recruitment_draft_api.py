@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
 from .config import OUTPUT_DIR
+from .engine.recruitment_time import now as recruitment_now
 from .engine.recruitment_drafts import DraftStore, DraftConflict, EDITABLE_FIELDS
 from .engine.recruitment_awards import ensure_calculated, money
 from .engine.recruitment_attention import project as attention_project, period_info, named_month
@@ -107,7 +108,7 @@ def confirm_month(month:int,payload:dict[str,Any]):
         with previous_confirmation_lock(store,month),store._lock(month) as folder:
             state=call(store.read,month);call(store._check,state,payload.get('revision'))
             call(require_confirmation,state,payload.get('coverageConfirmed'),store)
-            record={'revision':state['revision'],'confirmedAt':datetime.now().isoformat(timespec='seconds'),'state':state}
+            record={'revision':state['revision'],'confirmedAt':recruitment_now().isoformat(timespec='seconds'),'state':state}
             store._write(folder/'accepted'/f"{state['revision']}.json",record)
             store._write(folder/'accepted.json',record)
             store._write(folder/'accepted-status.json',{'revision':record['revision'],'confirmedAt':record['confirmedAt']})

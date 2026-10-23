@@ -140,6 +140,7 @@ def test_real_api_writes_survive_fresh_requests_and_downloads(backend,monkeypatc
     with session(write=True):SnapshotLibrary(store).refresh(MONTH)
     response=api.post('/api/recruitment/activities',json={'month':MONTH,'name':'持久化验证'})
     assert response.status_code==200,response.text
+    assert response.json()['updatedAt'].endswith('+08:00')
     item=response.json();base=f"/api/recruitment/activities/{item['id']}/api/recruitment/drafts/{MONTH}"
     state=api.get(base).json();row=next(r for r in state['rows'] if r['values']['工号']=='zt101')
     change=api.post(base+'/changes',json={'revision':state['revision'],'edits':[{'rowId':row['id'],'field':'招聘负责人姓名','value':'持久人工','reason':'合成验证'}]})
