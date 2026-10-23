@@ -107,11 +107,14 @@ def historical_arrangements_complete(row, kind, month):
     totals=[number(cells.get(c)) for c in total_columns]
     if totals[0] is None:return False
     arranged=0
-    for columns in COLUMNS[kind].values():
+    for index,columns in enumerate(COLUMNS[kind].values()):
+        role_arranged=0
         for amount_col,month_col,_ in columns:
             amount=number(cells.get(amount_col))
             if amount is None or amount==0:continue
             due=period(cells.get(month_col))
             if amount<0 or not due or due>=month:return False
             arranged+=amount
+            role_arranged+=amount
+        if role_arranged!=(totals[index] or 0):return False
     return arranged==sum(t or 0 for t in totals)

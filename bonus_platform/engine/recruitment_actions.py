@@ -67,7 +67,7 @@ def task_fields(row,task,month):
     if kind.startswith('field:'):
         field=kind.split(':',1)[1]
         if field=='招聘渠道' and v.get(field)=='其他' and field not in row.get('unresolvedFields',[]):
-            return ['其他渠道']
+            return []
         return [field]
     if kind=='rehire':
         fields=['上次离职日期'] if not present(v.get('上次离职日期')) or '上次离职日期' in row.get('unresolvedFields',[]) else []
@@ -106,7 +106,8 @@ def task_fields(row,task,month):
                     for prefix in ('候选人','招聘负责人','协助招聘人','推荐人'):
                         if not issue.startswith(prefix+'：'): continue
                         p='' if prefix=='候选人' else prefix
-                        if '日期' in issue and '转正' not in issue: fields.append(p+'入职日期')
+                        if '日期' in issue and '转正' not in issue and '在职' not in issue:
+                            fields.append(p+'人员状态' if p else '入职日期')
                         if '正式在职' in issue: fields += [p+'转正日期',p+'人员状态']
                         elif '在职' in issue:
                             fields.append(p+'人员状态')

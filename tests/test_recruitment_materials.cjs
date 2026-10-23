@@ -128,3 +128,21 @@ test('external result imports have their own purpose and never become opening or
   assert.equal(groups.find(group=>group.id==='opening').files.length,0);
   assert.equal(groups.find(group=>group.id==='external').status,'按需导入');
 });
+
+test('cumulative personnel imports use their own material card and expose skipped rows',()=>{
+  const file=source('BP累计',['cumulative'],{purpose:'external-personnel',cumulativeSummary:{newHires:2,updatedPeople:1,notApplied:[{code:'future_hire'}]}});
+  assert.deepEqual(plain(materials.categories(file)),['external-personnel']);
+  const groups=materials.build(draft([file]));
+  assert.equal(groups.find(group=>group.id==='external-personnel').status,'1 条未采用');
+  assert.equal(groups.find(group=>group.id==='external-personnel').tone,'missing');
+  assert.equal(groups.find(group=>group.id==='opening').files.length,0);
+  assert.equal(groups.find(group=>group.id==='external').files.length,0);
+});
+
+test('previous month cumulative evidence does not claim a current-month import',()=>{
+  const file=source('上月累计',['cumulative'],{purpose:'external-personnel',forMonth:202606});
+  const group=materials.build(draft([file])).find(item=>item.id==='external-personnel');
+  assert.equal(group.status,'待导入本月资料');
+  assert.equal(group.files.length,1);
+  assert.equal(materials.build(draft([])).find(item=>item.id==='external-personnel').status,'按需提供');
+});

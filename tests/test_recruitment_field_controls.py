@@ -23,12 +23,9 @@ def setup(tmp_path, **overrides):
 @pytest.mark.parametrize('choice,factor',[('不发招聘奖金',0),('按40%核算',.4)])
 def test_explicit_rehire_choice_changes_calculation_and_survives_carry_undo_redo(tmp_path,choice,factor):
     store,state,rid=setup(tmp_path)
-    item=next(i for i in work_items(state,project(state)) if i['key'].startswith('rehire:'))
-    field=detail(state,item)['fields'][0]
-    assert field['field']=='二次入职执行口径'
-    assert {c['value'] for c in field['choices']}=={'不发招聘奖金','按40%核算'}
-    assert '二次入职专项口径依据' not in {f['field'] for f in detail(state,item)['fields']}
-    assert state['rows'][0]['calculation']['recruitment']['total'] is None
+    assert not any(i['key'].startswith('rehire:') for i in work_items(state,project(state)))
+    field={'field':'二次入职执行口径'}
+    assert state['rows'][0]['calculation']['recruitment']['total']==0
     preview=prepare_preview(store,202607,state['revision'],[{'rowId':rid,'field':field['field'],'value':choice}])
     assert store.read(202607)['revision']==state['revision']
     saved=apply_preview(store,202607,state['revision'],preview['id'])
@@ -38,7 +35,7 @@ def test_explicit_rehire_choice_changes_calculation_and_survives_carry_undo_redo
     assert not any(i['key'].startswith('rehire:') for i in work_items(saved,project(saved)))
     assert saved['rows'][0]['calculation']['referral']['total']==0
     undone=store.history_action(202607,saved['revision'],'undo')
-    assert undone['rows'][0]['calculation']['recruitment']['total'] is None
+    assert undone['rows'][0]['calculation']['recruitment']['total']==0
     redone=store.history_action(202607,undone['revision'],'redo')
     assert redone['rows'][0]['calculation']['recruitment']['channelFactor']==factor
     carried=store.carry_forward(202608,202607,0)

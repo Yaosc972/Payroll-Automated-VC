@@ -488,6 +488,8 @@ def prepare_import(store,month,revision,files):
             if Path(name).suffix.lower() not in {'.xlsx','.xlsm'}:raise ValueError('请上传xlsx或xlsm核算结果表')
             if len(content)>80*1024*1024:raise ValueError('单份文件不能超过80MB')
             digest=hashlib.sha256(content).hexdigest();sid=_hash('external-results|'+str(month)+'|'+digest)
+            if any((s['id']==digest or s.get('contentDigest')==digest) and s.get('purpose','')!='external-results' for s in state['sources']):
+                raise ValueError('相同文件已按其他用途导入，请使用对应入口核对，不能重复改变资料用途')
             source=next((s for s in state['sources'] if s['id']==sid),None)
             source=deepcopy(source) if source else {'id':sid,'name':name,'storedName':sid+Path(name).suffix.lower(),'bytes':len(content),
                 'addedAt':_now(),'active':True,'forMonth':month,'purpose':'external-results','roles':['external_results'],

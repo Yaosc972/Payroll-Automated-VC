@@ -21,22 +21,22 @@ from test_recruitment_beisen import snapshot
     ('渠道说明：招聘会', '招聘网站'),
     ('Channel: Facebook', '招聘网站'),
 ])
-def test_other_channel_uses_explicit_note(note, expected):
-    assert _normalize_offer_channel('其他', '', note) == (expected, False)
+def test_other_channel_ignores_notes_for_award_eligibility(note, expected):
+    assert _normalize_offer_channel('其他', '', note) == ('其他', False)
     factor, issues, value = channel({'招聘渠道': '其他', '招聘渠道备注': note}, 'legacy')
-    assert value == expected and not issues
-    assert factor == (0 if expected == '外包转正式' else .4 if expected == '内推' else 1)
+    assert value == '其他' and not issues
+    assert factor == 0
 
 
 @pytest.mark.parametrize('note', ['推荐人尚未转正', '内推奖金待发', '不是内推', '渠道待确认：Boss或内推',
                                '招聘渠道：Boss；实际渠道：内推', '可能来自招聘网站'])
 def test_unrelated_negated_or_conflicting_notes_stay_unresolved(note):
-    assert _normalize_offer_channel('其他', '', note) == ('其他', True)
+    assert _normalize_offer_channel('其他', '', note) == ('其他', False)
 
 
 def test_main_channel_and_conflicting_details_are_not_silently_replaced():
     assert _normalize_offer_channel('内推', '', '招聘渠道：Boss') == ('内推', False)
-    assert _normalize_offer_channel('其他', '招聘会', '招聘渠道：内推') == ('其他', True)
+    assert _normalize_offer_channel('其他', '招聘会', '招聘渠道：内推') == ('其他', False)
 
 
 def test_overseas_offer_note_resolves_and_retains_source(tmp_path):
@@ -45,7 +45,7 @@ def test_overseas_offer_note_resolves_and_retains_source(tmp_path):
         ('offer.xlsx', book(OFFER + ['备注'], [['OF1', 'R1', 'C', 'zt1', '其他', '', '已归档', '招聘渠道：招聘会']])),
     ], 0)
     row = state['rows'][0]
-    assert row['values']['招聘渠道'] == '招聘网站'
+    assert row['values']['招聘渠道'] == '其他'
     assert row['values']['原始招聘渠道'] == '其他'
     assert row['values']['招聘渠道备注'] == '招聘渠道：招聘会'
     assert row['provenance']['招聘渠道备注'][0]['column'] == 8
@@ -58,7 +58,7 @@ def test_supplement_note_resolves_without_changing_original_channel(tmp_path):
         ['姓名', '工号', '入职日期', '招聘渠道', '备注'],
         [['甲', 'zt1', '2026-07-01', '其他', '实际渠道：猎聘']], title='导入_月度数据'))], 0)
     row = state['rows'][0]
-    assert row['values']['招聘渠道'] == '招聘网站'
+    assert row['values']['招聘渠道'] == '其他'
     assert row['original']['招聘渠道'] == '其他'
     assert row['channelResolution']['sources'][0]['row'] == 2
 
@@ -93,8 +93,8 @@ def test_conflicting_source_notes_never_produce_a_channel_factor(tmp_path):
         for name,note in [('a.xlsx','招聘渠道：Boss'), ('b.xlsx','实际渠道：内推')]], 0)
     row = state['rows'][0]
     assert row['values']['招聘渠道'] == '其他'
-    assert channel(row['values'], 'legacy')[0] is None
-    assert row['channelResolution']['resolved'] is False
+    assert channel(row['values'], 'legacy')[0] == 0
+    assert row['channelResolution']['resolved'] is True
 
 
 def test_channel_note_fetch_is_scoped_and_reusable():
@@ -128,7 +128,7 @@ def test_channel_note_fetch_rejects_changed_employment():
     assert extra['offers']==[] and extra['channelChecks'][0]['status']=='录用记录已变更或未找到'
 
 
-def test_prepare_automatically_upgrades_old_notes_only_once(tmp_path, monkeypatch):
+def test_prepare_does_not_fetch_notes_to_reinterpret_other_channel(tmp_path, monkeypatch):
     from bonus_platform.engine import recruitment_prepare as jobs, recruitment_beisen as adapter
     store=DraftStore(tmp_path)
     p=snapshot();p['offers'][0]['customProperties'][CHANNEL]='10'
@@ -142,24 +142,24 @@ def test_prepare_automatically_upgrades_old_notes_only_once(tmp_path, monkeypatc
         state=store.read(202607)
         jobs.run(store,202607,{'revision':state['revision'],'status':'running'},False,jobs.key_for(store,202607))
         assert jobs.read(store,202607)['status']=='complete'
-    assert calls==['notes']
-    assert len([s for s in store.read(202607)['sources'] if s['active']])==2
+    assert calls==[]
+    assert len([s for s in store.read(202607)['sources'] if s['active']])==1
 
 
 @pytest.mark.parametrize('detail', ['非内推', 'Boss或内推', '渠道待确认'])
 def test_uncertain_dedicated_details_are_not_positive_channel_evidence(detail):
-    assert _normalize_offer_channel('其他',detail)==('其他',True)
+    assert _normalize_offer_channel('其他',detail)==('其他',False)
 
 
 @pytest.mark.parametrize('detail,expected', [('新欧洲','招聘网站'),('西华网','招聘网站'),
     ('facebook','招聘网站'),('中介工转正','外包转正式')])
 def test_existing_overseas_materials_use_existing_channel_categories(detail,expected):
-    assert _normalize_offer_channel('其他',detail)==(expected,False)
+    assert _normalize_offer_channel('其他',detail)==('其他',False)
 
 
 @pytest.mark.parametrize('detail', ['国内','中介公司','人才市场'])
 def test_location_or_ambiguous_agency_description_does_not_invent_channel(detail):
-    assert _normalize_offer_channel('其他',detail)==('其他',True)
+    assert _normalize_offer_channel('其他',detail)==('其他',False)
 
 
 def test_successful_empty_note_query_is_not_an_unrecognized_upload(tmp_path):

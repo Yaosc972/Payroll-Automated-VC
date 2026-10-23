@@ -44,7 +44,7 @@
     return `<table class="rd-table flow-worksheet flow-ledger" style="width:${width}px" aria-label="招聘奖金核算明细，按线下表字段分组"><colgroup>${columns.map(c=>`<col data-column-key="${escape(c.key)}" style="width:${c.width}px">`).join('')}</colgroup><thead><tr>${columns.slice(0,2).map(heading).join('')}${grouped.map(g=>`<th data-tone="${tone(g.label)}" scope="colgroup" colspan="${g.columns.length}" class="flow-ledger-group"><span>${escape(g.label)}</span></th>`).join('')}</tr><tr>${columns.slice(2).map(c=>heading(c,2)).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${columns.map((c,i)=>{
       const value=r.cells[c.key],shown=display(value,c),note=isIdentity(c)?null:r.cellNotes?.[c.key];
       const content=i===0?`<button class="rd-row-open" data-flow-row="${escape(r.id)}" type="button">${escape(value||'姓名待补')}</button>`:escape(shown);
-      return `<td data-tone="${tone(c.group)}" class="${i===0?'flow-fixed-name':i===1?'flow-fixed-id':''} ${['money','percent','number'].includes(c.type)?'rd-number':''} ${value==null?'flow-warn':''}" title="${escape([shown,note].filter(Boolean).join(' · '))}">${content}</td>`;
+      return `<td data-tone="${tone(c.group)}" class="${i===0?'flow-fixed-name':i===1?'flow-fixed-id':''} ${['money','percent','number'].includes(c.type)?'rd-number':''} ${value==null?'flow-warn':''} ${c.key.endsWith('.period')&&String(value).includes('不发')?'flow-period-reason':''}" title="${escape([shown,note].filter(Boolean).join(' · '))}">${content}</td>`;
     }).join('')}</tr>`).join('')}</tbody></table>`;
   }
   window.RecruitmentDetailTable={groups,format,table,isIdentity,maskIdentity,display};

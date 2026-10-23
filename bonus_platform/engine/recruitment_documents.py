@@ -11,7 +11,7 @@ import sys
 from uuid import uuid4
 
 DOCUMENT_VERSION = 4
-DOCUMENT_REFERENCE_VERSION = 2
+DOCUMENT_REFERENCE_VERSION = 3
 
 
 def mark_blank_pages(data, folder):
@@ -39,6 +39,8 @@ def mentioned_attachments(data, include_pdf=False):
     # Normalize that extension only, never infer an attachment's basename.
     found=[(m.start(), m[1]+'.xls'+m[2].lower()) for m in re.finditer(
         r'([\w\-\u4e00-\u9fff（）()]+)\.x[lI1]s([xm]?)\b', full, re.I)]
+    found.extend((m.start(), m[1]+'.'+m[2].lower()) for m in re.finditer(
+        r'([\w\-\u4e00-\u9fff（）()]+)\.(png|jpe?g)\b', full, re.I))
     if include_pdf:
         # The scanned OA attachment list reads the d in .pdf as a.
         found.extend((m.start(), m[1].strip()+'.pdf') for m in re.finditer(

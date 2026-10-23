@@ -133,9 +133,8 @@ def test_metadata_completion_never_supplies_a_missing_regularization_date():
     for h in row['employmentTimelines']['推荐人']:h['regularizationDate']=None
     result=award(row,'referral',202608)
     node=next(n for n in result['nodes'] if n['dueMonth']==202608)
-    assert node['status']=='待核对'
-    assert '推荐人岗位与职级待核' not in node['issues']
-    assert '推荐人：转正日期待核对' in node['issues']
+    assert node['status']=='本月到期'
+    assert node['issues']==[]
 
 
 @pytest.mark.parametrize('change',[
@@ -170,37 +169,38 @@ def test_missing_translation_never_borrows_a_different_segment_or_capture(field,
     assert not result.get('referrerQualificationBasis')
 
 
-def test_missing_referrer_qualification_uses_month_end_history_instead_of_current_role():
+def test_missing_referrer_qualification_uses_candidate_hire_history_instead_of_current_role():
     old=history(stopDate='2026-08-31')
     now=history(startDate='2026-09-01',translateProperties={'OIdJobLevelText':'M4-1','OIdJobPositionText':'HRBP'})
     row=qualification_row([old,now])
     result=award(row,'referral',202608)
     assert result['nodes'][0]['status']=='本月到期'
     assert '推荐人岗位与职级待核' not in result['issues']
-    assert result['referrerQualificationBasis'][0]['at']=='2026-08-31'
+    assert result['referrerQualificationBasis'][0]['at']=='2026-08-01'
     assert result['referrerQualificationBasis'][0]['values']['推荐人职级']=='P2-1'
     assert result['referrerQualificationBasis'][0]['sources'][0]['sourceId']=='api'
     assert row['values']['推荐人职级']==row['values']['推荐人职位']==''
 
 
-def test_explicit_referral_cutoff_selects_that_date_for_missing_qualification():
+def test_payment_cutoff_does_not_change_candidate_hire_qualification():
     old=history(stopDate='2026-08-31')
     now=history(startDate='2026-09-01',translateProperties={'OIdJobLevelText':'M4-1','OIdJobPositionText':'HRBP'})
     result=award(qualification_row([old,now]),'referral',202608,
                  cutoff_policy={'mode':'date','date':'2026-09-15'})
-    assert result['total']==0
-    assert '推荐人岗位或职级不符合资格' in result['reasons']
+    assert result['total']==400
+    assert result['referrerQualificationBasis'][0]['at']=='2026-08-01'
+    assert '推荐人岗位或职级不符合资格' not in result['reasons']
 
 
-def test_distinct_due_date_roles_stay_unknown_instead_of_globally_excluding():
+def test_promotion_after_candidate_hire_does_not_change_eligibility():
     old=history(stopDate='2026-06-30')
     later=history(startDate='2026-07-01',translateProperties={'OIdJobLevelText':'M4-1','OIdJobPositionText':'HRBP'})
     row=qualification_row([old,later],ABC类别='A',职级='P4-1')
     row['values']['入职日期']=row['values']['候选人入职时间']='2026-05-01'
     row['rule']['version']='legacy'
     result=award(row,'referral',202608,cutoff_policy={'mode':'due'})
-    assert '推荐人岗位与职级待核' in result['issues']
-    assert all(n['status']=='待核对' for n in result['nodes'] if n['dueMonth']<=202608)
+    assert '推荐人岗位与职级待核' not in result['issues']
+    assert result['referrerQualificationBasis'][0]['at']=='2026-05-01'
     assert '推荐人岗位或职级不符合资格' not in result['reasons']
 
 
@@ -212,7 +212,7 @@ def test_same_qualification_across_due_dates_supplies_one_traceable_fact_per_dat
     before=deepcopy(row)
     result=award(row,'referral',202608,cutoff_policy={'mode':'due'})
     assert '推荐人岗位与职级待核' not in result['issues']
-    assert [b['at'] for b in result['referrerQualificationBasis']]==['2026-05-31','2026-07-31']
+    assert [b['at'] for b in result['referrerQualificationBasis']]==['2026-05-01']
     assert row==before
 
 
@@ -221,7 +221,7 @@ def test_partial_historical_qualification_can_only_fill_matching_missing_fact():
     row['values']['推荐人职级']='P2-1'
     assert '推荐人岗位与职级待核' not in award(row,'referral',202608)['issues']
     row['values']['推荐人职级']='P1-1'
-    assert '推荐人岗位与职级待核' in award(row,'referral',202608)['issues']
+    assert award(row,'referral',202608)['referrerQualificationBasis'][0]['values']['推荐人职级']=='P2-1'
 
 
 @pytest.mark.parametrize('placeholder',['n/a',' N/a ','--','none','None','null','NULL'])
@@ -301,13 +301,15 @@ def test_incomplete_or_protected_referrer_facts_are_not_filled(change):
     facts=[history()]
     row=qualification_row(facts)
     if change=='manual-empty':row['edits']=[{'field':'推荐人职位','value':''}]
-    elif change=='existing-history':row['values'].update(推荐人职级='P1-1',推荐人职位='旧核对岗位')
+    elif change=='existing-history':
+        row['values'].update(推荐人职级='P1-1',推荐人职位='旧核对岗位')
+        row['edits']=[{'field':'推荐人职级','value':'P1-1'}]
     elif change=='conflict':row['conflicts']=[{'field':'推荐人职位','values':['旧岗位','新岗位']}]
     elif change=='overlap':
         row['employmentTimelines']['推荐人'].append({**row['employmentTimelines']['推荐人'][0],
             'translateProperties':{'OIdJobLevelText':'M4-1','OIdJobPositionText':'HRBP'}})
     elif change=='unknown-field':row['employmentTimelines']['推荐人'][0]['translateProperties'].pop('OIdJobPositionText')
-    elif change=='future-query':row['employmentTimelines']['推荐人'][0]['queriedAt']='2026-08-15'
+    elif change=='future-query':row['employmentTimelines']['推荐人'][0]['queriedAt']='2026-07-31'
     elif change=='different-employment':row['values']['推荐人入职日期']='2021-01-01'
     result=award(row,'referral',202608)
     if change=='existing-history':

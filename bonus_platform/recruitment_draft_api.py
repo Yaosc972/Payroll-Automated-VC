@@ -35,7 +35,9 @@ def public(state):
     state,approval_adjustments=approval_project(store,state)
     previous=previous_confirmed(store,state['month'])
     attention=attention_project(state)
-    table=worksheet(state);cells={r['id']:r['cells'] for r in table['rows']}
+    from .engine.recruitment_no_payment import calculations as display_calculations
+    calculations=display_calculations(state)
+    table=worksheet(state,calculations=calculations);cells={r['id']:r['cells'] for r in table['rows']}
     current_ids={rid for t in attention['current'] for rid in t['rowIds']}
     history_ids={rid for t in attention['history'] for rid in t['rowIds']}
     from .engine import recruitment_external_results as external
@@ -57,7 +59,7 @@ def public(state):
             'attentionSummary':{k:attention[k] for k in ('currentPeople','historyPeople')},
             'period':period_info(state),
             'intakeSummary':state.get('intakeSummary'),'referenceFacts':state['referenceFacts'],
-            'monthly':monthly_project(state,attention),'externalResults':external_context,
+            'monthly':monthly_project(state,attention,calculations=calculations),'externalResults':external_context,
             'sources':[{**source,'relatedRowIds':sorted(source_rows.get(source['id'],set()))} for source in state['sources']],
             'fieldControls':definitions(),'editableFields':sorted(EDITABLE_FIELDS-SYSTEM_FIELDS),
             'canUndo':any(o['month']==state['month'] and o['active'] for o in state.get('operations',[])),
@@ -69,7 +71,7 @@ def public(state):
                      'needsReview':r['id'] in current_ids or r['id'] in history_ids,
                      'cells':cells[r['id']],
                      'attentionScope':'current' if r['id'] in current_ids else 'history' if r['id'] in history_ids else '',
-                     'calculation':{kind:{k:v for k,v in r['calculation'][kind].items() if k!='nodes'} for kind in ('recruitment','referral')}} for r in state['rows']]}
+                     'calculation':{kind:{k:v for k,v in calculations[r['id']][kind].items() if k!='nodes'} for kind in ('recruitment','referral')}} for r in state['rows']]}
 
 
 def public_response(state):
@@ -219,9 +221,9 @@ def call_when_prepared(fn,month,*args):
 
 
 @router.post('/{month}/sources')
-async def upload(month:int,revision:int=Form(...),files:list[UploadFile]=File(...),periodConfirmed:bool=Form(False),comparisonOnly:bool=Form(False)):
+async def upload(month:int,revision:int=Form(...),files:list[UploadFile]=File(...),periodConfirmed:bool=Form(False),comparisonOnly:bool=Form(False),purpose:str=Form('')):
     existing=call(store.read,month)
-    suggested=named_month(f.filename or '' for f in files)
+    suggested=named_month(f.filename or '' for f in files) if not purpose else None
     if suggested and suggested!=month and not existing['revision'] and not periodConfirmed:
         raise HTTPException(409,{'code':'material_month','suggestedMonth':suggested,'message':f'台账月份为{suggested//100}年{suggested%100}月，请核对核算月份'})
     payload=[]
@@ -230,8 +232,34 @@ async def upload(month:int,revision:int=Form(...),files:list[UploadFile]=File(..
         content=await upload.read(80*1024*1024+1)
         if len(content)>80*1024*1024: raise HTTPException(413,'单份文件不能超过80MB')
         payload.append((upload.filename or '资料.xlsx',content))
-    state=await run_in_threadpool(call_when_prepared,store.ingest,month,payload,revision,periodConfirmed and bool(suggested and suggested!=month),comparisonOnly)
+    state=await run_in_threadpool(call_when_prepared,store.ingest,month,payload,revision,periodConfirmed and bool(suggested and suggested!=month),comparisonOnly,purpose)
     return public_response(state)
+
+
+@router.get('/{month}/external-personnel/template')
+def external_personnel_template(month:int):
+    from .engine.recruitment_import_validation import STANDARD_IMPORT_HEADERS
+    from .engine.recruitment_draft_sources import DEPRECATED_FIELDS
+    from openpyxl.utils import get_column_letter
+    import urllib.parse
+    call(store._folder,month)
+    workbook=Workbook();sheet=workbook.active;sheet.title='体系外累计人员'
+    headers=['体系外人员编号']+[h for h in STANDARD_IMPORT_HEADERS if h not in DEPRECATED_FIELDS and h!='核算月份']
+    sheet.append(headers);sheet.freeze_panes='C2';sheet.auto_filter.ref=sheet.dimensions
+    for index,cell in enumerate(sheet[1],1):
+        cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='1E3A8A')
+        sheet.column_dimensions[get_column_letter(index)].width=max(16,len(str(cell.value))*2+2)
+    notes=workbook.create_sheet('填写说明')
+    for line in ('只新增核算月入职人员。已有任职仅核对本月转正日期和最后工作日。',
+                 '填写人员编号和实际入职日期。同一人员的不同任职分行保留。缺编号时保留原始人员行，不按同名合并。',
+                 '日期填写 YYYY-MM-DD。空日期不清空已有值，冲突日期保留待核。',
+                 '金额与发放周期请勿填写在人员表中。本入口不导入期初金额或月度核定结果。'):
+        notes.append([line])
+    notes.column_dimensions['A'].width=100
+    content=BytesIO();workbook.save(content)
+    name=urllib.parse.quote(f'体系外累计人员资料{month}.xlsx')
+    return StreamingResponse(BytesIO(content.getvalue()),media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition':f"attachment; filename*=UTF-8''{name}"})
 
 
 @router.get('/{month}/external-results')
@@ -301,7 +329,13 @@ def row_detail(month:int,row_id:str):
     row=next((r for r in state['rows'] if r['id']==row_id),None)
     if not row: raise HTTPException(404,'人员记录不存在')
     from .engine.recruitment_field_controls import controls
-    return {'revision':state['revision'],'row':{**row,'fieldControls':controls(state,row),'reviewSuggestion':referral_suggestion(row,state)}}
+    from .engine.recruitment_no_payment import project as display_calculation
+    from .engine.recruitment_detail_table import installment_period
+    calculation=display_calculation(state,row)
+    calculation={**calculation,**{kind:{**calculation[kind],**{
+        key:[{**node,'periodText':installment_period(node)} for node in calculation[kind].get(key,[])]
+        for key in ('nodes','nonPaymentInstallments')}} for kind in ('recruitment','referral')}}
+    return {'revision':state['revision'],'row':{**row,'calculation':calculation,'fieldControls':controls(state,row),'reviewSuggestion':referral_suggestion(row,state)}}
 
 
 @router.post('/{month}/field-controls')

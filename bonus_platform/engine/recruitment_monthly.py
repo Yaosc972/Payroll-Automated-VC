@@ -6,10 +6,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from .recruitment_detail_table import columns as detail_columns, cells as detail_cells
+from .recruitment_no_payment import calculations as display_calculations
 
 
-def worksheet(state, nodes, row_tasks):
+def worksheet(state, nodes, row_tasks,*,calculations=None):
     """Keep the familiar employee row while summing only this month's installments."""
+    if calculations is None:calculations=display_calculations(state)
     by_row=defaultdict(list)
     for node in nodes:by_row[node['rowId']].append(node)
     result=[]
@@ -19,7 +21,9 @@ def worksheet(state, nodes, row_tasks):
         current_nodes=[n for n in all_nodes if n['scope']=='current']
         hire=str(v.get('入职日期') or v.get('候选人入职时间') or '')
         new_hire=hire[:7].replace('-','')==str(state['month'])
-        scheduled=any(n['month']==state['month'] or n['scope']=='held' and n['dueMonth']==state['month'] for n in all_nodes)
+        scheduled=(any(n['month']==state['month'] or n['scope']=='held' and n['dueMonth']==state['month'] for n in all_nodes)
+                   or any(n['dueMonth']==state['month'] for kind in ('recruitment','referral')
+                          for n in calculations[rid][kind].get('nonPaymentInstallments',[])))
         reasons=list(dict.fromkeys([reason for n in current_nodes for reason in n['reasons']]+
                     [reason for task in row_tasks.get(rid,[]) for reason in task.get('rowReasons',{}).get(rid,task.get('reasons',[])) or [task['title']]]))
         current=bool(new_hire or scheduled or row_tasks.get(rid))
@@ -42,12 +46,8 @@ def worksheet(state, nodes, row_tasks):
             label+'：'+'、'.join(currencies[kind]) for kind,label in [('recruitment','招聘'),('referral','内推')] if currencies[kind])
         reasons=list(dict.fromkeys(reasons));review=bool(reasons)
         note='；'.join(dict.fromkeys(str(v[k]) for k in ('人工备注','备注') if v.get(k)))
-        eligibility_notes=list(dict.fromkeys(('内推奖金：' if n['kind']=='referral' else '招聘奖金：')+
-                    '；'.join(n.get('eligibilityReasons',[])) for n in all_nodes
-                    if n['scope']=='held' and n['dueMonth']==state['month'] and n.get('eligibilityReasons')))
-        if eligibility_notes:note='；'.join(filter(None,[note,*eligibility_notes]))
         if reasons:note='；'.join(filter(None,[note,'；'.join(reasons)]))
-        cells,cell_notes=detail_cells(row)
+        cells,cell_notes=detail_cells(row,calculations[rid])
         if has_adjustments:
             for kind in ('recruitment','referral'):
                 for direction in ('supplement','deduction'):
@@ -131,7 +131,7 @@ def recipient_summaries(state, nodes):
     return result
 
 
-def project(state, attention):
+def project(state, attention,*,calculations=None):
     from .recruitment_work_items import project as work_items
     month=state['month'];rows={r['id']:r for r in state['rows']}
     row_tasks=defaultdict(list);cases=[]
@@ -190,7 +190,7 @@ def project(state, attention):
     from .recruitment_attention import recipient_requirements
     missing_recipients=recipient_requirements(state,month)['domesticFetchIds']
     work=work_items(state,attention)
-    return {'nodes':nodes,'recipientSummaries':recipient_summaries(state,nodes),'worksheet':worksheet(state,nodes,row_tasks),'cases':cases,'reviewPeople':len(row_tasks),'workItems':work,
+    return {'nodes':nodes,'recipientSummaries':recipient_summaries(state,nodes),'worksheet':worksheet(state,nodes,row_tasks,calculations=calculations),'cases':cases,'reviewPeople':len(row_tasks),'workItems':work,
             'automaticResults':automatic_results(state,nodes,attention.get('notices',[])),
             'actionCount':sum(w['current'] for w in work),'preparationCount':sum(not w['current'] for w in work),
             'operatorActionCount':sum(w['current'] and not w.get('ruleMaintenance') for w in work),
@@ -218,7 +218,7 @@ def automatic_results(state,nodes,notices=()):
     external={n['recipientId'] for n in nodes if n['scope']=='current' and n.get('employmentBasis')}
     if external:items.append({'title':f'体系外／GL 人员 {len(external)} 人','detail':'使用已导入的线下资料，不要求内部任职记录。'})
     probation={n['recipientId'] for n in nodes if n['dueMonth']==month and n['scope']=='held' and any('推荐人：适用日期尚未转正'==r for r in n.get('eligibilityReasons',[]))}
-    if probation:items.append({'title':f'推荐人试用状态 {len(probation)} 人','detail':'按花名册状态判断，本月相应内推分期不安排；原因已列入核算明细备注。'})
+    if probation:items.append({'title':f'推荐人试用状态 {len(probation)} 人','detail':'按花名册状态判断，本月相应内推分期不安排；原因已列入对应发放周期。'})
     special={n['rowId'] for n in nodes if n['kind']=='referral' and n['dueMonth']==month}
     special={r['id'] for r in state['rows'] if r['id'] in special and r['rule']['version']=='legacy' and r['rule'].get('specialScope')}
     if special:items.append({'title':f'德国／捷克旧规则 {len(special)} 人','detail':'按 7 月前入职及已确认的部门边界自动适用，保留推荐人资格条件。'})

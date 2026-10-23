@@ -30,7 +30,7 @@ def test_first_month_snapshot_builds_new_hires_with_original_source_locations(tm
     row=state['rows'][0]
     assert row['values']['标签分类']=='海外'
     assert row['values']['海外offer流程编号']=='OF1'
-    assert row['values']['招聘渠道']=='外包转正式'
+    assert row['values']['招聘渠道']=='其他'
     assert row['offerMatched'] is True
     source=state['sources'][0]
     assert source['forMonth']==202608 and source['kind']=='overseas_api'

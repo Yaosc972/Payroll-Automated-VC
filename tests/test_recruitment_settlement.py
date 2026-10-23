@@ -9,7 +9,7 @@ def test_historical_owner_does_not_inherit_new_owner_qualification_issues():
     state['month']=202609
     fact=deepcopy(state['confirmedInstallments'][0])
     row['values'].update({'招聘负责人工号':'zt-new','招聘负责人姓名':'新领取人',
-                         '招聘负责人入职日期':'','人员状态':''})
+                         '招聘负责人入职日期':'','招聘负责人人员状态':'','人员状态':''})
     result=calculate_row(state,row)['recruitment']
     historical=next(n for n in result['nodes'] if n.get('openingLocked'))
     assert not any(i.startswith('招聘负责人：') for i in historical['issues'])
@@ -26,6 +26,7 @@ def test_historical_owner_does_not_inherit_new_owner_qualification_issues():
 def test_same_owner_historical_qualification_issue_is_preserved():
     state,row=confirmed_state()
     row['values']['招聘负责人入职日期']=''
+    row['values']['招聘负责人人员状态']=''
     result=calculate_row(state,row)['recruitment']
     historical=next(n for n in result['nodes'] if n.get('openingLocked'))
     assert historical['recipientId']=='zt-owner'
@@ -35,7 +36,7 @@ def test_same_owner_historical_qualification_issue_is_preserved():
 def test_overseas_prefix_does_not_make_the_same_recipient_a_different_person():
     state,row=confirmed_state()
     state['confirmedInstallments'][0]['recipientId']='zt25991'
-    row['values'].update({'招聘负责人工号':'海外-zt25991','招聘负责人入职日期':''})
+    row['values'].update({'招聘负责人工号':'海外-zt25991','招聘负责人入职日期':'','招聘负责人人员状态':''})
     result=calculate_row(state,row)['recruitment']
     historical=next(n for n in result['nodes'] if n.get('openingLocked'))
     assert historical['recipientId']=='zt25991'
@@ -46,7 +47,7 @@ def test_current_month_fact_does_not_hide_current_owner_qualification_issue():
     state,row=confirmed_state()
     state['month']=202609
     state['confirmedInstallments'][0]['scheduledMonth']=202609
-    row['values'].update({'招聘负责人工号':'zt-new','招聘负责人入职日期':''})
+    row['values'].update({'招聘负责人工号':'zt-new','招聘负责人入职日期':'','招聘负责人人员状态':''})
     result=calculate_row(state,row)['recruitment']
     assert not any(n.get('openingLocked') for n in result['nodes'])
     current=next(n for n in result['nodes'] if n.get('scheduledMonth')==202609)
@@ -58,7 +59,7 @@ def test_historical_owner_cleanup_preserves_opening_conflict_and_original_amount
     state['settlement']['baselineId']='ledger'
     row['history']=[{'ref':{'sourceId':'ledger'},'cells':[{'column':c,'value':v} for c,v in
         [(39,30),(40,202607),(22,'zt-owner'),(23,'招聘负责人'),(56,'欧元')]]}]
-    row['values'].update({'招聘负责人工号':'zt-new','招聘负责人入职日期':''})
+    row['values'].update({'招聘负责人工号':'zt-new','招聘负责人入职日期':'','招聘负责人人员状态':''})
     result=calculate_row(state,row)['recruitment']
     historical=next(n for n in result['nodes'] if n.get('openingLocked'))
     assert not any(i.startswith('招聘负责人：') for i in historical['issues'])

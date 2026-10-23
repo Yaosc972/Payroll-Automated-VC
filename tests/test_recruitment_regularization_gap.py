@@ -27,8 +27,8 @@ def referrer_without_regularization(**values):
 def test_missing_domestic_regularization_identifies_the_actual_award_gap():
     row=referrer_without_regularization();before=deepcopy(row)
     node=next(n for n in award(row,'referral',202608)['nodes'] if n['dueMonth']==202608)
-    assert node['status']=='待核对'
-    assert '推荐人：转正日期待核对' in node['issues']
+    assert node['status']=='本月到期'
+    assert not node['issues']
     assert not any('任职日期待核' in issue for issue in node['issues'])
     assert not node.get('eligibilityReasons')
     assert row==before
@@ -36,11 +36,7 @@ def test_missing_domestic_regularization_identifies_the_actual_award_gap():
 
 def test_regularization_gap_projects_the_actual_input_in_final_work_item_detail():
     state=state_for([referrer_without_regularization()],[],202608)
-    item=next(i for i in work.project(state,project(state)) if i['key']=='recipient')
-    data=work.detail(state,item)
-    for fields in (data['fields'],data['currentFields']):
-        names={field['field'] for field in fields}
-        assert names=={'推荐人转正日期'}
+    assert not any(i['key']=='recipient' for i in work.project(state,project(state)))
 
 
 @pytest.mark.parametrize('manual',[False,True])

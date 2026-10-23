@@ -113,7 +113,7 @@ def run(store,month,job,force,key,local_only=False,include_overseas=False,overse
 
 
 def _run(store,month,job,force,key,local_only=False,include_overseas=False,overseas_only=False,domestic_only=False,monthly_all=False):
-    from .recruitment_beisen import fetch, fetch_employment, fetch_channel_details, coverage_sets, CHANNEL
+    from .recruitment_beisen import fetch, fetch_employment, coverage_sets
     from .recruitment_drafts import staff_id
     from .recruitment_attention import recipient_requirements
     from .recruitment_trials import TRIAL
@@ -264,22 +264,6 @@ def _run(store,month,job,force,key,local_only=False,include_overseas=False,overs
             checkpoint()
             state=store.save_beisen_snapshot(month,state['revision'],snapshot)
             job['revision']=state['revision'];checkpoint()
-        # Older snapshots predate Remarks intake. Upgrade those facts without
-        # asking the user to enter channels or replacing the primary snapshot.
-        checked={oid for s in state['sources'] if s.get('active',True) for oid in s.get('channelDetailsCheckedOfferIds',[])}
-        for source in list(state['sources']):
-            checkpoint()
-            if source.get('kind')!='beisen' or not source.get('active',True) or source.get('comparisonOnly') or source.get('employmentOnly') or source.get('channelDetailsOnly') or not source.get('storedName'):continue
-            payload=json.loads((store._folder(month)/'sources'/source['storedName']).read_text())
-            if not any(str(o.get('customProperties',{}).get(CHANNEL))=='10'
-                       and 'remarks' not in o and o.get('objectId') not in checked for o in payload.get('offers',[])):continue
-            save(stage='sync',message='正在补查其他招聘渠道的原始备注')
-            extra=fetch_channel_details(payload,checked)
-            checkpoint()
-            if extra:
-                state=store.save_beisen_snapshot(month,state['revision'],extra)
-                job['revision']=state['revision'];checkpoint()
-                checked.update(extra['channelDetailsCheckedOfferIds'])
         gaps=coverage_gaps(state,month)
         save(status='complete',stage='complete',revision=state['revision'],coverageGaps=gaps,
              message=coverage_message(gaps))

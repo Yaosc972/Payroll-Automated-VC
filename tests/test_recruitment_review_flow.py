@@ -63,8 +63,8 @@ def test_already_uploaded_opening_is_adoption_not_a_missing_upload():
 
 
 def test_work_detail_defaults_to_current_fields_but_preserves_future_data():
-    first=ready_row(招聘渠道='其他');first['id']='current'
-    second=ready_row(hire='2026-07-15',招聘渠道='其他');second['id']='future'
+    first=ready_row(招聘渠道='');first['id']='current'
+    second=ready_row(hire='2026-07-15',招聘渠道='');second['id']='future'
     state=state_for([first,second],[]);before=deepcopy(state)
     item=next(i for i in work.project(state,project(state)) if i['key']=='field:招聘渠道')
     data=work.detail(state,item)
@@ -75,7 +75,7 @@ def test_work_detail_defaults_to_current_fields_but_preserves_future_data():
 
 
 def test_hidden_future_recipient_value_does_not_make_current_form_mixed():
-    first=ready_row(推荐人人员状态='试用');first['id']='current'
+    first=ready_row(推荐人人员状态='');first['id']='current'
     second=deepcopy(first);second['id']='future';second['values'].update(入职日期='2026-07-15',候选人入职时间='2026-07-15',推荐人人员状态='在职')
     second['unresolvedFields']=['推荐人人员状态']
     state=state_for([first,second],[{**fact_task(second,'recipient_conflict','推荐人状态不同'),'recipientId':'zt-ref'}])
@@ -84,7 +84,7 @@ def test_hidden_future_recipient_value_does_not_make_current_form_mixed():
     field=next(f for f in data['fields'] if f['field']=='推荐人人员状态')
     current=next(f for f in data['currentFields'] if f['field']=='推荐人人员状态')
     assert field['mixed'] is True
-    assert current['value']=='试用' and current['mixed'] is False
+    assert current['value']=='' and current['mixed'] is False
 
 
 def test_employment_form_shows_roster_date_as_a_real_source_choice():
@@ -103,7 +103,7 @@ def test_employment_form_shows_roster_date_as_a_real_source_choice():
 
 
 def test_recipient_count_is_actual_subjects_not_affected_candidates():
-    first=ready_row(招聘负责人入职日期='');first['id']='one'
+    first=ready_row(招聘负责人入职日期='',招聘负责人人员状态='');first['id']='one'
     second=deepcopy(first);second['id']='two'
     state=state_for([first,second],[])
     item=next(i for i in work.project(state,project(state)) if i['key']=='recipient')
@@ -114,7 +114,7 @@ def test_formal_qualification_exposes_probation_not_a_blank_last_work_day():
     row=ready_row(推荐人人员状态='在职',推荐人转正日期='')
     state_for([row],[])
     fields=task_fields(row,{'kind':'recipient'},202607)
-    assert '推荐人转正日期' in fields
+    assert '推荐人转正日期' not in fields
     assert '推荐人最后工作日' not in fields
 
 
@@ -137,7 +137,7 @@ def test_grouping_never_shows_another_persons_missing_fields():
 
 def test_other_channel_only_asks_for_its_missing_detail():
     row=ready_row(招聘渠道='其他')
-    assert task_fields(row,{'kind':'field:招聘渠道'},202607)==['其他渠道']
+    assert task_fields(row,{'kind':'field:招聘渠道'},202607)==[]
     row['unresolvedFields']=['招聘渠道']
     assert task_fields(row,{'kind':'field:招聘渠道'},202607)==['招聘渠道']
 
@@ -147,7 +147,7 @@ def test_recipient_form_does_not_ask_about_unrelated_future_qualification():
     row['calculation']={'recruitment':{'nodes':[{'dueMonth':202607,'issues':['招聘负责人：任职日期待核']}]},
                         'referral':{'nodes':[{'dueMonth':202610,'issues':['推荐人：推荐人正式在职状态待核']}]}}
     row['unresolvedFields']=[]
-    assert task_fields(row,{'kind':'recipient'},202607)==['招聘负责人入职日期']
+    assert task_fields(row,{'kind':'recipient'},202607)==['招聘负责人人员状态']
 
 
 def test_name_lookup_only_uses_active_activity_materials_and_keeps_namesakes(tmp_path):

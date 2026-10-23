@@ -27,9 +27,7 @@ def test_rehire_consistent_rule_is_automatic_while_real_gaps_remain_work_items()
     ensure_calculated(state)
     monthly=monthly_project(state,project(state))
     assert not any('ready' in item['rowIds'] for item in monthly['workItems'])
-    assert {rid for item in monthly['workItems'] for rid in item['rowIds']}=={'conflict','missing'}
-    policy=next(item for item in monthly['workItems'] if item['rowIds']==['conflict'])
-    assert policy['ruleMaintenance'] and '40%' in policy['detail'] and '不发' in policy['detail']
+    assert {rid for item in monthly['workItems'] for rid in item['rowIds']}=={'missing'}
     assert next(item for item in monthly['workItems'] if item['rowIds']==['missing'])['mode']=='facts'
     assert any('二次入职' in item['title'] and '40%' in item['detail'] for item in monthly['automaticResults'])
     assert [r['values'] for r in state['rows']]==original_values and state['revision']==1
@@ -52,12 +50,12 @@ def test_missing_offer_work_is_grouped_by_region_not_job_family():
 
 
 def test_recipient_fields_are_shared_across_roles_but_not_distinct_employments():
-    first=person();first['id']='a';first['values'].update(招聘负责人工号='zt-shared',招聘负责人入职日期='',招聘负责人姓名='同一领取人')
-    second=deepcopy(first);second['id']='b';second['values'].update(招聘负责人工号='zt-other',招聘负责人入职日期='2020-01-01',协助招聘人工号='zt-shared',协助招聘人入职日期='',协助招聘人姓名='同一领取人')
+    first=person();first['id']='a';first['values'].update(招聘负责人工号='zt-shared',招聘负责人入职日期='',招聘负责人人员状态='',招聘负责人姓名='同一领取人')
+    second=deepcopy(first);second['id']='b';second['values'].update(招聘负责人工号='zt-other',招聘负责人入职日期='2020-01-01',协助招聘人工号='zt-shared',协助招聘人入职日期='',协助招聘人人员状态='',协助招聘人姓名='同一领取人')
     state=state_for([first,second],[]);item=next(i for i in work.project(state,project(state)) if i['key']=='recipient')
     fields=work.detail(state,item)['fields']
     combined=next(f for f in fields if len(f['bindings'])==2)
-    assert {b['field'] for b in combined['bindings']}=={'招聘负责人入职日期','协助招聘人入职日期'}
+    assert {b['field'] for b in combined['bindings']}=={'招聘负责人人员状态','协助招聘人人员状态'}
 
 
 def test_missing_start_date_does_not_reask_known_recruitment_relationships():

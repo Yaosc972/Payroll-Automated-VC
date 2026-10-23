@@ -6,6 +6,7 @@ Excel helper columns and historical deduction workings remain in source records.
 from decimal import Decimal
 
 from .recruitment_awards import NODES, present as has_value
+from .recruitment_no_payment import installments
 
 
 def columns():
@@ -55,21 +56,33 @@ def columns():
     return result
 
 
-def cells(row):
+def installment_period(node):
+    if node.get('status')=='按规则不发':
+        reasons=list(dict.fromkeys(reason.strip() for text in [node.get('scheduleText',''),*node.get('eligibilityReasons',[])]
+                                   for reason in text.split('；') if reason.strip()))
+        return '不发：'+'；'.join(reasons) if reasons else '按规则不发'
+    period=node.get('scheduledMonth',node.get('dueMonth'))
+    if period:return period
+    if node.get('status') in {'暂缓安排','往期未安排','依据已失效','安排需重新核对'}:return node['status']
+    return '待转正' if node['label']=='转正' and not node.get('dueDate') else '待核对'
+
+
+def cells(row,calculation=None):
     """Do not confuse a missing amount, an unused installment, and calculated zero."""
     v=row['values'];out={c['key']:v.get(c['key'],'') for c in columns()};notes={}
     out['候选人入职时间']=v.get('候选人入职时间') or v.get('入职日期','')
-    recruitment=row['calculation']['recruitment'];cycle=recruitment.get('cycle') or {}
+    calculation=row['calculation'] if calculation is None else calculation
+    recruitment=calculation['recruitment'];cycle=recruitment.get('cycle') or {}
     unused_cycle=recruitment['total']==0 and not cycle
     for key in ('standardDays','exclusionDays','actualDays'):out['recruitment.'+key]=cycle.get(key,'' if unused_cycle else None)
     out['recruitment.difference']=cycle['actualDays']-cycle['standardDays'] if all(cycle.get(k) is not None for k in ('actualDays','standardDays')) else '' if unused_cycle else None
     out['recruitment.channelFactor']=recruitment.get('channelFactor')
     if cycle.get('exempt'):notes['recruitment.actualDays']='已按有效依据免招聘周期考核'
     relation=v.get('推荐人是否直接/间接上级') or v.get('推荐人与候选人上下级关系','')
-    if any('上下级汇报关系' in reason for reason in row['calculation']['referral'].get('reasons',[])):relation='是'
+    if any('上下级汇报关系' in reason for reason in calculation['referral'].get('reasons',[])):relation='是'
     out['referral.relationship']=relation
     for kind,roles in [('recruitment',('招聘负责人','协助招聘人')),('referral',('推荐人',))]:
-        a=row['calculation'][kind]
+        a=calculation[kind]
         out[kind+'.standard']=a.get('standard') if a.get('standard') is not None else '' if a['total']==0 else None
         for role in roles:
             present=role=='招聘负责人' or has_value(v.get(role+'姓名')) or has_value(v.get(role+'工号'))
@@ -78,7 +91,7 @@ def cells(row):
             out[f'{kind}.{role}.allocated']=allocation['allocatedAmount'] if allocation else 0 if a['total']==0 and present else None if present else ''
             for i,label in enumerate(NODES):
                 prefix=f'{kind}.{role}.{i}'
-                nodes=[n for n in a['nodes'] if n['role']==role and n['label']==label]
+                nodes=[n for n in installments(a) if n['role']==role and n['label']==label]
                 if not nodes:
                     out[prefix+'.amount']=None if present and a['total'] is None else ''
                     out[prefix+'.period']=''
@@ -88,8 +101,7 @@ def cells(row):
                 out[prefix+'.amount']=float(sum((Decimal(str(n['amount'])) for n in nodes),Decimal(0))) if len(units)==1 and all(n.get('amount') is not None for n in nodes) else None
                 periods=[];explanations=[]
                 for n in nodes:
-                    period=n.get('scheduledMonth',n.get('dueMonth'))
-                    periods.append(str(period) if period else n.get('status') if n.get('status') in {'按规则不发','暂缓安排','往期未安排','依据已失效','安排需重新核对'} else '待转正' if i==3 and not n.get('dueDate') else '待核对')
+                    periods.append(str(installment_period(n)))
                     explanations.extend(filter(None,[role+'：'+str(n.get('recipientName') or n.get('recipientId') or '待补充'),n.get('amountBasis'),n.get('scheduleText'),*n.get('issues',[])]))
                 out[prefix+'.period']='；'.join(dict.fromkeys(periods))
                 notes[prefix+'.amount']='；'.join(dict.fromkeys([*units,*explanations]))

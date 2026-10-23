@@ -23,11 +23,11 @@ from .recruitment_draft_sources import (
     DATE_FIELDS, DEPRECATED_FIELDS, FIELDS, PARSER_VERSION, date_text, digest, read_source, text,
 )
 from .recruitment_import_validation import (
-    _is_domestic_location, _normalized_region_type, _normalized_special_region_rule, _classify_overseas_country, _normalize_offer_channel, _channel_notes, _channel_note_categories, _confirmed_domestic_scope, offer_validity,
+    _is_domestic_location, _normalized_region_type, _normalized_special_region_rule, _classify_overseas_country, _normalize_offer_channel, _channel_notes, _confirmed_domestic_scope, offer_validity,
 )
 
 ROLE_LABELS={'ledger':'历史/核对台账','roster':'人员花名册','domestic_offer':'国内Offer','overseas_offer':'海外Offer',
-             'supplement':'补充人员','resignation':'离职资料','approval':'审批资料','unknown':'待识别','employment_history':'任职时间线'}
+             'supplement':'补充人员','cumulative':'体系外累计人员','resignation':'离职资料','approval':'审批资料','unknown':'待识别','employment_history':'任职时间线'}
 EDITABLE_FIELDS = (FIELDS - DEPRECATED_FIELDS - {'核算月份','审批状态','是否作废','状态','数据动作','申请单编号'}) | {
     '二次入职执行口径','原始ABC类别','任职说明','招聘负责人入职日期','协助招聘人入职日期','推荐人入职日期',
     '管培生资格依据','周期豁免依据','发薪币种','发薪主体','核算范围','二次入职间隔结论',
@@ -46,14 +46,14 @@ SNAPSHOT_FIELDS={'姓名','工号','证件号','入职日期','候选人入职�
                  '原始ABC类别','原始招聘渠道','奖金地区类型'}
 OFFER_FIELDS={'ABC类别','招聘负责人工号','招聘负责人姓名','协助招聘人工号','协助招聘人姓名',
               '招聘渠道','原始招聘渠道','招聘启动日期','推荐人姓名','推荐人工号'}
-ASSEMBLY_VERSION=34
+ASSEMBLY_VERSION=36
 
 
 @lru_cache(maxsize=64)
 def _parsed_metadata(path, file_stamp):
     """Retain validation metadata, without retaining the full personnel records."""
     parsed=json.loads(Path(path).read_text())
-    result={k:parsed[k] for k in ('contentDigest','parserVersion','beisenSourceMetadata','attachment','sheets') if k in parsed}
+    result={k:parsed[k] for k in ('contentDigest','parserVersion','sourcePurpose','beisenSourceMetadata','attachment','sheets') if k in parsed}
     records=parsed.get('records',[])
     result.update(recordCount=len(records),roles=sorted({r['role'] for r in records}),
                   roleCounts=dict(Counter(r['role'] for r in records)))
@@ -216,9 +216,18 @@ def assemble(month, records, state):
     record_keys,identity_conflicts,old_identity_conflicts=_employment_keys(records,state.get('rows',[]))
     original_sources={s['id'] for s in state['sources'] if 'contentDigest' in s and not s.get('comparisonOnly')}
     current_anchors={(r['ref']['sourceId'],record_keys[id(r)]) for r in records if id(r) in record_keys}
+    cumulative_records=[rec for rec in records if rec['role']=='cumulative']
+    cumulative_saved_aliases=defaultdict(set)
+    if cumulative_records:
+        for old in state.get('rows',[]):
+            for alias in employment_aliases(old['original']):cumulative_saved_aliases[alias].add(old['key'])
+    for rec in cumulative_records:
+        keys={_identity(rec['values'],rec['ref'])}
+        keys.update(key for alias in employment_aliases(rec['values']) for key in cumulative_saved_aliases[alias])
+        current_anchors.update((rec['ref']['sourceId'],key) for key in keys)
     def unavailable_origins(row):
         origins={ref['sourceId'] for field in (*IDENTITY,'入职日期','候选人入职时间')
-                 for ref in row.get('provenance',{}).get(field,[]) if ref.get('role') in {'ledger','supplement','roster'}}
+                 for ref in row.get('provenance',{}).get(field,[]) if ref.get('role') in {'ledger','supplement','roster','cumulative'}}
         return sorted(({ref['sourceId'] for ref in row.get('sources',[])} & unavailable_sources) |
                       {sid for sid in origins & original_sources if (sid,row['key']) not in current_anchors})
     rows={}; offers=defaultdict(list); unusable_offers=defaultdict(list); people=defaultdict(list); resignations=defaultdict(list)
@@ -378,6 +387,67 @@ def assemble(month, records, state):
             if _date(old['values']) and _date(old['values'])[:7].replace('-','')<str(month):row['frozenRecruitmentFacts']=True
             if not any(s['id'] in {r['sourceId'] for r in old['sources']} and s.get('active',True) for s in state['sources']):
                 todo('source_removed','人员来源已停用，核对保留范围',key,row['id'])
+    cumulative_sources={s['id']:s for s in state['sources'] if s.get('purpose')=='external-personnel'}
+    cumulative_counts={sid:{key:set() for key in ('newHires','updatedPeople','unchangedPeople')} for sid in cumulative_sources}
+    for source in cumulative_sources.values():
+        source['cumulativeSummary']={'month':month,'newHires':0,'updatedPeople':0,'unchangedPeople':0,'notApplied':[]}
+    cumulative_edits=defaultdict(dict)
+    for edit in state.get('edits',[]):
+        if edit.get('active',True):cumulative_edits[edit['rowId']][edit['field']]=edit['value']
+    cumulative_aliases=defaultdict(dict);cumulative_people=defaultdict(dict);cumulative_names=defaultdict(dict)
+    def person_aliases(values):
+        return {(field,staff_id(values[field]) if field=='工号' else text(values[field]).lower())
+                for field in IDENTITY if text(values.get(field)) not in {'','-','无','无工号','N/A'}}
+    def index_cumulative(row):
+        facts={**row['original'],**cumulative_edits[row['id']]}
+        for alias in employment_aliases(facts):cumulative_aliases[alias][row['id']]=row
+        for alias in person_aliases(facts):cumulative_people[alias][row['id']]=row
+        cumulative_names[(text(facts.get('姓名')),_date(facts))][row['id']]=row
+    if cumulative_sources:
+        for row in rows.values():index_cumulative(row)
+    for rec in cumulative_records:
+        if rec['ref']['sourceId'] not in current_sources:continue
+        checkpoint()
+        source=cumulative_sources[rec['ref']['sourceId']];summary=source['cumulativeSummary']
+        values=rec['values'];start=_date(values);aliases=employment_aliases(values);person_ids=dict(person_aliases(values))
+        same=list({rid:row for alias in aliases for rid,row in cumulative_aliases[alias].items()}.values())
+        reason='';code=''
+        if not start:
+            code='missing_hire_date';reason='缺少有效入职日期，无法确定本月新增或已有任职'
+        elif date_text(values.get('入职日期')) and date_text(values.get('候选人入职时间')) and date_text(values['入职日期'])!=date_text(values['候选人入职时间']):
+            code='conflicting_hire_dates';reason='两列入职日期不一致，需核对本次任职'
+        elif len(same)>1 or any(any(field in person_ids and person_ids[field]!=value
+                                  for field,value in person_aliases({**row['original'],**cumulative_edits[row['id']]})) for row in same):
+            code='ambiguous_identity';reason='人员编号无法唯一对应同一任职，需核对原件'
+        elif not same and start[:7].replace('-','')!=str(month):
+            code='future_hire' if start[:7].replace('-','')>str(month) else 'past_hire_not_carried'
+            reason='未来入职，本月不新增' if code=='future_hire' else '往月入职且不在已有底稿中，请先核对历史承接'
+        elif (not same and _identity(values,rec['ref']) not in rows and cumulative_names[(text(values.get('姓名')),start)]
+              and (not aliases or any(not person_aliases({**row['original'],**cumulative_edits[row['id']]})
+                                      for row in cumulative_names[(text(values.get('姓名')),start)].values()))):
+            code='ambiguous_identity';reason='已有同名同入职日人员，缺少可核对的人员编号，不自动重复新增'
+        if reason:
+            summary['notApplied'].append({**rec['ref'],'name':text(values.get('姓名')),'hireDate':start,'code':code,'reason':reason})
+            continue
+        key=record_keys.get(id(rec),_identity(values,rec['ref']))
+        row=same[0] if same else rows.get(key)
+        if row is None:
+            row=row_for(rec)
+            previous=list({rid:old for alias in person_ids.items() for rid,old in cumulative_people[alias].items() if _date(old['original'])!=start}.values())
+            if previous:row['employmentCandidates']=[{'rowId':r['id'],'hireDate':_date(r['original']),'source':r['sources'][0]} for r in previous]
+        historical=bool(row.get('frozenRecruitmentFacts') or row['history'] or start[:7].replace('-','')<str(month))
+        if historical:
+            monthly={field for field in MONTHLY_FIELDS if date_text(values.get(field))[:7].replace('-','')==str(month)}
+            apply(row,rec,set(values)-monthly,observe_only=True)
+            apply(row,rec,monthly)
+            cumulative_counts[source['id']]['updatedPeople' if monthly else 'unchangedPeople'].add(row['id'])
+        else:
+            apply(row,rec)
+            cumulative_counts[source['id']]['newHires'].add(row['id'])
+            eligible_intake.add(row['key'])
+        index_cumulative(row)
+    for sid,counts in cumulative_counts.items():
+        cumulative_sources[sid]['cumulativeSummary'].update({key:len(value) for key,value in counts.items()})
     for row in rows.values():
         checkpoint()
         if row.get('unavailableSourceIds'):
@@ -596,14 +666,8 @@ def assemble(month, records, state):
         if raw_channel=='其他':
             v['招聘渠道']=normalized_channel
             v['渠道待核']=channel_unknown
-            categories=_channel_note_categories(notes)
-            detail,unknown=_normalize_offer_channel('其他',v.get('其他渠道'))
-            if not unknown:categories.add(detail)
-            if len(categories)>1:
-                row['conflicts'].append({'field':'招聘渠道','values':sorted(categories),
-                    'sourceId':note_refs[-1]['sourceId'] if note_refs else '', 'reason':'渠道说明及备注不一致'})
             row['channelResolution']={'original':'其他','channel':normalized_channel,'resolved':not channel_unknown,
-                'sources':note_refs,'description':'按已导入的渠道说明及备注识别' if not channel_unknown else '渠道说明及备注不一致' if len(categories)>1 else '现有说明及备注仍无法唯一确定渠道'}
+                'sources':note_refs,'description':'按招聘渠道字段核算；备注保留供查阅，不改判渠道'}
         # Recipient facts keep original roster status and employment start, separately from the candidate.
         row['recipientSourceRegions']={};row['recipientEmploymentEvidence']={}
         for id_field,prefix,name_field,status_field in ROLE_FIELDS:
@@ -856,7 +920,8 @@ class DraftStore:
                                              (source.get('parserVersion')!=PARSER_VERSION or not source.get('syncCoverage') or
                                               before.get('contentDigest')!=source['contentDigest']))
                     if (parsed.get('contentDigest')!=source['contentDigest'] or
-                        parsed.get('parserVersion',source.get('parserVersion'))!=PARSER_VERSION or source.get('sourceCacheError') or missing_beisen_metadata):
+                        parsed.get('parserVersion',source.get('parserVersion'))!=PARSER_VERSION or
+                        parsed.get('sourcePurpose','')!=source.get('purpose','') or source.get('sourceCacheError') or missing_beisen_metadata):
                         self._parse_source(folder,source)
                         changed=True
                     else:
@@ -876,11 +941,14 @@ class DraftStore:
         if revision!=state['revision']: raise DraftConflict('底稿已更新，请刷新后查看最新内容再修改；本次修改尚未保存。')
 
     def _write(self,path,value):
+        self._write_json(path,json.dumps(value,ensure_ascii=False,separators=(',',':'),allow_nan=False))
+
+    def _write_json(self,path,content):
         path.parent.mkdir(parents=True,exist_ok=True)
         temp=path.with_name(path.name+'.'+uuid4().hex+'.tmp')
         try:
             with temp.open('w',encoding='utf-8') as out:
-                json.dump(value,out,ensure_ascii=False,separators=(',',':'),allow_nan=False)
+                out.write(content)
                 out.flush(); os.fsync(out.fileno())
             os.replace(temp,path)
         finally:
@@ -888,9 +956,6 @@ class DraftStore:
 
     def _save(self,folder,state,*,recalculate=True):
         checkpoint()
-        if recalculate:
-            from .recruitment_external_results import attach_rows
-            attach_rows(state)
         state['revision']+=1; state['updatedAt']=recruitment_now().isoformat(timespec='seconds')
         if recalculate:
             from .recruitment_awards import calculate_draft
@@ -900,16 +965,17 @@ class DraftStore:
             # these identical rows and decisions. Do not reorder their todos.
             state['calculation']['draftRevision']=state['revision']
         persisted={k:v for k,v in state.items() if k!='referenceFacts'}
+        content=json.dumps(persisted,ensure_ascii=False,separators=(',',':'),allow_nan=False)
         checkpoint()
         # Once commit starts, finish both files before observing a stop request.
-        self._write(folder/'revisions'/f"{state['revision']}.json",persisted)
-        self._write(folder/'draft.json',persisted)
+        self._write_json(folder/'revisions'/f"{state['revision']}.json",content)
+        self._write_json(folder/'draft.json',content)
         return state
 
-    def _rebuild(self,folder,state,*,digests_current=False):
+    def _rebuild(self,folder,state,*,digests_current=False,owned=False):
         checkpoint()
         if not digests_current:self._source_digests(folder,state)
-        state=deepcopy(state)
+        if not owned:state=deepcopy(state)
         state['rows']=[r for r in state['rows'] if not r.get('externalOnly')]
         records=[]
         for source in state['sources']:
@@ -986,7 +1052,8 @@ class DraftStore:
                 'syncCoverage','validOfferIds','offerResponseIds','requestedJobNumbers','requestedRecipientJobNumbers',
                 'scopeJobNumbers','scopeRecipientJobNumbers','syncWarnings','channelDetailsCheckedOfferIds','channelChecks')}
         else:
-            parsed=read_source(folder/'sources'/source['storedName'],source['id'])
+            options={'personnel_only':True} if source.get('purpose')=='external-personnel' else {}
+            parsed=read_source(folder/'sources'/source['storedName'],source['id'],**options)
         source.update(attachment=parsed['attachment'],sheets=parsed['sheets'],recordCount=len(parsed['records']),
                       roles=sorted({r['role'] for r in parsed['records']}),roleCounts=dict(Counter(r['role'] for r in parsed['records'])),
                       parserVersion=PARSER_VERSION)
@@ -995,6 +1062,7 @@ class DraftStore:
             raise ValueError('原始文件在读取时发生变化，请重新读取后核对')
         parsed['contentDigest']=content_digest
         parsed['parserVersion']=PARSER_VERSION
+        parsed['sourcePurpose']=source.get('purpose','')
         source.update(contentDigest=content_digest,parsedContentDigest=content_digest)
         if source.pop('sourceCacheError',False):source.pop('error',None)
         self._write(folder/'parsed'/f"{source['id']}.json",parsed)
@@ -1045,7 +1113,9 @@ class DraftStore:
                 return self._save(folder,self._rebuild(folder,state) if changed else state)
             return state
 
-    def ingest(self,month,files,revision,period_confirmed=False,comparison_only=False):
+    def ingest(self,month,files,revision,period_confirmed=False,comparison_only=False,purpose=''):
+        if purpose not in {'','external-personnel'}:raise ValueError('不支持的资料用途')
+        if purpose and comparison_only:raise ValueError('累计人员资料不能同时作为线下核对表')
         with self._lock(month) as folder:
             state=self.read(month); self._check(state,revision)
             changed=bool(state['revision'] and state.get('assemblyVersion')!=ASSEMBLY_VERSION)
@@ -1054,10 +1124,12 @@ class DraftStore:
             for name,content in files:
                 name=Path(name).name; suffix=Path(name).suffix.lower()
                 if suffix not in {'.xlsx','.xlsm','.xls','.pdf','.png','.jpg','.jpeg'}: raise ValueError('请上传Excel、PDF或图片资料')
+                if purpose=='external-personnel' and suffix not in {'.xlsx','.xlsm','.xls'}:raise ValueError('体系外累计资料请上传Excel人员表')
                 if len(content)>80*1024*1024: raise ValueError('单份文件不能超过80MB')
                 sid=hashlib.sha256(content).hexdigest()
-                existing=next((s for s in state['sources'] if s['id']==sid),None)
+                existing=next((s for s in state['sources'] if s['id']==sid or s.get('contentDigest')==sid),None)
                 if existing:
+                    if existing.get('purpose','')!=purpose:raise ValueError('相同文件已按其他用途导入，请使用对应入口核对，不能重复改变资料用途')
                     if existing.get('forMonth')!=month:
                         existing['forMonth']=month; changed=True
                     if existing.get('parserVersion')!=PARSER_VERSION and not existing.get('error'):
@@ -1067,6 +1139,7 @@ class DraftStore:
                 with path.open('wb') as dest:
                     dest.write(content); dest.flush(); os.fsync(dest.fileno())
                 source={'id':sid,'name':name,'storedName':path.name,'active':True,'bytes':len(content),'forMonth':month,'addedAt':recruitment_now().isoformat(timespec='seconds'),'comparisonOnly':comparison_only}
+                if purpose:source['purpose']=purpose
                 try:
                     self._parse_source(folder,source)
                     if state.get('strictInputs') and 'ledger' in source.get('roles',[]):
@@ -1217,7 +1290,9 @@ class DraftStore:
             state['redoOperations']=[]
             state['operations'][-1]['referenceFacts']=[deepcopy(e['referenceFact']) for e in change['edits'] if e.get('referenceFact')]
             state['operations'][-1]['employmentSelections']=[deepcopy(e['employmentBasis']) for e in change['edits'] if e.get('employmentBasis')]
-        return state if validate_only else self._rebuild(folder,state)
+        # This method already mutates its caller-owned state. Preview supplies
+        # an isolated copy; duplicating every row again adds no isolation.
+        return state if validate_only else self._rebuild(folder,state,owned=True)
 
     def change(self,month,revision,change):
         with self._lock(month) as folder:

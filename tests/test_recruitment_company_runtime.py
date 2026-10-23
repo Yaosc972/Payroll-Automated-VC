@@ -14,6 +14,10 @@ from test_recruitment_monthly_sync import payloads, MONTH
 
 @pytest.mark.parametrize(('method', 'url'), [
     ('GET', '/api/recruitment/activities'),
+    ('GET', '/api/recruitment/drafts/202609/external-personnel/template'),
+    ('POST', '/api/recruitment/drafts/202609/sources'),
+    ('GET', '/api/recruitment/activities/' + 'a'*32 + '/api/recruitment/drafts/202609/external-personnel/template'),
+    ('POST', '/api/recruitment/activities/' + 'a'*32 + '/api/recruitment/drafts/202609/sources'),
     ('POST', '/api/recruitment/activities'),
     ('GET', '/api/recruitment/activities/snapshot-library/202608'),
     ('POST', '/api/recruitment/activities/snapshot-library/202608/refresh'),

@@ -96,6 +96,9 @@ def test_existing_unknown_channel_is_classification_work_without_raw_reentry(raw
     row['channelResolution']={'original':'其他','resolved':False,'sources':[{'value':'中介公司'}]}
     state=state_for(row,[{'id':'channel','kind':'channel','title':'核对其他招聘渠道','rowIds':[row['id']],'sourceIds':[]}])
     groups=work_items(state,project(state))
+    if raw=='其他':
+        assert not any(g['key']=='channel_policy' for g in groups)
+        return
     group=next(g for g in groups if g['key']=='channel_policy')
     assert group['ruleMaintenance']
     assert [f['field'] for f in detail(state,group)['fields']]==['招聘渠道']
@@ -147,7 +150,7 @@ def test_recipient_grade_and_position_source_values_are_retained_and_nonblocking
     row=next(r for r in state['rows'] if r['values']['姓名']=='甲')
     assert {'推荐人职级','推荐人职位'} <= set(row['unresolvedFields'])
     assert row['calculation']['referral']['total']==400
-    assert not row['calculation']['referral']['issues']
+    assert '推荐人岗位与职级待核' in row['calculation']['referral']['issues']
     assert not any(t['kind']=='recipient' and row['id'] in t['rowIds'] for scope in ('current','history') for t in project(state)[scope])
 
 

@@ -62,7 +62,7 @@ ALIASES = {
     '二次入职专项口径依据': [], '旧特殊规则依据': [],
     '推荐人与候选人上下级关系': [], '推荐人是否直接/间接上级': [], '推荐人转正日期': [],
 }
-PARSER_VERSION = 16
+PARSER_VERSION = 18
 DATE_FIELDS = {'入职日期','候选人入职时间','转正日期','最后工作日','招聘启动日期','原计划入职日期','计划入职日期','上次离职日期',
                '招聘负责人入职日期','招聘负责人最后工作日','协助招聘人入职日期','协助招聘人最后工作日','推荐人入职日期','推荐人最后工作日','推荐人转正日期'}
 FIELDS = set(STANDARD_IMPORT_HEADERS) | set(ALIASES) | DATE_FIELDS
@@ -208,7 +208,7 @@ def _sheets(archive):
         yield sheet.attrib.get('name',''), path
 
 
-def _sheet_records(archive, path, shared, name, source_id):
+def _sheet_records(archive, path, shared, name, source_id, *, personnel_only=False):
     buffered, records = [], []
     headers = None
     role = 'unknown'
@@ -237,6 +237,11 @@ def _sheet_records(archive, path, shared, name, source_id):
         base=buffered[index][1]
         headers={col:canonical_header(v) for col,v in base.items() if text(v)}
         role=classify(headers.values(),name)
+        if personnel_only:
+            names=set(headers.values())
+            identity_fields={'姓名','工号','证件号','体系外人员编号','海外offer流程编号'}
+            person_headers={h for field in identity_fields for h in [field]+ALIASES.get(field,[])}
+            role='cumulative' if names & person_headers else 'unknown'
         full_headers=dict(headers)
         start=index+1
         # The actual historical template has a second header row for award nodes.
@@ -277,19 +282,19 @@ def _sheet_records(archive, path, shared, name, source_id):
     return {'name':name,'role':role,'recordCount':len(records)},records
 
 
-def read_source(path: Path, source_id: str, *, content: bytes | None = None):
+def read_source(path: Path, source_id: str, *, content: bytes | None = None, personnel_only=False):
     if path.suffix.lower()=='.xls':
         with tempfile.TemporaryDirectory() as tmp:
             if content is not None:
                 path=Path(tmp)/path.name
                 path.write_bytes(content)
-            return read_source(_convert_xls_to_xlsx(path,Path(tmp)),source_id)
+            return read_source(_convert_xls_to_xlsx(path,Path(tmp)),source_id,personnel_only=personnel_only)
     if path.suffix.lower() in {'.pdf','.png','.jpg','.jpeg'}:
         return {'sheets':[], 'records':[], 'attachment':True}
     result={'sheets':[],'records':[],'attachment':False}
     with zipfile.ZipFile(BytesIO(content) if content is not None else path) as archive:
         shared=_read_shared_strings(archive)
         for name,sheet_path in _sheets(archive):
-            meta,records=_sheet_records(archive,sheet_path,shared,name,source_id)
+            meta,records=_sheet_records(archive,sheet_path,shared,name,source_id,personnel_only=personnel_only)
             result['sheets'].append(meta); result['records'].extend(records)
     return result

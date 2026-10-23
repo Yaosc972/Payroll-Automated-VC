@@ -10,6 +10,8 @@ from openpyxl.utils import get_column_letter
 from .recruitment_awards import ensure_calculated, money, NODES
 from .recruitment_attention import project, named_month
 from .recruitment_draft_sources import date_text
+from .recruitment_detail_table import installment_period
+from .recruitment_no_payment import calculations as display_calculations, installments
 
 
 BASE_GROUPS = [
@@ -60,14 +62,15 @@ def columns():
     return out
 
 
-def worksheet(state):
+def worksheet(state,*,calculations=None):
     ensure_calculated(state)
+    if calculations is None:calculations=display_calculations(state)
     names={s['id']:s['name'] for s in state['sources']}
     sources={s['id']:s for s in state['sources']}
     reference_columns={}
     result=[]
     for row in state['rows']:
-        v=row['values'];a=row['calculation'];cells=dict(v)
+        v=row['values'];a=calculations[row['id']];cells=dict(v)
         cells.update(rule=row['rule']['label'],currency=a['recruitment']['currency'],payment='未核实',history=f"{len(row['history'])} 份台账原记录" if row['history'] else '无历史台账',source='；'.join(dict.fromkeys(names.get(r['sourceId'],'人工补充') for r in row['sources'])))
         for k,value in (a['recruitment']['cycle'] or {}).items(): cells['cycle.'+k]=value
         cells['channelFactor']=a['recruitment']['channelFactor']
@@ -80,11 +83,11 @@ def worksheet(state):
                 for key in ('allocatedAmount','scheduledAmount','roundingDifference'):
                     cells[f'{kind}.{allocation["role"]}.{key}']=allocation[key]
             reasons.extend(title+'：'+s for s in award['issues'])
-            for node in award['nodes']:
+            for node in installments(award):
                 if node.get('adjustmentId') or node.get('externalResultId'):continue
                 index=NODES.index(node['label'])
                 for key in ('amount','dueDate','scheduledMonth'):
-                    cells[f'{kind}.{node["role"]}.{index}.{key}']=node.get(key,node['dueMonth'] if key=='scheduledMonth' else '')
+                    cells[f'{kind}.{node["role"]}.{index}.{key}']=installment_period(node) if key=='scheduledMonth' else node.get(key,'')
             for cancelled in award.get('cancelledBalances',[]):cells[f'{kind}.{cancelled["role"]}.cancelledBalance']=cancelled['amount']
         cells['issues']='；'.join(dict.fromkeys(reasons))
         histories=[h for h in row['history'] if sources.get(h['ref']['sourceId'],{}).get('active',True)]
@@ -181,7 +184,7 @@ def export_results(state):
         for kind,title in [('recruitment','招聘奖金'),('referral','内推奖金')]:
             for n in row['calculation'][kind]['nodes']:
                 if n.get('scheduledMonth',n['dueMonth'])==state['month']:continue
-                pending.append([n['timing'],row['values'].get('姓名'),row['values'].get('工号'),row['values'].get('入职日期'),title+' · '+n['label'],'；'.join(n['issues']),'',n['recipientName'] or n['recipientId'],n['dueDate'],n['amount'],n['currency'],'未核实'])
+                pending.append([n['timing'],row['values'].get('姓名'),row['values'].get('工号'),row['values'].get('入职日期'),title+' · '+n['label'],'；'.join(dict.fromkeys([*n['issues'],*n.get('eligibilityReasons',[]),n.get('scheduleText','')])).strip('；'),'',n['recipientName'] or n['recipientId'],n['dueDate'],n['amount'],n['currency'],'未核实'])
     sheet('未结与异常',['范围','姓名','工号','入职日期','待处理事项','具体原因','相关资料','领取人','规则到期日','节点试算金额','标准币种','实际支付'],pending)
     names={s['id']:s['name'] for s in state['sources']};ops={o['id'] for o in state.get('operations',[]) if o['active']}
     evidence=[]

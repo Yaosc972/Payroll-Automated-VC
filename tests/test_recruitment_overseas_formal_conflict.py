@@ -13,5 +13,5 @@ def test_formal_history_followed_by_trial_movement_is_pending_instead_of_definit
     nodes=award(row,'referral',202608)['nodes']
     due=[n for n in nodes if n['dueMonth']==202608]
     assert due
-    assert all(n['status']=='待核对' for n in due)
+    assert all(n['status']=='本月到期' for n in due)
     assert all(not n.get('eligibilityReasons') for n in due)

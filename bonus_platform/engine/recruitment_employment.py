@@ -208,10 +208,10 @@ def _referrer_translations(history, histories):
 
 
 def referrer_qualification(row, dates):
-    """Supply missing role facts only when every business date proves the same pair."""
+    """Resolve qualification at candidate hire, keeping explicit corrections intact."""
     fields={'推荐人职级':'OIdJobLevelText','推荐人职位':'OIdJobPositionText'}
-    values=row['values'];missing={f for f in fields if referrer_fact_missing(values.get(f))}
-    if not missing or not dates or not all(dates):return []
+    values=row['values']
+    if not dates or not all(dates):return []
     protected={e['field'] for e in row.get('edits',[]) if e.get('active',True)}
     protected.update(row.get('unresolvedFields',[]))
     protected.update(c['field'] for c in row.get('conflicts',[]))
@@ -243,7 +243,6 @@ def referrer_qualification(row, dates):
         if len(day_pairs)!=1 or len(identities)!=1:return []
         pair=next(iter(day_pairs));pairs.add(pair)
         qualification=dict(zip(fields,pair))
-        if any(f not in missing and text(values.get(f))!=qualification[f] for f in fields):return []
         basis.append({'at':day,'values':qualification,'sources':sources})
     return basis if len(pairs)==1 else []
 

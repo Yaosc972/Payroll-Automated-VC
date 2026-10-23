@@ -109,9 +109,9 @@ def test_empty_api_response_remains_gap_and_next_prepare_tries_once(tmp_path,mon
 
 
 @pytest.mark.parametrize('description,explicit,expected,conflict',[
-    ('内部推荐 工号 zt123 推荐人甲','','zt123',False),
-    ('内部推荐 zt123 或 zt456','','',True),
-    ('内部推荐 工号 zt123 推荐人甲','zt456','zt456',True),
+    ('内部推荐 工号 zt123 推荐人甲','','',False),
+    ('内部推荐 zt123 或 zt456','','',False),
+    ('内部推荐 工号 zt123 推荐人甲','zt456','zt456',False),
 ])
 def test_embedded_referrer_uses_unique_evidence_and_preserves_conflict(tmp_path,description,explicit,expected,conflict):
     result=DraftStore(tmp_path).ingest(202607,[('roster.xlsx',book(['姓名','工号','入职日期','人员状态','人员来源','offer流程编号'],[['甲','ov1','2026-07-01','正式','OEHR入职','OF1']])),('offer.xlsx',book(OVERSEAS+['推荐人工号'],[['OF1','R1','A','ov9','其他',description,'2026-06-01','已入职',explicit]]))],0)

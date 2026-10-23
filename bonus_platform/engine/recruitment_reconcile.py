@@ -159,7 +159,10 @@ def monthly_comparison(saved,reference,source):
     labels={'amount':'金额','period':'月份','currency':'币种','recipient':'领取人','role':'角色分配','eligibility':'资格'}
     def dim(status,reason):return {'status':status,'reason':reason}
     def eligibility(a,node):
-        reasons=list(dict.fromkeys((a or {}).get('issues',[])+(a or {}).get('reasons',[])+(node or {}).get('eligibilityReasons',[])+(node or {}).get('issues',[])))
+        # Positive awards carry rule explanations in reasons; only a zero
+        # award uses those reasons to explain an eligibility exclusion.
+        exclusion=(a or {}).get('reasons',[]) if (a or {}).get('total')==0 and not (a or {}).get('historyRetained') else []
+        reasons=list(dict.fromkeys((a or {}).get('issues',[])+exclusion+(node or {}).get('eligibilityReasons',[])+(node or {}).get('issues',[])))
         if node and node.get('status') in {'按规则不发','安排需重新核对','依据已失效'} and node.get('scheduleText'):reasons.append(node['scheduleText'])
         if (a or {}).get('approvalDecision'):reasons.append('已采用审批不发决定')
         return dim('blocked','；'.join(dict.fromkeys(reasons))) if reasons else dim('unknown','金额及安排一致不代表资格或实际支付已经核实')

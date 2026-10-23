@@ -15,17 +15,17 @@ from .models import add_months, as_date, yyyymm
 from .recruitment_draft_sources import text, digest
 from .recruitment_import_validation import (
     _normalize_offer_channel, _channel_notes, _domestic_holiday_exclusion_days, DOMESTIC_HOLIDAY_RANGES,
-    _classify_overseas_country, _is_domestic_location,
+    _classify_overseas_country, _is_domestic_location, _is_uk_location,
 )
 
 RULE_BYTES = Path(__file__).with_name('recruitment_rules.json').read_bytes()
 CATALOG = json.loads(RULE_BYTES)
 RULE_HASH = hashlib.sha256(RULE_BYTES).hexdigest()
-ENGINE_VERSION = '4.22'
+ENGINE_VERSION = '4.25'
 NODES = ('入职满一个月', '入职满三个月', '入职满六个月', '转正')
 EUROPE = ('德国','捷克','英国','法国','荷兰','意大利','西班牙','葡萄牙','奥地利','瑞士','比利时',
           '卢森堡','丹麦','瑞典','挪威','芬兰','爱尔兰','波兰','匈牙利','罗马尼亚','germany','czech',
-          'united kingdom','france','netherlands','italy','spain','poland','belgium','europe')
+          'united kingdom','england','france','netherlands','italy','spain','poland','belgium','europe')
 NO_RECRUIT = {'猎头','猎头推荐','猎头推荐入职','外包转正式','体系外转体系内','人员调动',
               '跨主体调动','跨体系调动','内部调动','体系内调动','调动'}
 FULL_CHANNELS = {'招聘网站','网站招聘','社招','社会招聘','自主招聘','自主开发','广告','招聘会','直接招聘'}
@@ -62,7 +62,7 @@ def country_currency(values):
         return '人民币', '中国大陆'
     org = ' '.join(text(values.get(f)) for f in ('二级组织','三级组织','四级组织','五级组织'))
     adopted = org if _classify_overseas_country(org) else text(values.get('工作地'))
-    if any(token in adopted.lower() for token in EUROPE):
+    if _is_uk_location(adopted) or any(token in adopted.lower() for token in EUROPE):
         return '欧元', adopted
     if _classify_overseas_country(adopted):
         return '美元', adopted
@@ -116,6 +116,17 @@ def observed_values(row, field, *, include_empty=False):
     values=[row['values'].get(field)]
     values.extend(value for c in row.get('conflicts',[]) if c['field']==field for value in c['values'])
     return list(dict.fromkeys(v for v in values if include_empty or present(v)))
+
+
+def recipient_conflict_fields(row, prefix):
+    fields=set(row.get('unresolvedFields',[])) & {prefix+'工号',prefix+'人员状态',prefix+'最后工作日'}
+    status=prefix+'人员状态'
+    choices=observed_values(row,status,include_empty=True)
+    # Probation and regular employment have the same recipient eligibility.
+    # Keep the source conflict itself, and retain unknown or departed choices.
+    if len(choices)>1 and all(text(v) in {'正式','正式在职','试用','试用在职','在职'} for v in choices):
+        fields.discard(status)
+    return fields
 
 
 def uses_previous_exit(row):
@@ -258,6 +269,7 @@ def rehire_basis(values, version):
 
 def channel(values, version):
     raw=text(values.get('招聘渠道'))
+    if raw=='其他':return 0,[],'其他'
     normalized, uncertain=_normalize_offer_channel(raw, values.get('其他渠道'), _channel_notes(values))
     value=normalized or raw
     rehire=raw in {'二次入职','返聘'} or value in {'二次入职','返聘'} or values.get('是否二次入职')=='是'
@@ -274,8 +286,7 @@ def channel(values, version):
                 return None,['二次入职专项条款执行依据待核'],'二次入职'
             return (0 if choice=='不发招聘奖金' else .4),[],'二次入职'
         factor=0 if hire<=add_months(previous,12) else .4
-        issues=[] if values.get('二次入职专项口径依据') or rehire_basis(values,version) else ['二次入职专项条款执行依据待核']
-        return factor,issues,'二次入职'
+        return factor,[],'二次入职'
     if raw in NO_RECRUIT or value in NO_RECRUIT: return 0,[],value
     if value in {'内推','校招'}: return .4,[],value
     if raw in FULL_CHANNELS or value in FULL_CHANNELS or (raw=='其他' and text(values.get('其他渠道')) in {'招聘广告','广告','招聘会','网站'}): return 1,[],value
@@ -304,7 +315,7 @@ def status_at(values, prefix, at, formal=False, *, offline=False):
     status=text(values.get(prefix+'人员状态') if prefix else values.get('人员状态'))
     if not at: return '任职日期待核'
     if (entry and entry>at) or (last and last<at): return '适用日期已不在职'
-    if not entry and not offline: return '任职日期待核'
+    if not entry and not prefix and not offline: return '任职日期待核'
     if status in {'待入职','未入职'}: return '适用日期在职状态待核'
     if formal:
         probation=as_date(values.get(prefix+'转正日期'))
@@ -330,11 +341,16 @@ def award(row, kind, month, *, evaluate_employment=True, cutoff_policy=None):
         from .recruitment_employment import referrer_fact_missing, referrer_qualification
         v={**v,**{field:'' for field in ('推荐人职级','推荐人职位') if referrer_fact_missing(v.get(field))}}
         if standard:
-            from .recruitment_special import evaluation_date
-            due_dates=[node_due_date(v,i) for i,ratio in enumerate(standard['ratios']) if ratio]
-            dates=[evaluation_date(cutoff_policy,kind,due,month) for due in due_dates if due and yyyymm(due)<=month]
-            qualification_basis=referrer_qualification(row,dates)
+            hire=as_date(v.get('入职日期') or v.get('候选人入职时间'))
+            qualification_basis=referrer_qualification(row,[hire] if hire else [])
             if qualification_basis:v={**v,**qualification_basis[0]['values']}
+            elif not row.get('frozenRecruitmentFacts'):
+                reviewed={e['field'] for e in row.get('edits',[]) if e.get('active',True)}
+                for field in ('推荐人职级','推荐人职位'):
+                    refs=row.get('provenance',{}).get(field,[])
+                    if refs and all(p.get('role')=='roster' for p in refs) and field not in reviewed:
+                        # An undated current roster cannot prove the role at hire.
+                        v[field]=''
     currency, country=country_currency(v)
     issues=[]; reasons=[]; total=None; cycle_info=None; channel_factor=None
     conflict_fields=material_conflicts(row,kind)
@@ -365,8 +381,8 @@ def award(row, kind, month, *, evaluate_employment=True, cutoff_policy=None):
         ref_level=grade_level(v.get('推荐人职级'))
         position=text(v.get('推荐人职位'))
         hierarchy={text(v.get(f)).lower() for f in ('直线经理工号','直接上级工号','间接上级1工号','间接上级2工号','间接上级3工号','间接上级4工号') if present(v.get(f))}
-        excluded=(v.get('招聘渠道') in NO_RECRUIT-{'猎头','猎头推荐','猎头推荐入职'} or v.get('招聘渠道') in {'二次入职','返聘'} or v.get('是否二次入职')=='是')
-        if excluded: total=0; reasons.append('二次入职、调动或外包转正式不享受内推奖金')
+        excluded=(v.get('招聘渠道') in NO_RECRUIT-{'猎头','猎头推荐','猎头推荐入职'} or v.get('招聘渠道') in {'其他','二次入职','返聘'} or v.get('是否二次入职')=='是')
+        if excluded: total=0; reasons.append('该招聘渠道不享受内推奖金' if v.get('招聘渠道')=='其他' else '二次入职、调动或外包转正式不享受内推奖金')
         elif ref and referrer_role_exclusion(v) is True:
             total=0; reasons.append('推荐人岗位或职级不符合资格')
         elif ref and (text(v.get('推荐人工号')).lower() in hierarchy or v.get('推荐人是否直接/间接上级')=='是' or v.get('推荐人与候选人上下级关系')=='是'):
@@ -424,17 +440,16 @@ def award(row, kind, month, *, evaluate_employment=True, cutoff_policy=None):
                 due_month=yyyymm(due)
                 node_issues=list(result['issues']);ineligible=[]
                 prefix_id='招聘负责人工号' if role=='招聘负责人' else '协助招聘人工号' if role=='协助招聘人' else '推荐人工号'
-                for field in (prefix_id,prefix+'人员状态',prefix+'入职日期',prefix+'最后工作日'):
-                    if field in row.get('unresolvedFields',[]): node_issues.append('领取人资料冲突')
+                if recipient_conflict_fields(row,prefix): node_issues.append('领取人资料冲突')
                 phase='未到期' if due_month and due_month>month else '本月到期' if due_month==month else '往期待核' if due_month else '待转正'
                 if due_month and due_month<=month:
                     from .recruitment_special import evaluation_date
                     at=evaluation_date(cutoff_policy,kind,due,month)
-                    for who,p,formal in [('候选人','',False),(role,prefix,kind=='referral')]:
+                    for who,p,formal in [('候选人','',False),(role,prefix,False)]:
                         from .recruitment_employment import status_from_timeline
                         problem=status_from_timeline(row,p,at,formal)
                         if problem is None:problem=status_at(v,p,at,formal,offline=bool(p and offline_basis))
-                        contested=bool({p+f for f in ('入职日期','人员状态','最后工作日','转正日期')} & set(row.get('unresolvedFields',[])))
+                        contested=bool(recipient_conflict_fields(row,p) if p else {'入职日期','人员状态','最后工作日','转正日期'} & set(row.get('unresolvedFields',[])))
                         if problem in {'适用日期已不在职','适用日期尚未转正'} and not contested:ineligible.append(who+'：'+problem)
                         elif problem: node_issues.append(who+'：'+problem)
                 result['nodes'].append({'id':digest(row['id']+'|'+kind+'|'+role+'|'+str(i)), 'rowId':row['id'],
@@ -459,11 +474,11 @@ def award(row, kind, month, *, evaluate_employment=True, cutoff_policy=None):
     return result
 
 
-def calculate_base(state,row):
+def calculate_base(state,row,*,evaluate_employment=True):
     from .recruitment_special import cutoff, apply_special
     result={'ruleVersion':row['rule']['version'],'ruleHash':RULE_HASH,
-            'recruitment':award(row,'recruitment',state['month'],cutoff_policy=cutoff(state,'recruitment')),
-            'referral':award(row,'referral',state['month'],cutoff_policy=cutoff(state,'referral'))}
+            'recruitment':award(row,'recruitment',state['month'],evaluate_employment=evaluate_employment,cutoff_policy=cutoff(state,'recruitment')),
+            'referral':award(row,'referral',state['month'],evaluate_employment=evaluate_employment,cutoff_policy=cutoff(state,'referral'))}
     if state.get('settlement') or state.get('confirmedInstallments'):
         from .recruitment_settlement import apply_settlement
         apply_settlement(state,row,result)

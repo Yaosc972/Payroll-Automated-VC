@@ -157,15 +157,16 @@ def test_stop_during_commit_finishes_revision_pair_before_acknowledging(tmp_path
     state['calculation']['engineVersion'] = -1
     store._write(store._folder(MONTH) / 'draft.json', state)
     entered, release = Event(), Event()
-    write = store._write
+    write = store._write_json
 
-    def gated(path, value):
-        write(path, value)
+    def gated(path, content):
+        write(path, content)
+        value = json.loads(content)
         if path.parent.name == 'revisions' and value['revision'] == state['revision'] + 1:
             entered.set()
             assert release.wait(5)
 
-    monkeypatch.setattr(store, '_write', gated)
+    monkeypatch.setattr(store, '_write_json', gated)
     job = jobs.start(store, MONTH, state['revision'])
     assert entered.wait(3)
     try:

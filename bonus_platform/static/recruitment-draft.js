@@ -76,18 +76,18 @@
     try{adopt(await request(base()+"/sync-domestic",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({revision:ui.data.revision})}));status("国内资料已同步并重新核算；快照已保存在资料中");}
     catch(err){status(err.message,true);}finally{busy(false);}
   }
-  async function upload(files,comparisonOnly=false){
+  async function upload(files,comparisonOnly=false,purpose=''){
     if(ui.busy||!files.length||!ui.data)return;
     if(ui.data.activity?.archived){status('活动已归档，请先在活动列表恢复后再导入资料。',true);return;}
     busy(true);status(`正在整理 ${files.length} 份资料并试算`);
     try{
-      const periods=files.filter(f=>/奖金.*(?:核算|明细|台账)|(?:招聘|内推).*台账/.test(f.name)&&!/offer/i.test(f.name)).flatMap(f=>[...f.name.matchAll(/(?<!\d)(20\d{2})[年._-]?(0?[1-9]|1[0-2])月?(?!\d)/g)].map(m=>Number(m[1])*100+Number(m[2])));
+      const periods=purpose?[]:files.filter(f=>/奖金.*(?:核算|明细|台账)|(?:招聘|内推).*台账/.test(f.name)&&!/offer/i.test(f.name)).flatMap(f=>[...f.name.matchAll(/(?<!\d)(20\d{2})[年._-]?(0?[1-9]|1[0-2])月?(?!\d)/g)].map(m=>Number(m[1])*100+Number(m[2])));
       const inferred=periods.length?Math.max(...periods):null;
       let target=ui.data;
       if(!ui.monthExplicit&&!target.revision&&inferred&&inferred!==target.month)target=await request(apiMonth(inferred));
       // Finish carry-forward and preparation for the actual upload month.
       target=await window.RecruitmentFlow?.beforeUpload?.(target,apiMonth(target.month))||target;
-      const form=new FormData();form.append("comparisonOnly",String(comparisonOnly));form.append("revision",target.revision);form.append("periodConfirmed",String(ui.monthExplicit));for(const file of files)form.append("files",file);
+      const form=new FormData();form.append("comparisonOnly",String(comparisonOnly));form.append("revision",target.revision);form.append("periodConfirmed",String(ui.monthExplicit));if(purpose)form.append("purpose",purpose);for(const file of files)form.append("files",file);
       const changedMonth=target.month!==ui.data.month;
       adopt(await request(apiMonth(target.month)+"/sources",{method:"POST",body:form}));$("draftUpload").value="";
       if(!comparisonOnly)document.dispatchEvent(new CustomEvent("recruitment:uploaded",{detail:{files:files.map(file=>file.name)}}));

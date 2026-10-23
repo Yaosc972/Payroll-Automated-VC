@@ -109,7 +109,7 @@ def save_review(store,month,revision,evidence):
         state=store.read(month);store._check(state,revision)
         reviewed=evidence_check(store,state,evidence)
         state.setdefault('reviewEntries',[]).append({**reviewed,'id':uuid4().hex,'applied':False})
-        return store._save(folder,store._rebuild(folder,state))
+        return store._save(folder,store._rebuild(folder,state,owned=True))
 
 
 def prepare_preview(store,month,revision,edits,*,evidence=None,origin='资料更正',arrangements=None,decisions=None,basis_type=None,approval_reviews=None,reference_selections=None,employment_selections=None):
@@ -143,7 +143,10 @@ def prepare_preview(store,month,revision,edits,*,evidence=None,origin='资料更
         edits=deepcopy(edits)
         for edit in edits:
             if reviewed and not edit.get('referenceFact'): edit.update(evidenceId=reviewed['sourceId'],reason=reviewed['note'])
-        after=store._prepare_change(folder,deepcopy(before),{'edits':edits},trusted_edits=True)
+        from .recruitment_attention import is_current
+        people={r['id']:{'values':dict(r['values']),'calculation':deepcopy(r['calculation'])} for r in before['rows']}
+        current_before={(r['id'],k):is_current(r,k,month,set()) for r in before['rows'] for k in ('recruitment','referral')}
+        after=store._prepare_change(folder,before,{'edits':edits},trusted_edits=True)
         submitted={(e['rowId'],e['field']) for e in edits if e.get('referenceFact') or e.get('employmentBasis')}
         if any((e['rowId'],e['field']) in submitted for e in after.get('referenceFacts',{}).get('staleEdits',[])):
             raise ValueError('更正后的任职或来源与所选事实不符，请重新核对')
@@ -161,7 +164,7 @@ def prepare_preview(store,month,revision,edits,*,evidence=None,origin='资料更
             row=next(r for r in after['rows'] if r['id']==decision['rowId'])
             row.setdefault('awardDecisions',[]).append(decision)
         after['revision']+=1;calculate_draft(after)
-        people={r['id']:r for r in before['rows']};changed={r['id']:r for r in after['rows']}
+        changed={r['id']:r for r in after['rows']}
         arrangements=deepcopy(arrangements or [])
         if arrangements and not reviewed: raise ValueError('补扣安排需要关联审批依据')
         for item in arrangements:
@@ -178,7 +181,6 @@ def prepare_preview(store,month,revision,edits,*,evidence=None,origin='资料更
         changes += [{'rowId':d['rowId'],'name':people[d['rowId']]['values'].get('姓名'),'field':(d.get('role') or ('招聘奖金' if d['kind']=='recruitment' else '内推奖金'))+'处理','before':'按规则试算','after':'手工设置不发' if manual else '按审批不发'} for d in decisions]
         impact=[]; current_impact=[]; node_impact=[]; remaining=[];unresolved_amounts=[]
         edited_ids={e['rowId'] for e in edits+decisions}
-        from .recruitment_attention import is_current
         # Assembly can propagate a person's employment facts to other recipients.
         # Compare every affected award, including scheduling-only changes.
         node_fields=('amount','currency','recipientId','recipientName','dueDate','dueMonth','scheduledMonth','status','issues')
@@ -192,7 +194,7 @@ def prepare_preview(store,month,revision,edits,*,evidence=None,origin='资料更
                 if (a['total'],a['currency'])!=(b['total'],b['currency']):
                     impact.append({**common,'before':a['total'],'after':b['total'],'beforeCurrency':a['currency'],'currency':b['currency']})
                 if (a['currentAmount'],a['currency'])!=(b['currentAmount'],b['currency']) and (
-                        is_current(people[rid],kind,month,set()) or is_current(changed[rid],kind,month,set())):
+                        current_before[rid,kind] or is_current(changed[rid],kind,month,set())):
                     current_impact.append({**common,'before':a['currentAmount'],'after':b['currentAmount'],'beforeCurrency':a['currency'],'currency':b['currency']})
                 old={n['id']:n for n in a['nodes']};new={n['id']:n for n in b['nodes']}
                 affected=False
@@ -263,7 +265,7 @@ def apply_preview(store,month,revision,token):
         state.setdefault('awardDecisions',[]).extend({**d,'operationId':operation['id']} for d in preview.get('decisions',[]))
         state.setdefault('adjustmentDrafts',[]).extend({**item,'operationId':operation['id']} for item in preview['arrangements'])
         state.setdefault('appliedPreviews',{})[token]=operation['id']
-        return store._save(folder,store._rebuild(folder,state))
+        return store._save(folder,store._rebuild(folder,state,owned=True))
 
 
 def editable_workbook(state):

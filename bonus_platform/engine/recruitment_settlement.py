@@ -137,6 +137,39 @@ def apply_settlement(state,row,result):
         computed['openingSource']=h['ref'] if h else None
         facts,opening_conflicts=opening_installments(state,row,kind,h,cells,computed)
         computed['recoveries'].extend(opening_conflicts)
+        from .recruitment_business_basis import historical_arrangements_complete
+        # Fully arranged, unchanged opening awards do not need repricing under
+        # today's catalog. New decisions, plans or conflicting opening evidence
+        # still follow normal reconciliation. This does not assert bank payment.
+        if (h and not opening_conflicts and historical_arrangements_complete(row,kind,month)
+                and v.get('核算范围')!='不纳入核算'
+                and not any(e.get('active',True) and e['field'].startswith('推荐人')
+                            for e in row.get('edits',[]) if kind=='referral')
+                and not any(d.get('kind')==kind for d in row.get('awardDecisions',[]))
+                and not any(p.get('rowId')==row['id'] and p.get('kind')==kind
+                            and p.get('operationId') in active for p in state.get('adjustmentDrafts',[]))
+                and not any(n['id'] in plans for n in computed['nodes'])):
+            nodes=[]
+            for fact in facts:
+                nodes.append({**fact,'id':fact['nodeId'],'rowId':row['id'],
+                    'dueMonth':fact.get('dueMonth') or fact['scheduledMonth'],
+                    'dueDate':fact.get('dueDate') or '', 'issues':[],
+                    'status':'期初已安排','timing':'往期安排','openingLocked':True,
+                    'openingAmount':fact['amount'],'amountBasis':'承接已完整安排的上月历史金额',
+                    'scheduleText':'历史分期已完整安排，保留原金额；实际支付未核实',
+                    'paidAmount':None,'paymentStatus':'未核实','paymentReady':False})
+            total=money(sum(Decimal(str(n['amount'])) for n in nodes))
+            currencies={n['currency'] for n in nodes}
+            role_totals=[{'role':role,'allocatedAmount':money(sum(n['amount'] for n in nodes if n['role']==role)),
+                         'scheduledAmount':money(sum(n['amount'] for n in nodes if n['role']==role)),
+                         'roundingDifference':0} for role in COLUMNS[kind] if any(n['role']==role for n in nodes)]
+            computed.update(total=total,nodes=nodes,issues=[],recoveries=[],accountingIssues=[],
+                eligibilityReasons=[],currentAmount=0,scheduledTotal=total,roundingDifference=0,
+                currency=next(iter(currencies)) if len(currencies)==1 else computed['currency'],recipientTotals=role_totals,
+                historyRetained=True,historyBasis=h['ref'],
+                reasons=['上月台账各角色金额与历史分期完整对应，沿用已确认安排'])
+            result[kind]=computed
+            continue
         if (v.get('核算范围')=='不纳入核算' or computed.get('approvalDecision')) and not facts:
             result[kind]=original;continue
         for role,columns in COLUMNS[kind].items():

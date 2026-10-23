@@ -148,10 +148,10 @@ def test_frozen_august_four_dimension_denominator_roles_and_complete_roster():
     state=json.loads((base/'draft.json').read_text());parsed=json.loads((base/'workbook-parsed.json').read_text())
     refs=[r for r in parsed['records'] if r['role']=='ledger'];source={'id':refs[0]['ref']['sourceId'],'name':'202608核对表'}
     before=deepcopy(state['rows']);result=reconcile.monthly_comparison(state,refs,source)
-    assert result['summary']['referenceNodes']==438 and result['summary']['equalNodes']==421
-    assert result['summary']['additionalQualificationNodes']==5
-    assert {t['currency']:(t['reference'],t['calculated']) for t in result['totalsByCurrency']}=={'人民币':(41427,40737),'欧元':(6724.54,6247.78),'美元':(2101.17,2044.87)}
-    assert len([d for d in result['differences'] if not d.get('fourDimensionsEqual')])==20
+    assert result['summary']['referenceNodes']==438 and result['summary']['equalNodes']==422
+    assert result['summary']['additionalQualificationNodes']==3
+    assert {t['currency']:(t['reference'],t['calculated']) for t in result['totalsByCurrency']}=={'人民币':(41427,40737),'欧元':(6724.54,6447.78),'美元':(2101.17,2044.87)}
+    assert len([d for d in result['differences'] if not d.get('fourDimensionsEqual')])==19
     for row_id,source_row,recipient_id,history_rows in (
         ('95036833d29116c290742265',2088,'zt29046',{4563,4658}),
         ('42cdb383f5d5906f5feae77a',2216,'zt29249',{5295})):
@@ -162,18 +162,14 @@ def test_frozen_august_four_dimension_denominator_roles_and_complete_roster():
         assert all(h['regularizationDate'] is None and h['approvalStatus']==4 and h['serviceType']==0 for h in timeline)
         previous=next(n for n in row['calculation']['referral']['nodes'] if n['label']=='入职满一个月')
         assert previous['scheduledMonth'] is None and previous['eligibilityReasons']==['推荐人：适用日期尚未转正']
-        current=next(d for d in result['differences'] if d['rowId']==row_id and d['item']=='推荐人 · 入职满一个月')
-        assert current['sourceRow']==source_row and current['reference']==current['calculated']==300
-        assert current['calculatedPeriod']==202608 and current['fourDimensionsEqual']
-        assert all(current['dimensions'][field]['status']=='equal' for field in ('amount','period','currency','recipient'))
-        assert current['dimensions']['eligibility']=={'status':'blocked','reason':'推荐人：转正日期待核对'}
+        assert not any(d['rowId']==row_id and d['item']=='推荐人 · 入职满一个月' for d in result['differences'])
     assert result['summary']['unmatchedPeople']==11 and result['summary']['draftOnlyPeople']==3
     assert {d['name'] for d in result['rosterDifferences'] if d['matchStatus']=='unmatched'}=={'Cheng Wang','Steven/Jian Hao Chen','Qimeng Zhang','Qu Lina','杨雪','蒋仁政','刘娜','汪飞','余靖发','梁华生','卢淑敏'}
     assert {d['name'] for d in result['rosterDifferences'] if d['matchStatus']=='draft_only'}=={'干杰','罗之龙','Antonio Gutierrez'}
     will=[d for d in result['differences'] if d['name'].startswith('Will Wang')]
     assert len(will)==2 and all(d['dimensions']['role']['status']=='different' for d in will)
     feng=[d for d in result['differences'] if d['name']=='FENG WEIZE']
-    assert len(feng)==2 and all(sum(v['status'] in {'different','blocked'} for v in d['dimensions'].values())>=2 for d in feng)
+    assert len(feng)==1 and all(sum(v['status'] in {'different','blocked'} for v in d['dimensions'].values())>=2 for d in feng)
     daniel=next(d for d in result['differences'] if d['name'].startswith('Daniel Li'))
     assert daniel['referenceStatus']=='refused'
     assert state['rows']==before

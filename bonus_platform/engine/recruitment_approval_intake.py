@@ -17,6 +17,7 @@ from .recruitment_documents import extract_document, mentioned_attachments, unre
 from .recruitment_draft_sources import digest, text
 
 STAFF = r'(?<![a-z0-9])(?:zt|z1|zl|21)\d{4,9}(?!\d)'
+RECIPIENT_ID = r'(?:zt|z1|zl|21|gl)\d{4,9}'
 FIELDS = {'ABC类别', '招聘渠道', '周期剔除天数', '周期剔除依据', '招聘启动日期',
           '入职日期', '候选人入职时间', '转正日期', '最后工作日', '职级',
           '招聘负责人姓名', '招聘负责人工号', '协助招聘人姓名', '协助招聘人工号',
@@ -43,6 +44,49 @@ def body_text(doc):
     # OA scans sometimes contain the same printout twice. Later copies are
     # retained as evidence, but repeated proposals are deduplicated below.
     return '\n'.join(p.get('text', '').replace('\u3000', ' ') for p in doc['pages'] if not p.get('blank'))
+
+
+def business_wording(body):
+    # Normalize wording for parsing only; original excerpts remain available.
+    return body.translate(str.maketrans('關於編碼內薦誤資訊請該為補並員', '关于编码内荐误资讯请该为补并员'))
+
+
+def printed_sections(full):
+    """Separate flattened OA form sentences from operator columns and crop copies."""
+    if not ('基本信息' in full and re.search(r'申请人工号\s*[*＊]', full)):
+        return None
+    body = []; opinions = []; continuing = False; days_next = False
+    boundary = re.compile(r'^(?:节点名称|操作者|操作$|处理意见|审批记录|评论记录|附件$|打印日期|扫描二维码|'
+                          r'起草|超草|直接上级|间隔上级|HSSC|海外HR|HRBP|CHO|结束节点|时间$|'
+                          r'身份重复|提交文档|通过$|结束流程|抱歉|模板|基本信息|申请人|创建时间)')
+    action = re.compile(r'入职的人员[（(]|员工.+由原定|已于\s*20\d{2}.+入职|'
+                        r'o[f]+er\s*流程.*(?:编码|编号|编碼)|'
+                        r'招聘渠道.{0,20}(?:修改|调整|更正|变更)|'
+                        r'由.+(?:内推|推荐)|(?:申请|批准).*(?:剔除|扣除)\s*\d|'
+                        r'特此申请.*(?:offer|录用).*变更|'
+                        r'申请.*按\s*[ABC]\s*类|^\d+[.、]\s*在.*入职|'
+                        r'(?:招聘启动日期|入职日期|转正日期|最后工作日|职级|ABC类别|岗位类别).{0,15}(?:修改|调整|更正|变更|改为)|'
+                        r'(?:不发|取消|不予发放)(?:招聘|内推)奖金|无需调整|无需修改|维持原资料|保持现有资料|候选人[：:]|'
+                        r'(?:取消|更正|补充|调整).*(?:推荐人|协助人|招聘负责人)', re.I)
+    for original in full.splitlines():
+        line = business_wording(original.strip())
+        if not line: continue
+        if re.match(r'^(?:同意|不同意|仅批准|只批准|不批准|不予|最终意见|最终审批意见|维持原|保持现有|另行核定)', line):
+            opinions.append(line); continuing = False; continue
+        if re.match(r'^剔除天数\s*[*＊：:，,]?\s*\d*(?:\.\d+)?$', line):
+            body.append(line); days_next = not bool(re.search(r'\d', line)); continuing = False; continue
+        if days_next:
+            if re.fullmatch(r'\d+(?:\.\d+)?', line): body.append(line)
+            days_next = False
+        if boundary.search(line) or re.match(r'^[•●○O]|^20\d{2}-\d\d-\d\d|^ZTJT-', line) or re.search(r'\.(?:pdf|pdt|jpg|png)\b', line, re.I):
+            continuing = False; continue
+        if action.search(line) and '提交的' not in line:
+            body.append(line); continuing = True
+        elif continuing and (len(line) >= 18 or re.fullmatch(r'周期[。.]?', line)):
+            body.append(line)
+        else:
+            continuing = False
+    return '\n'.join(dict.fromkeys(body)), list(dict.fromkeys(opinions))
 
 
 @lru_cache(maxsize=4)
@@ -101,26 +145,36 @@ class Directory:
 
     def recipient(self, raw):
         raw = raw.strip(' ：:，,。；;\n')
-        numbers = list(dict.fromkeys(staff(s) for s in re.findall(STAFF, raw, re.I)))
+        numbers = list(dict.fromkeys(staff(s) for s in re.findall(RECIPIENT_ID, raw, re.I)))
         if len(numbers) == 1:
             found = [p for p in self.people if p['employeeId'] == numbers[0]]
             names = {p['name'] for p in found}
             if len(names) == 1: return {'name':next(iter(names)), 'employeeId':numbers[0]}
             if len(names) > 1: return {'name':'', 'employeeId':numbers[0]}
-            name = re.sub(STAFF, '', raw, flags=re.I).strip(' ：:，,。；;\n')
+            name = re.sub(RECIPIENT_ID, '', raw, flags=re.I).strip(' ：:，,。；;\n')
             return {'name':name if 1 < len(name) < 60 else '', 'employeeId':numbers[0]}
         found = [p for p in self.people if compact(p['name']) == compact(raw)]
         ids = {p['employeeId'] for p in found if p['employeeId']}
         return {'name':raw, 'employeeId':next(iter(ids)) if len(ids) == 1 else ''}
 
     def target(self, body, applicant):
+        body = business_wording(body)
+        named = re.findall(r'入职的人员\s*[（(]([^）)]+)[）)]', body)
+        if named:
+            found = [p for p in self.people if compact(p['name']) in {compact(n) for n in named}]
+            found.extend({'name': n, 'employeeId': '', 'hireDate': '', 'offers': set()}
+                         for n in named if not any(compact(p['name']) == compact(n) for p in found))
+        else:
+            found = None
         explicit = re.findall(r'((?:zt|z1|zl|21)\d{4,9})\s*入职的\s*o[f]+er', body, re.I)
-        if explicit:
+        if found is not None:
+            pass
+        elif explicit:
             ids = {staff(v) for v in explicit}
             found = [p for p in self.people if p['employeeId'] in ids]
             found.extend({'name': number, 'employeeId': number, 'hireDate': '', 'offers': set()} for number in ids if not any(p['employeeId'] == number for p in found))
         else:
-            offer_ids = re.findall(r'(?:o[f]+er\s*(?:流程|编码|编号)|录用流程(?:编号)?)\s*[：:]?\s*(20\d{10})(?!\d)', body, re.I)
+            offer_ids = re.findall(r'(?:o[f]+er\s*(?:流程\s*[（(]?\s*(?:编码|编号)?|编码|编号)|录用流程(?:编号)?)\s*[：:]?\s*(20\d{10})(?!\d)', body, re.I)
             found = [p for p in self.people if p['offers'] & set(offer_ids)]
             if not found and offer_ids:
                 return [], '录用流程 '+ '、'.join(dict.fromkeys(offer_ids))+' 未对应到人员，请补充对应的花名册或 Offer。'
@@ -130,10 +184,19 @@ class Directory:
                 applicant_name = compact(applicant)
                 names = []
                 for p, name, folded_name in self.target_names:
-                    if len(name) < 2 or folded_name == applicant_name: continue
+                    if len(name) < 2: continue
                     if folded_name not in folded: continue
                     for m in re.finditer(re.escape(name), searchable, re.I):
                         before = searchable[max(0,m.start()-18):m.start()]
+                        after = searchable[m.end():m.end()+45]
+                        if folded_name == applicant_name and not re.match(r'(?:已于|于)20\d{2}.+入职|由原定', after): continue
+                        if any(len(other)>len(folded_name) and any(
+                                hit.start()<=m.start() and hit.end()>=m.end()
+                                for hit in re.finditer(re.escape(other),folded))
+                               for _,_,other in self.target_names if folded_name in other): continue
+                        if re.search(r'[a-z]', name[-1], re.I) and m.end()<len(searchable) and re.match(r'[a-z]', searchable[m.end()], re.I): continue
+                        if re.search(r'[a-z]', name[0], re.I) and m.start() and re.match(r'[a-z]', searchable[m.start()-1], re.I): continue
+                        if after.startswith('内推') and re.search(r'由.*(?:员工|员T)$',before): continue
                         if re.search(r'(?:推荐人|内推人|协助招聘人|招聘协助人|招聘负责人|申请人|审批人)[：:为是]*$', before): continue
                         names.append(p); break
                 found = names
@@ -147,6 +210,12 @@ class Directory:
         hire_dates = dates(body)
         dated = [p for p in found if p['hireDate'] in hire_dates]
         if dated and len({compact(p['name']) for p in found}) == 1: found = dated
+        # A final explicitly postponed hire day can distinguish employments;
+        # never infer its year or use the original planned date.
+        final_days = {f'-{int(m):02d}-{int(d):02d}' for m,d in re.findall(
+            r'推迟至\s*(\d{1,2})[月./-](\d{1,2})日?\s*入职',body)}
+        dated = [p for p in found if any(p['hireDate'].endswith(day) for day in final_days)]
+        if len(final_days)==1 and dated and len({compact(p['name']) for p in found})==1: found=dated
         distinct = {}
         for p in found:
             key = (p['employeeId'], compact(p['name']), p['hireDate'])
@@ -163,6 +232,9 @@ class Directory:
 
 
 def role_pair(body, prefix, directory):
+    structured = re.search(ROLES[prefix]+r'工号\s*[（(：:]\s*('+RECIPIENT_ID+r')\s*[）)]?\s*和姓[名各]\s*[（(：:]\s*([^）)\n]+)[）)]?', body, re.I)
+    if structured:
+        return {'name': structured[2].strip(), 'employeeId': staff(structured[1])}
     pattern = ROLES[prefix]+r'\s*(?:为|是|填写为|更改为|调整为)?\s*[：:]?\s*([^，,。；;\n]{2,65})'
     for match in re.finditer(pattern, body, re.I):
         raw = match.group(1).strip()
@@ -175,6 +247,7 @@ def role_pair(body, prefix, directory):
 
 
 def extract_changes(body, directory):
+    body = business_wording(body)
     body = re.sub(r'(?<=[\u4e00-\u9fff])\s*\n\s*(?=[\u4e00-\u9fff])', '', body)
     fields = {}; decisions = []; issues = []
     if re.search(r'(?:不要|无需|不应|不同意|不批准|不予批准).{0,20}(?:修改|更正|调整|改为|剔除|按\s*[ABC]\s*类)',body):
@@ -195,9 +268,15 @@ def extract_changes(body, directory):
         pair(after, person or {'name':'','employeeId':''}); pair(before, {'name':'','employeeId':''})
         issues = [i for i in issues if i != '请补充'+before+'姓名。']
         if after == '推荐人': put('招聘渠道', '内推')
-    channels = re.findall(r'招聘渠道\s*(?:需|需要)?\s*(?:(?:修改|调整|更正|变更|改)为|由[^，。；\n]{1,15}改为)\s*(内部推荐入职|内部推荐|内推|招聘网站|校招|猎头|二次入职|员工推荐)', body)
+    channels = re.findall(r'(?:招聘渠道\s*(?:需|需要)?\s*(?:(?:修改|调整|更正|变更|改)为|由[^，。；\n]{1,15}改为)|(?:修改|调整|更正|变更)招聘渠道为)\s*(内部推荐入职|内部推荐|外部推荐|内推|招聘网站|校招|猎头|二次入职|员工推荐)', body)
     if not channels and re.search(r'(?:为内推人选|内推人选).*?(?:需更正|需修改|需调整)', body, re.S): channels = ['内推']
     for value in channels: put('招聘渠道', '内推' if value in {'内部推荐','内部推荐入职','员工推荐'} else value)
+    if '外部推荐' in channels and re.search(r'误填.{0,60}(?:内部推荐人|内推人).{0,60}(?:取消|删除)', body, re.S):
+        pair('推荐人', {'name':'','employeeId':''})
+        issues = [i for i in issues if i != '请补充推荐人姓名。']
+    referred = re.search(r'由.{0,12}(?:员工|员T)\s*([A-Za-z\u4e00-\u9fff][A-Za-z\u4e00-\u9fff .·-]{1,59}?)\s*内推', body)
+    if referred and re.search(r'(?:申请|更正|变更|调整).{0,12}(?:offer|录用|渠道|信息)', body, re.I):
+        put('招聘渠道','内推'); pair('推荐人',directory.recipient(referred[1]))
     if not moved:
         for prefix in ROLES:
             value = role_pair(body, prefix, directory)
@@ -207,8 +286,7 @@ def extract_changes(body, directory):
     for value in re.findall(r'按\s*([ABC])\s*类(?:岗位)?标准\s*(?:核算|计算)|(?:岗位类别|ABC类别)\s*(?:修改|调整|更正|变更|改)为\s*([ABC])', body, re.I):
         put('ABC类别', (value[0] or value[1]).upper())
     exclusions = re.findall(r'(?<!不)(?<!无需)(?:剔除|扣除)\s*(\d+(?:\.\d+)?)\s*天', body)
-    if not exclusions and re.search(r'申请特批|周期.*剔除', body):
-        exclusions = re.findall(r'剔除天数\s*[*＊：:]?\s*(\d+(?:\.\d+)?)\b', body)
+    exclusions += re.findall(r'剔除天数\s*[*＊：:，,]?\s*(\d+(?:\.\d+)?)\b', body)
     for days in exclusions:
         put('周期剔除天数', float(days))
     for field in ('招聘启动日期','入职日期','转正日期','最后工作日'):
@@ -222,6 +300,12 @@ def extract_changes(body, directory):
 
 
 def same_value(field, left, right):
+    if field == '招聘渠道':
+        from .recruitment_import_validation import _normalize_offer_channel
+        lvalue,lunknown = _normalize_offer_channel(text(left))
+        rvalue,runknown = _normalize_offer_channel(text(right))
+        if lvalue and rvalue and not lunknown and not runknown:
+            return lvalue == rvalue
     if field == '周期剔除天数':
         try: return float(left or 0) == float(right or 0)
         except (ValueError,TypeError): return False
@@ -280,6 +364,9 @@ def resolve_item(item, rows, override=None):
 
 
 def approval_sections(full):
+    printed = printed_sections(full)
+    if printed is not None:
+        return printed
     parts = re.split(r'节点名称', full)
     main = parts[0]
     finals = list(re.finditer(r'(?:最终审批意见|最终意见)\s*[：:]?\s*', full))
@@ -545,6 +632,12 @@ def proposals(store, state):
                         'documentIssues':list(result['issues']),'extractionIssues':extraction_issues,'matchIssue':match_issue,
                         'excerpt':scoped.strip() or '\n'.join(final).strip(), 'pageNumbers':result['pageNumbers']}
                 previous = adopted.get(iid) or adopted.get(legacy_id) or (adopted.get(digest(source['id']+'|manual')) if not matches else None) or {}
+                if not previous and row:
+                    # Cleaning OCR columns changes the text-derived item ID.
+                    # Reuse a unique review for this exact source and employment,
+                    # never a name-only match or another person's saved decision.
+                    prior = [a for a in adopted.values() if a.get('rowId') == row['id']]
+                    if len(prior) == 1: previous = prior[0]
                 source_changed = previous.get('sourceSignature') and previous['sourceSignature'] != result['sourceSignature']
                 prior_override={k:deepcopy(previous[k]) for k in ('rowId','fields','decisions') if k in previous and (k == 'rowId' or previous.get('outcome') != 'no_change') and not source_changed}
                 referenced=set(previous.get('referenceFields',[]))

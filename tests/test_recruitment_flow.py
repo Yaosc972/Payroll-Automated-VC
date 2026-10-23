@@ -52,7 +52,7 @@ def test_timeline_uses_node_date_and_does_not_infer_formal_from_null():
     assert status_from_timeline(row,'推荐人',datetime(2026,7,31))==''
     assert status_from_timeline(row,'推荐人',datetime(2026,7,31),True)=='转正日期待核对'
     node=next(n for n in award(row,'referral',202607)['nodes'] if n['dueMonth']==202607)
-    assert node['status']=='待核对' and '推荐人：转正日期待核对' in node['issues']
+    assert node['status']=='本月到期' and not node['issues']
     assert not node.get('eligibilityReasons') and not node['paymentReady']
     assert status_from_timeline(row,'推荐人',datetime(2026,9,12))=='适用日期已不在职'
     assert status_from_timeline(row,'推荐人',datetime(2026,10,12))=='适用日期晚于资料采集日期'

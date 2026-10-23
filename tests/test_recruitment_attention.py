@@ -18,7 +18,7 @@ def fact_task(row,kind,title):
 
 
 def test_new_hire_future_nodes_do_not_become_current_only_because_hired_this_month():
-    row=person(hire='2026-07-15',招聘渠道='其他')
+    row=person(hire='2026-07-15',招聘渠道='未知来源')
     row['originKinds']=['roster','domestic_offer']
     state=state_for([row],[])
     view=attention.project(state)
@@ -27,7 +27,7 @@ def test_new_hire_future_nodes_do_not_become_current_only_because_hired_this_mon
 
 
 def test_unknown_award_on_first_of_month_still_blocks_possible_current_node():
-    row=person(hire='2026-07-01',招聘渠道='其他')
+    row=person(hire='2026-07-01',招聘渠道='未知来源')
     view=attention.project(state_for([row],[]))
     assert view['current']
 
@@ -153,13 +153,13 @@ def test_candidate_status_wording_that_keeps_same_employment_result_is_not_a_tas
 def test_direct_recruitment_descriptions_are_consistent_with_website_channel(description):
     from bonus_platform.engine.recruitment_import_validation import _normalize_offer_channel
     from bonus_platform.engine.recruitment_awards import channel
-    assert _normalize_offer_channel('其他',description)==('招聘网站',False)
-    assert channel(person(招聘渠道='其他',其他渠道=description)['values'],'2026-07')[0]==1
+    assert _normalize_offer_channel('其他',description)==('其他',False)
+    assert channel(person(招聘渠道='其他',其他渠道=description)['values'],'2026-07')[0]==0
 
 
 def test_unknown_channel_is_still_unknown():
     from bonus_platform.engine.recruitment_import_validation import _normalize_offer_channel
-    assert _normalize_offer_channel('其他','待核实的业务来源')==('其他',True)
+    assert _normalize_offer_channel('其他','待核实的业务来源')==('其他',False)
 
 
 def test_projection_keeps_history_and_deduplicates_one_shared_fact():

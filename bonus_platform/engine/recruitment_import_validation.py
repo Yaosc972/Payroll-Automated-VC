@@ -60,7 +60,7 @@ DEVELOPING_LOCATION_TOKENS = {
 }
 RECRUITMENT_WEBSITE_TOKENS = {
     "招聘网站", "招聘網站", "boss直聘", "boss", "indeed", "linkedin", "领英", "領英", "猎聘", "獵聘", "智联招聘", "智聯招聘",
-    "pracuj.pl", "pracuj", "topcv", "moovup", "careerviet", "career viet", "jobsdb", "handshake",
+    "前程无忧", "前程無憂", "51job", "pracuj.pl", "pracuj", "topcv", "moovup", "careerviet", "career viet", "jobsdb", "handshake",
     "华人资讯网", "華人資訊網", "奋韩网", "奮韓網", "华人168", "華人168", "小红书", "小紅書",
     "微信群", "德国插队", "在德国插队", "超人", "国内收到转发", "邮箱投递简历", "线下广告张贴",
     "referral",
@@ -726,7 +726,7 @@ def _read_overseas_offers(path: Path) -> dict[str, dict[str, Any]]:
         other_channel = record.get("其他渠道")
         notes=[record.get(k) for k in ('招聘渠道说明','渠道说明','备注','说明','招聘备注','招聘渠道备注') if record.get(k)]
         normalized_channel, channel_needs_confirmation = _normalize_offer_channel(raw_channel, other_channel, notes)
-        inferred_referrer_no, inferred_referrer_name = _referrer_from_other_channel(raw_channel, other_channel)
+        inferred_referrer_no, inferred_referrer_name = ('', '')
         offer = {
             "ABC类别": record.get("编制ABC分类", ""),
             "招聘负责人工号": record.get("招聘负责人工号", ""),
@@ -1089,11 +1089,15 @@ def _organization_text(row: dict[str, Any]) -> str:
     )
 
 
+def _is_uk_location(value: Any) -> bool:
+    return bool(re.search(r'(?<![a-z0-9])uk(?![a-z0-9])', _text(value), re.I))
+
+
 def _classify_overseas_country(value: Any) -> str:
     text = _text(value).lower()
     if not text:
         return ""
-    if any(token.lower() in text for token in DEVELOPED_LOCATION_TOKENS):
+    if _is_uk_location(text) or any(token.lower() in text for token in DEVELOPED_LOCATION_TOKENS if token != "uk"):
         return "海外发达国家"
     if any(token.lower() in text for token in DEVELOPING_LOCATION_TOKENS):
         return "海外发展中国家"
@@ -1684,15 +1688,9 @@ def _channel_note_categories(value):
 
 def _normalize_offer_channel(main_value: Any, other_value: Any = "", remarks: Any = "") -> tuple[str, bool]:
     main = _text(main_value)
-    if main != "其他":
-        return _normalize_channel(main), False
-
-    channel, unknown = _normalize_other_channel(other_value)
-    categories = _channel_note_categories(remarks)
-    if not unknown: categories.add(channel)
-    if len(categories) == 1:
-        return next(iter(categories)), False
-    return '其他', True
+    # The selected Offer field is authoritative; notes remain source evidence.
+    # A different channel requires an explicit, traceable correction.
+    return _normalize_channel(main), False
 
 
 def _normalize_other_channel(other_value):

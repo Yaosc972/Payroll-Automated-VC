@@ -6,7 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 import re
 
-from .recruitment_awards import NO_RECRUIT, RECRUIT_FIELDS, CORE_FIELDS, lookup, present, material_conflicts, observed_values, uses_previous_exit, status_at, channel
+from .recruitment_awards import NO_RECRUIT, RECRUIT_FIELDS, CORE_FIELDS, lookup, present, material_conflicts, observed_values, uses_previous_exit, status_at, channel, recipient_conflict_fields
 from .recruitment_draft_sources import date_text, digest, text
 from .models import add_months, as_date, yyyymm
 
@@ -96,6 +96,10 @@ def candidate_status_affects(row,kind,month):
 
 
 def needed(row,field,month=None):
+    if field in row.get('unresolvedFields',[]) and field.endswith('人员状态'):
+        prefix=field.removesuffix('人员状态')
+        if prefix in {'招聘负责人','协助招聘人','推荐人'} and field not in recipient_conflict_fields(row,prefix):return []
+    if field in {'推荐人转正日期','推荐人入职日期','招聘负责人入职日期','协助招聘人入职日期'}:return []
     if field=='上次离职日期' and not uses_previous_exit(row): return []
     if field=='招聘负责人工号' and not present(row['values'].get(field)) and present(row['values'].get('招聘负责人姓名')) and field not in row.get('unresolvedFields',[]): return []
     if field in row.get('unresolvedFields',[]):

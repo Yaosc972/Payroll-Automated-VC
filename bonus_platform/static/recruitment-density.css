@@ -290,3 +290,5 @@
 .recruitment-experience .ra-activity-month { display:inline-flex; align-items:center; gap:5px; height:26px; padding:3px 8px; border:1px solid #d8e4f4; border-radius:7px; background:#edf4fd; color:#3c6090; font-size:12px; line-height:1.4; }
 .recruitment-experience .ra-activity-month .rd-icon { width:14px; height:14px; }
 .recruitment-experience .rd-heading { margin-bottom:8px; }
+
+.recruitment-experience .flow-ledger td.flow-period-reason { white-space:normal; overflow-wrap:anywhere; color:#667085; line-height:1.5; }

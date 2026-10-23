@@ -78,15 +78,15 @@ def test_old_and_new_in_same_month_are_isolated_including_old_special_scope():
     assert '旧特殊规则适用日期及依据待核' not in award(old,'referral',202607)['issues']
 
 
-def test_explicit_probation_is_a_result_not_a_missing_employment_task():
+def test_referrer_on_probation_is_eligible_while_employed():
     row=person(推荐人人员状态='试用',推荐人转正日期='')
     node=next(n for n in award(row,'referral',202607)['nodes'] if n['dueMonth']==202607)
-    assert node['status']=='按规则不发'
-    assert node['scheduledMonth'] is None
+    assert node['status']=='本月到期'
+    assert node.get('scheduledMonth',node['dueMonth'])==202607
     assert not node['issues']
-    assert '推荐人：适用日期尚未转正' in node['eligibilityReasons']
+    assert not node.get('eligibilityReasons')
     row['values']['推荐人人员状态']=''
-    assert any('正式在职状态待核' in i for n in award(row,'referral',202607)['nodes'] for i in n['issues'])
+    assert any('在职状态待核' in i for n in award(row,'referral',202607)['nodes'] for i in n['issues'])
 
 
 @pytest.mark.parametrize('identifier',['体系外海外-Jin','海外-GL001669'])
@@ -100,7 +100,7 @@ def test_offline_external_recipient_does_not_require_internal_employment(identif
     assert award(row,'recruitment',202607)['nodes'][0]['status']=='按规则不发'
     row['values']['招聘负责人最后工作日']=''
     row['provenance']={}
-    assert '招聘负责人：任职日期待核' in award(row,'recruitment',202607)['nodes'][0]['issues']
+    assert '招聘负责人：适用日期在职状态待核' in award(row,'recruitment',202607)['nodes'][0]['issues']
 
 
 def test_zero_exclusion_does_not_require_an_approval_even_when_holidays_exist():
@@ -118,8 +118,8 @@ def test_zero_exclusion_does_not_require_an_approval_even_when_holidays_exist():
 def test_rehire_calendar_month_boundary(previous,hire,factor):
     r=person(hire,招聘渠道='二次入职',上次离职日期=previous)
     assert channel(r['values'],'2026-07')[0]==factor
-    assert ('二次入职专项条款执行依据待核' in channel(r['values'],'2026-07')[1]) == (factor==0)
-    if factor==0:assert award(r,'recruitment',202607)['total'] is None
+    assert channel(r['values'],'2026-07')[1]==[]
+    if factor==0:assert award(r,'recruitment',202607)['total']==0
     assert award(r,'referral',202607)['total']==0
 
 
@@ -179,10 +179,10 @@ def test_missing_rehire_date_is_unknown_and_referral_ineligibility_is_independen
 
 
 def test_unknown_channel_never_defaults_to_zero_or_full_bonus():
-    r=person(招聘渠道='其他',其他渠道='尚未认可的新来源')
+    r=person(招聘渠道='尚未认可的新来源')
     assert award(r,'recruitment',202607)['total'] is None
-    r['values']['其他渠道']='招聘广告'
-    assert channel(r['values'],'2026-07')[0]==1
+    r['values'].update(招聘渠道='其他',其他渠道='招聘广告')
+    assert channel(r['values'],'2026-07')[:2]==(0,[])
 
 
 @pytest.mark.parametrize('grade',['P4-1','M4-1','P6-2','M9-1'])
