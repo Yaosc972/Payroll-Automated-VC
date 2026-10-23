@@ -157,7 +157,7 @@ def fetch_employment(job_numbers,client=None):
         result=_post(client,HISTORY,{'option':'None','empStatus':[],'employType':[],'serviceType':[],'approvalStatus':[4],
             'oIds':batch,'isWithDeleted':False,'columns':RECIPIENT_HISTORY_COLUMNS,'enableTranslate':True})
         records.extend(pick(r,RECIPIENT_HISTORY_COLUMNS) for r in result.get('data') or [])
-    return _with_coverage({'version':1,'employmentOnly':True,'queriedAt':datetime.now().isoformat(timespec='seconds'),
+    return _with_coverage({'version':1,'employmentOnly':True,'queriedAt':datetime.now().astimezone().isoformat(timespec='seconds'),
             'requestedJobNumbers':[],'requestedRecipientJobNumbers':numbers,'employeeMappings':[pick(m,['jobNumber','userId','code']) for m in mapped],
             'candidateHistories':[],'recipientHistories':records,'offers':[],'requirements':[],'forms':[]})
 
@@ -215,7 +215,7 @@ def fetch(job_numbers,client=None,recipient_numbers=(),candidate_histories=(),pr
         mapped.extend(response)
         recipient_ids.extend(m['userId'] for m in response if m.get('userId') and str(m.get('code'))=='200')
     recipients=histories(recipient_ids,recipient=True)
-    return _with_coverage({'version':1,'queriedAt':datetime.now().isoformat(timespec='seconds'),'requestedJobNumbers':list(job_numbers),
+    return _with_coverage({'version':1,'queriedAt':datetime.now().astimezone().isoformat(timespec='seconds'),'requestedJobNumbers':list(job_numbers),
         'requestedRecipientJobNumbers':list(dict.fromkeys(str(n).lower() for n in extra if n)), 'employeeMappings':[pick(m,['jobNumber','userId','code']) for m in mapped],
         'candidateHistories':hs,'offers':list(offers.values()),'requirements':requirements,'forms':forms,'recipientHistories':recipients})
 
@@ -265,7 +265,7 @@ def fetch_channel_details(payload, checked_ids=(), client=None):
         status='已取得备注' if valid and live.get('remarks') else '备注为空' if valid else '录用记录已变更或未找到'
         checks.append({'offerId':oid,'status':status})
         if valid:offers.append({**{k:old.get(k) for k in ('objectId','entryDate','approvalStatus')},'remarks':live.get('remarks')})
-    return {'version':1,'queriedAt':datetime.now().isoformat(timespec='seconds'),'channelDetailsOnly':True,
+    return {'version':1,'queriedAt':datetime.now().astimezone().isoformat(timespec='seconds'),'channelDetailsOnly':True,
         'channelDetailsCheckedOfferIds':sorted(targets),'channelChecks':checks,'scopeJobNumbers':[],
         'candidateHistories':[h for h in payload['candidateHistories'] if h.get('lUOffer') in targets],
         'offers':offers,'forms':[],'requirements':[],'recipientHistories':[]}

@@ -178,3 +178,5 @@ def test_monthly_offer_lookup_keeps_history_without_scanning_former_employments(
     assert client.calls[0]['startTime']>'2020-01-01'
     assert [o['objectId'] for o in payload['offers']]==['current']
     assert len(payload['candidateHistories'])==2
+    from datetime import datetime
+    assert datetime.fromisoformat(payload['queriedAt']).utcoffset() is not None
