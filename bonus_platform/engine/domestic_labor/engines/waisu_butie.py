@@ -3,13 +3,13 @@ from collections import Counter
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from .base import BaseEngine, CalculationResult, safe_float
-from .position_rules import is_position_eligible
 from ..models import AuditExplanation
 
 
 SUBJECT = "waisu_butie"
 
 DONGGUAN_ELIGIBLE_POSITIONS = {
+    "安检副主管",
     "安检员",
     "操作员",
     "叉车司机",
@@ -19,22 +19,30 @@ DONGGUAN_ELIGIBLE_POSITIONS = {
     "揽收充电司机",
     "安检组长",
     "操作组长",
+    "操作主管",
     "稽查副主管",
+    "稽查组长",
     "文员",
     "物流专员",
     "操作文员",
     "实习生",
+    "民航初级安检员",
+    "民航中级安检员",
+    "民航高级安检员",
+    "内部初级安检员",
+    "内部中级安检员",
+    "内部高级安检员",
 }
 DONGGUAN_INELIGIBLE_POSITIONS = {
+    "HRBP主管",
+    "人事专员",
     "保洁",
     "行政专员",
     "质量监控专员",
     "HRBP专员",
-    "高级HRBP专员",
     "高级招聘专员",
     "招聘专员",
 }
-DONGGUAN_ELIGIBLE_NAME_OVERRIDES = {"陈西莎", "田盈"}
 
 JINJIANG_ELIGIBLE_POSITIONS = {
     "操作员",
@@ -436,16 +444,15 @@ class WaiSuBuTieEngine(BaseEngine):
 
     def _check_regional_eligibility(self, work_area: str, employee_name: str, position: str) -> Dict[str, Any]:
         if work_area == "东莞":
-            name_override = employee_name in DONGGUAN_ELIGIBLE_NAME_OVERRIDES
-            explicitly_ineligible = position in DONGGUAN_INELIGIBLE_POSITIONS and not name_override
-            eligible_position = is_position_eligible(position, DONGGUAN_ELIGIBLE_POSITIONS) or name_override
+            explicitly_ineligible = position in DONGGUAN_INELIGIBLE_POSITIONS
+            eligible_position = position in DONGGUAN_ELIGIBLE_POSITIONS
             return {
                 "工作地区": work_area,
                 "岗位名称": position,
                 "姓名": employee_name,
                 "岗位是否明确不享有": explicitly_ineligible,
                 "岗位是否在享有名单": eligible_position,
-                "姓名是否特殊享有": name_override,
+                "是否限制职级": False,
                 "eligible": eligible_position and not explicitly_ineligible,
             }
         if work_area in {"嘉善", "义乌"}:

@@ -350,7 +350,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert response.status_code == 200
     package = response.json()
     assert package["package_id"] == "DL-PAYROLL"
-    assert package["version"] == "1.4.12"
+    assert package["version"] == "1.4.13"
     assert package["status"] == "已发布"
     assert {category["id"] for category in package["categories"]} == {"allowance", "bonus"}
     assert {subject["id"] for subject in package["subjects"]} == {
@@ -369,7 +369,7 @@ def test_rule_package_exposes_verified_and_validating_subjects():
     assert all(subject["verification"] for subject in package["subjects"])
     assert all(subject["regions"] for subject in package["subjects"])
     assert all(subject["change_log"] for subject in package["subjects"])
-    assert package["version_history"][0]["version"] == "1.4.12"
+    assert package["version_history"][0]["version"] == "1.4.13"
     assert package["version_history"][0]["subject_ids"] == [
         "quanqinjiang", "canbu", "waisu_butie", "gonglingjiang", "yeban_butie", "gangwei_butie",
         "gaowen_butie",
@@ -529,7 +529,7 @@ def test_rule_package_publishes_confirmed_security_inspector_position_names():
     }
 
     assert subjects["canbu"]["version"] == "DL-CANBU.v1.0.8"
-    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.7"
+    assert subjects["waisu_butie"]["version"] == "DL-WAISU.v1.0.8"
     assert subjects["gonglingjiang"]["version"] == "DL-GONGLING.v1.0.9"
     for subject_id in ("canbu", "waisu_butie", "gonglingjiang"):
         payload = str(subjects[subject_id])
@@ -579,12 +579,12 @@ def test_rule_package_publishes_intern_housing_allowance_eligibility():
     dongguan = next(region for region in waisu["regions"] if region["name"] == "东莞")
     jiashan_yiwu = next(region for region in waisu["regions"] if region["name"] == "嘉善 / 义乌")
 
-    assert waisu["version"] == "DL-WAISU.v1.0.7"
+    assert waisu["version"] == "DL-WAISU.v1.0.8"
     assert "东莞、嘉善、义乌实习生享有外宿补贴" in str(dongguan)
     assert "嘉善、义乌所有岗位均具备外宿补贴资格" in str(jiashan_yiwu)
     assert "低正班出勤人员按完整上下班打卡复核实际出勤" in str(waisu)
     assert "嘉善、义乌外宿补贴不限制岗位" in str(jiashan_yiwu)
-    assert waisu["change_log"][0]["version"] == "DL-WAISU.v1.0.7"
+    assert waisu["change_log"][0]["version"] == "DL-WAISU.v1.0.8"
     assert any(item["version"] == "DL-WAISU.v1.0.5" for item in waisu["change_log"])
     assert any(item["version"] == "DL-WAISU.v1.0.4" for item in waisu["change_log"])
     assert any(item["version"] == "DL-WAISU.v1.0.3" for item in waisu["change_log"])
@@ -690,7 +690,7 @@ def test_historical_rule_package_keeps_latest_version_available_for_navigation()
     ).json()
 
     assert package["version"] == "1.1.3"
-    assert package["available_versions"][0]["version"] == "1.4.12"
+    assert package["available_versions"][0]["version"] == "1.4.13"
     assert package["available_versions"][0]["status"] == "当前版本"
     assert any(item["version"] == "1.1.3" for item in package["available_versions"])
 
@@ -728,7 +728,7 @@ def test_rule_package_preserves_pre_fix_version_and_publishes_cross_month_fix():
     current_waisu = next(subject for subject in current["subjects"] if subject["id"] == "waisu_butie")
     previous_waisu = next(subject for subject in previous["subjects"] if subject["id"] == "waisu_butie")
 
-    assert current_waisu["version"] == "DL-WAISU.v1.0.7"
+    assert current_waisu["version"] == "DL-WAISU.v1.0.8"
     assert "最后工作日在核算月月末或之后" in "".join(current_waisu["common_rules"])
     assert previous_waisu["version"] == "DL-WAISU.v1.0.0"
     assert "最后工作日在核算月月末或之后" not in "".join(previous_waisu["common_rules"])

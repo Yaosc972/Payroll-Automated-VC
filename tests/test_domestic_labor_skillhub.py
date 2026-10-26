@@ -216,6 +216,27 @@ def test_housing_roster_completeness_and_conflicts_block_payment(tmp_path, relea
     assert report["results"] == []
 
 
+@pytest.mark.parametrize("position,name,amount", [
+    ("安检副主管", "测试员工", 150),
+    ("操作主管", "测试员工", 150),
+    ("稽查组长", "测试员工", 150),
+    ("HRBP主管", "陈西莎", 0),
+    ("人事专员", "田盈", 0),
+    ("未知岗位", "陈西莎", 0),
+])
+def test_housing_skill_uses_dongguan_position_table_ignoring_grade(tmp_path, released, position, name, amount):
+    catalog, bundles = released
+    item = next(item for item in catalog["skills"] if item["id"] == "waisu_butie")
+    payload = payload_for(item)
+    payload["employees"][0].update({"岗位名称": position, "姓名": name, "职级": "任意职级"})
+    for row in payload["daily"]:
+        row["姓名"] = name
+    report = execute_package(tmp_path, bundles[item["id"]], item, payload)
+    assert report["status"] == "calculated", report
+    assert report["rule_version"] == "DL-WAISU.v1.0.8"
+    assert report["results"][0]["amount"] == amount
+
+
 def test_housing_checkout_deducts_actual_daily_leave_from_external_days(tmp_path, released):
     catalog, bundles = released
     item = next(item for item in catalog["skills"] if item["id"] == "waisu_butie")

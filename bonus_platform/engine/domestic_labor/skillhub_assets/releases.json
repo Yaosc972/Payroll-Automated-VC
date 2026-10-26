@@ -1,6 +1,19 @@
 {
   "releases": [
     {
+      "id": "waisu_butie-516edc6d50c80d43600685056c50ab2ce2469adaa9621da919e1483014c4f23a",
+      "kind": "update",
+      "name": "操作线外宿补贴",
+      "package_version": "2026.10.26+516edc6d",
+      "released_at": "2026-10-26T13:53:53+08:00",
+      "rule_version": "DL-WAISU.v1.0.8",
+      "skill_id": "waisu_butie",
+      "title": "操作线外宿补贴 Skill 上新",
+      "updates": [
+        "东莞外宿补贴整体替换为23个享有岗位、8个不享有岗位；忽略职级，取消姓名例外。"
+      ]
+    },
+    {
       "id": "gaowen_butie-2a82d53dfd1ff8321d75bc67ad7e4b0ff95d2ff656406ce75ad37390d14cd62a",
       "kind": "update",
       "name": "操作线高温补贴",
@@ -510,7 +523,7 @@
             "哺乳假小时"
           ]
         },
-        "rule_version": "DL-WAISU.v1.0.7",
+        "rule_version": "DL-WAISU.v1.0.8",
         "source_labels": {
           "abandonment_roster": "本月自离名单",
           "daily": "全月日考勤及排班状态",
@@ -529,8 +542,8 @@
         "subject": "waisu_butie"
       },
       "description": "结合完整住宿区间与出勤记录，核算外宿补贴。",
-      "download_url": "/api/domestic-labor/skillhub/waisu_butie/download?release=3defff42e6709b1541edd3c273738554861d1b4d549c19782a8f51844600aef0",
-      "fingerprint": "3defff42e6709b1541edd3c273738554861d1b4d549c19782a8f51844600aef0",
+      "download_url": "/api/domestic-labor/skillhub/waisu_butie/download?release=516edc6d50c80d43600685056c50ab2ce2469adaa9621da919e1483014c4f23a",
+      "fingerprint": "516edc6d50c80d43600685056c50ab2ce2469adaa9621da919e1483014c4f23a",
       "icon": "home",
       "id": "waisu_butie",
       "inputs": [
@@ -541,12 +554,17 @@
       ],
       "is_new": true,
       "name": "操作线外宿补贴",
-      "package_version": "2026.10.21+3defff42",
-      "released_at": "2026-10-21T16:26:45+08:00",
-      "rule_version": "DL-WAISU.v1.0.7",
+      "package_version": "2026.10.26+516edc6d",
+      "released_at": "2026-10-26T13:53:53+08:00",
+      "rule_version": "DL-WAISU.v1.0.8",
       "rules": {
         "category_id": "allowance",
         "change_log": [
+          {
+            "changes": "东莞外宿补贴整体替换为23个享有岗位、8个不享有岗位；忽略职级，取消姓名例外。",
+            "released_at": "2026-10-26",
+            "version": "DL-WAISU.v1.0.8"
+          },
           {
             "changes": "东莞、嘉善、义乌住宿至实际离职当天并退宿的，该日不新增外宿补贴；普通退宿及入住前外宿天数口径不变。",
             "released_at": "2026-10-20",
@@ -612,11 +630,49 @@
             "details": [
               "缺勤包含事假、排休请假、病假、旷工及入离职缺勤；不计休年假等有薪假。",
               "全月在职缺勤达到56小时且仍在宿时为0；无住宿扣除时按缺勤小时折算。",
-              "东莞、嘉善、义乌实习生享有外宿补贴，月标准150元，沿用各地区现有在职、住宿和缺勤折算规则。"
+              "东莞、嘉善、义乌实习生享有外宿补贴，月标准150元，沿用各地区现有在职、住宿和缺勤折算规则。",
+              "享有岗位：安检副主管、安检员、安检组长、操作文员、操作员、操作主管、操作组长、叉车司机、查验员、稽查副主管、稽查组长、监察员、理货员、民航初级安检员、民航中级安检员、民航高级安检员、内部初级安检员、内部中级安检员、内部高级安检员、实习生、文员、物流专员、揽收充电司机。",
+              "不享有岗位：HRBP主管、HRBP专员、保洁、高级招聘专员、人事专员、行政专员、招聘专员、质量监控专员。",
+              "仅按岗位名称判断，不校验职级；陈西莎、田盈与其他人员统一按岗位名单判断，不再按姓名例外享有。"
+            ],
+            "eligible_positions": [
+              "安检副主管",
+              "安检员",
+              "安检组长",
+              "操作文员",
+              "操作员",
+              "操作主管",
+              "操作组长",
+              "叉车司机",
+              "查验员",
+              "稽查副主管",
+              "稽查组长",
+              "监察员",
+              "理货员",
+              "民航初级安检员",
+              "民航中级安检员",
+              "民航高级安检员",
+              "内部初级安检员",
+              "内部中级安检员",
+              "内部高级安检员",
+              "实习生",
+              "文员",
+              "物流专员",
+              "揽收充电司机"
             ],
             "formula": "150/月自然日天数×有效补贴天数",
+            "ineligible_positions": [
+              "HRBP主管",
+              "HRBP专员",
+              "保洁",
+              "高级招聘专员",
+              "人事专员",
+              "行政专员",
+              "招聘专员",
+              "质量监控专员"
+            ],
             "name": "东莞",
-            "rule": "按东莞享有/不享有岗位名单判断，陈西莎、田盈按已确认特殊名单享有。"
+            "rule": "按东莞完整享有/不享有岗位名单精确匹配，忽略职级；取消姓名特殊享有，未列入享有名单的岗位不享有。"
           },
           {
             "details": [
@@ -648,23 +704,22 @@
           "2026年8月逐行回归修复4人：植里海62.90元、叶小玉9.68元、袁连升14.52元、王堂庆4.84元。",
           "按2026年8月数据复核，取消岗位限制仅新增义乌张扬（OWHD8161，人事行政专员）38.71元；嘉善无人受影响。"
         ],
-        "version": "DL-WAISU.v1.0.7"
+        "version": "DL-WAISU.v1.0.8"
       },
-      "sha256": "1610d07fdde40e5bff2fef91d37b309a7ce388dfe2aab948864fe5d56a4630ef",
-      "size_bytes": 59156,
+      "sha256": "26e9460c35faa58733a122c5bf9a9dfe50111424ddaf923451fd24b518f47c50",
+      "size_bytes": 59839,
       "slug": "hras-waisu-butie",
       "source_sha256": {
         "engines/base.py": "1c805c9d023a8800509a90756c089b8dc7b2f1adb53250ef1a763a29d43a4d6e",
         "engines/gaowen_butie.py": "bebfee28a5e21789f7563a04193183a76c182f835489389d94b6ba293318303d",
         "engines/position_rules.py": "c76042657afdb510831c9f0da7a37c61ab90a63d1da665ed927f3cf0ffa95985",
-        "engines/waisu_butie.py": "fe5f80bc96af874a6c3ddf5e7389869caac733e8c45d2d85b8e7356eea4b7b28",
+        "engines/waisu_butie.py": "68658308e19a33e856bc61a4616243133557c61c3c94e11e792856ef091ce3d6",
         "models.py": "8bc8ba01f006c495ae3d28778ef0a27359cc1a38273b5dedc5ce796481d1e62b",
         "supplemental_inputs.py": "e4bc5f66b1a5648c3c6fab80054b5f2074fb4ae689e1f19732a7aa3f4c0f2994",
         "temperature_sites.py": "97f7e40d36fd5df034adb6de7630677ee9e8ef3027105eeb2bded69fce4f6a6c"
       },
       "updates": [
-        "同步最新核算引擎与配套输入校验",
-        "规则版本：DL-WAISU.v1.0.7；实现内容已更新"
+        "东莞外宿补贴整体替换为23个享有岗位、8个不享有岗位；忽略职级，取消姓名例外。"
       ]
     },
     {
@@ -1806,5 +1861,5 @@
       ]
     }
   ],
-  "updated_at": "2026-10-21T16:26:45+08:00"
+  "updated_at": "2026-10-26T13:53:53+08:00"
 }

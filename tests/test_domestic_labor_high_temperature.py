@@ -534,7 +534,7 @@ def test_southeast_security_officer_monthly_cap():
 
 def test_southeast_security_officer_rule_preserves_previous_version():
     client = TestClient(app)
-    current = client.get("/api/domestic-labor/rule-package").json()
+    current = client.get("/api/domestic-labor/rule-package", params={"version":"1.4.12"}).json()
     previous = client.get("/api/domestic-labor/rule-package", params={"version":"1.4.11"}).json()
     current_subjects = {s["id"]:s for s in current["subjects"]}
     previous_subjects = {s["id"]:s for s in previous["subjects"]}
@@ -553,7 +553,7 @@ def test_rule_package_and_subject_card_publish_high_temperature_as_validating():
     high_temperature = next(subject for subject in package["subjects"] if subject["id"] == "gaowen_butie")
     payload = str(high_temperature)
 
-    assert package["version"] == "1.4.12"
+    assert package["version"] == "1.4.13"
     assert high_temperature["version"] == "DL-GAOWEN.v0.9.3"
     assert high_temperature["status"] == "验证中"
     assert "同测温网点、同出勤日期、同白/夜班" in payload

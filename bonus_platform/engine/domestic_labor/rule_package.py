@@ -2579,7 +2579,43 @@ _RULE_PACKAGE["version_history"] = [{
     "released_at": "2026-10-21", "summary": "东南（晋江）高温补贴享有岗位新增安全员。",
 }, {**_RULE_PACKAGE_V1_4_11["version_history"][0], "status": "历史版本"}, *_RULE_PACKAGE_V1_4_11["version_history"][1:]]
 
+# 2026-10-26：东莞外宿补贴按完整岗位表核算，忽略职级、取消姓名例外。
+_RULE_PACKAGE_V1_4_12 = deepcopy(_RULE_PACKAGE)
+_RULE_PACKAGE = deepcopy(_RULE_PACKAGE_V1_4_12)
+_RULE_PACKAGE.update({
+    "version": "1.4.13", "display_version": "DL-PAYROLL.v1.4.13", "released_at": "2026-10-26",
+})
+_waisu_butie = next(subject for subject in _RULE_PACKAGE["subjects"] if subject["id"] == "waisu_butie")
+_waisu_butie["version"] = "DL-WAISU.v1.0.8"
+_dongguan_housing = next(region for region in _waisu_butie["regions"] if region["name"] == "东莞")
+_dongguan_housing["eligible_positions"] = [
+    "安检副主管", "安检员", "安检组长", "操作文员", "操作员", "操作主管", "操作组长",
+    "叉车司机", "查验员", "稽查副主管", "稽查组长", "监察员", "理货员",
+    "民航初级安检员", "民航中级安检员", "民航高级安检员",
+    "内部初级安检员", "内部中级安检员", "内部高级安检员",
+    "实习生", "文员", "物流专员", "揽收充电司机",
+]
+_dongguan_housing["ineligible_positions"] = [
+    "HRBP主管", "HRBP专员", "保洁", "高级招聘专员", "人事专员", "行政专员", "招聘专员", "质量监控专员",
+]
+_dongguan_housing["rule"] = "按东莞完整享有/不享有岗位名单精确匹配，忽略职级；取消姓名特殊享有，未列入享有名单的岗位不享有。"
+_dongguan_housing["details"].extend([
+    "享有岗位：" + "、".join(_dongguan_housing["eligible_positions"]) + "。",
+    "不享有岗位：" + "、".join(_dongguan_housing["ineligible_positions"]) + "。",
+    "仅按岗位名称判断，不校验职级；陈西莎、田盈与其他人员统一按岗位名单判断，不再按姓名例外享有。",
+])
+_waisu_butie["change_log"].insert(0, {
+    "version": "DL-WAISU.v1.0.8", "released_at": "2026-10-26",
+    "changes": "东莞外宿补贴整体替换为23个享有岗位、8个不享有岗位；忽略职级，取消姓名例外。",
+})
+_RULE_PACKAGE["version_history"] = [{
+    **_RULE_PACKAGE_V1_4_12["version_history"][0],
+    "version": "1.4.13", "display_version": "DL-PAYROLL.v1.4.13", "status": "当前版本",
+    "released_at": "2026-10-26", "summary": "东莞外宿补贴按完整岗位表核算，忽略职级并取消姓名特殊享有。",
+}, {**_RULE_PACKAGE_V1_4_12["version_history"][0], "status": "历史版本"}, *_RULE_PACKAGE_V1_4_12["version_history"][1:]]
+
 _RULE_PACKAGE_VERSIONS = {
+    _RULE_PACKAGE_V1_4_12["version"]: _RULE_PACKAGE_V1_4_12,
     _RULE_PACKAGE_V1_4_11["version"]: _RULE_PACKAGE_V1_4_11,
     _RULE_PACKAGE_V1_4_10["version"]: _RULE_PACKAGE_V1_4_10,
     _RULE_PACKAGE_V1_4_9["version"]: _RULE_PACKAGE_V1_4_9,
