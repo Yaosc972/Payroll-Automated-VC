@@ -130,14 +130,17 @@ def needed(row,field,month=None):
     return kinds
 
 
-def recipient_requirements(state,month):
+def recipient_requirements(state,month,include_pending=False):
     from .recruitment_beisen import coverage_sets
     from .recruitment_drafts import ROLE_FIELDS, staff_id
     coverage=coverage_sets([s for s in state['sources'] if s.get('kind')=='beisen' and s.get('forMonth')==month])
     current=set();covered=set();domestic=set();missing=set()
     for row in state['rows']:
-        roles={n['role'] for kind in ('recruitment','referral') for n in row['calculation'][kind]['nodes']
-               if not n.get('externalResultId') and n.get('scheduledMonth',n.get('dueMonth'))==month}
+        def required(node):
+            return not node.get('externalResultId') and (node.get('scheduledMonth',node.get('dueMonth'))==month
+                or include_pending and not node.get('openingLocked') and any(
+                    issue.startswith(node['role']+'：') for issue in node.get('issues',[])))
+        roles={n['role'] for kind in ('recruitment','referral') for n in row['calculation'][kind]['nodes'] if required(n)}
         for field,prefix,_,_ in ROLE_FIELDS:
             number=staff_id(row['values'].get(field))
             if prefix not in roles or not number.startswith('zt'):continue
@@ -145,6 +148,13 @@ def recipient_requirements(state,month):
             evidence=row.get('recipientEmploymentEvidence',{}).get(prefix,{})
             overseas=row.get('recipientSourceRegions',{}).get(prefix)=='海外'
             proven=evidence.get('covered') or not overseas and not evidence.get('virtual') and number in coverage['recipientEmployment']
+            if not proven and not evidence.get('virtual') and row.get('employmentTimelines',{}).get(prefix):
+                from .recruitment_employment import status_from_timeline
+                from .recruitment_special import cutoff, evaluation_date
+                nodes=[(kind,n) for kind in ('recruitment','referral') for n in row['calculation'][kind]['nodes']
+                       if n['role']==prefix and required(n)]
+                proven=all(status_from_timeline(row,prefix,evaluation_date(cutoff(state,kind),kind,as_date(n.get('dueDate')),month))
+                           in {'','适用日期已不在职'} for kind,n in nodes)
             if proven:covered.add(number)
             else:missing.add(number)
             if not overseas and not evidence.get('virtual'):domestic.add(number)
@@ -305,9 +315,12 @@ def project(state):
                 elif '汇报关系' in issue: action,name='hierarchy','核对推荐关系'
                 elif '推荐人岗位与职级' in issue: action,name='referral_qualification','核对推荐人资格'
                 elif any(token in issue for token in ('在职','转正','任职日期','任职记录','日期记录','采集日期','领取人资料')): action,name='recipient','核对候选人及领取人任职状态'
+                elif issue=='标准币种对应地区待核':action,name='country','核对实际工作国家/地区'
                 elif '标准' in issue or '特殊规则' in issue: action,name='standard','核对适用奖金标准'
                 else: action,name='calculation:'+issue,issue
-                add(action,name,task,rid,dependencies);continue
+                recoveries=[r for r in row['calculation'][dependencies[0]].get('recoveries',[]) if r['reason']==issue]
+                historical=bool(recoveries) and all(r.get('historyOnly') for r in recoveries)
+                add(action,name,task,rid,dependencies,False if historical else None);continue
             if kind=='previous_exit':
                 if 'recruitment' in eligible and uses_previous_exit(row): add('rehire','核对二次入职间隔',task,rid,['recruitment'])
                 continue

@@ -120,8 +120,8 @@ def project(state, attention):
                     key='recruitment-assignment';title='核对招聘分工';mode='assignments';field=None
                     detail='原始资料中的招聘分工不一致或缺少负责人。对照依据，集中更正负责人和协助招聘人。'
                 elif kind=='recipient':
-                    key='recipient';title='补齐招聘负责人、协助招聘人和推荐人的任职资料';mode='recipient';field=None
-                    detail='国内工号自动补查任职；同一人的资料补充一次，更新全部关联奖金。'
+                    key='recipient';title='核对奖金发放时的在职状态';mode='recipient';field=None
+                    detail='自动核对国内、海外人员的在职及离职信息，同一人的结果用于全部关联奖金。'
                 elif kind=='channel_policy':
                     key=kind;title='核定招聘渠道归类及系数';mode='facts';field=None
                     detail='原始渠道已经提供，需核定适用归类及系数；保留原文和当前不可计算结果。'
@@ -226,6 +226,7 @@ def operator_reason(row,key,month,state=None):
         if len(dates)>1:return '入职日期存在 '+ ' / '.join(dates)+' 不同记录，请对照原始资料。'
         return '本次入职日期 '+(dates[0] if dates else '未提供')+'，请核对是否重新入职及此前离职记录。'
     if key=='field:推荐人工号':return '已记录内推渠道，但没有推荐人姓名；核对实际推荐关系。'
+    if key=='country':return f"已同步的工作地为「{v.get('工作地') or '未提供'}」，尚不能确定币种。请补充具体工作国家，例如德国、美国。"
     if key=='standard':return f"{v.get('标签分类','')} · {v.get('ABC类别','')} · {v.get('职级','')} 尚未对应奖金标准，不需要更改人员资料。"
     return ''
 
@@ -315,6 +316,8 @@ def detail(state,item,attention=None):
                         identity='recipient:'+str(v[prefix+'工号']).lower()+'|'+str(v.get(prefix+'入职日期',''));fact=field[len(prefix):]
                         person=v.get(prefix+'姓名') or v[prefix+'工号'];break
             key=(identity,fact);f=fields.setdefault(key,{'field':field,'person':person,'identity':identity,'value':v.get(field,''),'options':[],'targets':[],'bindings':[]})
+            if item['key']=='country':f.update(label='实际工作国家/地区',placeholder='例如：德国、美国',
+                help='按本次任职在核算月的实际工作国家填写，系统据此确定币种和地区标准。')
             if v.get(field,'')!=f['value']:f['mixed']=True
             if rid not in f['targets']:f['targets'].append(rid)
             binding={'rowId':rid,'field':field}
@@ -333,15 +336,18 @@ def detail(state,item,attention=None):
         from .recruitment_beisen import coverage_sets
         coverage=coverage_sets([s for s in state['sources'] if s.get('kind')=='beisen' and s.get('forMonth')==state['month']])
         attempted=coverage['requestedRecipient']|coverage['requestedCandidate']
+        attempted.update(n for s in state['sources'] if s.get('kind')=='overseas_api'
+                         and s.get('active',True) and not s.get('comparisonOnly') and s.get('forMonth')==state['month']
+                         for n in s.get('scopeJobNumbers',[]))
         for f in fields.values():
             for binding in f['bindings']:
                 row=rows[binding['rowId']];v=row['values'];field=binding['field']
                 for prefix in ('招聘负责人','协助招聘人','推荐人'):
                     if not field.startswith(prefix) or not v.get(prefix+'工号'):continue
                     number=str(v[prefix+'工号']).lower();facts=row.get('employmentTimelines',{}).get(prefix,[])
-                    message=('已返回任职记录，但仍未提供可确定本次领取资格的完整事实' if facts else
-                             '已查询，未返回可用任职记录' if number in attempted else
-                             '可通过接口补查' if number.startswith('zt') else '体系外编号，需要补充原始任职资料')
+                    message=('已返回记录，在职或离职信息仍有缺项或冲突' if facts else
+                             '已查询，未返回可用在职或离职信息' if number in attempted else
+                             '可自动核对国内、海外离职信息' if number.startswith('zt') else '体系外编号，需要补充在职或离职依据')
                     checks[number]={'employeeId':number,'name':v.get(prefix+'姓名') or number,'message':message}
     current_fields=[]
     for f in fields.values():

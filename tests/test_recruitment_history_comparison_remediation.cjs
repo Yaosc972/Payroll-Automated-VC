@@ -71,6 +71,18 @@ test('history review shows source notes and existing arrangements before its mon
   assert.equal(page.requests.length,1);
 });
 
+test('an old cancellation is informational without another retain-history step',async()=>{
+  const page=surface({...recovery,historyOnly:true});
+  await page.window.RecruitmentSpecial.review({rowIds:['row']});
+  const html=page.elements.get('draftInspectorBody').innerHTML;
+  assert.match(html,/历史记录不计入本月金额/);
+  assert.match(html,/实际扣回结果未核实/);
+  assert.match(html,/3月扣回35.75美元/);
+  assert.doesNotMatch(html,/data-rs-retain|是否已结清|结算结果待核实/);
+  assert.match(html,/data-rs-correct/);
+  assert.equal(page.requests.filter(r=>r.options?.method==='POST').length,0);
+});
+
 
 test('missing historical payee remains blank in the original form', async()=>{
   const missing={...recovery,recipientId:'',recipientName:''};

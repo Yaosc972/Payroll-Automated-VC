@@ -161,7 +161,7 @@ def parse(content,source,month,state=None):
                                 'scopeExpanded':not (_outside(number) or _outside(recipient_id))}))
     finally:
         workbook.close();formulas.close()
-    if not recognized:raise ValueError('未找到体系外核算结果表。请使用模板，或上传含“附件一-招聘奖金核算明细”的原表')
+    if not recognized:raise ValueError('未找到体系外核算结果。请上传含被招聘人、奖金项目、领取人、本月核定金额和币种的结果表，或含“附件一-招聘奖金核算明细”的原表')
     if not result:raise ValueError('未找到本月体系外核算结果。原台账仅纳入明确GL、体系外编号或已划为体系外的人员及奖金项目')
     return result
 

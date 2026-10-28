@@ -213,3 +213,43 @@ def test_activity_list_summary_updates_after_saved_draft_changes(activities):
     result=client.get('/api/recruitment/activities').json()
     for key in ('activities','legacyRecords'):
         assert (result[key][0]['people'],result[key][0]['sources'],result[key][0]['updatedAt'])==(2,1,'2099-07-02T10:00:00')
+
+
+def test_creator_uses_session_and_survives_other_user_updates(activities,monkeypatch):
+    import sys
+    from types import ModuleType
+    client,store=activities
+    auth=ModuleType('bonus_platform.auth')
+    current={'user':{'id':'user-a','name':'创建人甲','avatarUrl':'https://example.com/avatar.png','email':'private@example.com'}}
+    auth.current_user_from_request=lambda request:current
+    monkeypatch.setitem(sys.modules,'bonus_platform.auth',auth)
+    item=create(client,creator={'userId':'forged','name':'伪造创建人'})
+    expected={'userId':'user-a','name':'创建人甲','avatarUrl':'https://example.com/avatar.png'}
+    assert item['creator']==expected
+    assert store.activity(item['id'])['creator']==expected
+    current['user']={'id':'user-b','name':'其他用户'}
+    response=client.get('/api/recruitment/activities').json()
+    assert response['currentUserId']=='user-b'
+    assert response['activities'][0]['creator']==expected
+    changed=client.patch('/api/recruitment/activities/'+item['id'],json={'name':'改名','version':1})
+    assert changed.status_code==200
+    assert changed.json()['creator']==expected
+    assert client.patch('/api/recruitment/activities/'+item['id'],json={'creator':{'name':'替换'},'version':2}).status_code==400
+
+
+def test_missing_creator_does_not_relabel_old_activities(activities,monkeypatch):
+    import sys
+    from types import ModuleType
+    client,store=activities
+    auth=ModuleType('bonus_platform.auth');auth.current_user_from_request=lambda request:None
+    monkeypatch.setitem(sys.modules,'bonus_platform.auth',auth)
+    item=create(client,creator={'name':'不能从请求填写'})
+    assert item['creator']=={'userId':'','name':'','avatarUrl':''}
+    path=store.activity_root/item['id']/'activity.json'
+    old=json.loads(path.read_text());old.pop('creator');path.write_text(json.dumps(old))
+    before=path.read_bytes()
+    auth.current_user_from_request=lambda request:{'user':{'id':'later','name':'后来查看的人'}}
+    result=client.get('/api/recruitment/activities').json()
+    assert result['currentUserId']=='later'
+    assert not result['activities'][0].get('creator')
+    assert path.read_bytes()==before

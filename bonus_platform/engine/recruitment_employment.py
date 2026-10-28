@@ -22,6 +22,12 @@ def index_histories(records):
         latest={provider:max(h.get('queriedAt','') for h in items if h['provider']==provider)
                 for provider in {h['provider'] for h in items}}
         index[key]=[h for h in items if h.get('queriedAt','')==latest[h['provider']]]
+    people=defaultdict(list)
+    for items in index.values():
+        for h in items:
+            if h.get('provider')=='beisen' and h.get('userID') is not None:
+                people['beisen-user:'+str(h['userID'])].append(h)
+    index.update(people)
     return index
 
 
@@ -39,6 +45,101 @@ def identity_discrepancy_is_observation(row):
     return bool(current and len({(h.get('userID'),h.get('lUOffer')) for h in current})==1)
 
 
+def _overseas_previous_exit(row, facts, hire, edits):
+    from .recruitment_drafts import staff_id
+    number=staff_id(row['values'].get('工号'))
+    primary=[h for h in facts if h.get('provider')=='oehr' and h.get('employmentType')=='0'
+             and h.get('employmentStatus') in {'0','1'} and staff_id(h.get('empNo'))==number]
+    current=[h for h in primary if date_text(h.get('entryDate'))==hire]
+    identities={text(h.get('employeeInfoId')) for h in current}
+    if not hire or len(identities)!=1 or '' in identities:return
+    previous=[h for h in primary if date_text(h.get('entryDate')) and date_text(h['entryDate'])<hire]
+    nearest=max((date_text(h['entryDate']) for h in previous),default='')
+    segment=[h for h in previous if date_text(h['entryDate'])==nearest]
+    if any(text(h.get('employeeInfoId')) not in identities for h in segment):return
+    exits={date_text(h['lastWorkDay']) for h in segment if h.get('lastWorkDay')}
+    if len(exits)!=1:return
+    last=next(iter(exits))
+    proof=[h for h in segment if h.get('employeeStatus')=='8' and date_text(h.get('lastWorkDay'))==last]
+    if not proof or not nearest<=last<hire:return
+    field='上次离职日期';values=row['values']
+    refs=row['provenance'].setdefault(field,[])
+    for h in proof:
+        evidence={**h['source'],'role':'employment_history','value':last}
+        if evidence not in refs:refs.append(evidence)
+    if field in edits:return
+    old=values.get(field)
+    if old not in ('',None,last):
+        conflict={'field':field,'values':[old,last],'sourceId':proof[0]['source']['sourceId']}
+        if conflict not in row['conflicts']:row['conflicts'].append(conflict)
+        return
+    values[field]=last
+    if old!=last:
+        row.setdefault('automaticFacts',[]).append({'field':field,'before':old,'after':last,
+            'reason':'OEHR已唯一对应本次入职及上一段已结束的主职任职','source':proof[0]['source']})
+    ended={date_text(h.get('entryDate')) for h in previous if text(h.get('employeeInfoId')) in identities and h.get('employeeStatus')=='8'
+           and date_text(h.get('entryDate'))<=date_text(h.get('lastWorkDay'))<hire}
+    if (row.get('employmentCandidates') and all(c['hireDate'] in ended for c in row['employmentCandidates'])
+            and '任职说明' not in edits and not values.get('任职说明')):
+        values['任职说明']='二次入职：OEHR已对应前后任职，上一段任职已结束'
+
+
+def _overseas_candidate_country(row, facts, hire, edits):
+    from .recruitment_awards import country_currency
+    from .recruitment_drafts import staff_id
+    from .recruitment_overseas import _historical_roster, roster_as_of
+    fields=('二级组织','三级组织','四级组织','五级组织','工作地')
+    values=row['values'];month=values.get('核算月份')
+    if (row.get('frozenRecruitmentFacts') or not month or country_currency(values)[0]
+            or set(fields)&(edits|set(row.get('unresolvedFields',[])))):return
+    current=[h for h in facts if h.get('provider')=='oehr' and h.get('employmentType')=='0'
+             and h.get('employmentStatus') in {'0','1'} and date_text(h.get('entryDate'))==hire
+             and staff_id(h.get('empNo'))==staff_id(values.get('工号'))]
+    identities={text(h.get('employeeInfoId')) for h in current}
+    queried={text(h.get('queriedAt')) for h in current}
+    if len(identities)!=1 or '' in identities or len(queried)!=1 or '' in queried:return
+    raw={f.replace('组织','部门'):values.get(f,'') for f in fields[:-1]}
+    raw.update(工号=staff_id(values.get('工号')),入职日期=hire,办公地址=values.get('工作地',''))
+    payload={'month':month,'queriedAt':next(iter(queried)),
+             'employmentHistory':[{'empNo':raw['工号'],'records':current}]}
+    observed=_historical_roster(raw,payload)
+    changes={f:observed.get('办公地址' if f=='工作地' else f.replace('组织','部门'),'') for f in fields}
+    if not country_currency({**values,**changes})[0]:return
+    if any(values.get(f) and changes[f] and values[f]!=changes[f] for f in fields[:-1]):return
+    at=roster_as_of(payload)
+    proof=next((h for h in current if date_text(h.get('startDate'))<=at<=date_text(h.get('endDate'))),None)
+    if not proof:return
+    for field,value in changes.items():
+        if not value or values.get(field)==value:continue
+        values[field]=value
+        row['provenance'].setdefault(field,[]).append({**proof['source'],'role':'employment_history','value':value,
+            'description':f'按 {at} 有效任职中的工作地及完整组织路径补齐国家'})
+
+
+def _candidate_attributes(row,facts,hire,edits):
+    from datetime import date, timedelta
+    v=row['values'];month=v.get('核算月份')
+    if row.get('frozenRecruitmentFacts') or not month or not hire:return
+    following=(month//100+1)*100+1 if month%100==12 else month+1
+    at=(date(following//100,following%100,1)-timedelta(days=1)).isoformat()
+    provider='oehr' if v.get('标签分类')=='海外' else 'beisen'
+    latest=max((h.get('queriedAt','')[:10] for h in facts if h.get('provider','beisen')==provider),default='')
+    if not latest:return
+    at=min(at,latest)
+    matches=[h for h in facts if h.get('provider','beisen')==provider and date_text(h.get('entryDate'))==hire
+             and date_text(h.get('startDate')) and date_text(h['startDate'])<=at<=date_text(h.get('endDate' if provider=='oehr' else 'stopDate'))
+             and at<=h.get('queriedAt','')[:10] and (h.get('employmentType')=='0' and h.get('employmentStatus') in {'0','1'}
+                if provider=='oehr' else str(h.get('serviceType'))=='0' and str(h.get('approvalStatus'))=='4')]
+    identities={str(h.get('employeeInfoId') if provider=='oehr' else h.get('userID')) for h in matches}
+    if len(identities)!=1 or identities & {'','None'}:return
+    for field,key,translated in [('职级','jobLevelName','OIdJobLevelText'),('职位','positionName','OIdJobPositionText')]:
+        if v.get(field) or field in edits or field in row.get('unresolvedFields',[]):continue
+        choices={text(h.get(key) if provider=='oehr' else h.get('translateProperties',{}).get(translated)) for h in matches}
+        if len(choices)!=1 or '' in choices:continue
+        value=choices.pop();v[field]=value
+        row['provenance'].setdefault(field,[]).append({**matches[0]['source'],'role':'employment_history','value':value})
+
+
 def enrich(row, index, roles):
     """Only unique positive facts are adopted; manual and competing facts survive."""
     from .recruitment_drafts import staff_id
@@ -54,10 +155,15 @@ def enrich(row, index, roles):
     # The engine consults these only when no manual override or unresolved
     # competing fact affects the role. Never serialize them as worksheet cells.
     row['employmentTimelines']=timelines
+    from .recruitment_hierarchy import evidence
+    row['reportingLine']=evidence(row,index)
     candidate=timelines.get('',[]);hire=date_text(v.get('入职日期'))
+    _candidate_attributes(row,candidate,hire,edits)
     if v.get('标签分类')=='海外' and any(h.get('provider')=='oehr' for h in candidate):
+        _overseas_candidate_country(row,candidate,hire,edits)
+        _overseas_previous_exit(row,candidate,hire,edits)
         current=[h for h in candidate if h.get('provider')=='oehr' and h.get('employmentType')=='0'
-                 and date_text(h.get('entryDate'))==hire]
+                 and h.get('employmentStatus') in {'0','1'} and date_text(h.get('entryDate'))==hire]
         dates={date_text(h.get('lastWorkDay')) for h in current if date_text(h.get('lastWorkDay'))>=hire}
         for value in sorted(dates):
             proof=next(h for h in current if date_text(h.get('lastWorkDay'))==value)
@@ -72,7 +178,8 @@ def enrich(row, index, roles):
                 if conflict not in row['conflicts']:row['conflicts'].append(conflict)
         return
     current=[h for h in candidate if (date_text(h.get('entryDate'))==hire or
-             date_text(h.get('recruitmentEntryDate'))==hire and h.get('continuityEvidence')) and h.get('lUOffer')]
+             date_text(h.get('recruitmentEntryDate'))==hire and h.get('continuityEvidence')) and h.get('lUOffer')
+             and str(h.get('serviceType'))=='0' and str(h.get('approvalStatus'))=='4']
     if not current or len({(h.get('userID'),h.get('lUOffer')) for h in current})!=1:return
     user,offer=current[0]['userID'],current[0]['lUOffer']
     row['automaticFacts']=[]
@@ -144,6 +251,9 @@ def status_from_timeline(row,prefix,at,formal=False):
     if region=='海外' and (prefix or overseas) or overseas and region!='国内':
         return _overseas_status(overseas,row,prefix,date,formal) if overseas else None
     facts=[h for h in facts if h.get('provider','beisen')=='beisen']
+    if prefix:
+        # Concurrent assignments do not invalidate the employee's approved primary service.
+        facts=[h for h in facts if str(h.get('serviceType'))=='0' and str(h.get('approvalStatus'))=='4']
     # Recipient identity follows the employee at the award's business date;
     # their current rehire date must not hide an earlier valid employment.
     hire=date_text(row['values'].get(prefix+'入职日期'))
@@ -207,6 +317,34 @@ def _referrer_translations(history, histories):
     return result
 
 
+def _overseas_referrer_qualification(row, dates, facts):
+    from .recruitment_drafts import staff_id
+    number=staff_id(row['values'].get('推荐人工号'));basis=[];identities=set();pairs=set()
+    facts=[h for h in facts if h.get('provider')=='oehr' and str(h.get('employmentType'))=='0'
+           and str(h.get('employmentStatus')) in {'0','1'}]
+    for at in sorted(set(dates)):
+        day=at.strftime('%Y-%m-%d');hire=date_text(row['values'].get('推荐人入职日期'))
+        if hire>day:hire=''
+        matches=[h for h in facts if (not hire or date_text(h.get('entryDate'))==hire)
+                 and date_text(h.get('startDate')) and date_text(h.get('endDate'))
+                 and date_text(h['startDate'])<=day<=date_text(h['endDate'])]
+        if not matches:return []
+        sources=[];day_pairs=set()
+        for h in matches:
+            entry=date_text(h.get('entryDate'));source=h.get('source',{})
+            grade=text(h.get('jobLevelName'));position=text(h.get('positionName'))
+            if (not text(h.get('employeeInfoId')) or staff_id(h.get('empNo'))!=number or not entry or entry>day
+                    or str(h.get('employeeStatus')) not in {'2','3','8'} or day>h.get('queriedAt','')[:10]
+                    or not source.get('sourceId') or not re.fullmatch(r'[PM]\d+(?:-\d+)?',grade.upper())
+                    or referrer_fact_missing(position)):return []
+            day_pairs.add((grade,position));identities.add((text(h['employeeInfoId']),entry))
+            if source not in sources:sources.append(source)
+        if len(day_pairs)!=1 or len(identities)!=1:return []
+        grade,position=next(iter(day_pairs));pairs.add((grade,position))
+        basis.append({'at':day,'values':{'推荐人职级':grade,'推荐人职位':position},'sources':sources})
+    return basis if len(pairs)==1 else []
+
+
 def referrer_qualification(row, dates):
     """Resolve qualification at candidate hire, keeping explicit corrections intact."""
     fields={'推荐人职级':'OIdJobLevelText','推荐人职位':'OIdJobPositionText'}
@@ -218,8 +356,10 @@ def referrer_qualification(row, dates):
     if protected & (set(fields)|{'推荐人工号','推荐人姓名','推荐人入职日期'}):return []
     facts=row.get('employmentTimelines',{}).get('推荐人',[])
     region=row.get('recipientSourceRegions',{}).get('推荐人')
-    if region=='海外' or region!='国内' and any(h.get('provider')=='oehr' for h in facts):return []
-    facts=[h for h in facts if h.get('provider','beisen')=='beisen']
+    if region=='海外' or region!='国内' and any(h.get('provider')=='oehr' for h in facts):
+        return _overseas_referrer_qualification(row,dates,facts)
+    facts=[h for h in facts if h.get('provider','beisen')=='beisen'
+           and str(h.get('serviceType'))=='0' and str(h.get('approvalStatus'))=='4']
     basis=[];identities=set();pairs=set()
     for at in sorted(set(dates)):
         day=at.strftime('%Y-%m-%d');hire=date_text(values.get('推荐人入职日期'))

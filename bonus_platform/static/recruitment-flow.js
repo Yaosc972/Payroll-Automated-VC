@@ -46,6 +46,7 @@
   $('draftRefresh').onclick=()=>prepare(false,true);
   $('draftSyncDomestic').onclick=()=>prepare(true);
   $('flowSync').onclick=syncMonthly;
+  $('flowPrepare').onclick=()=>prepare(false);
   const range=document.createElement('label');range.className='rd-scope';range.id='flowRangeLabel';
   range.innerHTML='<span class="rd-sr-only">人员范围</span><select id="flowRange"><option value="current">本月核算人员</option><option value="review">需要核对的人员</option><option value="all">全部人员</option></select>';
   $('draftScopeLabel').after(range);
@@ -59,7 +60,7 @@
   resultTabs.querySelectorAll('button').forEach(button=>button.onclick=()=>{ui.flowResult=button.dataset.resultTable;ui.flowPage=1;$('draftSearch').value='';$('draftContent').scrollTo(0,0);render();});
   const materialViews=document.createElement('div');materialViews.className='flow-material-view-switch';materialViews.hidden=true;materialViews.setAttribute('role','group');materialViews.setAttribute('aria-label','资料显示方式');
   materialViews.innerHTML=[['list','列表'],['grid','网格']].map(([key,title])=>`<button type="button" data-material-view="${key}" aria-label="${title}显示资料" aria-pressed="${key==='grid'}">${flowIcon(key)}</button>`).join('');
-  $('flowUpload').after(materialViews);
+  $('flowPrepare').after(materialViews);
   materialViews.querySelectorAll('button').forEach(button=>button.onclick=()=>{ui.materialView=button.dataset.materialView;render();});
 
   function renderRecipientSummary(m){
@@ -209,7 +210,7 @@
   }
   function renderSources(m){
     const c=m.coverage,q=$('draftSearch').value.trim().toLowerCase(),materials=window.RecruitmentMaterials;
-    const groups=materials.build(ui.data),preparing=activePreparation(ui.prepareJob),locked=ui.busy||preparing;
+    const groups=materials.build(ui.data),preparing=activePreparation(ui.prepareJob),locked=ui.busy||preparing||!!ui.data.activity?.archived;
     const icon=name=>`<svg class="rd-icon" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
     const matches=source=>[source.name,materials.format(source).description,materials.syncTime(source),...(source.sheets||[]).map(sheet=>sheet.name)].join(' ').toLowerCase().includes(q);
     $('draftCount').textContent=`共 ${ui.data.sources.length} 份资料`;
@@ -249,22 +250,19 @@
       const historyList=history.length?`<details class="flow-sync-history" ${q?'open':''}><summary>查看历史同步记录<span>${history.length} 份</span>${icon('chevron')}</summary><ul class="flow-material-files">${history.map(fileRow).join('')}</ul></details>`:'';
       const intake=group.id==='roster'?ui.data.intakeSummary:null;
       const intakeNotes=Object.entries(intake?.excludedByReason||{}).filter(([,n])=>n).map(([key,n])=>`${n} 人${({oehrMissingOffer:'缺海外 Offer 流程编号',ehrNonZt:'工号不以 zt 开头',otherSource:'不属于 EHR/OEHR 新入职记录'})[key]||'未自动新增'}`);
-      const externalAction=group.id==='external'?`<div class="flow-external-actions"><a class="rd-button" href="${base()}/external-results/template" download>下载模板</a><button data-external-upload class="rd-button" type="button" ${locked?'disabled':''}>上传结果</button>${files.length||ui.data.externalResults?.summary?.records||ui.data.externalResults?.pendingImports?.length?'<button data-external-open class="rd-button" type="button">查看结果</button>':''}</div>`:'';
-      const cumulativeAction=group.id==='external-personnel'?`<p>${e(group.note)}</p><div class="flow-external-actions"><a class="rd-button" href="${base()}/external-personnel/template" download>下载人员模板</a><button data-cumulative-upload class="rd-button" type="button" ${locked?'disabled':''}>上传累计资料</button></div>`:'';
-      const cumulativeNotes=group.id==='external-personnel'?files.filter(source=>source.forMonth===ui.data.month&&source.cumulativeSummary).map(source=>{
+      const externalAction=group.id==='external'?`<p>${e(group.note)}</p><div class="flow-external-actions"><button data-external-upload class="rd-button" type="button" ${locked?'disabled':''}>上传结果</button>${files.length||ui.data.externalResults?.summary?.records||ui.data.externalResults?.pendingImports?.length?'<button data-external-open class="rd-button" type="button">查看结果</button>':''}</div>`:'';
+      const importAction=['opening','extra'].includes(group.id)?`<div class="flow-external-actions"><button data-flow-import="${group.id}" class="rd-button" type="button" aria-label="导入${e(group.title)}" ${locked?'disabled':''}>导入资料</button></div>`:'';
+      const cumulativeNotes=files.filter(source=>source.purpose==='external-personnel'&&source.forMonth===ui.data.month&&source.cumulativeSummary).map(source=>{
         const summary=source.cumulativeSummary;
         return `<details class="flow-material-intake"><summary>${e(source.name)} · 导入情况</summary><p>${summary.newHires} 人本月新增，${summary.updatedPeople} 人有本月转正或离职日期，${summary.unchangedPeople} 人沿用已有事实。</p>${summary.notApplied.length?`<ul>${summary.notApplied.map(item=>`<li>${e(item.name||'未填姓名')} · ${e(item.sheet)} 第 ${item.row} 行 · ${e(item.reason)}</li>`).join('')}</ul>`:''}</details>`;
-      }).join(''):'';
+      }).join('');
       const approvalAction=group.id==='extra'&&files.some(s=>s.approvalSummary)?'<button id="flowApprovalAdjustments" class="rd-button" type="button">核对审批调整</button>':'';
-      return `<section class="flow-material-block" data-category="${group.id}" data-tone="${group.tone}"><header><span class="flow-block-icon">${icon(group.id==='comparison'?'compare':group.icon)}</span><h3>${e(group.title)}</h3><span class="flow-material-status" data-tone="${pending.length?'missing':group.tone}">${pending.length?`${pending.length} 份${group.id==='extra'?'需补充':'待处理'}`:e(group.status)}</span></header>${approvalAction}${['external','external-personnel'].includes(group.id)&&!files.length?'':rows}${historyList}${externalAction}${cumulativeAction}${cumulativeNotes}${intake?`<details class="flow-material-intake"><summary>人员导入情况</summary><p>${intake.eligibleNewHires} 人符合本月新增条件${intakeNotes.length?'；'+e(intakeNotes.join('；')):''}。</p></details>`:''}</section>`;
+      return `<section class="flow-material-block" data-category="${group.id}" data-tone="${group.tone}"><header><span class="flow-block-icon">${icon(group.id==='comparison'?'compare':group.icon)}</span><h3>${e(group.title)}</h3><span class="flow-material-status" data-tone="${pending.length?'missing':group.tone}">${pending.length?`${pending.length} 份${group.id==='extra'?'需补充':'待处理'}`:e(group.status)}</span></header>${approvalAction}${group.id==='external'&&!files.length?'':rows}${historyList}${importAction}${externalAction}${cumulativeNotes}${intake?`<details class="flow-material-intake"><summary>人员导入情况</summary><p>${intake.eligibleNewHires} 人符合本月新增条件${intakeNotes.length?'；'+e(intakeNotes.join('；')):''}。</p></details>`:''}</section>`;
     }).filter(Boolean);
-    $('draftContent').innerHTML=`<div class="flow-sources flow-materials" data-layout="${ui.materialView||'grid'}"><div id="flowMaterialFiles" class="flow-material-board">${blocks.join('')||empty('没有匹配的资料','试试其他文件名或资料分类。')}</div><div class="flow-step-actions"><button id="flowPerson" class="rd-text-button" type="button" ${locked?'disabled':''}>${icon('person')}手动补充人员</button><button id="flowToResults" class="rd-button rd-primary" type="button" ${locked?'disabled':''}>${ui.data.previousAccepted&&!ui.data.rows.length?'承接上月并开始核算':'查看核算明细'}${icon('right')}</button></div></div>`;
+    $('draftContent').innerHTML=`<div class="flow-sources flow-materials" data-layout="${ui.materialView||'grid'}"><div id="flowMaterialFiles" class="flow-material-board">${blocks.join('')||empty('没有匹配的资料','试试其他文件名或资料分类。')}</div><div class="flow-step-actions"><button id="flowPerson" class="rd-text-button" type="button" ${locked?'disabled':''}>${icon('person')}手动补充人员</button><button id="flowToResults" class="rd-button" type="button" ${locked?'disabled':''}>查看核算明细${icon('right')}</button></div></div>`;
     $('flowUpload').onclick=()=>$('draftUpload').click();
+    document.querySelectorAll('[data-flow-import]').forEach(button=>button.onclick=()=>{const input=$('draftUpload');input.multiple=true;input.click();});
     document.querySelectorAll('[data-external-upload]').forEach(button=>button.onclick=()=>window.RecruitmentExternalResults.chooseUpload());
-    document.querySelectorAll('[data-cumulative-upload]').forEach(button=>button.onclick=()=>{
-      const input=document.createElement('input');input.type='file';input.accept='.xlsx,.xlsm,.xls';input.multiple=true;
-      input.onchange=()=>w.upload([...input.files],false,'external-personnel');input.click();
-    });
     document.querySelectorAll('[data-external-open]').forEach(button=>button.onclick=()=>window.RecruitmentExternalResults.open());
     $('flowApprovalAdjustments')?.addEventListener('click',()=>window.RecruitmentApprovals.open());
     $('flowEmptyOpening')?.addEventListener('click',()=>{
@@ -272,9 +270,9 @@
         const revision=ui.data.revision;$('flowOpeningApply').onclick=async()=>{$('flowOpeningApply').disabled=true;try{adopt(await post('/opening-empty',{revision,confirmed:true}));$('draftInspector').close();}catch(err){$('flowOpeningError').textContent=err.message;$('flowOpeningApply').disabled=false;}};
     });
     $('flowPerson').onclick=()=>$('draftAddPerson').click();
-    $('flowToResults').onclick=()=>{if(!ui.data.activity?.archived&&ui.data.previousAccepted&&!ui.data.rows.length)prepare(false);else w.setView('rows');};
+    $('flowToResults').onclick=()=>w.setView('rows');
     document.querySelectorAll('[data-flow-source]').forEach(b=>b.onclick=()=>{const menu=b.closest('details.rd-menu');if(menu)menu.open=false;previewSource(ui.data.sources.find(s=>s.id===b.dataset.flowSource));});
-    document.querySelectorAll('[data-flow-opening]').forEach(button=>button.onclick=async()=>{const id=button.dataset.flowOpening;await w.mutate({baseline:id});if(ui.data.baseline===id)prepare(false);});
+    document.querySelectorAll('[data-flow-opening]').forEach(button=>button.onclick=async()=>{const id=button.dataset.flowOpening;await w.mutate({baseline:id});if(ui.data.baseline===id)status('已采用上月核算表，可继续导入其他资料。全部导入后点击“整理资料并核算”。');});
   }
   function refreshControls(){
     const locked=ui.busy||activePreparation(ui.prepareJob)||!!ui.data?.activity?.archived;
@@ -283,10 +281,25 @@
     $('flowRecalculate').disabled=locked||!ui.data?.sources.length;
     ['flowUpload','flowSync','flowPerson','flowToResults','flowDownload','flowConfirmMonth','flowRestartFromOpening','flowProgressRetry'].forEach(id=>{if($(id))$(id).disabled=locked;});
     document.querySelectorAll('[data-flow-opening]').forEach(button=>{button.disabled=locked;});
+    document.querySelectorAll('[data-flow-import]').forEach(button=>{button.disabled=locked;});
+    refreshMaterialReadiness(locked);
     lockArchived();
   }
+  function refreshMaterialReadiness(locked){
+    if(!ui.data||!window.RecruitmentMaterials?.readiness)return;
+    const check=window.RecruitmentMaterials.readiness(ui.data),button=$('flowPrepare'),hint=$('flowMaterialReadiness');
+    button.disabled=locked||!check.hasMaterials;
+    button.dataset.ready=String(check.ready&&!locked);
+    button.classList.toggle('rd-primary',check.ready);
+    button.title=check.ready?'已导入资料检查通过，点击后开始整理和接口补查':'导入完成后可先整理已有资料；仍有缺项会继续提示。';
+    hint.dataset.ready=String(check.ready);
+    hint.title=check.missing.join('；');
+    hint.textContent=check.ready?'已导入资料检查通过，全部导入后点击“整理资料并核算”。':`待补齐：${check.missing.slice(0,3).join('；')}${check.missing.length>3?`等 ${check.missing.length} 项`:''}。导入完成后可点击整理。`;
+    hint.hidden=ui.view!=='sources';
+    button.hidden=ui.view!=='sources';
+  }
   function refreshExperience(){
-    const state=window.RecruitmentExperience.model(ui.data,ui.prepareJob,{busy:ui.busy,message:ui.operationMessage,error:ui.operationError,exportedRevision:ui.exportedBase===base()?ui.exportedRevision:undefined});
+    const state=window.RecruitmentExperience.model(ui.data,ui.prepareJob,{busy:ui.busy,uploadCount:ui.uploadCount,message:ui.operationMessage,error:ui.operationError,exportedRevision:ui.exportedBase===base()?ui.exportedRevision:undefined});
     state.steps.forEach(step=>{
       const button=document.querySelector(`.flow-step[data-draft-view="${step.id}"]`);
       if(!button)return;
@@ -306,8 +319,11 @@
       if(progress){
         const running=progress.tone==='running',cancelled=progress.tone==='cancelled',done=['complete','attention'].includes(progress.tone);
         const phases=progress.phases.map((title,i)=>{const state=progress.phaseStates?.[i]||(i<progress.phase?'done':i===progress.phase?'active':'waiting');return `<li data-state="${state}">${state==='done'?flowIcon('check'):state==='error'?flowIcon('alert'):'<span class="flow-phase-dot"></span>'}${e(title)}${state==='error'?' · 未完成':''}</li>`;}).join('');
+        const measurement=progress.measurement;
+        const progressText=measurement?`当前环节：${measurement.completed} / ${measurement.total} ${measurement.unit}`:'当前环节正在处理';
+        const progressBar=running?`<div class="flow-progress-meter"><div class="flow-progress-meter-label">${e(progressText)}${measurement?`<span>${measurement.percent}%</span>`:''}</div><div class="flow-progress-track" role="progressbar" aria-label="${e(progress.title)}，当前环节" aria-valuetext="${e(progressText)}" ${measurement?`aria-valuemin="0" aria-valuemax="${measurement.total}" aria-valuenow="${measurement.completed}" data-measured="true"`:''}><span ${measurement?`style="width:${measurement.percent}%"`:''}></span></div></div>`:'';
         const scan='<svg class="flow-scan-icon" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M10 5H7a2 2 0 0 0-2 2v3m17-5h3a2 2 0 0 1 2 2v3M5 22v3a2 2 0 0 0 2 2h3m12 0h3a2 2 0 0 0 2-2v-3"/><path d="M11 10h10M11 15h10M11 20h6"/><path class="flow-scan-line" d="M7 16h18"/></svg>';
-        container.innerHTML=`<section class="flow-progress-card" data-tone="${progress.tone}"><span class="flow-progress-symbol">${running?scan:flowIcon(cancelled?'close':done?'check':'alert')}</span><div class="flow-progress-copy"><h2>${e(progress.title)}</h2>${progress.detail&&progress.detail!==progress.title?`<p>${e(label(progress.detail))}</p>`:''}</div>${running&&activePreparation(ui.prepareJob)?`<button id="flowProgressStop" class="rd-button" type="button" ${progress.canCancel?'':'disabled'}>${progress.canCancel?'停止':'正在停止'}</button>`:running?'':`<button id="flowProgressDismiss" class="rd-text-button" type="button" aria-label="关闭进度提示">×</button>`}${running?`<div class="flow-progress-track" role="progressbar" aria-label="${e(progress.title)}" aria-valuetext="${e(progress.phases[progress.phase]||progress.detail||'正在处理')}"><span></span></div>`:''}${phases?`<ol class="flow-progress-phases" aria-label="资料整理进度">${phases}</ol>`:''}${progress.retry?'<button id="flowProgressRetry" class="rd-button" type="button">重新整理资料</button>':''}</section>`;
+        container.innerHTML=`<section class="flow-progress-card" data-tone="${progress.tone}"><span class="flow-progress-symbol">${running?scan:flowIcon(cancelled?'close':done?'check':'alert')}</span><div class="flow-progress-copy"><h2>${e(progress.title)}</h2>${progress.detail&&progress.detail!==progress.title?`<p>${e(label(progress.detail))}</p>`:''}</div>${running&&activePreparation(ui.prepareJob)?`<button id="flowProgressStop" class="rd-button" type="button" ${progress.canCancel?'':'disabled'}>${progress.canCancel?'停止':'正在停止'}</button>`:running?'':`<button id="flowProgressDismiss" class="rd-text-button" type="button" aria-label="关闭进度提示">×</button>`}${progressBar}${phases?`<ol class="flow-progress-phases" aria-label="资料整理进度">${phases}</ol>`:''}${progress.retry?'<button id="flowProgressRetry" class="rd-button" type="button">重新整理资料</button>':''}</section>`;
         $('flowProgressStop')?.addEventListener('click',stopPreparation);
         if(ui.prepareJob?.monthlyAll&&$('flowProgressRetry'))$('flowProgressRetry').textContent='重新同步资料';
         $('flowProgressRetry')?.addEventListener('click',()=>ui.prepareJob?.monthlyAll?syncMonthly():ui.prepareJob?.overseasOnly?syncOverseas():ui.prepareJob?.domesticOnly?syncDomestic():prepare(false));
@@ -436,10 +452,10 @@
   }
   async function resume(){
     if(ui.data?.activity?.archived)return;
-    const url=base();try{const job=await request(url+'/prepare');if(url!==base())return;ui.prepareJob=job;if(activePreparation(job)){jobBase=url;watch();}else if(ui.data.previousAccepted&&!ui.data.revision&&!['complete','failed','interrupted','cancelled'].includes(job?.status))prepare(false);else update();}catch(err){status(err.message,true);}
+    const url=base();try{const job=await request(url+'/prepare');if(url!==base())return;ui.prepareJob=job;if(activePreparation(job)){jobBase=url;watch();}else update();}catch(err){status(err.message,true);}
   }
   async function prepare(force=false,localOnly=false){
-    if(ui.busy||activePreparation(ui.prepareJob))return;
+    if(ui.busy||activePreparation(ui.prepareJob)||ui.data?.activity?.archived)return;
     const data=ui.data,period=String(data.month).slice(0,4)+'-'+String(data.month).slice(4);
     const hasSnapshot=data.sources.some(s=>s.kind==='overseas_api'&&s.forMonth===data.month&&!s.error);
     const initial=!data.revision||data.parentMonth&&!data.rows.some(r=>String(r.values['入职日期']||r.values['候选人入职时间']||'').startsWith(period));
@@ -475,10 +491,6 @@
   async function beforeUpload(target=ui.data,url=base()){
     const origin=base(),needsOpening=target.previousAccepted&&!target.revision;
     let job=await request(url+'/prepare');
-    if(needsOpening&&!activePreparation(job)){
-      const latest=await request(url);
-      if(!latest.revision)job=await request(url+'/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:latest.revision})});
-    }
     const waitingJob=activePreparation(job)?job.id:null;
     const started=Date.now();
     while(activePreparation(job)){
@@ -489,10 +501,15 @@
       job=await request(url+'/prepare');
     }
     if(waitingJob&&job?.id===waitingJob&&job.status==='cancelled')throw new Error('已停止，文件尚未导入。');
-    const latest=await request(url);
+    let latest=await request(url);
+    if(base()!==origin)throw new Error('核算月份已切换，请在当前月份重新导入。');
+    if(needsOpening&&!latest.revision){
+      const previous=latest.previousMonth||(latest.month%100===1?(Math.floor(latest.month/100)-1)*100+12:latest.month-1);
+      latest=await request(url+'/carry-forward',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:latest.revision,sourceMonth:previous})});
+    }
     if(base()!==origin)throw new Error('核算月份已切换，请在当前月份重新导入。');
     if(url===origin){ui.prepareJob=job;adopt(latest);}
-    if(needsOpening&&!latest.parentMonth)throw new Error('尚未完成上月记录承接，请先重试资料整理，再导入本月文件。');
+    if(needsOpening&&!latest.parentMonth&&!latest.monthly?.coverage?.hasOpening)throw new Error('上月结果承接未完成，请先确认上月结果后再导入。');
     return latest;
   }
   async function watch(){
@@ -507,13 +524,17 @@
   }
   function lockArchived(){
     if(!ui.data?.activity?.archived)return;
-    const ids=['flowPrimary','flowRecalculate','flowUpload','flowSync','flowPerson','flowEmptyOpening','flowConfirmMonth','flowCoverageConfirmed','flowRestartFromOpening','draftUpload','trialNew','trialHistoryNew','trialReference','flowCompareUpload','flowEditPerson','draftEditRecord','flowUndo','flowRedo','flowWorkUpload','flowWorkSync','rwUseBaseline','rwSuggestedPreview','flowOpeningApply'];
+    const ids=['flowPrimary','flowRecalculate','flowUpload','flowSync','flowPrepare','flowPerson','flowEmptyOpening','flowConfirmMonth','flowCoverageConfirmed','flowRestartFromOpening','draftUpload','trialNew','trialHistoryNew','trialReference','flowCompareUpload','flowEditPerson','draftEditRecord','flowUndo','flowRedo','flowWorkUpload','flowWorkSync','rwUseBaseline','rwSuggestedPreview','flowOpeningApply'];
     document.querySelectorAll(ids.map(id=>'#'+id).concat(['[data-flow-opening]','[data-baseline]','[data-toggle-source]','[data-plan]','#flowEditForm input','#flowEditForm select','#flowEditForm button','.rd-review-form input','.rd-review-form select','.rd-review-form textarea','.rd-review-form button']).join(',')).forEach(control=>{if(!control.disabled)control.disabled=true;});
   }
   // Inspectors are populated asynchronously; viewing evidence stays available,
   // while their editing controls inherit the same archive state as the page.
   new MutationObserver(lockArchived).observe($('draftInspectorBody'),{childList:true,subtree:true});
-  document.addEventListener('recruitment:uploaded',()=>setTimeout(()=>prepare(false),0));
+  document.addEventListener('recruitment:uploaded',()=>{
+    if(!activePreparation(ui.prepareJob))ui.prepareJob=null;
+    status('资料已导入，可继续添加其他资料。全部导入后点击“整理资料并核算”。');
+    update(false);
+  });
   document.addEventListener('recruitment:assignments-applied',()=>{status('招聘分工已更正，奖金已更新；可在修改记录中撤销。');});
   document.addEventListener('recruitment:render',update);
   document.addEventListener('recruitment:status',refreshExperience);
@@ -549,7 +570,7 @@
     $('flowOpeningForm').onsubmit=async ev=>{
       ev.preventDefault();const selected=ev.target.querySelector('input:checked');if(!selected){$('flowOpeningError').textContent='请选择要采用的上月核算表。';return;}
       if(ui.busy)return;busy(true);$('flowOpeningApply').disabled=true;
-      try{adopt(await post('/changes',{revision:data.revision,baseline:selected.value}));$('draftInspector').close();status('已采用上月核算表，正在更新核算。');setTimeout(()=>prepare(false),0);}
+      try{adopt(await post('/changes',{revision:data.revision,baseline:selected.value}));$('draftInspector').close();status('已采用上月核算表，可继续导入其他资料。全部导入后点击“整理资料并核算”。');}
       catch(err){$('flowOpeningError').textContent=err.message;$('flowOpeningApply').disabled=false;}finally{busy(false);}
     };
   }
@@ -596,9 +617,14 @@
       form.insertAdjacentHTML('beforebegin',`<div class="flow-review-range"><strong>${includeFuture?`全部 ${people.length} 人`:`本月 ${current.length} 人`}</strong><button id="flowReviewFuture" class="rd-text-button" type="button">${includeFuture?'只看影响本月的人员':`后续 ${future.length} 人，展开查看`}</button></div>`);
       $('flowReviewFuture').onclick=()=>{if(form.dataset.dirty==='true'&&!confirm('切换人员范围会放弃尚未保存的修改，是否继续？'))return;reviewDialog(item,data,!includeFuture);};
     }
+    const queryLabels={employment:'自动查询历史任职及上次离职日期',country:'自动查询工作国家',hierarchy:'自动查询入职时汇报关系',referral_qualification:'自动查询推荐人岗位与职级','field:最后工作日':'自动查询最后工作日','field:转正日期':'自动查询转正日期','field:人员状态':'自动查询任职状态'};
+    if(queryLabels[item.key]){
+      form.insertAdjacentHTML('beforebegin',`<div class="flow-work-tools"><button id="flowWorkSync" class="rd-button" type="button">${queryLabels[item.key]}</button></div>`);
+      $('flowWorkSync').onclick=()=>{$('draftInspector').close();prepare(false);};
+    }
     if(item.mode==='recipient'){
-      const checks=data.checks||[],unqueried=checks.some(c=>c.message==='可通过接口补查');
-      form.insertAdjacentHTML('beforebegin',`<div class="flow-work-tools"><button id="flowWorkUpload" class="rd-button" type="button">上传任职资料，匹配整批</button>${unqueried?'<button id="flowWorkSync" class="rd-text-button" type="button">补查尚未查询的国内人员</button>':''}</div>${checks.length?`<details class="flow-query-receipts"><summary>查看已查询结果 · ${checks.length} 人</summary>${checks.map(c=>`<p><strong>${e(c.name)}</strong>：${e(label(c.message))}</p>`).join('')}</details>`:''}<details class="flow-linked-people"><summary>影响 ${people.length} 名员工的奖金</summary><p>${people.map(p=>e(p.name)+' · '+e(p.employeeId)).join('、')}</p></details>`);
+      const checks=data.checks||[],queryable=checks.some(c=>/^zt/i.test(c.employeeId));
+      form.insertAdjacentHTML('beforebegin',`<div class="flow-work-tools">${queryable?'<button id="flowWorkSync" class="rd-button" type="button">自动核对在职及离职信息</button>':''}<button id="flowWorkUpload" class="rd-text-button" type="button">补充核对依据</button></div>${checks.length?`<details class="flow-query-receipts"><summary>查看核对情况 · ${checks.length} 人</summary>${checks.map(c=>`<p><strong>${e(c.name)}</strong>：${e(label(c.message))}</p>`).join('')}</details>`:''}<details class="flow-linked-people"><summary>影响 ${people.length} 名员工的奖金</summary><p>${people.map(p=>e(p.name)+' · '+e(p.employeeId)).join('、')}</p></details>`);
       $('flowWorkUpload').onclick=()=>{$('draftInspector').close();$('draftUpload').click();};
       $('flowWorkSync')?.addEventListener('click',()=>{$('draftInspector').close();prepare(false);});
     }else if(item.mode==='policy'){
@@ -649,7 +675,7 @@
     const current=data.people.filter(p=>p.current),future=data.people.filter(p=>!p.current);
     const people=includeFuture?data.people:current.length?current:future;
     const table=list=>`<table class="flow-intake-table"><thead><tr><th>人员／入职日</th><th>具体缺项或差异</th><th></th></tr></thead><tbody>${list.map(p=>`<tr><td><strong>${e(p.name)}</strong><span>${e(p.employeeId)} · ${e(p.hireDate)}</span>${includeFuture&&!p.current?'<span>后续准备，不影响本月</span>':''}</td><td>${p.missingFields.length?`缺少：${e(p.missingFields.map(fieldName).join('、'))}`:''}${p.reviewFields.length?`<span>需核对：${e(p.reviewFields.map(fieldName).join('、'))}</span>`:''}<span>${e(p.offerStatus)}</span></td><td><button class="rd-text-button" type="button" data-flow-intake-person="${e(p.id)}">手工补充</button></td></tr>`).join('')}</tbody></table>`;
-    openDialog(label(item.title),`<section class="flow-intake"><h3>${current.length?`本月 ${current.length} 人`:`后续 ${future.length} 人`}</h3><div class="flow-work-tools"><button id="flowWorkUpload" class="rd-button rd-primary" type="button">上传录用资料或补充表</button><a id="flowIntakeTemplate" class="rd-text-button" href="${e(base()+'/work-items/'+item.id+'/supplement.xlsx?revision='+data.revision+'&includeFuture='+includeFuture)}">下载${includeFuture?'全部人员':'当前清单'}补充表</a>${item.key==='intake:国内'?'<button id="flowWorkSync" class="rd-text-button" type="button">接口补查</button>':''}</div>${future.length&&current.length?`<button id="flowIntakeFuture" class="rd-text-button" type="button">${includeFuture?'只看影响本月的 '+current.length+' 人':'另有 '+future.length+' 人仅影响后续月份，展开查看'}</button>`:''}${table(people)}</section>`);
+    openDialog(label(item.title),`<section class="flow-intake"><h3>${current.length?`本月 ${current.length} 人`:`后续 ${future.length} 人`}</h3><div class="flow-work-tools"><button id="flowWorkUpload" class="rd-button rd-primary" type="button">上传录用资料或补充表</button><a id="flowIntakeTemplate" class="rd-text-button" href="${e(base()+'/work-items/'+item.id+'/supplement.xlsx?revision='+data.revision+'&includeFuture='+includeFuture)}">下载${includeFuture?'全部人员':'当前清单'}补充表</a>${['intake:国内','intake:海外'].includes(item.key)?'<button id="flowWorkSync" class="rd-text-button" type="button">自动查询录用资料</button>':''}</div>${future.length&&current.length?`<button id="flowIntakeFuture" class="rd-text-button" type="button">${includeFuture?'只看影响本月的 '+current.length+' 人':'另有 '+future.length+' 人仅影响后续月份，展开查看'}</button>`:''}${table(people)}</section>`);
     $('flowWorkUpload').onclick=()=>{$('draftInspector').close();$('draftUpload').click();};
     $('flowWorkSync')?.addEventListener('click',()=>{$('draftInspector').close();prepare(false);});
     $('flowIntakeFuture')?.addEventListener('click',()=>intakeDialog(item,data,!includeFuture));
@@ -715,7 +741,8 @@
       const conflict=f.mixed?f.options?.length?`<button class="flow-status-tag" data-tone="warning" data-flow-state="${i}" data-flow-conflict="${i}" type="button">来源不一致</button>`:`<span class="flow-status-tag" data-tone="warning" data-flow-state="${i}">来源不一致</span>`:'';
       const definition=f.choices?f:ui.data.fieldControls?.[f.field],value=f.mixed?'':f.value??'';
       const choice=window.RecruitmentFactControls.choice(definition,value,`id="flowValue${i}" data-flow-value="${i}"`);
-      const content=`${picker}<div class="flow-field-label"><label for="flowValue${i}">${e(role?role+'工号':definition?.label||fieldTitle)}</label>${conflict}</div>${choice??`<input id="flowValue${i}" data-flow-value="${i}" type="${/日期|工作日|入职时间/.test(f.field)?'date':f.field.includes('天数')?'number':'text'}" value="${e(value)}" ${f.mixed?'placeholder="选择来源值或填写"':''}/>`}`;
+      const placeholder=f.mixed?'选择来源值或填写':f.placeholder||'';
+      const content=`${picker}<div class="flow-field-label"><label for="flowValue${i}">${e(role?role+'工号':definition?.label||fieldTitle)}</label>${conflict}</div>${choice??`<input id="flowValue${i}" data-flow-value="${i}" type="${/日期|工作日|入职时间/.test(f.field)?'date':f.field.includes('天数')?'number':'text'}" value="${e(value)}" ${placeholder?`placeholder="${e(placeholder)}"`:''}${f.help?` aria-describedby="flowFieldHelp${i}"`:''}/>`}${f.help?`<p id="flowFieldHelp${i}" class="flow-picker-hint">${e(f.help)}</p>`:''}`;
       return `<section class="flow-field${f.field==='任职说明'?' flow-employment-note':''}">${content}</section>`;
     };
     const groups=new Map();

@@ -42,7 +42,21 @@ def test_recruitment_role_can_read_isolated_activity_list(secured_company, monke
     identity(monkeypatch, ('recruitment',))
     response = secured_company.get('/api/recruitment/activities')
     assert response.status_code == 200
-    assert response.json() == {'activities': [], 'legacyRecords': []}
+    assert response.json() == {'activities': [], 'legacyRecords': [], 'currentUserId': 'security-user'}
+
+
+@pytest.mark.parametrize('avatar',[None,'javascript:alert(1)','https://user:password@example.com/avatar.png','https://[invalid'])
+def test_company_identity_uses_existing_session_and_default_avatar(secured_company,monkeypatch,tmp_path,avatar):
+    import bonus_platform.recruitment_draft_api as api
+    monkeypatch.setattr(api,'store',ScopedDraftStore(tmp_path/'drafts'))
+    monkeypatch.setattr(runtime,'production_runtime',lambda:False)
+    current=identity(monkeypatch,('recruitment',));current['user'].update(name='公司用户',avatarUrl=avatar)
+    response=secured_company.post('/api/recruitment/activities',json={'month':202609,'creator':{'userId':'forged','name':'伪造用户'}})
+    assert response.status_code==200,response.text
+    expected={'userId':'security-user','name':'公司用户','avatarUrl':'/assets/sigma-user-avatar-default.png'}
+    assert response.json()['creator']==expected
+    listing=secured_company.get('/api/recruitment/activities').json()
+    assert listing['currentUserId']=='security-user' and listing['activities'][0]['creator']==expected
 
 
 @pytest.mark.parametrize('page', ['recruitment.html', 'recruitment-activities.html', 'recruitment-history.html', 'recruitment-guide.html', 'recruitment-guide.md', 'recruitment-rules.html'])

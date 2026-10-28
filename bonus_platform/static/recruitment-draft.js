@@ -79,13 +79,14 @@
   async function upload(files,comparisonOnly=false,purpose=''){
     if(ui.busy||!files.length||!ui.data)return;
     if(ui.data.activity?.archived){status('活动已归档，请先在活动列表恢复后再导入资料。',true);return;}
-    busy(true);status(`正在整理 ${files.length} 份资料并试算`);
+    ui.uploadCount=files.length;
+    busy(true);status(`正在导入 ${files.length} 份资料`);
     try{
       const periods=purpose?[]:files.filter(f=>/奖金.*(?:核算|明细|台账)|(?:招聘|内推).*台账/.test(f.name)&&!/offer/i.test(f.name)).flatMap(f=>[...f.name.matchAll(/(?<!\d)(20\d{2})[年._-]?(0?[1-9]|1[0-2])月?(?!\d)/g)].map(m=>Number(m[1])*100+Number(m[2])));
       const inferred=periods.length?Math.max(...periods):null;
       let target=ui.data;
       if(!ui.monthExplicit&&!target.revision&&inferred&&inferred!==target.month)target=await request(apiMonth(inferred));
-      // Finish carry-forward and preparation for the actual upload month.
+      // Preserve the confirmed opening and avoid writes during an existing task.
       target=await window.RecruitmentFlow?.beforeUpload?.(target,apiMonth(target.month))||target;
       const form=new FormData();form.append("comparisonOnly",String(comparisonOnly));form.append("revision",target.revision);form.append("periodConfirmed",String(ui.monthExplicit));if(purpose)form.append("purpose",purpose);for(const file of files)form.append("files",file);
       const changedMonth=target.month!==ui.data.month;
@@ -93,7 +94,7 @@
       if(!comparisonOnly)document.dispatchEvent(new CustomEvent("recruitment:uploaded",{detail:{files:files.map(file=>file.name)}}));
       if(changedMonth)status(`已按台账月份归入 ${target.month%100} 月`);
     }
-    catch(err){status(err.message,true);}finally{busy(false);}
+    catch(err){status(err.message,true);}finally{ui.uploadCount=0;busy(false);}
   }
   async function change(payload,revision=ui.data.revision){adopt(await request(base()+"/changes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,revision})}));}
   async function mutate(payload){if(ui.busy)return;busy(true);status("正在保存并更新试算");try{await change(payload);}catch(err){status(err.message,true);}finally{busy(false);}}

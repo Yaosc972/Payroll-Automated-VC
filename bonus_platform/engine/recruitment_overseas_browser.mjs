@@ -1,4 +1,5 @@
 /* Read-only API transport in the user's existing Ego browser session. */
+import {randomUUID} from 'node:crypto';
 const ROSTER_URL='https://oehr.ztn.cn/oehr/personnel/employeeManagement/roster';
 const OFFER_URL='https://hrms.ztn.cn/hc/recruitment/offer';
 const SIZE=200;
@@ -26,7 +27,8 @@ export async function collect(options){
   const fs=await import('node:fs/promises');
   const month=options.month,year=Math.floor(month/100),m=month%100;
   if(!Number.isInteger(month)||year<2000||year>2099||m<1||m>12)fail('INVALID_MONTH');
-  const task=await taskSpace(options.spaceId||`招聘奖金海外取数-${month}`);
+  // Scheduled and activity syncs can overlap; page-side query state belongs to one capture.
+  const task=await taskSpace(options.spaceId||`招聘奖金海外取数-${month}-${randomUUID()}`);
   const checkpoint=async()=>{if(options.cancelFile){try{await fs.access(options.cancelFile);fail('CANCELLED');}catch(e){if(e.code==='CANCELLED')throw e;if(e.code!=='ENOENT')throw e;}}};
   const progress=async message=>{
     if(options.progressFile)await fs.writeFile(options.progressFile,message,{mode:0o600});
@@ -76,9 +78,9 @@ export async function collect(options){
     }
     const rosterQuery=data=>collectPages(page=>rosterPage(data,page));
     const mm=String(m).padStart(2,'0'),last=new Date(Date.UTC(year,m,0)).getUTCDate();
-    const monthly=await rosterQuery({entryDate:[`${year}/${mm}/01`,`${year}/${mm}/${last}`],staffSource:'0'});
+    const monthly=options.employmentOnly||options.offerOnly?[]:await rosterQuery({entryDate:[`${year}/${mm}/01`,`${year}/${mm}/${last}`],staffSource:'0'});
     if(monthly.some(r=>!r['入职日期'].startsWith(`${year}-${mm}`)||r['人员来源']!=='OEHR入职'))fail('WRONG_QUERY_SCOPE');
-    await progress(`已取得 ${monthly.length} 条本月海外花名册，正在关联 Offer`);
+    if(!options.employmentOnly&&!options.offerOnly)await progress(`已取得 ${monthly.length} 条本月海外花名册，正在关联 Offer`);
     const records=new Map();
     function merge(items,scope){for(const data of items){const key=number(data['工号'])+'|'+data['入职日期'];const old=records.get(key);
       if(old&&JSON.stringify(old.data)!==JSON.stringify(data))fail('CHANGED_DURING_QUERY');
@@ -147,7 +149,8 @@ export async function collect(options){
     }
     const recipients=unique(offers.flatMap(o=>['招聘负责人工号','协助招聘负责人工号','内推人工号'].map(k=>number(o[k]))));
     await lookup(recipients);await checkpoint();
-    const historyNumbers=unique([...records.values()].filter(r=>r.data['人员来源']==='OEHR入职'
+    const historyNumbers=unique([...records.values()].filter(r=>(r.data['人员来源']==='OEHR入职'
+      ||options.employmentOnly&&r.scope==='lookup'&&r.data['人员来源']==='人员迁移')
       &&r.data['是否虚拟员工']!=='是'&&(r.scope==='lookup'||r.data['offer流程编号'])).map(r=>number(r.data['工号'])));
     const employmentHistory=[];
     for(let offset=0;offset<historyNumbers.length;offset+=12){
@@ -157,7 +160,7 @@ export async function collect(options){
         const job=window.__recruitmentEmploymentHistory={status:'running',records:[]};let next=0;
         const fields=['empNo','employeeInfoId','infoId','recordId','startDate','endDate','entryDate','lastWorkDay',
           'employmentType','employmentStatus','employeeStatus','businessType','businessTypeName','deptCode','deptName',
-          'positionCode','positionName','jobLevelCode','jobLevelName','lineManagerNo','lineManagerName','workPlaceAreaId','workPlacePathName'];
+          'positionCode','positionName','jobLevelCode','jobLevelName','lineManagerNo','lineManagerName','workPlaceAreaId','workPlacePathName','orgPathName'];
         async function query(empNo){for(let attempt=0;attempt<3;attempt++){let timer;
           try{const result=await Promise.race([v.$api.personnel.employmentRecordData({empNo,queryType:'rosterAuth'}),
             new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(Error('QUERY_TIMEOUT'),{code:'ETIMEDOUT'})),15000);})]);
@@ -165,7 +168,8 @@ export async function collect(options){
             if([408,429].includes(result?.code)||result?.code>=500&&result?.code<=599)throw Object.assign(Error('QUERY_FAILED'),{retryable:true});
             if(result?.code!==200||!Array.isArray(result.data)||result.data.some(h=>!h||typeof h!=='object'||Array.isArray(h)))throw Error('INCOMPLETE_RESPONSE');
             if(result.data.some(h=>String(h.empNo).toLowerCase()!==empNo))throw Error('WRONG_QUERY_SCOPE');
-            return {empNo,records:result.data.map(h=>Object.fromEntries(fields.map(f=>[f,h[f]??''])))};
+            return {empNo,records:result.data.map(h=>({...Object.fromEntries(fields.map(f=>[f,h[f]??''])),
+              lineManagerProvided:Object.hasOwn(h,'lineManagerNo')?'1':'0'}))};
           }catch(error){
             const status=Number(error.response?.status||error.status||0);
             if([401,403].includes(status))throw Error('LOGIN_REQUIRED');
@@ -191,6 +195,8 @@ export async function collect(options){
     await checkpoint();
     const payload={version:1,month,queriedAt:new Date().toISOString(),requestedJobNumbers:requested,
       requestedOfferCodes:unique(options.offerCodes||[]),roster:[...records.values()],offers,missingOfferCodes:unique(missing),employmentHistory};
+    if(options.employmentOnly){payload.employmentOnly=true;payload.employmentHistoryScope='oehr_and_migrated';}
+    if(options.offerOnly)payload.offerOnly=true;
     if(!options.keepSpace)await task.finish({keep:[]});
     return payload;
   }catch(error){

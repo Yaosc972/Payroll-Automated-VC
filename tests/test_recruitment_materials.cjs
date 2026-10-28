@@ -11,6 +11,38 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const source = (id, roles, extra = {}) => ({id, name: id + '.xlsx', roles, active: true, forMonth: 202607, ...extra});
 const draft = sources => ({month: 202607, sources, rows: [], baseline: '', monthly: {coverage: {}}});
 
+test('readiness checks known inputs without requiring optional approvals or policy decisions',()=>{
+  const data=draft([source('本月花名册',['roster','domestic_offer'])]);
+  data.monthly.coverage={hasOpening:true,syncRequired:true};
+  data.monthly.workItems=[{key:'standard',title:'补充奖金标准',ruleMaintenance:true,actionClass:'policy'}];
+  assert.equal(materials.readiness(data).ready,true);
+  data.monthly.workItems.push({key:'intake:海外',title:'补齐海外录用资料',actionClass:'missing_fact'});
+  assert.equal(materials.readiness(data).ready,false);
+  assert.deepEqual(plain(materials.readiness(data).missing),['补齐海外录用资料']);
+});
+
+test('readiness rejects missing openings, old rosters and unadopted or failed snapshots',()=>{
+  const data=draft([source('上月花名册',['roster'],{forMonth:202606})]);
+  assert.deepEqual(plain(materials.readiness(data).missing),['上月核算表或无历史奖金确认','本月花名册']);
+  data.monthly.coverage.hasOpening=true;
+  data.sources.push(source('本月快照',['roster'],{snapshotOnly:true}));
+  assert.equal(materials.readiness(data).ready,false);
+  data.sources[1].snapshotOnly=false;
+  assert.equal(materials.readiness(data).ready,true);
+  data.sources[1].error='文件读取失败';
+  assert.equal(materials.readiness(data).ready,false);
+  assert.ok(materials.readiness(data).missing.includes('处理读取失败的资料'));
+});
+
+test('optional external results become a readiness issue only when expected or uploaded',()=>{
+  const data=draft([source('花名册',['roster'])]);data.monthly.coverage.hasOpening=true;
+  assert.equal(materials.readiness(data).ready,true);
+  data.externalResults={expected:[{id:'external-person'}]};
+  assert.equal(materials.readiness(data).ready,false);
+  data.externalResults={expected:[],pendingImports:[]};
+  assert.equal(materials.readiness(data).ready,true);
+});
+
 test('historical month and current observation time are explicitly distinguished',()=>{
   const note=materials.snapshotNote({kind:'overseas_api',forMonth:202608,addedAt:'2026-10-22T19:00:00+08:00',snapshotVersion:2});
   assert.match(note,/2026年8月/);assert.match(note,/2026-10-22 19:00/);
@@ -129,20 +161,19 @@ test('external result imports have their own purpose and never become opening or
   assert.equal(groups.find(group=>group.id==='external').status,'按需导入');
 });
 
-test('cumulative personnel imports use their own material card and expose skipped rows',()=>{
+test('legacy cumulative evidence remains accessible without an intake card or result reclassification',()=>{
   const file=source('BP累计',['cumulative'],{purpose:'external-personnel',cumulativeSummary:{newHires:2,updatedPeople:1,notApplied:[{code:'future_hire'}]}});
-  assert.deepEqual(plain(materials.categories(file)),['external-personnel']);
+  assert.deepEqual(plain(materials.categories(file)),['other']);
   const groups=materials.build(draft([file]));
-  assert.equal(groups.find(group=>group.id==='external-personnel').status,'1 条未采用');
-  assert.equal(groups.find(group=>group.id==='external-personnel').tone,'missing');
+  assert.equal(groups.find(group=>group.id==='external-personnel'),undefined);
+  assert.equal(groups.find(group=>group.id==='other').files[0].cumulativeSummary.notApplied.length,1);
   assert.equal(groups.find(group=>group.id==='opening').files.length,0);
   assert.equal(groups.find(group=>group.id==='external').files.length,0);
 });
 
-test('previous month cumulative evidence does not claim a current-month import',()=>{
+test('previous month cumulative evidence stays in other files and empty drafts have no cumulative card',()=>{
   const file=source('上月累计',['cumulative'],{purpose:'external-personnel',forMonth:202606});
-  const group=materials.build(draft([file])).find(item=>item.id==='external-personnel');
-  assert.equal(group.status,'待导入本月资料');
+  const group=materials.build(draft([file])).find(item=>item.id==='other');
   assert.equal(group.files.length,1);
-  assert.equal(materials.build(draft([])).find(item=>item.id==='external-personnel').status,'按需提供');
+  assert.equal(materials.build(draft([])).find(item=>item.id==='external-personnel'),undefined);
 });

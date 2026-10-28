@@ -49,6 +49,25 @@ def test_missing_offer_work_is_grouped_by_region_not_job_family():
     assert state==before  # Neither grouping nor opening is an approval.
 
 
+def test_unknown_currency_requests_a_country_instead_of_an_unrelated_standard_type():
+    row=person(工作地='非中国',二级组织='',三级组织='',四级组织='',五级组织='',奖金地区类型='',推荐人工号='',推荐人姓名='')
+    state=state_for([row],[])
+    items=work.project(state,project(state))
+    item=next(i for i in items if i['key']=='country')
+    assert item['title']=='核对实际工作国家/地区' and not item['ruleMaintenance']
+    data=work.detail(state,item)
+    assert [f['field'] for f in data['fields']]==['工作地']
+    field=data['fields'][0]
+    assert field['label']=='实际工作国家/地区'
+    assert '德国' in field['placeholder'] and '币种' in field['help']
+    assert '非中国' in data['people'][0]['explanation']
+    row['values']['工作地']='德国'
+    from bonus_platform.engine.recruitment_awards import calculate_draft
+    calculate_draft(state)
+    assert row['calculation']['recruitment']['currency']=='欧元'
+    assert not any(i['key']=='country' for i in work.project(state,project(state)))
+
+
 def test_recipient_fields_are_shared_across_roles_but_not_distinct_employments():
     first=person();first['id']='a';first['values'].update(招聘负责人工号='zt-shared',招聘负责人入职日期='',招聘负责人人员状态='',招聘负责人姓名='同一领取人')
     second=deepcopy(first);second['id']='b';second['values'].update(招聘负责人工号='zt-other',招聘负责人入职日期='2020-01-01',协助招聘人工号='zt-shared',协助招聘人入职日期='',协助招聘人人员状态='',协助招聘人姓名='同一领取人')

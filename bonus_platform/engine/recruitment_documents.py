@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import fcntl
+from importlib import metadata
+import logging
 import re
 from pathlib import Path
 import shutil
@@ -10,8 +12,70 @@ import subprocess
 import sys
 from uuid import uuid4
 
-DOCUMENT_VERSION = 4
-DOCUMENT_REFERENCE_VERSION = 3
+DOCUMENT_VERSION = 5
+DOCUMENT_REFERENCE_VERSION = 4
+
+
+def _vision_available():
+    return sys.platform == 'darwin' and bool(shutil.which('swift'))
+
+
+def ocr_signature():
+    versions = []
+    for package in ('rapidocr', 'onnxruntime'):
+        try: versions.append(package + ':' + metadata.version(package))
+        except metadata.PackageNotFoundError: versions.append(package + ':unavailable')
+    return '|'.join(['ocr-1', 'vision:' + str(_vision_available()), *versions])
+
+
+def _recognize(command, images):
+    output = subprocess.run(command, check=True, capture_output=True, text=True, timeout=180)
+    result = json.loads(output.stdout)
+    expected = {str(image) for image in images}
+    if (not isinstance(result, list) or len(result) != len(images)
+            or any(not isinstance(item, dict) or not isinstance(item.get('image'), str)
+                   or not isinstance(item.get('text', ''), str) for item in result)
+            or {item.get('image') for item in result} != expected):
+        raise ValueError('OCR response does not cover the requested pages')
+    return {item['image']: item for item in result}
+
+
+def _ocr_pages(pages, folder):
+    remaining = [page for page in pages if not page.get('blank')
+                 and (len(page.get('text', '').strip()) < 60 or page.get('notice'))]
+    if not remaining: return
+    engines = ['rapidocr']
+    if _vision_available(): engines.insert(0, 'vision')
+    available = False
+    for engine in engines:
+        images = [folder / f"page-{page['page']}.png" for page in remaining]
+        if engine == 'vision':
+            sdk = Path('/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk')
+            command = ['swift'] + (['-sdk', str(sdk)] if sdk.exists() else []) + [str(Path(__file__).with_name('recruitment_ocr.swift'))]
+        else:
+            command = [sys.executable, '-m', 'bonus_platform.engine.recruitment_ocr']
+        try:
+            result = _recognize(command + [str(image) for image in images], images)
+            available = True
+        except (subprocess.SubprocessError, ValueError, OSError) as exc:
+            logging.getLogger(__name__).warning('Approval OCR failed: engine=%s error=%s', engine, type(exc).__name__)
+            continue
+        pending = []
+        for page, image in zip(remaining, images):
+            found = result[str(image)]
+            if found.get('text', '').strip() and not found.get('error'):
+                page.update(text=found['text'], method='本地文字识别' if engine == 'vision' else '服务器文字识别',
+                            ocrEngine=engine, needsVisualReview=True)
+                page.pop('notice', None)
+                page.pop('ocrError', None)
+            else: pending.append(page)
+        remaining = pending
+        if not remaining: return
+    for page in remaining:
+        page['needsVisualReview'] = True
+        page['ocrError'] = 'unrecognized' if available else 'unavailable'
+        page['notice'] = ('未能识别该页文字，请补充清晰原件或人工核对' if available else
+                          '扫描件文字识别暂不可用，请补充文字版或清晰原件并对照原页核对')
 
 
 def mark_blank_pages(data, folder):
@@ -58,11 +122,14 @@ def extract_document(path: Path, folder: Path):
 
 def _extract_document(path: Path, folder: Path):
     cached=folder/'document.json'
+    signature=ocr_signature()
     if cached.exists():
         value=json.loads(cached.read_text())
-        if value.get('version') in (3, DOCUMENT_VERSION) and all((folder/f"page-{p['page']}.png").is_file() for p in value['pages']):
-            if value.get('version') != DOCUMENT_VERSION:
-                mark_blank_pages(value, folder); value['version'] = DOCUMENT_VERSION
+        if value.get('version') in (3, 4, DOCUMENT_VERSION) and all((folder/f"page-{p['page']}.png").is_file() for p in value['pages']):
+            if value.get('version') != DOCUMENT_VERSION or value.get('ocrSignature') != signature:
+                mark_blank_pages(value, folder)
+                _ocr_pages(value['pages'], folder)
+                value.update(version=DOCUMENT_VERSION, ocrSignature=signature)
                 temp=folder/(uuid4().hex+'.tmp');temp.write_text(json.dumps(value,ensure_ascii=False));temp.replace(cached)
             return value
     folder.mkdir(parents=True,exist_ok=True)
@@ -88,20 +155,11 @@ def _extract_document(path: Path, folder: Path):
             raise ValueError('无法读取审批图片，请核对文件是否完整') from exc
         pages=[{'page':1,'text':''}]
     mark_blank_pages({'pages': pages}, folder)
-    sparse=[p for p in pages if not p.get('blank') and len(p['text'].strip())<60]
-    if sparse and sys.platform=='darwin' and shutil.which('swift'):
-        sdk=Path('/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk')
-        command=['swift']+(['-sdk',str(sdk)] if sdk.exists() else [])+[str(Path(__file__).with_name('recruitment_ocr.swift'))]+[str(folder/f"page-{p['page']}.png") for p in sparse]
-        try:
-            output=subprocess.run(command,check=True,capture_output=True,text=True,timeout=180)
-            for page,found in zip(sparse,json.loads(output.stdout)):
-                page['text']=found.get('text','');page['method']='本地文字识别';page['needsVisualReview']=True
-        except (subprocess.SubprocessError,ValueError,OSError):
-            for page in sparse: page['notice']='本机文字识别暂不可用，可对照原页继续核对'
+    _ocr_pages(pages, folder)
     for page in pages:
         page.setdefault('method','原文文字' if page['text'].strip() else '人工核对')
         page.setdefault('needsVisualReview',not bool(page['text'].strip()))
-    result={'version':DOCUMENT_VERSION,'pages':pages,'pageCount':len(pages)}
+    result={'version':DOCUMENT_VERSION,'pages':pages,'pageCount':len(pages),'ocrSignature':signature}
     temp=folder/(uuid4().hex+'.tmp');temp.write_text(json.dumps(result,ensure_ascii=False));temp.replace(cached)
     return result
 

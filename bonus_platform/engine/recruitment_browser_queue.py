@@ -41,10 +41,15 @@ def actor(request):
     return str(current.get('user', {}).get('id', ''))
 
 
-def enqueue(month, numbers, codes):
+def enqueue(month, numbers, codes, *, employment_only=False, offer_only=False):
     from .recruitment_overseas import _month, _numbers
     _month(month)
-    query = {'month':month,'jobNumbers':_numbers(numbers),'offerCodes':_numbers(codes)}
+    if type(employment_only) is not bool or type(offer_only) is not bool or employment_only and offer_only:
+        raise ValueError('海外定向查询模式无效')
+    query = {'month':month,'jobNumbers':_numbers(numbers),'offerCodes':_numbers(codes),
+             'employmentOnly':employment_only,'offerOnly':offer_only}
+    if employment_only and query['offerCodes'] or offer_only and (query['jobNumbers'] or not query['offerCodes']):
+        raise ValueError('海外定向查询范围无效')
     if any(len(query[k]) > 5000 for k in ('jobNumbers','offerCodes')):
         raise ValueError('本次海外查询范围过大')
     session = SESSION.get()
@@ -67,10 +72,10 @@ def get(identifier):
 
 
 class QueuedClient:
-    def fetch(self, month, job_numbers=(), offer_codes=(), progress=None):
+    def fetch(self, month, job_numbers=(), offer_codes=(), progress=None, *, employment_only=False, offer_only=False):
         from .recruitment_cancellation import checkpoint, PreparationCancelled
         from .recruitment_overseas import validate_snapshot
-        identifier = enqueue(month,job_numbers,offer_codes)
+        identifier = enqueue(month,job_numbers,offer_codes,employment_only=employment_only,offer_only=offer_only)
         deadline, message, last_report = time.monotonic()+900, '', 0
         while time.monotonic() < deadline:
             try:
@@ -145,7 +150,10 @@ def complete(identifier:str,payload:dict,request:Request):
     try:
         value=validate_snapshot(payload.get('snapshot'),query['month'])
         if (_numbers(value['requestedJobNumbers']) != query['jobNumbers']
-                or _numbers(value['requestedOfferCodes']) != query['offerCodes']):
+                or _numbers(value['requestedOfferCodes']) != query['offerCodes']
+                or bool(value.get('employmentOnly')) != query.get('employmentOnly',False)
+                or bool(value.get('offerOnly')) != query.get('offerOnly',False)
+                or query.get('employmentOnly') and value.get('employmentHistoryScope') != 'oehr_and_migrated'):
             raise ValueError('取数范围与任务不一致')
         content=json.dumps(value,ensure_ascii=False,separators=(',',':')).encode()
         if len(content)>MAX_RESPONSE:raise ValueError('海外快照过大')

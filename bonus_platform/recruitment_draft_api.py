@@ -641,12 +641,35 @@ trial_drafts_router.include_router(router)
 # route, including copied ContextVars in background preparation jobs.
 activities_router=APIRouter(route_class=PersistentRoute,prefix='/api/recruitment/activities',tags=['recruitment-activities'])
 
+def activity_creator(request:Request):
+    try:
+        from .auth import current_user_from_request
+    except ModuleNotFoundError as exc:
+        if exc.name!='bonus_platform.auth':raise
+        return {}
+    current=getattr(request.state,'labor_current_user',None)
+    if current is None:current=current_user_from_request(request)
+    user=current.get('user',{}) if current else {}
+    if not user:return {}
+    from urllib.parse import urlsplit
+    avatar=str(user.get('avatarUrl') or user.get('avatar_url') or '').strip()
+    try:
+        parsed=urlsplit(avatar)
+        valid=parsed.scheme=='https' and bool(parsed.hostname) and not parsed.username and not parsed.password
+    except ValueError:
+        valid=False
+    if not valid:
+        avatar='/assets/sigma-user-avatar-default.png'
+    return {'userId':str(user.get('id') or ''),'name':str(user.get('name') or ''),'avatarUrl':avatar}
+
 @activities_router.get('')
-def activities():return {'activities':call(store.list_activities),'legacyRecords':call(store.legacy_records)}
+def activities(request:Request):
+    return {'activities':call(store.list_activities),'legacyRecords':call(store.legacy_records),
+            'currentUserId':activity_creator(request).get('userId','')}
 
 @activities_router.post('')
-def create_activity(payload:dict[str,Any]):
-    return call(store.create_activity,payload.get('month'),payload.get('name',''),payload.get('opening'))
+def create_activity(payload:dict[str,Any],request:Request):
+    return call(store.create_activity,payload.get('month'),payload.get('name',''),payload.get('opening'),activity_creator(request))
 
 @activities_router.get('/snapshot-library/{month}')
 def snapshot_library_status(month:int):

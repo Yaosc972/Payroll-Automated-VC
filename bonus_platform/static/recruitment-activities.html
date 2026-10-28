@@ -8,7 +8,7 @@
   <title>核算活动 · 招聘奖金与内推奖金</title>
   <link rel="icon" type="image/png" href="assets/workbench-logo-2026.png" />
   <link rel="stylesheet" href="recruitment-draft.css?v=11" />
-  <link rel="stylesheet" href="recruitment-activities.css?v=6" />
+  <link rel="stylesheet" href="recruitment-activities.css?v=7" />
   <link rel="stylesheet" href="recruitment-ui.css?v=2" />
   <link rel="stylesheet" href="recruitment-icons.css?v=1" />
   <link rel="stylesheet" href="recruitment-density.css?v=1" />
@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="recruitment-start.css?v=3" />
   <script src="recruitment-icons.js?v=11" defer></script>
   <script src="recruitment-ui.js?v=3" defer></script>
-  <script src="recruitment-activities.js?v=11" defer></script>
+  <script src="recruitment-activities.js?v=13" defer></script>
   <script src="recruitment-controls.js?v=3" defer></script>
   <link rel="stylesheet" href="feedback-widget.css?v=20260916-01" />
 </head>
@@ -53,7 +53,7 @@
     <section class="ra-panel" aria-label="核算活动列表">
       <div class="ra-toolbar">
         <div class="ra-tabs" role="group" aria-label="记录范围"><button type="button" data-scope="activities" aria-pressed="true">核算活动</button><button type="button" data-scope="legacy" aria-pressed="false">原核算记录</button></div>
-        <label class="ra-search"><span class="rd-sr-only">搜索活动名称</span><svg class="rd-icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="activitySearch" type="search" placeholder="搜索活动名称" /></label>
+        <label class="ra-search"><span class="rd-sr-only">搜索活动名称、创建人</span><svg class="rd-icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="activitySearch" type="search" placeholder="搜索活动名称、创建人" /></label>
         <label><span class="rd-sr-only">核算月份</span><select id="activityMonth"><option value="">全部月份</option></select></label>
         <label id="activityStateLabel"><span class="rd-sr-only">活动状态</span><select id="activityState"><option value="active">未归档</option><option value="all">全部状态</option><option value="未开始">未开始</option><option value="核算中">核算中</option><option value="正在整理">正在整理</option><option value="已确认">已确认</option><option value="archived">已归档</option></select></label>
         <button id="activityRefresh" type="button" class="rd-text-button">刷新</button>

@@ -17,3 +17,5 @@ numpy
 Pillow
 xlrd
 APScheduler==3.11.3
+rapidocr==3.10.0
+onnxruntime>=1.19.2,<2

@@ -48,9 +48,24 @@ test('empty data does not claim calculated or exported results', () => {
 test('real server stage drives progress without inventing a percentage', () => {
   const progress = model(draft(), {status:'running',stage:'sync',message:'正在补查资料',revision:5}).progress;
   assert.equal(progress.phase, 1);
-  assert.equal(progress.title, '正在同步国内资料');
+  assert.equal(progress.title, '正在同步接口资料');
   assert.equal(progress.detail, '正在补查资料');
   assert.equal('percent' in progress, false);
+});
+test('measured progress describes only the current sync operation', () => {
+  const job={status:'running',stage:'sync',revision:6};
+  for(const [message,completed,total,unit,percent] of [
+    ['正在补查 1 份海外录用资料中的核算缺项',0,1,'份',0],
+    ['海外 Offer 已核对 20 / 50 份',20,50,'份',40],
+    ['海外任职记录已核对 12 / 24 人',12,24,'人',50],
+    ['正在读取国内花名册：300/400 人',300,400,'人',75],
+  ]){
+    const measurement=model(draft(),{...job,message}).progress.measurement;
+    assert.deepEqual(JSON.parse(JSON.stringify(measurement)),{completed,total,unit,percent});
+  }
+  for(const message of ['正在连接接口','海外 Offer 已核对 5 / 4 份','海外任职记录已核对 0 / 0 人'])
+    assert.equal(model(draft(),{...job,message}).progress.measurement,null);
+  assert.equal(model(draft(),{...job,status:'cancelling',message:'海外 Offer 已核对 1 / 2 份'}).progress.measurement,undefined);
 });
 test('an older completed or failed job is not shown as this revision', () => {
   for (const status of ['complete','failed']) assert.equal(model(draft(), {status,revision:5}).progress, null);
@@ -88,6 +103,26 @@ test('ordinary imports, exports and errors have their own prominent feedback', (
   assert.equal(model(draft(), null, {busy:true,message:'正在整理 2 份资料并核算'}).progress.title, '正在导入资料');
   assert.equal(model(draft(), null, {busy:true,message:'正在生成导出表格'}).progress.title, '正在生成导出表格');
   assert.equal(model(draft(), null, {message:'文件读取失败',error:true}).progress.tone, 'error');
+});
+test('upload feedback stays an import while intermediate draft reads change the message',()=>{
+  for(const message of ['正在导入 2 份资料','已保存','正在读取']){
+    const progress=model(draft(),null,{busy:true,uploadCount:2,message}).progress;
+    assert.equal(progress.title,'正在导入资料');
+    assert.equal(progress.detail,'正在读取、识别并保存 2 份资料');
+  }
+  const finished=model(draft(),null,{busy:false,uploadCount:0,message:'资料已导入'});
+  assert.equal(finished.progress,null);
+});
+test('overseas gaps remain visible in every successful sync mode', () => {
+  for(const flags of [{},{overseasOnly:true},{domesticOnly:true},{monthlyAll:true}]){
+    const data=draft();data.monthly.coverage.syncRequired=true;
+    const state=model(data,{status:'complete',revision:6,...flags,
+      coverageGaps:[{role:'海外候选人',reason:'未取得有效录用资料'}],message:'1 名海外候选人未取得有效录用资料'});
+    assert.equal(state.progress.title,'资料尚未齐全');
+    assert.equal(state.progress.tone,'attention');
+    assert.equal(state.progress.retry,true);
+    assert.equal(state.steps[0].note,'资料待补齐');
+  }
 });
 test('exported state applies only to the downloaded revision', () => {
   assert.equal(model(draft(), null, {exportedRevision:6}).steps[2].state, 'complete');

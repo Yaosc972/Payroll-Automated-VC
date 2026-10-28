@@ -14,7 +14,7 @@
   if(startView){$('startTab').setAttribute('aria-current','page');document.title='开始核算 · 招聘奖金与内推奖金';document.querySelector('.rd-skip').href='#recruitmentStart';document.querySelector('.rd-skip').textContent='跳到开始核算';}
 
   const initialPage=Number(query.get('page'));
-  const state={activities:[],legacyRecords:[],scope:query.get('scope')==='legacy'?'legacy':'activities',page:Number.isSafeInteger(initialPage)?Math.max(1,initialPage):1,loading:false,loaded:false,error:'',sequence:0};
+  const state={activities:[],legacyRecords:[],currentUserId:'',scope:query.get('scope')==='legacy'?'legacy':'activities',page:Number.isSafeInteger(initialPage)?Math.max(1,initialPage):1,loading:false,loaded:false,error:'',sequence:0};
   $('activitySearch').value=query.get('q')||'';
   if([...$('activityState').options].some(o=>o.value===query.get('state')))$('activityState').value=query.get('state');
   const createState={submitting:false,snapshotSequence:0,uncertain:false};
@@ -32,6 +32,13 @@
     history.replaceState(null,'',u);try{sessionStorage.setItem('recruitment-activity-list',u.searchParams.toString());}catch{}
   }
   function feedback(message){$('activityFeedback').textContent=message;$('activityFeedback').hidden=!message;}
+  function creatorCell(activity){
+    const creator=activity.creator||{},name=String(creator.name||'').trim();
+    let avatar='';
+    try{const parsed=new URL(creator.avatarUrl);if(['https:','http:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)avatar=parsed.href;}catch{}
+    const mine=!!creator.userId&&creator.userId===state.currentUserId;
+    return `<span class="ra-creator"><span class="ra-avatar" aria-hidden="true">${avatar?`<img src="${escape(avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer" />`:''}</span><span class="ra-creator-name${name?'':' ra-creator-unknown'}" title="${escape(name||'未记录创建人')}">${escape(name||'—')}</span>${mine?'<span class="ra-creator-me">我</span>':''}</span>`;
+  }
   function render(){
     updateCreateControls();
     $('startLoadStatus').textContent=state.error|| (state.loading?'正在读取活动…':'');
@@ -40,7 +47,7 @@
     const legacy=state.scope==='legacy',q=$('activitySearch').value.trim().toLowerCase(),filter=$('activityState').value;
     $('activityStateLabel').hidden=legacy;$('activityNote').hidden=!legacy;
     document.querySelectorAll('[data-scope]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.scope===state.scope)));
-    const rows=(legacy?state.legacyRecords:state.activities).filter(a=>(!q||a.name.toLowerCase().includes(q))&&(!$('activityMonth').value||String(a.month)===$('activityMonth').value)&&(legacy||filter==='all'||(filter==='active'?!a.archived:filter==='archived'?a.archived:a.status===filter)));
+    const rows=(legacy?state.legacyRecords:state.activities).filter(a=>(!q||`${a.name} ${a.creator?.name||''}`.toLowerCase().includes(q))&&(!$('activityMonth').value||String(a.month)===$('activityMonth').value)&&(legacy||filter==='all'||(filter==='active'?!a.archived:filter==='archived'?a.archived:a.status===filter)));
     const pages=Math.max(1,Math.ceil(rows.length/20));if(state.loaded)state.page=Math.min(state.page,pages);remember();
     $('activityCount').textContent=state.loading?'正在读取…':`${rows.length} ${legacy?'份原核算记录':'个活动'} · 第 ${state.page} / ${pages} 页`;
     $('activityPrev').disabled=state.page<=1;$('activityNext').disabled=state.page>=pages;
@@ -54,13 +61,14 @@
       $('activityFirst')?.addEventListener('click',goStart);$('activityLegacy')?.addEventListener('click',()=>scope('legacy'));
       $('activityClear')?.addEventListener('click',()=>{$('activitySearch').value='';$('activityMonth').value='';$('activityState').value='all';render();});return;
     }
-    $('activityTable').innerHTML=`<table class="ra-table"><thead><tr><th>核算月份</th><th>${legacy?'记录名称':'活动名称'}</th><th>人员 / 资料</th><th>状态</th><th>最近更新</th><th>操作</th></tr></thead><tbody>${rows.slice((state.page-1)*20,state.page*20).map(a=>`<tr><td>${month(a.month)}</td><td><a class="ra-name" href="${escape(a.url||url(a))}" title="${escape(a.name)}">${escape(a.name)}</a>${a.records?`<span class="ra-meta">${a.records} 份历史记录</span>`:''}</td><td>${a.people} 人<span class="ra-meta">${a.sources} 份资料</span></td><td><span class="ra-status" data-status="${escape(a.status)}">${escape(a.status)}</span></td><td>${escape(a.updatedAt?.replace('T',' ').slice(0,16)||'—')}</td><td><div class="ra-actions"><a class="ra-enter" href="${escape(a.url||url(a))}">${a.archived?'查看':'进入核算'}<svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></a>${!legacy?`<button type="button" class="ra-manage" data-manage="${a.id}" aria-label="管理 ${escape(a.name)}"><svg class="rd-icon" aria-hidden="true"><use href="#icon-more"/></svg></button>`:''}</div></td></tr>`).join('')}</tbody></table>`;
+    $('activityTable').innerHTML=`<table class="ra-table"><thead><tr><th>核算月份</th><th>${legacy?'记录名称':'活动名称'}</th><th>创建人</th><th>人员 / 资料</th><th>状态</th><th>最近更新</th><th>操作</th></tr></thead><tbody>${rows.slice((state.page-1)*20,state.page*20).map(a=>`<tr><td>${month(a.month)}</td><td><a class="ra-name" href="${escape(a.url||url(a))}" title="${escape(a.name)}">${escape(a.name)}</a>${a.records?`<span class="ra-meta">${a.records} 份历史记录</span>`:''}</td><td>${creatorCell(a)}</td><td>${a.people} 人<span class="ra-meta">${a.sources} 份资料</span></td><td><span class="ra-status" data-status="${escape(a.status)}">${escape(a.status)}</span></td><td>${escape(a.updatedAt?.replace('T',' ').slice(0,16)||'—')}</td><td><div class="ra-actions"><a class="ra-enter" href="${escape(a.url||url(a))}">${a.archived?'查看':'进入核算'}<svg class="rd-icon" aria-hidden="true"><use href="#icon-right"/></svg></a>${!legacy?`<button type="button" class="ra-manage" data-manage="${a.id}" aria-label="管理 ${escape(a.name)}"><svg class="rd-icon" aria-hidden="true"><use href="#icon-more"/></svg></button>`:''}</div></td></tr>`).join('')}</tbody></table>`;
+    document.querySelectorAll('.ra-avatar img').forEach(img=>{img.addEventListener('error',()=>img.remove(),{once:true});if(img.complete&&!img.naturalWidth)img.remove();});
     document.querySelectorAll('[data-manage]').forEach(b=>b.onclick=()=>manage(state.activities.find(a=>a.id===b.dataset.manage)));
   }
   function scope(value){state.scope=value;state.page=1;$('activityMonth').value='';render();}
   async function load(){
     const seq=++state.sequence;state.loading=true;state.error='';render();
-    try{const data=await request(endpoint);if(seq!==state.sequence)return;state.activities=data.activities;state.legacyRecords=data.legacyRecords;
+    try{const data=await request(endpoint);if(seq!==state.sequence)return;state.activities=data.activities;state.legacyRecords=data.legacyRecords;state.currentUserId=data.currentUserId||'';
       const selected=state.loaded?$('activityMonth').value:query.get('month'),months=[...new Set([...state.activities,...state.legacyRecords].map(a=>a.month))].sort((a,b)=>b-a);
       $('activityMonth').innerHTML='<option value="">全部月份</option>'+months.map(m=>`<option value="${m}">${month(m)}</option>`).join('');$('activityMonth').value=months.includes(Number(selected))?selected:'';
       state.loaded=true;

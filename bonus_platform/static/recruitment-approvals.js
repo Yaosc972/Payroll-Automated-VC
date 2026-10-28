@@ -4,7 +4,7 @@
   const fields=['招聘渠道','ABC类别','周期剔除天数','招聘负责人姓名','招聘负责人工号','协助招聘人姓名','协助招聘人工号','推荐人姓名','推荐人工号','招聘启动日期','入职日期','转正日期','最后工作日','职级'];
   const label=f=>({'ABC类别':'岗位类别','候选人入职时间':'录用入职日期'}[f]||f);
   const shown=v=>v===null||v===undefined||v===''?'未填写':String(v);
-  let session=null,sequence=0,pendingUpload=false;
+  let session=null,sequence=0;
   const post=(url,payload)=>request(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   function selected(){return session.data.items.filter(i=>session.selected.has(i.id));}
   function chosenReferences(item){return Object.values(session.referenceSelections[item.id]||{});}
@@ -172,11 +172,10 @@
   }
   $('draftInspector').addEventListener('cancel',event=>{if(session?.operation)event.preventDefault();});
   $('draftInspector').addEventListener('close',()=>{$('draftInspector').classList.remove('rai-dialog');$('draftCloseInspector').disabled=false;session=null;sequence++;});
-  document.addEventListener('recruitment:uploaded',event=>{pendingUpload=event.detail?.files?.some(name=>/\.(pdf|png|jpe?g)$/i.test(name))||false;});
   document.addEventListener('recruitment:render',()=>{if(session&&$('draftInspector').classList.contains('rai-dialog')&&$('approvalApply')){
     if(!session.operation&&!session.dirty&&base()===session.base&&ui.data.revision!==session.data.revision)open(session.sourceId,session.notice);else footer();
   }});
   document.addEventListener('recruitment:status',()=>{if(session&&$('approvalApply'))footer();});
-  document.addEventListener('recruitment:busy',()=>{if(pendingUpload&&!ui.busy){pendingUpload=false;open();}else if(session&&$('approvalApply'))footer();});
+  document.addEventListener('recruitment:busy',()=>{if(session&&$('approvalApply'))footer();});
   window.RecruitmentApprovals={open};
 })();

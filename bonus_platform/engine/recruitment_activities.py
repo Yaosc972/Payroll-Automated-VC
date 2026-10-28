@@ -54,13 +54,14 @@ class ActivityStore:
             try:yield self.activity(identifier)
             finally:fcntl.flock(lock,fcntl.LOCK_UN)
 
-    def create_activity(self,month,name='',opening=None):
+    def create_activity(self,month,name='',opening=None,creator=None):
         if type(month) is not int:raise ValueError('请选择核算月份')
         DraftStore(self.base_root)._folder(month)
         if not isinstance(name,str) or len(name)>60:raise ValueError('活动名称不能超过60字')
         now=recruitment_now().isoformat(timespec='seconds')
         item={'id':uuid4().hex,'month':month,'name':name.strip() or f'{month//100}年{month%100}月招聘与内推奖金',
-              'createdAt':now,'updatedAt':now,'archived':False,'version':1}
+              'createdAt':now,'updatedAt':now,'archived':False,'version':1,
+              'creator':{key:str((creator or {}).get(key) or '') for key in ('userId','name','avatarUrl')}}
         self.activity_root.mkdir(parents=True,exist_ok=True)
         with TemporaryDirectory(prefix='.create-',dir=self.activity_root) as temporary:
             staged=Path(temporary)/'activity';target=DraftStore(staged/'drafts')

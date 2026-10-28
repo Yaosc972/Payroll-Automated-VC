@@ -46,12 +46,20 @@ test('an ordinary opening with missing coverage does not query HR automatically'
   await tick();
   assert.equal(page.calls.filter(c=>c.method==='POST').length, 0);
 });
-test('newly uploaded material still starts the existing prepare operation', async () => {
+test('uploads wait for an explicit click before starting preparation', async () => {
   const page = surface({status:'complete',revision:6});
   page.ui.data = data();
   page.listeners.get('recruitment:uploaded')();
   await tick();
+  assert.equal(page.calls.filter(c=>c.method==='POST').length, 0);
+  await page.elements.get('flowPrepare').onclick();
+  await tick();
   assert.equal(page.calls.filter(c=>c.method==='POST'&&c.url.endsWith('/prepare')).length, 1);
+});
+test('an empty month with a confirmed previous result does not prepare on opening', async () => {
+  const page = surface(null,{...data(),revision:0,previousAccepted:true});
+  await tick();
+  assert.equal(page.calls.filter(c=>c.method==='POST').length,0);
 });
 test('historical work items open the existing settlement review', async () => {
   const page = surface(null);

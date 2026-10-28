@@ -240,14 +240,17 @@ def test_prepare_refreshes_new_recipient_with_candidate_already_covered(tmp_path
     store=DraftStore(tmp_path)
     state=state_with_rows();state['revision']=1
     state['rows'][0]['values'].update({'标签分类':'国内','工号':'zt1','招聘负责人工号':'zt-new'})
-    state['sources']=[{'kind':'beisen','forMonth':202607,'scopeJobNumbers':['zt1'],'scopeRecipientJobNumbers':['zt-old'],
+    state['sources']=[{'id':'beisen-source','name':'北森资料.json','kind':'beisen','forMonth':202607,'scopeJobNumbers':['zt1'],'scopeRecipientJobNumbers':['zt-old'],
         'syncCoverage':{'version':1,'candidates':{'zt1':{'requested':True,'employment':True,'offer':True}},
                         'recipients':{'zt-old':{'requested':True,'employment':True}}}}]
     monkeypatch.setattr(store,'refresh',lambda *args:state)
     monkeypatch.setattr(store,'read',lambda *args:state)
     calls=[]
     monkeypatch.setattr(adapter,'fetch_employment',lambda numbers:calls.append(numbers) or {})
-    monkeypatch.setattr(store,'save_beisen_snapshot',lambda *args:state)
+    def save_recipients(*args):
+        state['sources'][0]['syncCoverage']['recipients'].update({n:{'requested':True,'employment':True} for n in calls[-1]})
+        return state
+    monkeypatch.setattr(store,'save_beisen_snapshot',save_recipients)
     job={'status':'running'}
     jobs.run(store,202607,{'revision':1,**job},False,jobs.key_for(store,202607))
     assert calls and 'zt-new' in calls[0] and 'zt1' not in calls[0]

@@ -99,13 +99,20 @@ def legacy_person_standard(row, candidates, ratios):
 
 
 def historical_arrangements_complete(row, kind, month):
+    """Keep complete past ledger schedules without reopening their old pricing.
+
+    Every positive installment needs a recorded past month. An unfinished total,
+    a cancelled standard, or changed facts still needs reconciliation. Historical
+    installments can exceed an old nominal standard; retaining them is not proof
+    of payment or a completed recovery.
+    """
     if not unchanged_opening(row):return False
     from .recruitment_awards import number
     from .recruitment_opening import COLUMNS, period
     cells={c['column']:c['value'] for c in adopted_history(row)['cells']}
     total_columns=(38,45) if kind=='recruitment' else (61,)
     totals=[number(cells.get(c)) for c in total_columns]
-    if totals[0] is None:return False
+    if totals[0] is None or any(t is not None and t<0 for t in totals):return False
     arranged=0
     for index,columns in enumerate(COLUMNS[kind].values()):
         role_arranged=0
@@ -116,5 +123,6 @@ def historical_arrangements_complete(row, kind, month):
             if amount<0 or not due or due>=month:return False
             arranged+=amount
             role_arranged+=amount
-        if role_arranged!=(totals[index] or 0):return False
-    return arranged==sum(t or 0 for t in totals)
+        declared=totals[index] or 0
+        if role_arranged<declared or (role_arranged>0 and declared<=0):return False
+    return arranged>=sum(t or 0 for t in totals)

@@ -58,6 +58,7 @@ export async function run({spaceId,controlPage,stopFile,gateway,targetUrl}){
     console.log('RECRUITMENT_JOB_STARTED:'+job.id);
     try{
       const snapshot=await collect({spaceId,keepSpace:true,month:job.month,jobNumbers:job.jobNumbers,offerCodes:job.offerCodes,
+        employmentOnly:job.employmentOnly===true,offerOnly:job.offerOnly===true,
         cancelFile:stopFile,onProgress:message=>post(`/api/recruitment/browser-worker/${job.id}/progress`,{lease:job.lease,message})});
       await post(`/api/recruitment/browser-worker/${job.id}/complete`,{lease:job.lease,snapshot});
       console.log('RECRUITMENT_JOB_COMPLETED:'+job.id);

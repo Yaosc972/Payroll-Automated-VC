@@ -92,6 +92,26 @@ def test_new_working_copy_restores_snapshots_activity_edits_and_settings(backend
     assert backend[1] and backend[2]
 
 
+def test_company_creator_survives_object_restore_and_a_different_viewer(backend,monkeypatch,tmp_path):
+    import shutil
+    import bonus_platform.auth as auth
+    payloads(monkeypatch);api,_=client(monkeypatch,tmp_path)
+    current={'user':{'id':'synthetic-creator','name':'合成创建人','avatar_url':'https://example.com/company-avatar.png'}}
+    monkeypatch.setattr(auth,'current_user_from_request',lambda _:current)
+    response=api.post('/api/recruitment/activities',json={'month':MONTH,'creator':{'userId':'forged','name':'伪造用户'}})
+    assert response.status_code==200,response.text
+    item=response.json();expected={'userId':'synthetic-creator','name':'合成创建人','avatarUrl':'https://example.com/company-avatar.png'}
+    assert item['creator']==expected
+    assert any(json.loads(content).get('creator')==expected for content in backend[1].values() if content.startswith(b'{'))
+    shutil.rmtree(tmp_path/'cache')
+    current['user']={'id':'synthetic-viewer','name':'其他查看人'}
+    restored,_=client(monkeypatch,tmp_path/'new-process')
+    listing=restored.get('/api/recruitment/activities').json()
+    assert listing['currentUserId']=='synthetic-viewer'
+    assert next(x for x in listing['activities'] if x['id']==item['id'])['creator']==expected
+    assert not (tmp_path/'not-authoritative').exists()
+
+
 def test_failed_publish_keeps_last_committed_manifest_and_history(backend, monkeypatch):
     with session(write=True) as s:
         root=s.root/'recruitment_drafts';root.mkdir();(root/'evidence.json').write_text('{"value":1}')

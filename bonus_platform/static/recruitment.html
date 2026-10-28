@@ -16,30 +16,30 @@
   <script src="vendor/motion-14.4.0.min.js" defer></script>
   <script src="recruitment-interactions.js?v=4" defer></script>
   <script src="recruitment-fact-controls.js?v=1" defer></script>
-  <script src="recruitment-draft.js?v=35" defer></script>
+  <script src="recruitment-draft.js?v=39" defer></script>
   <script src="recruitment-review.js?v=19" defer></script>
   <script src="recruitment-workbench.js?v=24" defer></script>
-  <script src="recruitment-approvals.js?v=6" defer></script>
+  <script src="recruitment-approvals.js?v=7" defer></script>
   <link rel="stylesheet" href="recruitment-approvals.css?v=3" />
   <script src="recruitment-trial.js?v=20" defer></script>
   <link rel="stylesheet" href="recruitment-flow.css?v=19" />
-  <script src="recruitment-materials.js?v=15" defer></script>
-  <script src="recruitment-experience.js?v=11" defer></script>
+  <script src="recruitment-materials.js?v=18" defer></script>
+  <script src="recruitment-experience.js?v=14" defer></script>
   <script src="recruitment-detail-table.js?v=4" defer></script>
-  <script src="recruitment-external-results.js?v=4" defer></script>
+  <script src="recruitment-external-results.js?v=5" defer></script>
   <link rel="stylesheet" href="recruitment-external-results.css?v=1" />
-  <script src="recruitment-flow.js?v=78" defer></script>
+  <script src="recruitment-flow.js?v=91" defer></script>
   <script src="recruitment-assignments.js?v=9" defer></script>
 <script src="recruitment-review-center.js?v=17" defer></script>
   <link rel="stylesheet" href="recruitment-special.css?v=2" />
   <script src="recruitment-adjustment-model.js?v=1" defer></script>
-  <script src="recruitment-special.js?v=12" defer></script>
+  <script src="recruitment-special.js?v=13" defer></script>
   <link rel="stylesheet" href="recruitment-assignments.css?v=2" />
-  <link rel="stylesheet" href="recruitment-activities.css?v=6" />
-  <link rel="stylesheet" href="recruitment-experience.css?v=9" />
+  <link rel="stylesheet" href="recruitment-activities.css?v=7" />
+  <link rel="stylesheet" href="recruitment-experience.css?v=10" />
   <link rel="stylesheet" href="recruitment-icons.css?v=1" />
   <link rel="stylesheet" href="recruitment-density.css?v=13" />
-  <link rel="stylesheet" href="recruitment-drive.css?v=2" />
+  <link rel="stylesheet" href="recruitment-drive.css?v=5" />
   <link rel="stylesheet" href="recruitment-controls.css?v=4" />
   <script src="recruitment-controls.js?v=3" defer></script>
   <script src="recruitment-date-controls.js?v=2" defer></script>
@@ -115,9 +115,11 @@
         <label id="draftScopeLabel" class="rd-scope" hidden><span class="rd-sr-only">人员范围</span><select id="draftScope"><option value="all">全部人员</option><option value="new">本月入职</option><option value="due">本月到期</option><option value="review">待核对</option></select></label>
         <label class="rd-search"><svg class="rd-icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="draftSearch" type="search" placeholder="搜索姓名、工号" aria-label="搜索姓名、工号或事项" /></label>
         <button id="flowDownload" class="rd-button rd-primary" type="button" hidden><svg class="rd-icon" aria-hidden="true"><use href="#icon-down"/></svg>导出 Excel</button>
-        <button id="flowSync" class="rd-button rd-primary" type="button" title="按核算月份同步国内和海外花名册、Offer" hidden><svg class="rd-icon" aria-hidden="true"><use href="#icon-refresh"/></svg>一键同步国内及海外</button>
+        <button id="flowSync" class="rd-button" type="button" title="按核算月份同步国内和海外花名册、Offer" hidden><svg class="rd-icon" aria-hidden="true"><use href="#icon-refresh"/></svg>一键同步国内及海外</button>
         <button id="flowUpload" class="rd-button" type="button" hidden><svg class="rd-icon" aria-hidden="true"><use href="#icon-upload"/></svg>导入资料</button>
+        <button id="flowPrepare" class="rd-button" type="button" aria-describedby="flowMaterialReadiness" hidden><svg class="rd-icon" aria-hidden="true"><use href="#icon-checklist"/></svg>整理资料并核算</button>
       </div>
+      <p id="flowMaterialReadiness" class="flow-material-readiness" role="status" hidden></p>
       <div class="rd-commandbar" aria-label="底稿操作">
         <div><button id="draftAddPerson" class="rd-text-button" type="button">补充人员</button><button id="draftCarry" class="rd-text-button" type="button" hidden>承接上月</button><span class="rd-command-divider"></span><a id="draftEditableExport" class="rd-text-button" href="#">导出可编辑底稿</a><button id="draftWorkbookReturn" class="rd-text-button" type="button">回传修改表格</button><a id="draftRawExport" class="rd-text-button" href="#">导出原始底稿</a></div>
         <a id="recruitmentHistory" class="rd-text-button" href="recruitment-history.html">历史批次</a>

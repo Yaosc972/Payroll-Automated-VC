@@ -218,8 +218,8 @@ def apply_special(state, row, result):
             if not valid_source(state,record) or current and current.get('historyFingerprint',current['fingerprint'])!=record['fingerprint']:
                 award['accountingIssues'].append({'recordId':record['id'],'accountingMonth':month,
                     'reason':'历史安排核对所用资料或计算事实已变化，请重新核对'})
-        award['accountingIssues']=[i for i in award['accountingIssues'] if not i.get('recovery')]+[
-            {'accountingMonth':month,'reason':r['reason'],'recovery':True} for r in award['recoveries']]
+        from .recruitment_settlement import recovery_issues
+        award['accountingIssues']=[i for i in award['accountingIssues'] if not i.get('recovery')]+recovery_issues(award['recoveries'],month)
         award['currentAmount']=float(sum((Decimal(str(n['amount'])) for n in award['nodes']
             if n.get('scheduledMonth',n.get('dueMonth'))==month),Decimal(0))) if award['total'] is not None else None
 

@@ -26,7 +26,7 @@ COOP_NAME='extxiezhuzhaopinfuzeren_109025_1163526586'
 ABC_LABELS={'1':'A','2':'B','3':'C1','4':'C2','5':'C','6':'不占编'}
 CHANNEL_LABELS=dict(zip(map(str,[1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17]),
  ['内推','猎头','猎聘','Boss直聘','前程无忧','拉勾网','领英','外部推荐','二次入职','其他','校招','智联招聘','体系外转体系内','外包转正式','人员调动','小红书']))
-HISTORY_COLUMNS=['UserID','JobNumber','StartDate','StopDate','EntryDate','LastWorkDate','LUOffer','EmployType','RegularizationDate','ServiceType','ApprovalStatus']
+HISTORY_COLUMNS=['UserID','JobNumber','StartDate','StopDate','EntryDate','LastWorkDate','LUOffer','EmployType','RegularizationDate','ServiceType','ApprovalStatus','POIdEmpAdmin','EmployeeStatus']
 RECIPIENT_HISTORY_COLUMNS=HISTORY_COLUMNS+['OIdJobLevel','OIdJobPosition']
 OFFER_COLUMNS=['ObjectId','Name','UserID','EntryDate','RecruitmentRequirement','ApplicantPosition','ApprovalStatus','EmploymentForm','CreatedTime','ModifiedTime','StdIsDeleted','Remarks',OWNER,REFERRER,CHANNEL,COOP_ID,COOP_NAME]
 
@@ -161,6 +161,20 @@ def fetch_employment(job_numbers,client=None):
     return _with_coverage({'version':1,'employmentOnly':True,'queriedAt':recruitment_now().isoformat(timespec='seconds'),
             'requestedJobNumbers':[],'requestedRecipientJobNumbers':numbers,'employeeMappings':[pick(m,['jobNumber','userId','code']) for m in mapped],
             'candidateHistories':[],'recipientHistories':records,'offers':[],'requirements':[],'forms':[]})
+
+
+def fetch_employment_by_ids(user_ids,client=None):
+    client=client or Client();ids=list(dict.fromkeys(str(i) for i in user_ids));records=[]
+    if any(not i.isdigit() for i in ids):raise ValueError('任职人员标识无效')
+    for batch in batches(ids,300):
+        result=_post(client,HISTORY,{'option':'None','empStatus':[],'employType':[],'serviceType':[0],'approvalStatus':[4],
+            'oIds':[int(i) for i in batch],'isWithDeleted':False,'columns':RECIPIENT_HISTORY_COLUMNS,'enableTranslate':True})
+        if not isinstance(result.get('data'),list) or any(str(r.get('userID')) not in batch for r in result['data']):
+            raise ValueError('汇报关系任职资料未完整对应查询人员')
+        records.extend(pick(r,RECIPIENT_HISTORY_COLUMNS) for r in result['data'])
+    return _with_coverage({'version':1,'employmentOnly':True,'queriedAt':datetime.now().isoformat(timespec='seconds'),
+        'requestedJobNumbers':[],'requestedRecipientJobNumbers':[],'employeeMappings':[],
+        'requestedManagerUserIds':ids,'candidateHistories':[],'recipientHistories':records,'offers':[],'requirements':[],'forms':[]})
 
 
 def fetch(job_numbers,client=None,recipient_numbers=(),candidate_histories=(),progress=None,newest_first=False,offer_month=None):

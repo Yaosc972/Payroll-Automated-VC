@@ -119,6 +119,41 @@ def describe_recoveries(row, kind, facts, rule, computed, rule_hash, state=None)
         if r['type']=='opening_conflict':r['correctionReviewReason']='平台确认安排与期初台账不一致，请先核对两份来源，不能据此推导补扣金额'
 
 
+def historical_cancellation(state, row, kind, recovery, opening, cells):
+    """An award already cancelled in the adopted ledger is not a new recovery.
+
+    Keep its original amount and unverified execution status. A current change,
+    explicit correction, conflicting opening or current arrangement still needs
+    monthly review; free-text notes never establish that a deduction was paid.
+    """
+    if (recovery['type']!='removed_installment' or not row.get('frozenRecruitmentFacts')
+            or not opening or not opening.get('isBaseline')
+            or sum(bool(h.get('isBaseline')) for h in row.get('history',[]))!=1
+            or recovery['currentAmount']!=0):return False
+    source_id=opening['ref']['sourceId']
+    if state.get('baseline')!=source_id or not any(s['id']==source_id and s.get('active',True)
+            and not s.get('error') and not s.get('comparisonOnly') for s in state.get('sources',[])):return False
+    total_column={'招聘负责人':38,'协助招聘人':45,'推荐人':61}[recovery['role']]
+    if number(cells.get(total_column))!=0:return False
+    facts=recovery['openingFacts']
+    if not facts or any(not f.get('scheduledMonth') or f['scheduledMonth']>=state['month']
+                       or (f.get('openingSource') or {}).get('sourceId')!=source_id for f in facts):return False
+    if any(number(cells.get(c)) and period(cells.get(p)) and period(cells.get(p))>=state['month']
+           for c,p,_ in COLUMNS[kind][recovery['role']]):return False
+    if any(e.get('active',True) for e in row.get('edits',[])):return False
+    if any(e.get('rowId')==row['id'] and e.get('active',True) for e in state.get('edits',[])):return False
+    if any(d.get('kind')==kind for d in row.get('awardDecisions',[])):return False
+    ops={o['id'] for o in state.get('operations',[]) if o.get('active')}
+    return not any(r.get('rowId')==row['id'] and r.get('kind')==kind and r.get('operationId') in ops
+                   for key in ('installmentPlans','adjustmentDrafts','specialAdjustments','eligibilityExceptions')
+                   for r in state.get(key,[]))
+
+
+def recovery_issues(recoveries, month):
+    return [{'accountingMonth':None if r.get('historyOnly') else month,'reason':r['reason'],'recovery':True,
+             **({'historyOnly':True} if r.get('historyOnly') else {})} for r in recoveries]
+
+
 def apply_settlement(state,row,result):
     from .recruitment_drafts import staff_id
     month=state['month'];v=row['values'];baseline=state.get('settlement',{}).get('baselineId')
@@ -167,7 +202,7 @@ def apply_settlement(state,row,result):
                 eligibilityReasons=[],currentAmount=0,scheduledTotal=total,roundingDifference=0,
                 currency=next(iter(currencies)) if len(currencies)==1 else computed['currency'],recipientTotals=role_totals,
                 historyRetained=True,historyBasis=h['ref'],
-                reasons=['上月台账各角色金额与历史分期完整对应，沿用已确认安排'])
+                reasons=['上月台账分期均已明确安排在往期，承接原历史金额'])
             result[kind]=computed
             continue
         if (v.get('核算范围')=='不纳入核算' or computed.get('approvalDecision')) and not facts:
@@ -264,7 +299,11 @@ def apply_settlement(state,row,result):
             if kind=='recruitment':computed['cancelledBalances'].append({'role':role,'amount':money(cancelled) if computed['total'] is not None else None,'currency':computed['currency'],'month':month,
                 'basis':'奖金总额尚不可计算，取消余额待核' if computed['total'] is None else '按候选人及领取人的到期任职状态计算'})
         describe_recoveries(row,kind,facts,rule_basis,computed,result.get('ruleHash'),state)
-        computed['accountingIssues']=[{'accountingMonth':month,'reason':r['reason'],'recovery':True} for r in computed['recoveries']]
+        for recovery in computed['recoveries']:
+            if (not any(r['type']=='opening_conflict' and r['role']==recovery['role'] for r in computed['recoveries'])
+                    and historical_cancellation(state,row,kind,recovery,h,cells)):
+                recovery['historyOnly']=True
+        computed['accountingIssues']=recovery_issues(computed['recoveries'],month)
         computed['scheduledTotal']=money(sum(Decimal(str(n['amount'])) for n in computed['nodes'])) if computed['total'] is not None and len({n['currency'] for n in computed['nodes']})<=1 else None
         computed['currentAmount']=money(sum(Decimal(str(n['amount'])) for n in computed['nodes'] if n.get('scheduledMonth')==month)) if computed['total'] is not None else None
         result[kind]=computed
@@ -278,7 +317,7 @@ def validation(state):
             if row['values'].get('核算范围')=='不纳入核算' and not a.get('accountingIssues'):continue
             reasons=list(a['issues'])+[i['reason'] for i in a.get('accountingIssues',[]) if i['accountingMonth']==state['month']]
             if a['total'] is None:reasons.append('缺少可计算的规则或事实')
-            reasons += [x['reason'] for x in a.get('recoveries',[])]
+            reasons += [x['reason'] for x in a.get('recoveries',[]) if not x.get('historyOnly')]
             for node in a['nodes']:
                 if node.get('scheduledMonth',node['dueMonth'])==state['month'] or node.get('adjustmentId') and node.get('accountingMonth')==state['month']:reasons+=node['issues']
                 if node.get('planningIssue') and node.get('amount') and node.get('status')!='按规则不发':reasons.append(node['planningIssue'])

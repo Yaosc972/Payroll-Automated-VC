@@ -62,7 +62,7 @@ ALIASES = {
     '二次入职专项口径依据': [], '旧特殊规则依据': [],
     '推荐人与候选人上下级关系': [], '推荐人是否直接/间接上级': [], '推荐人转正日期': [],
 }
-PARSER_VERSION = 18
+PARSER_VERSION = 21
 DATE_FIELDS = {'入职日期','候选人入职时间','转正日期','最后工作日','招聘启动日期','原计划入职日期','计划入职日期','上次离职日期',
                '招聘负责人入职日期','招聘负责人最后工作日','协助招聘人入职日期','协助招聘人最后工作日','推荐人入职日期','推荐人最后工作日','推荐人转正日期'}
 FIELDS = set(STANDARD_IMPORT_HEADERS) | set(ALIASES) | DATE_FIELDS
@@ -241,7 +241,8 @@ def _sheet_records(archive, path, shared, name, source_id, *, personnel_only=Fal
             names=set(headers.values())
             identity_fields={'姓名','工号','证件号','体系外人员编号','海外offer流程编号'}
             person_headers={h for field in identity_fields for h in [field]+ALIASES.get(field,[])}
-            role='cumulative' if names & person_headers else 'unknown'
+            hire_headers={h for field in ('入职日期','候选人入职时间') for h in [field]+ALIASES.get(field,[])}
+            role='cumulative' if names & person_headers and names & hire_headers else 'unknown'
         full_headers=dict(headers)
         start=index+1
         # The actual historical template has a second header row for award nodes.

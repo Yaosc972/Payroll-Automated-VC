@@ -79,11 +79,19 @@ def test_comparison_snapshot_does_not_claim_applied_employee_coverage():
 def test_domestic_monthly_job_starts_with_no_people_and_retains_completed_message(activities,monkeypatch):
     import time
     from bonus_platform.engine import recruitment_domestic as domestic
+    from bonus_platform.engine import recruitment_beisen as employment
     from test_recruitment_activities import create,base
     client,store=activities;activity=create(client)
     calls=[]
     def fetch(month,**options):calls.append(month);return snapshot(month)
     monkeypatch.setattr(domestic,'fetch',fetch)
+    lookups=[]
+    def fetch_employment(numbers,**options):
+        lookups.append(numbers);result=employment_snapshot()
+        result.update(employmentOnly=True,requestedJobNumbers=[],requestedRecipientJobNumbers=numbers,
+                      recipientHistories=result['candidateHistories'],candidateHistories=[],offers=[],requirements=[],forms=[])
+        return result
+    monkeypatch.setattr(employment,'fetch_employment',fetch_employment)
     response=client.post(base(activity)+'/sync-domestic-monthly',json={'revision':0})
     assert response.status_code==200 and response.json()['domesticOnly']
     for _ in range(100):
@@ -93,6 +101,7 @@ def test_domestic_monthly_job_starts_with_no_people_and_retains_completed_messag
     assert result['status']=='complete',result
     assert result['message']=='国内资料已同步，本月核算已更新。'
     assert calls==[202607]
+    assert lookups==[['zt1']]
     assert client.get(base(activity)).json()['sources'][0]['monthlyRoster']
 
 

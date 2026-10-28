@@ -111,6 +111,17 @@ def test_unknown_wording_can_be_completed_without_review_metadata(tmp_path,monke
     assert intake.proposals(store,saved)['items'][0]['status']=='consistent'
 
 
+def test_missing_ocr_service_is_not_reported_as_an_empty_original(tmp_path,monkeypatch):
+    store,state=setup(tmp_path,monkeypatch,{'审批':'候选甲申请剔除10天。'})
+    monkeypatch.setattr(intake,'extract_document',lambda *args:{'pages':[
+        {'page':1,'text':'','blank':False,'notice':'识别服务不可用','ocrError':'unavailable'}],'pageCount':1})
+    document=intake.proposals(store,state)['documents'][0]
+    assert document['status']=='blocked'
+    assert '识别服务暂不可用' in str(document['issues'])
+    assert '管理员' in str(document['issues'])
+    assert '没有可识别内容' not in str(document['issues'])
+
+
 def test_missing_attachment_is_automatic_when_supplied_and_never_ignored(tmp_path,monkeypatch):
     store,state=setup(tmp_path,monkeypatch,{'审批':'候选甲申请剔除10天。附件：名单.xlsx'})
     item=intake.proposals(store,state)['items'][0]

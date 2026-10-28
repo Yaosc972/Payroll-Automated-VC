@@ -24,7 +24,7 @@ OFFER_FIELDS=('姓名','offer编码','状态','编制ABC分类','招聘负责人
 HISTORY_FIELDS=('empNo','employeeInfoId','infoId','recordId','startDate','endDate','entryDate','lastWorkDay',
                 'employmentType','employmentStatus','employeeStatus','businessType','businessTypeName',
                 'deptCode','deptName','positionCode','positionName','jobLevelCode','jobLevelName',
-                'lineManagerNo','lineManagerName','workPlaceAreaId','workPlacePathName')
+                'lineManagerNo','lineManagerName','lineManagerProvided','workPlaceAreaId','workPlacePathName','orgPathName')
 
 
 def _month(value):
@@ -102,8 +102,14 @@ def validate_snapshot(payload, month):
                    for k in ('招聘负责人工号','协助招聘负责人工号','内推人工号') if text(o.get(k)))
     if any(r['scope']=='lookup' and r['data']['工号'].lower() not in allowed for r in result['roster']):
         raise ValueError('海外花名册定向补查返回了范围以外的人员')
+    history_scope=payload.get('employmentHistoryScope')
+    if history_scope is not None:
+        if history_scope!='oehr_and_migrated' or payload.get('employmentOnly') is not True:
+            raise ValueError('海外任职补查范围无效')
+        result['employmentHistoryScope']=history_scope
     if 'employmentHistory' in payload:
-        expected={r['data']['工号'].lower() for r in result['roster'] if r['data']['人员来源']=='OEHR入职'
+        expected={r['data']['工号'].lower() for r in result['roster'] if (r['data']['人员来源']=='OEHR入职'
+                  or history_scope=='oehr_and_migrated' and r['scope']=='lookup' and r['data']['人员来源']=='人员迁移')
                   and r['data']['是否虚拟员工']!='是' and (r['scope']=='lookup' or r['data']['offer流程编号'])}
         queries=payload['employmentHistory'];queried=set();result['employmentHistory']=[]
         if not isinstance(queries,list) or len(queries)>20000:raise ValueError('海外任职记录格式无效')
@@ -126,6 +132,17 @@ def validate_snapshot(payload, month):
             result['employmentHistory'].append({'empNo':number,'records':sorted(items,key=lambda h:(h['startDate'],h['endDate'],h['recordId']))})
         if queried!=expected:raise ValueError('海外任职记录未查询完整，本次未保存快照')
         result['employmentHistory'].sort(key=lambda h:h['empNo'])
+    if payload.get('employmentOnly'):
+        if (payload['employmentOnly'] is not True or result['offers'] or result['requestedOfferCodes']
+                or result['missingOfferCodes'] or any(r['scope']!='lookup' for r in result['roster'])
+                or 'employmentHistory' not in result):
+            raise ValueError('海外人员补查只能包含指定人员的任职与离职资料')
+        result['employmentOnly']=True
+    if payload.get('offerOnly'):
+        if (payload['offerOnly'] is not True or payload.get('employmentOnly') or
+                any(r['scope']!='lookup' for r in result['roster']) or not result['requestedOfferCodes']):
+            raise ValueError('海外录用补查只能包含指定 Offer 及关联人员资料')
+        result['offerOnly']=True
     result['roster'].sort(key=lambda r:(r['data']['工号'].lower(),r['data']['入职日期']))
     result['offers'].sort(key=lambda r:r['offer编码'].lower())
     return result
@@ -164,6 +181,16 @@ def _historical_roster(raw,payload):
         result['办公地址']=''
     if not same_department or workplace_evidence and (not workplace or workplace!=raw.get('办公地址')):
         for field in ('二级部门','三级部门','四级部门','五级部门'):result[field]=''
+    # The dated record can name a sixth-level department; the current roster
+    # only has levels two through five. Use its complete historical path rather
+    # than mistaking that level difference for missing country evidence.
+    from .recruitment_import_validation import _classify_overseas_country
+    path=unique('orgPathName');parts=[p.strip() for p in path.split('/') if p.strip()]
+    if (len(parts)>=2 and parts[-1]==unique('deptName')
+            and not (workplace_evidence and not workplace)
+            and not _classify_overseas_country(workplace)):
+        for index,field in enumerate(('二级部门','三级部门','四级部门','五级部门'),1):
+            result[field]=parts[index] if index<len(parts) else ''
     return result
 
 
@@ -207,23 +234,32 @@ def save_snapshot(store, month, revision, payload):
         if any(s.get('kind')=='overseas_api' and s.get('forMonth')==month and s.get('dataDigest')==fingerprint
                and not s.get('error') for s in state['sources']):return state
         period=_month(month)
-        previous=[s for s in state['sources'] if s.get('kind')=='overseas_api' and s.get('forMonth')==month]
-        new_month=(not state['revision'] or state.get('parentMonth') and not any(
+        previous=[s for s in state['sources'] if s.get('kind')=='overseas_api' and s.get('forMonth')==month
+                  and not s.get('employmentOnly') and not s.get('offerOnly')]
+        new_month=(not state['rows'] or state.get('parentMonth') and not any(
             str(r['values'].get('入职日期') or r['values'].get('候选人入职时间') or '').startswith(period) for r in state['rows']))
-        current=[s for s in state['sources'] if s.get('active',True) and not s.get('comparisonOnly')]
+        current=[s for s in state['sources'] if s.get('active',True) and not s.get('comparisonOnly')
+                 and not s.get('employmentOnly') and not s.get('offerOnly') and not s.get('channelDetailsOnly')]
         if current and all(s.get('monthlyRoster') and s.get('forMonth')==month for s in current) and not any(
                 r['values'].get('标签分类')=='海外' for r in state['rows']):new_month=True
-        snapshot_only=bool(previous or not (new_month or state.get('monthlyWorkflow')))
+        snapshot_only=not (payload.get('employmentOnly') or payload.get('offerOnly')) and bool(previous or not (new_month or state.get('monthlyWorkflow')))
         content=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode();sid=hashlib.sha256(content).hexdigest()
         source={'id':sid,'kind':'overseas_api','name':f'海外资料快照{month}.json','storedName':sid+'.json',
             'active':True,'bytes':len(content),'forMonth':month,'addedAt':payload['queriedAt'],'dataDigest':fingerprint,
-            'snapshotOnly':snapshot_only,'comparisonOnly':snapshot_only,'snapshotVersion':len(previous)+1,
+            'snapshotOnly':snapshot_only,'comparisonOnly':snapshot_only,
+            'snapshotVersion':1+max((s.get('snapshotVersion',0) for s in state['sources'] if s.get('kind')=='overseas_api' and s.get('forMonth')==month),default=0),
             'scope':'核算月海外新人及已有人员任职资料','rosterCount':len(payload['roster']),'offerCount':len(payload['offers']),
             'missingOfferCodes':payload['missingOfferCodes']}
         if 'employmentHistory' in payload:
             source.update(employmentPeople=len(payload['employmentHistory']),
                           employmentRecords=sum(len(h['records']) for h in payload['employmentHistory']),
                           rosterAsOf=roster_as_of(payload))
+        if payload.get('employmentOnly'):
+            source.update(employmentOnly=True,name='海外任职与离职资料补查.json',
+                          scope='指定人员任职与离职资料定向补查',scopeJobNumbers=payload['requestedJobNumbers'])
+        if payload.get('offerOnly'):
+            source.update(offerOnly=True,name='海外录用资料补查.json',scope='指定录用编号及关联人员资料定向补查',
+                          requestedOfferCodes=payload['requestedOfferCodes'])
         checkpoint();store._write(folder/'sources'/source['storedName'],payload)
         (folder/'sources'/source['storedName']).chmod(0o600)
         try:
@@ -241,7 +277,7 @@ class BrowserClient:
     def __init__(self, space_id=None, keep_space=False):
         self.space_id=space_id;self.keep_space=keep_space
 
-    def fetch(self, month, job_numbers=(), offer_codes=(), progress=None):
+    def fetch(self, month, job_numbers=(), offer_codes=(), progress=None, *, employment_only=False, offer_only=False):
         _month(month)
         executable=shutil.which('ego-browser')
         if not executable:raise ValueError('请先打开并登录海外人事系统，当前未找到 Ego 浏览器连接')
@@ -252,6 +288,8 @@ class BrowserClient:
             result_file=Path(temporary)/'result.json'
             options={'month':month,'jobNumbers':_numbers(job_numbers),'offerCodes':_numbers(offer_codes),'cancelFile':str(cancel),
                      'spaceId':self.space_id,'keepSpace':self.keep_space,'progressFile':str(progress_file),'resultFile':str(result_file)}
+            if employment_only:options['employmentOnly']=True
+            if offer_only:options['offerOnly']=True
             program=f'const {{run}}=await import({json.dumps(module.as_uri())});await run({json.dumps(options,ensure_ascii=False)});'
             process=subprocess.Popen([executable,'nodejs'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             first=True;last_message=''
@@ -302,3 +340,25 @@ def fetch(month, *, job_numbers=(), offer_codes=(), client=None, progress=None):
     payload=(client or configured_client()).fetch(month,job_numbers,offer_codes,progress)
     checkpoint()
     return validate_snapshot(payload,month)
+
+
+def fetch_employment(month, job_numbers, *, client=None, progress=None):
+    """Query specified people's employment histories without reloading Offers."""
+    checkpoint()
+    numbers=_numbers(job_numbers)
+    payload=(client or configured_client()).fetch(month,numbers,(),progress,employment_only=True)
+    checkpoint()
+    result=validate_snapshot(payload,month)
+    if not result.get('employmentOnly') or result['requestedJobNumbers']!=numbers:
+        raise ValueError('海外接口未返回本次领取人定向补查结果')
+    return result
+
+
+def fetch_offers(month, offer_codes, *, client=None, progress=None):
+    """Repair explicit Offer gaps without discovering or replacing monthly hires."""
+    checkpoint();codes=_numbers(offer_codes)
+    payload=(client or configured_client()).fetch(month,(),codes,progress,offer_only=True)
+    checkpoint();result=validate_snapshot(payload,month)
+    if not result.get('offerOnly') or result['requestedOfferCodes']!=codes or result['requestedJobNumbers']:
+        raise ValueError('海外接口未返回本次指定录用资料的补查结果')
+    return result

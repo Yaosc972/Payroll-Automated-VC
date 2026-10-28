@@ -21,7 +21,7 @@ from .recruitment_import_validation import (
 RULE_BYTES = Path(__file__).with_name('recruitment_rules.json').read_bytes()
 CATALOG = json.loads(RULE_BYTES)
 RULE_HASH = hashlib.sha256(RULE_BYTES).hexdigest()
-ENGINE_VERSION = '4.25'
+ENGINE_VERSION = '4.30'
 NODES = ('入职满一个月', '入职满三个月', '入职满六个月', '转正')
 EUROPE = ('德国','捷克','英国','法国','荷兰','意大利','西班牙','葡萄牙','奥地利','瑞士','比利时',
           '卢森堡','丹麦','瑞典','挪威','芬兰','爱尔兰','波兰','匈牙利','罗马尼亚','germany','czech',
@@ -351,6 +351,12 @@ def award(row, kind, month, *, evaluate_employment=True, cutoff_policy=None):
                     if refs and all(p.get('role')=='roster' for p in refs) and field not in reviewed:
                         # An undated current roster cannot prove the role at hire.
                         v[field]=''
+        reporting=row.get('reportingLine')
+        if reporting and reporting.get('complete'):
+            from .recruitment_hierarchy import FIELDS
+            v={**v,**{field:'' for field in FIELDS},
+               '推荐人与候选人上下级关系':'是' if reporting['related'] else '否'}
+            for field,number in zip(FIELDS[1:],reporting['chain']):v[field]=number
     currency, country=country_currency(v)
     issues=[]; reasons=[]; total=None; cycle_info=None; channel_factor=None
     conflict_fields=material_conflicts(row,kind)
@@ -420,6 +426,7 @@ def award(row, kind, month, *, evaluate_employment=True, cutoff_policy=None):
             'scheduledTotal':None,'roundingDifference':None,'recipientTotals':[]}
     if standard and standard.get('openingBasis'):result['standardBasis']=standard['openingBasis']
     if qualification_basis:result['referrerQualificationBasis']=qualification_basis
+    if kind=='referral' and row.get('reportingLine',{}):result['reportingLineBasis']=row['reportingLine']
     if kind=='recruitment' and normalized=='二次入职' and not conflict_fields:
         basis=rehire_basis(v,version)
         if basis:result['rehireBasis']=basis
@@ -522,7 +529,7 @@ def calculate_draft(state):
         result=calculate_row(state,row)
         for kind in ('recruitment','referral'):
             a=result[kind]; label='招聘奖金' if kind=='recruitment' else '内推奖金'
-            relevant=list(a['issues'])+[i['reason'] for i in a.get('accountingIssues',[]) if i['accountingMonth']==state['month']]
+            relevant=list(a['issues'])+[i['reason'] for i in a.get('accountingIssues',[]) if i['accountingMonth']==state['month'] or i.get('historyOnly')]
             for n in a['nodes']:
                 statuses[n['status']]+=1
                 if n.get('scheduledMonth',n['dueMonth'])==state['month']:

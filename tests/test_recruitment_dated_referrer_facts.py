@@ -165,6 +165,12 @@ def test_missing_translation_never_borrows_a_different_segment_or_capture(field,
     slim[field]=value
     if field=='entryDate':row['values']['推荐人入职日期']=''
     result=award(row,'referral',202608)
+    if field in {'serviceType','approvalStatus'}:
+        # A rejected/secondary record needs no metadata donation when the
+        # approved primary record already supplies the complete qualification.
+        assert '推荐人岗位与职级待核' not in result['issues']
+        assert len(result['referrerQualificationBasis'][0]['sources'])==1
+        return
     assert '推荐人岗位与职级待核' in result['issues']
     assert not result.get('referrerQualificationBasis')
 

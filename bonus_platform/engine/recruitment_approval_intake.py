@@ -564,8 +564,12 @@ def proposals(store, state):
         result['attachmentIds'] = list(dict.fromkeys(sid for ref in result['referencedAttachments'] for sid in ref['sourceIds']))
         missing = [ref['name'] for ref in result['referencedAttachments'] if ref['required'] and not ref['sourceIds']]
         if missing: result['issues'].append('缺少审批引用附件：'+'、'.join(missing))
-        if result['unreadablePages']: result['issues'].append('第 '+ '、'.join(map(str,result['unreadablePages']))+' 页内容未读清，请补充清晰原件。')
-        if not full.strip(): result['issues'].append('审批文件没有可识别内容，请补充有内容的审批原件。')
+        unavailable = [p['page'] for p in doc['pages'] if not p.get('blank') and p.get('ocrError')=='unavailable']
+        if unavailable:
+            result['issues'].append('第 '+'、'.join(map(str,unavailable))+' 页扫描件识别服务暂不可用，请联系管理员检查服务；原件已保留。')
+        unread = [page for page in result['unreadablePages'] if page not in unavailable]
+        if unread: result['issues'].append('第 '+ '、'.join(map(str,unread))+' 页内容未读清，请补充清晰原件。')
+        if not full.strip() and not unavailable: result['issues'].append('审批文件没有可识别内容，请补充有内容的审批原件。')
         # Explicit overall status can block adoption; a historical rejection
         # inside an approval log is not treated as the final outcome.
         if re.search(r'(?:流程状态|审批状态|最终结果)\s*[：:]?\s*(?:未结束|审批中|已驳回|已撤回|已拒绝)',full):

@@ -29,6 +29,35 @@ def people(state):
     return {r['values']['姓名']:r for r in state['rows']}
 
 
+def test_bp_original_workbook_reads_personnel_detail_not_payee_summary_or_award_amounts(tmp_path):
+    from bonus_platform.engine.recruitment_draft_sources import read_source
+    fields=FIELDS+['候选人入职时间','奖金对应币种']
+    wb=load_workbook(BytesIO(book(fields,[
+        ['历史甲','outside-01','2026-06-01','2026-09-02','','国内','中国大陆','A','zt-other','2026-06-01','人民币'],
+        ['本月新增','outside-02','2026-09-03','','','国内','中国大陆','C','zt-owner','2026-09-03','人民币'],
+    ],title='附件一-招聘奖金核算明细')))
+    detail=wb.active;detail.insert_rows(1);detail.cell(1,2,'花名册');detail.insert_rows(3)
+    detail['AM3']='入职1个月发放奖金';detail['AN3']='入职1个月发放周期'
+    detail['AM4']=99999;detail['AN4']=202609
+    detail['AM5']=88888;detail['AN5']=202609
+    summary=wb.create_sheet('附件二-招聘奖金汇总表')
+    summary.append(['工号','姓名','币种',202608]);summary.append(['zt-owner','领取人甲','美元/欧元',77777])
+    data=BytesIO();wb.save(data);content=data.getvalue()
+    parsed=read_source(tmp_path/'BP原表.xlsx','bp-original',content=content,personnel_only=True)
+    assert [(s['role'],s['recordCount']) for s in parsed['sheets']]==[('cumulative',2),('unknown',0)]
+    assert all(not r['historyCells'] for r in parsed['records'])
+    store=DraftStore(tmp_path/'drafts');before=opening(store);previous=deepcopy(before['rows'][0])
+    after=store.ingest(202609,[('BP原表.xlsx',content)],before['revision'],purpose='external-personnel')
+    rows=people(after)
+    assert set(rows)=={'历史甲','本月新增'}
+    assert rows['历史甲']['values']['转正日期']=='2026-09-02'
+    assert rows['历史甲']['values']['ABC类别']==previous['values']['ABC类别']
+    assert rows['历史甲']['history']==previous['history']
+    assert not rows['本月新增']['history'] and not after.get('externalResults')
+    assert after['sources'][-1]['cumulativeSummary']['notApplied']==[]
+    assert after['sources'][-1]['cumulativeSummary']['newHires']==1
+
+
 def test_cumulative_adds_only_current_hires_and_observes_historical_facts(tmp_path):
     store=DraftStore(tmp_path);state=opening(store);old=deepcopy(state['rows'][0])
     state=upload(store,state,[
@@ -179,6 +208,38 @@ def test_duplicate_source_rows_count_people_once_and_preserve_conflicts_on_refre
     assert 'ABC类别' in state['rows'][0]['unresolvedFields']
     state=store.refresh(202609,state['revision'])
     assert len(state['rows'])==1 and 'ABC类别' in state['rows'][0]['unresolvedFields']
+
+
+@pytest.mark.parametrize('reverse',[False,True])
+def test_reused_offer_and_hire_date_never_merge_different_people(tmp_path,reverse):
+    store=DraftStore(tmp_path);state=opening(store)
+    fields=['姓名','海外offer流程编号','入职日期','转正日期']
+    rows=[['Ashley Siddon','offer-1','2026-09-29',''],['Callum Halford','offer-1','2026-09-29',''],
+          ['正常新人','offer-2','2026-09-20','']]
+    state=upload(store,state,rows[::-1] if reverse else rows,fields=fields)
+    assert set(people(state))=={'历史甲','正常新人'}
+    summary=state['sources'][-1]['cumulativeSummary']
+    assert summary['newHires']==1
+    assert {x['name'] for x in summary['notApplied']}=={'Ashley Siddon','Callum Halford'}
+    assert all(x['code']=='ambiguous_identity' and x['row'] for x in summary['notApplied'])
+    refreshed=store.refresh(202609,state['revision'])
+    assert set(people(refreshed))=={'历史甲','正常新人'}
+
+
+def test_existing_person_is_not_updated_from_a_different_name_with_same_identifier(tmp_path):
+    store=DraftStore(tmp_path);state=opening(store);before=deepcopy(state['rows'][0])
+    state=upload(store,state,[['另一人','outside-01','2026-06-01','2026-09-02','','国内','中国大陆','C','zt-owner']])
+    assert len(state['rows'])==1
+    assert state['rows'][0]['values']==before['values'] and state['rows'][0]['history']==before['history']
+    assert state['sources'][-1]['cumulativeSummary']['notApplied'][0]['code']=='ambiguous_identity'
+
+
+def test_cumulative_matching_ignores_name_case_and_repeated_spaces(tmp_path):
+    store=DraftStore(tmp_path)
+    state=opening(store,[['Ashley Siddon','outside-01','2026-06-01','','','国内','中国大陆','C','zt-owner']])
+    state=upload(store,state,[['ASHLEY  SIDDON','outside-01','2026-06-01','2026-09-02','','国内','中国大陆','C','zt-owner']])
+    assert len(state['rows'])==1 and state['rows'][0]['values']['转正日期']=='2026-09-02'
+    assert state['sources'][-1]['cumulativeSummary']['notApplied']==[]
 
 
 def test_current_month_opening_does_not_accept_new_recruitment_facts(tmp_path):

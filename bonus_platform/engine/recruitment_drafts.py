@@ -46,7 +46,7 @@ SNAPSHOT_FIELDS={'姓名','工号','证件号','入职日期','候选人入职�
                  '原始ABC类别','原始招聘渠道','奖金地区类型'}
 OFFER_FIELDS={'ABC类别','招聘负责人工号','招聘负责人姓名','协助招聘人工号','协助招聘人姓名',
               '招聘渠道','原始招聘渠道','招聘启动日期','推荐人姓名','推荐人工号'}
-ASSEMBLY_VERSION=36
+ASSEMBLY_VERSION=40
 
 
 @lru_cache(maxsize=64)
@@ -395,16 +395,24 @@ def assemble(month, records, state):
     for edit in state.get('edits',[]):
         if edit.get('active',True):cumulative_edits[edit['rowId']][edit['field']]=edit['value']
     cumulative_aliases=defaultdict(dict);cumulative_people=defaultdict(dict);cumulative_names=defaultdict(dict)
+    cumulative_alias_names=defaultdict(set)
+    def index_cumulative_name(values):
+        name=re.sub(r'\s+',' ',text(values.get('姓名'))).casefold()
+        if name:
+            for alias in employment_aliases(values):cumulative_alias_names[alias].add(name)
     def person_aliases(values):
         return {(field,staff_id(values[field]) if field=='工号' else text(values[field]).lower())
                 for field in IDENTITY if text(values.get(field)) not in {'','-','无','无工号','N/A'}}
     def index_cumulative(row):
         facts={**row['original'],**cumulative_edits[row['id']]}
+        index_cumulative_name(facts)
         for alias in employment_aliases(facts):cumulative_aliases[alias][row['id']]=row
         for alias in person_aliases(facts):cumulative_people[alias][row['id']]=row
         cumulative_names[(text(facts.get('姓名')),_date(facts))][row['id']]=row
     if cumulative_sources:
         for row in rows.values():index_cumulative(row)
+        for rec in cumulative_records:
+            if rec['ref']['sourceId'] in current_sources:index_cumulative_name(rec['values'])
     for rec in cumulative_records:
         if rec['ref']['sourceId'] not in current_sources:continue
         checkpoint()
@@ -416,6 +424,8 @@ def assemble(month, records, state):
             code='missing_hire_date';reason='缺少有效入职日期，无法确定本月新增或已有任职'
         elif date_text(values.get('入职日期')) and date_text(values.get('候选人入职时间')) and date_text(values['入职日期'])!=date_text(values['候选人入职时间']):
             code='conflicting_hire_dates';reason='两列入职日期不一致，需核对本次任职'
+        elif any(len(cumulative_alias_names[alias])>1 for alias in aliases):
+            code='ambiguous_identity';reason='同一人员编号和入职日期对应不同姓名，需核对原表，不能合并人员'
         elif len(same)>1 or any(any(field in person_ids and person_ids[field]!=value
                                   for field,value in person_aliases({**row['original'],**cumulative_edits[row['id']]})) for row in same):
             code='ambiguous_identity';reason='人员编号无法唯一对应同一任职，需核对原件'
@@ -806,6 +816,7 @@ def assemble(month, records, state):
         row['awardDecisions']=[d for d in state.get('awardDecisions',[]) if d['rowId']==row['id'] and d['operationId'] in active_ops]
     monthly_queries={s['id'] for s in state['sources'] if s.get('forMonth')==month and s.get('dataDigest')
                      and (s.get('monthlyRoster') or s.get('kind')=='overseas_api')
+                     and not (s.get('employmentOnly') or s.get('offerOnly'))
                      and s.get('active',True) and not s.get('comparisonOnly') and not s.get('error')}
     for source in state['sources']:
         checkpoint()
@@ -823,11 +834,14 @@ def assemble(month, records, state):
                 detail=source['name']
                 if missing:title='补充审批引用的附件';detail+='：缺少 '+'、'.join(missing)
                 todo('attachment_review',title,source['id'],detail=detail,source_id=source['id'])
-        elif not source.get('recordCount') and source['id'] not in monthly_queries and not (source.get('channelDetailsOnly') and source.get('channelDetailsCheckedOfferIds')):
+        elif (not source.get('recordCount') and source['id'] not in monthly_queries
+              and not (source.get('kind') in {'beisen','overseas_api'} and (source.get('employmentOnly') or source.get('offerOnly')))
+              and not (source.get('channelDetailsOnly') and source.get('channelDetailsCheckedOfferIds'))):
             todo('source_unrecognized','资料未识别到人员记录',source['id'],detail=source['name'],source_id=source['id'])
     if not state.get('baseline') and not state.get('parentMonth') and not state.get('openingEmptyConfirmed'):
         todo('baseline','首次使用：选择可信期初','baseline',detail='历史金额和月份会保留；认可期初不等于确认实际已付。')
     has_roster=bool(monthly_queries) or any(s.get('active',True) and not s.get('comparisonOnly') and not s.get('error')
+        and not (s.get('employmentOnly') or s.get('offerOnly') or s.get('channelDetailsOnly'))
         and s.get('forMonth',month)==month and 'roster' in s.get('roles',[]) for s in state['sources'])
     if not has_roster: todo('coverage','补充本期花名册以核对人员覆盖','roster')
     out=sorted(rows.values(),key=lambda r:(_date(r['values']),text(r['values'].get('工号')),r['id']))

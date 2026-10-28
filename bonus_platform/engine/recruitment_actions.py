@@ -85,6 +85,7 @@ def task_fields(row,task,month):
         return fields
     if kind=='employment': return ['入职日期','候选人入职时间','任职说明']+(['核算范围'] if row.get('employmentCandidates') else [])
     if kind=='identity':return ['证件号']
+    if kind=='country':return ['工作地']
     if kind in {'scope','standard'}:
         fields=['标签分类','奖金地区类型','ABC类别','职级']
         missing=[f for f in fields if not present(v.get(f)) and needed(row,f,month)]

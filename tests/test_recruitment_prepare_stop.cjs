@@ -57,6 +57,22 @@ test('a stopped initial preparation is not restarted by reopening the page',asyn
  await context.resume();assert.equal(calls.length,0);
 });
 
+test('upload can inherit the confirmed opening without starting an HR preparation job',async()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../bonus_platform/static/recruitment-flow.js'),'utf8');
+ const initial={month:202609,revision:0,previousAccepted:true,previousMonth:202608};
+ const calls=[],context={ui:{data:initial},base:()=>'/month',activePreparation:()=>false,
+   request:async(url,options)=>{calls.push({url,method:options?.method||'GET',body:options?.body});
+     return url.endsWith('/prepare')?null:url.endsWith('/carry-forward')?{...initial,revision:1,parentMonth:202608}:initial;},
+   adopt:()=>{},update:()=>{}};
+ vm.createContext(context);
+ vm.runInContext(source.slice(source.indexOf('  async function beforeUpload('),source.indexOf('  async function watch(')),context);
+ const state=await context.beforeUpload();
+ assert.equal(state.parentMonth,202608);
+ const mutations=calls.filter(c=>c.method==='POST');
+ assert.equal(mutations.length,1);assert.equal(mutations[0].url,'/month/carry-forward');
+ assert.deepEqual(JSON.parse(mutations[0].body),{revision:0,sourceMonth:202608});
+});
+
 test('a stop acknowledged at the displayed revision skips the full draft download',async()=>{
  const source=fs.readFileSync(path.join(__dirname,'../bonus_platform/static/recruitment-flow.js'),'utf8');
  const calls=[],context={ui:{data:{revision:6}},base:()=>'/month',jobBase:'/month',pollSequence:0,clearTimeout:()=>{},pollTimer:null,activePreparation:job=>['running','cancelling'].includes(job?.status),request:async url=>{calls.push(url);return {id:'one',status:'cancelled',revision:6,message:'已停止'};},status:()=>{},update:()=>{}};

@@ -115,3 +115,111 @@ def test_waiting_worker_progress_is_republished_when_the_message_does_not_change
     result=queue.QueuedClient().fetch(202608,progress=messages.append)
     assert result['month']==202608
     assert len(messages)>=2 and messages[0]==messages[1]
+
+
+def targeted_result(job):
+    result=value(job['month'])
+    result.update(requestedJobNumbers=job['jobNumbers'],requestedOfferCodes=job['offerCodes'],
+                  missingOfferCodes=job['offerCodes'])
+    if job.get('employmentOnly'):
+        result.update(employmentOnly=True,employmentHistoryScope='oehr_and_migrated',employmentHistory=[])
+    if job.get('offerOnly'):result['offerOnly']=True
+    return result
+
+
+@pytest.mark.parametrize('mode',['ordinary','employment','offer'])
+def test_hosted_calls_roundtrip_the_requested_mode_and_explicit_missing_scope(worker,monkeypatch,mode):
+    import bonus_platform.auth as auth
+    from bonus_platform.engine import recruitment_overseas as overseas
+    client,_,_=worker;claimed=[]
+    monkeypatch.setattr(auth,'production_runtime',lambda:True)
+    monkeypatch.setattr(overseas,'BrowserClient',lambda:pytest.fail('Company queries must use the queue'))
+    def execute(_):
+        job=client.post('/api/recruitment/browser-worker/claim').json()['job'];claimed.append(job)
+        assert client.post(f"/api/recruitment/browser-worker/{job['id']}/complete",
+                           json={'lease':job['lease'],'snapshot':targeted_result(job)}).status_code==200
+    monkeypatch.setattr(queue.time,'sleep',execute)
+    if mode=='ordinary':result=overseas.fetch(202609)
+    elif mode=='employment':result=overseas.fetch_employment(202609,['ZT-TARGET'])
+    else:result=overseas.fetch_offers(202609,['OF-TARGET'])
+    assert len(claimed)==1
+    assert claimed[0]['employmentOnly']==(mode=='employment')
+    assert claimed[0]['offerOnly']==(mode=='offer')
+    assert result['roster']==result['offers']==[]
+    assert result['requestedJobNumbers']==(['zt-target'] if mode=='employment' else [])
+    assert result['missingOfferCodes']==(['of-target'] if mode=='offer' else [])
+    if mode=='employment':assert result['employmentHistoryScope']=='oehr_and_migrated'
+
+
+def test_mode_is_part_of_idempotency_key_and_older_jobs_remain_claimable(worker):
+    from types import SimpleNamespace
+    client,path,_=worker;token=queue.SESSION.set(SimpleNamespace(job_id='synthetic-preparation'))
+    try:
+        normal=queue.enqueue(202609,['zt-target'],[])
+        employment=queue.enqueue(202609,['zt-target'],[],employment_only=True)
+        assert normal!=employment
+        assert queue.enqueue(202609,['zt-target'],[],employment_only=True)==employment
+    finally:queue.SESSION.reset(token)
+    with sqlite3.connect(path) as db:
+        db.execute('UPDATE sigma_recruitment_browser_jobs SET request_document=? WHERE id=?',
+                   (json.dumps({'month':202609,'jobNumbers':['zt-target'],'offerCodes':[]}),normal))
+    job=client.post('/api/recruitment/browser-worker/claim').json()['job']
+    assert job['id']==normal and not job.get('employmentOnly') and not job.get('offerOnly')
+    assert client.post(f"/api/recruitment/browser-worker/{normal}/complete",
+                       json={'lease':job['lease'],'snapshot':targeted_result(job)}).status_code==200
+
+
+@pytest.mark.parametrize('mode',['employment','offer'])
+def test_targeted_result_without_mode_or_wrong_scope_cannot_publish(worker,mode):
+    client,_,objects=worker
+    identifier=queue.enqueue(202609,['zt-target'] if mode=='employment' else [],
+                             ['of-target'] if mode=='offer' else [],
+                             employment_only=mode=='employment',offer_only=mode=='offer')
+    job=client.post('/api/recruitment/browser-worker/claim').json()['job'];result=targeted_result(job)
+    result.pop('employmentOnly' if mode=='employment' else 'offerOnly')
+    if mode=='employment':result.pop('employmentHistoryScope')
+    url=f'/api/recruitment/browser-worker/{identifier}/complete'
+    assert client.post(url,json={'lease':job['lease'],'snapshot':result}).status_code==400
+    assert not objects and queue.get(identifier)['status']=='running'
+    result=targeted_result(job);result['requestedJobNumbers']=['out-of-scope']
+    assert client.post(url,json={'lease':job['lease'],'snapshot':result}).status_code==400
+    assert not objects
+
+
+@pytest.mark.parametrize('mode',['employment','offer'])
+def test_targeted_query_cancellation_releases_pending_work_without_a_snapshot(worker,monkeypatch,mode):
+    from threading import Event
+    from bonus_platform.engine.recruitment_cancellation import ACTIVE,PreparationCancelled
+    client,path,objects=worker;event=Event();token=ACTIVE.set(event)
+    monkeypatch.setattr(queue.time,'sleep',lambda _:event.set())
+    try:
+        with pytest.raises(PreparationCancelled):
+            queue.QueuedClient().fetch(202609,['zt-target'] if mode=='employment' else [],
+                                       ['of-target'] if mode=='offer' else [],
+                                       employment_only=mode=='employment',offer_only=mode=='offer')
+    finally:ACTIVE.reset(token)
+    assert client.post('/api/recruitment/browser-worker/claim').json()['job'] is None
+    with sqlite3.connect(path) as db:assert db.execute('SELECT status FROM sigma_recruitment_browser_jobs').fetchall()==[('failed',)]
+    assert not objects
+
+
+def test_queued_offer_repair_preserves_manual_values_and_original_sources(worker,monkeypatch,tmp_path):
+    import bonus_platform.auth as auth
+    from bonus_platform.engine import recruitment_overseas as overseas
+    from bonus_platform.engine.recruitment_drafts import DraftStore
+    from test_recruitment_overseas import snapshot
+    client,_,_=worker;store=DraftStore(tmp_path/'protected');initial=snapshot(202609)
+    initial.update(offers=[],missingOfferCodes=['OF1'])
+    before=store.save_overseas_snapshot(202609,0,initial);rid=before['rows'][0]['id']
+    before=store.change(202609,before['revision'],{'edits':[{'rowId':rid,'field':'招聘负责人姓名','value':'人工负责人','reason':'合成验证'}]})
+    original=(store._folder(202609)/'sources'/before['sources'][0]['storedName']).read_bytes()
+    monkeypatch.setattr(auth,'production_runtime',lambda:True)
+    def execute(_):
+        job=client.post('/api/recruitment/browser-worker/claim').json()['job'];result=snapshot(202609)
+        result.update(offerOnly=True,roster=[],requestedOfferCodes=job['offerCodes'])
+        assert client.post(f"/api/recruitment/browser-worker/{job['id']}/complete",json={'lease':job['lease'],'snapshot':result}).status_code==200
+    monkeypatch.setattr(queue.time,'sleep',execute)
+    result=overseas.fetch_offers(202609,['OF1']);after=store.save_overseas_snapshot(202609,before['revision'],result)
+    assert len(after['rows'])==1 and after['rows'][0]['offerMatched']
+    assert after['rows'][0]['values']['招聘负责人姓名']=='人工负责人' and after['edits']==before['edits']
+    assert (store._folder(202609)/'sources'/before['sources'][0]['storedName']).read_bytes()==original

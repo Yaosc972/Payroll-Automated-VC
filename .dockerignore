@@ -28,6 +28,8 @@ target
 .DS_Store
 .playwright-cli
 .superpowers
+.codex-artifacts
+.audit
 output
 tmp
 outputs/*

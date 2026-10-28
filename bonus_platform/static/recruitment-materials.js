@@ -6,14 +6,13 @@
     {id:'roster',title:'本月花名册',icon:'people',section:'主要资料',description:'国内、海外花名册，保留工号、入职日期、人员状态等原始字段。'},
     {id:'domestic',title:'国内招聘资料',icon:'building',section:'主要资料',description:'同步核算月份的国内花名册、Offer 与任职资料，按月保存快照；也可补充原始文件。'},
     {id:'overseas',title:'海外 Offer',icon:'globe',section:'主要资料',description:'同步本月海外花名册、Offer 与带生效日期的任职记录，按核算月份保存快照；也可导入原始资料。'},
-    {id:'external-personnel',title:'体系外累计资料',icon:'people',section:'按需提供',description:'只新增本月入职人员，已有任职仅核对本月转正和离职日期。'},
-    {id:'external',title:'体系外核算结果',icon:'table',section:'按需提供',description:'导入体系外同事提供的本月核定结果。'},
+    {id:'external',title:'体系外核算结果',icon:'table',section:'按需提供',description:'上传线下核算结果，按当前核算月提取发放金额，核对后并入汇总。'},
     {id:'extra',title:'离职与特殊审批',icon:'checklist',section:'按需提供',description:'有离职或特殊审批时，导入原始离职资料、审批 PDF 或图片。'},
     {id:'comparison',title:'线下核对表',icon:'checklist',section:'其他资料',description:'仅与本月结果比较，不作为上月核算表，也不参与计算。'},
     {id:'other',title:'补充与其他文件',icon:'file',section:'其他资料',description:'补充表及暂未识别的文件，保留原件供查看。'},
   ];
   function categories(source) {
-    if (source.purpose==='external-personnel') return ['external-personnel'];
+    if (source.purpose==='external-personnel') return ['other'];
     if (source.purpose==='external-results') return ['external'];
     if (source.kind==='overseas_api') return ['roster','overseas'];
     if (source.kind==='beisen'&&source.monthlyRoster) return ['roster','domestic'];
@@ -82,10 +81,6 @@
         else if (coverage.syncRequired) {status='待同步';tone='missing';}
         else if (coverage.syncedAt && coverage.domesticPeople) {status=`已同步 · ${coverage.queriedPeople || 0} 人`;tone='ready';}
         else if (!active.length) {status='待同步';tone='muted';}
-      } else if (type.id==='external-personnel') {
-        const skipped=current.reduce((count,source)=>count+(source.cumulativeSummary?.notApplied?.length||0),0);
-        status=current.length?skipped?`${skipped} 条未采用`:`已导入 ${current.length} 份`:active.length?'待导入本月资料':'按需提供';
-        tone=skipped?'missing':current.length?'info':'muted';
       } else if (type.id==='external') {
         const context=data.externalResults;
         const result=window.RecruitmentExternalResults?.cardState(context)||{label:'按需导入',tone:'muted'};
@@ -101,6 +96,25 @@
       return {...type,files,status,tone,note};
     }).filter(group => !['comparison','other'].includes(group.id) || group.files.length);
   }
+  function readiness(data) {
+    const coverage=data.monthly?.coverage||{};
+    const sources=(data.sources||[]).filter(source=>source.active!==false&&!source.comparisonOnly);
+    const usable=sources.filter(source=>!source.error&&!source.snapshotOnly);
+    const missing=[];
+    if(!coverage.hasOpening&&!data.previousAccepted)missing.push(usable.some(source=>source.roles?.includes('ledger'))?'确认采用上月核算表':'上月核算表或无历史奖金确认');
+    if(!usable.some(source=>(source.forMonth==null||source.forMonth===data.month)&&source.roles?.includes('roster')))missing.push('本月花名册');
+    if(sources.some(source=>source.error))missing.push('处理读取失败的资料');
+    if(sources.some(source=>source.snapshotOnly))missing.push('核对并采用已保存快照');
+    if(data.period?.mismatch)missing.push('核对资料所属月份');
+    for(const item of data.monthly?.workItems||[]){
+      if(!item.ruleMaintenance&&item.actionClass==='missing_fact'&&item.key!=='baseline')missing.push(item.title);
+    }
+    if(coverage.recipientSyncRequired)missing.push('奖金领取人任职资料');
+    if(data.externalResults?.expected?.length||data.externalResults?.pendingImports?.length)missing.push('核对并采用体系外核算结果');
+    if(usable.some(source=>!source.kind&&!source.attachment&&!source.purpose&&!(source.roles||[]).some(role=>role!=='unknown')))missing.push('核对未识别的文件');
+    const unique=[...new Set(missing)];
+    return {ready:unique.length===0,missing:unique,hasMaterials:!!(sources.length||data.rows?.length||data.previousAccepted)};
+  }
   function approvalStatus(data, source) {
     if(source.approvalSummary)return source.approvalSummary.label;
     const scope=data.monthly?.workItems?.find(i=>i.key==='approval:'+source.id)?.approvalPeople||[];
@@ -112,5 +126,5 @@
     const review=(data.reviewEntries || []).filter(r=>r.sourceId===source.id && (!r.operationId || active.has(r.operationId))).at(-1);
     return !review ? '待审阅' : review.applied ? (review.scopeComplete ? '已应用更正' : '已部分应用') : review.status;
   }
-  window.RecruitmentMaterials = {categories,format,build,approvalStatus,isSyncHistory,syncStatus,syncTime,snapshotNote};
+  window.RecruitmentMaterials = {categories,format,build,readiness,approvalStatus,isSyncHistory,syncStatus,syncTime,snapshotNote};
 })();

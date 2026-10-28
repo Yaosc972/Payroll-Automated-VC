@@ -85,3 +85,54 @@ def test_historical_workplace_supersedes_current_hierarchy_without_mutating_inpu
     values = parsed['records'][0]['values']
     assert values['工作地'] == '美国'
     assert not any(values.get(f) for f in ('二级组织', '三级组织', '四级组织', '五级组织'))
+
+
+@pytest.mark.parametrize('path,currency',[
+    ('纵腾网络/FBU仓储事业部/美洲区/加州区/洛杉矶25号仓/包装组','美元'),
+    ('纵腾网络/FBU仓储事业部/欧洲区/德国区/杜塞尔多夫20号仓/包装组','欧元'),
+])
+def test_effective_full_organization_proves_country_when_workplace_only_says_non_china(path,currency):
+    row,parsed=calculate([{**history(), 'deptName':'包装组','workPlacePathName':'非中国','orgPathName':path}])
+    assert row['calculation']['recruitment']['currency']==currency
+    assert '标准币种对应地区待核' not in row['calculation']['recruitment']['issues']
+    assert row['values']['二级组织']=='FBU仓储事业部'
+    assert parsed['records'][0]['rawValues']['工作地']=='德国'
+
+
+@pytest.mark.parametrize('case',['overlap','future','secondary','wrong-entry','wrong-leaf'])
+def test_unproven_organization_path_cannot_supply_a_historical_country(case):
+    record={**history(),'deptName':'包装组','workPlacePathName':'非中国',
+            'orgPathName':'纵腾网络/FBU仓储事业部/美洲区/加州区/洛杉矶25号仓/包装组'}
+    records=[record]
+    if case=='overlap':records.append({**record,'recordId':'other','orgPathName':'纵腾网络/FBU仓储事业部/欧洲区/德国区/测试仓/包装组'})
+    elif case=='future':record.update(startDate='2026-09-01',endDate='9999-12-31')
+    elif case=='secondary':record['employmentType']='1'
+    elif case=='wrong-entry':record['entryDate']='2026-07-01'
+    elif case=='wrong-leaf':record['orgPathName']='纵腾网络/德国区/另一个部门'
+    row,_=calculate(records)
+    assert row['calculation']['recruitment']['currency']==''
+    assert '标准币种对应地区待核' in row['calculation']['recruitment']['issues']
+
+
+def test_prepare_fills_new_hire_country_from_targeted_employment_query(tmp_path,monkeypatch):
+    from bonus_platform.engine.recruitment_drafts import DraftStore
+    from bonus_platform.engine.recruitment_prepare import repair_employments
+    store=DraftStore(tmp_path);payload=snapshot(202609)
+    payload['offers'][0].update(招聘渠道='招聘网站',其他渠道='')
+    record={**history(),'entryDate':'2026-09-01','startDate':'2026-09-01','endDate':'9999-12-31',
+            'employeeInfoId':'person-1','deptName':'包装组','workPlacePathName':'非中国'}
+    payload['employmentHistory']=[{'empNo':'zt1','records':[record]}]
+    before=store.save_overseas_snapshot(202609,0,payload)
+    assert before['rows'][0]['calculation']['recruitment']['currency']==''
+    calls=[]
+    def fetch(month,numbers,**kwargs):
+        calls.append((month,numbers));proof=deepcopy(payload)
+        proof.update(employmentOnly=True,requestedJobNumbers=numbers,offers=[],queriedAt='2026-10-26T13:00:00+08:00')
+        proof['roster'][0]['scope']='lookup'
+        proof['employmentHistory'][0]['records'][0]['orgPathName']='纵腾网络/FBU仓储事业部/欧洲区/德国区/测试仓/包装组'
+        return proof
+    monkeypatch.setattr(overseas,'fetch_employment',fetch)
+    after=repair_employments(store,202609,before,lambda **values:None)
+    assert calls==[(202609,['zt1'])]
+    assert after['rows'][0]['calculation']['recruitment']['currency']=='欧元'
+    assert after['rows'][0]['id']==before['rows'][0]['id'] and after['edits']==before['edits']

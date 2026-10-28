@@ -101,6 +101,7 @@
   }
   const historyMonth=value=>/^\d{6}$/.test(String(value))?`${String(value).slice(0,4)}年${Number(String(value).slice(4))}月`:String(value||'月份待核对');
   function historyQuestion(r){
+    if(r.historyOnly)return '原表已记录的往期调整';
     const notes=(r.originalNotes||[]).map(n=>n.text).join('；');
     const deduction=notes.match(/(\d{1,2})月(?:已)?(?:扣回|扣除)/);
     if(deduction)return `原表注明${Number(deduction[1])}月扣回，是否已结清？`;
@@ -135,13 +136,13 @@
     return `<div class="rs-history-basis">${noteMarkup.length?`<section class="rs-history-notes"><h4>原表备注</h4>${noteMarkup[0]}${noteMarkup.length>1?`<details><summary>其他备注与原件 · ${noteMarkup.length-1}</summary>${noteMarkup.slice(1).join('')}</details>`:''}</section>`:''}${recordMarkup.length?`<section class="rs-history-records"><h4>已有处理记录</h4><ul>${recordMarkup.join('')}</ul></section>`:'<p class="rs-history-missing">未关联到补扣记录</p>'}</div>`;
   }
   function historyCard(r,url){
-    const status={adjusted:'已有足额补扣安排',retained:'已保留历史金额',partial:'已有部分补扣安排'}[r.resolution]||({overage:'金额依据待核对',opening_conflict:'历史记录待核对',unallocated_balance:'待安排发放'}[r.type]||'结算结果待核实');
+    const status={adjusted:'已有足额补扣安排',retained:'已保留历史金额',partial:'已有部分补扣安排'}[r.resolution]||(r.historyOnly?'历史记录':({overage:'金额依据待核对',opening_conflict:'历史记录待核对',unallocated_balance:'待安排发放'}[r.type]||'结算结果待核实'));
     const missingPayee=!r.recipientId||!r.recipientName;
-    return `<article class="rs-record rs-history-card" data-rs-history="${e(r.key)}"><header class="rs-history-heading"><div><strong>${e(r.name)}</strong><span>${e(kinds[r.kind])} · ${e(r.role)}</span></div><span class="flow-status-tag" ${!r.resolution?'data-tone="warning"':''}>${e(status)}</span></header>
-      <h3 class="rs-history-question">${e(historyQuestion(r))}</h3>${historyBasis(r,url)}
+    return `<article class="rs-record rs-history-card" data-rs-history="${e(r.key)}"><header class="rs-history-heading"><div><strong>${e(r.name)}</strong><span>${e(kinds[r.kind])} · ${e(r.role)}</span></div><span class="flow-status-tag" ${!r.resolution&&!r.historyOnly?'data-tone="warning"':''}>${e(status)}</span></header>
+      <h3 class="rs-history-question">${e(historyQuestion(r))}</h3>${historyBasis(r,url)}${r.historyOnly?'<p>历史记录不计入本月金额，实际扣回结果未核实。确需本月补扣时再登记。</p>':''}
       <table class="rs-history-amounts"><thead><tr><th>历史安排</th><th>现行规则金额</th><th>差额参考</th></tr></thead><tbody><tr><td>${e(w.amount(r.historyAmount,r.currency))}</td><td>${e(w.amount(r.currentAmount,r.currentRule.currency))}</td><td>${r.signedAmount==null?'待核对':e(w.amount(Math.abs(r.signedAmount),r.currency))}</td></tr></tbody></table>
       <details class="rs-history-installments"><summary>历史分期与原件</summary>${(r.openingFacts||[]).map(f=>`<p>${f.basisLabel?e(f.basisLabel)+' · ':''}${e(f.label)} · ${e(historyMonth(f.scheduledMonth))} · ${e(w.amount(f.amount,f.currency))} · ${e(f.recipientName||f.recipientId||'原领取人未关联')}${f.openingSource?.sourceId?` · <a href="${url}/sources/${e(f.openingSource.sourceId)}" target="_blank" rel="noopener">查看原件</a>`:''}</p>`).join('')}</details>
-      <div class="rs-history-footer"><span>${missingPayee?'历史分期未关联领取人':`原领取人：${e(r.recipientName)}`}</span><div class="rd-dialog-actions">${r.type!=='unallocated_balance'&&!r.resolution?`<button class="rd-button" type="button" data-rs-retain="${e(r.key)}">保留历史金额</button>`:''}<button class="rd-button" type="button" data-rs-correct="${e(r.key)}" ${r.adjustmentAllowed===false||['adjusted','retained'].includes(r.resolution)||missingPayee?'disabled':''}>登记补发／扣回</button></div></div>${r.correctionReviewReason?`<p class="rs-error">${e(r.correctionReviewReason)}</p>`:''}</article>`;
+      <div class="rs-history-footer"><span>${missingPayee?'历史分期未关联领取人':`原领取人：${e(r.recipientName)}`}</span><div class="rd-dialog-actions">${r.type!=='unallocated_balance'&&!r.resolution&&!r.historyOnly?`<button class="rd-button" type="button" data-rs-retain="${e(r.key)}">保留历史金额</button>`:''}<button class="rd-button" type="button" data-rs-correct="${e(r.key)}" ${r.adjustmentAllowed===false||['adjusted','retained'].includes(r.resolution)||missingPayee?'disabled':''}>登记补发／扣回</button></div></div>${r.correctionReviewReason?`<p class="rs-error">${e(r.correctionReviewReason)}</p>`:''}</article>`;
   }
   async function review(item={}) {
     if(locked()||!ui.data)return;
